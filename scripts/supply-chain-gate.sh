@@ -48,6 +48,23 @@ done
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT_DIR}"
 
+# json_is_readable FILE
+# True when FILE holds JSON cargo-audit could have written.
+#
+# The test is "the advisory list is there", not "the file is non-empty":
+# cargo-audit writes the JSON even when it exits non-zero because it
+# found a vulnerability, and that is the case this gate exists to
+# report. A file with no advisories section is an unreadable DB.
+json_is_readable() {
+    local file="${1:-}"
+    [[ -s "$file" ]] || return 1
+    if command -v jq >/dev/null 2>&1; then
+        jq -e 'has("vulnerabilities") or has("warnings")' "$file" >/dev/null 2>&1
+        return $?
+    fi
+    grep -q '"vulnerabilities"\|"warnings"' "$file"
+}
+
 # cargo-audit is not on PATH by default in this environment; it lives in
 # ~/.cargo/bin. Look there too rather than failing with "command not found".
 AUDIT_BIN="$(command -v cargo-audit || true)"
@@ -68,18 +85,35 @@ tmp_stale="$(mktemp)"
 trap 'rm -f "${tmp_json}" "${tmp_seen}" "${tmp_allow}" "${tmp_new}" "${tmp_stale}"' EXIT
 
 echo "[supply-gate] auditing the lockfile..."
-# The advisory DB is fetched on first run and cached after that. A network
-# failure is NOT a clean bill of health, so the audit's exit status is
-# checked: cargo-audit exits non-zero when it finds vulnerabilities, and the
-# JSON is still written, so `|| true` here would swallow a real finding.
-# Instead the JSON's own "vulnerabilities.found" field is the authority.
-if ! "${AUDIT_BIN}" audit --json --no-fetch > "${tmp_json}" 2>/dev/null; then
+# The advisory DB is fetched on first run and cached after that.
+#
+# The JSON is the AUTHORITY, not the exit status. cargo-audit exits
+# non-zero whenever it finds a vulnerability — which is the normal case
+# this gate exists to report — so treating a non-zero exit as "the DB
+# could not be read" sent every real finding down the fetch-retry branch
+# and printed "the advisory database could not be read" WITHOUT ever
+# naming the advisory. The one report the gate exists to produce was
+# lost. (The script's own comment said the JSON was authoritative while
+# the code did the opposite.)
+#
+# So: run the audit, and use the JSON whenever it PARSES. The exit status
+# only decides whether to re-run with a fetch.
+audit_ok=0
+"${AUDIT_BIN}" audit --json --no-fetch > "${tmp_json}" 2>/dev/null || true
+if ! json_is_readable "${tmp_json}"; then
     # --no-fetch fails when there is no cached DB. Retry with the fetch.
-    if ! "${AUDIT_BIN}" audit --json > "${tmp_json}" 2>/dev/null; then
-        echo "[supply-gate] cargo-audit failed; the advisory database could not be read." >&2
-        echo "[supply-gate] this is NOT a pass: an unreadable DB cannot clear the gate." >&2
-        exit 1
+    "${AUDIT_BIN}" audit --json > "${tmp_json}" 2>/dev/null || true
+    if json_is_readable "${tmp_json}"; then
+        audit_ok=1
     fi
+else
+    audit_ok=1
+fi
+
+if [[ "${audit_ok}" -ne 1 ]]; then
+    echo "[supply-gate] cargo-audit failed; the advisory database could not be read." >&2
+    echo "[supply-gate] this is NOT a pass: an unreadable DB cannot clear the gate." >&2
+    exit 1
 fi
 
 # Every advisory the audit reports, one id per line: a vulnerability OR an

@@ -92,3 +92,4 @@ Append-only: `kb log "<entry>"` — one entry per unit of work.
 - **2026-10-19T21:01** · `omp` — Autonomous defect sweep, iters 980-992: 13 iterations, each a separate pushed commit
 - **2026-10-19T22:32** · `omp` — Autonomous defect sweep, iters 980-1002: 23 iterations, each a separate pushed commit
 - **2026-10-19T23:07** · `omp` — Autonomous defect sweep, iters 980-1008: 29 iterations, each a separate pushed commit
+- **2026-10-19T23:45** · `omp` — iters 1010-1011: the review of the 2026-10-19 sweep turned up four defects the sweep had not found (RT-55 the supply-chain gate could not name the advisory it exists to report; RT-58 the checkpoint shadow store was snapshotting ITSELF, which is where the 1.5 GB came from; RT-56 a size-bound checkpoint skip was reported as the wrong cause; RT-57 the genome's role map and the docs disagreed about which files exist), plus the paperwork the sweep left behind

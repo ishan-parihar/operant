@@ -90,6 +90,10 @@ pub struct CheckpointManager {
     /// from `&self` (it lives in a `OnceLock`).
     config: std::sync::Mutex<CheckpointConfig>,
     checkpointed_dirs: std::sync::Mutex<std::collections::HashSet<String>>,
+    /// Why the last `ensure_checkpoint` refused, when it refused for a
+    /// reason the caller can act on (a size-bound skip). `None` after a
+    /// successful checkpoint.
+    last_skip_reason: std::sync::Mutex<Option<String>>,
 }
 
 impl Default for CheckpointManager {
@@ -104,6 +108,7 @@ impl CheckpointManager {
         Self {
             config: std::sync::Mutex::new(CheckpointConfig::default()),
             checkpointed_dirs: std::sync::Mutex::new(std::collections::HashSet::new()),
+            last_skip_reason: std::sync::Mutex::new(None),
         }
     }
 
@@ -131,6 +136,25 @@ impl CheckpointManager {
         if let Ok(mut dirs) = self.checkpointed_dirs.lock() {
             dirs.clear();
         }
+    }
+
+    /// Record (or clear) the reason the last checkpoint was skipped.
+    fn set_skip_reason(&self, reason: Option<String>) {
+        if let Ok(mut slot) = self.last_skip_reason.lock() {
+            *slot = reason;
+        }
+    }
+
+    /// Why the last `ensure_checkpoint` call refused, if it refused for a
+    /// reason the caller can act on.
+    ///
+    /// The tool's error message used to name only two causes
+    /// ("checkpoints may be disabled" and "there were no changes"), and
+    /// neither was the size-bound skip that iter-992 added. An operator
+    /// whose tree was skipped for SIZE was told to enable checkpoints that
+    /// were already enabled. The reason is now reported.
+    pub fn last_skip_reason(&self) -> Option<String> {
+        self.last_skip_reason.lock().ok().and_then(|r| r.clone())
     }
 
     /// Take a checkpoint of the given directory
@@ -225,24 +249,30 @@ impl CheckpointManager {
         if max_total_bytes > 0 || max_file_bytes > 0 {
             let size = tree_size(&workdir);
             if max_file_bytes > 0 && size.largest_file_bytes > max_file_bytes {
-                debug!(
-                    "Checkpoint skipped: {} has a {} MiB file, over the {} MiB limit",
-                    working_dir,
+                let msg = format!(
+                    "the tree has a {} MiB file, over the {} MiB per-file checkpoint limit \
+                     ([checkpoints] max_file_size_mb)",
                     size.largest_file_bytes / (1024 * 1024),
                     max_file_bytes / (1024 * 1024)
                 );
+                debug!("Checkpoint skipped: {msg}");
+                self.set_skip_reason(Some(msg));
                 return false;
             }
             if max_total_bytes > 0 && size.total_bytes > max_total_bytes {
-                debug!(
-                    "Checkpoint skipped: {} is {} MiB, over the {} MiB limit",
-                    working_dir,
+                let msg = format!(
+                    "the tree is {} MiB, over the {} MiB checkpoint limit \
+                     ([checkpoints] max_total_size_mb)",
                     size.total_bytes / (1024 * 1024),
                     max_total_bytes / (1024 * 1024)
                 );
+                debug!("Checkpoint skipped: {msg}");
+                self.set_skip_reason(Some(msg));
                 return false;
             }
         }
+        // The checkpoint is going ahead: any previous skip reason is stale.
+        self.set_skip_reason(None);
 
         let base_dir = self
             .config
@@ -544,13 +574,24 @@ const MAX_CHECKPOINT_FILES: usize = 50_000;
 /// Directory names the shadow store's `info/exclude` tells git to skip — the
 /// file counter mirrors the same list so it never falsely refuses a
 /// checkpoint for a repo with a large object store / node_modules.
-const CHECKPOINT_EXCLUDE_DIRS: [&str; 6] = [
+///
+/// `checkpoints` is in this list for a reason that is not a "large
+/// directory" concern: the shadow store lives at `<operant home>/checkpoints`
+/// and the snapshot's working directory is the operant home itself, so
+/// WITHOUT this exclusion the store SNAPSHOTS ITSELF. `git add -A` then
+/// commits the store's own packed objects (measured on this box: a
+/// 406 MB and a 428 MB pack file inside the store's own tree), and every
+/// snapshot embeds the previous one's pack — geometric growth. That is
+/// where the 1.5 GB store came from: 11 commits whose reachable blobs
+/// total 2.6 GiB, the largest of them being the store's own packs.
+const CHECKPOINT_EXCLUDE_DIRS: [&str; 7] = [
     ".git",
     "node_modules",
     "target",
     "__pycache__",
     ".venv",
     "venv",
+    "checkpoints",
 ];
 
 /// Count files under `dir` recursively, stopping early once `max` is exceeded
@@ -750,33 +791,43 @@ fn git_identity_env() -> Vec<(String, String)> {
 
 /// Ensure the shadow store (bare repo) exists for a working directory.
 fn ensure_store(store: &Path) -> std::result::Result<(), String> {
-    if store.join("HEAD").exists() {
-        return Ok(());
-    }
-    std::fs::create_dir_all(store)
-        .map_err(|e| format!("Failed to create checkpoint store: {}", e))?;
-    let out = Command::new("git")
-        .args(["init", "-q", "--bare"])
-        .arg(store)
-        .output()
-        .map_err(|e| format!("git init failed: {}", e))?;
-    if !out.status.success() {
-        return Err(format!(
-            "git init failed: {}",
-            String::from_utf8_lossy(&out.stderr)
-        ));
+    if !store.join("HEAD").exists() {
+        std::fs::create_dir_all(store)
+            .map_err(|e| format!("Failed to create checkpoint store: {}", e))?;
+        let out = Command::new("git")
+            .args(["init", "-q", "--bare"])
+            .arg(store)
+            .output()
+            .map_err(|e| format!("git init failed: {}", e))?;
+        if !out.status.success() {
+            return Err(format!(
+                "git init failed: {}",
+                String::from_utf8_lossy(&out.stderr)
+            ));
+        }
     }
 
     // Default excludes for the shadow store: never snapshot the user's own
     // `.git` (would otherwise be added as a gitlink) or common heavy dirs.
+    //
+    // The file is REWRITTEN every time, not only when the store is new: a
+    // store created before the list grew kept the old one forever, and the
+    // self-snapshot loop below is exactly what that let happen.
+    //
+    // The store's own path is excluded BY PATH as well as by name. The
+    // name (`checkpoints`) only matches the default layout; `base_dir` is
+    // configurable, and a store at any other path would still snapshot
+    // itself.
     let exclude = store.join("info").join("exclude");
-    if !exclude.exists() {
-        let _ = std::fs::create_dir_all(store.join("info"));
-        let _ = std::fs::write(
-            &exclude,
-            ".git\nnode_modules/\ntarget/\n__pycache__/\n.venv/\nvenv/\n",
-        );
-    }
+    let _ = std::fs::create_dir_all(store.join("info"));
+    let store_path = store.to_string_lossy();
+    let _ = std::fs::write(
+        &exclude,
+        format!(
+            ".git\nnode_modules/\ntarget/\n__pycache__/\n.venv/\nvenv/\ncheckpoints/\n{}\n",
+            store_path
+        ),
+    );
     Ok(())
 }
 
@@ -867,10 +918,16 @@ impl OperantTool for CheckpointTool {
                         }),
                     )
                 } else {
-                    ToolResult::error(
-                        "checkpoint_ensure",
-                        "Failed to create checkpoint (checkpoints may be disabled in config — set [checkpoints] enabled = true — or there were no changes to snapshot)",
-                    )
+                    // The reason, when there is one the operator can act
+                    // on. Before this, the message named only two causes
+                    // and NEITHER was the size-bound skip, so an operator
+                    // whose tree was too big was told to enable
+                    // checkpoints that were already enabled.
+                    let message = match manager.last_skip_reason() {
+                        Some(why) => format!("Failed to create checkpoint: {why}."),
+                        None => "Failed to create checkpoint (checkpoints may be disabled in config — set [checkpoints] enabled = true — or there were no changes to snapshot)".to_string(),
+                    };
+                    ToolResult::error("checkpoint_ensure", message)
                 }
             }
             "list" => {
@@ -1067,8 +1124,82 @@ mod tests {
             "a tree over the size bounds must not be snapshotted"
         );
 
+        // The reason must be REPORTED, not just logged at debug level:
+        // the tool's error message used to name only "checkpoints may be
+        // disabled" and "there were no changes", and NEITHER was the
+        // size-bound skip. An operator whose tree was too big was told to
+        // enable checkpoints that were already enabled.
+        let reason = mgr
+            .last_skip_reason()
+            .expect("a size-bound skip must record why it skipped");
+        assert!(
+            reason.contains("MiB") && reason.contains("limit"),
+            "the skip reason must name the size and the limit, got: {reason}"
+        );
+        assert!(
+            reason.contains("max_file_size_mb") || reason.contains("max_total_size_mb"),
+            "the skip reason must name the config key to change, got: {reason}"
+        );
+
         let _ = std::fs::remove_dir_all(&tmp);
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// The shadow store must NOT snapshot itself.
+    ///
+    /// The store lives at `<operant home>/checkpoints/store/<hash>` and the
+    /// snapshot's working directory is the operant home itself. Without an
+    /// exclusion, `git add -A` commits the store's own packed objects into
+    /// the next snapshot, and every snapshot embeds the previous one's pack
+    /// — geometric growth. Measured on this box: 11 commits whose
+    /// reachable blobs total 2.6 GiB, the largest being the store's own
+    /// 406 MB and 428 MB pack files.
+    ///
+    /// The test puts the store INSIDE the snapshotted tree — which is the
+    /// production layout — and asserts the store's own pack is not among
+    /// the committed blobs.
+    #[test]
+    fn the_shadow_store_does_not_snapshot_itself() {
+        use std::process::Command as StdCommand;
+        if StdCommand::new("git").arg("--version").output().is_err() {
+            return;
+        }
+
+        // The production layout: the store is inside the working dir.
+        let home = std::env::temp_dir().join(format!("operant_ckpt_self_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(home.join("a.txt"), "hello").unwrap();
+
+        let mgr = CheckpointManager::new();
+        mgr.configure(CheckpointConfig {
+            base_dir: home.join("checkpoints"),
+            enabled: true,
+            ..Default::default()
+        });
+
+        assert!(
+            mgr.ensure_checkpoint(home.to_str().unwrap(), "one"),
+            "the checkpoint must be taken"
+        );
+
+        // The store's own objects must not be in the commit.
+        let store = mgr.store_path(home.to_str().unwrap());
+        let listing = StdCommand::new("git")
+            .args(["ls-tree", "-r", "--name-only", "HEAD"])
+            .current_dir(&store)
+            .output()
+            .expect("list the commit");
+        let names = String::from_utf8_lossy(&listing.stdout);
+        assert!(
+            !names.contains("checkpoints/") && !names.contains("objects/"),
+            "the store must not commit its own objects, the commit holds:\n{names}"
+        );
+        assert!(
+            names.contains("a.txt"),
+            "the working tree's own file must be committed, got:\n{names}"
+        );
+
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     /// A tree WITHIN the bounds is still snapshotted. The size check must

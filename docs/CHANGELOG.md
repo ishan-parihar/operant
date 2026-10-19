@@ -35,36 +35,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **iter-980 — the composer now draws the vim mode, and the typeahead ranks slash commands by how often you use them.** `VimMode::label` and `rank_commands` were both computed and never called: the composer never showed `NORMAL`/`INSERT`/`VISUAL`, and the recorded command usage never affected anything. The typeahead now ranks through the usage store it already keeps in memory, so a keystroke never waits on the usage file.
+- **iter-1011 — the checkpoint shadow store no longer snapshots itself.** The store lives inside the directory it snapshots, and its exclude list did not name it, so every checkpoint committed the store's own packed objects and each snapshot embedded the previous one's pack. On this box that had produced 11 commits with 2.68 GiB of reachable blobs, 1.21 GiB of them the store's own pack files. The store is now excluded by name and by its own absolute path, and the exclude file is rewritten on every use instead of only when the store is first created. The existing store is not reclaimed by the fix — deleting `~/.operant/checkpoints/store` is the owner's call, because it removes a rollback history.
+- **iter-1010 — a checkpoint skipped for size now says so.** The size-bound skip (iter-992) recorded its reason at debug level only, and the tool's error message named two other causes — so an operator whose tree was over the limit was told to enable checkpoints that were already enabled. The message now names the size, the limit and the config key to change.
+- **iter-995 — `operant logs follow` keeps working across a log rotation.** The rotation replaces the live file with a new one, and the follower tracked a byte offset into the old file: it printed nothing until 32 MB of new output had accumulated, and then it seeked into a stale offset and printed half a line. The follower now tracks the file's identity as well as the offset.
 
-- **iter-982 — the supply-chain gate runs, and the clippy gate no longer aborts on an empty allowlist.** `cargo audit` was wired but not executed (`cargo-deny` is not installed, so the licence and duplicate-version policies in `deny.toml` stay unexecuted by design), and the clippy gate treated an empty allowlist as a failure.
 
 - **iter-994 — a hook that panics while building its future is reported too.** The panic-at-poll-time shape was fixed in iter-993, but `HookHandler` is `Fn(..) -> Pin<Box<dyn Future>>`, so the closure body runs at call time and that shape escaped the caught region.
 
-- **iter-995 — `operant logs follow` keeps working across a log rotation.** The rotation replaces the live file with a new one, and the follower tracked a byte offset into the old file: it printed nothing until 32 MB of new output had accumulated, and then it seeked into a stale offset and printed half a line. The follower now tracks the file's identity as well as the offset.
 
 - **iter-993 — a panicking hook is now reported instead of swallowed silently.** The panic was always contained, but the warning that says so was unreachable, so a hook that panicked on every turn was invisible in the logs.
 
+
 - **iter-992 — the checkpoint shadow store now has a size bound, and its size limits are no longer dead config.** `max_total_size_mb` and `max_file_size_mb` were declared and never read, so nothing bounded the bytes a snapshot could take. A working tree over either limit is now skipped rather than snapshotted.
+
 
 - **iter-991 — a configured `logging.log_file` is now rotated.** The file was opened in append mode with no size bound, so the gateway's log grew without bound (90 MB after about three weeks on this box). It now rotates at 32 MB and keeps two generations.
 
+
 - **iter-990 — the trajectory directory no longer grows without bound.** A trajectory is written per run, so a long-lived session accumulated one file per run, and a Holon run always records. The write path now keeps the newest 200 and prunes the oldest, the way the checkpoint store bounds its snapshots.
 
+
 - **iter-989 — `[client.rate_limit] max_retries = 0` no longer panics the process.** The attempt count was used raw in `for attempt in 1..=max_retries`, so a 0 made the range empty: the request was never made and the non-streaming retry loop hit an `unreachable!()`. In the gateway daemon that is a crash. A 0 now means "one attempt, no retry", which is what the setting means, and the loop's fall-through is an error rather than a panic.
+
+
+- **iter-987 — PDF text extraction no longer reaches an unmaintained crate, and a decompression bomb is bounded (AD-039).** The `pdf_read` tool is ported from `pdf-extract` 0.12 to `lopdf` 0.45, which drops `ttf-parser` (RUSTSEC-2026-0192) from the dependency graph. The port also bounds each page's decompressed content stream at 64 MiB; `pdf-extract` did not bound it, so a small PDF could expand into gigabytes.
+
+
 
 - **iter-986 — rotating a credential in `.env` now actually rotates the running agent's credential.** The gateway's per-turn `.env` reload wrote the new key into the process environment, and nothing read it back: the client captured its key when it was built and the credential pool seeded its keys at startup, so a rotated key reached nobody. The reload now reports the credential and the endpoint it found, and the gateway pushes them into the live client. A key rotated in the documented `~/.operant/.env` now takes effect on the next turn, without restarting the gateway daemon.
 
   This supersedes the iter-985 entry, which claimed the same thing and was wrong: it did not reach the credential pool, which re-selects the startup-seeded key before every request, and it read a CWD-relative `.env` rather than the documented `~/.operant/.env`. Both are fixed here, and the two operations that were conflated — "use this key now" and "replace the stored credential's secret" — are now separate.
 
-- **iter-984 — a broken MCP server no longer stops operant from starting (AD-036).** One unreachable MCP server (a stale URL, a binary that is not installed, a host that is down) aborted every command that builds the tool registry, so `operant tools list` exited 1 with a raw `Connection refused` and the agent could not start at all. The failure is now recorded, logged, and shown in the `/mcp` view as an `error` status with the reason; the rest of the registry still builds. The `/mcp` view now distinguishes connected, disconnected (never tried), and error (tried and failed).
-
-- **iter-987 — PDF text extraction no longer reaches an unmaintained crate, and a decompression bomb is bounded (AD-039).** The `pdf_read` tool is ported from `pdf-extract` 0.12 to `lopdf` 0.45, which drops `ttf-parser` (RUSTSEC-2026-0192) from the dependency graph. The port also bounds each page's decompressed content stream at 64 MiB; `pdf-extract` did not bound it, so a small PDF could expand into gigabytes.
 
 - **iter-984 — a broken MCP server no longer stops operant from starting (AD-036).** One unreachable MCP server (a stale URL, a binary that is not installed, a host that is down) aborted every command that builds the tool registry, so `operant tools list` exited 1 with a raw `Connection refused` and the agent could not start at all. The failure is now recorded, logged, and shown in the `/mcp` view as an `error` status with the reason; the rest of the registry still builds. The `/mcp` view now distinguishes connected, disconnected (never tried), and error (tried and failed).
+
+
+- **iter-982 — the supply-chain gate runs, and the clippy gate no longer aborts on an empty allowlist.** `cargo audit` was wired but not executed (`cargo-deny` is not installed, so the licence and duplicate-version policies in `deny.toml` stay unexecuted by design), and the clippy gate treated an empty allowlist as a failure.
+
 
 - **iter-981 — the build no longer dies in bindgen when libclang is missing or stale (AD-035).** Three build scripts resolved libclang three different ways, and the one `dev-env.sh` used fell through to a directory that does not exist and only warned — so the build failed two minutes later inside `espeak-rs-sys` with a message naming neither the cause nor the fix. One resolver now owns the choice for all three scripts, a symlink whose target the machine removed is rejected rather than trusted, a missing libclang is a startup error that names the fix, and the provisioner repairs a dangling link.
 
+
+- **iter-980 — the composer now draws the vim mode, and the typeahead ranks slash commands by how often you use them.** `VimMode::label` and `rank_commands` were both computed and never called: the composer never showed `NORMAL`/`INSERT`/`VISUAL`, and the recorded command usage never affected anything. The typeahead now ranks through the usage store it already keeps in memory, so a keystroke never waits on the usage file.
 ### Added
 
 - **iter-954 — a Holon body's trajectory names its run and employee (AD-001).** A Holon run's operant-side trajectory carries `holon_run_id` and `holon_employee` in its metadata, in the operant home's `trajectories/` file. The kernel's `trajectory.json` keeps its shape, and body runs still write no `sessions` row.
@@ -142,6 +154,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **iter-949 — the unregistered `proxy_config` agent tool is removed.** Nothing registered it, and its writes went to `config.toml`, which no part of the CLI reads. Proxy settings are configured in `[proxy]` in `operant.toml`, applied at startup. The tool's test lock went with it: the web-search tests no longer need one. The selector error now names the valid service keys.
 
 ### Fixed
+
+
 
 - **iter-978 — warnings triage: the production build of operant-cli is warning-free (AD-034).** Dead paths are deleted: the turn-diff mode (`/changes` now opens the working-tree diff, the diff viewer's `d` key no longer switches modes, and `/rollback` names `/rewind`), the unused slash wrappers, `TurnState::Connecting`, 13 unreferenced `KeyAction` variants, `add_model_usage`, `encode_image_base64`, `find_with_fallback`, `remove`, and `McpViewStatus::Error`. Error notices now render as error rows in the transcript, where they drew as plain system rows before. The clippy allowlist shrinks from 47 to 24 entries; the remaining keys are test-configuration dead code, and the open gaps behind kept items are BUGS RT-29 to RT-33.
 
