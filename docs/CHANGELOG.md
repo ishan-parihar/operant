@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-991 — a configured `logging.log_file` is now rotated.** The file was opened in append mode with no size bound, so the gateway's log grew without bound (90 MB after about three weeks on this box). It now rotates at 32 MB and keeps two generations.
+
 - **iter-990 — the trajectory directory no longer grows without bound.** A trajectory is written per run, so a long-lived session accumulated one file per run, and a Holon run always records. The write path now keeps the newest 200 and prunes the oldest, the way the checkpoint store bounds its snapshots.
 
 - **iter-989 — `[client.rate_limit] max_retries = 0` no longer panics the process.** The attempt count was used raw in `for attempt in 1..=max_retries`, so a 0 made the range empty: the request was never made and the non-streaming retry loop hit an `unreachable!()`. In the gateway daemon that is a crash. A 0 now means "one attempt, no retry", which is what the setting means, and the loop's fall-through is an error rather than a panic.

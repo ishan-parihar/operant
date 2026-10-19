@@ -76,7 +76,7 @@ pub(crate) use tui::prompt_input;
 pub(crate) use tui::settings_screen;
 pub(crate) use tui::theme_screen;
 
-use std::fs::OpenOptions;
+use std::fs::{File, OpenOptions};
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -543,6 +543,121 @@ enum Commands {
     Donate,
 }
 
+/// The size at which a configured log file is rotated.
+///
+/// A configured `logging.log_file` is opened in APPEND mode and was never
+/// rotated: the date-stamped `operant-*.log` files the TUI logger writes
+/// are pruned after 7 days (`cleanup_old_logs_in`), but a CONFIGURED file
+/// was not on that list, so it grew without bound. Measured on this box:
+/// `~/.operant/logs/gateway.log` had reached 90 MB and 1.7M lines after
+/// about three weeks of the gateway running.
+const LOG_FILE_MAX_BYTES: u64 = 32 * 1024 * 1024;
+
+/// How many rotated generations of a log file are kept.
+///
+/// One live file plus two rotated ones: the current one, the previous one
+/// (for the incident that triggered the rotation) and the one before it.
+/// A rotation renames `foo.log` to `foo.log.1` and `foo.log.1` to
+/// `foo.log.2`, dropping whatever was at `.2`.
+const LOG_FILE_GENERATIONS: usize = 2;
+
+/// A `Write` target that rotates the log file when it grows past the cap.
+///
+/// `tracing_appender::rolling` does this, but it is not a dependency and
+/// adding one for a size check is not worth it. The check is on the WRITE
+/// path rather than on a timer: a daemon that emits a burst between timer
+/// ticks would otherwise overshoot the cap by the whole burst, and the
+/// point of the cap is to bound the file.
+struct RollingLogFile {
+    path: PathBuf,
+    file: File,
+    written: u64,
+    max_bytes: u64,
+    /// The bytes written so far, tracked so the size check does not stat
+    /// the file on every line.
+    rotated: bool,
+}
+
+impl RollingLogFile {
+    fn open(path: &Path, max_bytes: u64) -> std::io::Result<Self> {
+        let file = OpenOptions::new().create(true).append(true).open(path)?;
+        let written = file.metadata().map(|m| m.len()).unwrap_or(0);
+        Ok(Self {
+            path: path.to_path_buf(),
+            file,
+            written,
+            max_bytes,
+            rotated: false,
+        })
+    }
+
+    /// The path of the `generation`-th rotated file: `foo.log` →
+    /// `foo.log.1` → `foo.log.2`.
+    ///
+    /// The extension is rebuilt rather than appended to, because
+    /// `Path::with_extension` REPLACES the extension: `foo.log` with
+    /// `with_extension("log.1")` is `foo.log.1`, which is what we want.
+    fn generation_path(&self, generation: usize) -> PathBuf {
+        let ext = self
+            .path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| format!("{e}.{generation}"))
+            .unwrap_or_else(|| generation.to_string());
+        self.path.with_extension(ext)
+    }
+
+    /// Move the current file aside and start a fresh one.
+    ///
+    /// The rotation is `foo.log` → `foo.log.1` → `foo.log.2`, dropping
+    /// whatever was at `.2`. A rename on the same filesystem is atomic, so
+    /// a reader never sees a half-written log.
+    fn rotate(&mut self) {
+        let _ = std::fs::remove_file(self.generation_path(LOG_FILE_GENERATIONS));
+
+        for generation in (1..LOG_FILE_GENERATIONS).rev() {
+            let _ = std::fs::rename(
+                self.generation_path(generation),
+                self.generation_path(generation + 1),
+            );
+        }
+        let _ = std::fs::rename(&self.path, self.generation_path(1));
+
+        // Re-open the (now absent) path in append mode, which creates it.
+        match OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.path)
+        {
+            Ok(file) => {
+                self.file = file;
+                self.written = 0;
+            }
+            Err(_) => {
+                // The rename failed, or the path cannot be re-created.
+                // Keep writing to the OLD handle: a log that keeps growing
+                // is better than a daemon that cannot log at all.
+                self.rotated = true;
+            }
+        }
+    }
+}
+
+impl Write for RollingLogFile {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if self.written + buf.len() as u64 > self.max_bytes && !self.rotated {
+            self.rotate();
+        }
+        let n = self.file.write(buf)?;
+        self.written += n as u64;
+        Ok(n)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.file.flush()
+    }
+}
+
 fn init_logging(
     verbose: bool,
     cli_log_level: Option<&str>,
@@ -573,10 +688,13 @@ fn init_logging(
                 .log_file
                 .as_ref()
                 .context("log target is a file but no log_file is configured")?;
-            let file = OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(path)
+            // A configured log file is opened in APPEND mode and was never
+            // rotated, so it grew without bound: the date-stamped
+            // `operant-*.log` files are pruned after 7 days, but a
+            // CONFIGURED file was not on that list. Measured on this box:
+            // `~/.operant/logs/gateway.log` had reached 90 MB and 1.7M
+            // lines after about three weeks.
+            let file = RollingLogFile::open(Path::new(path), LOG_FILE_MAX_BYTES)
                 .with_context(|| format!("failed to open log file {path}"))?;
             let writer = Mutex::new(file);
             match logging.format.as_str() {
@@ -3245,6 +3363,101 @@ mod tests {
             text.contains("/nonexistent-operant-dir/operant.log"),
             "{text}"
         );
+    }
+
+    /// A configured log file is rotated when it grows past the cap.
+    ///
+    /// The file was opened in APPEND mode and never rotated: the
+    /// date-stamped `operant-*.log` files are pruned after 7 days, but a
+    /// CONFIGURED file was not on that list. Measured on this box:
+    /// `~/.operant/logs/gateway.log` had reached 90 MB and 1.7M lines after
+    /// about three weeks of the gateway running.
+    #[test]
+    fn a_configured_log_file_is_rotated_when_it_grows_past_the_cap() {
+        let dir = std::env::temp_dir().join(format!(
+            "operant_log_rotate_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        let path = dir.join("gateway.log");
+
+        // A small cap so the test does not have to write 32 MB. TWO caps'
+        // worth of bytes, so a rotation is guaranteed to happen.
+        let mut writer = RollingLogFile::open(&path, 100).expect("open the log file");
+        for _ in 0..20 {
+            writer.write_all(b"0123456789").expect("write a line");
+        }
+        writer.flush().expect("flush");
+
+        // The live file is bounded by the cap, and the overflow is in a
+        // rotated generation.
+        let live = std::fs::metadata(&path)
+            .expect("the live file exists")
+            .len();
+        assert!(
+            live <= 100,
+            "the live file must stay at or under the cap, got {live}"
+        );
+        let rotated = dir.join("gateway.log.1");
+        assert!(
+            rotated.exists(),
+            "the overflow must land in a rotated generation"
+        );
+        let rotated_len = std::fs::metadata(&rotated).expect("the rotated file").len();
+        assert!(
+            rotated_len > 0,
+            "the rotated generation must hold the overflow"
+        );
+        // And the content is all there, split across the two files.
+        let live_text = std::fs::read_to_string(&path).expect("read the live file");
+        let rotated_text = std::fs::read_to_string(&rotated).expect("read the rotated file");
+        assert_eq!(
+            live_text.len() + rotated_text.len(),
+            200,
+            "no log line may be lost by the rotation"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A rotation keeps a BOUNDED number of generations: the live file plus
+    /// two rotated ones. An unbounded rotation would just move the growth
+    /// problem.
+    #[test]
+    fn a_log_rotation_keeps_a_bounded_number_of_generations() {
+        let dir = std::env::temp_dir().join(format!(
+            "operant_log_gens_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        let path = dir.join("gateway.log");
+
+        // Three rotations, so a fourth generation would be needed to
+        // overflow the bound.
+        for _ in 0..3 {
+            let mut writer = RollingLogFile::open(&path, 10).expect("open the log file");
+            writer.write_all(b"0123456789abcdef").expect("write");
+            writer.write_all(b"0123456789abcdef").expect("write");
+            writer.flush().expect("flush");
+        }
+
+        assert!(path.exists(), "the live file survives");
+        assert!(dir.join("gateway.log.1").exists(), ".1 survives");
+        assert!(dir.join("gateway.log.2").exists(), ".2 survives");
+        assert!(
+            !dir.join("gateway.log.3").exists(),
+            "a third generation must not be kept: the bound is two"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The regression this pins: with stdin closed, `operant chat` spun forever
