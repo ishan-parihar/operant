@@ -31,4 +31,5 @@ dated_pattern = "^(plan-\\d{4}-\\d{2}-\\d{2}|\\d{4}-\\d{2}-\\d{2}-)"
 pointer_ignore = "SKILL.md autonomous-status.toml"
 
 [card]
+architecture = "AGENTS.md#Architecture Overview"
 status_into = "docs/handoff/STATE.md"
