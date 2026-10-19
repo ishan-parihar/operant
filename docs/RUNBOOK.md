@@ -27,6 +27,15 @@ authority for the iteration loop itself is AGENTS.md ("START HERE").
 | TUI corpus runner | `env -u OPENAI_BASE_URL -u OPENAI_API_KEY python3 crates/operant-cli/tests/tui_scenarios/_run.py verify <name>` — scenarios without `agent_script` build a real agent and hang on live calls otherwise; per-scenario invocation prints progress; `OPERANT_BIN` must be a FRESH build copy |
 | live TUI repro | tmux `-L <fresh-socket>`, 110x45; `OPENAI_BASE_URL=http://localhost:20129/v1` (omp gateway → poolside/laguna); `OPERANT_TUI_DEBUG=1 OPERANT_TUI_EVENT_LOG=<path>` dumps the ring on clean `/quit`; `/tmp` is swept — recreate configs per repro |
 
+## Autonomous loop traps
+
+One autonomous agent works `TODO.md`. These rules cover that loop and anyone who commits beside it.
+
+| trap | rule |
+|---|---|
+| dirty tree | `operant autonomous` publishes with `git add --all .` (`crates/operant-cli/src/autonomous.rs`, `publish_changes`). Start it only when `git status --short` is empty; otherwise it commits everyone's uncommitted files to `[autonomous] git_branch`. The fix is a `## Review` item in TODO.md |
+| manual commit | stage explicit paths and check `git diff --cached --name-only` first: the index can hold a peer's staged deletions. If it does, commit from a temporary index: `GIT_INDEX_FILE=<tmp> git read-tree HEAD`, `git update-index --cacheinfo` for a shared file (blob = HEAD plus your lines), `git add -- <paths>`, `git write-tree`, `git commit-tree <tree> -p HEAD -F <msg>`, then `git update-ref refs/heads/main <new> <old>` |
+
 ## Documentation CLI (`./scripts/genome`)
 
 | task | command |
@@ -36,7 +45,7 @@ authority for the iteration loop itself is AGENTS.md ("START HERE").
 | wake as a parallel agent | `./scripts/genome feed --to <your-id>` then `./scripts/genome doctor` |
 | claim / finish | `./scripts/genome claim <item>`; `./scripts/genome done <item> done --evidence <path>` |
 | mint records | `./scripts/genome plan "<title>"`, `kb audit`, `kb ad`, `kb rg` |
-| append entries | `./scripts/genome log "<entry>" --agent <id>`; `./scripts/genome post "<msg>" --wf <wf> --to @<agent>` |
+| append entries | `./scripts/genome log "<entry>" --agent <id>` (full text in the argument: `--body` is dropped); `./scripts/genome post "<msg>" --wf <wf> --to @<agent>` |
 | supersede a doc | `./scripts/genome archive <path> --reason "<why>"` (tombstone + INDEX row; nothing is deleted) |
 | regenerate state | `./scripts/genome handoff --write` |
 

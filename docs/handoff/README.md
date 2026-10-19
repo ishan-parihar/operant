@@ -5,7 +5,7 @@
 | 1 | `AGENTS.md` | the rules, the iteration protocol, and the documentation routing table |
 | 2 | `docs/handoff/STATE.md` | where the project stands right now |
 | 3 | `TODO.md` | the register: autonomous mode's `Implemented` / `Pending` / `Review` |
-| 4 | `BUGS.md` (root) | open audit findings and their fix state — the repo-native issue ledger |
+| 4 | `BUGS.md` (root) | open audit findings and their fix state — the repo-native issue ledger; the open queue is its `OPEN — Red-team: Holon seam, agentic-core seat and TUI (2026-10-19)` section |
 | 5 | `docs/RUNBOOK.md` | exact commands, environment traps, fleet procedure |
 | 6 | `docs/kb/CLOSED.md` | what was tried and rejected — do not re-litigate |
 | 7 | `docs/plans/` | current pre-registered plans (dated, frozen); `docs/plans/2026-10-14-batch/00-INDEX.md` indexes the live batch |
