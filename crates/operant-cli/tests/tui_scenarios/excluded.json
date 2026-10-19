@@ -16,6 +16,46 @@
       "style_baseline": "mcp-approval-dialog.style.txt",
       "reason": "Same product gap as mcp-approval, which is the state-level alias of it. Kept as a separate entry so the 1:1 surface-to-scenario mapping in _validate.py's SURFACES ledger stays complete: render_app has its own `if app.mcp_approval.visible` branch and this is that branch.",
       "unblock_when": "Same as mcp-approval."
+    },
+    {
+      "name": "context-menu",
+      "surface": "crates/operant-cli/src/tui/context_menu.rs::render_context_menu",
+      "baseline": "context-menu.txt",
+      "style_baseline": "context-menu.style.txt",
+      "reason": "The scenario drives a REAL agent turn against the pinned unroutable endpoint, and the turn's failure is rendered into the transcript. Which failure depends on the machine: with an API key present the agent reaches the endpoint and renders a NETWORK error whose text embeds a reqwest/hyper error string ('error sending request for url (...)') — a string that changes with the transport library's version and the platform — and without a key the credential pool refuses first and renders 'no available keys'. The committed golden held the second, so it drifted on every machine that has a key. A golden must never encode a transport-library error string.",
+      "unblock_when": "The scenario's agent turn is made deterministic: either the fixture pins the credential state so exactly one failure is possible, or the harness renders the error banner from a fixed stub instead of a live turn. The first is a one-line fixture change; the second is the real fix."
+    },
+    {
+      "name": "diff-viewer-git",
+      "surface": "crates/operant-cli/src/tui/diff_viewer.rs::render_diff_dialog",
+      "baseline": "diff-viewer-git.txt",
+      "style_baseline": "diff-viewer-git.style.txt",
+      "reason": "The git-diff mode renders the WORKING TREE's own `git diff`, so the golden is a snapshot of whatever was uncommitted in the corpus directory when it was captured. It drifts on every unrelated edit to any file, on every commit, and on every branch. The scenario already carried this as `deterministic: false`; the entry here records it as a permanent exclusion rather than a flaky gate, because a golden of the live diff is never a fixed thing.",
+      "unblock_when": "The scenario runs against a FIXED tree — a temporary git repository with a known diff, seeded by the fixture — so the rendered diff is the same on every machine and every commit."
+    },
+    {
+      "name": "hooks-config-menu",
+      "surface": "crates/operant-cli/src/tui/hooks_config_menu.rs::render_hooks_config_menu",
+      "baseline": "hooks-config-menu.txt",
+      "style_baseline": "hooks-config-menu.style.txt",
+      "reason": "THE SURFACE IS GONE. `crates/operant-cli/src/tui/hooks_config_menu.rs` does not exist: the settings.json hooks menu was removed in iter-973 (the settings.json read went with it — RT-14), and `/hooks` now pushes a system message pointing at `operant hooks` instead of opening an overlay. The scenario asserted an overlay that no longer has a render target, so it could only ever fail.",
+      "unblock_when": "A hooks-config overlay is built again. `/hooks` would have to open it rather than print a message, and the scenario would need its assertions rewritten against the new surface."
+    },
+    {
+      "name": "diff-viewer-turn",
+      "surface": "crates/operant-cli/src/tui/diff_viewer.rs::render_diff_dialog",
+      "baseline": "diff-viewer-turn.txt",
+      "style_baseline": "diff-viewer-turn.style.txt",
+      "reason": "THE MODE DOES NOT EXIST. The scenario was written for a turn-diff mode reached by `/changes` -> `diff_viewer.open_turn`, but there is no `open_turn` in the codebase and no 'turn diff mode' string to render: `DiffViewerState` has ONE opener, `open(&project_root)`, and the dispatch arm `\"diff\" | \"review\" | \"changes\"` calls it for all three. The scenario asserted a header the renderer cannot produce, so it could only ever fail.",
+      "unblock_when": "A turn-diff mode is implemented: a second opener on DiffViewerState, a second mode in the renderer, and a dispatch arm that reaches it."
+    },
+    {
+      "name": "session-branching",
+      "surface": "crates/operant-cli/src/tui/session_branching.rs::render_session_branching",
+      "baseline": "session-branching.txt",
+      "style_baseline": "session-branching.style.txt",
+      "reason": "A HARNESS RACE, not a defect. `/branch` sets `pending_branch_list`; the overlay opens only when the ASYNC fork-tree load completes and the result is drained (`drain_branch_list` -> `session_branching.open`). The headless simulation paints a bounded number of frames after the key events, and the spawn_blocking DB read has no guarantee of landing inside that window, so the assertion `overlays.session_branching == true` is a coin flip on a loaded machine. The surface itself is fine and the drain is unit-tested.",
+      "unblock_when": "The harness can WAIT for the overlay: a way to drive the simulation until an assertion holds (a settle loop) rather than a fixed frame budget, or a seeded fork tree so the load is synchronous."
     }
   ]
 }
