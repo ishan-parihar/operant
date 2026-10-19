@@ -5,7 +5,6 @@
 use anyhow::{Context, Result};
 use directories::UserDirs;
 #[cfg(feature = "schema-export")]
-use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 use super::*;
@@ -344,10 +343,6 @@ pub(crate) fn default_connection_pool_size() -> usize {
     4
 }
 
-pub(crate) fn default_entity_id() -> String {
-    "default".into()
-}
-
 pub(crate) fn default_ms365_auth_flow() -> String {
     "client_credentials".to_string()
 }
@@ -465,94 +460,12 @@ pub(crate) fn default_retention_days() -> u64 {
     90
 }
 
-// ── Google Workspace ─────────────────────────────────────────────
-
-/// Built-in default service allowlist for the `google_workspace` tool.
-///
-/// Applied when `allowed_services` is empty. Defined here (not in the tool layer)
-/// so that config validation can cross-check `allowed_operations` entries against
-/// the effective service set in all cases, including when the operator relies on
-/// the default.
-pub const DEFAULT_GWS_SERVICES: &[&str] = &[
-    "drive",
-    "sheets",
-    "gmail",
-    "calendar",
-    "docs",
-    "slides",
-    "tasks",
-    "people",
-    "chat",
-    "classroom",
-    "forms",
-    "keep",
-    "meet",
-    "events",
-];
-
-/// Google Workspace CLI (`gws`) tool configuration (`[google_workspace]` section).
-///
-/// ## Defaults
-/// - `enabled`: `false` (tool is not registered unless explicitly opted-in).
-/// - `allowed_services`: empty vector, which grants access to the full default
-///   service set: `drive`, `sheets`, `gmail`, `calendar`, `docs`, `slides`,
-///   `tasks`, `people`, `chat`, `classroom`, `forms`, `keep`, `meet`, `events`.
-/// - `credentials_path`: `None` (uses default `gws` credential discovery).
-/// - `default_account`: `None` (uses the `gws` active account).
-/// - `rate_limit_per_minute`: `60`.
-/// - `timeout_secs`: `30`.
-/// - `audit_log`: `false`.
-/// - `credentials_path`: `None` (uses default `gws` credential discovery).
-/// - `default_account`: `None` (uses the `gws` active account).
-/// - `rate_limit_per_minute`: `60`.
-/// - `timeout_secs`: `30`.
-/// - `audit_log`: `false`.
-///
-/// ## Compatibility
-/// Configs that omit the `[google_workspace]` section entirely are treated as
-/// `GoogleWorkspaceConfig::default()` (disabled, all defaults allowed). Adding
-/// the section is purely opt-in and does not affect other config sections.
-///
-/// ## Rollback / Migration
-/// To revert, remove the `[google_workspace]` section from the config file (or
-/// set `enabled = false`). No data migration is required; the tool simply stops
-/// being registered.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
-pub struct GoogleWorkspaceAllowedOperation {
-    /// Google Workspace service ID (for example `gmail` or `drive`).
-    pub service: String,
-    /// Top-level resource name for the service (for example `users` for Gmail or `files` for Drive).
-    pub resource: String,
-    /// Optional sub-resource for 4-segment gws commands
-    /// (for example `messages` or `drafts` under `gmail users`).
-    /// When present, the entry only matches calls that include this exact sub_resource.
-    /// When absent, the entry only matches calls with no sub_resource.
-    #[serde(default)]
-    pub sub_resource: Option<String>,
-    /// Allowed methods for the service/resource/sub_resource combination.
-    #[serde(default)]
-    pub methods: Vec<String>,
-}
-
-pub(crate) fn default_gws_rate_limit() -> u32 {
-    60
-}
-
-pub(crate) fn default_gws_timeout_secs() -> u64 {
-    30
-}
-
 pub(crate) fn default_knowledge_db_path() -> String {
     default_path_under_config_dir("knowledge.db")
 }
 
 pub(crate) fn default_knowledge_max_nodes() -> usize {
     100_000
-}
-
-pub(crate) fn default_linkedin_api_version() -> String {
-    "202602".to_string()
 }
 
 pub(crate) fn default_signature_mode() -> String {
@@ -565,63 +478,6 @@ pub(crate) fn default_plugins_dir() -> String {
 
 pub(crate) fn default_max_plugins() -> usize {
     50
-}
-
-pub(crate) fn default_image_providers() -> Vec<String> {
-    vec![
-        "stability".into(),
-        "imagen".into(),
-        "dalle".into(),
-        "flux".into(),
-    ]
-}
-
-pub(crate) fn default_card_accent_color() -> String {
-    "#0A66C2".into()
-}
-
-pub(crate) fn default_image_temp_dir() -> String {
-    "linkedin/images".into()
-}
-
-pub(crate) fn default_stability_api_key_env() -> String {
-    "STABILITY_API_KEY".into()
-}
-
-pub(crate) fn default_stability_model() -> String {
-    "stable-diffusion-xl-1024-v1-0".into()
-}
-
-pub(crate) fn default_imagen_api_key_env() -> String {
-    "GOOGLE_VERTEX_API_KEY".into()
-}
-
-pub(crate) fn default_imagen_project_id_env() -> String {
-    "GOOGLE_CLOUD_PROJECT".into()
-}
-
-pub(crate) fn default_imagen_region() -> String {
-    "us-central1".into()
-}
-
-pub(crate) fn default_dalle_api_key_env() -> String {
-    "OPENAI_API_KEY".into()
-}
-
-pub(crate) fn default_dalle_model() -> String {
-    "dall-e-3".into()
-}
-
-pub(crate) fn default_dalle_size() -> String {
-    "1024x1024".into()
-}
-
-pub(crate) fn default_flux_api_key_env() -> String {
-    "FAL_API_KEY".into()
-}
-
-pub(crate) fn default_flux_model() -> String {
-    "fal-ai/flux/schnell".into()
 }
 
 pub(crate) fn default_image_gen_model() -> String {
@@ -826,7 +682,6 @@ pub(crate) fn default_auto_approve() -> Vec<String> {
         "glob_search".into(),
         "content_search".into(),
         "image_info".into(),
-        "weather".into(),
         "browser".into(),
         "browser_open".into(),
     ]
@@ -1091,38 +946,6 @@ pub(crate) fn default_voice_wake_energy_threshold() -> f32 {
 
 #[cfg(feature = "voice-wake")]
 pub(crate) fn default_voice_wake_max_capture_secs() -> u32 {
-    30
-}
-
-pub(crate) fn default_notion_poll_interval() -> u64 {
-    5
-}
-
-pub(crate) fn default_notion_status_prop() -> String {
-    "Status".into()
-}
-
-pub(crate) fn default_notion_input_prop() -> String {
-    "Input".into()
-}
-
-pub(crate) fn default_notion_result_prop() -> String {
-    "Result".into()
-}
-
-pub(crate) fn default_notion_max_concurrent() -> usize {
-    4
-}
-
-pub(crate) fn default_notion_recover_stale() -> bool {
-    true
-}
-
-pub(crate) fn default_jira_allowed_actions() -> Vec<String> {
-    vec!["get_ticket".to_string()]
-}
-
-pub(crate) fn default_jira_timeout_secs() -> u64 {
     30
 }
 

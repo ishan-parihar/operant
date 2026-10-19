@@ -596,37 +596,6 @@ impl Default for NodeTransportConfig {
     }
 }
 
-// ── Composio (managed tool surface) ─────────────────────────────
-
-/// Composio managed OAuth tools integration (`[composio]` section).
-///
-/// Provides access to 1000+ OAuth-connected tools via the Composio platform.
-#[derive(Debug, Clone, Serialize, Deserialize, Configurable)]
-#[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
-#[prefix = "composio"]
-pub struct ComposioConfig {
-    /// Enable Composio integration for 1000+ OAuth tools
-    #[serde(default, alias = "enable")]
-    pub enabled: bool,
-    /// Composio API key (stored encrypted when secrets.encrypt = true)
-    #[serde(default)]
-    #[secret]
-    pub api_key: Option<String>,
-    /// Default entity ID for multi-user setups
-    #[serde(default = "default_entity_id")]
-    pub entity_id: String,
-}
-
-impl Default for ComposioConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            api_key: None,
-            entity_id: default_entity_id(),
-        }
-    }
-}
-
 // ── Microsoft 365 (Graph API integration) ───────────────────────
 
 /// Microsoft 365 integration via Microsoft Graph API (`[microsoft365]` section).
@@ -1084,12 +1053,6 @@ pub struct ProjectIntelConfig {
     /// Include git log data in reports. Default: true.
     #[serde(default = "default_true")]
     pub include_git_data: bool,
-    /// Include Jira data in reports. Default: false.
-    #[serde(default)]
-    pub include_jira_data: bool,
-    /// Jira instance base URL (required if include_jira_data is true).
-    #[serde(default)]
-    pub jira_base_url: Option<String>,
 }
 
 impl Default for ProjectIntelConfig {
@@ -1101,8 +1064,6 @@ impl Default for ProjectIntelConfig {
             templates_dir: None,
             risk_sensitivity: default_project_intel_risk_sensitivity(),
             include_git_data: true,
-            include_jira_data: false,
-            jira_base_url: None,
         }
     }
 }
@@ -1137,89 +1098,6 @@ impl Default for DataRetentionConfig {
             categories: Vec::new(),
         }
     }
-}
-
-/// Google Workspace CLI (`gws`) tool configuration (`[google_workspace]` section).
-///
-/// ## Defaults
-/// - `enabled`: `false` (tool is not registered unless explicitly opted-in).
-/// - `allowed_services`: empty vector, which grants access to the full default
-///   service set: `drive`, `sheets`, `gmail`, `calendar`, `docs`, `slides`,
-///   `tasks`, `people`, `chat`, `classroom`, `forms`, `keep`, `meet`, `events`.
-/// - `allowed_operations`: empty vector, which preserves the legacy behavior of
-///   allowing any resource/method under the allowed service set.
-/// - `credentials_path`: `None` (uses default `gws` credential discovery).
-/// - `default_account`: `None` (uses the `gws` active account).
-/// - `rate_limit_per_minute`: `60`.
-/// - `timeout_secs`: `30`.
-/// - `audit_log`: `false`.
-///
-/// ## Compatibility
-/// Configs that omit the `[google_workspace]` section entirely are treated as
-/// `GoogleWorkspaceConfig::default()` (disabled, all defaults allowed). Adding
-/// the section is purely opt-in and does not affect other config sections.
-///
-/// ## Rollback / Migration
-/// To revert, remove the `[google_workspace]` section from the config file (or
-/// set `enabled = false`). No data migration is required; the tool simply stops
-/// being registered.
-#[derive(Debug, Clone, Serialize, Deserialize, Configurable)]
-#[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
-#[prefix = "google-workspace"]
-#[integration(
-    category = "ToolsAutomation",
-    display_name = "Google Workspace",
-    description = "Drive, Gmail, Calendar, Sheets, Docs via gws CLI",
-    status_field = "enabled"
-)]
-pub struct GoogleWorkspaceConfig {
-    /// Enable the `google_workspace` tool. Default: `false`.
-    #[serde(default)]
-    pub enabled: bool,
-    /// Restrict which Google Workspace services the agent can access.
-    ///
-    /// When empty (the default), the full default service set is allowed (see
-    /// struct-level docs). When non-empty, only the listed service IDs are
-    /// permitted. Each entry must be non-empty, lowercase alphanumeric with
-    /// optional underscores/hyphens, and unique.
-    #[serde(default)]
-    pub allowed_services: Vec<String>,
-    /// Restrict which resource/method combinations the agent can access.
-    ///
-    /// When empty (the default), all methods under `allowed_services` remain
-    /// available for backward compatibility. When non-empty, the runtime denies
-    /// any `(service, resource, sub_resource, method)` combination that is not
-    /// explicitly listed. `sub_resource` is optional per entry: an entry without
-    /// it matches only 3-segment `gws` calls; an entry with it matches only calls
-    /// that supply that exact sub_resource value.
-    ///
-    /// Each entry's `service` must appear in `allowed_services` when that list is
-    /// non-empty; config validation rejects entries that would never match at
-    /// runtime.
-    #[serde(default)]
-    pub allowed_operations: Vec<GoogleWorkspaceAllowedOperation>,
-    /// Path to service account JSON or OAuth client credentials file.
-    ///
-    /// When `None`, the tool relies on the default `gws` credential discovery
-    /// (`gws auth login`). Set this to point at a service-account key or an
-    /// OAuth client-secrets JSON for headless / CI environments.
-    #[serde(default)]
-    pub credentials_path: Option<String>,
-    /// Default Google account email to pass to `gws --account`.
-    ///
-    /// When `None`, the currently active `gws` account is used.
-    #[serde(default)]
-    pub default_account: Option<String>,
-    /// Maximum number of `gws` API calls allowed per minute. Default: `60`.
-    #[serde(default = "default_gws_rate_limit")]
-    pub rate_limit_per_minute: u32,
-    /// Command execution timeout in seconds. Default: `30`.
-    #[serde(default = "default_gws_timeout_secs")]
-    pub timeout_secs: u64,
-    /// Enable audit logging of every `gws` invocation (service, resource,
-    /// method, timestamp). Default: `false`.
-    #[serde(default)]
-    pub audit_log: bool,
 }
 
 // ── Knowledge ───────────────────────────────────────────────────
@@ -1321,50 +1199,6 @@ impl Default for PluginsConfig {
             auto_discover: false,
             max_plugins: default_max_plugins(),
             security: PluginSecurityConfig::default(),
-        }
-    }
-}
-
-/// Stability AI image generation settings (`[linkedin.image.stability]`).
-#[derive(Debug, Clone, Serialize, Deserialize, Configurable)]
-#[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
-#[prefix = "linkedin.image.stability"]
-pub struct ImageProviderStabilityConfig {
-    /// Environment variable name holding the API key.
-    #[serde(default = "default_stability_api_key_env")]
-    pub api_key_env: String,
-    /// Stability model identifier.
-    #[serde(default = "default_stability_model")]
-    pub model: String,
-}
-
-impl Default for ImageProviderStabilityConfig {
-    fn default() -> Self {
-        Self {
-            api_key_env: default_stability_api_key_env(),
-            model: default_stability_model(),
-        }
-    }
-}
-
-/// Flux (fal.ai) image generation settings (`[linkedin.image.flux]`).
-#[derive(Debug, Clone, Serialize, Deserialize, Configurable)]
-#[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
-#[prefix = "linkedin.image.flux"]
-pub struct ImageProviderFluxConfig {
-    /// Environment variable name holding the fal.ai API key.
-    #[serde(default = "default_flux_api_key_env")]
-    pub api_key_env: String,
-    /// Flux model identifier.
-    #[serde(default = "default_flux_model")]
-    pub model: String,
-}
-
-impl Default for ImageProviderFluxConfig {
-    fn default() -> Self {
-        Self {
-            api_key_env: default_flux_api_key_env(),
-            model: default_flux_model(),
         }
     }
 }

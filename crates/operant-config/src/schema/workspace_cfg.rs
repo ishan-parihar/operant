@@ -55,21 +55,6 @@ impl Default for WorkspaceConfig {
     }
 }
 
-impl Default for GoogleWorkspaceConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            allowed_services: Vec::new(),
-            allowed_operations: Vec::new(),
-            credentials_path: None,
-            default_account: None,
-            rate_limit_per_minute: default_gws_rate_limit(),
-            timeout_secs: default_gws_timeout_secs(),
-            audit_log: false,
-        }
-    }
-}
-
 pub(crate) const ACTIVE_WORKSPACE_STATE_FILE: &str = "active_workspace.toml";
 
 #[derive(Debug, Serialize, Deserialize)]

@@ -48,6 +48,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **Orphaned integrations removed (iter-957): Jira, Notion, Composio, Google Workspace, Pushover, weather, git operations, LinkedIn.** No agent or gateway path registered these tools, so nothing reached them. Removed: nine `operant-tools` modules, the `operant-tools` `tokio-tungstenite` dependency, the `[notion]`, `[jira]`, `[composio]`, `[google_workspace]`, and `[linkedin]` config sections with their validation, the Jira fields of `[project_intel]`, the `"weather"` default auto-approve entry, and the unused `[linkedin.image.*]` provider structs (the live image tool reads `[image_gen]`). A stale section in `operant.toml` is now ignored, not rejected: delete it. The Holon Notion adapter (`[holon] notion_script`) is separate and unchanged.
+
 - **Never-read CLI config fields removed (iter-943).** `crates/operant-cli/src/config.rs` drops 167
   field definitions that no code read (398 → 231), with their defaults, and 12 structs with no remaining use.
   `CliConfig` never reads a file and `operant.toml` rejects these sections, so no setting depended on them.

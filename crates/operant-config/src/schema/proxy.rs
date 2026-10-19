@@ -36,9 +36,7 @@ pub(crate) const SUPPORTED_PROXY_SERVICE_KEYS: &[&str] = &[
     "channel.wechat",
     "channel.whatsapp",
     "tool.browser",
-    "tool.composio",
     "tool.http_request",
-    "tool.pushover",
     "tool.web_search",
     "memory.embeddings",
     "tunnel.custom",
@@ -206,11 +204,6 @@ pub struct Config {
     #[nested]
     pub gateway: GatewayConfig,
 
-    /// Composio managed OAuth tools integration (`[composio]`).
-    #[serde(default)]
-    #[nested]
-    pub composio: ComposioConfig,
-
     /// Microsoft 365 Graph API integration (`[microsoft365]`).
     #[serde(default)]
     #[nested]
@@ -291,11 +284,6 @@ pub struct Config {
     #[nested]
     pub project_intel: ProjectIntelConfig,
 
-    /// Google Workspace CLI (`gws`) tool configuration (`[google_workspace]`).
-    #[serde(default)]
-    #[nested]
-    pub google_workspace: GoogleWorkspaceConfig,
-
     /// Proxy configuration for outbound HTTP/HTTPS/SOCKS5 traffic (`[proxy]`).
     #[serde(default)]
     #[nested]
@@ -371,16 +359,6 @@ pub struct Config {
     #[nested]
     pub onboard_state: OnboardStateConfig,
 
-    /// Notion integration configuration (`[notion]`).
-    #[serde(default)]
-    #[nested]
-    pub notion: NotionConfig,
-
-    /// Jira integration configuration (`[jira]`).
-    #[serde(default)]
-    #[nested]
-    pub jira: JiraConfig,
-
     /// Secure inter-node transport configuration (`[node_transport]`).
     #[serde(default)]
     #[nested]
@@ -390,11 +368,6 @@ pub struct Config {
     #[serde(default)]
     #[nested]
     pub knowledge: KnowledgeConfig,
-
-    /// LinkedIn integration configuration (`[linkedin]`).
-    #[serde(default)]
-    #[nested]
-    pub linkedin: LinkedInConfig,
 
     /// Standalone image generation tool configuration (`[image_gen]`).
     #[serde(default)]
