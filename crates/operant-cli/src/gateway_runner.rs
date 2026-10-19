@@ -4010,6 +4010,10 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                         let recap_activity_for_turn = recap_activity_for_turns.clone();
                         let session_pins_for_turns = session_pins.clone();
                         let session_channels_for_turns = session_channels.clone();
+                        // The credential rotation below pushes a rotated
+                        // `.env` key into the live client, so this turn needs
+                        // its own handle to the handler.
+                        let handler_for_turn = handler.clone();
                         tokio::spawn(async move {
                     // Wrap the turn body for error resilience — a single message
                     // processing error will not crash the whole gateway.
@@ -4202,7 +4206,32 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                     // clone keeps the dispatch loop's original valid.)
 
                     // ── 5.6 Per-turn .env reload for credential rotation ─────────
-                    operant_core::env_passthrough::reload_dotenv();
+                    // Writing the process environment is not enough: the
+                    // running client captured its key when it was built and
+                    // the credential pool seeded its keys at startup, so a
+                    // value that only lands in the environment is read by
+                    // nobody and the rotation never took effect (RT-6c).
+                    // The reloaded values are pushed into the live agent
+                    // through the same seam `/connect` uses.
+                    let rotated = operant_core::env_passthrough::reload_dotenv();
+                    if let Some(key) = rotated
+                        .api_key
+                        .as_deref()
+                        .filter(|k| !k.trim().is_empty())
+                    {
+                        tracing::info!("credential rotated from .env; updating the live client");
+                        handler_for_turn.agent.set_api_key(key);
+                    }
+                    if let Some(base_url) = rotated
+                        .base_url
+                        .as_deref()
+                        .filter(|u| !u.trim().is_empty())
+                    {
+                        tracing::info!("endpoint rotated from .env; updating the live client");
+                        handler_for_turn
+                            .agent
+                            .set_endpoint(base_url, rotated.api_key.as_deref());
+                    }
 
                     // ── 5.7 Turn state: mark pending ─────────────────────────────
                     save_turn_state(&channel_id, "pending");

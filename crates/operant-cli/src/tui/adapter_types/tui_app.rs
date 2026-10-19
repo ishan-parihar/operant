@@ -899,6 +899,23 @@ impl TuiApp {
         app: &mut crate::tui::app::App,
         agent: Option<&std::sync::Arc<operant_core::agent::OperantAgent>>,
     ) {
+        // Credential rotation from `.env`, once per turn. The reload writes
+        // the process environment (tools and child processes read it) and
+        // REPORTS the credential it found; the report is what reaches the
+        // live client. Without the report the rotation never took effect,
+        // because the client captured its key when it was built
+        // (AD-037). The gateway does the same before each of its turns.
+        let rotated = operant_core::env_passthrough::reload_dotenv();
+        if let Some(agent) = agent {
+            if let Some(key) = rotated.api_key.as_deref().filter(|k| !k.trim().is_empty()) {
+                tracing::info!("credential rotated from .env; updating the live client");
+                agent.set_api_key(key);
+            }
+            if let Some(base_url) = rotated.base_url.as_deref().filter(|u| !u.trim().is_empty()) {
+                tracing::info!("endpoint rotated from .env; updating the live client");
+                agent.set_endpoint(base_url, rotated.api_key.as_deref());
+            }
+        }
         // (plan 04) watchdog repair: the agent task was aborted after the
         // grace window; commit the tail (partial text from the TUI buffer +
         // synthetic tool results) on the stored conversation.

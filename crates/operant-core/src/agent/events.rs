@@ -494,6 +494,18 @@ impl OperantAgent {
         self.client.set_endpoint(base_url, api_key);
     }
 
+    /// Swap the running client's credential without rebuilding it.
+    ///
+    /// The client captured its key when it was constructed, so a key
+    /// rotated in `.env` (or anywhere else) never reached the live
+    /// request path on its own — the reload wrote the process environment
+    /// and the running agent kept using the key it was built with. This
+    /// is the seam the gateway's per-turn `.env` reload uses.
+    pub fn set_api_key(&self, api_key: &str) {
+        tracing::info!("Agent credential rotated at runtime");
+        self.client.set_api_key(api_key);
+    }
+
     #[expect(
         clippy::expect_used,
         reason = "poisoned lock: panic is the intended recovery"
