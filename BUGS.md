@@ -495,6 +495,19 @@ today, independent of the gate repair.
 
 - [x] **RT-50 (S) — two more stale claims in AGENTS.md, one of them a command that does not exist.** "TUI bridge routes events" named a bridge that no longer exists: the vestigial `bridge_state` machinery was deleted in iter-985, and the event routing is `AgentEvent`s on `agent_event_rx` drained by `App::drain_agent_events`. The two accepted CLI stubs were also described with invocations that do not work: `operant dashboard --stop` is not a flag (the flag lives on `dashboard server`, so `operant dashboard --stop` is an "unexpected argument" error), and `operant cron run <id>` needs an ID before it reaches the stub. Both corrected in iter-1004, with the note that the dashboard stop flag lives on the SUBCOMMAND. The same pass verified the claims that hold: 15 closed gaps (15 entries), the 8-worker pool, the grace call, `sync_turn`, the steer queue, and the credential pool's OAuth fields.
 
+- [x] **RT-51 (S) — the handoff snapshot was two days stale and named the wrong CLI.** `docs/handoff/STATE.md` said "Regenerate with `./scripts/kb handoff --write`" and "Wake routine: `./scripts/kb doctor`" — the CLI is `./scripts/genome`; the `kb` name was the skill's original and is gone. It also claimed "the clippy warning gate is red at the pristine tip from in-flight peer work" (it is GREEN: `seen=24 allowlist=24 new=0 stale=0`) and described working-tree WIP that no longer exists ("deleted TUI scenario baselines +
+`crates/operant-cli/tests/tui_scenarios/rewind-flow.*`" and
+"untracked in-flight audit work in
+`docs/audit/2026-10-16-operant-audit/`"). The open-register row counts
+were wrong on all three sections: `Pending` has **3** items (the text said
+6, and named three that no longer exist — a collapsed `▸ thought` row, the
+K-4 observer gate, the K-3 terminal-scroll watermark), `Review` has **5**
+(the text said "9 unwired commands, display-only reasoning effort, Esc
+clearing all tool rows" — none of which is a row), and `Implemented` holds
+**46** rows. The handoff zone is REGENERATED (that part is the genome's
+job) and the hand-written prose around it was rewritten in iter-1005. The
+prose is the part that goes stale, so the rewrite says so at the top.
+
 - [ ] **S1 (OSC-8 / pinned-image post-draw writes)** — UNRESOLVED, live-only. Decided iter-973: not reproducible in this environment (no terminal to observe). Stays open until a live session checks it.
   `osc8::emit_hits` and `pinned_images::emit_strip` run after `terminal.draw`
   and write cells outside ratatui's diff; a width or position disagreement
