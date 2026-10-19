@@ -33,33 +33,30 @@ impl SpotifyClient {
         })
     }
 
-    #[expect(
-        clippy::expect_used,
-        reason = "panics if the token is not header-safe; a fallible path is tracked as RT-20"
-    )]
-    fn headers(&self) -> reqwest::header::HeaderMap {
+    /// A token that is not valid header text is an error for the caller to
+    /// report, not a panic.
+    fn headers(&self) -> Result<reqwest::header::HeaderMap, String> {
         let token = spotify_token().unwrap_or_default();
         let mut h = reqwest::header::HeaderMap::new();
-        h.insert(
-            reqwest::header::AUTHORIZATION,
-            format!("Bearer {}", token)
-                .parse()
-                .expect("Bearer header is valid header syntax"),
-        );
+        let bearer = reqwest::header::HeaderValue::from_str(&format!("Bearer {}", token))
+            .map_err(|e| format!("Spotify token is not a valid header value: {e}"))?;
+        h.insert(reqwest::header::AUTHORIZATION, bearer);
         h.insert(
             reqwest::header::CONTENT_TYPE,
-            "application/json"
-                .parse()
-                .expect("application/json is valid header syntax"),
+            reqwest::header::HeaderValue::from_static("application/json"),
         );
-        h
+        Ok(h)
     }
 
     async fn get(&self, path: &str) -> ToolResult {
+        let headers = match self.headers() {
+            Ok(h) => h,
+            Err(e) => return ToolResult::error("spotify", e),
+        };
         match self
             .client
             .get(format!("{}{}", self.base, path))
-            .headers(self.headers())
+            .headers(headers)
             .send()
             .await
         {
@@ -69,10 +66,14 @@ impl SpotifyClient {
     }
 
     async fn post(&self, path: &str, body: Option<Value>) -> ToolResult {
+        let headers = match self.headers() {
+            Ok(h) => h,
+            Err(e) => return ToolResult::error("spotify", e),
+        };
         let mut req = self
             .client
             .post(format!("{}{}", self.base, path))
-            .headers(self.headers());
+            .headers(headers);
         if let Some(b) = body {
             req = req.json(&b);
         }
@@ -83,10 +84,14 @@ impl SpotifyClient {
     }
 
     async fn put(&self, path: &str, body: Option<Value>) -> ToolResult {
+        let headers = match self.headers() {
+            Ok(h) => h,
+            Err(e) => return ToolResult::error("spotify", e),
+        };
         let mut req = self
             .client
             .put(format!("{}{}", self.base, path))
-            .headers(self.headers());
+            .headers(headers);
         if let Some(b) = body {
             req = req.json(&b);
         }
@@ -97,10 +102,14 @@ impl SpotifyClient {
     }
 
     async fn delete(&self, path: &str, body: Option<Value>) -> ToolResult {
+        let headers = match self.headers() {
+            Ok(h) => h,
+            Err(e) => return ToolResult::error("spotify", e),
+        };
         let mut req = self
             .client
             .delete(format!("{}{}", self.base, path))
-            .headers(self.headers());
+            .headers(headers);
         if let Some(b) = body {
             req = req.json(&b);
         }

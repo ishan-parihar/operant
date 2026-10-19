@@ -132,26 +132,20 @@ impl LinkedInClient {
         )
     }
 
-    #[expect(
-        clippy::expect_used,
-        reason = "panics if the token is not header-safe; a fallible path is tracked as RT-20"
-    )]
-    fn api_headers(&self, token: &str) -> HeaderMap {
+    /// A token or API version that is not valid header text is an error, not a panic.
+    fn api_headers(&self, token: &str) -> anyhow::Result<HeaderMap> {
         let mut headers = HeaderMap::new();
-        let bearer = format!("Bearer {}", token);
-        headers.insert(
-            reqwest::header::AUTHORIZATION,
-            HeaderValue::from_str(&bearer).expect("valid bearer token header"),
-        );
-        headers.insert(
-            "LinkedIn-Version",
-            HeaderValue::from_str(&self.api_version).expect("valid api version header"),
-        );
+        let bearer = HeaderValue::from_str(&format!("Bearer {}", token))
+            .context("LinkedIn access token is not a valid header value")?;
+        headers.insert(reqwest::header::AUTHORIZATION, bearer);
+        let version = HeaderValue::from_str(&self.api_version)
+            .context("LinkedIn API version is not a valid header value")?;
+        headers.insert("LinkedIn-Version", version);
         headers.insert(
             "X-Restli-Protocol-Version",
             HeaderValue::from_static("2.0.0"),
         );
-        headers
+        Ok(headers)
     }
 
     async fn api_request(
@@ -162,7 +156,7 @@ impl LinkedInClient {
         body: Option<serde_json::Value>,
     ) -> anyhow::Result<reqwest::Response> {
         let client = Self::client();
-        let headers = self.api_headers(token);
+        let headers = self.api_headers(token)?;
 
         let mut req = client.request(method.clone(), url).headers(headers);
         if let Some(ref json_body) = body {
@@ -177,7 +171,7 @@ impl LinkedInClient {
             let new_token = self.refresh_token(&creds).await?;
             self.update_env_token(&new_token).await?;
 
-            let retry_headers = self.api_headers(&new_token);
+            let retry_headers = self.api_headers(&new_token)?;
             let mut retry_req = Self::client().request(method, url).headers(retry_headers);
             if let Some(json_body) = body {
                 retry_req = retry_req.json(&json_body);
@@ -553,10 +547,6 @@ impl LinkedInClient {
         Ok(new_token)
     }
 
-    #[expect(
-        clippy::expect_used,
-        reason = "panics if the token is not header-safe; a fallible path is tracked as RT-20"
-    )]
     /// Register an image asset with LinkedIn, upload binary data, and return the asset URN.
     ///
     /// LinkedIn's image post flow is three steps:
@@ -610,7 +600,8 @@ impl LinkedInClient {
         let mut upload_headers = HeaderMap::new();
         upload_headers.insert(
             reqwest::header::AUTHORIZATION,
-            HeaderValue::from_str(&format!("Bearer {token}")).expect("valid bearer token header"),
+            HeaderValue::from_str(&format!("Bearer {token}"))
+                .context("LinkedIn access token is not a valid header value")?,
         );
 
         let upload_resp = client
@@ -1521,7 +1512,7 @@ mod tests {
     fn api_headers_contains_required_headers() {
         let tmp = TempDir::new().unwrap();
         let client = LinkedInClient::new(tmp.path().to_path_buf(), "202602".to_string());
-        let headers = client.api_headers("test_token");
+        let headers = client.api_headers("test_token").unwrap();
         assert_eq!(
             headers.get("Authorization").unwrap().to_str().unwrap(),
             "Bearer test_token"
@@ -1538,6 +1529,13 @@ mod tests {
                 .unwrap(),
             "2.0.0"
         );
+    }
+
+    #[test]
+    fn api_headers_rejects_token_with_control_character() {
+        let tmp = TempDir::new().unwrap();
+        let client = LinkedInClient::new(tmp.path().to_path_buf(), "202602".to_string());
+        assert!(client.api_headers("bad\ntoken").is_err());
     }
 
     // ── Image Generation Tests ──────────────────────────────────

@@ -76,23 +76,21 @@ fn get_config() -> (String, String) {
     (url.trim_end_matches('/').to_string(), token)
 }
 
-#[expect(
-    clippy::expect_used,
-    reason = "panics if the token is not header-safe; a fallible path is tracked as RT-20"
-)]
 /// Build authorization headers for the Home Assistant REST API.
 ///
 /// Returns a `HeaderMap` with:
 /// - `Authorization: Bearer {token}`
 /// - `Content-Type: application/json`
-fn get_headers(token: &str) -> HeaderMap {
+///
+/// A token that is not valid header text (e.g. one with a control character)
+/// is an error for the caller to report, not a panic.
+fn get_headers(token: &str) -> Result<HeaderMap, String> {
     let mut headers = HeaderMap::new();
-    headers.insert(
-        AUTHORIZATION,
-        HeaderValue::from_str(&format!("Bearer {}", token)).expect("Invalid Bearer token format"),
-    );
+    let bearer = HeaderValue::from_str(&format!("Bearer {}", token))
+        .map_err(|e| format!("Home Assistant token is not a valid header value: {e}"))?;
+    headers.insert(AUTHORIZATION, bearer);
     headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-    headers
+    Ok(headers)
 }
 
 // ---------------------------------------------------------------------------
@@ -283,7 +281,10 @@ impl HomeAssistantTool {
 
         let (hass_url, hass_token) = get_config();
         let url = format!("{}/api/states", hass_url);
-        let headers = get_headers(&hass_token);
+        let headers = match get_headers(&hass_token) {
+            Ok(h) => h,
+            Err(e) => return ToolResult::error("ha_list_entities", e),
+        };
 
         let client = match reqwest::Client::builder()
             .timeout(Duration::from_secs(15))
@@ -363,7 +364,10 @@ impl HomeAssistantTool {
 
         let (hass_url, hass_token) = get_config();
         let url = format!("{}/api/states/{}", hass_url, entity_id);
-        let headers = get_headers(&hass_token);
+        let headers = match get_headers(&hass_token) {
+            Ok(h) => h,
+            Err(e) => return ToolResult::error("ha_get_state", e),
+        };
 
         let client = match reqwest::Client::builder()
             .timeout(Duration::from_secs(10))
@@ -436,7 +440,10 @@ impl HomeAssistantTool {
 
         let (hass_url, hass_token) = get_config();
         let url = format!("{}/api/services", hass_url);
-        let headers = get_headers(&hass_token);
+        let headers = match get_headers(&hass_token) {
+            Ok(h) => h,
+            Err(e) => return ToolResult::error("ha_list_services", e),
+        };
 
         let client = match reqwest::Client::builder()
             .timeout(Duration::from_secs(15))
@@ -660,7 +667,10 @@ impl HomeAssistantTool {
 
         let (hass_url, hass_token) = get_config();
         let url = format!("{}/api/services/{}/{}", hass_url, domain, service);
-        let headers = get_headers(&hass_token);
+        let headers = match get_headers(&hass_token) {
+            Ok(h) => h,
+            Err(e) => return ToolResult::error("ha_call_service", e),
+        };
         let payload = build_service_payload(entity_id, data.as_ref());
 
         let client = match reqwest::Client::builder()
@@ -1519,7 +1529,7 @@ mod tests {
 
     #[test]
     fn test_get_headers_has_auth() {
-        let headers = get_headers("test_token_123");
+        let headers = get_headers("test_token_123").expect("ASCII token");
         let auth = headers
             .get("Authorization")
             .expect("Should have Authorization header");
@@ -1528,7 +1538,7 @@ mod tests {
 
     #[test]
     fn test_get_headers_has_content_type() {
-        let headers = get_headers("token");
+        let headers = get_headers("token").expect("ASCII token");
         let ct = headers
             .get("Content-Type")
             .expect("Should have Content-Type header");
@@ -1537,10 +1547,15 @@ mod tests {
 
     #[test]
     fn test_get_headers_empty_token() {
-        let headers = get_headers("");
+        let headers = get_headers("").expect("empty token is still a valid header");
         let auth = headers
             .get("Authorization")
             .expect("Should have Authorization header even with empty token");
         assert_eq!(auth.to_str().unwrap(), "Bearer ");
+    }
+
+    #[test]
+    fn test_get_headers_rejects_token_with_control_character() {
+        assert!(get_headers("bad\ntoken").is_err());
     }
 }
