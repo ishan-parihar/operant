@@ -1,5 +1,8 @@
 # Docs index
 
+| [`2026-07-23-DEAD_CODE_AUDIT.md`](audit/2026-07-23-DEAD_CODE_AUDIT.md) | Dead Code Audit Report — Generated: $(date)
+Total #[allow(deadcode)] annotations: 63… |
+
 Owns: the map of the one-off design, parity, audit and status pages under `docs/` that no other page links to.
 Not for: current state (see `docs/handoff/STATE.md`) or commands (see `docs/RUNBOOK.md`).
 
@@ -14,7 +17,7 @@ copied from each page's first heading.
 - [agentic-os/IMPLEMENTATION-PLAN.md](agentic-os/IMPLEMENTATION-PLAN.md) — Implementation plan: operant as the organization's runtime
 - [agentic-os/ORG-LAYER-DISPOSITION.md](agentic-os/ORG-LAYER-DISPOSITION.md) — Org layer disposition: keep, rewire, retire
 - [agentic-os/README.md](agentic-os/README.md) — Operant as an agentic OS, with Holon
-- [agentic-os/REMAINING-GAPS.md](agentic-os/REMAINING-GAPS.md) — Remaining implementation gaps (2026-10-16)
+- [agentic-os/2026-10-18-REMAINING-GAPS.md](agentic-os/2026-10-18-REMAINING-GAPS.md) — Remaining implementation gaps (2026-10-16)
 - [audit/2026-10-19-holon-employee-sessions-in-the-tui-integration-panels-and-se.md](audit/2026-10-19-holon-employee-sessions-in-the-tui-integration-panels-and-se.md) — Holon employee sessions in the TUI: integration, panels, and session outline
 
 ## Parity, gap and integration audits
@@ -78,7 +81,7 @@ copied from each page's first heading.
 
 ## Records, status and runbook
 
-- [BUGS.md](BUGS.md) — BUGS (superseded)
+- [BUGS.md](docs/audit/2026-06-19-BUGS.md) — BUGS (superseded)
 - [TODO.md](TODO.md) — Operant TODO
 - [RUNBOOK.md](RUNBOOK.md) — Runbook — exact commands, environment traps
 - [RECORDS.md](RECORDS.md) — Records
