@@ -463,6 +463,8 @@ today, independent of the gate repair.
 
 ## OPEN — Duplicate tool rows mid-turn (2026-10-14 batch, plan 01)
 
+- [x] **RT-35 (M) — `[client.rate_limit] max_retries = 0` panicked the process.** The attempt count was used raw in `for attempt in 1..=max_retries` in BOTH retry loops (`client.rs`). A 0 makes the range EMPTY, so the loop body never ran and the fall-through below was reached. The streaming loop returned an error (fixed in iter-139 as "ponytail-audit bug A22"), but the non-streaming loop hit `unreachable!("Retry loop always returns or breaks")` and PANICKED. In the gateway daemon that is a crash, and the setting is documented in `operant.example.toml`. Fixed iter-989: both loops clamp the count to at least 1, so a 0 means "one attempt, no retry" — which is what the setting means — and the non-streaming fall-through is an error rather than a panic. Test `a_zero_retry_budget_still_makes_one_request` drives the real `execute_with_retry` against a local server that answers 429: it asserts the call RETURNS an error (it used to panic) and that the server received EXACTLY ONE request (a 0 must not mean "no request"). Mutation: removing the clamp fails the test.
+
 - [ ] **S1 (OSC-8 / pinned-image post-draw writes)** — UNRESOLVED, live-only. Decided iter-973: not reproducible in this environment (no terminal to observe). Stays open until a live session checks it.
   `osc8::emit_hits` and `pinned_images::emit_strip` run after `terminal.draw`
   and write cells outside ratatui's diff; a width or position disagreement

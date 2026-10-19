@@ -517,7 +517,16 @@ impl OpenAIClient {
             });
         }
 
-        let max_retries = self.config.rate_limit.max_retries;
+        // The attempt count is clamped to at least 1. `max_retries` comes
+        // from `[client.rate_limit] max_retries` in the config, and a user
+        // who sets it to 0 meant "do not retry" — not "do not make the
+        // request". With the raw value, the `1..=0` range is EMPTY, the
+        // loop body never runs, and the fall-through below was reached: the
+        // first loop returned an error (fixed in iter-139), and the second
+        // one hit an `unreachable!()` and PANICKED. In the gateway daemon
+        // that is a crash. Clamping keeps "one attempt, no retry", which
+        // is what the setting means.
+        let max_retries = self.config.rate_limit.max_retries.max(1);
         let base_delay = self.config.rate_limit.base_delay_secs;
         let max_delay = self.config.rate_limit.max_delay_secs;
 
@@ -623,7 +632,11 @@ impl OpenAIClient {
         headers: HeaderMap,
         body: serde_json::Value,
     ) -> Result<(reqwest::StatusCode, String)> {
-        let max_retries = self.config.rate_limit.max_retries;
+        // Clamped to at least 1, for the same reason as the streaming loop
+        // above: `max_retries = 0` must mean "one attempt, no retry", not
+        // "no attempt". Without the clamp the range is empty and the
+        // fall-through below was reached.
+        let max_retries = self.config.rate_limit.max_retries.max(1);
         let base_delay = self.config.rate_limit.base_delay_secs;
         let max_delay = self.config.rate_limit.max_delay_secs;
 
@@ -732,7 +745,13 @@ impl OpenAIClient {
             return Ok((status, body_text));
         }
 
-        unreachable!("Retry loop always returns or breaks");
+        // The loop runs at least once (the attempt count is clamped to 1),
+        // and every path through the body returns or continues. This is
+        // reached only if that changes, so it is an error rather than a
+        // panic: a panic here would take down the gateway daemon.
+        Err(crate::error::Error::Agent(
+            "retry loop exhausted without returning a result".to_string(),
+        ))
     }
 
     /// Recursively remove null values and $schema from JSON Schema objects.
@@ -1906,6 +1925,88 @@ mod tests {
         assert_eq!(client.base_url(), "http://old.example/v1");
     }
     use super::*;
+
+    /// `[client.rate_limit] max_retries = 0` must mean "make the request
+    /// once, do not retry" — not "make no request".
+    ///
+    /// The attempt count was used raw in `for attempt in 1..=max_retries`, so
+    /// a 0 made the range EMPTY: the loop body never ran and the
+    /// fall-through was reached. One of the two retry loops returned an
+    /// error (iter-139); the other hit an `unreachable!()` and PANICKED. In
+    /// the gateway daemon that is a crash, and the setting is documented in
+    /// `operant.example.toml`.
+    ///
+    /// This drives the real `execute_with_retry` against a local server: the
+    /// server counts the requests it received, so the assertion is about
+    /// the request that was actually made, not about arithmetic.
+    #[tokio::test]
+    async fn a_zero_retry_budget_still_makes_one_request() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        // A server that answers 429 every time, so the retry path is the one
+        // under test: with a retry budget it would be called again, with a
+        // budget of zero it must be called exactly once.
+        let hits = Arc::new(AtomicUsize::new(0));
+        let hits_for_server = hits.clone();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind a loopback port");
+        let addr = listener.local_addr().expect("the bound address");
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    break;
+                };
+                hits_for_server.fetch_add(1, Ordering::SeqCst);
+                // Read the request headers so the client is not left
+                // writing into a closed socket, then answer 429.
+                use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                let mut buf = [0u8; 4096];
+                let _ = socket.read(&mut buf).await;
+                let body = r#"{"error":{"message":"slow down"}}"#;
+                let response = format!(
+                    "HTTP/1.1 429 Too Many Requests\r\nContent-Type: application/json\r\n\
+                     Content-Length: {}\r\nRetry-After: 0\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = socket.write_all(response.as_bytes()).await;
+                let _ = socket.flush().await;
+            }
+        });
+
+        let client = OpenAIClient::new(ClientConfig {
+            base_url: format!("http://{addr}/v1"),
+            api_key: Some("k".to_string()),
+            rate_limit: crate::config::RateLimitSettings {
+                max_retries: 0,
+                ..crate::config::RateLimitSettings::default()
+            },
+            ..ClientConfig::default()
+        });
+
+        // The call must RETURN, not panic. Before the clamp it reached an
+        // `unreachable!()` in the fall-through.
+        let result = client
+            .chat(
+                "gpt-4",
+                &[crate::client::Message::user("hi")],
+                None,
+                None,
+                None,
+            )
+            .await;
+        assert!(result.is_err(), "a 429 must be an error, not a success");
+
+        // And the request was actually made — exactly once, because a
+        // budget of zero means no RETRY, not no request.
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            1,
+            "a zero retry budget must make exactly one request"
+        );
+    }
 
     #[test]
     fn test_message_to_value() {

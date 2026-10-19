@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-989 — `[client.rate_limit] max_retries = 0` no longer panics the process.** The attempt count was used raw in `for attempt in 1..=max_retries`, so a 0 made the range empty: the request was never made and the non-streaming retry loop hit an `unreachable!()`. In the gateway daemon that is a crash. A 0 now means "one attempt, no retry", which is what the setting means, and the loop's fall-through is an error rather than a panic.
+
 - **iter-986 — rotating a credential in `.env` now actually rotates the running agent's credential.** The gateway's per-turn `.env` reload wrote the new key into the process environment, and nothing read it back: the client captured its key when it was built and the credential pool seeded its keys at startup, so a rotated key reached nobody. The reload now reports the credential and the endpoint it found, and the gateway pushes them into the live client. A key rotated in the documented `~/.operant/.env` now takes effect on the next turn, without restarting the gateway daemon.
 
   This supersedes the iter-985 entry, which claimed the same thing and was wrong: it did not reach the credential pool, which re-selects the startup-seeded key before every request, and it read a CWD-relative `.env` rather than the documented `~/.operant/.env`. Both are fixed here, and the two operations that were conflated — "use this key now" and "replace the stored credential's secret" — are now separate.
