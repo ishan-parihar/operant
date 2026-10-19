@@ -27,6 +27,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **iter-1014 — an MCP tool's registry name is now injective.** The name was `mcp_{server}_{tool}` with `/` and `-` folded to `_`, so two different (server, tool) pairs could share a name. The registry replaces a tool on a name collision and the sync tears down by name, so a hostile MCP server could shadow another server's tool — and tearing one server down removed the other's live tool. The same expression produced names the provider rejects (a server named `my.srv` gave `mcp_my.srv_tool`, and OpenAI's strict alphabet has no `.`, so the whole request failed). The name is now built by a lossless encoding that is injective by construction and always inside the provider's alphabet: `github` + `create_issue` is `mcp_github-create_issue`.
+
 - **iter-1009 — a webhook adapter with no signing secret now says so at startup.** The HMAC check is skipped entirely when no `webhooks_secret` is configured, so every POST is accepted and forwarded into the agent as a message — and the adapter's default listen address is `0.0.0.0`. The configuration itself is unchanged (a private-network receiver with no secret is legitimate), but the adapter now warns at startup with the address, what is accepted, and the two ways to fix it.
 
 - **iter-998 — the dashboard's API now accepts the auth header the bundled frontend actually sends.** The frontend sets `X-Hermes-Session-Token` on every request and never sends `Authorization`; the server read only `Authorization: Bearer`, so every API call the real dashboard made returned 401 and the UI could never have worked. The token is now accepted as `Authorization: Bearer`, as `X-Hermes-Session-Token`, or as the dashboard cookie.
@@ -161,7 +163,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   as before. Kept on purpose: `operant_ui/ui_header.rs`, the live header renderer; replacing
   it is an owner decision. The 60 `dead_code` warnings that remain (test-only
   helpers and never-constructed variants/fields) are tracked in
-  `.ci/clippy-allowlist.txt` and in `BUGS.md`.
+  `.ci/clippy-allowlist.txt` and in `docs/audit/2026-06-19-BUGS.md`.
 
 - **iter-947 — `[display] show_reasoning` is removed; `[agent] show_reasoning` is the one key.** The CLI config had two keys for the TUI reasoning display, and `[display]` overrode `[agent]`, so the two could disagree. The TUI and the gateway now both read `[agent] show_reasoning`. A `[display] show_reasoning` key left in the CLI config is ignored. A user who set `[display] show_reasoning = false` should move that value to `[agent]`.
 
@@ -893,7 +895,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `bash_prefix_allows_plain_continuations_only`.
 
 - **iters 868–869 — the remaining-gaps close-out, agentic-OS** (G3
-  closed by a peer in iter-865; see `docs/agentic-os/REMAINING-GAPS.md`'s
+  closed by a peer in iter-865; see `docs/agentic-os/2026-10-18-REMAINING-GAPS.md`'s
   closure log):
   - **iter-868 — G2, Chair notify, kernel-aligned**: `operant org holon
     notify --reason R --text T` is the `[notify].command` delivery seam —
@@ -962,7 +964,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `drain_leaves_pendings_alone_while_a_turn_is_still_stopping`).
 
 - **iter-865 — G3: clock-organ liveness is now evidenced, and doctor
-  reads it** (`REMAINING-GAPS.md` G3). The clock organ fires `holon tick`
+  reads it** (`2026-10-18-REMAINING-GAPS.md` G3). The clock organ fires `holon tick`
   every 2 minutes but wrote no liveness evidence, and `operant doctor`
   unconditionally printed OK for it — a clock that died at boot read as
   healthy forever. The organ now stamps the unix seconds of every
@@ -1051,7 +1053,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     solo rerun green). The 2026-10-15 brief's deferred tests ran for the
     first time and PASSED: `tool_output_budget_evicts_oldest_first` and
     the five rewind-selector tests. Six real hidden regressions the red
-    gate had been swallowing are now in `BUGS.md` (H-1..H-3, H-5..H-7);
+    gate had been swallowing are now in `docs/audit/2026-06-19-BUGS.md` (H-1..H-3, H-5..H-7);
     the one `sub_agent_tool` failure is the known parallel-DB flake
     (solo rerun green).
 

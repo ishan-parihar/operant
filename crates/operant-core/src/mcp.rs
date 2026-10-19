@@ -1635,14 +1635,99 @@ pub struct McpNamespacedTool {
 
 impl McpNamespacedTool {
     fn new(server_name: &str, tool: McpTool) -> Self {
-        let qualified_name = format!("mcp_{}_{}", server_name, tool.name())
-            .replace('/', "_")
-            .replace('-', "_");
+        let qualified_name = qualified_tool_name(server_name, &tool.name());
         Self {
             qualified_name,
             tool,
         }
     }
+}
+
+/// The registry name for an MCP tool.
+///
+/// It must be INJECTIVE: two different (server, tool) pairs must never
+/// produce the same name, because the registry's `register` REPLACES an
+/// existing tool with the same name (`tools.rs`: "Tool already
+/// registered, replacing") and the sync's teardown removes BY NAME — so a
+/// collision silently deletes another server's live tool.
+///
+/// The tool name comes from the MCP SERVER, which is untrusted, so the
+/// encoding has to survive a hostile name.
+///
+/// The first version concatenated with `_` as the separator and sanitized
+/// `/` and `-` to `_`. That was broken three ways:
+///
+/// 1. **Not injective.** Server `a` with tool `b_c` and server `a_b` with
+///    tool `c` both produced `mcp_a_b_c`. The second registration replaced
+///    the first, and the teardown list held the name twice — so tearing
+///    one server down removed the other's still-live tool.
+/// 2. **Lossy.** A server named `my.srv` produced `mcp_my.srv_tool`,
+///    which contains a `.` — not in OpenAI's strict tool-name alphabet
+///    (`^[a-zA-Z0-9_-]{1,64}$`). The whole request was rejected.
+/// 3. **The provider saw a different name than the registry.** The
+///    registry keys on `OperantTool::name()`, but the provider sees
+///    `ToolSchema::name`, and `ToolSchema::new` runs `sanitize_tool_name`
+///    over it — so any character it rewrote produced a name the model
+///    could call but the dispatcher could not resolve.
+///
+/// The fix is a LOSSLESS escape and a separator that cannot appear in an
+/// escaped component:
+///
+/// - Inside a component, `-` becomes `--` and `/` becomes `//`.
+/// - The two components are joined with a SINGLE `-`.
+///
+/// An escaped run of `-` is always EVEN (a run of N becomes 2N), so a
+/// single `-` in the qualified name is unambiguously the join. That makes
+/// the encoding injective: the pair can be recovered by splitting on the
+/// first single `-` and un-escaping each half.
+///
+/// The `_` in a tool name is left ALONE, so the common case stays
+/// readable: `github` + `create_issue` is `mcp_github-create_issue`.
+fn qualified_tool_name(server_name: &str, tool_name: &str) -> String {
+    format!(
+        "mcp_{}-{}",
+        escape_component(server_name),
+        escape_component(tool_name)
+    )
+}
+
+/// Escape the characters that the provider's tool-name alphabet rejects,
+/// or that could collide with the join separator.
+///
+/// The provider alphabet is `[a-zA-Z0-9_-]` (OpenAI strict) and
+/// `[a-zA-Z_][a-zA-Z0-9_.:-]` (Google). The INTERSECTION is
+/// `[a-zA-Z0-9_-]`, so a name carrying `.` or `:` is rejected outright by
+/// OpenAI — the whole request fails, not just that tool.
+///
+/// Every character outside `[a-zA-Z0-9_]` is therefore ENCODED as
+/// `_<hex>_`: `-` becomes `_2d_`, `/` becomes `_2f_`, `.` becomes `_2e_`,
+/// `:` becomes `_3a_`, and anything else becomes `_<hex>_` too. The
+/// encoding is lossless (the hex is recoverable) and stays inside the
+/// provider alphabet.
+///
+/// The two components are joined with a SINGLE `-`, and the escaped
+/// components never contain a bare `-`, so the join is unambiguous and
+/// the encoding is injective: the pair is recovered by splitting on the
+/// single `-` and decoding each half.
+///
+/// `_` and the alphanumerics are left alone, so the common case stays
+/// readable: `github` + `create_issue` is `mcp_github-create_issue`.
+fn escape_component(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    for ch in name.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '_' {
+            out.push(ch);
+            continue;
+        }
+        // `-` is the join separator, so it must not survive in a
+        // component; everything else outside the alphabet is encoded the
+        // same way, for the same reason: the result has to be legal AND
+        // lossless.
+        out.push('_');
+        out.push_str(&format!("{:02x}", ch as u32));
+        out.push('_');
+    }
+    out
 }
 
 #[async_trait]
@@ -2002,6 +2087,171 @@ impl McpManager {
 mod tests {
     use super::*;
 
+    /// The qualified name must be INJECTIVE.
+    ///
+    /// The name is built from the server name and the tool name, and the
+    /// tool name comes from the MCP SERVER — which is untrusted. The
+    /// registry's `register` REPLACES an existing tool with the same
+    /// name, and the sync's teardown removes BY NAME, so a collision
+    /// silently deletes another server's live tool.
+    ///
+    /// The first version concatenated with `_` and sanitized `/` and `-`
+    /// to `_`. Server `a` with tool `b_c` and server `a_b` with tool `c`
+    /// both produced `mcp_a_b_c`.
+    #[test]
+    fn the_mcp_qualified_name_is_injective() {
+        // The collisions that used to exist.
+        assert_ne!(
+            qualified_tool_name("a", "b_c"),
+            qualified_tool_name("a_b", "c"),
+            "two different (server, tool) pairs must not share a name"
+        );
+        assert_ne!(
+            qualified_tool_name("a", "b__c"),
+            qualified_tool_name("a_b", "_c"),
+            "a double underscore must not reintroduce a collision"
+        );
+        assert_ne!(
+            qualified_tool_name("a", "b"),
+            qualified_tool_name("a", "b/c"),
+            "a sanitised separator must not reintroduce a collision"
+        );
+        assert_ne!(
+            qualified_tool_name("a", "b-c"),
+            qualified_tool_name("a-b", "c"),
+            "a hyphen must not reintroduce a collision"
+        );
+        assert_ne!(
+            qualified_tool_name("a", "b.c"),
+            qualified_tool_name("a.b", "c"),
+            "a dot must not reintroduce a collision"
+        );
+        // The COMMON case stays readable: the tool name's underscores are
+        // untouched.
+        assert_eq!(
+            qualified_tool_name("github", "create_issue"),
+            "mcp_github-create_issue",
+            "the common name must stay readable"
+        );
+    }
+
+    /// The qualified name must be inside the PROVIDER's tool-name
+    /// alphabet.
+    ///
+    /// OpenAI strict requires `^[a-zA-Z0-9_-]{1,64}$`. A server named
+    /// `my.srv` used to produce `mcp_my.srv_tool`, which carries a `.` —
+    /// and the whole REQUEST was rejected, not just that tool.
+    #[test]
+    fn the_mcp_qualified_name_is_inside_the_provider_alphabet() {
+        for (server, tool) in [
+            ("my.srv", "do.thing"),
+            ("srv:one", "a-tool"),
+            ("a/b", "c"),
+            ("weird name", "with spaces"),
+            ("ünïcode", "tööl"),
+            ("", ""),
+        ] {
+            let name = qualified_tool_name(server, tool);
+            assert!(
+                name.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-'),
+                "the qualified name {name:?} (server {server:?}, tool {tool:?}) \
+                 must be inside the provider's alphabet"
+            );
+        }
+    }
+
+    /// The schema the PROVIDER sees must be the SAME name the registry
+    /// keys on.
+    #[test]
+    fn the_schema_name_equals_the_registry_name() {
+        for (server, tool) in [
+            ("github", "create_issue"),
+            ("my.srv", "do.thing"),
+            ("a/b", "c"),
+            ("srv:one", "a-tool"),
+        ] {
+            let qualified = qualified_tool_name(server, tool);
+            let schema = ToolSchema::new(
+                &qualified,
+                "a tool",
+                serde_json::json!({"type": "object", "properties": {}}),
+            );
+            assert_eq!(
+                schema.name, qualified,
+                "the provider must see the same name the registry keys on \
+                 (server {server:?}, tool {tool:?})"
+            );
+        }
+    }
+
+    /// The encoding is INJECTIVE by construction: the pair is recoverable
+    /// from the qualified name.
+    ///
+    /// The components are encoded with `_<hex>_` and joined with a single
+    /// `-`, which no encoded component contains. So splitting the
+    /// qualified name on that single `-` recovers the two encoded
+    /// components, and decoding each one recovers the original. Two
+    /// different pairs therefore cannot share a name.
+    #[test]
+    fn the_mcp_qualified_name_round_trips() {
+        for (server, tool) in [
+            ("github", "create_issue"),
+            ("a", "b_c"),
+            ("a_b", "c"),
+            ("my.srv", "do.thing"),
+            ("srv:one", "a-tool"),
+            ("a/b", "c"),
+            ("", ""),
+            ("ünïcode", "tööl"),
+        ] {
+            let name = qualified_tool_name(server, tool);
+            let body = name
+                .strip_prefix("mcp_")
+                .unwrap_or_else(|| panic!("the name {name:?} must start with mcp_"));
+            let (server_part, tool_part) = body
+                .split_once('-')
+                .unwrap_or_else(|| panic!("the name {name:?} must contain the join"));
+            assert_eq!(
+                decode_component(server_part),
+                server,
+                "the server part must decode back (name {name:?})"
+            );
+            assert_eq!(
+                decode_component(tool_part),
+                tool,
+                "the tool part must decode back (name {name:?})"
+            );
+        }
+    }
+
+    /// Undo [`escape_component`].
+    fn decode_component(encoded: &str) -> String {
+        let mut out = String::with_capacity(encoded.len());
+        let mut rest = encoded;
+        while let Some(start) = rest.find("_") {
+            let (before, after) = rest.split_at(start);
+            out.push_str(before);
+            let after = &after[1..]; // the `_` that opened the escape
+            // The escape is `_<hex>_`. A `_` that is not followed by two
+            // hex digits and a closing `_` is a literal underscore.
+            let is_escape = after.len() >= 3
+                && after.as_bytes()[0].is_ascii_hexdigit()
+                && after.as_bytes()[1].is_ascii_hexdigit()
+                && after.as_bytes()[2] == b'_';
+            if !is_escape {
+                out.push('_');
+                rest = after;
+                continue;
+            }
+            let code = u32::from_str_radix(&after[..2], 16).expect("two hex digits");
+            out.push(char::from_u32(code).expect("a valid scalar value"));
+            rest = &after[3..];
+        }
+        out.push_str(rest);
+        out
+    }
+
     #[test]
     fn test_tool_definition() {
         let def = McpToolDefinition {
@@ -2148,8 +2398,13 @@ mod tests {
             .iter()
             .map(|s| s.name.clone())
             .collect();
-        assert!(names.iter().any(|n| n == "mcp_test_server_search"));
-        assert!(names.iter().any(|n| n == "mcp_test_server_save"));
+        // The qualified name joins the two components with a `-`, and a
+        // `-` INSIDE a component is encoded as `_2d_` — the separator
+        // must not be forgeable from a component, or the pair would be
+        // ambiguous. The server here is `test-server`, so it encodes to
+        // `test_2d_server`.
+        assert!(names.iter().any(|n| n == "mcp_test_2d_server-search"));
+        assert!(names.iter().any(|n| n == "mcp_test_2d_server-save"));
 
         // Re-syncing is idempotent and reports the same count.
         let count2 = manager.sync_tools_to_registry(&registry).await;
