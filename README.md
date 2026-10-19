@@ -4,14 +4,14 @@
 
 - [Quick start](#quick-start)
 - [What it is](#what-it-is)
-- [How it works](#how-it-works)
+- [How the agent loop works](#how-the-agent-loop-works)
 - [Features](#features)
 - [Skills](#skills)
-- [Configuration](#configuration)
+- [Configuring operant](#configuring-operant)
 - [CLI reference](#cli-reference)
-- [Requirements](#requirements)
+- [Build prerequisites](#build-prerequisites)
 - [Development](#development)
-- [License](#license)
+- [Licensing](#licensing)
 
 
 [![CI](https://github.com/ishan-parihar/operant/actions/workflows/ci.yml/badge.svg)](https://github.com/ishan-parihar/operant/actions/workflows/ci.yml)
@@ -58,7 +58,7 @@ Why it is different:
 
 ---
 
-## How it works
+## How the agent loop works
 
 The agent loop is a classic ReAct cycle, executed with bounded iterations and tool timeouts:
 
@@ -193,7 +193,7 @@ operant curator              # agent-curated skill lifecycle (archive/backup/res
 
 ---
 
-## Configuration
+## Configuring operant
 
 Config lives at `~/.operant/operant.toml` (secrets in `~/.operant/.env`). Start from the annotated reference:
 
@@ -274,7 +274,7 @@ Renders in your terminal's main buffer with a small live region at the bottom in
 
 ---
 
-## Requirements
+## Build prerequisites
 
 - **Rust 1.89+** (edition 2024)
 - 4 GB RAM (8 GB recommended)
@@ -320,7 +320,7 @@ Architecture, porting notes, and parity decisions live in [`AGENTS.md`](AGENTS.m
 
 ---
 
-## License
+## Licensing
 
 MIT **or** Apache-2.0 — see [LICENSE-MIT](LICENSE-MIT) or [LICENSE-APACHE](LICENSE-APACHE).
 
