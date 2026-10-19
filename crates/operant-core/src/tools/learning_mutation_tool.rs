@@ -101,6 +101,15 @@ impl OperantTool for LearningMutationTool {
             }
         };
 
+        // KB-9: a Holon run never edits the personal knowledge base (O-22,
+        // invariant 4). The change lands as an annotation on the run, as
+        // skill_manage does.
+        if let Some(run_dir) = crate::org::holon_learning_sink()
+            && matches!(parsed.action.as_str(), "delete" | "edit")
+        {
+            return holon_learning_annotation(&run_dir, &parsed);
+        }
+
         let result = match parsed.action.as_str() {
             "delete" => delete_node(&parsed.node_id, &self.skills_dir, &self.memory_dir),
             "edit" => {
@@ -155,10 +164,46 @@ impl OperantTool for LearningMutationTool {
     }
 }
 
+/// KB-9: a delete or edit from a Holon run is recorded as an annotation on
+/// that run (O-22, invariant 4). The personal skills and memory stay as they are.
+fn holon_learning_annotation(run_dir: &std::path::Path, parsed: &LearningManageArgs) -> ToolResult {
+    let payload = json!({
+        "tool": "learning_manage",
+        "action": parsed.action,
+        "node_id": parsed.node_id,
+        "summary": parsed.content.as_deref().map(|c| c.chars().take(2000).collect::<String>()),
+    });
+    crate::org::record_learning_annotation(run_dir, "learning_changes", payload);
+    ToolResult::success(
+        "learning_manage",
+        format!(
+            "Learning change '{}' recorded as an annotation for this run's result (learning_changes) — a Holon run does not edit the personal knowledge base.",
+            parsed.node_id
+        ),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn holon_run_records_a_delete_as_an_annotation_only() {
+        // KB-9: the Holon redirect writes the change onto the run's learning
+        // file. It must not delete the node from the personal graph.
+        let run = tempdir().unwrap();
+        let args = LearningManageArgs {
+            action: "delete".to_string(),
+            node_id: "node-1".to_string(),
+            content: None,
+        };
+        let result = holon_learning_annotation(run.path(), &args);
+        assert!(result.success);
+        let recorded = std::fs::read_to_string(run.path().join("learning.jsonl")).unwrap();
+        assert!(recorded.contains("learning_changes"));
+        assert!(recorded.contains("node-1"));
+    }
 
     #[test]
     fn test_schema_valid() {

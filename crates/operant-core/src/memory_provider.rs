@@ -47,6 +47,7 @@ pub struct MemorySyncExecutor {
 
 enum SyncJob {
     SyncTurn {
+        bank: Option<String>,
         user: String,
         assistant: String,
     },
@@ -90,11 +91,13 @@ impl MemorySyncExecutor {
         }
     }
 
-    /// Submit a sync_turn job (non-blocking).
-    pub fn submit_sync_turn(&self, user: &str, assistant: &str) {
+    /// Submit a sync_turn job (non-blocking). `bank` is the bank the turn
+    /// belongs to, read by the caller now, so the worker never reads it later.
+    pub fn submit_sync_turn(&self, user: &str, assistant: &str, bank: Option<String>) {
         if self
             .tx
             .try_send(SyncJob::SyncTurn {
+                bank,
                 user: user.to_string(),
                 assistant: assistant.to_string(),
             })
@@ -184,8 +187,15 @@ impl MemorySyncExecutor {
     ) {
         while let Some(job) = rx.recv().await {
             match job {
-                SyncJob::SyncTurn { user, assistant } => {
-                    if let Err(e) = provider.sync_turn(&user, &assistant).await {
+                SyncJob::SyncTurn {
+                    bank,
+                    user,
+                    assistant,
+                } => {
+                    if let Err(e) = provider
+                        .sync_turn_in_bank(bank.as_deref(), &user, &assistant)
+                        .await
+                    {
                         if let Some(m) = &metrics {
                             m.record_memory_sync_failure();
                         }
@@ -268,6 +278,25 @@ pub trait MemoryProvider: Send + Sync {
     async fn sync_turn(&self, user: &str, assistant: &str) -> Result<()> {
         let _ = (user, assistant);
         Ok(())
+    }
+
+    /// The bank this provider writes turns to right now. Read when a turn is
+    /// queued, so a deferred sync keeps that bank (KB-7). `None` for providers
+    /// without banks.
+    fn write_bank(&self) -> Option<String> {
+        None
+    }
+
+    /// Persist a completed turn into `bank`; `None` means the current bank.
+    /// Default ignores the bank and calls [`Self::sync_turn`].
+    async fn sync_turn_in_bank(
+        &self,
+        bank: Option<&str>,
+        user: &str,
+        assistant: &str,
+    ) -> Result<()> {
+        let _ = bank;
+        self.sync_turn(user, assistant).await
     }
 
     /// Tool schemas this provider exposes to the model (OpenAI format).
@@ -456,5 +485,64 @@ mod tests {
                 "provider name '{name}' should route to the memory_wire provider"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod bank_at_enqueue_tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    /// Records the bank each sync job arrives with.
+    struct BankRecorder {
+        current: Mutex<String>,
+        written: Mutex<Vec<Option<String>>>,
+    }
+
+    #[async_trait]
+    impl MemoryProvider for BankRecorder {
+        fn name(&self) -> &str {
+            "bank-recorder"
+        }
+
+        fn is_available(&self) -> bool {
+            true
+        }
+
+        async fn initialize(&self, _session_id: &str) -> Result<()> {
+            Ok(())
+        }
+
+        fn write_bank(&self) -> Option<String> {
+            Some(self.current.lock().unwrap().clone())
+        }
+
+        async fn sync_turn_in_bank(
+            &self,
+            bank: Option<&str>,
+            _user: &str,
+            _assistant: &str,
+        ) -> Result<()> {
+            self.written.lock().unwrap().push(bank.map(str::to_string));
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn queued_turn_keeps_the_bank_it_was_queued_under() {
+        // KB-7 / GW-4: the bank is read at enqueue. A scope switch before the
+        // worker drains must not move the turn into another seat's bank.
+        let provider = Arc::new(BankRecorder {
+            current: Mutex::new("personal".to_string()),
+            written: Mutex::new(Vec::new()),
+        });
+        let exec = MemorySyncExecutor::new(provider.clone());
+        exec.submit_sync_turn("hi", "hello", provider.write_bank());
+        *provider.current.lock().unwrap() = "emp:alice".to_string();
+        exec.shutdown().await;
+        assert_eq!(
+            *provider.written.lock().unwrap(),
+            vec![Some("personal".to_string())]
+        );
     }
 }

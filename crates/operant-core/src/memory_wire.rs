@@ -188,6 +188,14 @@ impl<S: Store> MemoryWireProvider<S> {
     /// turn. A guard miss is a no-op — a degraded backend must not fail the
     /// turn that triggered the write.
     fn retain_turn(&self, user: &str, assistant: &str) {
+        let bank = self.bank_id();
+        self.retain_turn_in(&bank, user, assistant);
+    }
+
+    /// Retain one turn into `bank`. The sync worker passes the bank the turn
+    /// was queued under (KB-7), so a scope switch before the worker runs
+    /// cannot move the turn into another seat's bank.
+    fn retain_turn_in(&self, bank: &str, user: &str, assistant: &str) {
         if user.trim().is_empty() && assistant.trim().is_empty() {
             return;
         }
@@ -197,11 +205,8 @@ impl<S: Store> MemoryWireProvider<S> {
             .take(ASSISTANT_TURN_CHARS)
             .collect::<String>();
         let content = format!("User: {u}\nAssistant: {a}");
-        // (plan 06B) clone the key out of the lock: the service call
-        // outlives any guard we could hold here.
-        let bank = self.bank.read().map(|b| b.clone()).unwrap_or_default();
         let svc = &self.service;
-        guard("retain_turn", || svc.retain(&bank, &content, None));
+        guard("retain_turn", || svc.retain(bank, &content, None));
     }
 
     /// Recall for a query, returning a formatted text block. Uses
@@ -429,6 +434,23 @@ impl<S: Store + Send + Sync + 'static> crate::memory_provider::MemoryProvider
         } else {
             format!("[memory]\n{text}")
         }
+    }
+
+    fn write_bank(&self) -> Option<String> {
+        Some(self.bank_id())
+    }
+
+    async fn sync_turn_in_bank(
+        &self,
+        bank: Option<&str>,
+        user: &str,
+        assistant: &str,
+    ) -> Result<()> {
+        match bank {
+            Some(bank) => self.retain_turn_in(bank, user, assistant),
+            None => self.retain_turn(user, assistant),
+        }
+        Ok(())
     }
 
     async fn sync_turn(&self, user: &str, assistant: &str) -> Result<()> {
@@ -939,5 +961,32 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// KB-7: a turn queued under the personal bank lands there even after the
+    /// provider has been scoped to a seat, and the seat bank stays clean.
+    #[tokio::test]
+    async fn sync_turn_in_bank_retains_into_the_queued_bank() {
+        use crate::memory_provider::MemoryProvider as _;
+        let store = SqliteStore::open_in_memory().expect("open in-memory store");
+        let provider =
+            MemoryWireProvider::from_service(MemoryService::new(store), super::DEFAULT_BANK);
+        let queued = provider.write_bank();
+        let seat = MemoryScope::Seat {
+            identity: "eng-alice".to_string(),
+        };
+        provider.set_scope(&seat);
+        provider
+            .sync_turn_in_bank(queued.as_deref(), "personal question zebra", "answer")
+            .await
+            .expect("sync");
+        provider.set_scope(&MemoryScope::Personal);
+        assert!(
+            provider
+                .recall_text("zebra", 5)
+                .contains("personal question zebra")
+        );
+        provider.set_scope(&seat);
+        assert!(!provider.recall_text("zebra", 5).contains("zebra"));
     }
 }

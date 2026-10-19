@@ -37,6 +37,8 @@ Working a `## Pending` row, one row per iteration:
 - `operant debug memory` + `docs/MEMORY_BUDGET.md` footprint surfaces (iter-851)
 - Memory banks: `bank_for(identity, scope)` — seat banks (`emp:*`) isolated from the personal bank (iter-856)
 - Terminal-scroll watermark keyed on message boundaries, not rows (BUGS K-3, iter-887)
+- Async memory writes carry their bank from enqueue; a scope change after queueing does not move the write (BUGS GW-4, KB-7, iter-962)
+- Skill writes are screened and rolled back when refused; skill names and descriptions are escaped in the system prefix; a Holon run's learning delete or edit is an annotation (BUGS KB-4, KB-5, KB-9, iter-962)
 
 ## Pending
 
@@ -55,7 +57,6 @@ Working a `## Pending` row, one row per iteration:
 - Holon red-team (BUGS.md OS-9): `supervise --loop` never clears `errored` (`cmd_org.rs:502, 529, 547`). Verify: the idle back-off returns to 30 s after one successful tick, with a test.
 - Holon red-team (BUGS.md OS-8): native tool children outlive their 120 s timeout (`crates/operant-os/src/tools.rs:257-284`). Verify: `kill_on_drop` on the child, with a test that a timed-out child is reaped.
 - Holon red-team (BUGS.md OS-10): timeout kill leaves TERM-trapping grandchildren alive (`supervisor.rs:273-285`). Verify: after the grace period the whole group gets SIGKILL, with a test using `trap '' TERM`.
-- Seat red-team (BUGS.md GW-4): a queued memory write resolves its bank when the worker runs (`crates/operant-core/src/memory_provider.rs:94-101`, `memory_wire.rs:190-204`). Verify: the job carries its scope, with a test that a scope change after queueing does not move the write.
 - Seat red-team (BUGS.md GW-5): `/new` does not clear the transcript or the summary (`crates/operant-cli/src/gateway_commands.rs`, `gateway_runner.rs:464-469`, `gateway_session.rs:1401-1404`). Verify: the next turn after `/new` starts from an empty transcript, with a test.
 - Seat red-team (BUGS.md GW-7): the continuation summary is keyed by chat, so `/resume` can inject another transcript's summary (`gateway_runner.rs:1313, 1601, 1632`). Verify: the summary is keyed by `session_id`, with a test for a pinned resume.
 - Seat red-team (BUGS.md GW-9, same defect as G-1 in `docs/plans/2026-10-19-org-and-tui-foundation-ratified-decisions-red-team-findings-.md`): `/session` reports `premiere` for an unbound chat (`crates/operant-cli/src/gateway_commands.rs:835`). Verify: the report says "unbound — personal seat" for a NULL binding, with a test. Do not change the default binding; that is owner decision org-tui-foundation-003.
@@ -83,3 +84,4 @@ Owner decisions, not autonomous work. Until ruled, make no change in the area an
 - Seat red-team (org-tui-foundation-003): the default employee for new org-mode chats. Options: a `[holon] default_employee` roster id, or leave new chats unbound. `premiere` is not on the roster, so AD-004 rules it out. Recommendation: option (c), new chats stay unbound. GW-9 changes only the `/session` report, which fits (c).
 - TUI red-team (BUGS.md TUI-1): a pending approval prompt is painted under later overlays, and its keys go to whichever overlay is open. Overlaps `docs/ROADMAP-TUI-FLEET.md` §6.1, which deferred the dispatch-order fix. Decide: reorder the gates, or make `dialog_priority()` the real router. Recommendation: reorder the gates so the approval dialog comes first; defer the router rewrite.
 - TUI red-team (BUGS.md TUI-11): some TUI actions run blocking I/O on the event loop (SQLite branch queries, `git diff`). Magnitude is unmeasured. Decide whether to move them to `spawn_blocking` now or after profiling. Recommendation: profile once, then decide.
+- KB red-team (BUGS.md KB-6, retention half): every turn is retained, including turns from untrusted channels, so a channel message can be stored and replayed. The escape and data label are fixed (iter-962). Decide which channels are untrusted (for example, anything but the owner's chat) and whether they skip `sync_turn`. Recommendation: skip retention for non-owner channels, and keep recall unchanged.

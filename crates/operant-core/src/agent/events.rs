@@ -818,7 +818,8 @@ impl OperantAgent {
                 for (name, description) in &skills {
                     frozen.push_str(&format!(
                         "  <skill name=\"{}\">{}</skill>\n",
-                        name, description
+                        escape_xml_text(name),
+                        escape_xml_text(description)
                     ));
                 }
                 frozen.push_str("</available_skills>");
