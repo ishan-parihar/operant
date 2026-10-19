@@ -70,11 +70,10 @@ Working a `## Pending` row, one row per iteration:
 
 ## Review
 
-Owner decisions, not autonomous work. Until ruled, make no change in the area an item names. Items with a recommendation give it at the end.
+Decided on 2026-10-19; each choice and its reason are in the record named. The owner can overturn any of them with a new record.
 
-- Autonomous publish (`crates/operant-cli/src/autonomous.rs:660`, `publish_changes`): it runs `git add --all .`, so any uncommitted file in the checkout (a peer's BUGS.md rows, `Cargo.lock`, `xd:/`) is committed to `[autonomous] git_branch`. Recommendation: stage only the paths the agent changed. Until then, start `operant autonomous` only when `git status --short` is empty.
-- Context management (magic-context review): agent-driven reduction (`ctx_reduce`) and a background historian instead of the synchronous summarize rung — larger core changes
-- BUGS.md R42-8: two live Telegram bot tokens unredacted in gateway.log
-- Seat red-team (org-tui-foundation-003): the default employee for new org-mode chats. Options: a `[holon] default_employee` roster id, or leave new chats unbound. `premiere` is not on the roster, so AD-004 rules it out. Recommendation: option (c), new chats stay unbound. GW-9 changes only the `/session` report, which fits (c).
-- TUI red-team (BUGS.md TUI-11, git-diff half): `DiffState::reload_files` runs `git diff` on the event loop when the diff viewer opens (`diff_viewer/state.rs:108`, `diff_viewer/parse.rs:9`). The branch half is done (AD-015). Decide: load on a blocking thread with a loading state, or keep it synchronous and bound it.
-- KB red-team (BUGS.md KB-6, retention half): every turn is retained, including turns from untrusted channels, so a channel message can be stored and replayed. The escape and data label are fixed (iter-962). Decide which channels are untrusted (for example, anything but the owner's chat) and whether they skip `sync_turn`. Recommendation: skip retention for non-owner channels, and keep recall unchanged.
+- Autonomous publish: AD-027. The loop stages and commits only the paths its tick changed.
+- Seat default for new org chats: AD-028. New chats stay unbound. The comment that calls an unbound session ungoverned is still open for review.
+- Context management: AD-029. The synchronous summarize rung stays; agent-driven reduction and a background historian are not built.
+- BUGS.md R42-8 (Telegram tokens in gateway.log): AD-030. The filter is covered by a test; the historic log is not rewritten; rotation is the owner's call.
+- TUI-11, git-diff half: AD-026 (closed). KB-6 retention: closed by iter-971 (AD-019).

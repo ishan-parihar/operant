@@ -168,7 +168,6 @@ impl App {
 
             failed_input_recovery: None,
             session_title: None,
-            remote_session_url: None,
             bridge_state: crate::tui::bridge_state::BridgeConnectionState::Disconnected,
             bridge_state_rx: Some(bridge_state_rx),
             bridge_state_tx: Some(bridge_state_tx),

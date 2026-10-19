@@ -29,10 +29,8 @@ pub fn tui_slash_command_data() -> Vec<(&'static str, &'static str)> {
 /// (plan 04) same source as typeahead: the TUI registry, one table.
 pub(super) fn help_overlay_entries() -> Vec<HelpEntry> {
     crate::tui::operant_app::app::registered_command_rows()
-        .map(|(name, help)| HelpEntry {
+        .map(|(name, _)| HelpEntry {
             name: name.to_string(),
-            aliases: String::new(),
-            description: help.to_string(),
             category: "Commands".to_string(),
         })
         .collect()

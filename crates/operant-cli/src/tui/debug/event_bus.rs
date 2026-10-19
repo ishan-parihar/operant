@@ -25,21 +25,6 @@ pub enum TuiEvent {
         modifiers: u8,
         at: f64,
     },
-    Mouse {
-        x: u16,
-        y: u16,
-        action: String,
-        at: f64,
-    },
-    Resize {
-        width: u16,
-        height: u16,
-        at: f64,
-    },
-    Paste {
-        len: usize,
-        at: f64,
-    },
 
     // ── Async channels from agent ────────────────────────────────────
     AgentEvent {
@@ -69,14 +54,6 @@ pub enum TuiEvent {
     SlashCommand {
         name: String,
         args_preview: String,
-        at: f64,
-    },
-    OverlayOpened {
-        name: String,
-        at: f64,
-    },
-    OverlayClosed {
-        name: String,
         at: f64,
     },
     /// One painted frame. `reason` is `App::redraw_reason()`'s answer: why
@@ -115,9 +92,6 @@ impl TuiEvent {
                 };
                 format!("Key({mods}{code})")
             }
-            Self::Mouse { x, y, action, .. } => format!("Mouse({action} @{x},{y})"),
-            Self::Resize { width, height, .. } => format!("Resize({width}x{height})"),
-            Self::Paste { len, .. } => format!("Paste({len} chars)"),
             Self::AgentEvent {
                 variant, summary, ..
             } => {
@@ -140,8 +114,6 @@ impl TuiEvent {
             } => {
                 format!("Slash({name} {args_preview})")
             }
-            Self::OverlayOpened { name, .. } => format!("OverlayOpen({name})"),
-            Self::OverlayClosed { name, .. } => format!("OverlayClose({name})"),
             Self::FrameRendered {
                 frame,
                 render_ms,

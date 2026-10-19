@@ -15,12 +15,6 @@ pub enum BridgeConnectionState {
         session_url: String,
         peer_count: u32,
     },
-    /// Lost connection and retrying.
-    Reconnecting { attempt: u32 },
-    /// Connection failed unrecoverably.
-    Failed { reason: String },
-    /// Outbound-only mode (no incoming peers).
-    OutboundOnly,
 }
 
 impl BridgeConnectionState {}

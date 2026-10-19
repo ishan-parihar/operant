@@ -83,8 +83,6 @@ pub enum ContextMenuItem {
 /// Higher values = higher priority (handled first).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum DialogPriority {
-    /// No dialog active
-    None = 0,
     /// Context menu
     ContextMenu = 10,
     /// Bypass permissions - must accept or session exits

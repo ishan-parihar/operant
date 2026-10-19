@@ -13,7 +13,6 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NotificationKind {
     Info,
-    Success,
     Warning,
     Error,
 }

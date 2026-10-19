@@ -122,9 +122,7 @@ pub fn render_debug_overlay(f: &mut Frame, hub: &TuiDebugHub, full_area: Rect) {
             let color = match e {
                 super::TuiEvent::Error { .. } => theme_colors::error(),
                 super::TuiEvent::FrameRendered { .. } => Color::DarkGray,
-                super::TuiEvent::Key { .. } | super::TuiEvent::Mouse { .. } => {
-                    theme_colors::success()
-                }
+                super::TuiEvent::Key { .. } => theme_colors::success(),
                 super::TuiEvent::SlashCommand { .. } => theme_colors::warning(),
                 super::TuiEvent::AgentEvent { .. } => Color::Blue,
                 _ => theme_colors::text(),

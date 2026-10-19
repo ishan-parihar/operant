@@ -433,6 +433,7 @@ where
         match self
             .publish_changes(
                 &post_snapshot,
+                &snapshot.worktree_status,
                 tick_started_at,
                 Some(validation_summary.clone()),
             )
@@ -654,13 +655,24 @@ where
     async fn publish_changes(
         &mut self,
         snapshot: &WorkspaceSnapshot,
+        start_status: &str,
         tick_started_at: u64,
         validation: Option<StatusCommandSummary>,
     ) -> Result<PublishOutcome> {
-        let mut add_args = vec!["add".to_string(), "--all".to_string(), ".".to_string()];
-        if let Some(relative_status_path) = self.relative_status_path() {
-            add_args.push(format!(":(exclude){}", relative_status_path));
+        // AD-027: stage and commit only the paths this tick made dirty. A path that was
+        // already dirty when the tick started is the owner's work, so the loop leaves it.
+        let dirty_at_start = status_paths(start_status);
+        let tick_paths: Vec<String> = status_paths(&self.git_status().await?)
+            .into_iter()
+            .filter(|path| !dirty_at_start.contains(path))
+            .collect();
+        if tick_paths.is_empty() {
+            info!("Validation passed but this tick changed no file; skipping commit and push");
+            let refreshed_snapshot = self.refresh_snapshot(snapshot.todo_path.clone()).await?;
+            return Ok(PublishOutcome::Skipped(refreshed_snapshot));
         }
+        let mut add_args = vec!["add".to_string(), "--".to_string()];
+        add_args.extend(tick_paths.iter().cloned());
         let add = self
             .run_command(exec_git_owned(
                 "git add",
@@ -682,15 +694,19 @@ where
             return Ok(PublishOutcome::Failed);
         }
 
+        // Naming the paths commits only them, so anything the owner staged by hand stays out.
+        let mut commit_args = vec![
+            "commit".to_string(),
+            "-m".to_string(),
+            self.config.autonomous.commit_message.clone(),
+            "--".to_string(),
+        ];
+        commit_args.extend(tick_paths);
         let commit = self
             .run_command(exec_git_owned(
                 "git commit",
                 &self.repo_root,
-                vec![
-                    "commit".to_string(),
-                    "-m".to_string(),
-                    self.config.autonomous.commit_message.clone(),
-                ],
+                commit_args,
                 self.command_timeout(),
             ))
             .await?;
@@ -1120,6 +1136,17 @@ fn hash_parts<'a>(parts: impl IntoIterator<Item = &'a str>) -> u64 {
     hasher.finish()
 }
 
+/// The paths named by `git status --short` output. A rename names both sides, so the
+/// commit records the removal of the old path as well as the new file.
+fn status_paths(status: &str) -> std::collections::BTreeSet<String> {
+    status
+        .lines()
+        .filter_map(|line| line.get(3..))
+        .flat_map(|paths| paths.split(" -> "))
+        .map(str::to_string)
+        .collect()
+}
+
 fn looks_like_nothing_to_commit(outcome: &CommandOutcome) -> bool {
     let output = format!("{}\n{}", outcome.stdout, outcome.stderr).to_ascii_lowercase();
     output.contains("nothing to commit") || output.contains("nothing added to commit")
@@ -1524,6 +1551,7 @@ mod tests {
     #[tokio::test]
     async fn publish_changes_runs_git_steps_in_order() {
         let executor = FakeCommandExecutor::with_outcomes(vec![
+            success("?? notes.txt\n"),
             success(""),
             success("[main abc123] commit"),
             success("main\n"),
@@ -1544,6 +1572,7 @@ mod tests {
         let outcome = runner
             .publish_changes(
                 &snapshot,
+                &snapshot.worktree_status,
                 unix_timestamp_secs(),
                 Some(StatusCommandSummary::from(&CommandOutcome {
                     success: true,
@@ -1561,6 +1590,7 @@ mod tests {
         assert_eq!(
             runner.executor.calls(),
             vec![
+                "read git status",
                 "git add",
                 "git commit",
                 "read git branch",
@@ -1576,8 +1606,11 @@ mod tests {
 
     #[tokio::test]
     async fn failed_commit_blocks_push() {
-        let executor =
-            FakeCommandExecutor::with_outcomes(vec![success(""), failure("commit failed")]);
+        let executor = FakeCommandExecutor::with_outcomes(vec![
+            success("?? notes.txt\n"),
+            success(""),
+            failure("commit failed"),
+        ]);
         let snapshot = snapshot_with_pending();
         let mut runner = AutonomousRunner::new(
             sample_config(),
@@ -1589,13 +1622,17 @@ mod tests {
         let outcome = runner
             .publish_changes(
                 &snapshot,
+                &snapshot.worktree_status,
                 unix_timestamp_secs(),
                 Some(StatusCommandSummary::default()),
             )
             .await
             .unwrap();
         assert!(matches!(outcome, PublishOutcome::Failed));
-        assert_eq!(runner.executor.calls(), vec!["git add", "git commit"]);
+        assert_eq!(
+            runner.executor.calls(),
+            vec!["read git status", "git add", "git commit"]
+        );
     }
 
     #[tokio::test]
@@ -1646,6 +1683,46 @@ mod tests {
             .await
             .unwrap();
         assert!(runner.failure.as_ref().unwrap().paused);
+    }
+
+    #[test]
+    fn status_paths_names_both_sides_of_a_rename() {
+        let paths = status_paths(" M src/a.rs\n?? notes.txt\nR  old.txt -> moved.txt\n");
+        assert_eq!(
+            paths.into_iter().collect::<Vec<_>>(),
+            vec!["moved.txt", "notes.txt", "old.txt", "src/a.rs"]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_tick_does_not_commit_a_file_the_owner_left_dirty() {
+        // AD-027: the owner's untracked draft is not swept into the autonomous commit.
+        let repo_root = init_disposable_repo(
+            "## Implemented\n- setup repo\n\n## Pending\n- automate sample task\n",
+        );
+        std::fs::write(repo_root.join("owner-wip.txt"), "owner's draft\n").unwrap();
+        let agent = EditingAgentExecutor {
+            calls: Arc::new(AtomicUsize::new(0)),
+        };
+        let mut runner = AutonomousRunner::new(
+            sample_config(),
+            repo_root.clone(),
+            RealCommandExecutor,
+            agent,
+        );
+
+        runner.tick().await.unwrap();
+
+        let committed = git_stdout(&repo_root, &["ls-tree", "-r", "--name-only", "HEAD"]);
+        assert!(
+            committed.lines().any(|path| path == "notes.txt"),
+            "{committed}"
+        );
+        assert!(
+            !committed.lines().any(|path| path == "owner-wip.txt"),
+            "{committed}"
+        );
+        assert!(git_stdout(&repo_root, &["status", "--porcelain"]).contains("?? owner-wip.txt"));
     }
 
     #[tokio::test]

@@ -37,9 +37,6 @@ pub struct HelpOverlay {
 #[derive(Debug, Clone)]
 pub struct HelpEntry {
     pub name: String,
-    /// Comma-separated aliases, e.g. "h, ?"
-    pub aliases: String,
-    pub description: String,
     pub category: String,
 }
 

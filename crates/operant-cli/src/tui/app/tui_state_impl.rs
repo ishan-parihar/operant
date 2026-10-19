@@ -585,7 +585,6 @@ impl TuiState for App {
         matches!(
             self.bridge_state,
             crate::tui::bridge_state::BridgeConnectionState::Connecting
-                | crate::tui::bridge_state::BridgeConnectionState::Reconnecting { .. }
         )
     }
 

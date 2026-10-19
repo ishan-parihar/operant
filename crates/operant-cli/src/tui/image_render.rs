@@ -106,8 +106,6 @@ pub struct ImageRenderConfig {
     pub max_height_cells: u16,
     /// Preserve aspect ratio when scaling.
     pub preserve_aspect: bool,
-    /// Use Unicode half-block characters for higher density (Kitty only).
-    pub use_half_blocks: bool,
     /// Placeholder text when rendering is not supported.
     pub placeholder: String,
 }
@@ -118,7 +116,6 @@ impl Default for ImageRenderConfig {
             max_width_cells: 80,
             max_height_cells: 40,
             preserve_aspect: true,
-            use_half_blocks: true,
             placeholder: "[image]".to_string(),
         }
     }

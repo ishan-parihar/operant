@@ -400,8 +400,6 @@ pub struct App {
     /// Plugin hint banners.
     /// Optional session title shown in the status bar.
     pub session_title: Option<String>,
-    /// Remote session URL (set when bridge connects; readable by commands).
-    pub remote_session_url: Option<String>,
     /// Bridge/gateway connection state for status bar badge.
     pub bridge_state: crate::tui::bridge_state::BridgeConnectionState,
     /// Live MCP manager snapshot source when available.

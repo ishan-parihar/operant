@@ -1,5 +1,5 @@
-<!-- genome:zone records sha=242bf1cedf70 -->
-**Decisions** (26)
+<!-- genome:zone records sha=997263e674f5 -->
+**Decisions** (31)
 
 | ID | Title | Status | Description |
 |---|---|---|---|
@@ -29,6 +29,11 @@
 | AD-024 | A [keybindings] table loads and is warned about; dispatch does not read it yet | Active | A [keybindings] table in operant.toml is accepted and produces one warning, instead of failing the whole config load |
 | AD-025 | The settings.json hooks menu is removed; /hooks points to operant hooks | Active | The read-only settings.json hooks menu is removed because no runtime path reads or fires those hooks; /hooks names the command that manages shell hooks |
 | AD-026 | The git diff loads on a worker thread, and the viewer shows a reading state | Active | The git diff for the diff viewer is read on a worker thread and taken on the event-loop tick, so opening /diff does not stall the loop |
+| AD-027 | The autonomous loop commits only the paths its tick changed | Active | The autonomous publish stages and commits only the paths this tick made dirty, so a file the owner left uncommitted is not published |
+| AD-028 | A new org-mode chat starts unbound; no default employee is set | Active | New org-mode chats start unbound, with no default employee, which is the current behaviour and the recommended option for the seat-default question |
+| AD-029 | Context management stays on the synchronous summarize rung; agent-driven reduction is not built | Active | The magic-context review's agent-driven reduction and background historian are not built now; the synchronous summarize rung stays |
+| AD-030 | The Telegram token filter is covered for URL-embedded tokens; the historic log is not rewritten | Active | Telegram bot tokens in bot URLs are redacted by a tested rule; the old gateway.log lines are not rewritten, and token rotation stays the owner's call |
+| AD-031 | Dead TUI code is removed where it is ours; verbatim ports, the keybinding registry and vendored style modules stay allowlisted | Active | The clippy allowlist's dead-code entries drop from 52 to 47: unused TUI items with no caller are removed, and the verbatim jcode ports, the keybinding registry and the vendored style modules keep thei |
 <!-- genome:end records -->
 
 <!-- genome:zone idmap sha=a7a72b4c9dd0 -->

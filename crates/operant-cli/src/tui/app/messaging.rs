@@ -148,7 +148,7 @@ impl App {
                 self.push_system_message(msg.clone(), SystemMessageStyle::Error);
                 self.set_status_notice(msg);
             }
-            NotificationKind::Info | NotificationKind::Success | NotificationKind::Warning => {
+            NotificationKind::Info | NotificationKind::Warning => {
                 self.set_status_notice(msg);
             }
         }
