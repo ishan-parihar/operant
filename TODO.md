@@ -39,6 +39,8 @@ Working a `## Pending` row, one row per iteration:
 - Terminal-scroll watermark keyed on message boundaries, not rows (BUGS K-3, iter-887)
 - Async memory writes carry their bank from enqueue; a scope change after queueing does not move the write (BUGS GW-4, KB-7, iter-962)
 - Skill writes are screened and rolled back when refused; skill names and descriptions are escaped in the system prefix; a Holon run's learning delete or edit is an annotation (BUGS KB-4, KB-5, KB-9, iter-962)
+- Observe posture denies `holon_skill_invoke`, which writes the org ledger (BUGS OS-4, iter-963)
+- `chair notify` exits nonzero when no chair was reached (BUGS OS-5, the exit-code half, iter-963)
 
 ## Pending
 
@@ -50,10 +52,8 @@ Working a `## Pending` row, one row per iteration:
 - TUI red-team (BUGS.md TUI-2): `/resume` shows a transcript but does not retarget the agent (`crates/operant-cli/src/tui/app/channel_drains.rs:236-270`). Verify: a load also sets the agent's session id and the header title, with a test that the next turn uses the loaded id.
 - Seat red-team (BUGS.md GW-2): cron turns never set the memory scope (`crates/operant-core/src/cronjobs/scheduler.rs:478-481`). Verify: `bind_seat_run` sets the scope from the seat, with a test that a cron recall uses the seat's bank.
 - Seat red-team (BUGS.md GW-3): an unbound turn after `/new` keeps the previous employee's seat (`crates/operant-cli/src/gateway_runner.rs:1254-1276`). Verify: the unbound branch clears the seat, with a test that the next turn's consult uses no seat.
-- Holon red-team (BUGS.md OS-5): `chair notify` exits 0 when every send failed (`crates/operant-cli/src/cmd_org.rs:367-368`). Verify: exit nonzero when `sent == 0 && failed > 0`, with a test over a failing sender.
 - Holon red-team (BUGS.md OS-7): a reclaimed or cancelled run exits 0 and skips `finish` (`supervisor.rs:146-169, 192-193`). Verify: a non-`running` status is a non-zero exit with no self-submit, with a test for each status.
 - Holon red-team (BUGS.md OS-6): Ctrl-C or SIGTERM on `supervise` leaves the body running (`supervisor.rs:84, 110`). Verify: the supervisor forwards SIGTERM and SIGINT to the body group and kills it on exit, with a test.
-- Holon red-team (BUGS.md OS-4): `holon_skill_invoke` is allowed in observe posture (`crates/operant-os/src/policy.rs:100-107`). Verify: it is in `OBSERVE_HOLON_DENY`, with a policy test.
 - Holon red-team (BUGS.md OS-9): `supervise --loop` never clears `errored` (`cmd_org.rs:502, 529, 547`). Verify: the idle back-off returns to 30 s after one successful tick, with a test.
 - Holon red-team (BUGS.md OS-8): native tool children outlive their 120 s timeout (`crates/operant-os/src/tools.rs:257-284`). Verify: `kill_on_drop` on the child, with a test that a timed-out child is reaped.
 - Holon red-team (BUGS.md OS-10): timeout kill leaves TERM-trapping grandchildren alive (`supervisor.rs:273-285`). Verify: after the grace period the whole group gets SIGKILL, with a test using `trap '' TERM`.
@@ -84,4 +84,5 @@ Owner decisions, not autonomous work. Until ruled, make no change in the area an
 - Seat red-team (org-tui-foundation-003): the default employee for new org-mode chats. Options: a `[holon] default_employee` roster id, or leave new chats unbound. `premiere` is not on the roster, so AD-004 rules it out. Recommendation: option (c), new chats stay unbound. GW-9 changes only the `/session` report, which fits (c).
 - TUI red-team (BUGS.md TUI-1): a pending approval prompt is painted under later overlays, and its keys go to whichever overlay is open. Overlaps `docs/ROADMAP-TUI-FLEET.md` §6.1, which deferred the dispatch-order fix. Decide: reorder the gates, or make `dialog_priority()` the real router. Recommendation: reorder the gates so the approval dialog comes first; defer the router rewrite.
 - TUI red-team (BUGS.md TUI-11): some TUI actions run blocking I/O on the event loop (SQLite branch queries, `git diff`). Magnitude is unmeasured. Decide whether to move them to `spawn_blocking` now or after profiling. Recommendation: profile once, then decide.
+- Holon red-team (BUGS.md OS-5, retry half): the kernel advances `notify_seq` before delivery, so a chair notification that failed is never re-sent (`holon/execution/service.py:1858`). The exit code is fixed (iter-963). Retry is a Holon-repo change. Recommendation: a Holon-repo ticket that does not advance `notify_seq` past a notification whose delivery failed.
 - KB red-team (BUGS.md KB-6, retention half): every turn is retained, including turns from untrusted channels, so a channel message can be stored and replayed. The escape and data label are fixed (iter-962). Decide which channels are untrusted (for example, anything but the owner's chat) and whether they skip `sync_turn`. Recommendation: skip retention for non-owner channels, and keep recall unchanged.

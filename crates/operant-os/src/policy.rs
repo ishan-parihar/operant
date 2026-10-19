@@ -104,6 +104,7 @@ pub const OBSERVE_HOLON_DENY: &[&str] = &[
     "holon_claim",
     "holon_classify",
     "holon_run_heartbeat",
+    "holon_skill_invoke",
 ];
 
 /// `policy.json` as Holon compiles it (its execution/policy.py, version 1).
@@ -185,5 +186,29 @@ impl PolicyDoc {
                 deny: self.deny.clone(),
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn doc(posture: &str) -> PolicyDoc {
+        serde_json::from_value(serde_json::json!({
+            "version": 1,
+            "stage": "claim",
+            "posture": posture,
+            "budget": {},
+        }))
+        .expect("policy document parses")
+    }
+
+    #[test]
+    fn observe_posture_denies_holon_skill_invoke() {
+        // OS-4: skill invoke appends a `skill` event to the org ledger, so an
+        // observer must not reach it through the native-tool default-allow.
+        let policy = doc("observe").seat_policy();
+        assert!(!policy.allow.iter().any(|t| t == "holon_skill_invoke"));
+        assert!(policy.allow.iter().any(|t| t == "holon_whoami"));
     }
 }

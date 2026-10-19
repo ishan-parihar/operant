@@ -302,6 +302,35 @@ pub(crate) fn roster_has_employee(config: &AppConfig, employee: &str) -> Result<
         .any(|e| e.id == employee))
 }
 
+/// Send through `send` to each `<platform>:<user id>` chair ref and return
+/// `(sent, failed)`. When nothing was delivered the call is an error, so
+/// `chair notify` exits nonzero instead of reporting success (OS-5).
+async fn deliver_to_chairs<F>(channels: &[String], mut send: F) -> Result<(usize, usize)>
+where
+    F: AsyncFnMut(&str, &str) -> Result<String>,
+{
+    let mut sent = 0usize;
+    let mut failed = 0usize;
+    for r#ref in channels {
+        // a ref is `<platform>:<user id>` — the same shape is_chair
+        // compares against
+        let Some((platform, user_id)) = r#ref.split_once(':') else {
+            continue;
+        };
+        match send(platform, user_id).await {
+            Ok(_) => sent += 1,
+            Err(e) => {
+                failed += 1;
+                eprintln!("send to {platform}:{user_id} failed: {e}");
+            }
+        }
+    }
+    if sent == 0 && failed > 0 {
+        anyhow::bail!("chair notify: all {failed} sends failed");
+    }
+    Ok((sent, failed))
+}
+
 async fn handle_holon_action(config: &AppConfig, action: HolonAction) -> Result<()> {
     // Phase G: the archive touches only the OPERANT home — the read API
     // (and its live-instance gate) is irrelevant, and a not-yet-imported
@@ -346,24 +375,10 @@ async fn handle_holon_action(config: &AppConfig, action: HolonAction) -> Result<
             println!("no [chair] channels configured — the message has nobody to reach");
             return Ok(());
         }
-        let mut sent = 0usize;
-        let mut failed = 0usize;
-        for r#ref in &channels {
-            // a ref is `<platform>:<user id>` — the same shape is_chair
-            // compares against
-            let Some((platform, user_id)) = r#ref.split_once(':') else {
-                continue;
-            };
-            match crate::gateway_runner::send_channel_message(config, platform, user_id, &text)
-                .await
-            {
-                Ok(_) => sent += 1,
-                Err(e) => {
-                    failed += 1;
-                    eprintln!("send to {platform}:{user_id} failed: {e}");
-                }
-            }
-        }
+        let (sent, failed) = deliver_to_chairs(&channels, async |platform, user_id| {
+            crate::gateway_runner::send_channel_message(config, platform, user_id, &text).await
+        })
+        .await?;
         println!("chair notify: {sent} sent, {failed} failed (reason: {reason})");
         return Ok(());
     }
@@ -623,5 +638,41 @@ pub(crate) mod roster_tests {
     fn unreadable_roster_is_an_error_not_a_miss() {
         let dir = tempfile::tempdir().unwrap();
         assert!(roster_has_employee(&org_config(dir.path()), "emp_a").is_err());
+    }
+}
+
+#[cfg(test)]
+mod notify_delivery_tests {
+    use super::*;
+
+    fn chairs() -> Vec<String> {
+        vec!["telegram:1".to_string(), "telegram:2".to_string()]
+    }
+
+    #[tokio::test]
+    async fn notify_is_an_error_when_every_send_fails() {
+        // OS-5: a run where nothing reached a chair must exit nonzero.
+        let err = deliver_to_chairs(&chairs(), async |_, _| anyhow::bail!("offline"))
+            .await
+            .expect_err("zero delivered is an error");
+        assert!(err.to_string().contains("all 2 sends failed"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn notify_succeeds_when_one_send_lands() {
+        // A partial failure still counts as delivered, so the exit stays zero.
+        let calls = std::cell::Cell::new(0usize);
+        let (sent, failed) = deliver_to_chairs(&chairs(), async |_, _| {
+            let call = calls.get();
+            calls.set(call + 1);
+            if call == 0 {
+                Ok("sent".to_string())
+            } else {
+                anyhow::bail!("offline")
+            }
+        })
+        .await
+        .expect("one delivery is success");
+        assert_eq!((sent, failed), (1, 1));
     }
 }
