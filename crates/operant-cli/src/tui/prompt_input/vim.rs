@@ -33,13 +33,6 @@ pub enum VimMode {
 }
 
 impl VimMode {
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "AD-034: no composer indicator renders the mode label yet; tests pin the strings"
-        )
-    )]
     pub fn label(&self) -> &'static str {
         match self {
             Self::Insert => "INSERT",

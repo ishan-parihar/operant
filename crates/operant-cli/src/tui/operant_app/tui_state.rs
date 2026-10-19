@@ -278,6 +278,9 @@ pub trait TuiState {
     // ---- Session / server ----
     /// Whether running in remote (client-server) mode
     fn is_remote_mode(&self) -> bool;
+    /// The composer's vim mode label (`NORMAL`, `INSERT`, …), or `None` when
+    /// vim mode is off.
+    fn vim_mode_label(&self) -> Option<&'static str>;
     /// Whether running in canary/self-dev mode
     fn is_canary(&self) -> bool;
     /// Whether running in replay mode

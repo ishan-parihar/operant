@@ -109,13 +109,6 @@ pub fn usage_path() -> Option<PathBuf> {
 ///   3. Then by declaration order (stable)
 ///
 /// Returns the indices into the input slice in ranked order.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "AD-034: typeahead does not take UsageStore yet; ranking is tested only"
-    )
-)]
 pub fn rank_commands(commands: &[(&str, &str)], usage: &UsageStore) -> Vec<usize> {
     let mut indices: Vec<usize> = (0..commands.len()).collect();
     indices.sort_by(|&a, &b| {

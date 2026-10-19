@@ -583,6 +583,29 @@ fn ctrl_t_no_longer_enters_copy_mode_and_alt_y_does() {
     crate::tui::operant_app::config_shim::set_reasoning_display_override(None);
 }
 
+/// RT-29: the vim mode was never drawn. The composer now leads its hint row
+/// with the mode badge while vim is on, and draws nothing extra while it is off.
+#[test]
+fn vim_mode_is_drawn_in_the_composer_only_while_vim_is_on() {
+    use crate::tui::prompt_input::VimMode;
+
+    let mut app = make_app();
+    assert!(
+        rows_containing(&screen_rows(&app), "-- ").is_empty(),
+        "no badge while vim is off"
+    );
+
+    app.prompt_input.vim_enabled = true;
+    app.prompt_input.vim_mode = VimMode::Normal;
+    let rows = screen_rows(&app);
+    assert_eq!(rows_containing(&rows, "-- NORMAL --").len(), 1, "{rows:#?}");
+
+    app.prompt_input.vim_mode = VimMode::Insert;
+    let rows = screen_rows(&app);
+    assert_eq!(rows_containing(&rows, "-- INSERT --").len(), 1, "{rows:#?}");
+    assert!(rows_containing(&rows, "-- NORMAL --").is_empty());
+}
+
 /// Config `[tui] show_tool_calls = false` starts the session with tool rows
 /// hidden — the field was dead config until this plan wired it.
 #[test]

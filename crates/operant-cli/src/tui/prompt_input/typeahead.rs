@@ -1,5 +1,7 @@
 //! Typeahead / autocomplete suggestions.
 
+use crate::tui::slash_usage::{UsageStore, rank_commands};
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum TypeaheadSource {
     SlashCommand,
@@ -35,6 +37,7 @@ pub struct TypeaheadSuggestion {
 pub fn compute_typeahead(
     input: &str,
     slash_commands: &[(&str, &str)],
+    usage: &UsageStore,
     file_autocomplete_limit: usize,
     file_autocomplete_show_hidden: bool,
 ) -> Vec<TypeaheadSuggestion> {
@@ -49,7 +52,7 @@ pub fn compute_typeahead(
         if let Some(rest) = input.strip_prefix("/bundle ") {
             return compute_name_completions("bundle", rest, TypeaheadSource::SlashCommand);
         }
-        return compute_slash_suggestions(input, slash_commands);
+        return compute_slash_suggestions(input, slash_commands, usage);
     }
 
     // Handle file references: @, @/, @~/, @src/, etc.
@@ -69,12 +72,12 @@ pub fn compute_typeahead(
 ///      commands float to the top — closes the user-reported "smart ordering
 ///      of slash commands rather than generic-ordering" request.
 ///
-/// We pull usage stats from the global `UsageStore` on every call (cheap —
-/// it's a small HashMap deserialized from `~/.operant/slash-usage.json`,
-/// cached in `App`).
+/// The caller passes the App's cached `UsageStore`; nothing is read from disk
+/// here, so a keystroke never waits on the usage file.
 pub(super) fn compute_slash_suggestions(
     input: &str,
     slash_commands: &[(&str, &str)],
+    usage: &UsageStore,
 ) -> Vec<TypeaheadSuggestion> {
     let Some(cmd_prefix) = input.strip_prefix('/') else {
         return Vec::new();
@@ -82,7 +85,7 @@ pub(super) fn compute_slash_suggestions(
     let prefix_lower = cmd_prefix.to_lowercase();
 
     // Filter to prefix matches first.
-    let mut matching: Vec<usize> = (0..slash_commands.len())
+    let matching: Vec<usize> = (0..slash_commands.len())
         .filter(|&i| {
             slash_commands[i]
                 .0
@@ -94,29 +97,14 @@ pub(super) fn compute_slash_suggestions(
         return Vec::new();
     }
 
-    // Apply smart ordering: recency → frequency → declaration order.
-    // We pull the usage store lazily so we don't re-read the file per
-    // keystroke (App caches it in `slash_usage` and calls us via
-    // `update_suggestions` which has access to that cache — but for
-    // standalone callers we fall back to a fresh load).
-    let usage = crate::tui::slash_usage::UsageStore::load();
-    matching.sort_by(|&a, &b| {
-        let ra = usage.recency_rank(slash_commands[a].0);
-        let rb = usage.recency_rank(slash_commands[b].0);
-        ra.cmp(&rb)
-            .then_with(|| {
-                let fa = usage.frequency_rank(slash_commands[a].0);
-                let fb = usage.frequency_rank(slash_commands[b].0);
-                fb.cmp(&fa)
-            })
-            .then_with(|| a.cmp(&b))
-    });
-
-    matching
+    // Smart ordering (recency → frequency → declaration order) is
+    // `rank_commands`, the one ranker the composer uses.
+    let candidates: Vec<(&str, &str)> = matching.iter().map(|&i| slash_commands[i]).collect();
+    rank_commands(&candidates, usage)
         .into_iter()
-        .map(|i| TypeaheadSuggestion {
-            text: format!("/{}", slash_commands[i].0),
-            description: slash_commands[i].1.to_string(),
+        .map(|j| TypeaheadSuggestion {
+            text: format!("/{}", candidates[j].0),
+            description: candidates[j].1.to_string(),
             source: TypeaheadSource::SlashCommand,
         })
         .collect()

@@ -485,6 +485,12 @@ impl TuiState for App {
 
     // ---- Session / server ----
 
+    fn vim_mode_label(&self) -> Option<&'static str> {
+        self.prompt_input
+            .vim_enabled
+            .then(|| self.prompt_input.vim_mode.label())
+    }
+
     fn is_remote_mode(&self) -> bool {
         matches!(
             self.bridge_state,

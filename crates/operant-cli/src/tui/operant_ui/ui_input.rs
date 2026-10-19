@@ -407,6 +407,7 @@ pub(super) fn input_hint_line_height(app: &dyn TuiState) -> u16 {
 
     u16::from(
         shell_mode_hint(mode).is_some()
+            || app.vim_mode_label().is_some()
             || app.next_prompt_new_session_armed()
             || (app.is_processing() && !app.input().is_empty()),
     )
@@ -2525,6 +2526,17 @@ pub(super) fn draw_input(
             hint,
             Style::default().fg(dim_color()),
         )));
+    }
+
+    // The vim badge leads the hint row, so the mode stays visible under any
+    // other hint. The row is not reserved while the palette is open
+    // (`input_hint_line_height` returns 0), so the badge is skipped there too.
+    if let Some(label) = app.vim_mode_label().filter(|_| !has_suggestions) {
+        let badge = Span::styled(format!("-- {label} -- "), Style::default().fg(dim_color()));
+        match lines.first_mut() {
+            Some(first) => first.spans.insert(0, badge),
+            None => lines.push(Line::from(badge)),
+        }
     }
 
     if let Some(capture) = debug_capture {

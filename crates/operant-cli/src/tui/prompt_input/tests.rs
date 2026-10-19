@@ -11,6 +11,7 @@ use super::vim::{
     motion_first_nonblank, motion_gg, motion_w,
 };
 use super::*;
+use crate::tui::slash_usage::UsageStore;
 
 // ---- VimMode --------------------------------------------------------
 
@@ -274,7 +275,7 @@ const TEST_FILE_AUTOCOMPLETE_SHOW_HIDDEN: bool = false;
 fn typeahead_suggests_the_registered_tui_commands() {
     let cmds = crate::tui::app::helpers::tui_slash_command_data();
     for needle in ["/rew", "/perm", "/goal", "/undo"] {
-        let suggestions = compute_slash_suggestions(needle, &cmds);
+        let suggestions = compute_slash_suggestions(needle, &cmds, &UsageStore::default());
         assert!(
             suggestions.iter().any(|s| s.text.starts_with(needle)),
             "typeahead must suggest a registered command for {needle}"
@@ -315,7 +316,7 @@ fn typeahead_slash_prefix_matches() {
         ("history", "Show history"),
         ("compact", "Compact"),
     ];
-    let suggestions = compute_slash_suggestions("/h", &cmds);
+    let suggestions = compute_slash_suggestions("/h", &cmds, &UsageStore::default());
     assert_eq!(suggestions.len(), 2);
     assert_eq!(suggestions[0].text, "/help");
     assert_eq!(suggestions[1].text, "/history");
@@ -324,7 +325,7 @@ fn typeahead_slash_prefix_matches() {
 #[test]
 fn typeahead_full_match() {
     let cmds = [("compact", "Compact conversation")];
-    let suggestions = compute_slash_suggestions("/compact", &cmds);
+    let suggestions = compute_slash_suggestions("/compact", &cmds, &UsageStore::default());
     assert_eq!(suggestions.len(), 1);
     assert_eq!(suggestions[0].text, "/compact");
     assert_eq!(suggestions[0].description, "Compact conversation");
@@ -333,7 +334,7 @@ fn typeahead_full_match() {
 #[test]
 fn typeahead_case_insensitive() {
     let cmds = [("Help", "Show help")];
-    let suggestions = compute_slash_suggestions("/H", &cmds);
+    let suggestions = compute_slash_suggestions("/H", &cmds, &UsageStore::default());
     assert_eq!(suggestions.len(), 1);
     assert_eq!(suggestions[0].text, "/Help");
 }
@@ -358,22 +359,38 @@ fn typeahead_skill_names_complete() {
     // /skill <prefix> completes installed skill names. (The snapshot is
     // process-wide and shared with parallel tests that construct App and
     // register the real installed skills, so assert membership, not length.)
-    let s = compute_typeahead("/skill git", &cmds, 15, false);
+    let s = compute_typeahead("/skill git", &cmds, &UsageStore::default(), 15, false);
     assert!(s.iter().any(|x| x.text == "/skill gitcrawl"));
 
     // /bundle <prefix> completes bundle names too.
-    let s = compute_typeahead("/bundle rese", &cmds, 15, false);
+    let s = compute_typeahead("/bundle rese", &cmds, &UsageStore::default(), 15, false);
     assert!(s.iter().any(|x| x.text == "/bundle research-pack"));
 
     // No match → empty (falls through to normal slash suggestions).
-    let s = compute_typeahead("/skill zzz", &cmds, 15, false);
+    let s = compute_typeahead("/skill zzz", &cmds, &UsageStore::default(), 15, false);
     assert!(s.is_empty());
 
     // Regular slash commands still work after the skill prefix handling.
     let cmds2 = [("help", "Show help")];
-    let s = compute_typeahead("/he", &cmds2, 15, false);
+    let s = compute_typeahead("/he", &cmds2, &UsageStore::default(), 15, false);
     assert_eq!(s.len(), 1);
     assert_eq!(s[0].text, "/help");
+}
+
+// RT-30: slash usage was recorded and never ranked the typeahead. The
+// suggestions now order by the usage store the caller passes in.
+#[test]
+fn slash_suggestions_rank_by_the_usage_the_caller_passes() {
+    let mut usage = UsageStore::default();
+    usage.record("history");
+    let cmds = [("help", "Show help"), ("history", "History")];
+
+    let s = compute_slash_suggestions("/", &cmds, &usage);
+    assert_eq!(s[0].text, "/history", "the recently used command leads");
+    assert_eq!(s[1].text, "/help");
+
+    let s = compute_slash_suggestions("/", &cmds, &UsageStore::default());
+    assert_eq!(s[0].text, "/help", "with no usage, declaration order holds");
 }
 
 // ---- suggestion navigation -----------------------------------------
@@ -388,7 +405,7 @@ fn suggestion_next_cycles() {
     ];
     s.text = "/h".to_string();
     s.cursor = s.text.len();
-    s.update_suggestions(&cmds, 15, false);
+    s.update_suggestions(&cmds, &UsageStore::default(), 15, false);
     assert_eq!(s.suggestions.len(), 2);
     assert_eq!(s.suggestion_index, Some(0));
     s.suggestion_next();
@@ -403,7 +420,7 @@ fn accept_suggestion_fills_text() {
     let cmds = [("help", "Show help")];
     s.text = "/he".to_string();
     s.cursor = s.text.len();
-    s.update_suggestions(&cmds, 15, false);
+    s.update_suggestions(&cmds, &UsageStore::default(), 15, false);
     s.suggestion_next();
     s.accept_suggestion();
     assert_eq!(s.text, "/help");
@@ -1416,7 +1433,7 @@ fn vim_mode_new_labels() {
 #[test]
 fn file_autocomplete_slash_commands_still_work() {
     let cmds = vec![("help", "Show help"), ("clear", "Clear messages")];
-    let suggestions = compute_slash_suggestions("/he", &cmds);
+    let suggestions = compute_slash_suggestions("/he", &cmds, &UsageStore::default());
     assert_eq!(suggestions.len(), 1);
     assert_eq!(suggestions[0].text, "/help");
 }

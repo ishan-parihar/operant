@@ -224,6 +224,7 @@ impl App {
                 self.settings.config.file_autocomplete_show_hidden_files;
             self.prompt_input.update_suggestions(
                 &tui_slash_command_data(),
+                &self.slash_usage,
                 file_autocomplete_limit,
                 file_autocomplete_show_hidden,
             );

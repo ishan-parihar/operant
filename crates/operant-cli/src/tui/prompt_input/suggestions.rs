@@ -22,6 +22,7 @@ impl PromptInputState {
     pub fn update_suggestions(
         &mut self,
         slash_commands: &[(&str, &str)],
+        usage: &crate::tui::slash_usage::UsageStore,
         file_autocomplete_limit: usize,
         file_autocomplete_show_hidden: bool,
     ) {
@@ -31,6 +32,7 @@ impl PromptInputState {
         self.suggestions = compute_typeahead(
             text_before_cursor,
             slash_commands,
+            usage,
             file_autocomplete_limit,
             file_autocomplete_show_hidden,
         );
