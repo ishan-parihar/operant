@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-992 — the checkpoint shadow store now has a size bound, and its size limits are no longer dead config.** `max_total_size_mb` and `max_file_size_mb` were declared and never read, so nothing bounded the bytes a snapshot could take. A working tree over either limit is now skipped rather than snapshotted.
+
 - **iter-991 — a configured `logging.log_file` is now rotated.** The file was opened in append mode with no size bound, so the gateway's log grew without bound (90 MB after about three weeks on this box). It now rotates at 32 MB and keeps two generations.
 
 - **iter-990 — the trajectory directory no longer grows without bound.** A trajectory is written per run, so a long-lived session accumulated one file per run, and a Holon run always records. The write path now keeps the newest 200 and prunes the oldest, the way the checkpoint store bounds its snapshots.

@@ -202,6 +202,48 @@ impl CheckpointManager {
             return false;
         }
 
+        // The SIZE bounds. `max_file_size_mb` and `max_total_size_mb` were
+        // declared on the config and never read, so nothing bounded the
+        // bytes a snapshot could take: the count bound above is a COUNT,
+        // and 50,000 files of any size passes it. Measured on this box:
+        // the shadow store for one directory had reached 1.42 GiB of
+        // packed objects — 3x over the 500 MB the config documented.
+        //
+        // A checkpoint is a safety net for a mutation, not a backup. A
+        // tree this size is not something a rollback can restore anyway,
+        // so the honest behaviour is to skip the checkpoint and say so.
+        let (max_total_bytes, max_file_bytes) = self
+            .config
+            .lock()
+            .map(|g| {
+                (
+                    (g.max_total_size_mb as u64).saturating_mul(1024 * 1024),
+                    (g.max_file_size_mb as u64).saturating_mul(1024 * 1024),
+                )
+            })
+            .unwrap_or((500 * 1024 * 1024, 10 * 1024 * 1024));
+        if max_total_bytes > 0 || max_file_bytes > 0 {
+            let size = tree_size(&workdir);
+            if max_file_bytes > 0 && size.largest_file_bytes > max_file_bytes {
+                debug!(
+                    "Checkpoint skipped: {} has a {} MiB file, over the {} MiB limit",
+                    working_dir,
+                    size.largest_file_bytes / (1024 * 1024),
+                    max_file_bytes / (1024 * 1024)
+                );
+                return false;
+            }
+            if max_total_bytes > 0 && size.total_bytes > max_total_bytes {
+                debug!(
+                    "Checkpoint skipped: {} is {} MiB, over the {} MiB limit",
+                    working_dir,
+                    size.total_bytes / (1024 * 1024),
+                    max_total_bytes / (1024 * 1024)
+                );
+                return false;
+            }
+        }
+
         let base_dir = self
             .config
             .lock()
@@ -543,6 +585,58 @@ fn dir_file_count(dir: &Path, max: usize) -> usize {
         }
     }
     count
+}
+
+/// What a tree's SIZE looks like, for the checkpoint's size bounds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TreeSize {
+    /// The total bytes of the regular files under the tree.
+    total_bytes: u64,
+    /// The largest single file's size in bytes.
+    largest_file_bytes: u64,
+}
+
+/// Measure a tree's total and largest file size.
+///
+/// The excluded directory names are skipped, matching the file counter and
+/// the shadow store's `info/exclude`, so the measurement covers what would
+/// actually be snapshotted.
+///
+/// Symlinks are never followed, for the same reason the file counter does
+/// not follow them: a `loop -> .` cycle would otherwise loop forever.
+fn tree_size(dir: &Path) -> TreeSize {
+    let mut total_bytes = 0u64;
+    let mut largest_file_bytes = 0u64;
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(current) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&current) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let Ok(ft) = entry.file_type() else {
+                continue;
+            };
+            if ft.is_dir() {
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                if CHECKPOINT_EXCLUDE_DIRS.contains(&name.as_ref()) {
+                    continue;
+                }
+                stack.push(entry.path());
+            } else if ft.is_file() {
+                let Ok(meta) = entry.metadata() else {
+                    continue;
+                };
+                let len = meta.len();
+                total_bytes = total_bytes.saturating_add(len);
+                largest_file_bytes = largest_file_bytes.max(len);
+            }
+        }
+    }
+    TreeSize {
+        total_bytes,
+        largest_file_bytes,
+    }
 }
 
 /// Lexically normalize a path (`.`/`..`) without requiring it to exist —
@@ -934,6 +1028,103 @@ mod tests {
             )
             .await;
         assert!(!result.success);
+    }
+
+    /// The size bounds must be ENFORCED, not just declared.
+    ///
+    /// `max_file_size_mb` and `max_total_size_mb` were on the config and
+    /// never read, so nothing bounded the bytes a snapshot could take: the
+    /// count bound (`MAX_CHECKPOINT_FILES` = 50,000) is a COUNT, and 50,000
+    /// files of any size passes it. Measured on this box: one shadow store
+    /// had reached 1.42 GiB of packed objects — 3x over the 500 MB the
+    /// config documented.
+    #[test]
+    fn a_tree_over_the_size_bounds_is_not_snapshotted() {
+        use std::process::Command as StdCommand;
+        if StdCommand::new("git").arg("--version").output().is_err() {
+            return;
+        }
+
+        let tmp = std::env::temp_dir().join(format!("operant_ckpt_size_{}", uuid::Uuid::new_v4()));
+        let base =
+            std::env::temp_dir().join(format!("operant_ckpt_size_store_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        // A file over the per-file limit.
+        std::fs::write(tmp.join("big.bin"), vec![0u8; 3 * 1024 * 1024]).unwrap();
+
+        let mgr = CheckpointManager::new();
+        mgr.configure(CheckpointConfig {
+            base_dir: base.clone(),
+            enabled: true,
+            // 1 MiB per file, 3 MiB total: the 3 MiB file breaks both.
+            max_file_size_mb: 1,
+            max_total_size_mb: 1,
+            ..Default::default()
+        });
+
+        assert!(
+            !mgr.ensure_checkpoint(tmp.to_str().unwrap(), "too big"),
+            "a tree over the size bounds must not be snapshotted"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A tree WITHIN the bounds is still snapshotted. The size check must
+    /// not refuse everything.
+    #[test]
+    fn a_tree_within_the_size_bounds_is_snapshotted() {
+        use std::process::Command as StdCommand;
+        if StdCommand::new("git").arg("--version").output().is_err() {
+            return;
+        }
+
+        let tmp = std::env::temp_dir().join(format!("operant_ckpt_ok_{}", uuid::Uuid::new_v4()));
+        let base =
+            std::env::temp_dir().join(format!("operant_ckpt_ok_store_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::fs::write(tmp.join("small.txt"), b"hello").unwrap();
+
+        let mgr = CheckpointManager::new();
+        mgr.configure(CheckpointConfig {
+            base_dir: base.clone(),
+            enabled: true,
+            max_file_size_mb: 1,
+            max_total_size_mb: 1,
+            ..Default::default()
+        });
+
+        assert!(
+            mgr.ensure_checkpoint(tmp.to_str().unwrap(), "small enough"),
+            "a tree within the size bounds must be snapshotted"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// The size measurement covers what would actually be snapshotted: the
+    /// EXCLUDED directory names are skipped, matching the shadow store's
+    /// `info/exclude` and the file counter.
+    #[test]
+    fn the_size_measurement_skips_the_excluded_directories() {
+        let dir = std::env::temp_dir().join(format!("operant_ckpt_excl_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(dir.join("target")).unwrap();
+        std::fs::write(dir.join("small.txt"), vec![0u8; 100]).unwrap();
+        std::fs::write(dir.join("target").join("big.bin"), vec![0u8; 10_000]).unwrap();
+
+        let size = tree_size(&dir);
+        assert_eq!(
+            size.total_bytes, 100,
+            "the excluded directory must not count toward the total"
+        );
+        assert_eq!(
+            size.largest_file_bytes, 100,
+            "the excluded directory's file must not count as the largest"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

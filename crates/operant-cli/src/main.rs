@@ -2346,8 +2346,11 @@ fn configure_checkpoints(config: &AppConfig) {
         operant_core::tools::CheckpointConfig {
             base_dir,
             max_snapshots: settings.max_snapshots,
+            // The size bounds were declared on the config and never read,
+            // so nothing bounded the bytes a snapshot could take.
+            max_total_size_mb: settings.max_total_size_mb,
+            max_file_size_mb: settings.max_file_size_mb,
             enabled: settings.enabled,
-            ..Default::default()
         },
     );
 }

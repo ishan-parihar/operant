@@ -553,6 +553,14 @@ enabled = true
 # enabled = true
 # base_dir = "~/.operant/checkpoints"
 # max_snapshots = 20
+#
+# The SIZE bounds. A tree over either limit is NOT snapshotted — a
+# checkpoint is a safety net for a mutation, not a backup, and a tree
+# this size is not something a rollback could restore anyway. Set a limit
+# to 0 to disable that check.
+#
+# max_total_size_mb = 500
+# max_file_size_mb = 10
 
 # [pk]
 # Prime Kernel sidecar. Dark-merged: `enabled` defaults to false and the

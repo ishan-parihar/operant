@@ -1190,6 +1190,17 @@ pub struct CheckpointsSettings {
     pub base_dir: Option<PathBuf>,
     /// Maximum snapshots kept per working directory.
     pub max_snapshots: usize,
+    /// Maximum total size, in MB, of a working tree that will be
+    /// snapshotted. A tree over this is skipped.
+    ///
+    /// The snapshot count bound is a COUNT, and a count of files says
+    /// nothing about the bytes: 50,000 files of any size passes it. A
+    /// checkpoint is a safety net for a mutation, not a backup, so a tree
+    /// this size is not something a rollback could restore anyway.
+    pub max_total_size_mb: usize,
+    /// Maximum size, in MB, of a single file that will be included in a
+    /// snapshot. A tree containing a larger file is skipped.
+    pub max_file_size_mb: usize,
 }
 
 /// Plan 016 / Phase 0 config surface for the `operant-harness` kernel.
@@ -1281,6 +1292,8 @@ impl Default for CheckpointsSettings {
             enabled: true,
             base_dir: None,
             max_snapshots: 20,
+            max_total_size_mb: 500,
+            max_file_size_mb: 10,
         }
     }
 }
