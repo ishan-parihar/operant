@@ -149,6 +149,29 @@ impl PlatformAdapter for WebhookAdapter {
         let holon = self.holon.clone();
         let tx = message_tx.clone();
 
+        // An adapter with no secret accepts ANY POST body and forwards it
+        // into the agent as a message. That is a legitimate configuration
+        // for a receiver on a private network, so it is NOT refused — but
+        // it is the difference between "a webhook endpoint" and "an
+        // unauthenticated command channel pointed at the agent", and the
+        // default listen address is 0.0.0.0, which is the public
+        // internet. Say so, loudly, at startup: the operator cannot
+        // otherwise tell an unauthenticated receiver from a verified one.
+        //
+        // (iter-1009 — the HMAC check is `if let Some(ref sec) = secret`,
+        // so with no secret the whole verification block is skipped and the
+        // request is accepted.)
+        if secret.is_none() {
+            warn!(
+                addr = %addr,
+                "Webhook adapter is running WITHOUT a signing secret: every POST \
+                 to /webhook/<route> is accepted unverified and forwarded into \
+                 the agent as a message. Set [gateway] webhooks_secret to enable \
+                 HMAC-SHA256 verification, or bind the adapter to a private \
+                 address."
+            );
+        }
+
         // Build the axum router
         let app = Router::new()
             // Red-team F-4 (2026-10-15): an explicit body cap — a webhook
@@ -626,5 +649,88 @@ mod tests {
         let adapter = WebhookAdapter::new(true).with_addr(addr.to_string());
         let (tx, _rx) = mpsc::unbounded_channel();
         assert!(adapter.start_with_channel(tx).await.is_err());
+    }
+
+    /// Start a webhook adapter on an ephemeral port and return the port.
+    ///
+    /// The RECEIVER is kept alive: the handler forwards every accepted
+    /// message into the channel, and a dropped receiver makes the send
+    /// fail — which is a 500 AFTER the signature check, and would make
+    /// the test measure the wrong thing.
+    async fn start_on_ephemeral(
+        secret: Option<&str>,
+    ) -> (u16, mpsc::UnboundedReceiver<IncomingMessage>) {
+        let probe = std::net::TcpListener::bind("127.0.0.1:0").expect("an ephemeral port");
+        let port = probe.local_addr().expect("the bound address").port();
+        drop(probe);
+        let mut adapter = WebhookAdapter::new(true).with_addr(format!("127.0.0.1:{port}"));
+        adapter = adapter.with_secret(secret.map(str::to_string));
+        let (tx, rx) = mpsc::unbounded_channel();
+        adapter
+            .start_with_channel(tx)
+            .await
+            .expect("the adapter starts");
+        (port, rx)
+    }
+
+    /// POST a body and return the status code.
+    async fn post(port: u16, path: &str, headers: &[(&str, &str)]) -> u16 {
+        let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .expect("connect");
+        let mut request = format!(
+            "POST {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Length: 2\r\nConnection: close\r\n"
+        );
+        for (name, value) in headers {
+            request.push_str(&format!("{name}: {value}\r\n"));
+        }
+        request.push_str("\r\n{}");
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        stream.write_all(request.as_bytes()).await.expect("write");
+        let mut response = String::new();
+        stream.read_to_string(&mut response).await.expect("read");
+        response
+            .lines()
+            .next()
+            .and_then(|line| line.split_whitespace().nth(1))
+            .and_then(|code| code.parse().ok())
+            .unwrap_or(0)
+    }
+
+    /// With a secret configured, an UNSIGNED request is refused.
+    ///
+    /// The HMAC check is `if let Some(ref sec) = secret`, so with a secret
+    /// the whole verification block runs and an unsigned body never
+    /// reaches the agent. Without this test the block could be deleted and
+    /// nothing would notice.
+    #[tokio::test]
+    async fn a_signed_adapter_refuses_an_unsigned_request() {
+        let (port, _rx) = start_on_ephemeral(Some("shared-secret")).await;
+        let status = post(port, "/webhook/github", &[]).await;
+        assert_eq!(
+            status, 401,
+            "an unsigned request must be refused when a secret is configured"
+        );
+    }
+
+    /// With NO secret, the request is accepted — and that is a WARNING,
+    /// not a silent default.
+    ///
+    /// The adapter with no secret is a legitimate private-network
+    /// configuration, so the behaviour is not changed. What the fix added
+    /// is the startup warning, so the operator can tell an unauthenticated
+    /// receiver from a verified one.
+    #[tokio::test]
+    async fn an_adapter_with_no_secret_accepts_an_unsigned_request() {
+        let (port, mut rx) = start_on_ephemeral(None).await;
+        let status = post(port, "/webhook/github", &[]).await;
+        assert_eq!(
+            status, 200,
+            "with no secret the request is accepted — the warning is the guard"
+        );
+        // And it really did reach the agent: the message was forwarded.
+        let forwarded = rx.try_recv().expect("the message was forwarded");
+        assert_eq!(forwarded.platform, "webhook");
+        assert_eq!(forwarded.channel_id, "webhook:github");
     }
 }
