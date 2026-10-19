@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-995 — `operant logs follow` keeps working across a log rotation.** The rotation replaces the live file with a new one, and the follower tracked a byte offset into the old file: it printed nothing until 32 MB of new output had accumulated, and then it seeked into a stale offset and printed half a line. The follower now tracks the file's identity as well as the offset.
+
 - **iter-993 — a panicking hook is now reported instead of swallowed silently.** The panic was always contained, but the warning that says so was unreachable, so a hook that panicked on every turn was invisible in the logs.
 
 - **iter-992 — the checkpoint shadow store now has a size bound, and its size limits are no longer dead config.** `max_total_size_mb` and `max_file_size_mb` were declared and never read, so nothing bounded the bytes a snapshot could take. A working tree over either limit is now skipped rather than snapshotted.
