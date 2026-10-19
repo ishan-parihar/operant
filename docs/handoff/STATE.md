@@ -72,10 +72,10 @@ Live claims: see `genome doctor`. Recent units of work:
 |---|---|
 <!-- genome:end status -->
 
-<!-- genome:zone handoff sha=d28d19ff271a -->
+<!-- genome:zone handoff sha=bf1bf8e90726 -->
 ## Handoff — 2026-10-20
 
-Repo branch `main`, HEAD `e516be4b1f9f272f72896f283a7f8371de094de5`. Working tree dirty (1 paths).
+Repo branch `main`, HEAD `f356c9a62ebfa233f08552bf480d0ecbeb46006f`. Working tree dirty (3 paths).
 
 ## Open register rows
   (none)
