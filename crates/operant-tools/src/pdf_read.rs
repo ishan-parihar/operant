@@ -11,6 +11,43 @@ const DEFAULT_MAX_CHARS: usize = 50_000;
 /// Hard ceiling regardless of what the caller requests.
 const MAX_OUTPUT_CHARS: usize = 200_000;
 
+/// Maximum decompressed content per PDF page.
+///
+/// A PDF page's content stream is a compressed blob whose decompressed size
+/// the file chooses. Without a bound, a small file can expand into
+/// gigabytes — the classic PDF decompression bomb. `lopdf` enforces the
+/// limit for us; this is the value.
+#[cfg(feature = "rag-pdf")]
+const MAX_DECOMPRESSED_PAGE_BYTES: usize = 64 * 1024 * 1024;
+
+/// Extract the text of a PDF's pages.
+///
+/// `lopdf` 0.45 replaced `pdf-extract` 0.12 here (AD-039). Two things came
+/// with the swap:
+///
+/// - `pdf-extract` pins `lopdf` 0.42, which reaches `ttf-parser`
+///   (RUSTSEC-2026-0192, RT-27). `lopdf` 0.45 has no `ttf-parser`; its
+///   `font_embedding` feature pulls `skrifa` instead, and this tool does
+///   not embed fonts.
+/// - `lopdf` bounds the decompressed size of each page's content stream.
+///   `pdf-extract` did not, so a decompression bomb was a live hazard on
+///   the old path. The bound is now explicit.
+///
+/// The page numbers are passed explicitly because `lopdf` extracts by page
+/// rather than over the whole document.
+#[cfg(feature = "rag-pdf")]
+fn extract_pdf_text(bytes: &[u8]) -> Result<String, String> {
+    let doc = lopdf::Document::load_mem(bytes).map_err(|e| e.to_string())?;
+    let pages: Vec<u32> = doc.get_pages().keys().copied().collect();
+    if pages.is_empty() {
+        // A PDF with no pages has no text. Not an error: an image-only or
+        // empty document is a valid thing to read.
+        return Ok(String::new());
+    }
+    doc.extract_text_with_limit(&pages, MAX_DECOMPRESSED_PAGE_BYTES)
+        .map_err(|e| e.to_string())
+}
+
 /// Extract plain text from a PDF file in the workspace.
 ///
 /// PDF extraction requires the `rag-pdf` feature flag:
@@ -149,14 +186,11 @@ impl Tool for PdfReadTool {
             }
         };
 
-        // pdf_extract is a blocking CPU-bound operation; keep it off the async executor.
+        // lopdf is a blocking CPU-bound operation; keep it off the async
+        // executor.
         #[cfg(feature = "rag-pdf")]
         {
-            let text = match tokio::task::spawn_blocking(move || {
-                pdf_extract::extract_text_from_mem(&bytes)
-            })
-            .await
-            {
+            let text = match tokio::task::spawn_blocking(move || extract_pdf_text(&bytes)).await {
                 Ok(Ok(t)) => t,
                 Ok(Err(e)) => {
                     return Ok(ToolResult {
@@ -392,35 +426,94 @@ mod tests {
 
         /// Minimal valid PDF with one text page ("Hello PDF").
         /// Generated offline and verified with pdf-extract 0.10.
+        ///
+        /// The comment names the crate the fixture was written against; the
+        /// extractor is lopdf now (AD-039) and reads the same bytes.
         fn minimal_pdf_bytes() -> Vec<u8> {
             // A hand-crafted single-page PDF containing the text "Hello PDF".
-            let body = b"%PDF-1.4\n\
-                1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n\
-                2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n\
-                3 0 obj<</Type/Page/MediaBox[0 0 612 792]/Parent 2 0 R\
-                /Contents 4 0 R/Resources<</Font<</F1 5 0 R>>>>>>endobj\n\
-                4 0 obj<</Length 44>>\nstream\n\
-                BT /F1 12 Tf 72 720 Td (Hello PDF) Tj ET\n\
-                endstream\nendobj\n\
-                5 0 obj<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>endobj\n";
+            //
+            // The offsets and the stream length are COMPUTED, not written
+            // down. The fixture used to carry hardcoded values that were
+            // wrong (the stream was 41 bytes and declared 44; the xref
+            // entries pointed past their objects). `pdf-extract` was lenient
+            // enough to reconstruct the cross-reference table, so the
+            // fixture passed; `lopdf` TRUSTS the table, and a wrong one
+            // means no pages and no text. Computing the offsets is the
+            // only way the fixture stays valid when the body changes.
+            let stream = b"BT /F1 12 Tf 72 720 Td (Hello PDF) Tj ET\n";
+            let mut pdf = Vec::new();
+            let mut offsets = Vec::new();
 
-            let xref_offset = body.len();
-
-            let xref = format!(
-                "xref\n0 6\n\
-                 0000000000 65535 f \n\
-                 0000000009 00000 n \n\
-                 0000000058 00000 n \n\
-                 0000000115 00000 n \n\
-                 0000000274 00000 n \n\
-                 0000000370 00000 n \n\
-                 trailer<</Size 6/Root 1 0 R>>\n\
-                 startxref\n{xref_offset}\n%%EOF\n"
+            pdf.extend_from_slice(b"%PDF-1.4\n");
+            offsets.push(pdf.len());
+            pdf.extend_from_slice(b"1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n");
+            offsets.push(pdf.len());
+            pdf.extend_from_slice(b"2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n");
+            offsets.push(pdf.len());
+            pdf.extend_from_slice(
+                b"3 0 obj<</Type/Page/MediaBox[0 0 612 792]/Parent 2 0 R\
+                  /Contents 4 0 R/Resources<</Font<</F1 5 0 R>>>>>>endobj\n",
+            );
+            offsets.push(pdf.len());
+            pdf.extend_from_slice(
+                format!("4 0 obj<</Length {}>>\nstream\n", stream.len()).as_bytes(),
+            );
+            pdf.extend_from_slice(stream);
+            pdf.extend_from_slice(b"endstream\nendobj\n");
+            offsets.push(pdf.len());
+            pdf.extend_from_slice(
+                b"5 0 obj<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>endobj\n",
             );
 
-            let mut pdf = body.to_vec();
+            let xref_offset = pdf.len();
+            let mut xref = String::from("xref\n0 6\n0000000000 65535 f \n");
+            for offset in &offsets {
+                xref.push_str(&format!("{offset:010} 00000 n \n"));
+            }
+            xref.push_str(&format!(
+                "trailer<</Size 6/Root 1 0 R>>\nstartxref\n{xref_offset}\n%%EOF\n"
+            ));
             pdf.extend_from_slice(xref.as_bytes());
             pdf
+        }
+
+        /// The extractor reads the text the PDF carries.
+        ///
+        /// This is the direct test of the lopdf port (AD-039): the fixture
+        /// is a hand-built PDF whose only text is "Hello PDF", so the
+        /// extracted string must contain it. The tool-level test above
+        /// accepts "no extractable text" as a valid outcome, which is right
+        /// for a malformed fixture but would not notice an extractor that
+        /// extracted nothing at all.
+        #[test]
+        fn the_extractor_reads_the_text_the_pdf_carries() {
+            let text = extract_pdf_text(&minimal_pdf_bytes()).expect("the fixture parses");
+            assert!(
+                text.contains("Hello PDF"),
+                "the extracted text must carry the PDF's text, got {text:?}"
+            );
+        }
+
+        /// A PDF with no pages yields no text and is NOT an error.
+        ///
+        /// An empty or image-only document is a valid thing to read, and
+        /// the tool reports it as "no extractable text" rather than failing.
+        #[test]
+        fn a_document_with_no_pages_yields_no_text() {
+            let empty = b"%PDF-1.4\n%%EOF\n";
+            let text = extract_pdf_text(empty).unwrap_or_default();
+            assert!(text.is_empty(), "no pages means no text: {text:?}");
+        }
+
+        /// A file that is not a PDF is an error, not a panic and not empty
+        /// text.
+        #[test]
+        fn a_file_that_is_not_a_pdf_is_an_error() {
+            let result = extract_pdf_text(b"this is not a pdf at all");
+            assert!(
+                result.is_err(),
+                "a non-PDF must be reported as an error, not as empty text"
+            );
         }
 
         #[tokio::test]

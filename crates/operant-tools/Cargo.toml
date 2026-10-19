@@ -40,12 +40,17 @@ which = "6.0"
 
 # Optional deps for feature-gated modules
 fantoccini = { version = "0.22.1", optional = true, default-features = false, features = ["rustls-tls"] }
-pdf-extract = { version = "0.12", optional = true }
+# lopdf 0.45 replaces pdf-extract 0.12 (which pins lopdf 0.42 -> ttf-parser,
+# RUSTSEC-2026-0192). lopdf's default features are off: `chrono-clock` and
+# `rayon` are not needed for text extraction, and `font_embedding` would
+# pull skrifa. The `font_embedding` feature is what lopdf 0.45 offers
+# instead of ttf-parser, and this tool does not embed fonts.
+lopdf = { version = "0.45", optional = true, default-features = false }
 
 [features]
 default = []
 browser-native = ["dep:fantoccini"]
-rag-pdf = ["dep:pdf-extract"]
+rag-pdf = ["dep:lopdf"]
 
 # NOTE: the `probe` feature (probe-rs SWD/JTAG support for hardware tools)
 # was removed 2026-08-02 — it referenced the `probe_rs` crate but the

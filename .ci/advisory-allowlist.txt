@@ -21,14 +21,6 @@
 # at each syntect release.
 unmaintained|RUSTSEC-2025-0141|bincode@1.3.3
 #
-# RT-27. ttf-parser 0.25.1 reached through pdf-extract 0.12.1 -> lopdf
-# 0.42.0. Only the `rag-pdf` feature reaches it (operant-tools/src/
-# pdf_read.rs, one extract_text_from_mem call), so it is NOT in the default
-# operant-cli graph. lopdf 0.45.0 has no ttf-parser, but pdf-extract 0.12.1
-# (the latest release) still pins 0.42. The fix is a port of pdf_read to
-# lopdf 0.45, a text-extraction rewrite, or an upstream pdf-extract release.
-unmaintained|RUSTSEC-2026-0192|ttf-parser@0.25.1
-#
 # RT-26. unsafe-libyaml 0.2.11 reached through serde_yaml 0.9.34, which is
 # itself deprecated. The migration to serde_yaml_bw 2.5.8 (which drops
 # libyaml) was attempted across 13 files and the manifests, then REVERTED: a
