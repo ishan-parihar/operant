@@ -1,6 +1,6 @@
 ---
 ID: "AD-037"
-Title: "A rotated credential replaces the stored secret, and the two rotation operations are separate"
+Title: "A rotated credential is pushed into the live client, not just written into the environment"
 Status: "Superseded by AD-038"
 Date: "2026-10-19"
 Description: "The gateway's per-turn .env reload wrote the new key into the process environment, where nothing read it back, so credential rotation did not work at all; the reload now reports the value and the gateway applies it to the running client"

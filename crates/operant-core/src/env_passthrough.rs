@@ -3,12 +3,15 @@
 //! This used to also house an `EnvPassthrough` struct intended for sandboxed
 //! skill execution env-var allow-listing — that struct had zero callers and
 //! was deleted in iter-126 (ponytail audit Tier-1 cut). Only `reload_dotenv`
-//! survives because `gateway_runner.rs` calls it before each agent turn.
+//! survives, and BOTH the gateway runner and the TUI call it before each
+//! agent turn.
 //!
 //! Reads the file at `OPERANT_ENV_FILE` (legacy `HERMES_ENV_FILE` also
-//! honored for migration; or `.env` in the working directory) and sets each
-//! `KEY=VALUE` pair into the process environment, enabling credential
-//! rotation without restarting the long-lived gateway daemon.
+//! honored for migration), falling back to `<operant home>/.env` — the same
+//! file the startup loader reads — and only then to `.env` in the working
+//! directory. It sets each `KEY=VALUE` pair into the process environment,
+//! enabling credential rotation without restarting the long-lived gateway
+//! daemon.
 
 /// What a `.env` reload changed.
 ///

@@ -8,7 +8,7 @@ The concrete tools that agents can call. The crate root (`src/lib.rs`) declares 
 
 ## Configuration
 
-- Cargo features: `browser-native` (enables `fantoccini`) and `rag-pdf` (enables `pdf-extract`). Default is empty.
+- Cargo features: `browser-native` (enables `fantoccini`) and `rag-pdf` (enables `lopdf`). Default is empty.
 - The `probe` feature was removed on 2026-08-02 (comment in `Cargo.toml`).
 - Per-tool settings are not summarised in the crate docs; read the module for the tool.
 

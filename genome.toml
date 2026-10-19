@@ -18,6 +18,12 @@ plans = "docs/plans"
 audits = "docs/audit"
 runbook = "docs/RUNBOOK.md"
 archive = "docs/archive"
+# The ownership map: every active doc, the question it owns, and what it is
+# NOT for. It is the "one owner per question" rule made checkable.
+ownership_map = "docs/INDEX.md"
+# The operator-ruling ledger: what we asked, what they ruled, and which
+# owner doc the ruling was applied to.
+asks = "docs/kb/ASKS.md"
 
 # dated-frozen filename patterns: only files whose NAME carries the freeze stamp
 # are date-checked. docs/plans/ also holds the frozen 2026-08 numbering series
