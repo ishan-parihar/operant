@@ -19,6 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **iter-997 — the TUI visual corpus is now part of the local gate.** `_run.py verify` has a real exit code (1 on drift, 0 on pass), and it was in NO automated gate: `scripts/check.sh` forwards to cargo, and the corpus is a Python script. The corpus had been red for nine days and nothing ran it. `scripts/self-test.sh` runs it now, against the release binary it has already built.
+
+- **iter-988 — the release is deployed and a third operant is cleared from PATH.** `~/.cargo/bin/operant` needed libonnxruntime 1.20.1 and the runtime has 1.24.4, so every invocation of it failed with a version error; it is moved aside (not deleted). `operant doctor` now reports two copies on PATH instead of three.
+
 ### Security
 
 - **iter-998 — the dashboard's API now accepts the auth header the bundled frontend actually sends.** The frontend sets `X-Hermes-Session-Token` on every request and never sends `Authorization`; the server read only `Authorization: Bearer`, so every API call the real dashboard made returned 401 and the UI could never have worked. The token is now accepted as `Authorization: Bearer`, as `X-Hermes-Session-Token`, or as the dashboard cookie.
@@ -27,7 +33,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **iter-996 — `operant logs follow` keeps working across a log rotation.** The rotation replaces the live file with a new one, and the follower tracked a byte offset into the old file: it printed nothing until 32 MB of new output had accumulated, and then it seeked into a stale offset and printed half a line. The follower now tracks the file's identity as well as the offset.
+- **iter-980 — the composer now draws the vim mode, and the typeahead ranks slash commands by how often you use them.** `VimMode::label` and `rank_commands` were both computed and never called: the composer never showed `NORMAL`/`INSERT`/`VISUAL`, and the recorded command usage never affected anything. The typeahead now ranks through the usage store it already keeps in memory, so a keystroke never waits on the usage file.
+
+- **iter-982 — the supply-chain gate runs, and the clippy gate no longer aborts on an empty allowlist.** `cargo audit` was wired but not executed (`cargo-deny` is not installed, so the licence and duplicate-version policies in `deny.toml` stay unexecuted by design), and the clippy gate treated an empty allowlist as a failure.
+
+- **iter-994 — a hook that panics while building its future is reported too.** The panic-at-poll-time shape was fixed in iter-993, but `HookHandler` is `Fn(..) -> Pin<Box<dyn Future>>`, so the closure body runs at call time and that shape escaped the caught region.
+
+- **iter-995 — `operant logs follow` keeps working across a log rotation.** The rotation replaces the live file with a new one, and the follower tracked a byte offset into the old file: it printed nothing until 32 MB of new output had accumulated, and then it seeked into a stale offset and printed half a line. The follower now tracks the file's identity as well as the offset.
 
 - **iter-993 — a panicking hook is now reported instead of swallowed silently.** The panic was always contained, but the warning that says so was unreachable, so a hook that panicked on every turn was invisible in the logs.
 
