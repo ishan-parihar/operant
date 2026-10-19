@@ -61,6 +61,57 @@ struct PluginToolResult {
 
 // ── Host function implementations ─────────────────────────────────
 
+/// Whether an address is one a plugin may not reach (KB-17): loopback, private,
+/// link-local (cloud metadata sits there), unique-local and unspecified. An
+/// IPv4-mapped IPv6 address is judged as the IPv4 address it wraps.
+fn is_internal_address(ip: std::net::IpAddr) -> bool {
+    use std::net::IpAddr;
+    match ip {
+        IpAddr::V4(v4) => {
+            let [a, b, _, _] = v4.octets();
+            v4.is_loopback()
+                || v4.is_unspecified()
+                || a == 10
+                || (a == 172 && (16..=31).contains(&b))
+                || (a == 192 && b == 168)
+                || (a == 169 && b == 254)
+        }
+        IpAddr::V6(v6) => {
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                return is_internal_address(IpAddr::V4(v4));
+            }
+            let first = v6.segments()[0];
+            v6.is_loopback()
+                || v6.is_unspecified()
+                || (first & 0xfe00) == 0xfc00
+                || (first & 0xffc0) == 0xfe80
+        }
+    }
+}
+
+/// Where a plugin's HTTP request may go (KB-17). Resolves the host and refuses
+/// the request if any address is internal. For a host name, returns the checked
+/// address to pin, so the request cannot resolve again to another address
+/// (DNS rebinding).
+fn checked_destination(url: &reqwest::Url) -> Result<Option<std::net::SocketAddr>, Error> {
+    let addrs = url
+        .socket_addrs(|| None)
+        .map_err(|e| Error::msg(format!("HTTP host does not resolve: {e}")))?;
+    if addrs.is_empty() {
+        return Err(Error::msg("HTTP host does not resolve to any address"));
+    }
+    if addrs.iter().any(|addr| is_internal_address(addr.ip())) {
+        return Err(Error::msg(
+            "permission denied: HTTP request to an internal address",
+        ));
+    }
+    Ok(if url.domain().is_some() {
+        addrs.first().copied()
+    } else {
+        None
+    })
+}
+
 #[expect(
     clippy::unwrap_used,
     reason = "poisoned lock: panic is the intended recovery"
@@ -86,14 +137,25 @@ fn handle_http_request(
     let req: HttpRequest = serde_json::from_str(&request_json)
         .map_err(|e| Error::msg(format!("invalid HTTP request JSON: {e}")))?;
 
+    let url =
+        reqwest::Url::parse(&req.url).map_err(|e| Error::msg(format!("invalid HTTP URL: {e}")))?;
+    let pinned = checked_destination(&url)?;
+
     // 120s ceiling covers legitimate slow cases: large file downloads and slow
     // model-inference endpoints (fal.ai image generation routinely takes 20-60s
     // on cold models). A per-plugin override or tighter default is a candidate
     // follow-up — see ADR-003 §"Known gaps". Note: this runs inside
     // spawn_blocking, so a stalled request holds a blocking-pool thread for
     // the full duration.
-    let client = reqwest::blocking::Client::builder()
+    let mut client_builder = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(120))
+        // A redirect is handed back to the plugin, not followed: a followed one
+        // would reach an address the check above never saw (KB-17).
+        .redirect(reqwest::redirect::Policy::none());
+    if let (Some(domain), Some(addr)) = (url.domain(), pinned) {
+        client_builder = client_builder.resolve(domain, addr);
+    }
+    let client = client_builder
         .build()
         .map_err(|e| Error::msg(format!("failed to create HTTP client: {e}")))?;
 
@@ -390,5 +452,47 @@ mod tests {
                 "expected permission-denied error, got: {msg}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod internal_address_tests {
+    use super::{checked_destination, is_internal_address};
+    use std::net::IpAddr;
+
+    #[test]
+    fn internal_addresses_are_refused_and_public_ones_are_not() {
+        // KB-17: loopback, private, link-local (metadata) and unique-local are
+        // refused, including their IPv4-mapped forms; public addresses pass.
+        for ip in [
+            "127.0.0.1",
+            "10.0.0.1",
+            "172.16.0.5",
+            "192.168.1.1",
+            "169.254.169.254",
+            "0.0.0.0",
+            "::1",
+            "fe80::1",
+            "fd00::1",
+            "::ffff:127.0.0.1",
+        ] {
+            assert!(is_internal_address(ip.parse::<IpAddr>().unwrap()), "{ip}");
+        }
+        for ip in ["93.184.216.34", "8.8.8.8", "2606:4700::1111"] {
+            assert!(!is_internal_address(ip.parse::<IpAddr>().unwrap()), "{ip}");
+        }
+    }
+
+    #[test]
+    fn a_request_to_an_internal_literal_is_refused_before_it_is_sent() {
+        for raw in [
+            "http://127.0.0.1:8080/x",
+            "http://169.254.169.254/latest/meta-data/",
+        ] {
+            let url = reqwest::Url::parse(raw).unwrap();
+            assert!(checked_destination(&url).is_err(), "{raw}");
+        }
+        let public = reqwest::Url::parse("https://93.184.216.34/").unwrap();
+        assert_eq!(checked_destination(&public).unwrap(), None);
     }
 }

@@ -850,19 +850,12 @@ impl App {
 
         // Plugins hub intercepts navigation, toggle, and Esc
         if self.plugins_hub.visible {
-            // Resolve plugins_dir once for the toggle action.
-            let plugins_dir = crate::cmd_plugins::plugins_dir(&self.config).unwrap_or_else(|_| {
-                dirs::data_dir()
-                    .unwrap_or_default()
-                    .join("operant")
-                    .join("plugins")
-            });
             match key.code {
                 KeyCode::Esc | KeyCode::Char('q') => self.plugins_hub.close(),
                 KeyCode::Up | KeyCode::Char('k') => self.plugins_hub.select_prev(),
                 KeyCode::Down | KeyCode::Char('j') => self.plugins_hub.select_next(),
                 KeyCode::Enter | KeyCode::Char('t') | KeyCode::Char(' ') => {
-                    self.plugins_hub.toggle_selected(&plugins_dir);
+                    self.plugins_hub.toggle_selected();
                 }
                 _ => {}
             }

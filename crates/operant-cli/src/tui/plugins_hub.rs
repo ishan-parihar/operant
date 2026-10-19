@@ -19,7 +19,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Wrap};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use crate::tui::overlays::{HINT_ESC, ModalSpec, cycle_next, cycle_prev, modal_frame};
 use crate::tui::theme_colors;
@@ -84,8 +84,9 @@ impl PluginsHubState {
             if name.ends_with(".enabled") {
                 continue;
             }
-            let marker = plugins_dir.join(format!("{}.enabled", name));
-            let enabled = marker.exists();
+            let enabled = operant_core::config::runtime_config()
+                .plugins
+                .is_enabled(&name);
             let size = format_size(dir_size(&entry.path()));
             found.push(PluginEntry {
                 name,
@@ -116,34 +117,24 @@ impl PluginsHubState {
         }
     }
 
-    /// Toggle the selected plugin's enabled state by creating or removing
-    /// the `<name>.enabled` marker file. Returns a flash message.
-    pub fn toggle_selected(&mut self, plugins_dir: &Path) {
+    /// Toggle the selected plugin's enabled state in `[plugins].disabled` (AD-023).
+    /// The change is written to the config file and takes effect on the next start.
+    pub fn toggle_selected(&mut self) {
         let Some(entry) = self.plugins.get_mut(self.selected) else {
             return;
         };
-        let marker = plugins_dir.join(format!("{}.enabled", entry.name));
-        if entry.enabled {
-            // Disable: remove the marker file.
-            match std::fs::remove_file(&marker) {
-                Ok(_) => {
-                    entry.enabled = false;
-                    self.flash = Some(format!("Disabled plugin '{}'", entry.name));
-                }
-                Err(e) => {
-                    self.last_error = format!("Failed to disable '{}': {}", entry.name, e);
-                }
+        let disable = entry.enabled;
+        match operant_core::config::set_plugin_disabled(&entry.name, disable) {
+            Ok(()) => {
+                entry.enabled = !disable;
+                let verb = if disable { "Disabled" } else { "Enabled" };
+                self.flash = Some(format!(
+                    "{verb} plugin '{}' — takes effect on restart",
+                    entry.name
+                ));
             }
-        } else {
-            // Enable: create the marker file.
-            match std::fs::write(&marker, "") {
-                Ok(_) => {
-                    entry.enabled = true;
-                    self.flash = Some(format!("Enabled plugin '{}'", entry.name));
-                }
-                Err(e) => {
-                    self.last_error = format!("Failed to enable '{}': {}", entry.name, e);
-                }
+            Err(e) => {
+                self.last_error = format!("Failed to change '{}': {}", entry.name, e);
             }
         }
     }

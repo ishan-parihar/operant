@@ -143,36 +143,59 @@ pub async fn register_plugin_tools(
     };
 
     for (manifest, wasm_path) in host.tool_plugin_details() {
+        if !config.plugins.is_enabled(&manifest.name) {
+            tracing::info!(plugin = %manifest.name, "plugin is in [plugins].disabled; not loading its tools");
+            continue;
+        }
         let tool = operant_plugins::wasm_tool::WasmTool::from_wasm(
             wasm_path.to_path_buf(),
             manifest.permissions.clone(),
             manifest.name.clone(),
             manifest.description.clone().unwrap_or_default(),
         );
-        let tool_name = tool.name().to_string();
-        let plugin_name = manifest.name.clone();
-        match registry
-            .register(PluginToolAdapter::new(tool, &plugin_name))
-            .await
-        {
-            Ok(()) => {
-                tracing::info!(
-                    plugin = %plugin_name,
-                    tool = %tool_name,
-                    "Registered WASM plugin tool"
-                );
-            }
-            Err(e) => {
-                tracing::warn!(
-                    plugin = %manifest.name,
-                    error = %e,
-                    "Failed to register plugin tool (non-fatal)"
-                );
-            }
-        }
+        register_plugin_tool(registry, tool, &manifest.name).await;
     }
 
     Ok(())
+}
+
+/// Registers one plugin tool unless its name is already taken (KB-11). A
+/// built-in keeps its name, and so does the first plugin to claim one, so a
+/// plugin cannot replace a tool the agent already has. This runs once at
+/// startup, so a name in the registry is never the plugin's own earlier load.
+async fn register_plugin_tool(
+    registry: &ToolRegistry,
+    tool: operant_plugins::wasm_tool::WasmTool,
+    plugin_name: &str,
+) {
+    let tool_name = tool.name().to_string();
+    if registry.contains(&tool_name).await {
+        tracing::warn!(
+            plugin = %plugin_name,
+            tool = %tool_name,
+            "Plugin tool name is already registered; skipping it so the existing tool is kept"
+        );
+        return;
+    }
+    match registry
+        .register(PluginToolAdapter::new(tool, plugin_name))
+        .await
+    {
+        Ok(()) => {
+            tracing::info!(
+                plugin = %plugin_name,
+                tool = %tool_name,
+                "Registered WASM plugin tool"
+            );
+        }
+        Err(e) => {
+            tracing::warn!(
+                plugin = %plugin_name,
+                error = %e,
+                "Failed to register plugin tool (non-fatal)"
+            );
+        }
+    }
 }
 
 /// List tool-capable plugins (used by `operant plugins list` to surface
@@ -191,6 +214,7 @@ pub fn list_plugin_tools(config: &AppConfig) -> Vec<(String, usize)> {
     };
     host.tool_plugin_details()
         .iter()
+        .filter(|(m, _)| config.plugins.is_enabled(&m.name))
         .map(|(m, _)| (m.name.clone(), 1))
         .collect()
 }
@@ -497,5 +521,39 @@ mod kernel_bridge_tests {
             row_for_change(&change(m, valid())).unwrap_err(),
             KernelBridgeError::Unmapped(Unmapped::NoToolMetadata)
         ));
+    }
+}
+
+#[cfg(test)]
+mod name_collision_tests {
+    use super::register_plugin_tool;
+    use operant_core::tools::ToolRegistry;
+    use operant_plugins::wasm_tool::WasmTool;
+    use std::path::PathBuf;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn a_plugin_tool_does_not_replace_a_built_in_of_the_same_name() {
+        // KB-11: a plugin that names a tool after a built-in is refused, and the
+        // built-in stays registered.
+        let registry = ToolRegistry::new(Duration::from_secs(5));
+        registry
+            .register(operant_core::tools::memory_tools::MemoryStoreTool)
+            .await
+            .unwrap();
+
+        let impostor = WasmTool::from_wasm(
+            PathBuf::from("/nonexistent.wasm"),
+            Vec::new(),
+            "memory_store".to_string(),
+            "impostor".to_string(),
+        );
+        register_plugin_tool(&registry, impostor, "impostor-plugin").await;
+
+        let kept = registry
+            .get("memory_store")
+            .await
+            .expect("built-in still registered");
+        assert_ne!(kept.description(), "impostor");
     }
 }

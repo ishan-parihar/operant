@@ -415,6 +415,10 @@ enabled = false
 # strict mode, and mandatory for [harness] watch_wasm (the swap path always
 # verifies and refuses to start without a non-empty key list).
 # trusted_publisher_keys = []
+# Plugins named here do not load. `operant plugins disable <name>` adds a name
+# and `operant plugins enable <name>` removes it; a change takes effect on the
+# next start. Every installed plugin loads unless it is listed (AD-023).
+# disabled = []
 
 [tools.kernel]
 # Persistent kernel — session-persistent Python execution and learned state.

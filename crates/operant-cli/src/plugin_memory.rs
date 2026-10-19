@@ -39,6 +39,9 @@ pub struct PluginMemoryProvider {
     /// Cached reachability — a plugin that fails to load or lacks a
     /// `prefetch` export reports `is_available() == false`.
     available: bool,
+    /// Tool schemas, read once at load (KB-18). The schema export runs in a
+    /// wasm instance, so `tool_schemas` must not create one per call.
+    schemas: Vec<Value>,
 }
 
 impl PluginMemoryProvider {
@@ -53,16 +56,23 @@ impl PluginMemoryProvider {
     ) -> Self {
         let probe_path = wasm_path.clone();
         let probe_perms = permissions.clone();
-        let available = tokio::task::spawn_blocking(move || {
-            matches!(probe_plugin(&probe_path, &probe_perms), Ok(true))
+        let (available, schemas) = tokio::task::spawn_blocking(move || {
+            let available = matches!(probe_plugin(&probe_path, &probe_perms), Ok(true));
+            let schemas = if available {
+                read_tool_schemas(&probe_path, &probe_perms)
+            } else {
+                Vec::new()
+            };
+            (available, schemas)
         })
         .await
-        .unwrap_or(false);
+        .unwrap_or((false, Vec::new()));
         Self {
             name: format!("plugin:{}", manifest_name),
             wasm_path,
             permissions,
             available,
+            schemas,
         }
     }
 
@@ -84,6 +94,25 @@ impl PluginMemoryProvider {
             Ok(Some(v)) => Some(v),
             _ => None,
         }
+    }
+}
+
+/// Reads the plugin's `tool_schemas` export. Called once at load, inside
+/// `spawn_blocking` (KB-18); a panic or a bad document yields no schemas.
+fn read_tool_schemas(
+    wasm_path: &std::path::Path,
+    permissions: &[operant_plugins::PluginPermission],
+) -> Vec<Value> {
+    let wasm_path = wasm_path.to_path_buf();
+    let permissions = permissions.to_vec();
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mut plugin = operant_plugins::runtime::create_plugin(&wasm_path, &permissions).ok()?;
+        let out: String = plugin.call::<&str, String>("tool_schemas", "").ok()?;
+        let value: Value = serde_json::from_str(&out).ok()?;
+        value.get("schemas").and_then(Value::as_array).cloned()
+    })) {
+        Ok(Some(schemas)) => schemas,
+        _ => Vec::new(),
     }
 }
 
@@ -126,6 +155,13 @@ impl MemoryProvider for PluginMemoryProvider {
     }
 
     async fn prefetch(&self, query: &str) -> String {
+        // KB-10: a plugin without MemoryRead gets no query.
+        if !self
+            .permissions
+            .contains(&operant_plugins::PluginPermission::MemoryRead)
+        {
+            return String::new();
+        }
         let Some(value) = self
             .call_export("prefetch", serde_json::json!({ "query": query }))
             .await
@@ -140,6 +176,13 @@ impl MemoryProvider for PluginMemoryProvider {
     }
 
     async fn sync_turn(&self, user: &str, assistant: &str) -> operant_core::error::Result<()> {
+        // KB-10: a plugin without MemoryWrite receives no turn text.
+        if !self
+            .permissions
+            .contains(&operant_plugins::PluginPermission::MemoryWrite)
+        {
+            return Ok(());
+        }
         let _ = self
             .call_export(
                 "sync_turn",
@@ -150,26 +193,9 @@ impl MemoryProvider for PluginMemoryProvider {
     }
 
     fn tool_schemas(&self) -> Vec<Value> {
-        // The plugin may expose its own tool schemas; surfaced as-is. The
-        // blocking probe runs once at construction for availability, so we
-        // only return schemas when the plugin is actually usable.
-        if !self.available {
-            return Vec::new();
-        }
-        // Best-effort synchronous probe of the tool_schemas export. This
-        // runs per-call; the blocking create is cheap for a cold read.
-        let wasm_path = self.wasm_path.clone();
-        let permissions = self.permissions.clone();
-        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let mut plugin =
-                operant_plugins::runtime::create_plugin(&wasm_path, &permissions).ok()?;
-            let out: String = plugin.call::<&str, String>("tool_schemas", "").ok()?;
-            let value: Value = serde_json::from_str(&out).ok()?;
-            value.get("schemas").and_then(Value::as_array).cloned()
-        })) {
-            Ok(Some(schemas)) => schemas,
-            _ => Vec::new(),
-        }
+        // The plugin may expose its own tool schemas; surfaced as-is. Read
+        // once at load, and empty unless the plugin is usable.
+        self.schemas.clone()
     }
 
     async fn handle_tool_call(&self, name: &str, args: Value) -> String {
@@ -205,7 +231,7 @@ pub async fn build_plugin_memory_provider(
         return None;
     }
     let plugin_name = provider_name.strip_prefix("plugin:")?;
-    if plugin_name.is_empty() {
+    if plugin_name.is_empty() || !config.plugins.is_enabled(plugin_name) {
         return None;
     }
 

@@ -1144,6 +1144,10 @@ pub struct PluginSettings {
     /// schema world's `[plugins.security].trusted_publisher_keys`.
     #[serde(default)]
     pub trusted_publisher_keys: Vec<String>,
+    /// Plugins named here do not load (AD-023). Every installed plugin loads
+    /// unless it is listed; `operant plugins enable|disable` edits this list.
+    #[serde(default)]
+    pub disabled: Vec<String>,
 }
 
 /// Signature-mode default; mirrors the schema world's
@@ -1158,6 +1162,7 @@ impl Default for PluginSettings {
             plugin_dirs: vec![platform::operant_home().join("plugins")],
             signature_mode: default_plugin_signature_mode(),
             trusted_publisher_keys: Vec::new(),
+            disabled: Vec::new(),
         }
     }
 }
@@ -3322,5 +3327,113 @@ strategies = { opencode-zen = "round_robin", openai = "least_used" }
         };
         assert_eq!(invalid.strategy_for("openai"), PoolStrategy::FillFirst);
         assert_eq!(invalid.strategy_for("other"), PoolStrategy::FillFirst);
+    }
+}
+
+impl PluginSettings {
+    /// Whether a plugin loads: every installed plugin loads unless `disabled`
+    /// names it (AD-023).
+    pub fn is_enabled(&self, name: &str) -> bool {
+        !self.disabled.iter().any(|d| d == name)
+    }
+}
+
+/// Records a plugin's enable state in the loaded config file and in the running
+/// config (AD-023). The loaders read the list at start, so a change takes effect
+/// on the next start.
+pub fn set_plugin_disabled(name: &str, disabled: bool) -> std::result::Result<(), String> {
+    let path = loaded_config_path()
+        .ok_or_else(|| "no config file is loaded; run `operant setup` first".to_string())?;
+    write_plugin_disabled(&path, name, disabled)?;
+    if let Some(store) = RUNTIME_CONFIG.get()
+        && let Ok(mut current) = store.write()
+    {
+        current.plugins.disabled.retain(|d| d != name);
+        if disabled {
+            current.plugins.disabled.push(name.to_string());
+        }
+    }
+    Ok(())
+}
+
+/// Rewrites `[plugins].disabled` in the TOML file at `path`, keeping its comments
+/// and other keys. The file is replaced through a temp file and a rename.
+fn write_plugin_disabled(
+    path: &Path,
+    name: &str,
+    disabled: bool,
+) -> std::result::Result<(), String> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+    let mut doc: toml_edit::DocumentMut = text
+        .parse()
+        .map_err(|e| format!("cannot parse {}: {e}", path.display()))?;
+    if !doc.contains_key("plugins") {
+        doc["plugins"] = toml_edit::table();
+    }
+    let plugins = doc["plugins"]
+        .as_table_mut()
+        .ok_or_else(|| "[plugins] is not a table".to_string())?;
+    let mut names: Vec<String> = plugins
+        .get("disabled")
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    names.retain(|n| n != name);
+    if disabled {
+        names.push(name.to_string());
+    }
+    let mut list = toml_edit::Array::new();
+    for n in &names {
+        list.push(n.as_str());
+    }
+    plugins["disabled"] = toml_edit::value(list);
+
+    let tmp = path.with_extension("toml.tmp");
+    std::fs::write(&tmp, doc.to_string())
+        .and_then(|()| std::fs::rename(&tmp, path))
+        .map_err(|e| format!("cannot write {}: {e}", path.display()))
+}
+
+#[cfg(test)]
+mod plugin_state_tests {
+    use super::{PluginSettings, write_plugin_disabled};
+
+    #[test]
+    fn a_plugin_is_disabled_and_enabled_in_the_file_without_losing_other_keys() {
+        // AD-023: the disable list round-trips through the TOML file, and the
+        // comment and the other keys survive the rewrite.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("operant.toml");
+        std::fs::write(
+            &path,
+            "# keep me\n[plugins]\nsignature_mode = \"disabled\"\n",
+        )
+        .unwrap();
+
+        write_plugin_disabled(&path, "x", true).unwrap();
+        write_plugin_disabled(&path, "y", true).unwrap();
+        write_plugin_disabled(&path, "x", false).unwrap();
+
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("# keep me"), "{text}");
+        assert!(text.contains("signature_mode = \"disabled\""), "{text}");
+        assert!(text.contains("disabled = [\"y\"]"), "{text}");
+        assert!(!dir.path().join("operant.toml.tmp").exists());
+    }
+
+    #[test]
+    fn an_unlisted_plugin_loads_and_a_listed_one_does_not() {
+        // AD-023: every installed plugin loads unless the list names it.
+        let settings = PluginSettings {
+            disabled: vec!["blocked".to_string()],
+            ..PluginSettings::default()
+        };
+        assert!(settings.is_enabled("fine"));
+        assert!(!settings.is_enabled("blocked"));
     }
 }

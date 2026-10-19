@@ -102,8 +102,7 @@ async fn list_plugins(config: &AppConfig) -> Result<()> {
     for entry in &entries {
         let name = entry.file_name();
         let size = dir_size(&entry.path()).unwrap_or(0);
-        let marker = dir.join(format!("{}.enabled", name.to_string_lossy()));
-        let status = if marker.exists() {
+        let status = if config.plugins.is_enabled(&name.to_string_lossy()) {
             "enabled"
         } else {
             "disabled"
@@ -163,10 +162,9 @@ async fn remove_plugin(config: &AppConfig, name: &str) -> Result<()> {
     std::fs::remove_dir_all(&dir)
         .with_context(|| format!("Failed to remove plugin '{}' at '{}'", name, dir.display()))?;
 
-    // Clean up enable marker if present
-    let marker = plugins_dir(config)?.join(format!("{}.enabled", name));
-    if marker.exists() {
-        std::fs::remove_file(&marker).ok();
+    // A removed plugin leaves no disable entry behind, so a reinstall starts enabled.
+    if !config.plugins.is_enabled(name) {
+        operant_core::config::set_plugin_disabled(name, false).map_err(anyhow::Error::msg)?;
     }
 
     println!("Plugin '{}' has been removed.", name);
@@ -182,51 +180,44 @@ async fn enable_plugin(config: &AppConfig, name: &str) -> Result<()> {
         anyhow::bail!("Plugin '{}' is not installed.", name);
     }
 
-    let marker = dir.join(format!("{}.enabled", name));
-    std::fs::write(&marker, "").with_context(|| format!("Failed to enable plugin '{}'", name))?;
+    operant_core::config::set_plugin_disabled(name, false).map_err(anyhow::Error::msg)?;
 
-    println!("Plugin '{}' has been enabled.", name);
+    println!(
+        "Plugin '{}' has been enabled. It loads on the next start.",
+        name
+    );
     Ok(())
 }
 
 /// Disable a plugin by removing its `.enabled` marker file.
 async fn disable_plugin(config: &AppConfig, name: &str) -> Result<()> {
-    let dir = plugins_dir(config)?;
-    let marker = dir.join(format!("{}.enabled", name));
-
-    if !marker.exists() {
+    if !config.plugins.is_enabled(name) {
         println!("Plugin '{}' is not currently enabled.", name);
         return Ok(());
     }
 
-    std::fs::remove_file(&marker)
-        .with_context(|| format!("Failed to disable plugin '{}'", name))?;
+    operant_core::config::set_plugin_disabled(name, true).map_err(anyhow::Error::msg)?;
 
-    println!("Plugin '{}' has been disabled.", name);
+    println!(
+        "Plugin '{}' has been disabled. It stays out on the next start.",
+        name
+    );
     Ok(())
 }
 
 /// Toggle a plugin between enabled and disabled states.
 async fn toggle_plugin(config: &AppConfig, name: &str) -> Result<()> {
-    let dir = plugins_dir(config)?;
-    let plugin_dir = dir.join(name);
-    let marker = dir.join(format!("{}.enabled", name));
+    let plugin_dir = plugins_dir(config)?.join(name);
 
     if !plugin_dir.exists() {
         anyhow::bail!("Plugin '{}' is not installed.", name);
     }
 
-    if marker.exists() {
-        std::fs::remove_file(&marker)
-            .with_context(|| format!("Failed to disable plugin '{}'", name))?;
-        println!("Plugin '{}' has been disabled.", name);
+    if config.plugins.is_enabled(name) {
+        disable_plugin(config, name).await
     } else {
-        std::fs::write(&marker, "")
-            .with_context(|| format!("Failed to enable plugin '{}'", name))?;
-        println!("Plugin '{}' has been enabled.", name);
+        enable_plugin(config, name).await
     }
-
-    Ok(())
 }
 
 /// Recursively compute the total size of a directory in bytes.
