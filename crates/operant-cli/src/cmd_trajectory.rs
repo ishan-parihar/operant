@@ -56,6 +56,17 @@ pub async fn handle_trajectory_command(cmd: TrajectorySubcommand) -> Result<()> 
     }
 }
 
+/// The trajectory cap in force, if any.
+///
+/// 0 means "keep them all" — the default, so the common case returns
+/// `None` and the export says nothing.
+fn trajectory_cap() -> Option<usize> {
+    let path = operant_core::config::loaded_config_path()?;
+    let config = operant_core::config::parse_config_file(&path).ok()?;
+    let cap = config.agent.max_trajectories;
+    if cap == 0 { None } else { Some(cap) }
+}
+
 fn list_trajectories(dir: &std::path::Path) -> Result<()> {
     if !dir.exists() {
         println!("No trajectories directory at {}.", dir.display());
@@ -192,6 +203,16 @@ fn export_trajectories(dir: &std::path::Path, format: &str, output: Option<PathB
     }
 
     let count = trajectories.len();
+    // When a cap is in force, the export is a subset of what was recorded:
+    // the oldest trajectories were deleted. Say so, because the command
+    // collects a fine-tuning corpus and a silent subset looks like a
+    // complete one.
+    if let Some(cap) = trajectory_cap() {
+        println!(
+            "Note: [agent] max_trajectories = {cap} — the oldest trajectories were \
+             deleted, so this export is the most recent {cap}."
+        );
+    }
     let content = match format {
         "json" => serde_json::to_string_pretty(&trajectories).context("Failed to export JSON")?,
         "ndjson" => trajectories

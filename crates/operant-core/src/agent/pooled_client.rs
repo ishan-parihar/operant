@@ -330,6 +330,33 @@ impl ModelClient for PooledModelClient {
         // Replacing a credential's SECRET is a different operation, and it
         // has its own method: `rotate_credential_value`.
         self.inner.set_api_key(api_key);
+
+        // Refresh the ANCHOR: the credential the client is now using.
+        //
+        // The anchor is what a later `.env` rotation replaces, and it is
+        // only updated inside this client's own request loop. The
+        // agent-loop rotation (`try_rotate_credential`) moves the client
+        // onto a DIFFERENT credential by calling this with its value —
+        // without this, the anchor still points at the credential that was
+        // just benched, and the next `.env` rotation would replace the
+        // BENCHED credential's secret. That credential's availability
+        // window is still running, so the fresh key is never selected and
+        // the rotation is silently a no-op.
+        //
+        // The anchor is the pool credential whose value is the key being
+        // set. If the pool does not know that value (a key set from
+        // outside the pool), the anchor is left alone: there is no
+        // credential to point at.
+        if let Some(id) = self
+            .pool
+            .list()
+            .into_iter()
+            .find(|c| c.value == api_key.trim())
+            .map(|c| c.id)
+            && let Ok(mut slot) = self.last_credential_id.lock()
+        {
+            *slot = Some(id);
+        }
     }
 
     fn rotate_credential_value(&self, api_key: &str) {
@@ -890,6 +917,60 @@ mod tests {
             request_keys.lock().unwrap().as_slice(),
             ["k1", "k1"],
             "the request after the retarget must still carry the key"
+        );
+    }
+
+    /// The FULL rotation sequence, end to end: the agent-loop rotation
+    /// moves the client to k2, and a later `.env` rotation to k3 must
+    /// REPLACE k2 — not the benched k1.
+    ///
+    /// The anchor (the pool credential the client last used) is what a
+    /// `.env` rotation replaces, and it was only updated inside the
+    /// client's own request loop. The agent-loop rotation moved the client
+    /// to k2 without updating it, so the anchor still pointed at the
+    /// benched k1: the `.env` rotation replaced k1's secret, k1 stayed
+    /// unavailable for its 401 window, and the fresh key was never
+    /// selected. The rotation was silently a no-op.
+    #[tokio::test]
+    async fn an_env_rotation_after_an_agent_loop_rotation_replaces_the_new_credential() {
+        let seen = recording();
+        let (client, request_keys) =
+            scripted_with_request_keys(vec![Outcome::Ok(chat_response("mock"))], seen.clone());
+        let pooled = PooledModelClient::new(client, pool_with(&["k1", "k2"]));
+
+        // A request runs, so k1 is the credential in use.
+        pooled.chat(request()).await.expect("first chat");
+        assert_eq!(
+            request_keys.lock().unwrap().as_slice(),
+            ["k1"],
+            "the first request carried k1"
+        );
+
+        // The agent-loop rotation: invalidate k1, select k2, switch to it.
+        let active = pooled.pool.list().into_iter().next().expect("a credential");
+        pooled
+            .pool
+            .invalidate(&active.id, None, Some("benched"), None, false);
+        let next = pooled
+            .pool
+            .select()
+            .expect("the next credential is selected");
+        assert_eq!(next.value, "k2");
+        pooled.set_api_key(&next.value);
+
+        // Now the `.env` rotation supplies a brand-new key.
+        pooled.rotate_credential_value("k3");
+
+        // The credential in force must be k3, and the benched k1's secret
+        // must be untouched.
+        let values: Vec<String> = pooled.pool.list().into_iter().map(|c| c.value).collect();
+        assert!(
+            values.contains(&"k3".to_string()),
+            "the rotated key must be IN the pool, got: {values:?}"
+        );
+        assert!(
+            values.contains(&"k1".to_string()),
+            "the benched credential's secret must survive, got: {values:?}"
         );
     }
 

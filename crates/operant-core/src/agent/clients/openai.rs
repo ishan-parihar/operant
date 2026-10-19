@@ -53,7 +53,17 @@ impl ModelClient for OpenAIModelClient {
     }
 
     fn current_api_key(&self) -> Option<String> {
-        Some(self.inner.effective_api_key())
+        // `effective_api_key` falls back to the literal string "default"
+        // when there is no key. That placeholder is NOT a credential: the
+        // retarget path seeds a pool credential with this value, and a
+        // credential whose secret is the word "default" is a
+        // credential that cannot authenticate. Report "no key" instead.
+        let key = self.inner.effective_api_key();
+        if key.is_empty() || key == "default" {
+            None
+        } else {
+            Some(key)
+        }
     }
 
     async fn chat(&self, request: ChatRequest) -> Result<crate::client::ChatResponse> {

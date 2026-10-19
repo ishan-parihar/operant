@@ -134,6 +134,7 @@ fn test_config() -> AgentConfig {
         reasoning_effort: String::new(),
         reasoning_effort_param: Default::default(),
         model: "demo-stream-interrupt".to_string(),
+        max_trajectories: 0,
         max_iterations: 3,
         tool_timeout: Duration::from_secs(5),
         request_timeout: Duration::from_secs(10),

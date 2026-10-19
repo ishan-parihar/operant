@@ -44,6 +44,12 @@ tool_timeout_secs = 30
 request_timeout_secs = 120
 stream = true
 context_window = 128000
+# The most trajectory files to keep in `~/.operant/trajectories`.
+# 0 (the default) keeps them ALL. The bound exists so the directory cannot
+# grow without limit, but `operant trajectory export` collects these files as
+# prompt-completion pairs for fine-tuning — so a bound deletes the corpus that
+# command is for. The operator opts in.
+max_trajectories = 0
 # Largest share of `context_window` that ONE tool result may occupy before its
 # bulk is withheld behind an explicit marker (iter-357). The kept head, the
 # token count, the per-token price and the number of tokens removed are all

@@ -336,6 +336,7 @@ fn test_config(max_iterations: usize) -> AgentConfig {
         reasoning_effort: String::new(),
         reasoning_effort_param: Default::default(),
         model: "demo".to_string(),
+        max_trajectories: 0,
         max_iterations,
         // Generous stream-level wrapper: the registry's own (short) timeout
         // fires first in these tests, exercising the `tools.rs` writer. The

@@ -20,18 +20,26 @@ use super::*;
 /// bound.
 ///
 /// The cap follows the checkpoint store's precedent (`max_snapshots`, also
-/// 20): keep the newest N, drop the oldest. The count is a CONSTANT rather
-/// than a config key, because a trajectory is a diagnostic artefact and not
-/// a user-managed store — there is no workflow that needs the 500th one.
+/// 20): keep the newest N, drop the oldest. It IS a config key
+/// (`[agent] max_trajectories`, 0 = keep all) rather than a constant,
+/// because `operant trajectory export` exists to collect these files as
+/// prompt-completion pairs for fine-tuning — so silently deleting the
+/// oldest ones destroys exactly the corpus that command is for. The
+/// default is 0 (keep all): the operator opts into a bound.
+#[cfg(test)]
 const MAX_TRAJECTORIES_KEPT: usize = 200;
 
-/// Drop the oldest trajectory files so at most [`MAX_TRAJECTORIES_KEPT`]
-/// remain.
+/// Drop the oldest trajectory files so at most `keep` remain.
+///
+/// `keep` of 0 means keep them all — the default.
 ///
 /// Best-effort: a file that cannot be read or removed is skipped, and the
 /// prune never fails the run that triggered it. A trajectory is a diagnostic
 /// artefact; losing the pruning of one is not worth failing a turn over.
-fn prune_old_trajectories(dir: &std::path::Path) {
+fn prune_old_trajectories(dir: &std::path::Path, keep: usize) {
+    if keep == 0 {
+        return;
+    }
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
@@ -55,12 +63,12 @@ fn prune_old_trajectories(dir: &std::path::Path) {
         };
         files.push((modified, path));
     }
-    if files.len() <= MAX_TRAJECTORIES_KEPT {
+    if files.len() <= keep {
         return;
     }
     // Oldest first, so the tail is what survives.
     files.sort_by_key(|(modified, _)| *modified);
-    let excess = files.len() - MAX_TRAJECTORIES_KEPT;
+    let excess = files.len() - keep;
     for (_, path) in files.into_iter().take(excess) {
         if let Err(e) = std::fs::remove_file(&path) {
             warn!(error = %e, path = ?path, "Failed to prune an old trajectory");
@@ -209,7 +217,8 @@ impl OperantAgent {
                     warn!(error = %e, path = ?path, "Failed to write trajectory");
                 } else {
                     info!(path = %path.display(), "Trajectory saved");
-                    prune_old_trajectories(&trajectories_dir);
+                    let keep = self.config.max_trajectories;
+                    prune_old_trajectories(&trajectories_dir, keep);
                 }
             }
             Err(e) => {
@@ -810,7 +819,7 @@ mod tests {
         let other = dir.join("notes.txt");
         std::fs::write(&other, b"keep me").expect("write other file");
 
-        prune_old_trajectories(&dir);
+        prune_old_trajectories(&dir, MAX_TRAJECTORIES_KEPT);
 
         let remaining = std::fs::read_dir(&dir)
             .expect("read the dir")
@@ -830,6 +839,7 @@ mod tests {
             dir.join(format!("sess_{}.json", total - 1)).exists(),
             "the newest trajectory must survive"
         );
+
         // The OLDEST are gone.
         assert!(
             !dir.join("sess_0.json").exists(),
@@ -848,5 +858,40 @@ mod tests {
             .write(true)
             .open(path)
             .map(|f| f.set_times(ft));
+    }
+
+    /// `keep = 0` means KEEP THEM ALL.
+    ///
+    /// `operant trajectory export` exists to collect these files as
+    /// prompt-completion pairs for fine-tuning, so a prune that deletes
+    /// them silently destroys the corpus that command is for. The bound is
+    /// the operator's choice, and the default is no bound at all.
+    #[test]
+    fn a_cap_of_zero_keeps_every_trajectory() {
+        let dir = std::env::temp_dir().join(format!(
+            "operant_traj_keepall_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+
+        let total = MAX_TRAJECTORIES_KEPT + 5;
+        for i in 0..total {
+            std::fs::write(dir.join(format!("sess_{i}.json")), b"{}").expect("write trajectory");
+        }
+
+        prune_old_trajectories(&dir, 0);
+
+        let remaining = std::fs::read_dir(&dir)
+            .expect("read the dir")
+            .flatten()
+            .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("json"))
+            .count();
+        assert_eq!(remaining, total, "a cap of zero must keep every trajectory");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

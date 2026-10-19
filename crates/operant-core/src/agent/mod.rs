@@ -117,6 +117,14 @@ pub struct AgentConfig {
     pub max_tool_result_share: f64,
     /// Max self-healing attempts on tool errors
     pub max_healing_attempts: usize,
+    /// The most trajectory files to keep in `~/.operant/trajectories`.
+    ///
+    /// 0 (the default) keeps them ALL. The bound exists so the directory
+    /// cannot grow without limit, but `operant trajectory export` exists
+    /// to collect these files as prompt-completion pairs for fine-tuning,
+    /// so deleting them silently destroys the corpus that command is for.
+    /// The operator opts into a bound.
+    pub max_trajectories: usize,
     /// Ordered list of fallback models for automatic failover on retryable errors.
     pub fallback_models: Vec<String>,
     /// Whether automatic fallback to fallback_models is enabled.
@@ -192,6 +200,7 @@ impl From<&BehaviorSettings> for AgentConfig {
             context_window: settings.context_window,
             max_tool_result_share: settings.max_tool_result_share,
             max_healing_attempts: settings.max_healing_attempts,
+            max_trajectories: settings.max_trajectories,
             fallback_models: settings.fallback_models.clone(),
             fallback_on_errors: settings.fallback_on_errors,
             loop_detection_enabled: true,
@@ -2847,6 +2856,7 @@ mod tests {
             reasoning_effort: String::new(),
             reasoning_effort_param: crate::config::ReasoningEffortParam::Auto,
             model: "demo".to_string(),
+            max_trajectories: 0,
             max_iterations: 3,
             tool_timeout: Duration::from_secs(5),
             request_timeout: Duration::from_secs(10),
@@ -2897,6 +2907,7 @@ mod tests {
             reasoning_effort: String::new(),
             reasoning_effort_param: crate::config::ReasoningEffortParam::Auto,
             model: "demo".to_string(),
+            max_trajectories: 0,
             max_iterations: 3,
             tool_timeout: Duration::from_secs(5),
             request_timeout: Duration::from_secs(10),
@@ -3013,6 +3024,7 @@ mod tests {
             reasoning_effort: String::new(),
             reasoning_effort_param: crate::config::ReasoningEffortParam::Auto,
             model: "demo".to_string(),
+            max_trajectories: 0,
             max_iterations: 3,
             tool_timeout: Duration::from_secs(5),
             request_timeout: Duration::from_secs(10),

@@ -359,6 +359,7 @@ fn test_config() -> AgentConfig {
     AgentConfig {
         reasoning_effort: String::new(),
         reasoning_effort_param: Default::default(),
+        max_trajectories: 0,
         model: "demo".to_string(),
         max_iterations: 4,
         tool_timeout: Duration::from_secs(5),

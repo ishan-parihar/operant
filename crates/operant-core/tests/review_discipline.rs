@@ -341,6 +341,7 @@ fn test_config(max_iterations: usize, skill_nudge_interval: usize) -> AgentConfi
         reasoning_effort: String::new(),
         reasoning_effort_param: Default::default(),
         model: "demo".to_string(),
+        max_trajectories: 0,
         max_iterations,
         tool_timeout: Duration::from_secs(5),
         request_timeout: Duration::from_secs(10),

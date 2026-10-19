@@ -145,6 +145,29 @@ impl CheckpointManager {
         }
     }
 
+    /// Delete the shadow store for a working directory and report how many
+    /// bytes it held.
+    ///
+    /// The store is a bare git repo on disk; the DATABASE rows are a
+    /// separate thing. `operant checkpoints prune` and `clear` remove the
+    /// rows, and the bytes on disk stay — a store that had grown to
+    /// 1.5 GB of packed objects reported "pruned 3 checkpoints" and
+    /// reclaimed nothing. This is the path that reclaims them.
+    ///
+    /// The store holds SNAPSHOTS of the working directory, so deleting it
+    /// removes a rollback history and nothing else. The caller decides.
+    pub fn clear_store(&self, working_dir: &str) -> crate::Result<u64> {
+        let store = self.store_path(working_dir);
+        if !store.exists() {
+            return Ok(0);
+        }
+        let bytes = dir_size(&store);
+        std::fs::remove_dir_all(&store).map_err(|e| {
+            crate::error::Error::Agent(format!("Failed to remove the checkpoint store: {e}"))
+        })?;
+        Ok(bytes)
+    }
+
     /// Why the last `ensure_checkpoint` call refused, if it refused for a
     /// reason the caller can act on.
     ///
@@ -635,6 +658,33 @@ struct TreeSize {
     total_bytes: u64,
     /// The largest single file's size in bytes.
     largest_file_bytes: u64,
+}
+
+/// The total size of the files under a directory, in bytes.
+///
+/// Symlinks are not followed, for the same reason the file counter does
+/// not follow them.
+fn dir_size(dir: &Path) -> u64 {
+    let mut total = 0u64;
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(current) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&current) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let Ok(ft) = entry.file_type() else {
+                continue;
+            };
+            if ft.is_dir() {
+                stack.push(entry.path());
+            } else if ft.is_file()
+                && let Ok(meta) = entry.metadata()
+            {
+                total = total.saturating_add(meta.len());
+            }
+        }
+    }
+    total
 }
 
 /// Measure a tree's total and largest file size.
@@ -1143,6 +1193,54 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&tmp);
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Clearing the checkpoints must reclaim the BYTES, not just the rows.
+    ///
+    /// The database rows and the shadow store on disk are two different
+    /// things, and `operant checkpoints prune` and `clear` only removed the
+    /// rows: a store that had grown to 1.5 GB of packed objects reported
+    /// "cleared N checkpoints" and reclaimed nothing.
+    #[test]
+    fn clearing_the_checkpoints_removes_the_store_and_reports_the_bytes() {
+        use std::process::Command as StdCommand;
+        if StdCommand::new("git").arg("--version").output().is_err() {
+            return;
+        }
+
+        let home =
+            std::env::temp_dir().join(format!("operant_ckpt_clear_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(home.join("a.txt"), "hello").unwrap();
+
+        let mgr = CheckpointManager::new();
+        mgr.configure(CheckpointConfig {
+            base_dir: home.join("checkpoints"),
+            enabled: true,
+            ..Default::default()
+        });
+
+        assert!(
+            mgr.ensure_checkpoint(home.to_str().unwrap(), "one"),
+            "the checkpoint must be taken"
+        );
+        let store = mgr.store_path(home.to_str().unwrap());
+        assert!(store.exists(), "the store must exist after a checkpoint");
+
+        let bytes = mgr
+            .clear_store(home.to_str().unwrap())
+            .expect("clear the store");
+        assert!(bytes > 0, "the reclaim must report the bytes it freed");
+        assert!(!store.exists(), "the store must be gone after the clear");
+        // A second clear is a no-op, not an error.
+        assert_eq!(
+            mgr.clear_store(home.to_str().unwrap())
+                .expect("clear again"),
+            0,
+            "clearing a store that is not there is a no-op"
+        );
+
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     /// The shadow store must NOT snapshot itself.

@@ -411,6 +411,27 @@ impl CredentialPool {
             return false;
         };
         cred.value = value.to_string();
+        // The failure state belonged to the OLD secret. A new secret has
+        // not failed: leaving `status` / `error_reset_at` in place keeps
+        // the credential unavailable (for 5 minutes on a 401, an hour on a
+        // 429), so the pool refuses to select it and the rotation that
+        // just supplied a working key is silently a no-op — the agent
+        // answers "no available keys" with a fresh key in hand.
+        //
+        // This is the same set of fields `reset_statuses` clears.
+        let had_failure = cred.status.is_some() || cred.error_reset_at.is_some();
+        cred.status = None;
+        cred.last_error_code = None;
+        cred.last_error_reason = None;
+        cred.last_error_message = None;
+        cred.error_reset_at = None;
+        if had_failure {
+            info!(
+                provider = %self.provider,
+                id = %id,
+                "Replaced credential value and cleared the old secret's failure state"
+            );
+        }
         info!(provider = %self.provider, id = %id, "Replaced credential value in pool");
         true
     }
@@ -1110,6 +1131,45 @@ mod tests {
         );
         assert!(next.is_some());
         assert_eq!(next.unwrap().name, "key-2");
+    }
+
+    /// Replacing a credential's SECRET must clear the OLD secret's
+    /// failure state.
+    ///
+    /// The failure state belongs to the secret that failed. A 401 benches
+    /// a credential for 5 minutes and a 429 for an hour, so a credential
+    /// that was benched stays unavailable. If a rotation replaces only the
+    /// VALUE and leaves the status, the fresh key is stored on a
+    /// credential the pool will not select — and the agent answers "no
+    /// available keys" with a working key in hand.
+    #[test]
+    fn replacing_a_value_clears_the_old_secrets_failure_state() {
+        let pool = test_pool();
+        let id = pool.list()[0].id.clone();
+
+        // Bench it: a 429 keeps it unavailable for an hour.
+        pool.invalidate(
+            &id,
+            Some(429),
+            Some("rate_limited"),
+            Some("slow down"),
+            false,
+        );
+        assert!(
+            !pool.get(&id).expect("the credential").is_available(),
+            "a benched credential must be unavailable"
+        );
+
+        // The rotation supplies a new secret.
+        assert!(pool.replace_value(&id, "the-new-secret"));
+
+        let cred = pool.get(&id).expect("the credential");
+        assert_eq!(cred.value, "the-new-secret");
+        assert!(
+            cred.is_available(),
+            "a credential with a NEW secret must be available — the failure \
+             belonged to the old one"
+        );
     }
 
     #[test]

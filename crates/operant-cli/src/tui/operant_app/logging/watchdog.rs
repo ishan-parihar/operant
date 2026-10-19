@@ -167,6 +167,15 @@ pub fn thread_states() -> Vec<String> {
             let dir = entry.path();
             let tid = entry.file_name().to_string_lossy().to_string();
             let name = read_trimmed(dir.join("comm")).unwrap_or_else(|| "?".to_string());
+            // The thread name comes from `comm`, and it may contain COLONS
+            // (a Rust test thread is named after its module path:
+            // "tui::app::tests"). The record is colon-separated, so a
+            // colon in the name made it ambiguous — a parser that split on
+            // ':' got the wrong number of fields, and the test that
+            // checked the shape failed on any machine whose thread names
+            // carried a module path. The name's colons become dots, which
+            // keeps the record's four fields unambiguous.
+            let name = name.replace(':', ".");
             let wchan = read_trimmed(dir.join("wchan")).unwrap_or_else(|| "?".to_string());
             let state = read_trimmed(dir.join("stat"))
                 .and_then(|stat| {
@@ -230,12 +239,25 @@ mod tests {
         let states = thread_states();
         if cfg!(target_os = "linux") {
             assert!(!states.is_empty());
-            let first = &states[0];
-            assert_eq!(
-                first.split(':').count(),
-                4,
-                "expected tid:name:state:wchan, got {first}"
-            );
+            for record in &states {
+                // The record is "tid:name:state:wchan" — FOUR fields, and
+                // the name's own colons are dots, so the split is
+                // unambiguous whatever the thread is called.
+                let fields: Vec<&str> = record.split(':').collect();
+                assert_eq!(
+                    fields.len(),
+                    4,
+                    "expected tid:name:state:wchan, got {record}"
+                );
+                assert!(
+                    fields[0].chars().all(|c| c.is_ascii_digit()),
+                    "the first field is the thread id, got {record}"
+                );
+                assert!(
+                    !fields[2].is_empty() && fields[2].len() == 1,
+                    "the third field is the single-character state, got {record}"
+                );
+            }
         }
     }
 }

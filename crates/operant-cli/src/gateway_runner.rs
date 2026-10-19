@@ -1216,8 +1216,20 @@ impl MessageHandler for GatewayMessageHandler {
                 model = %endpoint.model,
                 "operant.toml endpoint changed; retargeting the gateway agent"
             );
-            self.agent
-                .set_endpoint(&endpoint.base_url, endpoint.api_key.as_deref());
+            // The key the client is CURRENTLY using, when the config file
+            // does not carry one. `parse_config_file` does NOT apply the
+            // environment overrides, so in the documented setup (the key
+            // lives in `~/.operant/.env`) `endpoint.api_key` is None — and
+            // `set_endpoint(url, None)` EMPTIES a pool-backed client's
+            // credentials. The agent then answers "no available keys"
+            // after the operator changed the model, with a key that was
+            // present the whole time. The `.env` rotation path already
+            // has this fallback; this path needed the same one.
+            let current_key = self.agent.current_api_key();
+            self.agent.set_endpoint(
+                &endpoint.base_url,
+                endpoint.api_key.as_deref().or(current_key.as_deref()),
+            );
             self.agent.set_model(endpoint.model);
         }
 

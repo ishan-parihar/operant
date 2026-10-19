@@ -20,6 +20,15 @@ const MAX_OUTPUT_CHARS: usize = 200_000;
 #[cfg(feature = "rag-pdf")]
 const MAX_DECOMPRESSED_PAGE_BYTES: usize = 64 * 1024 * 1024;
 
+/// The most pages one document may contribute.
+///
+/// The per-page decompression limit bounds ONE page's content stream.
+/// A document with 1,000 pages would still cost 1,000 x 64 MiB, so the
+/// document needs its own budget: the page count is capped, and the
+/// per-page limit is divided across the pages that are actually read.
+#[cfg(feature = "rag-pdf")]
+const MAX_PAGES_PER_DOCUMENT: usize = 256;
+
 /// Extract the text of a PDF's pages.
 ///
 /// `lopdf` 0.45 replaced `pdf-extract` 0.12 here (AD-039). Two things came
@@ -29,22 +38,37 @@ const MAX_DECOMPRESSED_PAGE_BYTES: usize = 64 * 1024 * 1024;
 ///   (RUSTSEC-2026-0192, RT-27). `lopdf` 0.45 has no `ttf-parser`; its
 ///   `font_embedding` feature pulls `skrifa` instead, and this tool does
 ///   not embed fonts.
-/// - `lopdf` bounds the decompressed size of each page's content stream.
-///   `pdf-extract` did not, so a decompression bomb was a live hazard on
-///   the old path. The bound is now explicit.
+/// - `lopdf` can bound the decompressed size of a stream. `pdf-extract`
+///   did not, so a decompression bomb was a live hazard on the old path.
+///   The bound is now explicit, and it covers BOTH paths that decompress:
+///   the LOAD (object streams and xref streams, which `Document::load_mem`
+///   decodes eagerly) and the EXTRACT (each page's content stream).
 ///
 /// The page numbers are passed explicitly because `lopdf` extracts by page
 /// rather than over the whole document.
 #[cfg(feature = "rag-pdf")]
 fn extract_pdf_text(bytes: &[u8]) -> Result<String, String> {
-    let doc = lopdf::Document::load_mem(bytes).map_err(|e| e.to_string())?;
+    // The LOAD path decompresses too: object streams and xref streams are
+    // decoded when the document is read, and `Document::load_mem` uses
+    // `LoadOptions::default()`, whose `max_decompressed_size` is `None`.
+    // Bounding only the extraction left the load path unbounded, which is
+    // the same class of hazard the port was meant to close.
+    let options = lopdf::LoadOptions::with_max_decompressed_size(MAX_DECOMPRESSED_PAGE_BYTES);
+    let doc = lopdf::Document::load_mem_with_options(bytes, options).map_err(|e| e.to_string())?;
     let pages: Vec<u32> = doc.get_pages().keys().copied().collect();
     if pages.is_empty() {
         // A PDF with no pages has no text. Not an error: an image-only or
         // empty document is a valid thing to read.
         return Ok(String::new());
     }
-    doc.extract_text_with_limit(&pages, MAX_DECOMPRESSED_PAGE_BYTES)
+    // The per-page limit is a limit PER PAGE, so a document's total cost
+    // is bounded by dividing the budget across the pages read. The page
+    // count is also capped: past the cap the remaining pages are not read
+    // at all, which is both cheaper and a clearer limit than a budget
+    // divided so far that each page gets almost nothing.
+    let read_count = pages.len().min(MAX_PAGES_PER_DOCUMENT);
+    let page_budget = (MAX_DECOMPRESSED_PAGE_BYTES / read_count.max(1)).max(1024 * 1024);
+    doc.extract_text_with_limit(&pages[..read_count], page_budget)
         .map_err(|e| e.to_string())
 }
 
@@ -527,15 +551,23 @@ mod tests {
             let tool = PdfReadTool::new(test_security(tmp.path().to_path_buf()));
             let result = tool.execute(json!({"path": "test.pdf"})).await.unwrap();
 
-            // Either successfully extracts text, or reports no extractable text
-            // (acceptable: minimal hand-crafted PDFs may not parse perfectly).
+            // The text must ACTUALLY be extracted.
+            //
+            // This test used to accept an error containing "no
+            // extractable", which means a completely broken port — one
+            // that returned empty for every file, or failed on every
+            // file — would pass. The fixture is a valid single-page PDF
+            // with the text "Hello PDF" and the extractor is lopdf now
+            // (AD-039), so the text is there to be read.
             assert!(
-                result.success
-                    || result
-                        .error
-                        .as_deref()
-                        .unwrap_or("")
-                        .contains("no extractable")
+                result.success,
+                "the extraction must succeed, got: {:?}",
+                result.error
+            );
+            let text = &result.output;
+            assert!(
+                text.contains("Hello PDF"),
+                "the extracted text must contain the fixture's text, got: {text}"
             );
         }
 

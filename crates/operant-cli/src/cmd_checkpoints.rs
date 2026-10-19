@@ -198,6 +198,25 @@ async fn cmd_clear(config: &AppConfig) -> Result<()> {
             .with_context(|| format!("Failed to delete checkpoint {}", cp.hash))?;
     }
 
-    println!("Cleared {} checkpoint(s).", count);
+    // The ROWS are gone; the BYTES are not. The shadow store is a bare git
+    // repo on disk, and clearing the database rows leaves it exactly as
+    // large as it was — a store that had reached 1.5 GB of packed objects
+    // reported "cleared N checkpoints" and reclaimed nothing. The store
+    // holds snapshots of the working directory, so removing it removes a
+    // rollback history and nothing else; `clear` is the command that
+    // says so, so it does it.
+    let reclaimed = operant_core::tools::get_checkpoint_manager()
+        .clear_store(&dir)
+        .unwrap_or(0);
+
+    if reclaimed > 0 {
+        println!(
+            "Cleared {} checkpoint(s) and reclaimed {} MiB of the shadow store.",
+            count,
+            reclaimed / (1024 * 1024)
+        );
+    } else {
+        println!("Cleared {} checkpoint(s).", count);
+    }
     Ok(())
 }

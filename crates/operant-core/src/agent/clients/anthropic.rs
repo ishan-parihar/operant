@@ -325,6 +325,31 @@ impl ModelClient for AnthropicModelClient {
         }
     }
 
+    /// The endpoint this client is using.
+    ///
+    /// Without this, the per-turn retarget's change-guard always fired
+    /// (the accessor returned `None`), and the retarget passed no key —
+    /// which EMPTIES a pool-backed client's credentials. The agent then
+    /// answered "no available keys" on a provider whose key was present
+    /// the whole time.
+    fn base_url(&self) -> Option<String> {
+        Some(self.base_url.clone())
+    }
+
+    /// The credential this client is currently using.
+    ///
+    /// The retarget hands the client back the key in force when the new
+    /// endpoint's key is not known, so the pool is re-seeded rather than
+    /// emptied.
+    fn current_api_key(&self) -> Option<String> {
+        let key = self
+            .api_key
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        if key.is_empty() { None } else { Some(key) }
+    }
+
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse> {
         let body = self.convert_request(&request);
         // Clone the key into an owned String FIRST: `RwLockReadGuard` is not

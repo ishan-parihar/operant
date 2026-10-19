@@ -421,6 +421,7 @@ fn test_config() -> AgentConfig {
         reasoning_effort: String::new(),
         reasoning_effort_param: Default::default(),
         model: "demo".to_string(),
+        max_trajectories: 0,
         max_iterations: PARENT_MAX_ITERATIONS,
         // 5s per tool call: shorter than the child's own 30s deadline, so the
         // child completing proves it did not inherit the parent's tool timeout.

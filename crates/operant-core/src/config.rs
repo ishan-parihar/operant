@@ -572,6 +572,14 @@ pub struct BehaviorSettings {
     pub context_window: usize,
     pub max_healing_attempts: usize,
     pub show_reasoning: bool,
+    /// The most trajectory files to keep in `~/.operant/trajectories`.
+    ///
+    /// 0 (the default) keeps them ALL. The bound exists so the directory
+    /// cannot grow without limit, but `operant trajectory export` exists
+    /// to collect these files as prompt-completion pairs for fine-tuning,
+    /// so deleting them silently destroys the corpus that command is for.
+    /// The operator opts into a bound.
+    pub max_trajectories: usize,
     pub tool_progress: ToolProgressMode,
     pub session_reset: SessionResetMode,
     pub context_compression: bool,
@@ -780,6 +788,7 @@ impl Default for BehaviorSettings {
             context_window: 128_000,
             max_healing_attempts: 3,
             show_reasoning: true,
+            max_trajectories: 0,
             reasoning_effort: String::new(),
             reasoning_effort_param: ReasoningEffortParam::Auto,
             tool_progress: ToolProgressMode::Auto,
