@@ -75,14 +75,17 @@ pub struct CliConfig {
 
 impl Default for CliConfig {
     fn default() -> Self {
-        let config_dir = dirs::home_dir()
-            .map(|h| h.join(".operant"))
-            .unwrap_or_else(|| PathBuf::from(".operant"));
-
-        // Respect HERMES_HOME env var if set
-        let config_dir = std::env::var("HERMES_HOME")
-            .map(PathBuf::from)
-            .unwrap_or(config_dir);
+        // The operant home, resolved by the CORE's own resolver — the same
+        // one the per-turn `.env` reload uses.
+        //
+        // This used to resolve `dirs::home_dir()/.operant` here, which
+        // agrees with the core on Unix but NOT on Windows: the core uses
+        // `%APPDATA%\operant` there. So on Windows the startup `.env`
+        // loader read `~\.operant\.env` while the per-turn reload read
+        // `%APPDATA%\operant\.env` — two different files, and the exact
+        // class of bug the `.env` path was fixed for. One resolver, one
+        // path.
+        let config_dir = operant_core::platform::operant_home();
 
         Self {
             config_dir: config_dir.clone(),
