@@ -564,9 +564,17 @@ pub struct App {
     /// When `true`, the main event loop should spawn an async task to load
     /// the session list from disk and populate the session browser.
     pub session_list_pending: bool,
+    /// `/rename` with no argument: start the rename once the list arrives (TUI-8).
+    pub rename_on_list_load: bool,
+    /// `/rename <title>` for the open session, saved by the adapter (TUI-8).
+    pub pending_title_save: Option<String>,
     /// Receiver for background session-list results.
     pub session_list_rx:
         Option<tokio::sync::mpsc::Receiver<Vec<crate::tui::session_browser::SessionEntry>>>,
+    /// Receiver for the Ctrl+B fork tree, read off the event loop (TUI-11).
+    pub branch_list_rx: Option<
+        tokio::sync::mpsc::Receiver<Result<Vec<crate::tui::session_branching::BranchInfo>, String>>,
+    >,
     /// Credential store for provider API keys and OAuth tokens.
     pub auth_store: crate::tui::adapter_types::AuthStore,
     /// Connect-a-provider dialog (/connect command).
@@ -1113,6 +1121,9 @@ impl App {
 
             // Drain background session-list results.
             self.drain_session_list();
+
+            // Drain the fork tree for the Ctrl+B branch browser.
+            self.drain_branch_list();
 
             // Drain background model-fetch results.
             self.drain_model_fetch();

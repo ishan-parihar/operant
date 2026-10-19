@@ -1001,9 +1001,19 @@ impl App {
                 true
             }
             "rename" => {
-                self.session_browser.open(vec![]);
-                self.session_list_pending = true;
-                self.session_browser.start_rename();
+                let title = args.trim();
+                if title.is_empty() {
+                    // The rows arrive with the list, so the rename starts on arrival (TUI-8).
+                    self.session_browser.open(vec![]);
+                    self.session_list_pending = true;
+                    self.rename_on_list_load = true;
+                } else {
+                    // `/rename <title>` names the open session. The adapter saves it
+                    // to the agent's session (`run_pending_agent_actions`).
+                    self.session_title = Some(title.to_string());
+                    self.pending_title_save = Some(title.to_string());
+                    self.set_status_notice(format!("Renamed to: {title}"));
+                }
                 true
             }
             // /login, /init — dialog tier (command backlog tier 2): the
@@ -1345,10 +1355,13 @@ impl App {
             // TuiApp runner (adapter_types.rs) and is not threaded into App,
             // so this reports the real startup default. (iter-240.)
             "mouse" => {
-                self.set_status_notice(
-                    "Mouse capture: enabled (use --no-mouse to disable, e.g. inside tmux)"
-                        .to_string(),
-                );
+                // TUI-13: report the state the TUI is in, not a constant.
+                let state = if self.mouse_capture_active {
+                    "enabled (use --no-mouse to disable, e.g. inside tmux)"
+                } else {
+                    "disabled (started with --no-mouse)"
+                };
+                self.set_status_notice(format!("Mouse capture: {state}"));
                 true
             }
 

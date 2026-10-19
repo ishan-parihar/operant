@@ -1,5 +1,5 @@
-<!-- genome:zone records sha=116ef188ce28 -->
-**Decisions** (10)
+<!-- genome:zone records sha=01e25fb338ca -->
+**Decisions** (15)
 
 | ID | Title | Status | Description |
 |---|---|---|---|
@@ -13,6 +13,11 @@
 | AD-008 | A chair notice is retried until delivered; driver tokens are plain | Active | The Holon kernel retries a failed chair notice on the next heartbeat, and refuses driver placeholders that are not plain tokens |
 | AD-009 | A gateway budget is metered per seat turn, and a hard cap fails closed | Active | Spend is recorded per turn against the start-time seat and the window reads that ledger; a hard cap whose usage cannot be read refuses |
 | AD-010 | A chat's conversation is kept on its row; /new and a seat change start a fresh one | Active | The conversation id persists on the session row, /new and a seat change start a fresh transcript, the continuation summary is keyed by it, and seat runs set their memory scope |
+| AD-011 | A pending approval answers the key before any overlay | Active | An approval the agent is waiting on takes the key before any overlay, so a browser cannot swallow it |
+| AD-012 | A rename is saved to the session, and a bare /rename waits for the list | Active | `/rename` persists the confirmed name, and a bare `/rename` opens the rename once the session list has loaded |
+| AD-013 | A cleared delegation is abandoned, and the HUD follows the running one | Active | A delegation whose turn is cleared by /new or /rewind is marked abandoned, and the status bar shows a running delegation before a finished one |
+| AD-014 | A shell-out restores the terminal before its result is reported, and releases mouse capture for the child | Active | A shell-out restores the terminal before it reports the child's exit, reports a failed or signalled exit as such, and frees the mouse for the child |
+| AD-015 | The Ctrl+B fork tree is read off the event loop, and a database error is shown | Active | The branch browser's parent and fork rows are read on a blocking thread, and a failed read is reported in the transcript instead of opening an empty browser |
 <!-- genome:end records -->
 
 <!-- genome:zone idmap sha=a7a72b4c9dd0 -->

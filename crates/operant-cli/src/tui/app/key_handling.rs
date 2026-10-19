@@ -143,6 +143,10 @@ impl App {
             }
             return false;
         }
+        if self.permission_request.is_some() {
+            self.handle_permission_key(key);
+            return false;
+        }
 
         // Permissions picker (/permissions) — 2026-10-14 batch, plan 10.
         // Enter applies the highlighted mode; Bypass does NOT arm here —
@@ -706,8 +710,13 @@ impl App {
                 SessionBrowserMode::Rename => match key.code {
                     KeyCode::Esc => self.session_browser.cancel(),
                     KeyCode::Enter => {
-                        if let Some((_id, name)) = self.session_browser.confirm_rename() {
+                        if let Some((id, name)) = self.session_browser.confirm_rename() {
+                            // TUI-8: the name is saved, not only shown until the next /resume.
                             self.session_title = Some(name.clone());
+                            tokio::spawn(crate::tui::adapter_types::history::save_session_title(
+                                id,
+                                name.clone(),
+                            ));
                             self.set_status_notice(format!("Renamed to: {}", name));
                         }
                     }
@@ -955,10 +964,6 @@ impl App {
         // (iter-155: legacy history_search.is_some() check deleted — always None)
 
         // Permission dialog mode intercepts most keys
-        if self.permission_request.is_some() {
-            self.handle_permission_key(key);
-            return false;
-        }
 
         // (iter-143: plugin_hints dismiss handler deleted — Vec was always empty)
 

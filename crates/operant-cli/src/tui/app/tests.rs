@@ -5327,3 +5327,131 @@ fn resume_picks_the_session_the_agent_switches_to() {
         "/resume must hand the picked session to the agent switch"
     );
 }
+
+#[cfg(test)]
+mod rename_on_load_tests {
+    use super::*;
+    use crate::tui::session_browser::{SessionBrowserMode, SessionEntry};
+
+    #[test]
+    fn a_bare_rename_starts_on_the_first_row_once_the_list_arrives() {
+        // TUI-8: `/rename` with no argument opens the rename on the list's first row.
+        let mut app = make_app();
+        app.rename_on_list_load = true;
+        let (tx, rx) = tokio::sync::mpsc::channel(1);
+        app.session_list_rx = Some(rx);
+        tx.try_send(vec![SessionEntry {
+            id: "s-7".to_string(),
+            title: "release notes".to_string(),
+            last_updated: "now".to_string(),
+            message_count: 1,
+            cost_usd: 0.0,
+        }])
+        .unwrap();
+
+        assert!(app.drain_session_list());
+
+        assert_eq!(app.session_browser.mode, SessionBrowserMode::Rename);
+        assert_eq!(app.session_browser.rename_input, "release notes");
+        assert!(!app.rename_on_list_load, "the flag is consumed once used");
+    }
+}
+
+#[cfg(test)]
+mod delegation_status_tests {
+    use super::*;
+
+    #[test]
+    fn a_cleared_delegation_is_abandoned_not_left_running() {
+        // TUI-9: a delegation whose turn is cleared never reports a completion,
+        // so it is marked abandoned rather than shown as running forever.
+        let mut app = make_app();
+        app.agent_status
+            .push(("d1".to_string(), "running".to_string()));
+        app.clear_tool_blocks();
+        assert_eq!(app.agent_status[0].1, "abandoned");
+    }
+}
+
+#[cfg(test)]
+mod approval_gate_tests {
+    use super::*;
+    use crate::tui::dialogs::PermissionRequest;
+    use crate::tui::session_browser::SessionEntry;
+
+    #[test]
+    fn a_pending_approval_takes_the_key_before_an_open_browser() {
+        // TUI-1: an approval the agent is waiting on is answered first, so an
+        // open overlay cannot swallow its key and leave the turn stalled.
+        let mut app = make_app();
+        app.session_browser.open(vec![SessionEntry {
+            id: "s-1".to_string(),
+            title: "t".to_string(),
+            last_updated: "now".to_string(),
+            message_count: 0,
+            cost_usd: 0.0,
+        }]);
+        app.permission_request = Some(PermissionRequest::bash(
+            "tu-9".to_string(),
+            "Bash".to_string(),
+            "run a command".to_string(),
+            "ls".to_string(),
+            None,
+        ));
+        let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+
+        app.handle_key_event(esc);
+
+        assert!(
+            app.permission_request.is_none(),
+            "the approval answered the key"
+        );
+        assert!(
+            app.session_browser.visible,
+            "the browser did not take the key"
+        );
+    }
+}
+
+#[cfg(test)]
+mod branch_list_tests {
+    use super::*;
+
+    #[test]
+    fn a_failed_fork_tree_read_is_reported_not_shown_as_an_empty_tree() {
+        // TUI-11: a database error must not open an empty branch browser.
+        let mut app = make_app();
+        let (tx, rx) = tokio::sync::mpsc::channel(1);
+        app.branch_list_rx = Some(rx);
+        tx.try_send(Err("database is locked".to_string())).unwrap();
+
+        assert!(app.drain_branch_list());
+
+        assert!(!app.session_branching.visible);
+        assert!(app.branch_list_rx.is_none());
+        assert!(
+            app.system_annotations
+                .iter()
+                .any(|a| a.text.contains("database is locked")),
+            "the error reaches the transcript"
+        );
+    }
+
+    #[test]
+    fn a_loaded_fork_tree_opens_the_branch_browser() {
+        let mut app = make_app();
+        let (tx, rx) = tokio::sync::mpsc::channel(1);
+        app.branch_list_rx = Some(rx);
+        tx.try_send(Ok(vec![crate::tui::session_branching::BranchInfo {
+            id: "b-1".to_string(),
+            name: "fork".to_string(),
+            created_at: String::new(),
+            is_current: false,
+        }]))
+        .unwrap();
+
+        assert!(app.drain_branch_list());
+
+        assert!(app.session_branching.visible);
+    }
+}

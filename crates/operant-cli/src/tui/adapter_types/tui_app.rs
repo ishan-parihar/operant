@@ -337,10 +337,18 @@ impl TuiApp {
                     // gets a chance to redraw the "Launching…" status message
                     // before we suspend.)
                     if let Some(argv) = self.app.pending_shell_command.take() {
-                        if let Err(e) = run_suspended_shell_command(&mut terminal, &argv) {
-                            self.app.status_message = Some(format!("Shell command failed: {}", e));
-                        } else {
-                            self.app.status_message = Some("Returned to operant.".to_string());
+                        match run_suspended_shell_command(
+                            &mut terminal,
+                            &argv,
+                            self.app.mouse_capture_active,
+                        ) {
+                            Ok(status) => {
+                                self.app.status_message = Some(shell_return_message(&status))
+                            }
+                            Err(e) => {
+                                self.app.status_message =
+                                    Some(format!("Shell command failed: {}", e));
+                            }
                         }
                         // Force a redraw on the next frame so the status
                         // message + restored terminal show immediately.
@@ -362,12 +370,19 @@ impl TuiApp {
                             // app.run() will block waiting for input. To avoid
                             // that, run it NOW if it was set.
                             if let Some(argv) = self.app.pending_shell_command.take() {
-                                if let Err(e) = run_suspended_shell_command(&mut terminal, &argv) {
-                                    self.app.status_message =
-                                        Some(format!("Shell command failed: {}", e));
-                                } else {
-                                    self.app.status_message =
-                                        Some("Returned to operant.".to_string());
+                                match run_suspended_shell_command(
+                                    &mut terminal,
+                                    &argv,
+                                    self.app.mouse_capture_active,
+                                ) {
+                                    Ok(status) => {
+                                        self.app.status_message =
+                                            Some(shell_return_message(&status));
+                                    }
+                                    Err(e) => {
+                                        self.app.status_message =
+                                            Some(format!("Shell command failed: {}", e));
+                                    }
                                 }
                                 self.app
                                     .transcript_version
@@ -909,39 +924,27 @@ impl TuiApp {
                 app.pending_repair_partial = None;
             }
         }
+        // TUI-8: `/rename <title>` names the open session.
+        if let Some(title) = app.pending_title_save.take()
+            && let Some(agent) = agent
+            && let Some(id) = agent.session_id()
+        {
+            tokio::spawn(super::history::save_session_title(id, title));
+        }
         // (plan 05) Ctrl+B: populate the branch browser with the current
         // session's fork tree (parent + children) from the agent's DB.
+        // TUI-11: the fork tree is read on a blocking thread; `drain_branch_list`
+        // opens the browser when it arrives, so a slow database does not stall
+        // the event loop.
         if std::mem::take(&mut app.pending_branch_list)
             && let Some(agent) = agent
         {
             let current = agent.session_id().unwrap_or_default();
-            let mut branches = Vec::new();
-            if let Ok(parent) = agent.database().session_parent(&current)
-                && let Some(parent) = parent
-            {
-                let short: String = parent.chars().take(8).collect();
-                branches.push(crate::tui::session_branching::BranchInfo {
-                    id: parent.clone(),
-                    name: format!("{short} (parent)"),
-                    created_at: String::new(),
-                    is_current: false,
-                });
-            }
-            if let Ok(children) = agent.database().child_sessions(&current) {
-                for (id, title) in children {
-                    let label = title.unwrap_or_else(|| {
-                        format!("{} (fork)", id.chars().take(8).collect::<String>())
-                    });
-                    branches.push(crate::tui::session_branching::BranchInfo {
-                        id,
-                        name: label,
-                        created_at: String::new(),
-                        is_current: false,
-                    });
-                }
-            }
-            let at = app.session_branching.branch_at_message;
-            app.session_branching.open(branches, at);
+            let (tx, rx) = tokio::sync::mpsc::channel(1);
+            app.branch_list_rx = Some(rx);
+            tokio::task::spawn_blocking(move || {
+                let _ = tx.blocking_send(super::history::fork_tree(&current));
+            });
         }
         // (plan 05) rewind selector: sync marks from the agent while open
         // (or while a /rewind <n> confirmation is pending — the numeric
@@ -1010,7 +1013,7 @@ impl TuiApp {
                 agent.clear_history().await;
                 let conv = agent.conversation().await;
                 Self::rebuild_display_from_agent(app, conv);
-                app.tool_use_blocks.clear();
+                app.clear_tool_blocks();
                 app.system_annotations.clear();
                 app.turn_metadata.clear();
                 app.cost_usd = 0.0;
@@ -1032,7 +1035,7 @@ impl TuiApp {
                     app.system_annotations.clear();
                     app.streaming_text.clear();
                     app.streaming_thinking.clear();
-                    app.tool_use_blocks.clear();
+                    app.clear_tool_blocks();
                     app.turn_metadata.clear();
                     app.session_goal = None;
                     app.cost_usd = 0.0;
@@ -1052,7 +1055,7 @@ impl TuiApp {
                 agent.notify_session_switch(&fresh, &old, false);
                 let conv = agent.conversation().await;
                 Self::rebuild_display_from_agent(app, conv);
-                app.tool_use_blocks.clear();
+                app.clear_tool_blocks();
                 app.system_annotations.clear();
                 app.turn_metadata.clear();
                 app.session_goal = None;
@@ -1083,7 +1086,7 @@ impl TuiApp {
                 agent.notify_session_switch(&session_id, &old, false);
                 let conv = agent.conversation().await;
                 Self::rebuild_display_from_agent(app, conv);
-                app.tool_use_blocks.clear();
+                app.clear_tool_blocks();
                 app.system_annotations.clear();
                 // TUI-2: the previous session's title must not label the new one.
                 app.session_title = None;
@@ -1111,7 +1114,7 @@ impl TuiApp {
                         Ok(outcome) => {
                             let conv = agent.conversation().await;
                             Self::rebuild_display_from_agent(app, conv);
-                            app.tool_use_blocks.clear();
+                            app.clear_tool_blocks();
                             app.system_annotations.clear();
                             app.request_native_replay();
                             app.invalidate_transcript();
@@ -1242,47 +1245,87 @@ fn run_app_loop(
 fn run_suspended_shell_command(
     terminal: &mut ratatui::Terminal<ratatui::backend::CrosstermBackend<std::io::Stdout>>,
     argv: &[String],
+    mouse_capture: bool,
 ) -> anyhow::Result<std::process::ExitStatus> {
     use crossterm::execute;
-    use crossterm::terminal::{
-        EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
-    };
+    use crossterm::terminal::{LeaveAlternateScreen, disable_raw_mode};
     use std::io::Write;
 
     if argv.is_empty() {
         anyhow::bail!("run_suspended_shell_command: empty argv");
     }
 
-    // 1. Leave alt screen + disable raw mode.
+    // 1. Leave alt screen + disable raw mode. Mouse capture goes too (TUI-10),
+    //    so the child gets the terminal's own mouse handling, not escape codes.
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    if mouse_capture {
+        let _ = execute!(
+            terminal.backend_mut(),
+            crossterm::event::DisableMouseCapture
+        );
+    }
     // Flush so the user sees the wizard's first prompt immediately.
     let _ = std::io::stdout().flush();
 
-    // 2. Spawn the subprocess with inherited stdio.
-    let mut cmd = std::process::Command::new(&argv[0]);
-    cmd.args(&argv[1..]);
-    cmd.stdin(std::process::Stdio::inherit())
-        .stdout(std::process::Stdio::inherit())
-        .stderr(std::process::Stdio::inherit());
+    // 2. Spawn the subprocess with inherited stdio. 3. Restore the terminal
+    //    whatever the outcome (TUI-6).
+    run_child_then_restore(
+        || {
+            let mut cmd = std::process::Command::new(&argv[0]);
+            cmd.args(&argv[1..]);
+            cmd.stdin(std::process::Stdio::inherit())
+                .stdout(std::process::Stdio::inherit())
+                .stderr(std::process::Stdio::inherit());
+            cmd.spawn().and_then(|mut child| child.wait())
+        },
+        || restore_tui_terminal(terminal, mouse_capture),
+    )
+}
 
-    // A spawn failure (the binary is missing or was replaced mid-session) is
-    // held until the terminal is restored below. Returning here would leave
-    // the terminal in cooked mode on the main screen (TUI-6).
-    let result = cmd.spawn().and_then(|mut child| child.wait());
+/// Runs `child` between a suspend and `restore`. `restore` runs whether or not
+/// the child could be spawned, so a missing binary (or one replaced mid-session)
+/// never leaves the terminal in cooked mode on the main screen (TUI-6).
+fn run_child_then_restore<T>(
+    child: impl FnOnce() -> std::io::Result<T>,
+    restore: impl FnOnce() -> anyhow::Result<()>,
+) -> anyhow::Result<T> {
+    let result = child();
+    restore()?;
+    Ok(result?)
+}
 
-    // 3. Re-enter alt screen + re-enable raw mode regardless of subprocess
-    //    outcome. If we skip this, the TUI is permanently broken.
+/// Re-enter the TUI after a suspended command: raw mode, the alternate screen,
+/// mouse capture if the TUI had it, and a resize, since the terminal may have
+/// changed size while we were suspended.
+fn restore_tui_terminal(
+    terminal: &mut ratatui::Terminal<ratatui::backend::CrosstermBackend<std::io::Stdout>>,
+    mouse_capture: bool,
+) -> anyhow::Result<()> {
+    use crossterm::execute;
+    use crossterm::terminal::{EnterAlternateScreen, enable_raw_mode};
+
     enable_raw_mode()?;
     execute!(terminal.backend_mut(), EnterAlternateScreen)?;
-    // Force ratatui to forget its cached buffer sizes — the terminal may have
-    // been resized while we were suspended. ratatui::Terminal::resize takes a
-    // Rect; we read the current size and convert.
+    if mouse_capture {
+        let _ = execute!(terminal.backend_mut(), crossterm::event::EnableMouseCapture);
+    }
+    // Force ratatui to forget its cached buffer sizes.
     let size = terminal.size()?;
     let _ = terminal.resize(ratatui::layout::Rect::new(0, 0, size.width, size.height));
+    Ok(())
+}
 
-    let status = result?;
-    Ok(status)
+/// The status line after a suspended command returns. A failure or a kill is
+/// said, not reported as a clean return (TUI-7).
+fn shell_return_message(status: &std::process::ExitStatus) -> String {
+    if status.success() {
+        "Returned to operant.".to_string()
+    } else if let Some(code) = status.code() {
+        format!("Returned to operant (exit {code}).")
+    } else {
+        "Returned to operant (the command was killed).".to_string()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1706,4 +1749,58 @@ pub(crate) fn register_tui_command_handlers(
     // Registered in the slash surface but historically unhandled — they
     // fell through the TUI intercept AND the registry, landing in the
     // model as literal prompt text. See register_agent_flow_handlers.
+}
+
+#[cfg(test)]
+mod shell_out_tests {
+    use super::*;
+
+    #[test]
+    fn the_terminal_is_restored_even_when_the_child_cannot_spawn() {
+        // TUI-6: a spawn failure is returned only after the restore has run.
+        let mut restored = false;
+        let out: anyhow::Result<()> = run_child_then_restore(
+            || {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "no such binary",
+                ))
+            },
+            || {
+                restored = true;
+                Ok(())
+            },
+        );
+        assert!(out.is_err());
+        assert!(
+            restored,
+            "restore must run before the spawn error is returned"
+        );
+    }
+
+    #[test]
+    fn a_failed_or_killed_child_is_not_reported_as_a_clean_return() {
+        // TUI-7: the exit code and a kill are both said.
+        let failed = std::process::Command::new("sh")
+            .args(["-c", "exit 3"])
+            .status()
+            .unwrap();
+        assert_eq!(
+            shell_return_message(&failed),
+            "Returned to operant (exit 3)."
+        );
+        let ok = std::process::Command::new("sh")
+            .args(["-c", "exit 0"])
+            .status()
+            .unwrap();
+        assert_eq!(shell_return_message(&ok), "Returned to operant.");
+        let killed = std::process::Command::new("sh")
+            .args(["-c", "kill -9 $$"])
+            .status()
+            .unwrap();
+        assert_eq!(
+            shell_return_message(&killed),
+            "Returned to operant (the command was killed)."
+        );
+    }
 }

@@ -446,8 +446,12 @@ impl TuiState for App {
     }
 
     fn subagent_status(&self) -> Option<String> {
+        // The first delegation still running; a finished or abandoned one must
+        // not hide it (TUI-9).
         self.agent_status
-            .first()
+            .iter()
+            .find(|(_, status)| status == "running" || status == "queued")
+            .or(self.agent_status.first())
             .map(|(name, status)| format!("{name}: {status}"))
     }
 

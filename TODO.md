@@ -52,18 +52,18 @@ Working a `## Pending` row, one row per iteration:
 - Gateway budgets meter per turn into a seat-spend ledger charged to the start seat, and a hard cap fails closed when its usage cannot be read (BUGS GW-1, GW-8; AD-009, iter-968). The ledger starts empty on upgrade.
 - A chat's conversation id is kept on its session row: `/new`, a seat change and `/resume` pick a transcript that survives a restart, and the continuation summary is keyed by it (BUGS GW-5, GW-6, GW-7; AD-010, iter-968)
 - Cron and socialization runs set their seat as the memory scope, and `/session` no longer names the premiere for an unbound chat (BUGS GW-2, GW-9; AD-010, iter-968)
+- The TUI's approval prompt answers its key before any overlay (BUGS TUI-1; AD-011, iter-969)
+- `/rename` saves the confirmed name, and a bare `/rename` starts once the list loads (BUGS TUI-8; AD-012, iter-969)
+- A delegation whose turn is cleared is marked abandoned, and the HUD shows a running one first (BUGS TUI-9; AD-013, iter-969)
+- A shell-out restores the terminal before its result is reported, and frees the mouse for the child (BUGS TUI-6, TUI-7, TUI-10; AD-014, iter-969)
+- The Ctrl+B fork tree is read off the event loop, and a database error is shown (BUGS TUI-11 branch half; AD-015, iter-969)
+- The TUI's command descriptions match their handlers, and `/mouse` reports the real capture state (BUGS TUI-12, TUI-13, iter-969)
 
 ## Pending
 
 - Rebuild `/settings` over `operant.toml` (toml_edit, comments kept), tabs per config section, live-apply where supported; retire the legacy settings.json screen
 - `[keybindings]` user overrides in `operant.toml` (`/keys` now shows the effective registry bindings + conflicts — iter-820; overrides remain)
 - Unify the gateway's `agent.show_reasoning` with the TUI reasoning display mode
-- TUI red-team (BUGS.md TUI-6): a shell-out spawn error skips the terminal restore (`crates/operant-cli/src/tui/adapter_types/tui_app.rs:1267`, `?` before `:1271-1272`). Verify: the restore runs on every exit path, including a spawn error, with a test that forces the spawn to fail. Status: the fix is applied (iter-966, the spawn result is held until the restore); the test needs a terminal and is not written.
-- TUI red-team (BUGS.md TUI-7): the shell-out ignores the child's exit status (`tui_app.rs:341-343, 367-370`). Verify: a non-zero exit or a signal shows its status in the status line, with a test.
-- TUI red-team (BUGS.md TUI-8): `/rename` ignores its argument and is not saved (`commands.rs:1003-1008`). Verify: `/rename <title>` writes the title to the database, with a test.
-- TUI red-team (BUGS.md TUI-9): delegations stay "running" after `/new` or `/rewind` (`agent_events.rs:159-200`). Verify: the status entries clear on both commands, with a test.
-- TUI red-team (BUGS.md TUI-10): the shell-out leaves mouse capture on for the child (`tui_app.rs:1240-1280`). Verify: capture is off for the child and back on after it, with a test of the toggle order.
-- TUI red-team (BUGS.md TUI-12, TUI-13): command descriptions do not match their handlers (`crates/operant-cli/src/tui/operant_app/app.rs`, `app/commands.rs`). Verify: each description names what its handler does; change the description, not the handler, with a test that the registry text matches.
 
 ## Review
 
@@ -73,6 +73,5 @@ Owner decisions, not autonomous work. Until ruled, make no change in the area an
 - Context management (magic-context review): agent-driven reduction (`ctx_reduce`) and a background historian instead of the synchronous summarize rung — larger core changes
 - BUGS.md R42-8: two live Telegram bot tokens unredacted in gateway.log
 - Seat red-team (org-tui-foundation-003): the default employee for new org-mode chats. Options: a `[holon] default_employee` roster id, or leave new chats unbound. `premiere` is not on the roster, so AD-004 rules it out. Recommendation: option (c), new chats stay unbound. GW-9 changes only the `/session` report, which fits (c).
-- TUI red-team (BUGS.md TUI-1): a pending approval prompt is painted under later overlays, and its keys go to whichever overlay is open. Overlaps `docs/ROADMAP-TUI-FLEET.md` §6.1, which deferred the dispatch-order fix. Decide: reorder the gates, or make `dialog_priority()` the real router. Recommendation: reorder the gates so the approval dialog comes first; defer the router rewrite.
-- TUI red-team (BUGS.md TUI-11): some TUI actions run blocking I/O on the event loop (SQLite branch queries, `git diff`). Magnitude is unmeasured. Decide whether to move them to `spawn_blocking` now or after profiling. Recommendation: profile once, then decide.
+- TUI red-team (BUGS.md TUI-11, git-diff half): `DiffState::reload_files` runs `git diff` on the event loop when the diff viewer opens (`diff_viewer/state.rs:108`, `diff_viewer/parse.rs:9`). The branch half is done (AD-015). Decide: load on a blocking thread with a loading state, or keep it synchronous and bound it.
 - KB red-team (BUGS.md KB-6, retention half): every turn is retained, including turns from untrusted channels, so a channel message can be stored and replayed. The escape and data label are fixed (iter-962). Decide which channels are untrusted (for example, anything but the owner's chat) and whether they skip `sync_turn`. Recommendation: skip retention for non-owner channels, and keep recall unchanged.

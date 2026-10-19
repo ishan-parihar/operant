@@ -224,7 +224,10 @@ impl App {
             default_model_rx: None,
             model_picker_fetch_pending: false,
             session_list_pending: false,
+            rename_on_list_load: false,
+            pending_title_save: None,
             session_list_rx: None,
+            branch_list_rx: None,
             auth_store,
             connect_dialog: DialogSelectState::new("Connect a provider", provider_picker_items()),
             import_config_picker: DialogSelectState::new(

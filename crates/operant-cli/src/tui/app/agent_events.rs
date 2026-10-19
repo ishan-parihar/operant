@@ -192,14 +192,13 @@ impl App {
                         ToolStatus::Done
                     };
                     block.output_preview = Some(preview);
-
-                    if block.name == "delegate_task" || block.name == "spawn_subagent" {
-                        let new_status = if is_error { "error" } else { "done" };
-                        for (id, st) in self.agent_status.iter_mut() {
-                            if id == &tool_id {
-                                *st = new_status.to_string();
-                            }
-                        }
+                }
+                // A delegation reports to the HUD by id, even when its transcript
+                // block was cleared by /new or /rewind (TUI-9).
+                let new_status = if is_error { "error" } else { "done" };
+                for (id, st) in self.agent_status.iter_mut() {
+                    if id == &tool_id {
+                        *st = new_status.to_string();
                     }
                 }
                 self.invalidate_transcript();
@@ -641,4 +640,17 @@ fn is_user_interrupt(error: &str) -> bool {
     error
         .trim_start_matches("Agent error: ")
         .starts_with("Interrupted by user")
+}
+
+impl super::App {
+    /// Clears the transcript's tool blocks. A delegation still running then
+    /// never reports a completion, so the HUD marks it abandoned (TUI-9).
+    pub(crate) fn clear_tool_blocks(&mut self) {
+        self.tool_use_blocks.clear();
+        for (_, status) in self.agent_status.iter_mut() {
+            if status == "running" || status == "queued" {
+                *status = "abandoned".to_string();
+            }
+        }
+    }
 }
