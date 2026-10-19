@@ -94,8 +94,21 @@ echo "=== Installing Runtime Libraries ==="
 # except inside a shell that happens to have sourced dev-env.sh. The rpath must
 # point somewhere that outlives the build tree, not into a checkout or tmpfs.
 RUNTIME_LIB_DIR="${RUNTIME_LIB_DIR:-$HOME/.local/lib/operant}"
-ORT_DIR="local/onnxruntime-linux-x64-1.20.1/lib"
-if [ -d "$ORT_DIR" ]; then
+ORT_DIR="local/onnxruntime-linux-x64-1.24.4/lib"
+# ort 2.x needs ONNX Runtime API 24 (BUGS CR-2). A library that does not serve it
+# is refused here, not at the first TTS call, where the panic used to abort.
+ort_serves_api_24() {
+    python3 - "$1" <<'PROBE'
+import ctypes, sys
+lib = ctypes.CDLL(sys.argv[1])
+lib.OrtGetApiBase.restype = ctypes.c_void_p
+base = lib.OrtGetApiBase()
+get_api = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_uint32)(
+    ctypes.cast(base, ctypes.POINTER(ctypes.c_void_p))[0])
+sys.exit(0 if get_api(24) else 1)
+PROBE
+}
+if [ -d "$ORT_DIR" ] && ort_serves_api_24 "$ORT_DIR/libonnxruntime.so"; then
     mkdir -p "$RUNTIME_LIB_DIR"
     cp -a "$ORT_DIR"/libonnxruntime.so* "$RUNTIME_LIB_DIR"/ 2>/dev/null \
         && echo "  ok   libonnxruntime -> $RUNTIME_LIB_DIR" \

@@ -70,6 +70,7 @@ pub async fn handle_doctor_command(config: &AppConfig, fix: bool, json: bool) ->
     checks_tools::run_integration_checks(&mut issues, &mut manual_issues).await;
     checks_api::run_api_checks(config, &mut issues).await;
     checks_tools::run_platform_checks(config, &mut issues, &mut manual_issues);
+    checks_tools::check_operant_binaries(&mut manual_issues);
 
     // Unified engine (docs/ORGANISM-ARCHITECTURE.md §6 F2): the SAME check
     // list the gateway serializes at GET /api/doctor. Engine errors are

@@ -2318,9 +2318,8 @@ pub(crate) fn operant_config_dir_override() -> Option<PathBuf> {
 /// `scope = "environment"` it also exports the variables for child processes.
 /// `main` calls this before the runtime exists, so no runtime thread can read
 /// the environment during the export.
-pub fn apply_startup_proxy(explicit: Option<&Path>) -> Result<()> {
-    let loaded = load_app_config(explicit)?;
-    let proxy = loaded.config.proxy;
+pub fn apply_startup_proxy(loaded: &LoadedConfig) -> Result<()> {
+    let proxy = loaded.config.proxy.clone();
     proxy.validate().map_err(|e| Error::Config(e.to_string()))?;
     if proxy.enabled && proxy.scope == operant_config::schema::ProxyScope::Environment {
         proxy.apply_to_process_env();

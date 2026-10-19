@@ -18,7 +18,7 @@ set -e
 # synthetic alsa.pc, the linker libs). Same variable name dev-env.sh uses, so
 # `LOCAL_DIR=... ./scripts/check.sh ...` means the same thing to both.
 LOCAL_DIR="${LOCAL_DIR:-/home/z/my-project/local}"
-ORT_DIR="$LOCAL_DIR/onnxruntime-linux-x64-1.20.1"
+ORT_DIR="$LOCAL_DIR/onnxruntime-linux-x64-1.24.4"
 
 # libclang path resolution
 if [ -d "$LOCAL_DIR/libclang_extract/usr/lib/x86_64-linux-gnu" ]; then

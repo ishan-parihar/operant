@@ -1,5 +1,5 @@
-<!-- genome:zone records sha=01e25fb338ca -->
-**Decisions** (15)
+<!-- genome:zone records sha=ab629f43dba7 -->
+**Decisions** (18)
 
 | ID | Title | Status | Description |
 |---|---|---|---|
@@ -18,6 +18,9 @@
 | AD-013 | A cleared delegation is abandoned, and the HUD follows the running one | Active | A delegation whose turn is cleared by /new or /rewind is marked abandoned, and the status bar shows a running delegation before a finished one |
 | AD-014 | A shell-out restores the terminal before its result is reported, and releases mouse capture for the child | Active | A shell-out restores the terminal before it reports the child's exit, reports a failed or signalled exit as such, and frees the mouse for the child |
 | AD-015 | The Ctrl+B fork tree is read off the event loop, and a database error is shown | Active | The branch browser's parent and fork rows are read on a blocking thread, and a failed read is reported in the transcript instead of opening an empty browser |
+| AD-016 | A TTS engine start that panics is a tool error, and the release profile unwinds | Active | The Kokoro engine starts on its own task, so an ONNX Runtime panic becomes a tool error, and the release profile unwinds instead of aborting |
+| AD-017 | ONNX Runtime is pinned to 1.24.4, and install refuses a library without API 24 | Active | The build and install scripts use ONNX Runtime 1.24.4, and install.sh refuses a runtime that does not serve API 24 |
+| AD-018 | The doctor reports tool availability from configuration, flags duplicate binaries, and loads the config once | Active | operant doctor marks a tool available only through its configuration or a present env var, reports TTS as unverified, flags a second operant on PATH, and loads the config once |
 <!-- genome:end records -->
 
 <!-- genome:zone idmap sha=a7a72b4c9dd0 -->

@@ -112,7 +112,7 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(operant_root_crate)'] }
 [profile.release]
 lto = true
 strip = true
-panic = "abort"
+panic = "unwind"  # a panic in an optional subsystem (ort, BUGS CR-1) must reach a JoinError, not abort the process
 codegen-units = 1
 
 # Advisory lints wired workspace-wide (see BUGS.md audit notes).

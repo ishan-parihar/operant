@@ -912,7 +912,7 @@ except Exception as e:
 
         let mut engine_lock = self.kokoro_engine.lock().await;
         if engine_lock.is_none() {
-            match TtsEngine::new().await {
+            match start_kokoro().await {
                 Ok(engine) => *engine_lock = Some(engine),
                 Err(e) => {
                     return ToolResult::error(
@@ -1029,10 +1029,43 @@ impl OperantTool for TtsTool {
     }
 }
 
+/// Starts the Kokoro engine on its own task. `ort` panics when the installed
+/// ONNX Runtime does not serve the API it was built against (BUGS CR-1); the
+/// release profile unwinds, so that panic reaches here as a `JoinError` and
+/// becomes a tool error instead of ending the gateway or the TUI.
+async fn start_kokoro() -> Result<TtsEngine, String> {
+    join_engine_start(tokio::spawn(TtsEngine::new()).await)
+}
+
+fn join_engine_start<T, E: std::fmt::Display>(
+    joined: Result<Result<T, E>, tokio::task::JoinError>,
+) -> Result<T, String> {
+    match joined {
+        Ok(engine) => engine.map_err(|e| e.to_string()),
+        Err(e) if e.is_panic() => Err(
+            "the installed ONNX Runtime does not provide the API this build needs (ORT API 24; BUGS CR-2)"
+                .to_string(),
+        ),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[tokio::test]
+    async fn a_panicking_engine_start_is_a_tool_error() {
+        // CR-1: a panic while the engine starts must come back as an error the
+        // tool can report, not unwind out of the gateway or TUI.
+        let task: tokio::task::JoinHandle<Result<(), String>> =
+            tokio::spawn(async { panic!("ORT API 24 is not served") });
+
+        let err = join_engine_start(task.await).unwrap_err();
+
+        assert!(err.contains("ONNX Runtime"), "got: {err}");
+    }
 
     #[test]
     fn test_tts_schema() {

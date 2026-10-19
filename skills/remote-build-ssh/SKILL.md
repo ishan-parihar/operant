@@ -148,7 +148,7 @@ export BINDGEN_EXTRA_CLANG_ARGS="-I/usr/lib/gcc/x86_64-linux-gnu/$(gcc -dumpvers
 
 For projects using ONNX Runtime (kokoro-tts):
 ```bash
-export ORT_LIB_LOCATION=/home/ishanp/Documents/GitHub/MY-PROJECTS/local/onnxruntime-linux-x64-1.20.1/lib
+export ORT_LIB_LOCATION=/home/ishanp/Documents/GitHub/MY-PROJECTS/local/onnxruntime-linux-x64-1.24.4/lib
 export ORT_PREFER_DYNAMIC_LINK=1
 ```
 

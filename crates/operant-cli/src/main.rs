@@ -2814,23 +2814,29 @@ fn main() -> Result<()> {
 
     // Apply the `[proxy]` table before the runtime exists, so the environment
     // export cannot race a runtime thread (see `apply_startup_proxy`).
-    operant_core::config::apply_startup_proxy(cli.config.as_deref())?;
+    // The config is loaded once, here, and `run` reuses it, so each load-time
+    // warning prints once (BUGS CR-5).
+    let loaded = load_app_config(cli.config.as_deref())?;
+    operant_core::config::apply_startup_proxy(&loaded)?;
 
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .context("failed to build the tokio runtime")?
-        .block_on(run(cli, cli_config))
+        .block_on(run(cli, cli_config, loaded))
 }
 
-async fn run(cli: Cli, cli_config: CliConfig) -> Result<()> {
+async fn run(
+    cli: Cli,
+    cli_config: CliConfig,
+    mut loaded: operant_core::config::LoadedConfig,
+) -> Result<()> {
     // Secret redaction toggle (hermes `HERMES_REDACT_SECRETS` parity). The
     // core loop redacts tool output / message content at the LLM boundary;
     // honor `security.redact_secrets` (default true) from CLI config.
     operant_core::redaction::set_redact_enabled(cli_config.security.redact_secrets.unwrap_or(true));
 
     // Load core AppConfig (TOML-based) and layer on any values from CliConfig
-    let mut loaded = load_app_config(cli.config.as_deref())?;
     // Snapshot the file's own LLM settings BEFORE apply_cli_overrides stamps
     // the global --api-key/--base-url/--model onto them (override semantics).
     // Commands that persist the config (e.g. channel add/remove) restore these

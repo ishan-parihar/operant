@@ -56,7 +56,7 @@ if [ -e "$LINK_DIR/libclang.so" ]; then
 fi
 
 # ── 2. ONNX Runtime (for ort-sys via kokoro-tiny) ──
-ORT_VERSION="1.20.1"
+ORT_VERSION="1.24.4"
 ORT_DIR="$LOCAL_DIR/onnxruntime-linux-x64-$ORT_VERSION"
 if [ ! -f "$ORT_DIR/lib/libonnxruntime.so" ]; then
   echo "[provision] downloading ONNX Runtime $ORT_VERSION..."

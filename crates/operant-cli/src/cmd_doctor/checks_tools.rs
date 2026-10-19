@@ -105,6 +105,44 @@ fn project_root() -> &'static Path {
 }
 
 /// Read an environment variable.
+/// The distinct executables named `name` in `dirs`, by resolved path. Two
+/// names that resolve to one file count once.
+fn executables_named(dirs: impl IntoIterator<Item = PathBuf>, name: &str) -> Vec<PathBuf> {
+    let mut found: Vec<PathBuf> = Vec::new();
+    for dir in dirs {
+        let candidate = dir.join(name);
+        if candidate.is_file() {
+            let resolved = std::fs::canonicalize(&candidate).unwrap_or(candidate);
+            if !found.contains(&resolved) {
+                found.push(resolved);
+            }
+        }
+    }
+    found
+}
+
+/// Warns when more than one `operant` is on PATH (BUGS CR-6). The deploy
+/// updates one copy; the one a user launches may be the other.
+pub fn check_operant_binaries(manual_issues: &mut Vec<String>) {
+    let dirs: Vec<PathBuf> = std::env::var_os("PATH")
+        .map(|p| std::env::split_paths(&p).collect())
+        .unwrap_or_default();
+    let found = executables_named(dirs, "operant");
+    if found.len() > 1 {
+        let paths: Vec<String> = found.iter().map(|p| p.display().to_string()).collect();
+        check_warn(
+            "operant",
+            &format!("({} copies on PATH: {})", found.len(), paths.join(", ")),
+        );
+        manual_issues.push(format!(
+            "Remove or replace the stale operant copy so one binary is on PATH: {}",
+            paths.join(", ")
+        ));
+    } else {
+        check_ok("operant", "(one copy on PATH)");
+    }
+}
+
 fn env_var(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|v| !v.is_empty())
 }
@@ -449,13 +487,12 @@ pub fn run_platform_checks(
             sourcehound_present,
         ),
         ("vision", vec![], config.vision.provider.is_some()),
-        ("tts", vec![], config.tts.enabled),
     ];
 
     let mut any_unavailable = false;
     for (name, required_envs, is_configured) in &tool_categories {
-        let envs_ok =
-            required_envs.iter().any(|e| env_var(e).is_some()) || required_envs.is_empty();
+        // A row with no env vars is available only through its configuration (CR-4).
+        let envs_ok = required_envs.iter().any(|e| env_var(e).is_some());
         let available = *is_configured || envs_ok;
 
         if available {
@@ -474,6 +511,18 @@ pub fn run_platform_checks(
                 check_warn(name, &format!("(missing {vars_str})"));
             }
         }
+    }
+
+    // TTS is only proven by loading the ONNX Runtime, which the doctor does not
+    // do, so a configured TTS is reported as unverified rather than available (CR-4).
+    if config.tts.enabled {
+        check_warn(
+            "tts",
+            "(configured — the ONNX Runtime is checked on first use)",
+        );
+    } else {
+        any_unavailable = true;
+        check_warn("tts", "(not configured — run operant setup)");
     }
 
     if any_unavailable {
@@ -942,5 +991,25 @@ pub async fn run_integration_checks(issues: &mut Vec<String>, manual_issues: &mu
             },
             Err(_) => check_info("aft (check skipped)"),
         }
+    }
+}
+
+#[cfg(test)]
+mod operant_binary_tests {
+    use super::*;
+
+    #[test]
+    fn two_copies_are_found_and_a_repeated_directory_is_counted_once() {
+        // CR-6: the same file reached twice on PATH is one copy; two files are two.
+        let root = tempfile::tempdir().unwrap();
+        let (a, b) = (root.path().join("a"), root.path().join("b"));
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::create_dir_all(&b).unwrap();
+        std::fs::write(a.join("operant"), b"x").unwrap();
+        std::fs::write(b.join("operant"), b"y").unwrap();
+
+        let found = executables_named(vec![a.clone(), b, a], "operant");
+
+        assert_eq!(found.len(), 2);
     }
 }

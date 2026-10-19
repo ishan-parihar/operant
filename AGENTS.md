@@ -525,11 +525,11 @@ source /home/z/my-project/operant/scripts/dev-env.sh
 # 3. Or set env manually (equivalent to dev-env.sh):
 source /home/z/.cargo/env
 export LIBCLANG_PATH=/home/z/my-project/local/libclang_extract/usr/lib/x86_64-linux-gnu
-export ORT_LIB_LOCATION=/home/z/my-project/local/onnxruntime-linux-x64-1.20.1/lib
+export ORT_LIB_LOCATION=/home/z/my-project/local/onnxruntime-linux-x64-1.24.4/lib
 export ORT_PREFER_DYNAMIC_LINK=1
 export BINDGEN_EXTRA_CLANG_ARGS="-I/usr/lib/gcc/x86_64-linux-gnu/14/include -I/usr/include"
 export PKG_CONFIG_PATH=/home/z/my-project/local/pkgconfig
-export LD_LIBRARY_PATH=/home/z/my-project/local/lib:/home/z/my-project/local/onnxruntime-linux-x64-1.20.1/lib
+export LD_LIBRARY_PATH=/home/z/my-project/local/lib:/home/z/my-project/local/onnxruntime-linux-x64-1.24.4/lib
 export RUSTFLAGS="-L native=/home/z/my-project/local/lib"
 export CARGO_INCREMENTAL=0
 

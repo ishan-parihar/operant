@@ -58,6 +58,9 @@ Working a `## Pending` row, one row per iteration:
 - A shell-out restores the terminal before its result is reported, and frees the mouse for the child (BUGS TUI-6, TUI-7, TUI-10; AD-014, iter-969)
 - The Ctrl+B fork tree is read off the event loop, and a database error is shown (BUGS TUI-11 branch half; AD-015, iter-969)
 - The TUI's command descriptions match their handlers, and `/mouse` reports the real capture state (BUGS TUI-12, TUI-13, iter-969)
+- The TTS engine's ONNX Runtime panic is a tool error, and the release profile unwinds (BUGS CR-1, CR-3; AD-016, iter-970)
+- ONNX Runtime is pinned to 1.24.4 in every script and AGENTS.md, and `install.sh` refuses a library without API 24 (BUGS CR-2; AD-017, iter-970)
+- `operant doctor` reports a tool available only through its configuration, flags a second `operant` on PATH, and the config loads once (BUGS CR-4, CR-5, CR-6; AD-018, iter-970)
 
 ## Pending
 

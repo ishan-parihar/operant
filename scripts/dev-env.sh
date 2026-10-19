@@ -21,7 +21,7 @@ set -e
 # provisioning and linking agree with no configuration.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOCAL_DIR="${LOCAL_DIR:-$(dirname "$SCRIPT_DIR")/local}"
-ORT_DIR="$LOCAL_DIR/onnxruntime-linux-x64-1.20.1"
+ORT_DIR="$LOCAL_DIR/onnxruntime-linux-x64-1.24.4"
 
 # libclang (extracted from libclang1-19 deb, no root needed)
 # Prefer the symlink the provisioner makes for a system libclang: bindgen globs
@@ -58,7 +58,7 @@ export ORT_LIB_LOCATION="${ORT_LIB_LOCATION:-$ORT_DIR/lib}"
 #
 #   ORT_PREFER_DYNAMIC_LINK=0 (ORT_LIB_LOCATION left pointing at local/)
 #     error: ort-sys could not link to the ONNX Runtime build in
-#            '.../local/onnxruntime-linux-x64-1.20.1/lib'
+#            '.../local/onnxruntime-linux-x64-1.24.4/lib'
 #
 #   both variables emptied
 #     [ort-sys] [DEBUG] doing full static linking since no single-file library
@@ -66,7 +66,7 @@ export ORT_LIB_LOCATION="${ORT_LIB_LOCATION:-$ORT_DIR/lib}"
 #     .../ort-sys-2.0.0-rc.12/build/static_link/mod.rs:134: panicked
 #
 # The local tarball ships only shared objects (libonnxruntime.so, .so.1,
-# .so.1.20.1) and no single-file static library, which is what the second
+# .so.1.24.4) and no single-file static library, which is what the second
 # attempt was looking for and could not find. The CI runner evidently resolves an
 # ONNX distribution this one does not have; that was not identified, and the
 # mechanism behind the self-contained 52 MB release binary is therefore NOT

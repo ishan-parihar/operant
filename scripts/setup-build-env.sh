@@ -78,9 +78,8 @@ echo "  BINDGEN_EXTRA_CLANG_ARGS: $BINDGEN_EXTRA_CLANG_ARGS"
 
 # ── ONNX Runtime (for kokoro-tts) ──
 ORT_DIRS=(
-    "/home/ishanp/Documents/GitHub/MY-PROJECTS/local/onnxruntime-linux-x64-1.20.1/lib"
-    "/home/ishanp/Documents/GitHub/MY-PROJECTS/local/onnxruntime-linux-x64-1.21.0/lib"
-    "/home/ishanp/local/onnxruntime-linux-x64-1.20.1/lib"
+    "/home/ishanp/Documents/GitHub/MY-PROJECTS/local/onnxruntime-linux-x64-1.24.4/lib"
+    "/home/ishanp/local/onnxruntime-linux-x64-1.24.4/lib"
 )
 for d in "${ORT_DIRS[@]}"; do
     if [ -d "$d" ]; then
