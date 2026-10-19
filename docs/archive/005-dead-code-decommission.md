@@ -41,7 +41,7 @@ misleads auditors. Each item below was flagged with evidence in prior rounds.
    future use" blocks, `schema.rs:9572`), unless plan 014's README says otherwise.
 4. After each removal batch: `cargo check --workspace`, run the affected crate's full
    lib tests, then `cargo test --workspace --all-features --lib` at the end.
-5. Record each removal in `BUGS.md` (one entry per item, with the grep evidence).
+5. Record each removal in `docs/audit/2026-06-19-BUGS.md` (one entry per item, with the grep evidence).
 
 ## Done criteria
 

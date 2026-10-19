@@ -23,7 +23,7 @@ the scrolling, rather than simulating a scrolling environment."
   - `emit_settled_transcript_rows` writes settled rows into scrollback via
     `Terminal::insert_before` (`tui/app/scroll_emit.rs`).
   - The viewport floors its scroll at the emitted watermark (`operant_ui/ui_viewport.rs:422-428`).
-  - Known defect **K-3** (BUGS.md): the watermark counts *rows* and assumes the settled body
+  - Known defect **K-3** (docs/audit/2026-06-19-BUGS.md): the watermark counts *rows* and assumes the settled body
     only grows. Tool rows grow on ToolComplete, and `Current` reasoning disappears at the
     next prompt, so emission slices misaligned rows (duplicates or gaps in scrollback).
   - ratatui 0.30.2 supports `insert_before` and `resize`, and has a `scrolling-regions`

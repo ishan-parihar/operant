@@ -28,7 +28,7 @@ There is one organization, one owner per capability and one writer per database.
 5. **`AUDIT-2026-10-16-capability-layer.md`**: the open work list for how the organization's
    declared capabilities reach a body, and what operant injects into a Holon run on its own
    (R-02 … R-20). It gives each item's acceptance, its order relative to the kernel (the
-   read-API v4 trap), and the verification method. It extends `REMAINING-GAPS.md`'s G-list.
+   read-API v4 trap), and the verification method. It extends `2026-10-18-REMAINING-GAPS.md`'s G-list.
 6. In Holon's repository:
    - `docs/design/2026-10-16-capability-layer-audit.md` (public) is the kernel's half of that
      work list, with the same R-numbers;

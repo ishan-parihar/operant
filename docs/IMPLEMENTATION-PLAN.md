@@ -59,7 +59,7 @@ There is still no local alias for the third. That is item 2 below.
 
 ### 1.3 Ledger state
 
-`BUGS.md` holds 35 `R40-*` entries. Re-verified individually rather than
+`docs/audit/2026-06-19-BUGS.md` holds 35 `R40-*` entries. Re-verified individually rather than
 trusted from status lines, **27 are resolved and 4 are genuinely open**. Six
 headlines claimed open work that was already done; all were corrected at
 iter-479. The four real items are R40-12, R40-22, R40-24, R40-25.

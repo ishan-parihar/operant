@@ -76,4 +76,4 @@ Existing DBs still open and work (doctor/session flows unaffected).
 
 - If any existing DB in the wild has drifted schema (columns missing that the code
   assumes), the migration should detect and report — do not silently `ALTER TABLE ADD`
-  into a broken DB. Flag in `BUGS.md` instead.
+  into a broken DB. Flag in `docs/audit/2026-06-19-BUGS.md` instead.

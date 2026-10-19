@@ -334,6 +334,13 @@ admins = []
 # their slots. Unset/None = unlimited.
 # max_concurrent_sessions = 4
 
+# How long a gateway session is kept after its last activity, in days.
+# The gateway sweeps every 6 hours and drops sessions idle for longer than
+# this — from the database AND from the in-memory map. 0 keeps them
+# forever (the store then grows without bound, one row per conversation
+# the gateway ever saw).
+# session_retention_days = 90
+
 # Global emergency stop — `operant pause` / `operant resume` writes/removes a
 # sentinel (fail-safe: any file pauses new work). While paused, the cron
 # scheduler skips dispatch, kanban dispatch is blocked, and new gateway turns

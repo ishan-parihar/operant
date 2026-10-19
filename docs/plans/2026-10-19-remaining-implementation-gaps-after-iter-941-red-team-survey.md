@@ -9,7 +9,7 @@ Corrections section below says so. The 2026-10-18 plan stays as written (dated-f
 ## Mechanism
 
 Survey basis: `origin/main` = `HEAD` = `fdf72239` (iter-941), checked after `git fetch`.
-Sources read: `BUGS.md` open sections, `TODO.md`, `docs/kb/WORKLOG.md` (tail), the
+Sources read: `docs/audit/2026-06-19-BUGS.md` open sections, `TODO.md`, `docs/kb/WORKLOG.md` (tail), the
 2026-10-18 plan, `AGENTS.md` genome rules, and the code.
 
 Method and limits (so the numbers can be checked):
@@ -135,18 +135,18 @@ Severity is a judgment: **M** = user-visible or safety-relevant, **L** = hygiene
   modules included): `allow(unused_imports)` 73, `allow(clippy::too_many_arguments)` 22,
   `allow(clippy::cast_possible_truncation)` 17. The practice guide prefers `#[expect]`.
 - **RT-16 (L) — genome warnings.** `./scripts/genome lint` returns 0 errors and 8 warnings: W010
-  (no table of contents) on `AGENTS.md`, `BUGS.md`, `README.md`, `docs/CHANGELOG.md` (eight warnings in total).
+  (no table of contents) on `AGENTS.md`, `docs/audit/2026-06-19-BUGS.md`, `README.md`, `docs/CHANGELOG.md` (eight warnings in total).
 - **RT-17 (L) — remotes.** `origin` = `HEAD`. The `github` remote is 13 commits behind
   (R40-22, known).
 
 Owner-only items (unchanged, not findings):
 
 - P6.7: `sudo cp ~/.local/bin/operant /usr/local/bin/operant.new && sudo mv /usr/local/bin/operant.new /usr/local/bin/operant`.
-- S1 and S2: F12 `d` buffer dump in the owner's terminal (BUGS.md).
+- S1 and S2: F12 `d` buffer dump in the owner's terminal (docs/audit/2026-06-19-BUGS.md).
 - Plan 06 P2/P3 (historian, `ctx_reduce`): deferred until P0 and P1 are measured.
 - R42-8 (Telegram tokens in gateway.log): declined by the owner. A token-shape scan found none
   in the current log. Not re-litigated.
-- D-5b and D-6: accepted limits (BUGS.md).
+- D-5b and D-6: accepted limits (docs/audit/2026-06-19-BUGS.md).
 
 ## Gates / success criteria
 

@@ -774,7 +774,7 @@ code, not after.
   this repo's comments routinely cite the incident that forced the code);
   `///` documents **what** public items do. Do not narrate what the code
   plainly says.
-- Every `TODO` carries a tracker link (`BUGS.md` row or issue id) — bare
+- Every `TODO` carries a tracker link (`docs/audit/2026-06-19-BUGS.md` row or issue id) — bare
   `TODO:` with no owner is debt the next agent cannot act on.
 - Public API additions get doc comments; library crates keep
   `#![deny(missing_docs)]` green.
@@ -1061,7 +1061,7 @@ MUST know before touching the render layer:
   WRITE_ORIGIN for process lifetime, one cross-module origin test lock,
   mutation-proven regression test (iter-332); one-family-per-DB-file invariant
   documented in migrations.rs (iter-333)
-- 2026-09-25/26: deployment-audit fixes R39-1..R39-8 (BUGS.md) — lib-test
+- 2026-09-25/26: deployment-audit fixes R39-1..R39-8 (docs/audit/2026-06-19-BUGS.md) — lib-test
   compile, doctest link-search via build.rs, SeamUnavailable dark-safe seam,
   write_approval test lock, clippy annotations, cron split-brain →
   cron_db_path(), AFT dead-shim probe; live battery green against omp
@@ -1256,7 +1256,7 @@ so the loop only works if every iteration ends with a push.
 ### How It Works
 
 1. **AI agent reads this file** (AGENTS.md) to understand the project.
-2. **AI agent finds a bug** (from `BUGS.md`, a user report, or a test failure).
+2. **AI agent finds a bug** (from `docs/audit/2026-06-19-BUGS.md`, a user report, or a test failure).
 3. **AI agent fixes the bug** following the guidelines above.
 4. **AI agent runs tests** to verify the fix locally.
 5. **AI agent commits the change** with a `feat(iter-N)` / `fix(iter-N)` message.
@@ -1266,7 +1266,7 @@ so the loop only works if every iteration ends with a push.
 
 ### Issue Tracking
 
-**File**: `BUGS.md` (repo root)
+**File**: `docs/audit/2026-06-19-BUGS.md` (repo root)
 
 **Format:**
 ```markdown
@@ -1285,7 +1285,7 @@ so the loop only works if every iteration ends with a push.
 - [ ] Issue 6: [Description]
 ```
 
-When you fix an issue, **edit `BUGS.md` in the same iteration** that fixes the
+When you fix an issue, **edit `docs/audit/2026-06-19-BUGS.md` in the same iteration** that fixes the
 code — do not leave it for a follow-up.
 
 ### Self-Test Script
@@ -1436,7 +1436,7 @@ were adopted without moving files this repo already owns.
 | in-flight work for ONE workflow, claim-guarded | `docs/kb/workflows/<wf>.md` | rows update, claims guarded |
 | exact commands, environment traps | `docs/RUNBOOK.md` | current, surgical edits |
 | superseded history (findable, never deleted) | `docs/archive/` (tombstones at the original paths, an `docs/archive/INDEX.md` row each) | tombstone + pointer |
-| open audit findings and fix state (repo-native) | `BUGS.md` (root — NOT the kb ledger; the CLOSED ledger holds *rejected proposals*) | rows update, verdicts append |
+| open audit findings and fix state (repo-native) | `docs/audit/2026-06-19-BUGS.md` (root — NOT the kb ledger; the CLOSED ledger holds *rejected proposals*) | rows update, verdicts append |
 | release history, dated | `docs/CHANGELOG.md` | append-only per release |
 | one-off 2026-08 design/parity/audit docs | `docs/*.md` reference shelf (HERMES_*, ORGANISM-*, *PLAN*, *AUDIT*) | frozen history — no edits, cite only |
 

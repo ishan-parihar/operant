@@ -53,7 +53,7 @@ Three hermes QoL surfaces are absent in operant's TUI/terminal stack:
    the current focus). Register it. In the TUI, render the focused pane as a status
    indicator (small: a mode line / banner segment). If the TUI has no natural pane
    concept yet, scope to the tool + status-line indicator and note it.
-4. Update `BUGS.md`; run suites.
+4. Update `docs/audit/2026-06-19-BUGS.md`; run suites.
 
 ## Done criteria
 

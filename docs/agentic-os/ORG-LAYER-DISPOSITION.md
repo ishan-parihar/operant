@@ -93,7 +93,7 @@ That is about 3.8k of 21.6k lines (`seat_policy` and its db, `seat_budgets`, `co
 ## 4. Data: archive, never delete
 
 Operant already keeps org tables in **two** databases that disagree. This is the split-brain the
-`BUGS.md` R5-1 rule was meant to prevent.
+`docs/audit/2026-06-19-BUGS.md` R5-1 rule was meant to prevent.
 
 | Table | `~/.operant/database.db` | `~/.operant/operant_kanban.db` |
 |---|---|---|

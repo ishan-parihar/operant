@@ -146,15 +146,15 @@ method: read it before you claim an item closed.
 
 ### R-11 — doc truth · CONFIRMED
 
-- This repo's `REMAINING-GAPS.md` and the owner's overlay register disagree (org mode on vs
+- This repo's `2026-10-18-REMAINING-GAPS.md` and the owner's overlay register disagree (org mode on vs
   gated; W5 notify closed vs open). The overlay register is the one place open work is tracked;
-  `REMAINING-GAPS.md` should link it rather than keep a parallel closure log.
+  `2026-10-18-REMAINING-GAPS.md` should link it rather than keep a parallel closure log.
 - `AGENTS.md` → "Design Preferences" describes `BuiltinProvider` as the zero-dependency memory
   fallback, and lightpanda/camofox/browserbase/browser-use/firecrawl as available browser
   backends. The code deleted them (`memory_provider.rs`: "BuiltinProvider is deleted";
   `browser_provider.rs:1-6`). The **preferences** stand; the descriptive lines are stale. That
   section is marked DO NOT CHANGE, so raise it with the owner instead of editing it.
-- **Closed (iter-884, docs):** `REMAINING-GAPS.md`'s closure log now names the owner's overlay
+- **Closed (iter-884, docs):** `2026-10-18-REMAINING-GAPS.md`'s closure log now names the owner's overlay
   register as the one tracker and forbids parallel logs; the stale `AGENTS.md` descriptors
   are recorded as owner-action items there (raised, not edited — the section is DO NOT
   CHANGE). R-04/R-03 and R-20 stay open on their own gates (kernel v4; owner's choice).

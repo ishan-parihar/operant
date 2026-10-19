@@ -71,7 +71,7 @@ Plus 8 `agent_session_isolation`, 6 `org_authority_tools` and 15
 ### 1.0 Read this first — the top item is a live defect, not a planned one
 
 **A cron agent job destroys a gateway user's live conversation on `origin/main`
-today.** This is filed as `BUGS.md` **D-1 (P1, unowned)** and it outranks every
+today.** This is filed as `docs/audit/2026-06-19-BUGS.md` **D-1 (P1, unowned)** and it outranks every
 step below. The distinction matters: steps B-F are unwired subsystems that only
 matter once someone wires them, whereas D-1 is reachable by ordinary
 configuration — run a gateway adapter with at least one enabled agent cron job.
@@ -167,7 +167,7 @@ stable-id / compressor-reset decisions below stand but have no mount point.
 ### Option (1) is NOT the cheap fix — two side effects need an explicit decision
 
 The cost note above is incomplete, and both omissions change what option (1)
-means. Verified against current `origin/main`; filed as `BUGS.md` D-2.
+means. Verified against current `origin/main`; filed as `docs/audit/2026-06-19-BUGS.md` D-2.
 
 **1a. Permissions fail OPEN, not closed.** This is the sharp one. `permission_tx`
 is `Option<mpsc::Sender<ToolPermissionRequest>>` (`agent/mod.rs:361`) and
@@ -669,7 +669,7 @@ owned files.
 |---|---|---|---|
 | A | `SeatPolicyDb` sqlite store + `SeatPolicySource` trait | `org/seat_policy.rs` (trait only), `org/seat_policy_db.rs` (new), `org/mod.rs` (one `pub mod` line) | `GrantDb` (`org/authority.rs:551`): DDL const, idempotent init, `Arc<Mutex<Connection>>` |
 | B | `hierarchy_edges` table → `Vec<HierarchyEntry>` adapter feeding `Hierarchy::new` | `org/hierarchy_edges.rs` (new), `org/mod.rs` (one line) | `employee_db` store style |
-| C | D-5 fix: hoist `(MemoryManager, Option<Arc<dyn MemoryProvider>>)`; thread the same pair into both agent builds | `operant-cli/src/main.rs`, `gateway_runner.rs` (build seam only), `BUGS.md` (D-5 entry) | BUGS.md D-5 names the preferred fix |
+| C | D-5 fix: hoist `(MemoryManager, Option<Arc<dyn MemoryProvider>>)`; thread the same pair into both agent builds | `operant-cli/src/main.rs`, `gateway_runner.rs` (build seam only), `docs/audit/2026-06-19-BUGS.md` (D-5 entry) | BUGS.md D-5 names the preferred fix |
 | D | B′: mount `WriteBarrier::apply` in `run_agent_job` per §3 acceptance | `cronjobs/scheduler.rs`, `org/write_barrier.rs` (only if a helper is missing), `tests/` (extend `cron_session_isolation.rs` or new) | §3 of this outline is the spec |
 
 Fleet rules:

@@ -41,7 +41,7 @@ executing. This is the missing approval surface for non-interactive origins.
 
 1. **Audit first** (read-only): read `write_origin.rs` and compare its origin semantics
    against hermes `write_approval.current_origin`/`is_background` + `skill_provenance.py`.
-   Write the delta list into `BUGS.md`.
+   Write the delta list into `docs/audit/2026-06-19-BUGS.md`.
 2. **Implement `write_approval.rs`**: pure gate + origin detection. Persisted pending
    store (JSON under `~/.operant/approvals/` — atomic write, 0600, via the core
    secret-write helper from plan 002, `crates/operant-core/src/fs_secrets.rs`).
@@ -54,7 +54,7 @@ executing. This is the missing approval surface for non-interactive origins.
 5. **Verification pass** on `security.rs` (tirith) + `skills_guard.rs` (threat
    patterns): diff against hermes `tirith_security.py`/`threat_patterns.py`; fix only
    concrete missing checks; record the verdict.
-6. Update `BUGS.md`; run suites.
+6. Update `docs/audit/2026-06-19-BUGS.md`; run suites.
 
 ## Done criteria
 

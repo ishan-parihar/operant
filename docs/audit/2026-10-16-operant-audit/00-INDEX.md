@@ -69,7 +69,7 @@ everything (without it no change can be verified).
   clippy parity (`bash scripts/clippy-warning-gate.sh`).
 - Test first: the new test must be RED on the old code.
 - Same commit: `docs/CHANGELOG.md` (Unreleased), `README.md` if user-facing,
-  `operant.example.toml` if a config field changes, `TODO.md`, `BUGS.md` for
+  `operant.example.toml` if a config field changes, `TODO.md`, `docs/audit/2026-06-19-BUGS.md` for
   anything found and not fixed.
 - No `.unwrap()`/`.expect()` in production code (AGENTS.md "Rust Code Standards").
 - **Never run `tui debug simulate` without `--agent-script` while

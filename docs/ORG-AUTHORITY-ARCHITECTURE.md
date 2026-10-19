@@ -9,7 +9,7 @@
 > See [`ORG-AUTHORITY-DESIGN-REVIEW.md`](ORG-AUTHORITY-DESIGN-REVIEW.md) for
 > the four defects the review found; the sequencing in §14 is updated to match.
 > Read the review first — it changes what step 1 is.
-> **Answers:** the six open questions in [`REMAINING-GAPS.md`](REMAINING-GAPS.md),
+> **Answers:** the six open questions in [`2026-10-18-REMAINING-GAPS.md`](2026-10-18-REMAINING-GAPS.md),
 > and the owner's design session of 2026-10-01.
 > **Supersedes nothing.** [`CHRONOGRAPH-DESIGN.md`](CHRONOGRAPH-DESIGN.md)
 > remains the collective-synthesis rationale; this document is the authority,
@@ -95,7 +95,7 @@ inside a department. An **explicit capability grant** is required only to
 cross a department boundary — because that is the only place where hierarchy
 gives no answer.
 
-This is the resolution of Q1 in [`REMAINING-GAPS.md`](REMAINING-GAPS.md), which
+This is the resolution of Q1 in [`2026-10-18-REMAINING-GAPS.md`](2026-10-18-REMAINING-GAPS.md), which
 flagged it as an authorization boundary I should not guess at.
 
 ### 2.2 The scope lattice
@@ -530,7 +530,7 @@ strength).
 
 The owner asked for decisions to be **correlated into a separate database**.
 Agreed, and it is also the only clean way to avoid the `PRAGMA user_version`
-collision documented in `REMAINING-GAPS.md` §GAP-4.5 (the org tables share a
+collision documented in `2026-10-18-REMAINING-GAPS.md` §GAP-4.5 (the org tables share a
 file already claimed by the kanban family at v1).
 
 New file `operant_decisions.db`, with `org_decisions` and `subjective_log`:
@@ -667,7 +667,7 @@ must be aware of the limit.**
 
 ### 10.3 This resolves Q6
 
-`REMAINING-GAPS.md` Q6 asked whether a ceiling should record-and-mark-terminal
+`2026-10-18-REMAINING-GAPS.md` Q6 asked whether a ceiling should record-and-mark-terminal
 or drop silently. **Neither.** The ceiling is a thread with a known length, and
 the answer is a normal conversation that ends:
 
@@ -746,7 +746,7 @@ reads all artifacts from all threads in the round.
 
 ### 11.4 `org check` becomes the gate's instrument
 
-`REMAINING-GAPS.md` GAP-2.4 found `cmd_check` returns `Ok` unconditionally. In
+`2026-10-18-REMAINING-GAPS.md` GAP-2.4 found `cmd_check` returns `Ok` unconditionally. In
 this architecture it becomes the **precondition check for every gate**: identity
 validity, department rules, unfilled required capabilities, NULL departments,
 and cycle-free `reports_to`. Exit contract:
@@ -759,7 +759,7 @@ and cycle-free `reports_to`. Exit contract:
 
 ## 12. Schema versioning — resolved, because this design needs it
 
-`REMAINING-GAPS.md` GAP-4.5 flagged that the org tables have no version marker,
+`2026-10-18-REMAINING-GAPS.md` GAP-4.5 flagged that the org tables have no version marker,
 and that Wave 3's first `ALTER TABLE` would be applied twice or skipped on an
 older file. This design adds **two columns to `employees` and four new tables**,
 so it must be resolved first.

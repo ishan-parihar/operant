@@ -79,7 +79,7 @@ Files with accurate comments left unchanged: `platform.rs` (uses `#[serial_test:
 
 ### Phase 3: Bug Tracking
 
-Added pre-existing config schema test failure to `BUGS.md`:
+Added pre-existing config schema test failure to `docs/audit/2026-06-19-BUGS.md`:
 - **Test:** `schema::tests::config_schema_export_contains_expected_contract_shape`
 - **Issue:** JSON Schema URL mismatch (draft-07 vs 2020-12)
 - **Severity:** High (pre-existing, non-blocking)
@@ -103,7 +103,7 @@ Added pre-existing config schema test failure to `BUGS.md`:
 | Cargo.toml files | 5 (added dev-deps) |
 | Rust source files | 11+ (unsafe blocks, safety comments, imports) |
 | Test fixtures | 1 (test_photo.jpg) |
-| Documentation | 1 (BUGS.md) |
+| Documentation | 1 (docs/audit/2026-06-19-BUGS.md) |
 | **Total commits** | **4** (3 code + 1 docs) |
 | **This session's changes** | **~200 lines** across 15 files |
 

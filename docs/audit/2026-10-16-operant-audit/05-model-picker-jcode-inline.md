@@ -57,7 +57,7 @@ the omp gateway with routes such as `small-stack`) is never queried.
 3. Plus every `[providers]` entry that `ProviderRegistry` holds a client for.
    **Verify first** that the agent can switch to a registry client by name
    (`crates/operant-core/src/agent/provider_registry.rs`). If it can't, leave
-   this group out and file it in `BUGS.md`. Don't add a switching layer here.
+   this group out and file it in `docs/audit/2026-06-19-BUGS.md`. Don't add a switching layer here.
 4. models.dev is used only to *decorate* rows (context window, price) when the
    id matches. It is never a row source.
 

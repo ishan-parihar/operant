@@ -105,7 +105,7 @@ quality bar (07 steps 4–7) and the default flip.
 Peer-owned surfaces (coordinate via `agent://<name>`, never fix from another
 slice, fleet rule 7): the gateway `/fast` twin (H-8), the memory-wire lock
 advances (chore, precedent iters 866/897/899), and anything in
-`REMAINING-GAPS.md` G1 (owner-held).
+`2026-10-18-REMAINING-GAPS.md` G1 (owner-held).
 
 ---
 

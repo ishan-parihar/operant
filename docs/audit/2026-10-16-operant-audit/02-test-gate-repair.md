@@ -60,7 +60,7 @@ Also delete the stale comments that name retired modules as live, at
    (lib plus integration). Record the failures. Allowed: K-1 (`tools::kernel`
    `ping_roundtrip`, `harness_apply_and_rollback_roundtrip`) and the known
    parallel-DB flake. Any other failure is a real regression that was hidden by
-   the red gate. Put each one in `BUGS.md` with its name and first error line,
+   the red gate. Put each one in `docs/audit/2026-06-19-BUGS.md` with its name and first error line,
    and fix it in its own iteration.
 4. Run the brief's deferred tests by name and report them:
    `cargo test -p operant-cli --bin operant tool_output_budget_evicts_oldest_first`
@@ -75,6 +75,6 @@ Also delete the stale comments that name retired modules as live, at
   also fail, don't repair them. Those crates are slated for deletion (`10`).
   Use `-p` scopes until they are gone.)
 - Gate 2 and gate 3 have been run, and the failures (if any) are listed in
-  `BUGS.md`, each with an owner iteration.
+  `docs/audit/2026-06-19-BUGS.md`, each with an owner iteration.
 - The commit message lists every deleted test by name. That is the audit trail
   that these tests went with their feature and were not just silenced.

@@ -111,7 +111,7 @@ Rationale, and the cost of being wrong:
 Two independent `AppConfig` definitions in the same binary is not a design
 choice, it is a divergence waiting to happen. Whichever is canonical, the other
 should go. This is the highest-value structural finding in the audit and it is
-**not** recorded in `BUGS.md`.
+**not** recorded in `docs/audit/2026-06-19-BUGS.md`.
 
 ### Ranked findings
 
@@ -121,7 +121,7 @@ should go. This is the highest-value structural finding in the audit and it is
 | 2 | Second 2,501-line `AppConfig` in operant-core | 2.5k | duplicate | pick a winner |
 | 3 | 35 channel adapters duplicating a live stack | 74.5k | duplicate | wire root, then dedupe |
 | 4 | 4 crates in the default build with no entry point | 226k | dead weight in build | fix #1, then #3 |
-| 5 | `DEAD_CODE_AUDIT.md` is stale | 63 items | process debt | delete or regenerate |
+| 5 | `docs/audit/2026-07-23-DEAD_CODE_AUDIT.md` is stale | 63 items | process debt | delete or regenerate |
 
 On #5: that file is a live trap. Its header still contains a literal `$(date)`
 — a shell substitution that was never expanded — and it asserts four wire-up

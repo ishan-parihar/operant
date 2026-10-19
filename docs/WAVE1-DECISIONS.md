@@ -131,7 +131,7 @@ five, costs four lines, and makes the invariant greppable.
 **Why no `org_root` config key:** `$HERMES_HOME` already provides the override
 (`platform.rs:99-103`). A second knob is a second precedence rule, and the
 repo has already paid for a split-brain from a third location
-(`BUGS.md` R5-1, the `memory/` split). The plan's own design rule §4 says
+(`docs/audit/2026-06-19-BUGS.md` R5-1, the `memory/` split). The plan's own design rule §4 says
 "no second store ... Three divergent locations for one concept is a bug operant
 has already paid for once." A config-key org root is exactly that shape.
 

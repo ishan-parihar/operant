@@ -92,5 +92,5 @@ reality.
 ## Escape hatches
 
 - If a "real implementation" exists but is half-finished (compiles, wrong behavior),
-  treat as not-implemented: remove the route, and leave a `BUGS.md` note listing the
+  treat as not-implemented: remove the route, and leave a `docs/audit/2026-06-19-BUGS.md` note listing the
   integration as a future add-on. Do not ship half-wired webhooks.

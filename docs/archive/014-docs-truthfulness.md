@@ -23,7 +23,7 @@ Stamped: `d394c136`. Priority: **P2** (last — reflects finalized decisions fro
 
 ## Files out of scope
 
-- Code behavior; `BUGS.md` (keep as the audit log — reference it, don't rewrite it).
+- Code behavior; `docs/audit/2026-06-19-BUGS.md` (keep as the audit log — reference it, don't rewrite it).
 
 ## Steps
 

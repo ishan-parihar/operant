@@ -62,7 +62,7 @@ Operant's `crates/operant-runtime/src/skills/mod.rs:34` already carries a
    remote **only when authenticated** (inert error otherwise — hermes `SyncInertError`
    parity). Debounced push hook in `skill_manage` (after the write gate) + periodic pull
    at curator tick sites + `operant sync status|pull|push|now`.
-4. Update `BUGS.md`; document the remote config keys.
+4. Update `docs/audit/2026-06-19-BUGS.md`; document the remote config keys.
 
 ## Done criteria
 

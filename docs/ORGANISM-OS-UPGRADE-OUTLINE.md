@@ -409,7 +409,7 @@ runtime is governed are ceremony.
    `show` / `stats`. `supersede` writes a pointer, never a delete.
 2. **Tombstones.** `TOMBSTONES.md`-equivalent so dangling citations resolve.
    This directly fixes a live operant problem: `docs/IMPLEMENTATION-PLAN.md`
-   §1.3 found **6 of 35 `BUGS.md` headlines claimed open work that was already
+   §1.3 found **6 of 35 `docs/audit/2026-06-19-BUGS.md` headlines claimed open work that was already
    done**. A tombstone + a linter that resolves citations would make that
    class of drift structurally detectable.
 3. **Derived registry.** `operant architecture emit` regenerates
@@ -603,5 +603,5 @@ grep -rn "pub struct CronJob" -A 80 crates/operant-runtime/src/cron/types.rs
 | `pool.rs` compiles the wrong schema | `crates/operant-harness/src/pool.rs:32-136` + this session's probe |
 | "✓ pool compiler" acceptance claim | `docs/harness-kernel.md:180` |
 | 6/35 stale BUGS.md headlines | `docs/IMPLEMENTATION-PLAN.md` §1.3 |
-| Split-brain from three stores for one concept | `BUGS.md` R5-1 |
-| Memory-store three-location split | `BUGS.md` R5-1/R5-2 |
+| Split-brain from three stores for one concept | `docs/audit/2026-06-19-BUGS.md` R5-1 |
+| Memory-store three-location split | `docs/audit/2026-06-19-BUGS.md` R5-1/R5-2 |

@@ -133,7 +133,7 @@ Everything above is fixable incrementally with green builds at every step. Estim
 - Clippy at **498** (claimed ~82). Dead-code warnings cluster exactly where this audit found dead code (adapter_types, gateway_runner, main.rs).
 - `workspace-lint` skill present but unconfigured (no `workspace-lint.yaml`).
 - Debug tooling undocumented (G11) — an autonomous worker must read source to discover the simulator's key-token vocabulary and assertion whitelist.
-- Root carries 4 audit docs (`BACKEND_TUI_AUDIT.md`, `SETUP_TUI_AUDIT.md`, `UX_AUDIT_REPORT.md`, `BUGS.md`); `BUGS.md` (2026-06-19) is now almost entirely stale — most "Critical" items no longer reproduce.
+- Root carries 4 audit docs (`BACKEND_TUI_AUDIT.md`, `SETUP_TUI_AUDIT.md`, `UX_AUDIT_REPORT.md`, `docs/audit/2026-06-19-BUGS.md`); `docs/audit/2026-06-19-BUGS.md` (2026-06-19) is now almost entirely stale — most "Critical" items no longer reproduce.
 
 ---
 
@@ -184,7 +184,7 @@ Everything above is fixable incrementally with green builds at every step. Estim
 
 - [ ] **F1: Clippy burn-down** to `-D warnings` clean (498 → 0; Phases B–D delete most dead-code offenders for free), then add clippy to the pre-commit verify path so it can't drift again.
 - [ ] **F2: Activate workspace-lint**: author `workspace-lint.yaml` (audits → `docs/audit/`, plans → `docs/superpowers/plans/`, no stray root files) and run it in the iteration protocol.
-- [ ] **F3: Ledger truth**: archive stale `BUGS.md` (mark superseded by this doc), fold the 4 root audit docs' still-open items here, update TODO.md Implemented/Pending, CHANGELOG on user-facing changes.
+- [ ] **F3: Ledger truth**: archive stale `docs/audit/2026-06-19-BUGS.md` (mark superseded by this doc), fold the 4 root audit docs' still-open items here, update TODO.md Implemented/Pending, CHANGELOG on user-facing changes.
 
 ### Sequencing at a glance
 

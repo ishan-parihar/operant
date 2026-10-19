@@ -50,7 +50,7 @@ hierarchy works only if every node honors this contract:
    frontmatter below root: the `H1` is the name; the first line after it is a
    one-line summary — this absorbs what a child description used to do.
 3. **Pointers are markdown links.** A parent routes by linking:
-   `[label — descend when X](relative/path.md)` (file-relative, with the skill
+   `[label — descend when X](docs/decisions/AD-041-the-pdf-decompression-bound-covers-the-load-path.md)` (file-relative, with the skill
    root as fallback). The validator resolves pointers **both ways**: a node
    unreachable from root is an error; a link to a missing file is an error.
    Backticked root-relative paths (with an extension) also count as pointers —

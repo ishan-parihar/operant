@@ -96,7 +96,7 @@
    `CronDelivery.job_id`; both handoff tests assert the job id,
    mutation-proven.
  6. **Production work re-queued out of row 4** (not tests):
-    - **~~S7 (BUGS.md)~~ LANDED iter-745 `b99be430`.** Fixed in the
+    - **~~S7 (docs/audit/2026-06-19-BUGS.md)~~ LANDED iter-745 `b99be430`.** Fixed in the
       merged controller exactly as the filing prescribed: the
       pre-execution ping-pong rung now consults the alternating pair's
       result streaks (`alternation_returns_identical_output`) — both

@@ -76,7 +76,7 @@ Execute phases in order; each phase's tasks are checkboxed in the audit doc. Con
 - **Phase C** — render pipeline: fix streaming full-transcript re-render, kill per-frame deep clones, one `text_util` wrap module (fixes R4/R5/R6), delete dead `render_message` subtree, split `prompt_input.rs`
 - **Phase D** — app decomposition + residual bugs: shrink `handle_key_event`, delete dead App fields (R11), honest `SessionRecord` mapping (R1/R2), real cost from `AgentEvent::Cost` (R3, DONE iter-244 for non-streaming), split `app.rs`
 - **Phase E** — config consolidation: deprecate `config.yaml` + remove `"gpt-4"` precedence heuristic (DONE iter-245)
-- **Phase F** — hygiene: clippy 498 → 0 with `-D warnings` in verify path, author `workspace-lint.yaml`, archive stale `BUGS.md`
+- **Phase F** — hygiene: clippy 498 → 0 with `-D warnings` in verify path, author `workspace-lint.yaml`, archive stale `docs/audit/2026-06-19-BUGS.md`
 
 ### Infrastructure & Hardening
 

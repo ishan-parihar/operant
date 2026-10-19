@@ -1,7 +1,7 @@
 # Operant Production-Readiness Remediation Plans
 
 Stamped against commit `d394c136` (R30, binary v0.1.4). Audit date: 2026-08-09.
-Audit sources: 30 prior parity rounds (R1–R30, see `BUGS.md`), full workspace scan
+Audit sources: 30 prior parity rounds (R1–R30, see `docs/audit/2026-06-19-BUGS.md`), full workspace scan
 (19 crates, ~430k LOC), live binary smoke tests, hermes-agent (Python parent) references.
 
 ## Execution model (per user decision)
@@ -9,8 +9,8 @@ Audit sources: 30 prior parity rounds (R1–R30, see `BUGS.md`), full workspace 
 - **CI/CD is manual.** CI workflows are tag/manual-triggered and are **not** part of the
   gate. All validation is **local**, via the commands below. No tags/releases until the
   baseline is finalized.
-- Every plan follows the established **R-round protocol** from `AGENTS.md` / `BUGS.md`:
-  surgical change → local verify → commit+push with `R##:` prefix → update `BUGS.md`
+- Every plan follows the established **R-round protocol** from `AGENTS.md` / `docs/audit/2026-06-19-BUGS.md`:
+  surgical change → local verify → commit+push with `R##:` prefix → update `docs/audit/2026-06-19-BUGS.md`
   with findings/fixes → deploy binary + live smoke where behavior is user-visible.
 
 ### Local validation gates (every plan)

@@ -243,7 +243,7 @@ eventually retire, and O-11's refusal guard holds until then.
   incident work; smoke checks for operant departments.
 - **Operant:**
   - `operant doctor --json` is stable enough to be a smoke check;
-  - an "Operant" department (or Tools, scoped to this repository) takes `TODO.md` and `BUGS.md` as
+  - an "Operant" department (or Tools, scoped to this repository) takes `TODO.md` and `docs/audit/2026-06-19-BUGS.md` as
     intake;
   - the iteration protocol in `AGENTS.md` becomes its playbook, refined from its own verified
     iterations.

@@ -46,7 +46,7 @@ parity test that proves identical turn semantics under identical scripted input.
 1. **Inventory the duplication**: list each shared behavior (empty-response retry,
    evolution triggers, compression+todo re-injection, loop detection thresholds,
    budget accounting) with its implementation sites in both agents. Write the list into
-   the plan/`BUGS.md` as the ground truth.
+   the plan/`docs/audit/2026-06-19-BUGS.md` as the ground truth.
 2. **Extract** each behavior into pure functions/structs in the shared module (no agent
    type dependency — operate on `&mut TurnState`-style plain data). The agents keep
    their own I/O (provider calls, tool execution) but delegate the *rules* to the shared
@@ -57,7 +57,7 @@ parity test that proves identical turn semantics under identical scripted input.
    of scenarios: empty response ×3 then answer; empty response ×4 (exhaustion); memory
    nudge interval firing; skill nudge firing; compression + todo re-injection; budget
    exhaustion.
-4. Run the full suites; update `BUGS.md`.
+4. Run the full suites; update `docs/audit/2026-06-19-BUGS.md`.
 
 ## Done criteria
 

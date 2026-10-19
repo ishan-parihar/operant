@@ -138,7 +138,7 @@ scroll-and-return, unless it lives in a cache whose key happens to change on scr
 - Live: a 5-tool turn in tmux, with `tmux capture-pane` taken every 200 ms during the turn
   (a small script). No frame shows a tool row twice, and no capture differs from the
   buffer dump.
-- The cause is written into `CHANGELOG.md` and the fixed suspect is recorded in `BUGS.md`.
+- The cause is written into `CHANGELOG.md` and the fixed suspect is recorded in `docs/audit/2026-06-19-BUGS.md`.
   Rejected suspects go in too, with the oracle evidence that cleared them.
 
 ## Non-goals

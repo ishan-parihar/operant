@@ -58,7 +58,7 @@ permanent.
   that passes before the fix proves nothing.
 - Docs, in the same commit: `CHANGELOG.md` (Unreleased), `README.md` if user-facing,
   `operant.example.toml` when a config field changes, `TODO.md` (Implemented/Pending), and
-  `BUGS.md` for anything found and not fixed.
+  `docs/audit/2026-06-19-BUGS.md` for anything found and not fixed.
 - Deploy (only when the user asks): release build; back up `operant.prev-HHMM` in
   `~/.local/bin` and `~/.cargo/bin`; `cp` to `.new`, then `mv`; run
   `systemctl --user restart operant-gateway`; check the md5 of `/proc/<pid>/exe`.

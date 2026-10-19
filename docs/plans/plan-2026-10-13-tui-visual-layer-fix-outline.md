@@ -112,7 +112,7 @@ splice that appears and disappears). What's left: tool rows growing on ToolCompl
 - **Scroll-mode watermark** (`scroll_emit.rs`): the row-count watermark assumes Body is
   append-only, but tool rows above the watermark change height and Current mode drops
   thinking at flush. Only matters when `terminal_scroll_mode = true`, so it is not the user's
-  complaint. Log it in `BUGS.md`. Fix if scroll mode becomes a target.
+  complaint. Log it in `docs/audit/2026-06-19-BUGS.md`. Fix if scroll mode becomes a target.
 - Renderer line cache (jcode `get_cached_message_lines`): skip until a profile shows markdown
   re-render cost.
 

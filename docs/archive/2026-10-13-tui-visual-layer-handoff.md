@@ -172,7 +172,7 @@ Read `docs/plan-2026-10-13-tui-remaining-gaps-outline.md` §A/§B. Ranked:
   design (thinking-status note corrected iter-771)
 - `docs/plan-2026-10-09-tui-jcode-parity-gaps-v2.md` — P4 wave specs
 - `AGENTS.md` — THE protocol file (read top-to-bottom before any change)
-- `BUGS.md` — open-issues ledger (D-1 doc-debt row)
+- `docs/audit/2026-06-19-BUGS.md` — open-issues ledger (D-1 doc-debt row)
 
 ## PROCESS DISCIPLINE (non-negotiable, learned the hard way)
 

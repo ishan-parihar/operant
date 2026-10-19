@@ -94,7 +94,7 @@ trading-systems/
    unlimited depth. No frontmatter below root: `H1` = name, first line =
    one-line summary (this absorbs the per-node "routing description").
 3. **Pointers are markdown links**: parent → child is
-   `[label — descend when X](relative/path.md)`. The validator resolves links
+   `[label — descend when X](docs/decisions/AD-041-the-pdf-decompression-bound-covers-the-load-path.md)`. The validator resolves links
    **both ways**: node not reachable from root = ERROR; link to a missing file
    = ERROR (fixes B2). Bare backticked paths are accepted only for
    `scripts/`/`assets/` resources.
@@ -124,7 +124,7 @@ trading-systems/
 | **3** | **Rust lockstep** | `crates/operant-core/src/tools/skills_tool.rs`, `crates/operant-cli/src/cmd_skills.rs`, `crates/operant-core/src/agent/mod.rs` (prompt block), tests, `CHANGELOG.md` |
 | **4** | **Migration script + pilot tree** | new `scripts/migrate_to_references.py`, `skills/creative/website-design/**` |
 | **5** | **Migrate the 7 live trees** (262 nodes) | `~/.agents/skills/{human-conversation,mental-model-atlas,website-design,linkedin-marketing,agent-interface,cognitive-kernel,perfect-github-readme}/**` (script committed in iter 4) |
-| **6** | Verification sweep + sync + tracker updates | sync copy → live, `BUGS.md` rows for §5, `CHANGELOG.md` if audit UX changed |
+| **6** | Verification sweep + sync + tracker updates | sync copy → live, `docs/audit/2026-06-19-BUGS.md` rows for §5, `CHANGELOG.md` if audit UX changed |
 
 ### Iter 2 detail — the rewrite itself
 
@@ -217,7 +217,7 @@ skip already exists).
 - Navigation smoke test: fresh-context agent, root → `_map.md` → correct
   reference file in ≤2 reads on a known prompt and on a sibling near-miss.
 - Grep gate: zero `SKILL.md` pointers below any root across both stores.
-- `BUGS.md` rows for §5 items; `CHANGELOG.md` if anything user-visible moved.
+- `docs/audit/2026-06-19-BUGS.md` rows for §5 items; `CHANGELOG.md` if anything user-visible moved.
 
 ---
 

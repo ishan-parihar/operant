@@ -1,7 +1,5 @@
 # Docs index
 
-| [`2026-07-23-DEAD_CODE_AUDIT.md`](audit/2026-07-23-DEAD_CODE_AUDIT.md) | Dead Code Audit Report — Generated: $(date)
-Total #[allow(deadcode)] annotations: 63… |
 
 Owns: the map of the one-off design, parity, audit and status pages under `docs/` that no other page links to.
 Not for: current state (see `docs/handoff/STATE.md`) or commands (see `docs/RUNBOOK.md`).

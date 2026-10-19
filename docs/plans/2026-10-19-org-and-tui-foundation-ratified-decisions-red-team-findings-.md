@@ -67,7 +67,7 @@ Recommendation: (c) now, because it fixes a misstatement with no new configurati
 
 ## Red-team findings
 
-Three read-only lanes ran on 2026-10-19: the Holon seam (`crates/operant-os`, and the Holon-side branches of `cmd_org.rs`), the agentic-core and gateway seat (`gateway_session.rs`, `gateway_runner.rs`, `cronjobs/scheduler.rs`, `memory_provider.rs`), and the TUI interaction layer (`crates/operant-cli/src/tui/`). Each finding is a row in the `OPEN — Red-team: Holon seam, agentic-core seat and TUI (2026-10-19)` section of `BUGS.md`, with its file:line, a dedupe note and its verification level.
+Three read-only lanes ran on 2026-10-19: the Holon seam (`crates/operant-os`, and the Holon-side branches of `cmd_org.rs`), the agentic-core and gateway seat (`gateway_session.rs`, `gateway_runner.rs`, `cronjobs/scheduler.rs`, `memory_provider.rs`), and the TUI interaction layer (`crates/operant-cli/src/tui/`). Each finding is a row in the `OPEN — Red-team: Holon seam, agentic-core seat and TUI (2026-10-19)` section of `docs/audit/2026-06-19-BUGS.md`, with its file:line, a dedupe note and its verification level.
 
 | lane | rows | H | M | L | ids |
 |---|---|---|---|---|---|

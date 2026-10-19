@@ -62,7 +62,7 @@ missing:
 3. **Daemon-pool helper**: `spawn_daemon_task(fut)` that detaches the task and
    guarantees no shutdown join (track in a best-effort set; on shutdown, log-and-drop).
    Route `spawn_background_review` and curator background ticks through it.
-4. Tests (below); update `BUGS.md`.
+4. Tests (below); update `docs/audit/2026-06-19-BUGS.md`.
 
 ## Done criteria
 

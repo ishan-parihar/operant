@@ -4,7 +4,7 @@
 > read-only scouts re-verified every claim in the Waves 2–4 plan against the live
 > source with file:line evidence, plus inline spot-checks. **Parent authority:**
 > `docs/OPENHUMAN-AGENTIC-LOGIC-PORT-PLAN.md` (this doc is its audit-qualified
-> refinement), `docs/REMAINING-GAPS.md` (org layer), and
+> refinement), `docs/2026-10-18-REMAINING-GAPS.md` (org layer), and
 > `docs/plans/plan-2026-10-07-organism-operational-memory.md` (org operational slices).
 >
 > **Purpose:** kill redundant work. Several items the port plan lists as "to

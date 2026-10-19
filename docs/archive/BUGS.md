@@ -7,8 +7,8 @@
 > predated the TDG→agentmemory, Obscura→igs, prompt-caching, streaming-scrubber,
 > session-resume, and gateway tool-execution work. Every item below was verified
 > against the current codebase before being marked resolved. Cross-reference:
-> [`docs/HERMES_VS_OPERANT_AUDIT_2026-08-03.md`](HERMES_VS_OPERANT_AUDIT_2026-08-03.md)
-> and [`docs/RUST_BEST_PRACTICES_PLAN.md`](RUST_BEST_PRACTICES_PLAN.md).
+> [`docs/HERMES_VS_OPERANT_AUDIT_2026-08-03.md`](../HERMES_VS_OPERANT_AUDIT_2026-08-03.md)
+> and [`docs/RUST_BEST_PRACTICES_PLAN.md`](../RUST_BEST_PRACTICES_PLAN.md).
 
 ---
 
