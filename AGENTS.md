@@ -402,10 +402,18 @@ These are the user's intentional design choices. Do not replace, remove, or
 - **Supported: 7 platforms** in the gateway registry (`platform_registry()` in
   `crates/operant-cli/src/gateway_runner.rs`) — telegram, discord, slack,
   whatsapp, email_smtp, sms_twilio, webhooks
-- **Working adapters**: Telegram, Discord, Slack (fully implemented in `gateway/mod.rs`)
-- **Stub adapter**: Webhook (needs HTTP server implementation)
-- **Config-only**: WhatsApp, Email, SMS (setup wizard + config flags exist,
-  adapter code TBD)
+- **All seven have a real adapter** in `operant-core/src/gateway/`. Telegram,
+  Discord and Slack are long-polling / Socket Mode platforms. WhatsApp
+  (Graph API), Email (SMTP) and SMS (Twilio) are OUTBOUND-ONLY: they send
+  through the provider's API and receive nothing. Webhooks is INBOUND-ONLY:
+  it runs a real axum server with HMAC-SHA256 signature validation
+  (including the Slack `v0:` timestamped variant), and `send_message` is
+  deliberately a no-op.
+  (This section said "Stub adapter: Webhook" and "Config-only: WhatsApp,
+  Email, SMS" until iter-999. That was stale by seven months: the
+  implementations landed in iter-54, and the description was never
+  corrected. The one true part of "stub" was the webhook's inbound-only
+  `send_message`.)
 - 20 phantom platforms were purged in iter-50 (matrix, mattermost, signal, etc.)
 - Do NOT re-add purged platforms without a real adapter implementation
 - **The gateway registry IS the whole channel surface** (2026-10-17 purge):
@@ -821,9 +829,9 @@ asked — the user has accepted them as documented gaps.
 - ✅ ~~`/steer` directive~~ — steer queue + drain between iterations (iter-65)
 - ✅ ~~Context compression on overflow~~ — auto-compress via context_management
   on context_overflow errors (iter-63)
-- ✅ ~~Hook system~~ — HookRegistry with 6 events + wildcard, wired into agent
+- ✅ ~~Hook system~~ — HookRegistry with 9 events + wildcard, wired into agent
   loop (iter-61/62)
-- ✅ ~~Error recovery 3 vs 22~~ — 12 error classes with ClassifiedError (iter-61)
+- ✅ ~~Error recovery 3 vs 22~~ — 24 error classes with ClassifiedError (iter-61)
 - ✅ ~~Sequential tool execution~~ — concurrent 8-worker pool (iter-56)
 - ✅ ~~7 dead TUI dialogs~~ — elicitation/onboarding/file_injection/invalid_config/
   memory_update_notification/overage_upsell/desktop_upsell_startup deleted
@@ -840,7 +848,7 @@ asked — the user has accepted them as documented gaps.
 
 ## What IS Working (verified functional — iter-68 audit)
 
-### CLI (52 command variants — real handlers, except the two accepted stubs below)
+### CLI (53 command variants — real handlers, except the two accepted stubs below)
 run, chat, autonomous, tools, test, config, sessions, mcp, skills, model,
 completion, cron, kanban, gateway (16 sub-actions), checkpoints, memory,
 profile, auth/login/logout, version, doctor, status, dump, logs, backup,
@@ -967,7 +975,7 @@ MUST know before touching the render layer:
 - Context-overflow auto-compression: classify + manage_context + retry (iter-63)
 - `/steer` directive: real-time user steering between iterations (iter-65)
 - Hook system: `AgentStart`/`AgentEnd` events wired into `run()` (iter-61/62)
-- Error recovery: 12-class `ClassifiedError` with `should_compress`/`should_fallback` (iter-61)
+- Error recovery: 24-class `ClassifiedError` with `should_compress`/`should_fallback` (iter-61)
 - `sync_turn`: auto memory write-back after each turn — memory-wire
   `retain` (was agentmemory `/agentmemory/remember` pre-integration)
 - Credential rotation: `CredentialPool` with `PooledCredential` + OAuth refresh (iter-66)
