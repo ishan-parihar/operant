@@ -227,14 +227,7 @@ impl HookRegistry {
             let handler_clone = handler.clone();
             let event_clone = event.clone();
             let ctx_clone = ctx.clone();
-            tokio::spawn(async move {
-                let result = std::panic::AssertUnwindSafe(handler_clone(event_clone, ctx_clone))
-                    .catch_unwind_safe()
-                    .await;
-                if result.is_err() {
-                    tracing::warn!("Hook handler panicked — caught and ignored");
-                }
-            });
+            tokio::spawn(run_handler(handler_clone, event_clone, ctx_clone));
         }
     }
 
@@ -272,6 +265,34 @@ impl Default for HookRegistry {
 // catch_unwind for async futures
 trait CatchUnwindSafe<F: Future> {
     async fn catch_unwind_safe(self) -> std::result::Result<F::Output, ()>;
+}
+
+/// Run one hook handler, containing and REPORTING a panic.
+///
+/// Returns true when the handler panicked.
+///
+/// This is a free function, not a method, so the test can call exactly
+/// what `emit` calls. An earlier version had the logic inline in
+/// `emit`, and the test called `catch_unwind_safe` directly instead —
+/// which tested a re-implementation, not the production path, and a
+/// mutation to `emit` went unnoticed.
+///
+/// The CALL is inside the caught region, not just the future.
+/// `HookHandler` is `Fn(..) -> Pin<Box<dyn Future>>`, so the closure body
+/// runs at CALL time: a handler that panics while BUILDING its future
+/// would panic at the call site, outside the `catch_unwind_safe` future,
+/// and go unreported. Wrapping only the future caught the panic-at-poll
+/// shape and missed the panic-at-call shape.
+async fn run_handler(handler: HookHandler, event: HookEvent, ctx: HookContext) -> bool {
+    let result = std::panic::AssertUnwindSafe(async move { handler(event, ctx).await })
+        .catch_unwind_safe()
+        .await;
+    if result.is_err() {
+        tracing::warn!("Hook handler panicked — caught and ignored");
+        true
+    } else {
+        false
+    }
 }
 
 impl<F: Future + Send> CatchUnwindSafe<F> for std::panic::AssertUnwindSafe<F> {
@@ -369,33 +390,71 @@ mod tests {
     /// The old comment claimed `FutureExt::catch_unwind` "requires the
     /// future to be Unpin". It does not: it requires `Sized`, and
     /// `AssertUnwindSafe<F>` for any `F: Future` satisfies it.
+    ///
+    /// This calls `run_handler` — the same function `emit` calls — so a
+    /// change to the production path is a change to what is tested.
     #[tokio::test]
     async fn a_panicking_hook_is_reported_not_swallowed() {
-        let panicked = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let handler: HookHandler = Arc::new(|_event, _ctx| {
+            Box::pin(async {
+                panic!("a buggy hook");
+            })
+        });
 
-        let result = std::panic::AssertUnwindSafe(async {
-            panic!("a buggy hook");
-        })
-        .catch_unwind_safe()
-        .await;
+        let panicked = run_handler(handler, HookEvent::AgentStart, HookContext::new()).await;
 
         assert!(
-            result.is_err(),
-            "a panicking hook must be reported as an error, not silently swallowed"
+            panicked,
+            "a panicking hook must be reported, not silently swallowed"
         );
-        panicked.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// A hook that panics while BUILDING its future must be reported too.
+    ///
+    /// `HookHandler` is `Fn(..) -> Pin<Box<dyn Future>>`, so the closure
+    /// body runs at CALL time, not at poll time. A handler that panics
+    /// before returning its future panics at the CALL SITE, so wrapping
+    /// only the future catches the poll-time shape and misses the
+    /// call-time one. The call has to be inside the caught region.
+    ///
+    /// The two shapes are distinct and both are real: a hook that does
+    /// `Box::pin(async { ... })` with the panic in the body panics at
+    /// poll time; a hook that panics in a guard it evaluates before
+    /// returning the future panics at call time.
+    #[tokio::test]
+    async fn a_hook_that_panics_while_building_its_future_is_reported() {
+        // The panic is in the CLOSURE BODY, before the future exists.
+        let handler: HookHandler = Arc::new(|_event, _ctx| {
+            panic!("a hook that panics before returning its future");
+        });
+
+        let panicked = run_handler(handler, HookEvent::AgentStart, HookContext::new()).await;
+
+        assert!(
+            panicked,
+            "a hook that panics at call time must be reported, not swallowed"
+        );
     }
 
     /// A hook that does NOT panic must not be reported as one. The fix
     /// must not turn every hook into a false alarm.
     #[tokio::test]
     async fn a_healthy_hook_is_not_reported_as_a_panic() {
-        let result = std::panic::AssertUnwindSafe(async {})
-            .catch_unwind_safe()
-            .await;
+        let ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let ran_clone = ran.clone();
+        let handler: HookHandler = Arc::new(move |_event, _ctx| {
+            let ran = ran_clone.clone();
+            Box::pin(async move {
+                ran.store(true, std::sync::atomic::Ordering::SeqCst);
+            })
+        });
+
+        let panicked = run_handler(handler, HookEvent::AgentStart, HookContext::new()).await;
+
+        assert!(!panicked, "a healthy hook must not be reported as a panic");
         assert!(
-            result.is_ok(),
-            "a healthy hook must not be reported as a panic"
+            ran.load(std::sync::atomic::Ordering::SeqCst),
+            "a healthy hook must actually run"
         );
     }
 
