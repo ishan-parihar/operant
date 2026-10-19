@@ -891,7 +891,7 @@ version = "3.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "faf9468729b8cbcea668e36183cb69d317348c2e08e994829fb56ebfdfbaac34"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
@@ -3222,7 +3222,7 @@ dependencies = [
 [[package]]
 name = "memory-wire"
 version = "0.9.0"
-source = "git+https://github.com/ishan-parihar/memory-wire?branch=main#12fc2dbd16547888a320ac3bab7001a033369bae"
+source = "git+https://github.com/ishan-parihar/memory-wire?branch=main#384e23868cc88c63ec108696a1de3cf311dae81f"
 dependencies = [
  "anyhow",
  "axum 0.7.9",
@@ -5830,7 +5830,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.4",
  "windows-sys 0.61.2",
@@ -7419,7 +7419,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
