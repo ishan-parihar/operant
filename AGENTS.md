@@ -875,7 +875,10 @@ suggestions, tui
 - Prompt-cache stability: frozen prefix + volatile suffix (iter-39)
 - Session caching: `clear_history` only on session change (iter-49)
 - Anthropic `cache_control` breakpoints (iter-54)
-- 7 dead dialogs deleted (iter-58); 7 remaining are alive via `.open()`
+- 7 dead dialogs deleted (iter-58); every remaining overlay has a PRODUCTION
+  opener (verified iter-1002: 20 overlays, each opened from a non-test
+  call site — `commands.rs`, `key_handling.rs`, `channel_drains.rs`,
+  `import_config.rs`, `turn_state.rs` or `adapter_types/tui_app.rs`)
 
 #### TUI visual layer — architecture + working discipline (2026-10-13)
 
