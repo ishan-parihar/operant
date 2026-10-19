@@ -72,20 +72,20 @@ Live claims: see `genome doctor`. Recent units of work:
 |---|---|
 <!-- genome:end status -->
 
-<!-- genome:zone handoff sha=7dd6269a7d55 -->
-## Handoff — 2026-10-19
+<!-- genome:zone handoff sha=d28d19ff271a -->
+## Handoff — 2026-10-20
 
-Repo branch `main`, HEAD `2c40844e6adfa73c1f8a2f2295f32068b337bba4`. Working tree dirty (8 paths).
+Repo branch `main`, HEAD `e516be4b1f9f272f72896f283a7f8371de094de5`. Working tree dirty (1 paths).
 
 ## Open register rows
   (none)
 
 ## Recent worklog
-- **2026-10-19T11:50Z** · `claude-code` — iter-978 (deploy). Release build of 53f9bb7a (`scripts/build.sh --offline --release`, 10m 27s, exit 0). Provenance: artifact 17:05:38 postdates the commit 16:54:59. Installed `~/.local/bin/operant` (temp file + `mv`); gateway restarted (PID 2703980); running exe md5 equals the installed file (`c76f3c88`). Live: TTS tool test passed on the same source (1.77 s); TUI-10 pty check passed; S1 and S2 tmux captures clean but not decisive (BUGS rows left open). CR-6 unchanged (needs sudo).
-- **2026-10-19T12:20Z** · `claude-code` — iter-979 (test). The workspace run failed once in `live_tails_render_once_while_a_tool_is_reserved`: an unguarded test (`ctrl_t_no_longer_enters_copy_mode_and_alt_y_does`) sent Ctrl+T, which writes the process-wide reasoning override and races the render. The test now takes `reasoning_override_test_guard()` and clears the override. Verified: workspace 7113 passed, 0 failed, 24 ignored; clippy gate new=0 stale=0; operant-cli bin 3 of 3 passed.
 - **2026-10-19T21:01** · `omp` — Autonomous defect sweep, iters 980-992: 13 iterations, each a separate pushed commit
 - **2026-10-19T22:32** · `omp` — Autonomous defect sweep, iters 980-1002: 23 iterations, each a separate pushed commit
 - **2026-10-19T23:07** · `omp` — Autonomous defect sweep, iters 980-1008: 29 iterations, each a separate pushed commit
+- **2026-10-19T23:45** · `omp` — iters 1010-1011: the review of the 2026-10-19 sweep turned up four defects the sweep had not found (RT-55 the supply-chain gate could not name the advisory it exists to report; RT-58 the checkpoint shadow store was snapshotting ITSELF, which is where the 1.5 GB came from; RT-56 a size-bound checkpoint skip was reported as the wrong cause; RT-57 the genome's role map and the docs disagreed about which files exist), plus the paperwork the sweep left behind
+- **2026-10-20T00:38** · `omp` — iters 1010-1012: a REVIEW of the sweep found eight reachable defects the sweep had not found (RT-55 to RT-65) and the paperwork it had left behind; the one decision is AD-041, the correction to AD-039's overstated decompression claim
 
 Regenerate with `genome handoff --write`.
 <!-- genome:end handoff -->
