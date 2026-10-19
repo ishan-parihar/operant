@@ -139,12 +139,16 @@ impl PlatformAdapter for EmailAdapter {
             static TLS_CONFIG: OnceLock<std::sync::Arc<rustls::ClientConfig>> = OnceLock::new();
             let config = TLS_CONFIG.get_or_init(|| {
                 let mut roots = rustls::RootCertStore::empty();
-                // rustls-native-certs v0.7 returns its own cert iterator;
-                // we add each to the rustls RootCertStore manually.
-                for cert in rustls_native_certs::load_native_certs()
-                    .unwrap_or_default()
-                    .into_iter()
-                {
+                // rustls-native-certs 0.8 returns the certs it loaded next to
+                // the errors it hit; a bad store entry is skipped, not fatal.
+                let loaded = rustls_native_certs::load_native_certs();
+                if !loaded.errors.is_empty() {
+                    tracing::warn!(
+                        count = loaded.errors.len(),
+                        "some native root certificates could not be loaded"
+                    );
+                }
+                for cert in loaded.certs {
                     let _ = roots.add(cert);
                 }
                 std::sync::Arc::new(

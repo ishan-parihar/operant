@@ -1,5 +1,5 @@
-<!-- genome:zone records sha=997263e674f5 -->
-**Decisions** (31)
+<!-- genome:zone records sha=faeaf8f99f87 -->
+**Decisions** (33)
 
 | ID | Title | Status | Description |
 |---|---|---|---|
@@ -34,6 +34,8 @@
 | AD-029 | Context management stays on the synchronous summarize rung; agent-driven reduction is not built | Active | The magic-context review's agent-driven reduction and background historian are not built now; the synchronous summarize rung stays |
 | AD-030 | The Telegram token filter is covered for URL-embedded tokens; the historic log is not rewritten | Active | Telegram bot tokens in bot URLs are redacted by a tested rule; the old gateway.log lines are not rewritten, and token rotation stays the owner's call |
 | AD-031 | Dead TUI code is removed where it is ours; verbatim ports, the keybinding registry and vendored style modules stay allowlisted | Active | The clippy allowlist's dead-code entries drop from 52 to 47: unused TUI items with no caller are removed, and the verbatim jcode ports, the keybinding registry and the vendored style modules keep thei |
+| AD-032 | RT-18 clears with a zip-9 patch of ndarray-npy, not a TTS-engine rewrite | Active | The three zip advisories are cleared by vendoring ndarray-npy 0.9.1 with zip 9; kokoro-micro was rejected because it still resolves zip 6 |
+| AD-033 | Advisory triage clears four by dependency moves; the YAML crate swap is reverted pending an owner decision | Active | Four advisories are cleared (atty, rustls-native-certs, chacha20, image defaults); serde_yaml stays at 0.9 because its only policy-compliant replacement changes manifest errors |
 <!-- genome:end records -->
 
 <!-- genome:zone idmap sha=a7a72b4c9dd0 -->
