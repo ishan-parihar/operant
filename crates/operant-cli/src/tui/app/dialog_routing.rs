@@ -1,5 +1,6 @@
 //! Dialog routing, permission handling, and key context methods.
 
+use super::channel_drains::plain_command_prefix;
 use super::*;
 
 impl App {
@@ -12,9 +13,6 @@ impl App {
         }
         if self.bypass_permissions_dialog.visible {
             return Some(DialogPriority::BypassPermissions);
-        }
-        if self.mcp_approval.visible {
-            return Some(DialogPriority::McpApproval);
         }
         if self.ask_user_dialog.visible {
             return Some(DialogPriority::AskUser);
@@ -227,17 +225,13 @@ impl App {
         if selected_key != Some('P') {
             return;
         }
-        if let PermissionDialogKind::Bash { command, .. } = &pr.kind {
-            // (plan 03 §4) store the first TWO tokens ("git status", not
-            // "git") — a one-token "git" would auto-approve "git push
-            // --force". One token only for single-token commands. The read
-            // side (channel_drains) additionally refuses any command with
-            // shell metacharacters or a dangerous shape, so a stored
-            // prefix can never approve an injected tail.
-            let tokens: Vec<&str> = command.split_whitespace().take(2).collect();
-            if !tokens.is_empty() {
-                self.bash_prefix_allowlist.insert(tokens.join(" "));
-            }
+        // The same guard that decided the option was offered decides what is
+        // stored, so the entry is the two-token prefix ("git status", not
+        // "git": a one-token "git" would approve "git push --force").
+        if let PermissionDialogKind::Bash { command, .. } = &pr.kind
+            && let Some(entry) = plain_command_prefix(command)
+        {
+            self.bash_prefix_allowlist.insert(entry);
         }
     }
 }

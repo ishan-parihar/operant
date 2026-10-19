@@ -65,7 +65,6 @@ mod prompt_helpers;
 pub mod provider;
 mod tui;
 
-pub(crate) use tui::dialogs;
 pub(crate) use tui::free_mode_dialog;
 pub(crate) use tui::image_paste;
 pub(crate) use tui::input;

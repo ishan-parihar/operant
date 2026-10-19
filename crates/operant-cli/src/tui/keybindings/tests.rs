@@ -59,17 +59,6 @@ fn test_global_vs_context_binding() {
 }
 
 #[test]
-fn test_fallback_contexts() {
-    let registry = KeyBindingRegistry::with_defaults();
-    let event = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
-
-    // Should find binding in dialog context
-    let binding =
-        registry.find_with_fallback(&event, &[BindingContext::Dialog, BindingContext::Global]);
-    assert!(binding.is_some());
-}
-
-#[test]
 fn test_default_registry_has_bindings() {
     let registry = KeyBindingRegistry::with_defaults();
 
@@ -82,30 +71,6 @@ fn test_default_registry_has_bindings() {
     let binding = registry.find(&event, BindingContext::VimNormal);
     assert!(binding.is_some());
     assert_eq!(binding.unwrap().action, KeyAction::VimEnterInsert);
-}
-
-#[test]
-fn test_remove_binding() {
-    let mut registry = KeyBindingRegistry::new();
-
-    registry.add(KeyBinding {
-        key: KeyCode::Char('x'),
-        modifiers: KeyModifiers::NONE,
-        action: KeyAction::Cancel,
-        context: Some(BindingContext::Prompt),
-        description: None,
-    });
-
-    let event = KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE);
-    assert!(registry.find(&event, BindingContext::Prompt).is_some());
-
-    let removed = registry.remove(
-        KeyCode::Char('x'),
-        KeyModifiers::NONE,
-        Some(BindingContext::Prompt),
-    );
-    assert!(removed);
-    assert!(registry.find(&event, BindingContext::Prompt).is_none());
 }
 
 #[test]

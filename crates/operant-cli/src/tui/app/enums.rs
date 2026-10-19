@@ -87,8 +87,6 @@ pub enum DialogPriority {
     ContextMenu = 10,
     /// Bypass permissions - must accept or session exits
     BypassPermissions = 20,
-    /// MCP approval
-    McpApproval = 30,
     /// Device auth (OAuth)
     /// Ask user dialog
     AskUser = 50,
@@ -185,13 +183,6 @@ pub enum TurnState {
     Idle,
     /// The request was handed to the agent; nothing has come back yet.
     Sending,
-    /// The provider transport is opening (connect / first byte).
-    ///
-    /// No `AgentEvent` signals the pre-first-byte window yet — the agent
-    /// emits nothing between `run()` being called and the first Content
-    /// event — so nothing assigns this today. Kept because the lifecycle is
-    /// modelled in full and a provider-connect event will land in it.
-    Connecting,
     /// The model is reasoning; no assistant text yet.
     Thinking,
     /// Assistant text is arriving.

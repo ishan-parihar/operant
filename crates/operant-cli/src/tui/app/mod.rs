@@ -35,7 +35,6 @@ use crate::tui::adapter_types::config::{Settings, Theme};
 use crate::tui::adapter_types::cost::CostTracker;
 use crate::tui::context_viz::ContextVizState;
 use crate::tui::dialog_select::{DialogSelectState, SelectItem};
-use crate::tui::dialogs::McpApprovalDialogState;
 use crate::tui::dialogs::PermissionRequest;
 use crate::tui::diff_viewer::DiffViewerState;
 use crate::tui::export_dialog::{ExportDialogState, ExportFormat};
@@ -535,7 +534,6 @@ pub struct App {
     /// redraw cannot destroy them. See `tui::pinned_images`.
     pub pinned_images: crate::tui::pinned_images::PinnedImageRegistry,
     /// MCP server approval dialog.
-    pub mcp_approval: McpApprovalDialogState,
     /// Go to Line dialog (Ctrl+G in message pane).
 
     /// Bypass-permissions startup confirmation dialog.
@@ -650,6 +648,10 @@ pub struct App {
         tokio::sync::mpsc::UnboundedReceiver<crate::tui::bridge_state::BridgeConnectionState>,
     >,
     /// Sender for bridge connection state updates (given to gateway handler).
+    #[expect(
+        dead_code,
+        reason = "AD-034: the gateway runs out of process, so nothing sends through this sender"
+    )]
     pub bridge_state_tx:
         Option<tokio::sync::mpsc::UnboundedSender<crate::tui::bridge_state::BridgeConnectionState>>,
 

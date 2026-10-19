@@ -264,28 +264,6 @@ fn diff_viewer_toggle_collapse_empty_files_no_panic() {
 }
 
 #[test]
-fn diff_viewer_set_turn_diff_resets_collapsed() {
-    let mut state = DiffViewerState::new();
-    state.diff_type = DiffType::TurnDiff;
-    state.files = vec![make_file("x.rs", 1, 0, false)];
-    state.collapsed = vec![true]; // manually set collapsed
-    let new_files = vec![
-        make_file("y.rs", 2, 0, false),
-        make_file("z.rs", 3, 0, false),
-    ];
-    state.set_turn_diff(new_files);
-    assert_eq!(
-        state.collapsed.len(),
-        2,
-        "collapsed should match new file count"
-    );
-    assert!(
-        state.collapsed.iter().all(|&c| !c),
-        "new files start uncollapsed"
-    );
-}
-
-#[test]
 fn diff_viewer_collapse_renders_without_panic() {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;

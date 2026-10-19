@@ -533,6 +533,10 @@ pub fn selection_bg() -> Color {
 /// `cfg_attr`, not a bare `#[expect]`: the accessor is superseded in the bin
 /// build, but `color_depth.rs`'s quantization tests still read it, so under
 /// `--all-targets` the expectation is unfulfilled and warns.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "AD-034: no production caller yet")
+)]
 pub fn text_selection_bg() -> Color {
     with_active(|p| p.text_selection_bg)
 }

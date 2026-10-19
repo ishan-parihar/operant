@@ -345,46 +345,25 @@ impl App {
                 continue;
             }
 
-            // bash_prefix_allowlist: if the tool is bash/shell and
-            // the first word of the command is in the allowlist,
-            // auto-approve without showing a dialog. (Bug #21 from
-            // iter-82 audit — the allowlist was written but never
-            // consulted.) "Always allow" in the bypass-permissions
-            // dialog populates the allowlist via
-            // maybe_record_bash_prefix; this is the read side.
-            if (req.tool_name == "bash" || req.tool_name == "shell" || req.tool_name == "terminal")
-                && let Some(ref preview) = req.input_preview
+            // bash_prefix_allowlist: a plain command whose two-token prefix is
+            // in the allowlist auto-approves without a dialog. "Always allow"
+            // in the dialog populates it (maybe_record_bash_prefix). This is
+            // the read side, and it shares plain_command_prefix with the
+            // dialog's suggestion, so the two cannot disagree.
+            if SHELL_TOOLS.contains(&req.tool_name.as_str())
+                && let Some(entry) = req.input_preview.as_deref().and_then(plain_command_prefix)
             {
-                // (plan 03 §4) A stored prefix may only auto-approve a PLAIN
-                // continuation of itself: any shell metacharacter (injection
-                // tail) or a shape the core's danger classifier flags kills
-                // the auto-approve and falls through to the dialog. The
-                // classifier is the core's — never a second one here.
-                let has_meta = [";", "&&", "||", "|", "\\", "$(", ">", "<", "\n"]
-                    .iter()
-                    .any(|m| preview.contains(m));
-                let dangerous = operant_core::approval::ApprovalGuard::new(
-                    operant_core::approval::ApprovalMode::Smart,
-                )
-                .check_dangerous(preview)
-                .is_some();
-                if !has_meta && !dangerous {
-                    let tokens: Vec<&str> = preview.split_whitespace().take(2).collect();
-                    let two_token = tokens.join(" ");
-                    let first_token = tokens.first().copied().unwrap_or("");
-                    // Two-token entries match the command's two-token
-                    // prefix ("git status" covers "git status --short");
-                    // legacy one-token entries match the first token (the
-                    // metachar/danger guards above already police that arm).
-                    let prefix_ok = self.bash_prefix_allowlist.contains(&two_token)
-                        || (!first_token.is_empty()
-                            && self.bash_prefix_allowlist.contains(first_token));
-                    if prefix_ok {
-                        let _ = req
-                            .response_tx
-                            .send(operant_core::agent::ToolPermissionResponse::AllowSession);
-                        continue;
-                    }
+                // A two-token entry covers the command's two-token prefix ("git
+                // status" covers "git status --short"); a legacy one-token entry
+                // covers the first token.
+                let first_token = entry.split_whitespace().next().unwrap_or_default();
+                if self.bash_prefix_allowlist.contains(&entry)
+                    || self.bash_prefix_allowlist.contains(first_token)
+                {
+                    let _ = req
+                        .response_tx
+                        .send(operant_core::agent::ToolPermissionResponse::AllowSession);
+                    continue;
                 }
             }
 
@@ -407,12 +386,25 @@ impl App {
         } else {
             format!("{}\n{}", req.description, req.danger_explanation)
         };
-        let dialog = crate::tui::dialogs::PermissionRequest::from_reason(
-            req.tool_id,
-            req.tool_name,
-            reason,
-            req.input_preview,
-        );
+        let dialog = match req.input_preview {
+            Some(command) if SHELL_TOOLS.contains(&req.tool_name.as_str()) => {
+                let suggested_prefix = plain_command_prefix(&command);
+                crate::tui::dialogs::PermissionRequest::bash(
+                    req.tool_name,
+                    reason,
+                    command,
+                    suggested_prefix,
+                )
+            }
+            Some(command) if req.tool_name == "powershell" => {
+                crate::tui::dialogs::PermissionRequest::powershell(req.tool_name, reason, command)
+            }
+            input_preview => crate::tui::dialogs::PermissionRequest::from_reason(
+                req.tool_name,
+                reason,
+                input_preview,
+            ),
+        };
         self.permission_request = Some(dialog);
         self.pending_permission_response_tx = Some(req.response_tx);
         // The turn is blocked on the user's answer, not on the
@@ -499,4 +491,32 @@ impl App {
             Err(tokio::sync::oneshot::error::TryRecvError::Empty) => false,
         }
     }
+}
+
+/// Tools whose requests are judged by their command text.
+pub(super) const SHELL_TOOLS: [&str; 3] = ["bash", "shell", "terminal"];
+
+/// The allowlist entry a plain shell command stores: its first two tokens, so
+/// "git status" covers "git status --short" but not "git push --force".
+/// `None` when the command carries a shell metacharacter (an injection tail)
+/// or a shape the core's danger classifier flags. The read side and the
+/// "Allow commands matching …*" option both come through here, so a stored
+/// prefix can never approve a command the option would not have offered.
+pub(super) fn plain_command_prefix(command: &str) -> Option<String> {
+    let has_meta = [";", "&&", "||", "|", "\\", "$(", ">", "<", "\n"]
+        .iter()
+        .any(|m| command.contains(m));
+    let dangerous =
+        operant_core::approval::ApprovalGuard::new(operant_core::approval::ApprovalMode::Smart)
+            .check_dangerous(command)
+            .is_some();
+    if has_meta || dangerous {
+        return None;
+    }
+    let entry = command
+        .split_whitespace()
+        .take(2)
+        .collect::<Vec<_>>()
+        .join(" ");
+    (!entry.is_empty()).then_some(entry)
 }

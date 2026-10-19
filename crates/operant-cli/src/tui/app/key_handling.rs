@@ -769,15 +769,6 @@ impl App {
             return false;
         }
 
-        // MCP approval dialog
-        if self.mcp_approval.visible {
-            let result = crate::dialogs::handle_mcp_approval_key(&mut self.mcp_approval, key);
-            if result.is_some() {
-                // Result processed by CLI loop via take_mcp_approval_result()
-            }
-            return false;
-        }
-
         // (iter-211: feedback_survey key handler deleted — no telemetry backend)
 
         // Memory file selector intercepts navigation and Esc
@@ -1977,10 +1968,6 @@ impl App {
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => self.diff_viewer.close(),
             KeyCode::Tab | KeyCode::Left | KeyCode::Right => self.diff_viewer.switch_pane(),
-            KeyCode::Char('d') => {
-                let root = self.project_root();
-                self.diff_viewer.toggle_diff_type(&root);
-            }
             KeyCode::Up => {
                 if self.diff_viewer.active_pane == DiffPane::FileList {
                     self.diff_viewer.select_prev();

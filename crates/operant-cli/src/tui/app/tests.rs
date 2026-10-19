@@ -214,7 +214,7 @@ fn test_normalize_char_shift_with_other_modifiers() {
 #[test]
 fn test_mcp_with_args_runs_the_subcommand_and_bare_opens_the_panel() {
     let mut app = make_app();
-    assert!(app.intercept_slash_command_with_args("mcp", "auth mcphub"));
+    assert!(app.handle_tui_command("mcp", "auth mcphub"));
     assert!(
         !app.mcp_view.visible,
         "with args the panel must not open — the subcommand runs"
@@ -234,7 +234,7 @@ fn test_mcp_with_args_runs_the_subcommand_and_bare_opens_the_panel() {
     );
 
     app.pending_shell_command = None;
-    assert!(app.intercept_slash_command_with_args("mcp", ""));
+    assert!(app.handle_tui_command("mcp", ""));
     assert!(app.mcp_view.visible, "bare /mcp opens the panel");
     assert!(app.pending_shell_command.is_none());
 }
@@ -250,7 +250,7 @@ fn test_mcp_with_args_runs_the_subcommand_and_bare_opens_the_panel() {
 fn test_exit_slash_command_sets_quit_flag() {
     let mut app = make_app();
     assert!(!app.should_exit);
-    assert!(app.intercept_slash_command("exit"));
+    assert!(app.handle_tui_command("exit", ""));
     assert!(app.should_exit);
 }
 
@@ -258,9 +258,9 @@ fn test_exit_slash_command_sets_quit_flag() {
 fn test_vim_slash_command_toggles_vim() {
     let mut app = make_app();
     assert!(!app.prompt_input.vim_enabled);
-    assert!(app.intercept_slash_command("vim"));
+    assert!(app.handle_tui_command("vim", ""));
     assert!(app.prompt_input.vim_enabled);
-    assert!(app.intercept_slash_command("vim"));
+    assert!(app.handle_tui_command("vim", ""));
     assert!(!app.prompt_input.vim_enabled);
 }
 
@@ -270,7 +270,7 @@ fn test_model_slash_command_opens_picker() {
     let mut app = make_app();
     app.has_credentials = true;
     assert!(app.inline_interactive.is_none());
-    assert!(app.intercept_slash_command("model"));
+    assert!(app.handle_tui_command("model", ""));
     assert!(
         app.inline_interactive
             .is_some_and(|p| p.kind == crate::tui::operant_app::tui_fns::PickerKind::Model)
@@ -317,16 +317,16 @@ fn test_dialog_tier_slash_commands_are_consumed() {
     // fall through to the model per the iter-790 design.
     let mut app = make_app();
     assert!(
-        app.intercept_slash_command("login"),
+        app.handle_tui_command("login", ""),
         "/login must intercept (never fall through to the model)"
     );
     assert!(
         app.pending_shell_command.is_some(),
         "/login suspends to the setup wizard — the provider/model backend"
     );
-    assert!(app.intercept_slash_command("logout"));
+    assert!(app.handle_tui_command("logout", ""));
     assert!(
-        !app.intercept_slash_command("observe"),
+        !app.handle_tui_command("observe", ""),
         "removed /observe must fall through"
     );
 }
@@ -339,17 +339,17 @@ fn test_status_tier_slash_commands_are_consumed() {
     // dead-command sweep (plan 02) and must now fall through like any
     // unregistered name.
     let mut app = make_app();
-    assert!(app.intercept_slash_command("info"));
+    assert!(app.handle_tui_command("info", ""));
     assert_eq!(app.system_annotations.len(), 1);
     assert!(
-        !app.intercept_slash_command("model-status"),
+        !app.handle_tui_command("model-status", ""),
         "removed /model-status must fall through"
     );
     // The alias routes to the thinking-display handler: bare /thinking
     // reports current state without toggling. (plan 08: the report is a
     // transient notice now — no annotation lands.)
     let before = app.thinking_display_on;
-    assert!(app.intercept_slash_command("thinking"));
+    assert!(app.handle_tui_command("thinking", ""));
     assert_eq!(
         app.system_annotations.len(),
         1,
@@ -385,7 +385,7 @@ fn shift_tab_never_changes_permission_mode() {
     );
 
     // /permissions opens the picker; AcceptEdits applies on Enter directly.
-    assert!(app.intercept_slash_command("permissions"));
+    assert!(app.handle_tui_command("permissions", ""));
     assert!(app.permissions_picker.visible);
     app.permissions_picker.select_next(); // Default -> AcceptEdits
     app.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
@@ -394,7 +394,7 @@ fn shift_tab_never_changes_permission_mode() {
 
     // Bypass: Enter opens the confirmation dialog instead of arming…
     app.settings.permission_mode = PermissionMode::Default;
-    assert!(app.intercept_slash_command("permissions"));
+    assert!(app.handle_tui_command("permissions", ""));
     app.permissions_picker.select_next();
     app.permissions_picker.select_next(); // Default -> Bypass
     app.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
@@ -489,7 +489,7 @@ fn every_advertised_binding_dispatches() {
 fn keys_overlay_opens_at_top_not_transcript() {
     let mut app = make_app();
     let annotations_before = app.system_annotations.len();
-    assert!(app.intercept_slash_command("keys"));
+    assert!(app.handle_tui_command("keys", ""));
     assert!(app.help_overlay.visible, "/keys must open the overlay");
     assert_eq!(app.help_overlay.scroll_offset, 0, "opened at the top");
     assert_eq!(
@@ -517,7 +517,7 @@ fn keys_overlay_opens_at_top_not_transcript() {
 fn info_prints_once() {
     let mut app = make_app();
     let before = app.system_annotations.len();
-    assert!(app.intercept_slash_command("info"));
+    assert!(app.handle_tui_command("info", ""));
     assert_eq!(app.system_annotations.len(), before + 1);
 }
 
@@ -734,7 +734,7 @@ async fn watchdog_aborts_after_deadline() {
 #[test]
 fn rewind_selector_open_filter_and_escape() {
     let mut app = make_app();
-    assert!(app.intercept_slash_command("rewind"));
+    assert!(app.handle_tui_command("rewind", ""));
     assert!(app.rewind_selector.visible, "/rewind opens the selector");
 
     // f opens the filter; typing narrows.
@@ -815,7 +815,7 @@ fn double_escape_opens_rewind_selector() {
 #[test]
 fn rewind_selector_enter_gates_on_compacted_and_streams() {
     let mut app = make_app();
-    app.intercept_slash_command("rewind");
+    app.handle_tui_command("rewind", "");
     app.rewind_selector.entries = vec![
         crate::tui::rewind_selector::RewindEntry {
             turn_id: 1,
@@ -1040,7 +1040,7 @@ fn test_tasks_slash_command_is_an_alias_for_agents() {
     // error instead of opening the agents menu (iter-248).
     let mut app = make_app();
     assert!(!app.agents_menu.visible);
-    assert!(app.intercept_slash_command("tasks"));
+    assert!(app.handle_tui_command("tasks", ""));
     assert!(app.agents_menu.visible);
 }
 
@@ -1090,18 +1090,18 @@ fn tasks_overlay_should_be_fully_removed() {
 fn test_fast_is_not_a_command() {
     // H-8: /fast toggled a flag no agent code read — removed, not faked.
     let mut app = make_app();
-    assert!(!app.intercept_slash_command("fast"));
+    assert!(!app.handle_tui_command("fast", ""));
 }
 
 #[test]
 fn test_output_style_cycles() {
     let mut app = make_app();
     assert_eq!(app.output_style, "auto");
-    assert!(app.intercept_slash_command("output-style"));
+    assert!(app.handle_tui_command("output-style", ""));
     assert_eq!(app.output_style, "stream");
-    assert!(app.intercept_slash_command("output-style"));
+    assert!(app.handle_tui_command("output-style", ""));
     assert_eq!(app.output_style, "verbose");
-    assert!(app.intercept_slash_command("output-style"));
+    assert!(app.handle_tui_command("output-style", ""));
     assert_eq!(app.output_style, "auto");
 }
 
@@ -1161,7 +1161,7 @@ fn test_help_slash_command_opens_overlay() {
     assert!(!app.help_overlay.visible);
     assert!(!app.show_help);
     assert!(!app.help_overlay.commands.is_empty());
-    assert!(app.intercept_slash_command("help"));
+    assert!(app.handle_tui_command("help", ""));
     assert!(app.help_overlay.visible);
     assert!(app.show_help);
 }
@@ -1174,15 +1174,15 @@ fn test_help_slash_command_toggles() {
     // opens, second call closes.
     let mut app = make_app();
     // First call opens it.
-    assert!(app.intercept_slash_command("help"));
+    assert!(app.handle_tui_command("help", ""));
     assert!(app.help_overlay.visible);
     assert!(app.show_help);
     // Second call closes it (toggle, not idempotent-open).
-    assert!(app.intercept_slash_command("help"));
+    assert!(app.handle_tui_command("help", ""));
     assert!(!app.help_overlay.visible);
     assert!(!app.show_help);
     // Third call opens it again.
-    assert!(app.intercept_slash_command("help"));
+    assert!(app.handle_tui_command("help", ""));
     assert!(app.help_overlay.visible);
     assert!(app.show_help);
 }
@@ -1578,7 +1578,6 @@ fn test_bash_prefix_allowlist_after_p_key() {
     let mut app = make_app();
     // Set up a bash permission dialog with a suggested prefix.
     let pr = PermissionRequest::bash(
-        "tu-1".to_string(),
         "Bash".to_string(),
         "This will execute a shell command.".to_string(),
         "git status".to_string(),
@@ -1615,7 +1614,6 @@ fn test_bash_prefix_allowlist_via_enter_on_p_option() {
 
     let mut app = make_app();
     let mut pr = PermissionRequest::bash(
-        "tu-2".to_string(),
         "Bash".to_string(),
         "This will execute a shell command.".to_string(),
         "cargo build".to_string(),
@@ -1645,7 +1643,6 @@ fn test_bash_prefix_allowlist_non_prefix_option_does_not_add() {
 
     let mut app = make_app();
     let pr = PermissionRequest::bash(
-        "tu-3".to_string(),
         "Bash".to_string(),
         "This will execute a shell command.".to_string(),
         "npm install".to_string(),
@@ -1668,15 +1665,144 @@ fn test_bash_prefix_allowlist_non_prefix_option_does_not_add() {
 
 // ---- iter-20: permission dialog response routing ----------------------
 
+/// A shell-tool request as the core sends it, with the response channel the
+/// dialog answers on.
+fn shell_request(
+    command: &str,
+) -> (
+    operant_core::agent::ToolPermissionRequest,
+    tokio::sync::oneshot::Receiver<operant_core::agent::ToolPermissionResponse>,
+) {
+    let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+    let request = operant_core::agent::ToolPermissionRequest {
+        tool_name: "bash".to_string(),
+        tool_id: "tu-shell".to_string(),
+        description: "This will execute a shell command.".to_string(),
+        danger_explanation: String::new(),
+        input_preview: Some(command.to_string()),
+        seat_escalation: None,
+        unattended: false,
+        response_tx,
+    };
+    (request, response_rx)
+}
+
+/// Push one request through the permission drain, as the run loop does.
+fn drain_one_permission_request(
+    app: &mut App,
+    request: operant_core::agent::ToolPermissionRequest,
+) {
+    let (tx, rx) = tokio::sync::mpsc::channel(1);
+    tx.try_send(request)
+        .expect("the channel has room for one request");
+    app.permission_rx = Some(rx);
+    app.drain_permission_requests();
+}
+
+#[test]
+fn a_plain_shell_request_opens_a_bash_dialog_that_offers_its_prefix() {
+    // The prefix option had no producer: every shell request got the generic
+    // dialog, so the allowlist could only be fed by hand.
+    use crate::tui::dialogs::PermissionDialogKind;
+    let mut app = make_app();
+    let (request, _response) = shell_request("git status --short");
+    drain_one_permission_request(&mut app, request);
+    let pr = app.permission_request.as_ref().expect("the dialog opens");
+    assert_eq!(
+        pr.kind,
+        PermissionDialogKind::Bash {
+            command: "git status --short".to_string(),
+            suggested_prefix: Some("git status".to_string()),
+        }
+    );
+    assert!(
+        pr.options.iter().any(|o| o.key == 'P'),
+        "a plain command offers the prefix option"
+    );
+}
+
+#[test]
+fn a_shell_request_with_an_injection_tail_offers_no_prefix() {
+    // `echo done` is not flagged by the danger classifier, so only the
+    // metacharacter guard can refuse this chain. `rm -rf` is the dangerous case.
+    use crate::tui::dialogs::PermissionDialogKind;
+    for command in ["git status; echo done", "git status; rm -rf ~"] {
+        let mut app = make_app();
+        let (request, _response) = shell_request(command);
+        drain_one_permission_request(&mut app, request);
+        let pr = app.permission_request.as_ref().expect("the dialog opens");
+        assert!(
+            matches!(
+                &pr.kind,
+                PermissionDialogKind::Bash {
+                    suggested_prefix: None,
+                    ..
+                }
+            ),
+            "{command}: a chained command offers no prefix"
+        );
+        assert!(
+            pr.options.iter().all(|o| o.key != 'P'),
+            "{command}: no prefix option"
+        );
+    }
+}
+
+#[test]
+fn a_stored_prefix_approves_a_plain_continuation_and_nothing_chained() {
+    let mut app = make_app();
+    app.bash_prefix_allowlist.insert("git status".to_string());
+
+    let (request, mut response) = shell_request("git status --short");
+    drain_one_permission_request(&mut app, request);
+    assert!(
+        app.permission_request.is_none(),
+        "a stored prefix approves without a dialog"
+    );
+    assert_eq!(
+        response.try_recv().expect("the request is answered"),
+        operant_core::agent::ToolPermissionResponse::AllowSession
+    );
+
+    let (request, _response) = shell_request("git status; echo done");
+    drain_one_permission_request(&mut app, request);
+    assert!(
+        app.permission_request.is_some(),
+        "a chained command falls through to the dialog"
+    );
+}
+
+#[test]
+fn choosing_the_prefix_option_stores_the_two_token_prefix() {
+    use crate::tui::dialogs::PermissionRequest;
+    let mut app = make_app();
+    app.permission_request = Some(PermissionRequest::bash(
+        "Bash".to_string(),
+        "This will execute a shell command.".to_string(),
+        "git status --short".to_string(),
+        Some("git status".to_string()),
+    ));
+    let (tx, _rx) = tokio::sync::oneshot::channel();
+    app.pending_permission_response_tx = Some(tx);
+
+    app.handle_permission_key(press_key(KeyCode::Char('P'), KeyModifiers::NONE));
+
+    assert!(
+        app.bash_prefix_allowlist.contains("git status"),
+        "the prefix option stores the first two tokens, not the first"
+    );
+    assert!(!app.bash_prefix_allowlist.contains("git"));
+}
+
 #[test]
 fn test_permission_dialog_y_sends_allow_once() {
     use crate::tui::dialogs::PermissionRequest;
 
     let mut app = make_app();
-    let pr = PermissionRequest::standard(
-        "tu-1".to_string(),
+    let pr = PermissionRequest::from_reason(
         "Bash".to_string(),
         "This will execute a shell command.".to_string(),
+        None,
     );
     app.permission_request = Some(pr);
 
@@ -1700,10 +1826,10 @@ fn test_permission_dialog_uppercase_y_sends_allow_session() {
     use crate::tui::dialogs::PermissionRequest;
 
     let mut app = make_app();
-    let pr = PermissionRequest::standard(
-        "tu-2".to_string(),
+    let pr = PermissionRequest::from_reason(
         "Bash".to_string(),
         "This will execute a shell command.".to_string(),
+        None,
     );
     app.permission_request = Some(pr);
 
@@ -1727,10 +1853,10 @@ fn test_permission_dialog_p_sends_allow_always() {
     use crate::tui::dialogs::PermissionRequest;
 
     let mut app = make_app();
-    let pr = PermissionRequest::standard(
-        "tu-p".to_string(),
+    let pr = PermissionRequest::from_reason(
         "Bash".to_string(),
         "This will execute a shell command.".to_string(),
+        None,
     );
     app.permission_request = Some(pr);
 
@@ -1755,10 +1881,10 @@ fn test_permission_dialog_n_sends_deny() {
     use crate::tui::dialogs::PermissionRequest;
 
     let mut app = make_app();
-    let pr = PermissionRequest::standard(
-        "tu-3".to_string(),
+    let pr = PermissionRequest::from_reason(
         "Bash".to_string(),
         "This will execute a shell command.".to_string(),
+        None,
     );
     app.permission_request = Some(pr);
 
@@ -1778,10 +1904,10 @@ fn test_permission_dialog_esc_sends_deny() {
     use crate::tui::dialogs::PermissionRequest;
 
     let mut app = make_app();
-    let pr = PermissionRequest::standard(
-        "tu-4".to_string(),
+    let pr = PermissionRequest::from_reason(
         "Bash".to_string(),
         "This will execute a shell command.".to_string(),
+        None,
     );
     app.permission_request = Some(pr);
 
@@ -1801,10 +1927,10 @@ fn test_permission_dialog_enter_sends_selected_option_response() {
     use crate::tui::dialogs::PermissionRequest;
 
     let mut app = make_app();
-    let mut pr = PermissionRequest::standard(
-        "tu-5".to_string(),
+    let mut pr = PermissionRequest::from_reason(
         "Bash".to_string(),
         "This will execute a shell command.".to_string(),
+        None,
     );
     // Move selection down to the deny option (index 3).
     pr.selected_option = 3;
@@ -1829,10 +1955,10 @@ fn test_permission_dialog_no_tx_does_not_panic() {
     // (e.g. directly constructed in tests). resolve_permission_dialog
     // should silently no-op the send, not panic.
     let mut app = make_app();
-    let pr = PermissionRequest::standard(
-        "tu-6".to_string(),
+    let pr = PermissionRequest::from_reason(
         "Bash".to_string(),
         "This will execute a shell command.".to_string(),
+        None,
     );
     app.permission_request = Some(pr);
     // pending_permission_response_tx is None by default.
@@ -2112,6 +2238,25 @@ fn an_empty_done_turn_surfaces_a_corrupted_stream_notice() {
 }
 
 #[test]
+fn a_submitted_turn_records_its_metadata_and_starts_the_latency_clock() {
+    // The user-turn snapshot was never called, so the latency clock started at
+    // the first agent event and the turn had no metadata. Submit must set both.
+    let mut app = make_app();
+    assert!(app.turn_metadata.is_empty());
+    app.begin_turn();
+    assert_eq!(
+        app.turn_metadata.len(),
+        1,
+        "one metadata entry per submitted turn"
+    );
+    assert!(
+        app.turn_start.is_some(),
+        "latency is timed from submit, not the first event"
+    );
+    assert!(app.last_turn_elapsed.is_none());
+}
+
+#[test]
 fn footer_metrics_should_reset_each_turn() {
     let mut app = make_app();
     app.turn_started_at = Some(std::time::Instant::now() - std::time::Duration::from_millis(2_500));
@@ -2244,25 +2389,13 @@ fn test_stubs_eliminated_no_mcp_manager_field() {
     // system enforces the removal.
 }
 
-#[test]
-fn test_stubs_eliminated_no_file_history_field() {
-    // Phase 3b: App.file_history + current_turn fields must be gone.
-    // Verified by compilation — if they existed, referencing them would
-    // be needed. Their absence is the test.
-    let app = make_app();
-    assert!(
-        app.diff_viewer.turn_files.is_empty(),
-        "no turn-files without stub"
-    );
-}
-
 #[tokio::test(flavor = "multi_thread")]
 async fn test_feedback_survey_removed() {
     // Phase 4: /survey command must not be intercepted (feedback_survey deleted).
     // intercept_slash_command returns true if the command is known+intercepted.
     // /survey was removed from the command table, so it returns false.
     let mut app = make_app();
-    let result = app.intercept_slash_command("survey");
+    let result = app.handle_tui_command("survey", "");
     assert!(
         !result,
         "/survey should not be intercepted after feedback_survey deletion"
@@ -2614,12 +2747,12 @@ fn test_skill_slash_command_injects_pending_message() {
     app.config.skills.root_dir = tmp.clone();
 
     // Missing skill: handled with a status message, no pending message.
-    assert!(app.intercept_slash_command_with_args("skill", "nope-missing"));
+    assert!(app.handle_tui_command("skill", "nope-missing"));
     assert!(app.pending_user_message.is_none());
     assert!(app.status_message.is_some());
 
     // Existing skill: handled, expansion staged for the run loop.
-    assert!(app.intercept_slash_command_with_args("skill", "demo-skill"));
+    assert!(app.handle_tui_command("skill", "demo-skill"));
     let staged = app.pending_user_message.take().expect("expansion staged");
     assert!(
         staged.contains("demo-skill"),
@@ -2632,7 +2765,7 @@ fn test_skill_slash_command_injects_pending_message() {
 
     // Bare /skill opens the overlay (existing behavior preserved).
     assert!(!app.skills_view.visible);
-    assert!(app.intercept_slash_command("skill"));
+    assert!(app.handle_tui_command("skill", ""));
     assert!(app.skills_view.visible);
 
     let _ = std::fs::remove_dir_all(&tmp);
@@ -2645,7 +2778,7 @@ fn test_bundle_slash_command_handled_without_registry_fallback() {
     // CommandRegistry and print a misleading "not yet wired" message
     // (iter-320).
     let mut app = make_app();
-    assert!(app.intercept_slash_command("bundle"));
+    assert!(app.handle_tui_command("bundle", ""));
     assert!(app.pending_user_message.is_none());
 }
 
@@ -3248,7 +3381,7 @@ fn keys_command_should_report_registry_bindings() {
     let mut app = make_app();
     let before = app.system_annotations.len();
 
-    assert!(app.intercept_slash_command("keys"));
+    assert!(app.handle_tui_command("keys", ""));
     // (2026-10-14 batch, plan 10) /keys opens the overlay at the top —
     // never dumps the ~170-line report into the transcript.
     assert!(
@@ -3367,7 +3500,7 @@ fn hotkey_usage_should_distinguish_used_from_never_used() {
         "a bound chord is counted exactly once per accepted press"
     );
 
-    assert!(app.intercept_slash_command("hotkeys"));
+    assert!(app.handle_tui_command("hotkeys", ""));
     // (2026-10-14 batch, plan 10) /hotkeys opens the Hotkeys overlay — the
     // used/never-used split comes from the report builder.
     assert!(
@@ -5392,7 +5525,6 @@ mod approval_gate_tests {
             cost_usd: 0.0,
         }]);
         app.permission_request = Some(PermissionRequest::bash(
-            "tu-9".to_string(),
             "Bash".to_string(),
             "run a command".to_string(),
             "ls".to_string(),

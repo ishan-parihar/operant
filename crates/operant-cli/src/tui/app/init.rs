@@ -210,7 +210,6 @@ impl App {
             usage_overlay: crate::tui::usage_overlay::UsageOverlayState::new(),
             background_tasks: crate::tui::background_tasks::BackgroundTaskRegistry::new(),
             pinned_images: crate::tui::pinned_images::PinnedImageRegistry::new(),
-            mcp_approval: McpApprovalDialogState::new(),
 
             bypass_permissions_dialog:
                 crate::tui::bypass_permissions_dialog::BypassPermissionsDialogState::new(),

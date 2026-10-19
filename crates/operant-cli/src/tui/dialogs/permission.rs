@@ -38,10 +38,6 @@ pub enum PermissionDialogKind {
     },
     /// PowerShell command execution — rendered like Bash without prefix rules.
     PowerShell { command: String },
-    /// File read — three options: once / session / deny.
-    FileRead { path: String },
-    /// File write — four options: once / session / project / deny.
-    FileWrite { path: String },
 }
 
 // ---------------------------------------------------------------------------
@@ -62,7 +58,6 @@ pub struct PermissionOption {
 /// explanation, and a stable set of TS-compatible options.
 #[derive(Debug, Clone)]
 pub struct PermissionRequest {
-    pub tool_use_id: String,
     pub tool_name: String,
     /// Short summary line shown when present.
     pub description: String,
@@ -77,40 +72,16 @@ pub struct PermissionRequest {
 }
 
 impl PermissionRequest {
-    /// Create a standard four-option dialog matching the TS dialog options:
-    ///   `y` — Yes, allow once
-    ///   `Y` — Yes, allow this session
-    ///   `p` — Yes, always allow (persistent)
-    ///   `n` — No, deny
-    pub fn standard(tool_use_id: String, tool_name: String, description: String) -> Self {
-        Self {
-            tool_use_id,
-            tool_name,
-            description: description.clone(),
-            danger_explanation: String::new(),
-            input_preview: None,
-            kind: PermissionDialogKind::Generic,
-            selected_option: 0,
-            options: Self::default_options(),
-        }
-    }
-
     /// Build with a richer description derived from the full permission reason
     /// text produced by `crate::tui::adapter_types::format_permission_reason`.
     ///
     /// The `reason` string may contain a newline splitting the one-liner from
     /// the danger explanation — this constructor splits on the first `\n` and
     /// places each part in the right field.
-    pub fn from_reason(
-        tool_use_id: String,
-        tool_name: String,
-        reason: String,
-        input_preview: Option<String>,
-    ) -> Self {
+    pub fn from_reason(tool_name: String, reason: String, input_preview: Option<String>) -> Self {
         let (description, danger_explanation) = split_reason(reason);
 
         Self {
-            tool_use_id,
             tool_name,
             description,
             danger_explanation,
@@ -124,7 +95,6 @@ impl PermissionRequest {
     /// Build a Bash-specific dialog, computing the options set based on whether
     /// a `suggested_prefix` is available (5 options) or not (4 options).
     pub fn bash(
-        tool_use_id: String,
         tool_name: String,
         reason: String,
         command: String,
@@ -137,7 +107,6 @@ impl PermissionRequest {
         };
 
         Self {
-            tool_use_id,
             tool_name,
             description: String::new(),
             danger_explanation: command_reason_body(reason, &command),
@@ -148,14 +117,8 @@ impl PermissionRequest {
         }
     }
 
-    pub fn powershell(
-        tool_use_id: String,
-        tool_name: String,
-        reason: String,
-        command: String,
-    ) -> Self {
+    pub fn powershell(tool_name: String, reason: String, command: String) -> Self {
         Self {
-            tool_use_id,
             tool_name,
             description: String::new(),
             danger_explanation: command_reason_body(reason, &command),
@@ -163,57 +126,6 @@ impl PermissionRequest {
             kind: PermissionDialogKind::PowerShell { command },
             selected_option: 0,
             options: Self::default_options(),
-        }
-    }
-
-    /// Build a FileRead-specific dialog (3 options: once / session / deny).
-    pub fn file_read(tool_use_id: String, tool_name: String, reason: String, path: String) -> Self {
-        let (description, danger_explanation) = if let Some(nl) = reason.find('\n') {
-            (reason[..nl].to_string(), reason[nl + 1..].to_string())
-        } else {
-            (reason, String::new())
-        };
-
-        let preview = path.clone();
-        let kind = PermissionDialogKind::FileRead { path };
-
-        Self {
-            tool_use_id,
-            tool_name,
-            description,
-            danger_explanation,
-            input_preview: Some(preview),
-            kind,
-            selected_option: 0,
-            options: Self::file_read_options(),
-        }
-    }
-
-    /// Build a FileWrite-specific dialog (4 options: once / session / project / deny).
-    pub fn file_write(
-        tool_use_id: String,
-        tool_name: String,
-        reason: String,
-        path: String,
-    ) -> Self {
-        let (description, danger_explanation) = if let Some(nl) = reason.find('\n') {
-            (reason[..nl].to_string(), reason[nl + 1..].to_string())
-        } else {
-            (reason, String::new())
-        };
-
-        let preview = path.clone();
-        let kind = PermissionDialogKind::FileWrite { path };
-
-        Self {
-            tool_use_id,
-            tool_name,
-            description,
-            danger_explanation,
-            input_preview: Some(preview),
-            kind,
-            selected_option: 0,
-            options: Self::file_write_options(),
         }
     }
 
@@ -260,46 +172,6 @@ impl PermissionRequest {
             opts.push(deny);
         }
         opts
-    }
-
-    /// FileRead options (3): once / session / deny.
-    pub fn file_read_options() -> Vec<PermissionOption> {
-        vec![
-            PermissionOption {
-                label: "Yes, allow once".to_string(),
-                key: 'y',
-            },
-            PermissionOption {
-                label: "Yes, allow this session".to_string(),
-                key: 'Y',
-            },
-            PermissionOption {
-                label: "No, deny".to_string(),
-                key: 'n',
-            },
-        ]
-    }
-
-    /// FileWrite options (4): once / session / project / deny.
-    pub fn file_write_options() -> Vec<PermissionOption> {
-        vec![
-            PermissionOption {
-                label: "Yes, allow once".to_string(),
-                key: 'y',
-            },
-            PermissionOption {
-                label: "Yes, allow this session".to_string(),
-                key: 'Y',
-            },
-            PermissionOption {
-                label: "Yes, always allow for this project".to_string(),
-                key: 'p',
-            },
-            PermissionOption {
-                label: "No, deny".to_string(),
-                key: 'n',
-            },
-        ]
     }
 }
 
@@ -437,8 +309,6 @@ pub(crate) fn word_wrap(text: &str, width: usize) -> Vec<String> {
 /// For `Bash` with a `suggested_prefix`, a 5th option is shown:
 ///   │  [g] Allow commands matching git*              │
 ///
-/// For `FileRead`, only 3 options (once / session / deny).
-/// For `FileWrite`, 4 options (once / session / project / deny).
 pub fn render_permission_dialog(frame: &mut Frame, pr: &PermissionRequest, area: Rect) {
     // The wrap width depends on the *clamped* dialog width, which only
     // `modal_layout` knows, so ask it once for the geometry up front; the
@@ -630,8 +500,6 @@ pub fn render_permission_dialog(frame: &mut Frame, pr: &PermissionRequest, area:
         PermissionDialogKind::Bash { .. } | PermissionDialogKind::PowerShell { .. } => {
             (theme::warning_color(), "Permission Required")
         }
-        PermissionDialogKind::FileRead { .. } => (theme_colors::accent(), "File Read Permission"),
-        PermissionDialogKind::FileWrite { .. } => (theme::warning_color(), "File Write Permission"),
         PermissionDialogKind::Generic => (theme::warning_color(), "Permission Required"),
     };
 

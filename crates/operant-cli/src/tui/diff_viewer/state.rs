@@ -8,10 +8,8 @@ impl DiffViewerState {
     pub fn new() -> Self {
         Self {
             files: Vec::new(),
-            turn_files: Vec::new(),
             selected_file: 0,
             active_pane: DiffPane::FileList,
-            diff_type: DiffType::GitDiff,
             detail_scroll: 0,
             render_cache: HashMap::new(),
             loading: false,
@@ -31,12 +29,8 @@ impl DiffViewerState {
 
     /// Open the dialog and load diffs from the project root.
     pub fn open(&mut self, project_root: &std::path::Path) {
-        self.open_for_type(DiffType::GitDiff, project_root);
-    }
-
-    /// Open directly in turn-diff mode.
-    pub fn open_turn(&mut self, project_root: &std::path::Path) {
-        self.open_for_type(DiffType::TurnDiff, project_root);
+        self.reload_files(project_root);
+        self.visible = true;
     }
 
     pub fn close(&mut self) {
@@ -72,14 +66,6 @@ impl DiffViewerState {
         };
     }
 
-    pub fn toggle_diff_type(&mut self, project_root: &std::path::Path) {
-        self.diff_type = match self.diff_type {
-            DiffType::GitDiff => DiffType::TurnDiff,
-            DiffType::TurnDiff => DiffType::GitDiff,
-        };
-        self.reload_files(project_root);
-    }
-
     pub fn scroll_detail_up(&mut self) {
         self.detail_scroll = self.detail_scroll.saturating_sub(3);
     }
@@ -88,49 +74,22 @@ impl DiffViewerState {
         self.detail_scroll = self.detail_scroll.saturating_add(3);
     }
 
-    pub fn set_turn_diff(&mut self, files: Vec<FileDiffStats>) {
-        self.turn_files = files;
-        if self.diff_type == DiffType::TurnDiff {
-            self.files = self.turn_files.clone();
-            self.selected_file = 0;
-            self.detail_scroll = 0;
-            self.render_cache.clear();
-            self.collapsed = vec![false; self.files.len()];
-        }
-    }
-
-    fn open_for_type(&mut self, diff_type: DiffType, project_root: &std::path::Path) {
-        self.diff_type = diff_type;
-        self.reload_files(project_root);
-        self.visible = true;
-    }
-
     fn reload_files(&mut self, project_root: &std::path::Path) {
         self.selected_file = 0;
         self.detail_scroll = 0;
         self.render_cache.clear();
-        match self.diff_type {
-            DiffType::GitDiff => {
-                // TUI-11: `git diff` runs on a worker thread, so a large repository
-                // does not stall the event loop. A new load replaces the receiver,
-                // so the result of an older load is dropped when it arrives.
-                self.files.clear();
-                self.collapsed.clear();
-                self.loading = true;
-                let (tx, rx) = std::sync::mpsc::channel();
-                self.git_rx = Some(std::sync::Arc::new(std::sync::Mutex::new(rx)));
-                let root = project_root.to_path_buf();
-                std::thread::spawn(move || {
-                    let _ = tx.send(load_git_diff(&root));
-                });
-            }
-            DiffType::TurnDiff => {
-                self.git_rx = None;
-                self.loading = false;
-                self.files = self.turn_files.clone();
-                self.collapsed = vec![false; self.files.len()];
-            }
-        }
+        // TUI-11: `git diff` runs on a worker thread, so a large repository
+        // does not stall the event loop. A new load replaces the receiver,
+        // so the result of an older load is dropped when it arrives.
+        self.files.clear();
+        self.collapsed.clear();
+        self.loading = true;
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.git_rx = Some(std::sync::Arc::new(std::sync::Mutex::new(rx)));
+        let root = project_root.to_path_buf();
+        std::thread::spawn(move || {
+            let _ = tx.send(load_git_diff(&root));
+        });
     }
 
     /// Takes the git diff once the worker has sent it. Returns true when the list changed.

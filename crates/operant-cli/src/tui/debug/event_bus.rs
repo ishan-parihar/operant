@@ -203,10 +203,24 @@ impl TuiEventBus {
     }
 
     /// Total events currently in the ring.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "AD-034: kept with is_empty (clippy len_without_is_empty); only tests read it"
+        )
+    )]
     pub fn len(&self) -> usize {
         self.ring.lock().map(|g| g.len()).unwrap_or(0)
     }
 
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "AD-034: kept with len (clippy len_without_is_empty); only tests read it"
+        )
+    )]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }

@@ -22,6 +22,14 @@
 //! detection (an OSC 11 query, an environment override, or the user's config)
 //! and defaults to dark, which keeps every existing code path byte-identical.
 
+#![cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "AD-034: vendored style API kept whole; unused entry points stay with the module"
+    )
+)]
+
 use ratatui::buffer::Buffer;
 use ratatui::style::{Color, Modifier};
 use std::sync::atomic::{AtomicU8, Ordering};

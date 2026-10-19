@@ -353,15 +353,6 @@ fn png_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
     Some((w, h))
 }
 
-/// Read a file and base64-encode it for the Anthropic API.
-pub fn encode_image_base64(path: &PathBuf) -> Option<String> {
-    let data = std::fs::read(path).ok()?;
-    Some(base64::Engine::encode(
-        &base64::engine::general_purpose::STANDARD,
-        &data,
-    ))
-}
-
 // ---------------------------------------------------------------------------
 // Inline rendering
 // ---------------------------------------------------------------------------
@@ -507,23 +498,6 @@ mod tests {
         std::fs::write(&tmp, &data).unwrap();
         let dims = png_dimensions(&tmp);
         assert_eq!(dims, Some((100, 200)));
-        let _ = std::fs::remove_file(&tmp);
-    }
-
-    #[test]
-    fn encode_image_base64_missing_file_returns_none() {
-        let p = PathBuf::from("/nonexistent/file.png");
-        assert!(encode_image_base64(&p).is_none());
-    }
-
-    #[test]
-    fn encode_image_base64_roundtrip() {
-        let tmp = make_temp_png().unwrap();
-        std::fs::write(&tmp, b"hello world").unwrap();
-        let b64 = encode_image_base64(&tmp).unwrap();
-        let decoded =
-            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &b64).unwrap();
-        assert_eq!(decoded, b"hello world");
         let _ = std::fs::remove_file(&tmp);
     }
 

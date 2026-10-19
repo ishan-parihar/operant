@@ -95,7 +95,7 @@ impl SessionBrowserState {
 
     /// Switch to rename mode, pre-populating the input with the current title.
     pub fn start_rename(&mut self) {
-        if let Some(session) = self.sessions.get(self.selected_idx) {
+        if let Some(session) = self.selected_session() {
             self.rename_input = session.title.clone();
             self.mode = SessionBrowserMode::Rename;
         }
@@ -125,7 +125,7 @@ impl SessionBrowserState {
         if new_name.is_empty() {
             return None;
         }
-        let session_id = self.sessions.get(self.selected_idx)?.id.clone();
+        let session_id = self.selected_session()?.id.clone();
         // Apply the rename in the local list immediately for UI consistency.
         if let Some(session) = self.sessions.get_mut(self.selected_idx) {
             session.title = new_name.clone();

@@ -14,16 +14,37 @@
 use ratatui::layout::Margin;
 
 /// No inset.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "AD-034: the token scale is kept whole; layout tests pin its progression"
+    )
+)]
 pub const XXS: u16 = 0;
 /// The border inset, and a modal title's leading space.
 pub const XS: u16 = 1;
 /// A dialog's content gutter.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "AD-034: the token scale is kept whole; layout tests pin its progression"
+    )
+)]
 pub const S: u16 = 2;
 /// A modal's margin from the screen edge.
 pub const M: u16 = 4;
 /// The floor for a modal's width.
 pub const L: u16 = 8;
 /// The ceiling step: room for a short list without scrolling.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "AD-034: the token scale is kept whole; layout tests pin its progression"
+    )
+)]
 pub const XL: u16 = 16;
 
 /// Vertical-only inset. Horizontal stays 0.

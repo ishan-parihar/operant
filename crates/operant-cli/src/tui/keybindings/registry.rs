@@ -44,26 +44,19 @@ impl KeyBindingRegistry {
             .map(|v| v as _)
     }
 
-    /// Find binding for a key event, trying multiple contexts in priority order
-    pub fn find_with_fallback(
-        &self,
-        event: &KeyEvent,
-        contexts: &[BindingContext],
-    ) -> Option<&KeyBinding> {
-        for ctx in contexts {
-            if let Some(binding) = self.find(event, *ctx) {
-                return Some(binding);
-            }
-        }
-        None
-    }
-
     /// Check if a key event matches a binding
     fn matches(&self, binding: &KeyBinding, event: &KeyEvent) -> bool {
         binding.key == event.code && binding.modifiers == event.modifiers
     }
 
     /// Get all bindings for a context (for help display)
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "AD-034: registry tests read every binding; the help report builds its own list"
+        )
+    )]
     pub fn get_bindings(&self, context: BindingContext) -> Vec<&KeyBinding> {
         let mut result = Vec::new();
         if let Some(ctx_bindings) = self.bindings.get(&context) {
@@ -71,27 +64,5 @@ impl KeyBindingRegistry {
         }
         result.extend(&self.global_bindings);
         result
-    }
-
-    /// Remove a binding
-    pub fn remove(
-        &mut self,
-        key: KeyCode,
-        modifiers: KeyModifiers,
-        context: Option<BindingContext>,
-    ) -> bool {
-        if let Some(ctx) = context {
-            if let Some(bindings) = self.bindings.get_mut(&ctx) {
-                let len_before = bindings.len();
-                bindings.retain(|b| b.key != key || b.modifiers != modifiers);
-                return bindings.len() < len_before;
-            }
-        } else {
-            let len_before = self.global_bindings.len();
-            self.global_bindings
-                .retain(|b| b.key != key || b.modifiers != modifiers);
-            return self.global_bindings.len() < len_before;
-        }
-        false
     }
 }

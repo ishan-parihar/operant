@@ -11,12 +11,26 @@ pub enum Role {
 /// view.  These are NOT LLM API types — they are purely display-layer concepts
 /// assembled from `AgentEvent` values in `App::handle_agent_event`.
 #[derive(Debug, Clone)]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "AD-034: adapter wire enum; variants are parsed from adapter JSON, not built here"
+    )
+)]
 pub enum ContentBlock {
     Text {
         text: String,
     },
     Thinking {
         thinking: String,
+        #[cfg_attr(
+            not(test),
+            expect(
+                dead_code,
+                reason = "AD-034: deserialized from the adapter wire format; kept so payloads round-trip"
+            )
+        )]
         signature: String,
     },
     RedactedThinking {
@@ -56,6 +70,13 @@ pub enum ContentBlock {
     },
     SystemAPIError {
         message: String,
+        #[cfg_attr(
+            not(test),
+            expect(
+                dead_code,
+                reason = "AD-034: deserialized from the adapter wire format; kept so payloads round-trip"
+            )
+        )]
         retry_secs: Option<u64>,
     },
     CollapsedReadSearch {
@@ -71,6 +92,10 @@ pub enum ContentBlock {
 }
 
 #[derive(Debug, Clone)]
+#[expect(
+    dead_code,
+    reason = "AD-034: adapter wire enum; variants are parsed from adapter JSON, not built here"
+)]
 pub enum ToolResultContent {
     Text(String),
     Image { data: String, media_type: String },
@@ -90,6 +115,7 @@ pub struct Message {
 }
 
 impl Message {
+    #[cfg_attr(not(test), expect(dead_code, reason = "AD-034: test-only constructor"))]
     pub fn user(text: String) -> Self {
         Self {
             role: Role::User,
@@ -108,6 +134,7 @@ impl Message {
             content: MessageContent::Blocks(blocks),
         }
     }
+    #[cfg_attr(not(test), expect(dead_code, reason = "AD-034: test-only accessor"))]
     pub fn content_blocks(&self) -> Vec<&ContentBlock> {
         match &self.content {
             MessageContent::Blocks(blocks) => blocks.iter().collect(),

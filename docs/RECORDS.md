@@ -1,5 +1,5 @@
-<!-- genome:zone records sha=faeaf8f99f87 -->
-**Decisions** (33)
+<!-- genome:zone records sha=4901c813694f -->
+**Decisions** (34)
 
 | ID | Title | Status | Description |
 |---|---|---|---|
@@ -36,6 +36,7 @@
 | AD-031 | Dead TUI code is removed where it is ours; verbatim ports, the keybinding registry and vendored style modules stay allowlisted | Active | The clippy allowlist's dead-code entries drop from 52 to 47: unused TUI items with no caller are removed, and the verbatim jcode ports, the keybinding registry and the vendored style modules keep thei |
 | AD-032 | RT-18 clears with a zip-9 patch of ndarray-npy, not a TTS-engine rewrite | Active | The three zip advisories are cleared by vendoring ndarray-npy 0.9.1 with zip 9; kokoro-micro was rejected because it still resolves zip 6 |
 | AD-033 | Advisory triage clears four by dependency moves; the YAML crate swap is reverted pending an owner decision | Active | Four advisories are cleared (atty, rustls-native-certs, chacha20, image defaults); serde_yaml stays at 0.9 because its only policy-compliant replacement changes manifest errors |
+| AD-034 | Warnings triage deletes dead TUI paths, wires the two real gaps, and records the rest as expected debt | Active | The production build of operant-cli is warning-free: 35 dead items are deleted, error annotations keep their error role, and every kept dead-code item carries a reason or an open BUGS row |
 <!-- genome:end records -->
 
 <!-- genome:zone idmap sha=a7a72b4c9dd0 -->

@@ -332,7 +332,7 @@ pub struct ModalSpec<'a> {
     /// **Content-derived height**: pass `content_rows + this dialog's own
     /// chrome` and let the clamp bound the result. The six call sites that size
     /// from content (`ask_user_dialog`, `history_search`, `message_selector`,
-    /// `dialog_select`, `memory_file_selector`, `mcp_approval`) should stop
+    /// `dialog_select`, `memory_file_selector`) should stop
     /// calling `.min(area.height.saturating_sub(n))` themselves — that is this
     /// function's job.
     pub height: u16,

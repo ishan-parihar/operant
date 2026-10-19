@@ -67,7 +67,7 @@ use super::{DisplayMessage, ToolCall};
 use crate::tui::adapter_types::types::{
     ContentBlock, Message, MessageContent, Role, ToolResultContent,
 };
-use crate::tui::app::{App, SystemAnnotation, ToolUseBlock};
+use crate::tui::app::{App, SystemAnnotation, SystemMessageStyle, ToolUseBlock};
 
 /// Flatten operant's transcript state into the jcode message model.
 pub fn display_messages(app: &App) -> Vec<DisplayMessage> {
@@ -231,7 +231,10 @@ fn is_reserved(app: &App, block: &ToolUseBlock) -> bool {
 }
 
 fn system_annotation_row(annotation: &SystemAnnotation) -> DisplayMessage {
-    DisplayMessage::system(annotation.text.clone())
+    match annotation.style {
+        SystemMessageStyle::Error => DisplayMessage::error(annotation.text.clone()),
+        _ => DisplayMessage::system(annotation.text.clone()),
+    }
 }
 
 /// (plan 08) Collapse each contiguous run of tool rows into one dim
@@ -832,6 +835,17 @@ mod tests {
         let rows = display_messages(&app);
         let contents: Vec<&str> = rows.iter().map(|r| r.content.as_str()).collect();
         assert_eq!(contents, ["before all", "hi", "mid", "hello"]);
+    }
+
+    #[test]
+    fn error_annotation_keeps_the_error_role() {
+        let mut app = make_app();
+        app.push_system_message("boom".to_string(), SystemMessageStyle::Error);
+        app.push_system_message("note".to_string(), SystemMessageStyle::Info);
+
+        let rows = display_messages(&app);
+        let roles: Vec<&str> = rows.iter().map(|r| r.role.as_str()).collect();
+        assert_eq!(roles, ["error", "system"]);
     }
 
     #[test]

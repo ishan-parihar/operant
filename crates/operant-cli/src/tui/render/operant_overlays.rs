@@ -57,7 +57,7 @@ use crate::tui::bypass_permissions_dialog::render_bypass_permissions_dialog;
 use crate::tui::context_viz::render_context_viz;
 use crate::tui::custom_provider_dialog::render_custom_provider_dialog;
 use crate::tui::dialog_select::render_dialog_select;
-use crate::tui::dialogs::{render_mcp_approval_dialog, render_permission_dialog};
+use crate::tui::dialogs::render_permission_dialog;
 use crate::tui::diff_viewer::render_diff_dialog;
 use crate::tui::export_dialog::render_export_dialog;
 use crate::tui::import_config_dialog::render_import_config_dialog;
@@ -94,6 +94,10 @@ impl Sink {
     /// The column as the guard test spells it, so the assertion reads like the
     /// table does.
     // Read by the paint-order guard test only.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "AD-034: read by the paint-order guard test only")
+    )]
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
             Sink::Frame => "frame",
@@ -134,12 +138,20 @@ type PaintFn = fn(&mut Frame, &App, &mut FrameCtx);
 pub(crate) struct Entry {
     /// The surface's identity. Carried for the guard test and for debugging
     /// output; the paint path never reads it.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "AD-034: read by the paint-order guard test only")
+    )]
     pub name: &'static str,
     /// The real visibility predicate, already in final form.
     pub visible: VisibleFn,
     /// The delegation to the surface's own module.
     pub paint: PaintFn,
     /// Which buffer the delegation reaches.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "AD-034: read by the paint-order guard test only")
+    )]
     pub sink: Sink,
 }
 
@@ -186,7 +198,6 @@ overlay_visible_guards!(
     is_visible_session_branching => session_branching,
     is_visible_export_dialog => export_dialog,
     is_visible_context_viz => context_viz,
-    is_visible_mcp_approval => mcp_approval,
 );
 
 /// The frame, as data: every surface, in paint order.
@@ -366,12 +377,6 @@ const OVERLAYS: &[Entry] = &[
         visible: is_visible_context_viz,
         paint: paint_context_viz,
         sink: Sink::Frame,
-    },
-    Entry {
-        name: "mcp_approval",
-        visible: is_visible_mcp_approval,
-        paint: paint_mcp_approval,
-        sink: Sink::Buffer,
     },
     // --- post-pass, and the topmost surfaces --------------------------------
     // (P4-2: the error_modal and notification_banner entries are gone —
@@ -559,10 +564,6 @@ fn paint_context_viz(frame: &mut Frame, app: &App, ctx: &mut FrameCtx) {
     );
 }
 
-fn paint_mcp_approval(frame: &mut Frame, app: &App, ctx: &mut FrameCtx) {
-    render_mcp_approval_dialog(&app.mcp_approval, ctx.size, frame.buffer_mut());
-}
-
 /// The one row that ends the frame. It paints on top of every row above it,
 /// then `render_app` stops the ladder, runs the substitution pass and returns —
 /// so the banner, the three selection passes, the debug overlay and every
@@ -655,7 +656,6 @@ mod tests {
         ("session_branching", Sink::Buffer),
         ("export_dialog", Sink::Frame),
         ("context_viz", Sink::Frame),
-        ("mcp_approval", Sink::Buffer),
         ("selection_highlight", Sink::Frame),
         ("selection_row_cache", Sink::Frame),
         ("context_menu", Sink::Frame),

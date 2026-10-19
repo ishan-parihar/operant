@@ -25,7 +25,6 @@ pub enum McpViewStatus {
     Connected,
     Connecting,
     Disconnected,
-    Error,
 }
 
 impl McpViewStatus {
@@ -34,7 +33,6 @@ impl McpViewStatus {
             Self::Connected => "connected",
             Self::Connecting => "connecting",
             Self::Disconnected => "disconnected",
-            Self::Error => "error",
         }
     }
     pub fn badge(&self) -> &'static str {
@@ -42,7 +40,6 @@ impl McpViewStatus {
             Self::Connected => "●",
             Self::Connecting => "◌",
             Self::Disconnected => "○",
-            Self::Error => "⚠",
         }
     }
     pub fn color(&self) -> Color {
@@ -50,7 +47,6 @@ impl McpViewStatus {
             Self::Connected => theme_colors::success(),
             Self::Connecting => theme_colors::warning(),
             Self::Disconnected => theme::dim_color(),
-            Self::Error => theme_colors::error(),
         }
     }
 }
@@ -912,7 +908,7 @@ mod tests {
             make_server("fs-server", McpViewStatus::Connected, None),
             make_server(
                 "err-server",
-                McpViewStatus::Error,
+                McpViewStatus::Disconnected,
                 Some("connection refused"),
             ),
         ]);
@@ -936,7 +932,7 @@ mod tests {
         let mut state = McpViewState::new();
         state.open(vec![make_server(
             "broken",
-            McpViewStatus::Error,
+            McpViewStatus::Disconnected,
             Some("timeout: no response"),
         )]);
         state.error_expanded = true;

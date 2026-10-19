@@ -9,9 +9,15 @@ use ratatui::style::Color;
 
 fn make_state_with_models(entries: &[(&str, u64, u64, f64)]) -> StatsDialogState {
     let mut state = StatsDialogState::new();
-    for (model, input, output, cost) in entries {
-        state.add_model_usage(model, *input, *output, *cost);
-    }
+    state.model_breakdown = entries
+        .iter()
+        .map(|(model, input, output, cost)| ModelBreakdown {
+            model_id: model.to_string(),
+            input_tokens: *input,
+            output_tokens: *output,
+            cost_usd: *cost,
+        })
+        .collect();
     state
 }
 
@@ -23,52 +29,7 @@ fn make_agg_with_dates(dates: &[&str]) -> AggregatedStats {
     agg
 }
 
-// ---- model breakdown: add_model_usage ----------------------------------
-
-#[test]
-fn test_add_model_usage_new_model() {
-    let mut state = StatsDialogState::new();
-    state.add_model_usage("claude-3-opus", 1000, 500, 0.05);
-
-    assert_eq!(state.model_breakdown.len(), 1);
-    let e = &state.model_breakdown[0];
-    assert_eq!(e.model_id, "claude-3-opus");
-    assert_eq!(e.input_tokens, 1000);
-    assert_eq!(e.output_tokens, 500);
-    assert!((e.cost_usd - 0.05).abs() < 1e-9);
-}
-
-#[test]
-fn test_add_model_usage_accumulates_same_model() {
-    let mut state = StatsDialogState::new();
-    state.add_model_usage("claude-3-opus", 1000, 500, 0.05);
-    state.add_model_usage("claude-3-opus", 2000, 800, 0.10);
-
-    assert_eq!(state.model_breakdown.len(), 1);
-    let e = &state.model_breakdown[0];
-    assert_eq!(e.input_tokens, 3000);
-    assert_eq!(e.output_tokens, 1300);
-    assert!((e.cost_usd - 0.15).abs() < 1e-9);
-}
-
-#[test]
-fn test_add_model_usage_multiple_models() {
-    let state = make_state_with_models(&[
-        ("claude-3-opus", 1000, 500, 0.05),
-        ("claude-3-haiku", 500, 200, 0.01),
-        ("claude-3-sonnet", 800, 400, 0.03),
-    ]);
-
-    assert_eq!(state.model_breakdown.len(), 3);
-    let ids: Vec<&str> = state
-        .model_breakdown
-        .iter()
-        .map(|e| e.model_id.as_str())
-        .collect();
-    assert!(ids.contains(&"claude-3-opus"));
-    assert!(ids.contains(&"claude-3-haiku"));
-    assert!(ids.contains(&"claude-3-sonnet"));
-}
+// ---- model breakdown totals --------------------------------------------
 
 #[test]
 fn test_model_breakdown_totals() {

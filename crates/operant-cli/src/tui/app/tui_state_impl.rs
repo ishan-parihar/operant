@@ -378,7 +378,6 @@ impl TuiState for App {
         match self.display_turn_state() {
             TurnState::Idle => ProcessingStatus::Idle,
             TurnState::Sending => ProcessingStatus::Sending,
-            TurnState::Connecting => ProcessingStatus::Sending,
             TurnState::Thinking => {
                 ProcessingStatus::Thinking(self.turn_started_at.unwrap_or_else(Instant::now))
             }

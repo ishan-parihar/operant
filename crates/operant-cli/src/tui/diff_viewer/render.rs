@@ -19,24 +19,16 @@ pub fn render_diff_dialog(state: &mut DiffViewerState, area: Rect, buf: &mut Buf
     }
 
     let layout = begin_modal_buf(buf, area, 98, 32, 2, 1);
-    let title = match state.diff_type {
-        DiffType::GitDiff => "Review changes",
-        DiffType::TurnDiff => "Changes from this turn",
-    };
-    render_modal_title_buf(buf, layout.header_area, title, "esc");
+    render_modal_title_buf(buf, layout.header_area, "Review changes", "esc");
     let total_added: u32 = state.files.iter().map(|file| file.added).sum();
     let total_removed: u32 = state.files.iter().map(|file| file.removed).sum();
     if let Some(subtitle_area) = modal_header_line_area(layout.header_area, 1) {
         Paragraph::new(Line::from(vec![Span::styled(
             format!(
-                " {} files  ·  +{} -{}  ·  {} mode",
+                " {} files  ·  +{} -{}",
                 state.files.len(),
                 total_added,
                 total_removed,
-                match state.diff_type {
-                    DiffType::GitDiff => "git diff",
-                    DiffType::TurnDiff => "turn diff",
-                }
             ),
             Style::default().fg(theme_colors::muted()),
         )]))
@@ -45,19 +37,14 @@ pub fn render_diff_dialog(state: &mut DiffViewerState, area: Rect, buf: &mut Buf
 
     if state.files.is_empty() {
         // "nothing to compare" — distinct from a file that is present but has
-        // no textual delta (see `render_diff_detail`). Each mode gets its own
-        // wording and its own next action, because suggesting /review while a
-        // turn diff is open is what makes the panel look broken.
-        let (empty, hint) = match state.diff_type {
-            _ if state.loading => (" Reading the git diff…", ""),
-            DiffType::GitDiff => (
+        // no textual delta (see `render_diff_detail`).
+        let (empty, hint) = if state.loading {
+            (" Reading the git diff…", "")
+        } else {
+            (
                 " No git changes available.",
                 " Nothing differs from HEAD — stage or commit a change, then reopen /review.",
-            ),
-            DiffType::TurnDiff => (
-                " No changes were captured for this turn.",
-                " Make an edit this turn, then reopen /changes to see the turn diff.",
-            ),
+            )
         };
         Paragraph::new(vec![
             Line::from(""),

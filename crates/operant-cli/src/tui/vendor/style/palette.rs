@@ -28,6 +28,14 @@
 //! this module deliberately does not read the file itself, so the config schema
 //! stays owned by the CLI's config layer.
 
+#![cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "AD-034: vendored style API kept whole; unused entry points stay with the module"
+    )
+)]
+
 use ratatui::style::Color;
 use std::sync::RwLock;
 use std::sync::atomic::{AtomicBool, Ordering};

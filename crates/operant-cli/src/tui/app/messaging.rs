@@ -63,6 +63,13 @@ impl App {
     }
     /// Handle slash commands that should open UI screens rather than execute
     /// Add a message directly (e.g. from a non-streaming source).
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "AD-034: test seeding helper; production appends through its own paths"
+        )
+    )]
     pub fn add_message(&mut self, role: Role, text: String) {
         let msg = match role {
             Role::User => Message::user(text),

@@ -60,27 +60,6 @@ impl StatsDialogState {
             _ => 7,
         };
     }
-
-    /// Record usage for a model, accumulating into `model_breakdown`.
-    /// `cost` is in USD (not cents).
-    pub fn add_model_usage(&mut self, model_id: &str, input: u64, output: u64, cost: f64) {
-        if let Some(entry) = self
-            .model_breakdown
-            .iter_mut()
-            .find(|e| e.model_id == model_id)
-        {
-            entry.input_tokens += input;
-            entry.output_tokens += output;
-            entry.cost_usd += cost;
-        } else {
-            self.model_breakdown.push(ModelBreakdown {
-                model_id: model_id.to_string(),
-                input_tokens: input,
-                output_tokens: output,
-                cost_usd: cost,
-            });
-        }
-    }
 }
 
 impl Default for StatsDialogState {

@@ -68,15 +68,6 @@ pub struct FileDiffStats {
     pub hunks: Vec<DiffHunk>,
 }
 
-/// Which diff type to show.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DiffType {
-    /// `git diff` since last commit.
-    GitDiff,
-    /// Changes made during this conversation turn.
-    TurnDiff,
-}
-
 // ---------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------
@@ -93,14 +84,10 @@ pub enum DiffPane {
 pub struct DiffViewerState {
     /// All files in the diff.
     pub files: Vec<FileDiffStats>,
-    /// Cached turn-specific files, populated externally.
-    pub turn_files: Vec<FileDiffStats>,
     /// Currently selected file index.
     pub selected_file: usize,
     /// Active pane.
     pub active_pane: DiffPane,
-    /// Current diff type.
-    pub diff_type: DiffType,
     /// Scroll offset for the detail pane (in lines).
     pub detail_scroll: u16,
     /// Rendered line cache: (file_index, terminal_width) → lines.

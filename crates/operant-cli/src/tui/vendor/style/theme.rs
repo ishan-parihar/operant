@@ -3,6 +3,14 @@
 // `super::`; the 22 role accessors are otherwise unchanged (they resolve
 // against the same `Role` enum in `super::palette`).
 
+#![cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "AD-034: vendored style API kept whole; unused entry points stay with the module"
+    )
+)]
+
 use super::color;
 use super::color::rgb;
 use ratatui::prelude::*;

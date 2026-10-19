@@ -26,23 +26,18 @@ pub enum KeyAction {
     // Navigation
     MoveCursorLeft,
     MoveCursorRight,
-    MoveCursorHome,
     MoveCursorEnd,
-    MoveCursorWordLeft,
     MoveCursorWordRight,
-    MoveCursorLineStart,
-    MoveCursorLineEnd,
 
     // Editing
-    DeleteCharLeft,
-    DeleteCharRight,
     DeleteWordLeft,
-    DeleteWordRight,
     DeleteLine,
-    DeleteToLineStart,
-    DeleteToLineEnd,
     InsertNewline,
     Undo,
+    #[expect(
+        dead_code,
+        reason = "AD-034: kept so a future redo has a variant to bind; the catalogue guard test pins that no binding uses it"
+    )]
     Redo,
     Paste,
 
@@ -80,7 +75,6 @@ pub enum KeyAction {
     VimDeleteChar,
     VimDeleteLine,
     VimDeleteWord,
-    VimChangeWord,
     VimChangeLine,
     VimYank,
     VimPasteAfter,
@@ -100,7 +94,6 @@ pub enum KeyAction {
     VimSetMark,
     VimGoToMark,
     VimYankRegister,
-    VimPaste,
 
     // Completion
     CompletionNext,
@@ -110,10 +103,8 @@ pub enum KeyAction {
 
     // App-level
     Submit,
-    SubmitAlt,
     Cancel,
     ToggleVimMode,
-    TogglePlanMode,
     ShowHelp,
     ShowCommandPalette,
     ShowContextMenu,

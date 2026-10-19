@@ -3,18 +3,8 @@
 use super::*;
 
 impl App {
-    pub fn intercept_slash_command_with_args(&mut self, cmd: &str, args: &str) -> bool {
-        self.intercept_slash_command_with_args_impl(cmd, args)
-    }
-
     pub fn handle_tui_command(&mut self, cmd: &str, args: &str) -> bool {
         self.intercept_slash_command_with_args_impl(cmd, args)
-    }
-
-    /// Backwards-compatible wrapper that takes no args (treats args as empty).
-    /// Kept so external callers (and the existing `?` shortcut path) still work.
-    pub fn intercept_slash_command(&mut self, cmd: &str) -> bool {
-        self.intercept_slash_command_with_args_impl(cmd, "")
     }
 
     /// A JSON snapshot of assertable App state for the headless simulator's
@@ -27,7 +17,7 @@ impl App {
     /// `effort_picker` from `any_modal_open` in iter-227). Each entry is
     /// `(snapshot_key, is_visible)`. `permission_request` is tracked via
     /// `.is_some()` rather than a `.visible` flag.
-    pub(crate) fn overlay_flags(&self) -> [(&'static str, bool); 31] {
+    pub(crate) fn overlay_flags(&self) -> [(&'static str, bool); 30] {
         [
             ("help_overlay", self.help_overlay.visible),
             (
@@ -53,7 +43,6 @@ impl App {
             ("session_branching", self.session_branching.visible),
             ("export_dialog", self.export_dialog.visible),
             ("context_viz", self.context_viz.visible),
-            ("mcp_approval", self.mcp_approval.visible),
             (
                 "bypass_permissions_dialog",
                 self.bypass_permissions_dialog.visible,
@@ -340,15 +329,9 @@ impl App {
                 self.open_agents_menu();
                 true
             }
-            "diff" | "review" => {
+            "diff" | "review" | "changes" => {
                 let root = self.project_root();
                 self.diff_viewer.open(&root);
-                true
-            }
-            "changes" => {
-                let root = self.project_root();
-                // (iter-209: refresh_turn_diff_from_history removed — turn-diff stub deleted)
-                self.diff_viewer.open_turn(&root);
                 true
             }
             "search" | "find" => {
@@ -1221,11 +1204,8 @@ impl App {
             // /rollback — surface the existing /rewind flow (which IS
             // implemented) instead of silently dropping /rollback.
             "rollback" => {
-                let root = self.project_root();
-                // (iter-209: refresh_turn_diff_from_history removed — turn-diff stub deleted)
-                self.diff_viewer.open_turn(&root);
                 self.status_message =
-                    Some("Rollback: review last turn diff. Use /rewind to step back.".to_string());
+                    Some("Rollback: use /rewind to step back to an earlier turn.".to_string());
                 true
             }
 
@@ -1645,7 +1625,7 @@ impl App {
     // `overlay_flags()`. This is a deliberate *subset* of the overlay set
     // (it omits permission_request, rewind_flow, help_overlay,
     // history_search_overlay, global_search,
-    // effort_picker, mcp_approval, bypass_permissions_dialog, ask_user_dialog)
+    // effort_picker, bypass_permissions_dialog, ask_user_dialog)
     // and uses `.dismiss()` for export_dialog rather than `.close()`. Unifying
     // it with a loop would change behavior, so it's left explicit; migrate it
     // to the overlay registry in a later iteration once close semantics are
@@ -1923,7 +1903,6 @@ impl App {
                             | "context_menu"
                             | "command_palette"
                             | "permission_request"
-                            | "mcp_approval"
                             | "ask_user_dialog"
                     )
             })
@@ -2068,6 +2047,18 @@ mod tests {
         assert!(app.handle_tui_command("stop", ""));
         assert!(flag.is_triggered(), "/stop must trigger the interrupt flag");
         assert!(!app.is_streaming);
+    }
+
+    /// `/rollback` no longer opens a turn diff (turn-diff mode was removed);
+    /// it points at `/rewind`, the one command that steps back a turn.
+    #[test]
+    fn rollback_points_at_rewind() {
+        let mut app = make_app();
+        assert!(app.handle_tui_command("rollback", ""));
+        assert_eq!(
+            app.status_message.as_deref(),
+            Some("Rollback: use /rewind to step back to an earlier turn.")
+        );
     }
 
     /// /clear mid-stream cancels the turn and DEFERS the clear: the

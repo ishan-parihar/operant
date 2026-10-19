@@ -12,7 +12,9 @@ impl App {
     /// metrics clock, and move the lifecycle to `Sending` (the request is in
     /// flight, nothing has come back yet). Called from every turn-submit
     /// site in `TuiApp`, so the footer metrics never straddle two turns.
+    /// It also records the turn's metadata and starts the latency clock.
     pub(crate) fn begin_turn(&mut self) {
+        self.begin_user_turn_snapshot();
         self.turn_started_at = Some(std::time::Instant::now());
         self.turn_input_tokens = 0;
         self.turn_output_tokens = 0;
