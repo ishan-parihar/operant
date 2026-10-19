@@ -3,6 +3,10 @@
 # Usage: ./scripts/self-test.sh
 set -e
 
+# The repo root, derived from this script's own location — the corpus step
+# below `cd`s into a subdirectory, and a relative path would break there.
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
 echo "=== Hermes-RS Self-Test ==="
 echo ""
 
@@ -84,6 +88,24 @@ run_test "Build script tests" "bash scripts/tests/libclang_resolve_test.sh && ba
 
 # 4. Formatting
 run_test "Check formatting" "./scripts/check.sh fmt --all 2>&1"
+
+# 3d. The TUI visual-regression corpus. This gate was RED for nine days
+# and nobody noticed, because the corpus was not in ANY automated gate:
+# `scripts/check.sh` forwards to cargo, and the corpus is a Python script.
+# 19 scenarios had drifted from their baselines.
+#
+# The corpus is a LONG run (about ten minutes for the full verify) and it
+# needs a binary built from the SAME tree — a stale binary silently tests
+# the wrong renderer. The release binary above is exactly that, so it is
+# what the corpus gets. The two env vars are cleared because a scenario
+# without an `agent_script` builds a real agent and would otherwise make
+# live calls to the gateway (audit finding 16, hit twice).
+#
+# `diff-viewer-git` renders the live `git diff`, so it drifts on a dirty
+# tree and passes once the tree settles — expect it to be the one red
+# entry on a dirty tree.
+run_test "TUI visual corpus (crates/operant-cli/tests/tui_scenarios/_run.py verify)" \
+    "cd '$REPO_ROOT/crates/operant-cli/tests/tui_scenarios' && env -u OPENAI_BASE_URL -u OPENAI_API_KEY OPERANT_BIN='$REPO_ROOT/target/release/operant' python3 -u _run.py verify 2>&1"
 
 # 5. CLI version
 run_test "CLI version" "./target/release/operant --version 2>&1"
