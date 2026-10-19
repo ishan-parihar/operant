@@ -198,8 +198,16 @@ impl HookRegistry {
         clippy::expect_used,
         reason = "poisoned lock: panic is the intended recovery"
     )]
-    /// Emit an event to all matching handlers. Handlers run sequentially.
-    /// Errors in handlers are caught and logged (never block the pipeline).
+    /// Emit an event to all matching handlers.
+    ///
+    /// Each handler runs in its OWN spawned task, so the handlers run
+    /// CONCURRENTLY, not sequentially — and a slow handler never blocks
+    /// the pipeline. (The old doc said "run sequentially"; the code has
+    /// always spawned, and the concurrency is the point: a hook must not
+    /// be able to stall a gateway turn.)
+    ///
+    /// A panicking handler is caught and reported as a warning; it never
+    /// takes down the gateway.
     pub async fn emit(&self, event: HookEvent, ctx: HookContext) {
         let handlers: Vec<(HookEvent, HookHandler)> = {
             let handlers = self
@@ -262,18 +270,29 @@ impl Default for HookRegistry {
 }
 
 // catch_unwind for async futures
-trait CatchUnwindSafe<F: std::future::Future> {
+trait CatchUnwindSafe<F: Future> {
     async fn catch_unwind_safe(self) -> std::result::Result<F::Output, ()>;
 }
 
-impl<F: std::future::Future + Send> CatchUnwindSafe<F> for std::panic::AssertUnwindSafe<F> {
+impl<F: Future + Send> CatchUnwindSafe<F> for std::panic::AssertUnwindSafe<F> {
     async fn catch_unwind_safe(self) -> std::result::Result<F::Output, ()> {
-        // We can't use futures::FutureExt::catch_unwind because it requires
-        // the future to be Unpin. Instead, we use tokio::spawn + oneshot
-        // to isolate the panic. But that's complex — for now, just await
-        // directly. Panics in async hooks are rare and will be caught by
-        // the tokio runtime's panic handler.
-        Ok(self.await)
+        // `FutureExt::catch_unwind` DOES work on a non-`Unpin` future: it
+        // requires `Sized`, not `Unpin`, and `AssertUnwindSafe<F>` for any
+        // `F: Future` satisfies it. The old implementation here was a
+        // NO-OP — it awaited directly and always returned `Ok`, so the
+        // "Hook handler panicked" warning in `emit` was unreachable and a
+        // buggy hook failed SILENTLY. Verified empirically before the
+        // change: `AssertUnwindSafe(boom()).catch_unwind().await` reports
+        // `is_err() == true`.
+        //
+        // The panic is contained either way (the handler runs in a spawned
+        // task, so tokio's task panic handler catches it), but "contained"
+        // is not "reported": without this, a hook that panics on every
+        // AgentStart is invisible in the logs.
+        match futures::FutureExt::catch_unwind(self).await {
+            Ok(output) => Ok(output),
+            Err(_) => Err(()),
+        }
     }
 }
 
@@ -335,6 +354,49 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
 
         assert_eq!(counter.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    /// A panicking hook must be REPORTED, not merely contained.
+    ///
+    /// `catch_unwind_safe` was a NO-OP: it awaited the future directly and
+    /// always returned `Ok`, so the "Hook handler panicked — caught and
+    /// ignored" warning in `emit` was unreachable and a buggy hook failed
+    /// SILENTLY. The panic was contained (the handler runs in a spawned
+    /// task, so tokio's task panic handler catches it) — but "contained"
+    /// is not "reported": a hook that panics on every AgentStart was
+    /// invisible in the logs.
+    ///
+    /// The old comment claimed `FutureExt::catch_unwind` "requires the
+    /// future to be Unpin". It does not: it requires `Sized`, and
+    /// `AssertUnwindSafe<F>` for any `F: Future` satisfies it.
+    #[tokio::test]
+    async fn a_panicking_hook_is_reported_not_swallowed() {
+        let panicked = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+        let result = std::panic::AssertUnwindSafe(async {
+            panic!("a buggy hook");
+        })
+        .catch_unwind_safe()
+        .await;
+
+        assert!(
+            result.is_err(),
+            "a panicking hook must be reported as an error, not silently swallowed"
+        );
+        panicked.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// A hook that does NOT panic must not be reported as one. The fix
+    /// must not turn every hook into a false alarm.
+    #[tokio::test]
+    async fn a_healthy_hook_is_not_reported_as_a_panic() {
+        let result = std::panic::AssertUnwindSafe(async {})
+            .catch_unwind_safe()
+            .await;
+        assert!(
+            result.is_ok(),
+            "a healthy hook must not be reported as a panic"
+        );
     }
 
     #[tokio::test]
