@@ -5288,3 +5288,19 @@ fn inline_picker_enter_applies_and_esc_closes() {
         "Enter must route the pick to the pending_model drain"
     );
 }
+
+/// TUI-5: `/rewind <n>` arms a y/n confirmation. Any key other than y or n
+/// must cancel it, so a later `y` typed in a word cannot fork the session.
+#[test]
+fn any_key_other_than_y_or_n_cancels_the_rewind_confirmation() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let mut app = make_app();
+    app.pending_rewind_confirm = Some(1);
+    app.handle_key_event(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+    assert!(
+        app.pending_rewind_confirm.is_none(),
+        "a non-y/n key must cancel the armed /rewind confirmation"
+    );
+    assert!(app.pending_rewind.is_none(), "cancelling must not fork");
+}

@@ -324,6 +324,16 @@ impl AgentsMenuState {
                     .join(format!("{}.md", slugify_agent_name(&self.editor.name)))
             });
 
+        // TUI-3: a new agent never replaces an existing definition. The
+        // symlink_metadata check also refuses a dangling symlink, which
+        // fs::write would follow to its target.
+        if self.editor.original_index.is_none() && std::fs::symlink_metadata(&file_path).is_ok() {
+            return Err(format!(
+                "{} already exists; choose another name.",
+                file_path.display()
+            ));
+        }
+
         write_editor_to_disk(&file_path, &self.editor)?;
         self.definitions = load_agent_definitions(&root);
 
@@ -420,7 +430,15 @@ fn parse_agent_def(path: &std::path::Path) -> Option<AgentDefinition> {
 fn extract_yaml_str(front: &str, key: &str) -> Option<String> {
     for line in front.lines() {
         if let Some(rest) = line.strip_prefix(&format!("{key}:")) {
-            return Some(rest.trim().trim_matches('"').trim_matches('\'').to_string());
+            let value = rest.trim();
+            // A double-quoted YAML scalar uses JSON escapes, so serde_json reads
+            // back what `serialize_editor` wrote (TUI-4).
+            if value.starts_with('"')
+                && let Ok(text) = serde_json::from_str::<String>(value)
+            {
+                return Some(text);
+            }
+            return Some(value.trim_matches('"').trim_matches('\'').to_string());
         }
     }
     None
@@ -489,7 +507,9 @@ fn serialize_editor(editor: &AgentEditorState) -> String {
     if !editor.memory_scope.trim().is_empty() {
         out.push_str(&format!("memory_scope: {}\n", editor.memory_scope.trim()));
     }
-    out.push_str(&format!("description: {}\n", editor.description.trim()));
+    // Quoted with JSON escapes so a multi-line description stays on one line (TUI-4).
+    let description = serde_json::Value::String(editor.description.trim().to_string());
+    out.push_str(&format!("description: {description}\n"));
     if !tools.is_empty() {
         out.push_str(&format!("tools: [{}]\n", tools));
     }
@@ -838,4 +858,66 @@ fn agent_list_row(title: String, meta: String, selected: bool, width: u16) -> Li
         spans.push(Span::styled(" ".repeat(pad), Style::default().bg(bg)));
     }
     Line::from(spans)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn filled_editor(name: &str, description: &str) -> AgentEditorState {
+        let mut editor = AgentEditorState::new();
+        editor.name = name.to_string();
+        editor.description = description.to_string();
+        editor.prompt = "Review the diff.".to_string();
+        editor
+    }
+
+    #[test]
+    fn creating_an_agent_refuses_to_overwrite_an_existing_file() {
+        // TUI-3: "Code Reviewer" and "code-reviewer" share one slug, so a
+        // second create must be refused, naming the file, not overwrite it.
+        let root = tempfile::tempdir().expect("tempdir");
+        let mut menu = AgentsMenuState {
+            project_root: Some(root.path().to_path_buf()),
+            ..AgentsMenuState::default()
+        };
+        menu.editor = filled_editor("Code Reviewer", "first");
+        menu.save_editor().expect("first create writes the file");
+
+        menu.editor = filled_editor("code-reviewer", "second");
+        let err = menu.save_editor().expect_err("second create is refused");
+        assert!(
+            err.contains("code-reviewer.md"),
+            "error names the file: {err}"
+        );
+
+        let on_disk = std::fs::read_to_string(root.path().join(".operant/agents/code-reviewer.md"))
+            .expect("file survives");
+        assert!(
+            on_disk.contains("description: \"first\""),
+            "first agent kept"
+        );
+    }
+
+    #[test]
+    fn multi_line_description_round_trips_through_save_and_load() {
+        // TUI-4: a description with newlines was written raw and read back as
+        // its first line, so the next save lost the rest.
+        let root = tempfile::tempdir().expect("tempdir");
+        let text = "Reviews diffs.\nFlags unsafe code.";
+        let mut menu = AgentsMenuState {
+            project_root: Some(root.path().to_path_buf()),
+            ..AgentsMenuState::default()
+        };
+        menu.editor = filled_editor("reviewer", text);
+        menu.save_editor().expect("save");
+
+        let saved = root.path().join(".operant/agents/reviewer.md");
+        let defs = load_agent_definitions(root.path());
+        let def = defs
+            .iter()
+            .find(|def| def.file_path == saved)
+            .expect("agent loads back");
+        assert_eq!(def.description, text);
+    }
 }

@@ -1155,6 +1155,15 @@ impl App {
             }
         }
 
+        // TUI-5: the /rewind <n> confirmation is answered by y or n only. Any
+        // other key cancels it and then takes its normal meaning.
+        if self.pending_rewind_confirm.is_some()
+            && !matches!(key.code, KeyCode::Char('y' | 'Y' | 'n' | 'N'))
+        {
+            self.pending_rewind_confirm = None;
+            self.set_status_notice("Rewind cancelled.".to_string());
+        }
+
         match key.code {
             // ---- ESC: cancel streaming (status bar advertises "esc interrupt") ----
             KeyCode::Esc if self.is_streaming => {
