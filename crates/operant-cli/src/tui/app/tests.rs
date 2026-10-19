@@ -571,6 +571,7 @@ fn ctrl_t_toggles_thinking_and_restores_previous_mode() {
 /// Alt+Y no longer yank-pops.
 #[test]
 fn ctrl_t_no_longer_enters_copy_mode_and_alt_y_does() {
+    let _guard = crate::tui::operant_app::config_shim::reasoning_override_test_guard();
     let mut app = make_app();
     app.handle_key_event(press_key(KeyCode::Char('t'), KeyModifiers::CONTROL));
     assert!(
@@ -579,6 +580,7 @@ fn ctrl_t_no_longer_enters_copy_mode_and_alt_y_does() {
     );
     app.handle_key_event(press_key(KeyCode::Char('y'), KeyModifiers::ALT));
     assert!(app.copy_mode_active(), "Alt+Y enters copy mode (plan 08)");
+    crate::tui::operant_app::config_shim::set_reasoning_display_override(None);
 }
 
 /// Config `[tui] show_tool_calls = false` starts the session with tool rows
