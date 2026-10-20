@@ -940,9 +940,26 @@ impl App {
                 let _ = mcp_clone.remove_server(&name).await;
                 // Re-add based on transport.
                 let result = match transport {
-                    McpTransportKind::Http | McpTransportKind::StreamableHttp => {
+                    McpTransportKind::Http => {
                         if let Some(url) = url {
                             mcp_clone.add_server(&name, url, auth_token).await
+                        } else {
+                            Err(operant_core::error::Error::Agent(format!(
+                                "no URL configured for {name}"
+                            )))
+                        }
+                    }
+                    // The streamable-HTTP transport (MCP spec 2025-06-18)
+                    // needs its own client: the plain-HTTP one sends no
+                    // `Accept` header, so a spec-compliant server answers
+                    // `406 Not Acceptable`, and it never echoes the
+                    // `Mcp-Session-Id`, so every request starts a new
+                    // session.
+                    McpTransportKind::StreamableHttp => {
+                        if let Some(url) = url {
+                            mcp_clone
+                                .add_streamable_server(&name, url, auth_token)
+                                .await
                         } else {
                             Err(operant_core::error::Error::Agent(format!(
                                 "no URL configured for {name}"

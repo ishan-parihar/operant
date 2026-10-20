@@ -219,14 +219,17 @@ async fn connect_mcp_server(
                 .await?;
         }
         operant_core::config::McpTransportKind::StreamableHttp => {
-            // iter-190: StreamableHttp is now handled by the same add_server
-            // path as Http.
+            // The streamable-HTTP transport (MCP spec 2025-06-18) needs
+            // its own client: the plain-HTTP one sends no `Accept`
+            // header, so a spec-compliant server answers `406 Not
+            // Acceptable`, and it never echoes the `Mcp-Session-Id`, so
+            // every request starts a new session.
             let url = server
                 .url
                 .clone()
                 .context("Streamable-HTTP MCP server is missing a URL")?;
             mcp_manager
-                .add_server(server.name.clone(), url, server.auth_token.clone())
+                .add_streamable_server(server.name.clone(), url, server.auth_token.clone())
                 .await?;
         }
         operant_core::config::McpTransportKind::Stdio => {

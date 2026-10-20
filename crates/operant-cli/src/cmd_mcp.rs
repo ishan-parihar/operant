@@ -391,8 +391,11 @@ async fn handle_test(config: &AppConfig, mcp_manager: &McpManager, name: String)
                 .context(format!("Failed to connect to MCP server '{}'", name))?;
         }
         McpTransportKind::StreamableHttp => {
-            // iter-190: StreamableHttp is now handled by the same add_server
-            // path as Http.
+            // The streamable-HTTP transport (MCP spec 2025-06-18) needs
+            // its own client: the plain-HTTP one sends no `Accept`
+            // header, so a spec-compliant server answers `406 Not
+            // Acceptable`, and it never echoes the `Mcp-Session-Id`, so
+            // every request starts a new session.
             let url = server
                 .url
                 .as_deref()
@@ -400,7 +403,7 @@ async fn handle_test(config: &AppConfig, mcp_manager: &McpManager, name: String)
             println!("  URL:        {} (streamable-http)", url);
 
             mcp_manager
-                .add_server(&name, url.to_string(), server.auth_token.clone())
+                .add_streamable_server(&name, url.to_string(), server.auth_token.clone())
                 .await
                 .context(format!("Failed to connect to MCP server '{}'", name))?;
         }
