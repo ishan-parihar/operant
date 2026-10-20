@@ -2,7 +2,7 @@
 
 Date: 2026-10-20/21. Agent: `omp`.
 Range: iters 980–1102 on `origin/main`.
-Ledger: `docs/audit/2026-06-19-BUGS.md` — **217 rows closed, 6 open**. Five of the six are owner decisions or vendored-tooling findings; the two the sweep started with (S1 and S2) are live-terminal checks that need a terminal this session did not have.
+Ledger: `docs/audit/2026-06-19-BUGS.md` — **216 rows closed, 7 open**: RT-117 (the dashboard's `/api/status` shape), RT-119 (the channel doctor's health field), RT-124 (the MCP add command's missing transport), RT-125 (the handoff's own staleness check, in the vendored genome tooling), RT-126 (the message-delete capability has no wiring), and S1 and S2 — the two live-terminal checks the sweep started with, which need a terminal this session did not have.
 
 This is the morning review. It names every defect the sweep found, how each
 was proven, and what is deliberately left open.
@@ -76,9 +76,9 @@ several rows here name the MECHANISM, not just the outcome.
 | RT-116 | The output fitter sized `max_tokens` from the PREVIOUS request's reported prompt count, so a request could exceed the window by exactly the tool output accumulated since. | `estimate_current_tokens` now returns the LARGER of the current estimate and the reported count — one rule, every caller safe. |
 | RT-117 | The dashboard's SERVED `/api/status` omits the fields the bundled frontend reads (cpu_percent, cpu_count, memory, disk, load_avg, hostname, os_release, arch), so the system panel renders empty. | Open — part of the RT-44 owner decision. |
 | RT-118 | `operant channel list` omitted SMS: the registry has SEVEN adapters and the list showed six. | SMS is in the list. |
-| RT-119 | `operant channel doctor` reports "healthy" for a channel it never probed — the field is the ENABLED flag. | Open — probing means a network call per channel, which is a design decision. |
+| RT-119 | `operant channel doctor` reported "healthy" for a channel it never probed — the field was the ENABLED flag. | Now `"configured"` plus `"health": "not probed"`. Probing means a network call per channel, which is a design decision — the row stays open for that half. |
 | RT-120 | The `PlatformAdapter::handle_update` trait method is DEAD — zero production callers for ANY adapter. | Recorded; the inbound table encodes the truth. The method itself is RT-89's decision. |
-| RT-121 | `operant channel add` did not say the channel it added cannot receive — and its WRITE path was missing: "sms" was rejected as unsupported, and the platform key was "webhooks" where the config's key is `webhooks_enabled`. | The plural is an alias normalised to the canonical key, SMS is configurable, and the truth is printed. |
+| RT-121 | `operant channel add` did not say the channel it added cannot receive — and its WRITE path was missing: "sms" was rejected as unsupported, and the platform key was "webhooks" where the platform key is "webhook" (the CONFIG FIELD is `webhooks_enabled`). | The plural is an alias normalised to the canonical platform key, SMS is configurable, and the truth is printed. |
 | RT-122 | The STREAMING send did not record in the delivery ledger, so every streamed answer was invisible in the delivery-health view (the plain send always recorded). | The streaming path records, with the status from the outcome. Mutation-checked. |
 | RT-123 | The TUI's `/mcp` pane had no bucket for the streamable-HTTP transport, so such a server was never painted — and was counted as scrolled-off. The "sse" bucket was dead: the enum has no SSE variant. | The label is a named method on the enum; the buckets are its three variants. Mutation-checked. |
 | RT-86 (corrected) | The `"inbound": false` field existed but NOTHING read it — `Gateway::status()` had been deleted for having zero callers — so the operator still saw "Slack: enabled". | The gateway has ONE inbound table; `operant gateway status` PRINTS it: "Slack … send-only (no inbound)". |
@@ -183,6 +183,7 @@ code rather than adding a capability the core lacks.
 | RT-119 (`operant channel doctor` reports healthy) | The field is the ENABLED flag. A real health check means a network call per channel — a decision about what the doctor is and how long it may take. |
 | RT-124 (`operant mcp add` cannot create a streamable-HTTP server) | The transport works; the creation command does not exist. The command's shape — two mutually exclusive flags — is a design decision. |
 | RT-125 (the handoff never passes the doctor's staleness check) | In the VENDORED genome tooling, not this repo: the handoff writes the current HEAD, and the commit that carries it changes HEAD. The fix is to compare against the state doc's own commit. |
+| RT-126 (the message-delete capability has no wiring) | `PlatformAdapter::delete_message` has a default that does nothing, Telegram implements it, and nothing calls either — the gateway has no delete path. Telegram's implementation is correct; what is missing is the path that would use it. |
 
 ## The gates, as they stand
 
@@ -193,7 +194,7 @@ code rather than adding a capability the core lacks.
 | TUI corpus (`_run.py verify`) | 64 gated, 0 drift, against the DEPLOYED binary; 7 surfaces parked in `excluded.json` with a reason each |
 | `scripts/genome lint` | clean |
 | `docs_lint` | PASS — 0 hard failures |
-| `scripts/genome doctor` | healthy |
+| `scripts/genome doctor` | One finding — the handoff's own staleness (RT-125), which the check can never clear: the handoff writes the current HEAD and the commit that carries it changes HEAD. It exits 0, so it is a finding, not a gate. |
 
 ## What a new agent should know before touching this tree
 
