@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **iter-1037 — the superseded MCP stack in `operant-tools` is deleted.** Six modules and 3 232 lines with no production caller, pinning an older protocol version than the core's.
+
 - **iter-1036 — the Slack adapter now says it cannot receive.** There is no Socket Mode WebSocket in the tree, so a configured Slack token let an operator believe they could receive Slack messages. The status report carries `inbound: false`.
 
 - **iter-1035 — the shared updater picks the raw binary rather than an archive with the same marker, and it says so when a release carries no checksum manifest.**
