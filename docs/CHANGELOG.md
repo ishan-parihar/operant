@@ -21,6 +21,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-1121 — `operant dashboard server --stop` and `--status` stop being stubs.** Both printed a
+  sentence telling the operator to kill the process by hand. The server now records its pid and URL in
+  `$OPERANT_HOME/dashboard.pid` before it starts serving, `--status` reports that server (and removes a
+  stale file left by a crash), and `--stop` sends SIGTERM to the recorded pid and waits up to three
+  seconds for it to exit so the port is free for the next start. A clean exit removes the file; a
+  malformed file reads as "no server", never as a guessed pid, and pid 0 is refused outright —
+  `kill(0, …)` addresses the caller's own process group, so a `0` in that file would have turned
+  `--stop` into "SIGTERM my shell". The remaining accepted stub is `operant cron run <id>` (RT-135).
+
 - **iter-1120 — the dashboard is one first-party page again, and it calls only the routes the server has.**
   The served frontend was a 1.9 MB build artefact from a larger harness: it called 79 `/api/...` paths
   against a four-route server and opened a `/api/ws` WebSocket that never existed, so every panel but

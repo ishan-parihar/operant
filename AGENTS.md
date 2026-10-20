@@ -817,16 +817,22 @@ never to hide new ones).
 **All hermes-agent gaps closed.** The operant project now has feature parity
 with hermes-agent's core functionality (excluding Python-specific plugins).
 
-### 2 minor CLI stubs (not bugs, just incomplete features)
+### 1 minor CLI stub (not a bug, just an incomplete feature)
 - `operant cron run <id>` — with a real ID it marks the job triggered and
   says "Manual execution via CLI is not yet implemented"; with a bad one it
-  says "Cron job '<id>' not found"
-- `operant dashboard server --stop` — prints "Dashboard stop not yet
-  implemented (kill the process)" (stop via signal instead). NOTE the
-  subcommand: the flag lives on `dashboard server`, not on `dashboard`.
+  says "Cron job '<id>' not found". The scheduler executes jobs on its tick;
+  a manual trigger that runs one OUT of band needs a scheduler handle the CLI
+  does not build (see BUGS.md RT-135).
 
-These are tracked, low-priority items. Do not "fix" them unless explicitly
-asked — the user has accepted them as documented gaps.
+This is tracked and low-priority. Do not "fix" it unless explicitly asked —
+the user has accepted it as a documented gap.
+
+`operant dashboard server --stop` / `--status` are NOT stubs any more
+(iter-1121): the server records its pid + URL in
+`$OPERANT_HOME/dashboard.pid`, `--status` reports it (and removes a stale
+file), and `--stop` SIGTERMs that pid and waits for the process to go. The
+pid file is removed both by a clean exit and by `--stop`; pid 0 is refused
+outright because `kill(0, …)` addresses the caller's process group.
 
 ### Gaps CLOSED (15 total — all verified by grep + compile + tests)
 - ✅ ~~MCP SSE transport~~ — McpSseClient with background reader task + oneshot
