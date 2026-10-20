@@ -38,6 +38,36 @@ pub struct TelegramAdapter {
     client: reqwest::Client,
 }
 
+/// What a Telegram HTTP status means for a SEND.
+///
+/// Telegram's error body is JSON, so a `response.json()` on a failed
+/// request SUCCEEDS — and then `result.message_id` is absent. The old
+/// code read the body, found no id, and returned `Ok("")`: a revoked
+/// token, a blocked bot, a flood-control 429 and a 500 all looked like
+/// SUCCESS, the delivery ledger recorded "delivered", and the operator
+/// saw a silent no-op.
+///
+/// So the STATUS decides, and the body only supplies the description.
+///
+/// * `Ok` — accepted.
+/// * `RetryAsPlainText` — a 400, which is the HTML-parsing failure the
+///   plain-text retry handles.
+/// * `Failed` — anything else. The message was NOT delivered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SendOutcome {
+    Ok,
+    RetryAsPlainText,
+    Failed,
+}
+
+fn send_outcome(status: u16) -> SendOutcome {
+    match status {
+        200..=299 => SendOutcome::Ok,
+        400 => SendOutcome::RetryAsPlainText,
+        _ => SendOutcome::Failed,
+    }
+}
+
 impl TelegramAdapter {
     /// Create a new Telegram adapter
     pub fn new(token: Option<String>) -> Self {
@@ -134,6 +164,31 @@ impl TelegramAdapter {
 
         let status = response.status();
 
+        // A non-success status is a FAILED send, whatever the body says.
+        //
+        // Telegram's error body is JSON (`{"ok":false,"error_code":401,
+        // "description":"Unauthorized"}`), so `response.json()` succeeds on
+        // it — and then `result.message_id` is absent, and the old code
+        // returned `Ok("")`. A revoked token, a blocked bot, a flood-control
+        // 429 and a 500 all looked like SUCCESS: the delivery ledger
+        // recorded "delivered" and the operator saw a silent no-op.
+        //
+        // Only 400 is special — it is the HTML-parsing failure, which the
+        // plain-text retry below handles.
+        if send_outcome(status.as_u16()) == SendOutcome::Failed {
+            let err = response
+                .text()
+                .await
+                .ok()
+                .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+                .and_then(|d| d["description"].as_str().map(String::from))
+                .unwrap_or_else(|| status.as_u16().to_string());
+            return Err(crate::error::Error::Agent(format!(
+                "Telegram rejected the send: HTTP {} ({err}). The message was NOT delivered.",
+                status.as_u16()
+            )));
+        }
+
         // If HTML parsing fails (400 Bad Request), retry as plain text
         if status.as_u16() == 400 {
             let html_err = serde_json::from_str::<serde_json::Value>(&response.text().await?)
@@ -218,6 +273,10 @@ impl TelegramAdapter {
                 channel_id,
                 data["result"]["message_id"].as_i64()
             );
+            // A 2xx with no `message_id` is still not a delivered message —
+            // but at this point the status said success, so the message WAS
+            // accepted; Telegram simply did not echo the id. Return the
+            // empty id rather than inventing one.
             return Ok(data["result"]["message_id"]
                 .as_i64()
                 .map(|id| id.to_string())
@@ -538,8 +597,32 @@ impl PlatformAdapter for TelegramAdapter {
         });
         let resp = self.client.post(&url).json(&body).send().await?;
         if resp.status().as_u16() == 400 {
-            // "message is not modified" — return existing ID.
-            return Ok(message_id.to_string());
+            // "message is not modified" — return the existing ID.
+            //
+            // But a 400 is NOT only that: "message to edit not found",
+            // "chat not found" and "message text is too long" (>4096 UTF-16
+            // units) are 400s too. The caller uses `.is_ok()` to decide
+            // whether the streamed answer was delivered, so treating every
+            // 400 as success made the code believe a REJECTED edit landed
+            // — the answer was never delivered, and the dispatch-loop
+            // fallback send was suppressed.
+            //
+            // So the description is read: only "not modified" is a success.
+            let status = resp.status();
+            let description = resp
+                .text()
+                .await
+                .ok()
+                .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+                .and_then(|d| d["description"].as_str().map(String::from))
+                .unwrap_or_default();
+            if description.contains("not modified") {
+                return Ok(message_id.to_string());
+            }
+            return Err(crate::error::Error::Agent(format!(
+                "Telegram edit_message failed: HTTP {} ({description}). The answer was NOT delivered.",
+                status.as_u16()
+            )));
         }
         if !resp.status().is_success() {
             return Err(crate::error::Error::Agent(format!(
@@ -820,6 +903,56 @@ impl PlatformAdapter for TelegramAdapter {
                                                 "Telegram 409 Conflict (another instance?), restarting from probe in 35s"
                                             );
                                             tokio::time::sleep(Duration::from_secs(35)).await;
+                                            break;
+                                        }
+
+                                        // A non-success status is a FAILED poll, not
+                                        // "no updates".
+                                        //
+                                        // Telegram's error body is JSON, so
+                                        // `resp.json()` succeeds on it — and then
+                                        // `result` is absent, so the loop saw an
+                                        // EMPTY update set, slept 2 s and polled
+                                        // again. A revoked token produced a silent,
+                                        // permanent 2-second polling loop instead
+                                        // of a loud failure, and a flood-control
+                                        // 429 was re-polled immediately rather
+                                        // than backed off.
+                                        if !status.is_success() {
+                                            let description = resp
+                                                .text()
+                                                .await
+                                                .ok()
+                                                .and_then(|t| {
+                                                    serde_json::from_str::<serde_json::Value>(&t)
+                                                        .ok()
+                                                })
+                                                .and_then(|d| {
+                                                    d["description"].as_str().map(String::from)
+                                                })
+                                                .unwrap_or_default();
+                                            if status.as_u16() == 429 {
+                                                // Flood control: back off hard, and
+                                                // keep polling — the token is
+                                                // fine, the API is throttling.
+                                                let backoff = retry_delay.min(60);
+                                                tracing::warn!(
+                                                    status = status.as_u16(),
+                                                    backoff_secs = backoff,
+                                                    "Telegram rate limited (429) — backing off"
+                                                );
+                                                tokio::time::sleep(Duration::from_secs(backoff))
+                                                    .await;
+                                                retry_delay = (retry_delay * 2).min(60);
+                                                continue;
+                                            }
+                                            tracing::error!(
+                                                status = status.as_u16(),
+                                                description = %description,
+                                                "Telegram poll failed — the bot token may be revoked \\
+                                                 or the bot blocked"
+                                            );
+                                            running.store(false, Ordering::SeqCst);
                                             break;
                                         }
 
@@ -1601,6 +1734,38 @@ impl TelegramAdapter {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    /// A Telegram HTTP status decides whether a send was DELIVERED.
+    ///
+    /// Telegram's error body is JSON, so `response.json()` succeeds on a
+    /// failed request — and then `result.message_id` is absent, and the
+    /// old code returned `Ok("")`. A revoked token (401), a blocked bot
+    /// (403), a flood-control 429 and a 500 all looked like SUCCESS: the
+    /// delivery ledger recorded "delivered" and the operator saw a silent
+    /// no-op. That is the same defect class as the SMTP one (RT-73).
+    #[test]
+    fn a_failed_telegram_send_is_not_reported_as_a_success() {
+        // The statuses a real Telegram failure carries.
+        for status in [401u16, 403, 404, 429, 500, 502, 503] {
+            assert_eq!(
+                send_outcome(status),
+                SendOutcome::Failed,
+                "HTTP {status} is a failed send, not a success"
+            );
+        }
+        // A 2xx is the only success.
+        for status in [200u16, 201, 204] {
+            assert_eq!(
+                send_outcome(status),
+                SendOutcome::Ok,
+                "HTTP {status} is a delivered send"
+            );
+        }
+        // A 400 is the HTML-parsing failure the plain-text retry handles.
+        assert_eq!(send_outcome(400), SendOutcome::RetryAsPlainText);
+    }
+
     use super::{get_offset_path_for, redacted_error};
 
     /// The exact shape that leaked 30 times into `gateway.log` (BUGS.md
