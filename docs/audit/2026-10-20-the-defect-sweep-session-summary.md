@@ -1,8 +1,8 @@
 # Audit: the 2026-10-19/20 defect sweep — what was found, what was fixed, and what remains
 
 Date: 2026-10-20. Agent: `omp`.
-Range: iters 980–1022 (66 commits) on `origin/main`.
-Ledger: `docs/audit/2026-06-19-BUGS.md` (the open rows are S1 and S2 only).
+Range: iters 980–1046 (67 commits) on `origin/main`.
+Ledger: `docs/audit/2026-06-19-BUGS.md` — **188 rows closed, 2 open** (S1 and S2, both live-terminal checks that need a terminal this session did not have).
 
 This is the morning review. It names every defect the sweep found, how each
 was proven, and what is deliberately left open.
@@ -16,6 +16,15 @@ that fails when the fix is removed is.
 Three defects in this sweep were caught by the sweep's OWN tests being
 wrong — they passed for the wrong reason, and the second pass made them
 bite. Those are called out, because the shape recurs.
+
+**A fourth was caught by a TRACER, not by reading the code.** The TUI's
+process-global reasoning-mode cell leaked between tests (RT-79). Reading
+the code said every writer was guarded — because a search for "the setter is
+called" does not say "and the CALLER holds the guard". An `eprintln!` in the
+setter that printed the mode, the thread and the TEST NAME found it, after
+the obvious suspects were all cleared. The same class — a claim that reads
+as verified but was verified against the wrong thing — is the reason
+several rows here name the MECHANISM, not just the outcome.
 
 ## The defects, by class
 
@@ -70,6 +79,44 @@ claim that operant had no MCP server was "corrected" from a grep over
 (955 lines), and the evidence was in hand at the time (`operant mcp --help`
 listed `serve`). That correction was reverted, and the lesson recorded.
 
+## The structural finding: a parallel library the product barely used
+
+The sweep's largest result is not a single defect but a PATTERN, and it is
+worth stating on its own because it explains several of the rows above.
+
+`operant-tools` was a 30 860-line crate of tool implementations — the
+browser, the file tools, the HTTP tool, the web tools, a whole second MCP
+stack — that the product called **ONCE**: `cli_discovery::discover_cli_tools`,
+from the doctor's CLI check. The core registers its OWN browser tool, file
+tools, HTTP tool and web-search tool, and those are the ones the model
+calls.
+
+The cost was not only 30 695 lines of unreachable code (RT-87, RT-88 — now
+deleted). It was **divergence**: two implementations of the same tools,
+kept in step by hand. The Streamable-HTTP gap (RT-81) had to be fixed in
+the core while a copy in `operant-tools` — in an older form, pinned to
+MCP protocol `2024-11-05` against the core's `2025-06-18` — was never
+consulted, even though it had a Streamable-HTTP implementation.
+
+The same pattern repeats in three more crates, and RT-89 measures it:
+
+| crate | lines | reachable | what the live call is |
+|---|---|---|---|
+| `operant-providers` | 30 390 | 19 of 21 modules unreachable | ONE call: the doctor validating a provider name |
+| `operant-memory` | 11 324 | 0 | nothing — the core's `build_memory_provider` ignores every name but memory-wire, and warns |
+| `operant-infra` | 2 270 | 0 | nothing — and it holds the only message debouncer and stall watchdog the tree has (RT-93) |
+
+**43 923 lines** of provider, memory and session implementations that no
+configuration can reach. Two of those crates hold real, working capability
+for backends and native APIs operant does not support — so this is a
+**feature gap wearing a redundancy's clothes**, and the fix (wire the
+routing, or narrow the configuration surface so nothing is silently
+ignored) is the owner's call. RT-89, RT-90 and RT-93 record the
+measurement and the options; nothing was deleted.
+
+The `operant-tools` half WAS deleted, because it duplicated the core's own
+code rather than adding a capability the core lacks.
+
 ## The three traps this sweep paid for
 
 1. **A test that passes is not evidence.** The gateway-sweep test, the
@@ -96,6 +143,8 @@ listed `serve`). That correction was reverted, and the lesson recorded.
 | CR-6 (the stale `/usr/local/bin/operant`) | Needs `sudo`, which this session does not have. |
 | RT-26/27/28 (dependency advisories) | Owner decisions, recorded in AD-033/AD-039. |
 | RT-44 (the 75 missing dashboard routes) | A project, and the owner's call. The bundle is from a larger harness; the server implements 4. |
+| RT-89 / RT-93 (43 923 unreachable provider/memory/session lines, and the infra crate's debouncer and watchdog) | A product decision: WIRE the routing so a configured provider or memory backend is the one used, or narrow the configuration surface so nothing is silently ignored. The implementations are real and working, so deleting them is not the only answer. |
+| RT-86 (Slack Socket Mode) | A feature: the `apps.connections.open` handshake, the WebSocket, the reconnect and the event routing. Until it exists, the channel is outbound-only and the status report says so. |
 | The 1.5 GB checkpoint store | Reclaimable with `operant checkpoints clear` (RT-61); the forward-looking bound is in place. |
 | Session/DB retention policy | A policy decision, not a defect. |
 
