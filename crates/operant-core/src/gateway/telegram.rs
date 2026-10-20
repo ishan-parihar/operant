@@ -684,21 +684,37 @@ impl PlatformAdapter for TelegramAdapter {
         Ok(message_id.to_string())
     }
 
-    fn delete_message(&self, channel_id: &str, message_id: &str) -> Result<()> {
+    async fn delete_message(&self, channel_id: &str, message_id: &str) -> Result<()> {
         let url = format!("{}/deleteMessage", self.api_url());
         let body = serde_json::json!({
             "chat_id": channel_id,
             "message_id": message_id,
         });
-        let client = self.client.clone();
-        tokio::spawn(async move {
-            if let Err(e) = client.post(&url).json(&body).send().await {
+        // Awaited, and the status checked: the previous version spawned this
+        // request and returned `Ok(())` immediately, so a bot without the
+        // delete permission (or a message too old to retract) reported a
+        // deletion that never happened.
+        let resp = self
+            .client
+            .post(&url)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| {
                 // `reqwest::Error`'s Display embeds the full request URL, and a
                 // Telegram URL carries the bot token. This leaked 30 times into
                 // gateway.log before the redactor was applied here.
-                tracing::error!("Telegram delete_message error: {}", redacted_error(&e));
-            }
-        });
+                crate::error::Error::Agent(format!(
+                    "Telegram deleteMessage failed: {}",
+                    redacted_error(&e)
+                ))
+            })?;
+        if !resp.status().is_success() {
+            return Err(crate::error::Error::Agent(format!(
+                "Telegram deleteMessage failed: HTTP {} (the message was NOT deleted)",
+                resp.status()
+            )));
+        }
         Ok(())
     }
 

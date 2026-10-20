@@ -688,6 +688,24 @@ impl Gateway {
         outcome
     }
 
+    /// Delete a message that was previously sent on `platform`.
+    ///
+    /// The adapter method existed and Telegram implemented it, but nothing in
+    /// the gateway or the CLI could reach it, so a message operant sent could
+    /// never be retracted on any platform (RT-126). This is the path.
+    pub async fn delete_message_on_platform(
+        &self,
+        platform: &str,
+        channel_id: &str,
+        message_id: &str,
+    ) -> Result<()> {
+        let adapter = self
+            .adapters
+            .get(platform)
+            .ok_or_else(|| crate::error::Error::Agent(format!("Unknown platform: {}", platform)))?;
+        adapter.delete_message(channel_id, message_id).await
+    }
+
     /// Send a message and return the platform message ID.
     pub async fn send_message_return_id(
         &self,
@@ -2305,6 +2323,129 @@ mod tests {
     use crate::gateway::dispatch_breaker::DispatchBreaker;
     use crate::gateway::types::PlatformAdapter;
     use std::sync::atomic::AtomicUsize;
+
+    /// RT-126: `delete_message` existed on the trait, Telegram implemented it,
+    /// and no path in the gateway could reach either. This adapter records what
+    /// the gateway hands it, so the test proves the CALL arrives — a test that
+    /// invoked the adapter's method directly would pass with the gateway method
+    /// missing.
+    struct RecordingDeleteAdapter {
+        name: String,
+        deleted: Arc<std::sync::Mutex<Vec<(String, String)>>>,
+        fail: bool,
+    }
+
+    #[async_trait::async_trait]
+    impl PlatformAdapter for RecordingDeleteAdapter {
+        fn name(&self) -> &str {
+            &self.name
+        }
+        fn is_enabled(&self) -> bool {
+            true
+        }
+        async fn start(&self) -> Result<()> {
+            Ok(())
+        }
+        async fn stop(&self) -> Result<()> {
+            Ok(())
+        }
+        async fn send_message(&self, _message: OutgoingMessage) -> Result<()> {
+            Ok(())
+        }
+        async fn handle_update(
+            &self,
+            _update: serde_json::Value,
+        ) -> Result<Option<IncomingMessage>> {
+            Ok(None)
+        }
+        fn config_json(&self) -> serde_json::Value {
+            serde_json::json!({})
+        }
+        async fn start_with_channel(
+            &self,
+            _message_tx: tokio::sync::mpsc::UnboundedSender<IncomingMessage>,
+        ) -> Result<()> {
+            Ok(())
+        }
+        async fn send_message_to_channel(
+            &self,
+            _channel_id: &str,
+            _message: &OutgoingMessage,
+        ) -> Result<String> {
+            Ok(String::new())
+        }
+        async fn delete_message(&self, channel_id: &str, message_id: &str) -> Result<()> {
+            lock(&self.deleted).push((channel_id.to_string(), message_id.to_string()));
+            if self.fail {
+                return Err(Error::Agent("deleteMessage failed: HTTP 400".to_string()));
+            }
+            Ok(())
+        }
+    }
+
+    fn lock<T>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+        m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    #[tokio::test]
+    async fn the_gateway_reaches_the_adapters_delete_and_reports_its_failure() {
+        let deleted = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let gw =
+            Gateway::new(GatewayConfig::default()).with_adapter(Arc::new(RecordingDeleteAdapter {
+                name: "telegram".to_string(),
+                deleted: deleted.clone(),
+                fail: false,
+            }));
+
+        gw.delete_message_on_platform("telegram", "42", "7")
+            .await
+            .expect("the adapter accepted the delete");
+        assert_eq!(
+            *lock(&deleted),
+            vec![("42".to_string(), "7".to_string())],
+            "the gateway must hand the adapter the chat AND the message id"
+        );
+
+        // A platform that cannot delete must refuse, not report success.
+        let err = gw
+            .delete_message_on_platform("discord", "42", "7")
+            .await
+            .expect_err("no discord adapter is registered");
+        assert!(err.to_string().contains("Unknown platform"), "{err}");
+
+        // An adapter's own failure reaches the caller instead of being logged
+        // and swallowed (the old Telegram implementation spawned the request
+        // and returned Ok before the platform answered).
+        let failing =
+            Gateway::new(GatewayConfig::default()).with_adapter(Arc::new(RecordingDeleteAdapter {
+                name: "telegram".to_string(),
+                deleted: Arc::default(),
+                fail: true,
+            }));
+        let err = failing
+            .delete_message_on_platform("telegram", "42", "7")
+            .await
+            .expect_err("the adapter's error must surface");
+        assert!(err.to_string().contains("deleteMessage failed"), "{err}");
+    }
+
+    /// The trait's DEFAULT must refuse: a platform with no delete support
+    /// reporting a successful deletion is the defect this row is about.
+    #[tokio::test]
+    async fn an_adapter_without_delete_support_refuses_instead_of_reporting_success() {
+        let adapter = SucceedingAdapter {
+            name: "email".to_string(),
+        };
+        let err = adapter
+            .delete_message("42", "7")
+            .await
+            .expect_err("the default must not claim a deletion");
+        assert!(
+            err.to_string()
+                .contains("does not support deleting messages"),
+            "{err}"
+        );
+    }
 
     /// A platform adapter that counts its sends and fails every one with a
     /// fixed rendered error — the hammered channel the breaker exists for.

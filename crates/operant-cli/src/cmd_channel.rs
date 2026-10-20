@@ -46,6 +46,18 @@ pub enum ChannelSubcommand {
         #[arg(long)]
         recipient: String,
     },
+    /// Delete a message operant sent earlier (platform support varies)
+    DeleteMessage {
+        /// Channel config name (e.g. telegram)
+        #[arg(long)]
+        channel_id: String,
+        /// Recipient/chat identifier the message was sent to (e.g. Telegram chat ID)
+        #[arg(long)]
+        recipient: String,
+        /// Platform message ID (Telegram returns it from sendMessage)
+        #[arg(long)]
+        message_id: String,
+    },
 }
 
 pub async fn handle_channel_command(
@@ -333,6 +345,45 @@ pub async fn handle_channel_command(
                     } else {
                         println!("Failed to send: {e:#}");
                     }
+                }
+            }
+            Ok(())
+        }
+        ChannelSubcommand::DeleteMessage {
+            channel_id,
+            recipient,
+            message_id,
+        } => {
+            let result = crate::gateway_runner::delete_channel_message(
+                config,
+                &channel_id,
+                &recipient,
+                &message_id,
+            )
+            .await;
+            match result {
+                Ok(()) => {
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::json!({"status":"deleted","channel": channel_id, "recipient": recipient, "message_id": message_id})
+                        );
+                    } else {
+                        println!("Deleted message {message_id} on {channel_id} ({recipient}).");
+                    }
+                }
+                Err(e) => {
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::json!({"status":"error","channel": channel_id, "recipient": recipient, "message_id": message_id, "message": e.to_string()})
+                        );
+                    } else {
+                        println!("Failed to delete: {e:#}");
+                    }
+                    // Non-zero exit: a retraction that did not happen must not
+                    // look like one in a script.
+                    std::process::exit(1);
                 }
             }
             Ok(())

@@ -674,8 +674,19 @@ pub trait PlatformAdapter: Send + Sync {
     }
 
     /// Delete a message.
-    fn delete_message(&self, _channel_id: &str, _message_id: &str) -> Result<()> {
-        Ok(())
+    ///
+    /// `async` because every real implementation is a network call. The
+    /// synchronous signature this used to have forced Telegram's implementation
+    /// to `tokio::spawn` the request and return `Ok(())` before the platform had
+    /// answered, so no caller could ever learn that a retraction failed.
+    ///
+    /// The default refuses: a platform that cannot delete must not report a
+    /// deletion it never performed.
+    async fn delete_message(&self, _channel_id: &str, _message_id: &str) -> Result<()> {
+        Err(crate::error::Error::Agent(format!(
+            "{} does not support deleting messages",
+            self.name()
+        )))
     }
 
     /// Get information about a user.

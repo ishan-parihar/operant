@@ -2111,6 +2111,46 @@ pub async fn send_channel_message(
         .map_err(anyhow::Error::from)
 }
 
+/// Delete a message operant sent earlier, on one configured platform.
+///
+/// Same two paths as `send_channel_message`: the live gateway first (its
+/// adapters carry the tokens, proxy and per-platform settings), and a one-shot
+/// gateway when the service is not running — Telegram's `deleteMessage` is a
+/// stateless API call.
+pub async fn delete_channel_message(
+    app_config: &AppConfig,
+    platform: &str,
+    channel_id: &str,
+    message_id: &str,
+) -> Result<()> {
+    let gw = runner().lock().await.clone();
+    if let Some(gw) = gw
+        && gw.is_running().await
+    {
+        return gw
+            .delete_message_on_platform(platform, channel_id, message_id)
+            .await
+            .map_err(anyhow::Error::from);
+    }
+
+    let gw_config = gateway_config_from_app(app_config);
+    let adapters = build_adapters(&gw_config);
+    if adapters.is_empty() {
+        anyhow::bail!(
+            "No channels are enabled. Set gateway.{}_enabled = true in operant.toml first",
+            platform
+        );
+    }
+    let mut one_shot = Gateway::new(gw_config);
+    for adapter in adapters {
+        one_shot = one_shot.with_adapter(adapter);
+    }
+    one_shot
+        .delete_message_on_platform(platform, channel_id, message_id)
+        .await
+        .map_err(anyhow::Error::from)
+}
+
 fn build_session_context(
     platform: &str,
     channel_id: &str,
