@@ -233,6 +233,20 @@ pub async fn update(spec: &IntegrationSpec) -> anyhow::Result<Option<UpdateNotic
     let bytes = download(&asset.url).await?;
     if release_has_sums(&release.assets) {
         verify_sha256(&release, &asset.name, &bytes).await?;
+    } else {
+        // NO manifest, so the bytes are NOT verified. Installing anyway is
+        // deliberate: refusing would strand the operator on an old version
+        // if an upstream repo stopped publishing checksums. But it must not
+        // be SILENT — "a verification that silently never runs reads as
+        // protection" is exactly the defect class this row is about.
+        tracing::warn!(
+            name = %spec.name,
+            version = %release.tag,
+            "the release carries no checksum manifest — the download is NOT verified. \
+             The transport is TLS-protected, so a network MITM alone is not enough, but \
+             any compromise of the release or of the publishing account would install \
+             unverified code."
+        );
     }
     install(spec, &release.tag, &bytes)?;
     Ok(Some(UpdateNotice::Updated {
@@ -355,8 +369,20 @@ async fn latest_release(spec: &IntegrationSpec) -> anyhow::Result<Option<Release
     Ok(Some(serde_json::from_slice(&out.stdout)?))
 }
 
+/// Pick the asset for this platform.
+///
+/// The marker is a substring (`linux-x64`), and for aft the release carries
+/// BOTH `aft-linux-x64` (a raw binary) and `ck-aft-linux-x64.zip` (an
+/// archive) — both contain it, and both pass the shape filter. Which one
+/// was picked depended on the ASSET LIST'S ORDER, which upstream happens
+/// to keep alphabetical. That is luck, not design: a reorder upstream
+/// would silently switch the install from the raw binary to the archive.
+///
+/// So the raw binary WINS: it is the unambiguous form, it needs no
+/// extraction, and the release's checksum manifest lists it by the same
+/// name the asset carries. The archive is the fallback.
 fn pick_asset<'a>(assets: &'a [ReleaseAsset], marker: &str) -> Option<&'a ReleaseAsset> {
-    assets.iter().find(|a| {
+    let matches = |a: &ReleaseAsset| {
         a.name.contains(marker)
             // Archives (sourcehound) and raw binaries (aft's plain
             // `aft-linux-x64`) are both accepted — extract_binary handles
@@ -364,7 +390,13 @@ fn pick_asset<'a>(assets: &'a [ReleaseAsset], marker: &str) -> Option<&'a Releas
             && (a.name.ends_with(".tar.gz")
                 || a.name.ends_with(".zip")
                 || !a.name.contains('.'))
-    })
+    };
+    // The raw binary first: a name with no extension is the plain
+    // executable.
+    assets
+        .iter()
+        .find(|a| matches(a) && !a.name.contains('.'))
+        .or_else(|| assets.iter().find(|a| matches(a)))
 }
 
 /// The names a release may use for its checksum manifest.
@@ -562,6 +594,48 @@ mod tests {
         assert_eq!(parse_version("sourcehound 1.6.0"), Some((1, 6, 0)));
         assert_eq!(parse_version("v0.59.0"), Some((0, 59, 0)));
         assert_eq!(parse_version("nope"), None);
+    }
+
+    /// The raw binary must win over an archive that also matches the
+    /// marker.
+    ///
+    /// The aft release carries BOTH `aft-linux-x64` (a raw binary) and
+    /// `ck-aft-linux-x64.zip` (an archive), and both contain the marker
+    /// `linux-x64`. Which one was picked depended on the ASSET LIST'S
+    /// ORDER, which upstream happens to keep alphabetical — luck, not
+    /// design. A reorder upstream would silently switch the install from
+    /// the raw binary to the archive.
+    ///
+    /// The test feeds the archive FIRST, so an order-dependent selection
+    /// picks the archive and fails.
+    #[test]
+    fn the_raw_binary_wins_over_an_archive_with_the_same_marker() {
+        let assets = vec![
+            ReleaseAsset {
+                name: "ck-aft-linux-x64.zip".to_string(),
+                url: "https://example.test/ck-aft-linux-x64.zip".to_string(),
+            },
+            ReleaseAsset {
+                name: "aft-linux-x64".to_string(),
+                url: "https://example.test/aft-linux-x64".to_string(),
+            },
+        ];
+        let picked = pick_asset(&assets, "linux-x64").expect("an asset is picked");
+        assert_eq!(
+            picked.name, "aft-linux-x64",
+            "the raw binary must win over the archive, whatever the order"
+        );
+    }
+
+    /// The archive is still picked when there is no raw binary.
+    #[test]
+    fn an_archive_is_picked_when_there_is_no_raw_binary() {
+        let assets = vec![ReleaseAsset {
+            name: "sourcehound-linux-x64.tar.gz".to_string(),
+            url: "https://example.test/sourcehound-linux-x64.tar.gz".to_string(),
+        }];
+        let picked = pick_asset(&assets, "linux-x64").expect("an asset is picked");
+        assert_eq!(picked.name, "sourcehound-linux-x64.tar.gz");
     }
 
     #[test]

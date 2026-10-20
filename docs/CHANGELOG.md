@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **iter-1035 — the shared updater picks the raw binary rather than an archive with the same marker, and it says so when a release carries no checksum manifest.**
+
 - **iter-1033 — a JSON-RPC error from an MCP SSE server is no longer returned as a successful result.** The reader sent whichever of `result`/`error` it found, so a rejected tool call came back as the tool's output and the failure was reported as a success.
 
 - **iter-1032 — the token estimate now sees the tool-call arguments and the reasoning.** A tool-call turn's text is empty by construction, so counting only the content estimated a 100 KB tool call at 4 tokens — which meant the eviction could not see the largest messages in the conversation.
