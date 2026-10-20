@@ -4175,6 +4175,12 @@ fn drifted_bindings() -> Vec<DriftedBinding> {
 
 #[test]
 fn global_bindings_should_fire_their_action_behaviourally() {
+    // One of the drifted chords is Ctrl+T, and the thinking toggle writes
+    // the PROCESS-GLOBAL reasoning-mode cell. Without this guard the
+    // toggle's write lands in the middle of a parallel test that expects
+    // a different mode — which is how the live-tails test came to fail
+    // intermittently with "the thinking did not render".
+    let _guard = crate::tui::operant_app::config_shim::reasoning_override_test_guard();
     let mut inert = Vec::new();
     for b in drifted_bindings() {
         let mut app = make_app();
@@ -4199,6 +4205,10 @@ fn global_bindings_should_fire_their_action_behaviourally() {
 
 #[test]
 fn a_modified_binding_must_not_fire_on_the_bare_key() {
+    // Ctrl+T is one of the drifted chords, and the thinking toggle writes
+    // the process-global reasoning-mode cell — so this test needs the same
+    // guard as the one above.
+    let _guard = crate::tui::operant_app::config_shim::reasoning_override_test_guard();
     let mut leaked = Vec::new();
     for b in drifted_bindings() {
         if !b.requires_modifier {

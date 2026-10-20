@@ -350,12 +350,25 @@ impl Drop for ReasoningOverrideGuard {
 
 #[cfg(test)]
 pub(crate) fn reasoning_override_test_guard() -> ReasoningOverrideGuard {
-    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
     ReasoningOverrideGuard {
-        _lock: LOCK
+        _lock: TEST_GUARD_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner),
     }
+}
+
+/// The lock the test guard serialises on.
+///
+/// ONE lock, shared by the guard and by the tests that inspect it — a
+/// per-caller static would not serialise anything.
+#[cfg(test)]
+static TEST_GUARD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// The test guard's lock, for the leak tracer.
+#[cfg(test)]
+pub(crate) fn test_guard_lock() -> &'static std::sync::Mutex<()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    &LOCK
 }
 
 /// The process-wide reasoning display mode, as currently set.
@@ -393,6 +406,33 @@ pub fn config() -> &'static Config {
 mod tests {
     use super::*;
 
+    /// The guard must EXCLUDE other threads.
+    ///
+    /// The whole point is that a test holding the guard has the cell to
+    /// itself. If it did not, a concurrent test's write lands in the
+    /// middle of this one — which is exactly what the flake was: the
+    /// live-tails test set `Full`, and a concurrent test's `Off` landed
+    /// before its read, so the thinking did not render.
+    #[test]
+    fn the_guard_excludes_another_thread() {
+        let (tx, rx) = std::sync::mpsc::channel::<bool>();
+        let handle = std::thread::spawn(move || {
+            let _guard = reasoning_override_test_guard();
+            // The guard is held. The main thread's `try_lock` must fail.
+            tx.send(true).expect("signal that the guard is held");
+            // Hold it long enough for the main thread to try.
+            std::thread::sleep(std::time::Duration::from_millis(300));
+        });
+        rx.recv().expect("the other thread took the guard");
+        // The main thread tries while the other holds it.
+        let acquired = TEST_GUARD_LOCK.try_lock().is_ok();
+        assert!(
+            !acquired,
+            "the guard must exclude another thread while it is held"
+        );
+        handle.join().expect("join the other thread");
+    }
+
     /// The guard must restore the cell when it is dropped.
     ///
     /// A test that sets the cell and resets it BY HAND leaks the value
@@ -407,18 +447,28 @@ mod tests {
     /// a panic. This test proves the restore happens without a panic.
     #[test]
     fn the_guard_restores_the_cell_when_it_is_dropped() {
+        // The guard FIRST, then the write. Setting the cell before
+        // taking the guard is the very defect this fixes: the write would
+        // land while another test held the guard and expected a different
+        // mode, and that test would fail with a message that looks like a
+        // product bug ("the thinking did not render") and is not one.
+        let _guard = reasoning_override_test_guard();
         set_reasoning_display_override(Some(ReasoningDisplayMode::Off));
-        {
-            let _guard = reasoning_override_test_guard();
-            set_reasoning_display_override(Some(ReasoningDisplayMode::Off));
-            // Inside the guard the cell holds what the test set.
-            assert_eq!(
-                current_reasoning_display_override(),
-                Some(ReasoningDisplayMode::Off),
-                "the cell must hold the mode the test set"
-            );
-        }
-        // And after the guard is dropped, the snapshot default is back.
+        // Inside the guard the cell holds what the test set.
+        assert_eq!(
+            current_reasoning_display_override(),
+            Some(ReasoningDisplayMode::Off),
+            "the cell must hold the mode the test set"
+        );
+        // Drop the guard: it restores the snapshot default.
+        drop(_guard);
+
+        // Read the cell back UNDER A FRESH GUARD. Reading it without one
+        // is a race: the cell is process-global, so a concurrent test's
+        // write lands between the drop and the read. (That race made THIS
+        // test the intermittent failure — the same class as the one it
+        // was written to fix.)
+        let _guard = reasoning_override_test_guard();
         assert_eq!(
             current_reasoning_display_override(),
             None,

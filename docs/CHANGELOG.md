@@ -21,6 +21,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **iter-1033 — a JSON-RPC error from an MCP SSE server is no longer returned as a successful result.** The reader sent whichever of `result`/`error` it found, so a rejected tool call came back as the tool's output and the failure was reported as a success.
+
+- **iter-1032 — the token estimate now sees the tool-call arguments and the reasoning.** A tool-call turn's text is empty by construction, so counting only the content estimated a 100 KB tool call at 4 tokens — which meant the eviction could not see the largest messages in the conversation.
+
+- **iter-1031 — the HTTP and SSE MCP transports no longer advertise `sampling` and `roots`.** They cannot answer a server-initiated request — the HTTP path read one as the response to its own request and failed with "response ID mismatch", leaving the server blocked waiting for a reply — and advertising a capability the transport cannot honour is worse than not advertising it.
+
+- **iter-1031 — a `transport = "streamable-http"` MCP server can now connect.** It was routed to the plain-HTTP client, which sends no `Accept` header (a spec-compliant streamable server answers `406 Not Acceptable`), never echoes the `Mcp-Session-Id` (so every request starts a new session), and cannot read an SSE-framed response. The plain-HTTP transport is unchanged.
+
 - **iter-1030 — dropping an MCP stdio transport no longer leaves the server subprocess running.** `kill_on_drop` defaults to false and there was no `impl Drop`, so every transport dropped without an explicit `disconnect()` — a failed connect, a manager teardown, the agent shutting down — left a live MCP server process behind.
 
 - **iter-1029 — a failed Telegram send is no longer reported as delivered.** Only HTTP 400 was special-cased; every other failure status fell through to a JSON parse that succeeded on Telegram's error body, and the absent message id became an empty string — so a revoked token, a blocked bot, a 429 and a 500 all looked like success. The status now decides. The `edit_message` path no longer treats every 400 as "not modified" (which silently lost answers whose text exceeded Telegram's 4096-unit limit), and a failed poll ends with an error that names the likely cause instead of looping silently every two seconds.
