@@ -2117,7 +2117,13 @@ pub fn runtime_config() -> AppConfig {
 /// loader reads `operant.toml` — `~/.operant/config.toml` is in no load path
 /// at all (ENV-3). A dead file that looks authoritative is worth one line.
 fn ignored_config_files(chosen: &Path) -> Vec<PathBuf> {
-    let candidate = crate::platform::operant_home().join("config.toml");
+    // The sibling of the file the loader ACTUALLY read — not
+    // `platform::operant_home()`, which follows `HERMES_HOME` and not the
+    // `OPERANT_CONFIG_DIR` / `~/.operant` the loader resolves.
+    let candidate = chosen
+        .parent()
+        .unwrap_or_else(|| Path::new(""))
+        .join("config.toml");
     if candidate.exists() && candidate != chosen {
         vec![candidate]
     } else {
@@ -2731,23 +2737,19 @@ model = "anthropic/claude-opus-4-20250514"
     /// ENV-3: a `config.toml` beside the live `operant.toml` is in no load
     /// path — the warning must name it, and must NOT fire for the live file.
     #[test]
-    #[serial]
     fn config_toml_beside_operant_toml_is_reported_as_ignored() {
-        let _lock = crate::platform::test_env_lock_blocking();
         let dir = std::env::temp_dir().join(format!("operant-env3-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("temp dir");
         let chosen = dir.join("operant.toml");
         let dead = dir.join("config.toml");
         std::fs::write(&chosen, "").expect("write chosen");
+        let before = ignored_config_files(&chosen);
         std::fs::write(&dead, "[providers.omniroute]\n").expect("write dead");
-        // SAFETY: the crate-wide env lock serialises process-global env mutation.
-        unsafe { std::env::set_var("HERMES_HOME", &dir) };
         let ignored = ignored_config_files(&chosen);
         let not_ignored = ignored_config_files(&dead);
-        // SAFETY: same lock.
-        unsafe { std::env::remove_var("HERMES_HOME") };
         let _ = std::fs::remove_dir_all(&dir);
+        assert!(before.is_empty(), "no dead file means nothing to name");
         assert_eq!(ignored, vec![dead], "the dead config.toml must be named");
         assert!(not_ignored.is_empty(), "the chosen file is never ignored");
     }
