@@ -115,13 +115,15 @@ impl PlatformAdapter for EmailAdapter {
                 Ok(full)
             }
 
-            // Read greeting
+            // Read greeting — the server must accept the connection.
             let mut buf = [0u8; 4096];
-            let _ = read_response(&mut stream, &mut buf)?;
+            let greeting = read_response(&mut stream, &mut buf)?;
+            check_smtp_code(&greeting, &[220], "greeting")?;
 
             // EHLO
             write!(stream, "EHLO operant\r\n").map_err(|e| format!("SMTP write: {e}"))?;
             let ehlo_resp = read_response(&mut stream, &mut buf)?;
+            check_smtp_code(&ehlo_resp, &[250], "EHLO")?;
 
             // STARTTLS — refuse to proceed without TLS upgrade.
             write!(stream, "STARTTLS\r\n").map_err(|e| format!("SMTP write: {e}"))?;
@@ -135,12 +137,18 @@ impl PlatformAdapter for EmailAdapter {
 
             // Upgrade to TLS. Use a minimal TLS connector with the system
             // root store + hostname verification (rustls).
-            use std::sync::OnceLock;
-            static TLS_CONFIG: OnceLock<std::sync::Arc<rustls::ClientConfig>> = OnceLock::new();
-            let config = TLS_CONFIG.get_or_init(|| {
+            //
+            // The cached value is the RESULT, not the config: building the
+            // config can fail (the protocol versions are resolved against
+            // the named provider), and a `LazyLock` initializer cannot
+            // propagate an error out of itself.
+            static TLS_CONFIG: std::sync::LazyLock<
+                std::result::Result<std::sync::Arc<rustls::ClientConfig>, String>,
+            > = std::sync::LazyLock::new(|| {
                 let mut roots = rustls::RootCertStore::empty();
-                // rustls-native-certs 0.8 returns the certs it loaded next to
-                // the errors it hit; a bad store entry is skipped, not fatal.
+                // rustls-native-certs 0.8 returns the certs it loaded next
+                // to the errors it hit; a bad store entry is skipped, not
+                // fatal.
                 let loaded = rustls_native_certs::load_native_certs();
                 if !loaded.errors.is_empty() {
                     tracing::warn!(
@@ -151,12 +159,17 @@ impl PlatformAdapter for EmailAdapter {
                 for cert in loaded.certs {
                     let _ = roots.add(cert);
                 }
-                std::sync::Arc::new(
-                    rustls::ClientConfig::builder()
-                        .with_root_certificates(roots)
-                        .with_no_client_auth(),
-                )
+                // The provider is named EXPLICITLY: `builder()` resolves it
+                // from the crate features and PANICS when they are
+                // ambiguous, and they are here (hyper-rustls turns on
+                // `aws-lc-rs` by default, tokio-rustls turns on `ring`).
+                operant_config::schema::client_config(roots)
+                    .map(std::sync::Arc::new)
+                    .map_err(|e| format!("rustls client config: {e}"))
             });
+            let config = TLS_CONFIG
+                .clone()
+                .map_err(|e| format!("SMTP TLS setup: {e}"))?;
             let server_name = host
                 .split(':')
                 .next()
@@ -173,30 +186,39 @@ impl PlatformAdapter for EmailAdapter {
 
             // EHLO again over the encrypted channel.
             write!(tls_stream, "EHLO operant\r\n").map_err(|e| format!("SMTP write (TLS): {e}"))?;
-            tls_stream.read(&mut buf).map_err(|e| format!("SMTP read (TLS): {e}"))?;
+            let resp = read_tls_response(&mut tls_stream, &mut buf)?;
+            check_smtp_code(&resp, &[250], "EHLO (TLS)")?;
 
             // AUTH LOGIN (base64-encoded user/pass — now encrypted in transit)
             use base64::Engine;
             write!(tls_stream, "AUTH LOGIN\r\n").map_err(|e| format!("SMTP write (TLS): {e}"))?;
-            tls_stream.read(&mut buf).map_err(|e| format!("SMTP read (TLS): {e}"))?;
+            let resp = read_tls_response(&mut tls_stream, &mut buf)?;
+            check_smtp_code(&resp, &[334], "AUTH LOGIN")?;
             write!(tls_stream, "{}\r\n", base64::engine::general_purpose::STANDARD.encode(&user))
                 .map_err(|e| format!("SMTP write (TLS): {e}"))?;
-            tls_stream.read(&mut buf).map_err(|e| format!("SMTP read (TLS): {e}"))?;
+            let resp = read_tls_response(&mut tls_stream, &mut buf)?;
+            check_smtp_code(&resp, &[334], "AUTH username")?;
             write!(tls_stream, "{}\r\n", base64::engine::general_purpose::STANDARD.encode(&pass))
                 .map_err(|e| format!("SMTP write (TLS): {e}"))?;
-            tls_stream.read(&mut buf).map_err(|e| format!("SMTP read (TLS): {e}"))?;
+            let resp = read_tls_response(&mut tls_stream, &mut buf)?;
+            // 235 is "authentication succeeded"; 535 is "authentication
+            // failed" and must NOT be reported as a successful send.
+            check_smtp_code(&resp, &[235], "AUTH password")?;
 
             // MAIL FROM
             write!(tls_stream, "MAIL FROM:<{}>\r\n", user).map_err(|e| format!("SMTP write (TLS): {e}"))?;
-            tls_stream.read(&mut buf).map_err(|e| format!("SMTP read (TLS): {e}"))?;
+            let resp = read_tls_response(&mut tls_stream, &mut buf)?;
+            check_smtp_code(&resp, &[250], "MAIL FROM")?;
 
             // RCPT TO
             write!(tls_stream, "RCPT TO:<{}>\r\n", to).map_err(|e| format!("SMTP write (TLS): {e}"))?;
-            tls_stream.read(&mut buf).map_err(|e| format!("SMTP read (TLS): {e}"))?;
+            let resp = read_tls_response(&mut tls_stream, &mut buf)?;
+            check_smtp_code(&resp, &[250, 251], "RCPT TO")?;
 
             // DATA
             write!(tls_stream, "DATA\r\n").map_err(|e| format!("SMTP write (TLS): {e}"))?;
-            tls_stream.read(&mut buf).map_err(|e| format!("SMTP read (TLS): {e}"))?;
+            let resp = read_tls_response(&mut tls_stream, &mut buf)?;
+            check_smtp_code(&resp, &[354], "DATA")?;
 
             // Email body
             write!(
@@ -205,7 +227,9 @@ impl PlatformAdapter for EmailAdapter {
                 user, to, body
             )
             .map_err(|e| format!("SMTP write (TLS): {e}"))?;
-            tls_stream.read(&mut buf).map_err(|e| format!("SMTP read (TLS): {e}"))?;
+            let resp = read_tls_response(&mut tls_stream, &mut buf)?;
+            // 250 is "message accepted"; 552 is "message too large".
+            check_smtp_code(&resp, &[250], "message body")?;
 
             // QUIT
             write!(tls_stream, "QUIT\r\n").map_err(|e| format!("SMTP write (TLS): {e}"))?;
@@ -277,5 +301,107 @@ impl PlatformAdapter for EmailAdapter {
         msg.parse_markdown = message.parse_markdown;
         self.send_message(msg).await?;
         Ok(String::new())
+    }
+}
+
+/// Check that an SMTP reply carries one of the expected status codes.
+///
+/// The adapter used to read every server reply into a buffer and DISCARD
+/// it, so a `535 Authentication failed`, a `550 mailbox unavailable` and a
+/// `552 message too large` all produced `Ok(())` — the send reported
+/// SUCCESS for a message the server had rejected. The operator saw the
+/// reply come back and had no idea the mail was never sent.
+///
+/// The code is the first three characters of the reply. A multi-line
+/// reply's LAST line carries the final code, and that is the one that
+/// matters — the earlier lines are continuations.
+fn check_smtp_code(reply: &str, expected: &[u16], step: &str) -> std::result::Result<(), String> {
+    let last = reply.lines().last().unwrap_or("").trim();
+    let code: u16 = last
+        .get(..3)
+        .and_then(|c| c.parse().ok())
+        .ok_or_else(|| format!("SMTP {step}: unparseable server reply: {last:?}"))?;
+    if expected.contains(&code) {
+        return Ok(());
+    }
+    Err(format!(
+        "SMTP {step}: server replied {code} ({last:?}); expected one of {expected:?}. \
+         The message was NOT sent."
+    ))
+}
+
+/// Read a multi-line SMTP reply over a TLS stream.
+///
+/// The plain-stream path has `read_response`; the TLS one needs the same
+/// "keep reading until the final line" loop, over `rustls::Stream`.
+fn read_tls_response<S>(stream: &mut S, buf: &mut [u8]) -> std::result::Result<String, String>
+where
+    S: std::io::Read,
+{
+    let n = stream
+        .read(buf)
+        .map_err(|e| format!("SMTP read (TLS): {e}"))?;
+    let mut full = String::from_utf8_lossy(&buf[..n]).to_string();
+    // A multi-line reply ends with "<code> <text>" — a SPACE after the
+    // code, not a dash.
+    while let Some(line) = full.lines().last() {
+        if line.len() >= 4 && line.as_bytes()[3] == b' ' {
+            break;
+        }
+        let n2 = stream
+            .read(buf)
+            .map_err(|e| format!("SMTP read (TLS): {e}"))?;
+        if n2 == 0 {
+            break;
+        }
+        full.push_str(&String::from_utf8_lossy(&buf[..n2]));
+    }
+    Ok(full)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::check_smtp_code;
+
+    #[test]
+    fn an_accepted_reply_passes() {
+        assert!(check_smtp_code("250 2.1.0 Ok\r\n", &[250], "EHLO").is_ok());
+        assert!(check_smtp_code("235 2.7.0 Authentication successful\r\n", &[235], "AUTH").is_ok());
+    }
+
+    #[test]
+    fn a_rejected_reply_fails() {
+        // The defect: these all used to be reported as a successful send.
+        let err = check_smtp_code(
+            "535 5.7.8 Authentication credentials invalid\r\n",
+            &[235],
+            "AUTH",
+        )
+        .expect_err("a failed authentication must not pass");
+        assert!(err.contains("535"), "the error must name the code: {err}");
+        assert!(
+            err.contains("NOT sent"),
+            "the error must say it was not sent"
+        );
+
+        assert!(check_smtp_code("550 5.1.1 mailbox unavailable\r\n", &[250], "RCPT TO").is_err());
+        assert!(
+            check_smtp_code("552 5.3.4 message too large\r\n", &[250], "message body").is_err()
+        );
+    }
+
+    #[test]
+    fn the_last_line_carries_the_decisive_code() {
+        // A multi-line reply's continuations are not the verdict.
+        let reply = "250-first line\r\n250 2.0.0 Ok\r\n";
+        assert!(check_smtp_code(reply, &[250], "EHLO").is_ok());
+        let reply = "250-first line\r\n535 5.7.8 bad credentials\r\n";
+        assert!(check_smtp_code(reply, &[250], "EHLO").is_err());
+    }
+
+    #[test]
+    fn an_unparseable_reply_fails() {
+        assert!(check_smtp_code("garbage", &[250], "EHLO").is_err());
+        assert!(check_smtp_code("", &[250], "EHLO").is_err());
     }
 }

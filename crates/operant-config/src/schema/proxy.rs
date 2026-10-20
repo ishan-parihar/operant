@@ -12,6 +12,43 @@ use std::sync::{OnceLock, RwLock};
 
 use super::*;
 
+/// The crypto provider this build uses, named EXPLICITLY.
+///
+/// `rustls::ClientConfig::builder()` resolves the provider from the crate
+/// FEATURES, and PANICS when they are ambiguous. They ARE ambiguous in
+/// this workspace: `hyper-rustls` (reached through `reqwest`) turns on
+/// `aws-lc-rs` by default, and `tokio-rustls` turns on `ring` — so both
+/// are on whenever the workspace is built with `--all-features`, and the
+/// workspace-wide feature unification brings `aws-lc-rs` in even when a
+/// crate's own dependency does not.
+///
+/// `builder_with_provider` names the provider instead of inferring it, so
+/// the code works under EVERY feature combination — and the choice is
+/// visible at the call site rather than implied by a dependency's
+/// defaults.
+pub fn crypto_provider() -> std::sync::Arc<rustls::crypto::CryptoProvider> {
+    std::sync::Arc::new(rustls::crypto::ring::default_provider())
+}
+
+/// The rustls client configuration, with the provider named.
+///
+/// Use this instead of `rustls::ClientConfig::builder()`: the builder
+/// resolves the provider from the crate features and panics when they are
+/// ambiguous, which they are here.
+///
+/// The protocol versions are set explicitly because `builder_with_provider`
+/// does not default them — unlike `builder()`, which takes the defaults
+/// along with the (inferable) provider.
+pub fn client_config(roots: rustls::RootCertStore) -> anyhow::Result<rustls::ClientConfig> {
+    Ok(
+        rustls::ClientConfig::builder_with_provider(crypto_provider())
+            .with_safe_default_protocol_versions()
+            .context("rustls protocol versions")?
+            .with_root_certificates(roots)
+            .with_no_client_auth(),
+    )
+}
+
 pub(crate) const SUPPORTED_PROXY_SERVICE_KEYS: &[&str] = &[
     "provider.anthropic",
     "provider.compatible",
@@ -1138,11 +1175,7 @@ pub async fn ws_connect_with_proxy(
             let stream: BoxedIo = if is_secure {
                 let mut root_store = rustls::RootCertStore::empty();
                 root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-                let tls_config = std::sync::Arc::new(
-                    rustls::ClientConfig::builder()
-                        .with_root_certificates(root_store)
-                        .with_no_client_auth(),
-                );
+                let tls_config = std::sync::Arc::new(client_config(root_store)?);
                 let connector = tokio_rustls::TlsConnector::from(tls_config);
                 let server_name = rustls_pki_types::ServerName::try_from(target_host.clone())
                     .with_context(|| format!("Invalid TLS server name: {target_host}"))?;
@@ -1291,11 +1324,7 @@ pub(crate) async fn ws_connect_via_proxy(
     let stream: BoxedIo = if is_secure {
         let mut root_store = rustls::RootCertStore::empty();
         root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-        let tls_config = std::sync::Arc::new(
-            rustls::ClientConfig::builder()
-                .with_root_certificates(root_store)
-                .with_no_client_auth(),
-        );
+        let tls_config = std::sync::Arc::new(client_config(root_store)?);
         let connector = tokio_rustls::TlsConnector::from(tls_config);
         let server_name = rustls_pki_types::ServerName::try_from(target_host.clone())
             .with_context(|| format!("Invalid TLS server name: {target_host}"))?;

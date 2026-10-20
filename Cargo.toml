@@ -70,7 +70,13 @@ url = "2.5"
 tokio-tungstenite = "0.29"
 tokio-stream = "0.1"
 tokio-util = "0.7"
-tokio-rustls = { version = "0.26", features = ["ring", "logging", "tls12"] }
+# `default-features = false` matters: tokio-rustls's default features pull
+# in `aws_lc_rs`, and with `ring` ALSO enabled the rustls crypto provider
+# is ambiguous — `rustls::ClientConfig::builder()` panics with "Could not
+# automatically determine the process-level CryptoProvider from Rustls
+# crate features". That panic was in the Email adapter's TLS setup and in
+# the proxy's TLS setup, so both were broken.
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "logging", "tls12"] }
 uuid = { version = "1.7", features = ["v4", "std"] }
 chrono = { version = "0.4", features = ["clock", "std", "serde"] }
 parking_lot = "0.12"

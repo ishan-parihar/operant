@@ -19,7 +19,10 @@ parking_lot = "0.12"
 rand = "0.8"
 regex = "1.10"
 reqwest = { workspace = true }
-rustls = "0.23"
+# One crypto provider, named — see the note in operant-core/Cargo.toml:
+# with `aws_lc_rs` AND `ring` both enabled, `rustls::ClientConfig::builder()`
+# panics, which broke every proxied WebSocket connection.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 rustls-pki-types = "1"
 schemars = { version = "0.8", features = ["derive"], optional = true }
 serde = { version = "1.0", default-features = false, features = ["derive"] }

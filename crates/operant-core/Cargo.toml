@@ -29,7 +29,14 @@ url = { workspace = true }
 tokio-tungstenite = { workspace = true }
 # TLS for the EmailAdapter's SMTP STARTTLS upgrade (iter-125). Used by the
 # gateway to refuse plaintext SMTP AUTH and require an encrypted channel.
-rustls = "0.23"
+# The crypto provider must be EXPLICIT. `rustls` with default features
+# enables `aws_lc_rs`, and `tokio-rustls` enables `ring` — so both are on,
+# and `rustls::ClientConfig::builder()` PANICS when the crate features are
+# ambiguous ("Could not automatically determine the process-level
+# CryptoProvider from Rustls crate features"). That panic is in the Email
+# adapter's TLS setup and in the proxy's TLS setup, so both were broken.
+# One provider, named: `builder()` resolves it.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 rustls-native-certs = "0.8"
 
 # Serialization
