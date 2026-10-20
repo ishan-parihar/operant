@@ -1154,10 +1154,13 @@ pub fn create_provider(name: &str, api_key: Option<&str>) -> anyhow::Result<Box<
 /// `default_wire_api` / `default_base_url` the runtime already calls at
 /// every chat request).
 ///
-/// One shared function — gateway onboarding pre-fill, CLI wizard prompt
-/// pre-fill, and any future caller all consume this so the surfaces can't
-/// drift. The schema-level cleanup (per-provider typed configs that would
-/// eliminate the hardcoded field list here) ships with v3 / #5947.
+/// One shared function — so the surfaces that consume it cannot drift.
+///
+/// NOTE: this had NO caller. Its doc used to claim "gateway onboarding
+/// pre-fill, CLI wizard prompt pre-fill, and any future caller all
+/// consume this" — and none of them did. The claim is recorded as RT-90.
+/// The function is kept because it is the ONLY place the per-provider
+/// defaults are read, and the fix is to WIRE it, not to delete it.
 ///
 /// Returns `ModelProviderConfig::default()` (all `None`) for unknown
 /// providers — the form just opens blank, callers don't have to special
