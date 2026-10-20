@@ -621,6 +621,28 @@ impl Gateway {
         let outcome = adapter.send_message(message).await;
         self.breaker_record(platform, &channel_id, outcome.as_ref().err())
             .await;
+
+        // Record the delivery. The ledger used to be written ONLY on the
+        // REPLY path (`handle_with_lifecycle`), so every PROACTIVE send —
+        // a scheduled message, a cron push, a permission notice, a
+        // gateway event — was invisible in the operator's view of
+        // delivery health. The ledger's own doc says "Every send is
+        // recorded — success or failure, so operators can inspect recent
+        // delivery health instead of guessing whether a reply actually
+        // left the gateway"; a proactive send is a send.
+        //
+        // And the failure is now RECORDED, which matters because most
+        // proactive call sites discard the result (`let _ = ...`), so a
+        // failed proactive send was previously invisible everywhere.
+        let status = if outcome.is_ok() {
+            "delivered"
+        } else {
+            "failed"
+        };
+        self.delivery_ledger
+            .record(platform, &channel_id, "", status)
+            .await;
+
         outcome
     }
 
@@ -1316,6 +1338,56 @@ mod tests {
         assert_eq!(first.content, "echo:first");
         assert!(!gw.turn_lease().is_busy("telegram:u1:c1").await);
         assert_eq!(gw.stall_tracker().active_count().await, 0);
+    }
+
+    /// A PROACTIVE send must appear in the delivery ledger.
+    ///
+    /// The ledger used to be written ONLY on the reply path
+    /// (`handle_with_lifecycle`), so every proactive send — a scheduled
+    /// message, a cron push, a permission notice, a gateway event — was
+    /// invisible in the operator's view of delivery health. The ledger's
+    /// own doc says "Every send is recorded — success or failure".
+    ///
+    /// And the FAILURE is recorded, which matters because most proactive
+    /// call sites discard the result (`let _ = ...`), so a failed
+    /// proactive send was previously invisible everywhere.
+    #[tokio::test]
+    async fn a_proactive_send_is_recorded_in_the_delivery_ledger() {
+        let gw = Arc::new(
+            Gateway::new(GatewayConfig::default())
+                .with_adapter(Arc::new(FlakyAdapter {
+                    name: "flaky".to_string(),
+                    sends: Arc::new(AtomicUsize::new(0)),
+                    error: "the channel is gone".to_string(),
+                }))
+                .with_adapter(Arc::new(SucceedingAdapter {
+                    name: "working".to_string(),
+                })),
+        );
+
+        // A proactive send that succeeds.
+        gw.send_to_platform("working", OutgoingMessage::new("c1", "hello"))
+            .await
+            .expect("the proactive send succeeds");
+        // A proactive send that fails.
+        let failed = gw
+            .send_to_platform("flaky", OutgoingMessage::new("c2", "hello"))
+            .await;
+        assert!(
+            failed.is_err(),
+            "the failing adapter must surface its error"
+        );
+
+        assert_eq!(
+            gw.delivery_ledger().delivered_count().await,
+            1,
+            "a proactive send that succeeded must be recorded as delivered"
+        );
+        assert_eq!(
+            gw.delivery_ledger().failed_count().await,
+            1,
+            "a proactive send that failed must be recorded as failed"
+        );
     }
 
     /// Every successful route records a delivery in the ledger; mirror rules
@@ -2086,6 +2158,52 @@ mod tests {
         name: String,
         sends: Arc<AtomicUsize>,
         error: String,
+    }
+
+    /// An adapter whose sends always succeed.
+    struct SucceedingAdapter {
+        name: String,
+    }
+
+    #[async_trait::async_trait]
+    impl PlatformAdapter for SucceedingAdapter {
+        fn name(&self) -> &str {
+            &self.name
+        }
+        fn is_enabled(&self) -> bool {
+            true
+        }
+        async fn start(&self) -> Result<()> {
+            Ok(())
+        }
+        async fn stop(&self) -> Result<()> {
+            Ok(())
+        }
+        async fn send_message(&self, _message: OutgoingMessage) -> Result<()> {
+            Ok(())
+        }
+        async fn send_message_to_channel(
+            &self,
+            _channel_id: &str,
+            _message: &OutgoingMessage,
+        ) -> Result<String> {
+            Ok(String::new())
+        }
+        async fn handle_update(
+            &self,
+            _update: serde_json::Value,
+        ) -> Result<Option<IncomingMessage>> {
+            Ok(None)
+        }
+        fn config_json(&self) -> serde_json::Value {
+            serde_json::json!({})
+        }
+        async fn start_with_channel(
+            &self,
+            _message_tx: tokio::sync::mpsc::UnboundedSender<IncomingMessage>,
+        ) -> Result<()> {
+            Ok(())
+        }
     }
 
     #[async_trait::async_trait]
