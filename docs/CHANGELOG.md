@@ -21,6 +21,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-1123 — accepted-but-unread config keys now say so, and the template stops advertising them.**
+  `operant config show`, `operant.example.toml` and the loader all presented as live 19 settings nothing
+  reads: the six `[tui]` presentation keys (`show_iterations`, `landing_title`, `prompt_placeholder`,
+  `refresh_rate_ms`, `compact_width`, `medium_width`), `[skills] template_name`/`template_description`,
+  the whole `[pk]` table (the live kernel surface is `[tools.kernel]`), `[bylaws] grant_ttl_days`
+  (retired with the grant ledger — there is no `SeatApprover::mint` any more), the `[socialization]`
+  table (phase 1 never landed), `[agent] max_consecutive_tool_only`, `[tools] event_channel_size` and
+  `browser_binary_path`, `[memory] agentmemory_url`/`agentmemory_secret`, and
+  `[tools.tool_search] search_default_limit`/`max_search_limit` (hardcoded 10/25 in the tool). The
+  loader now prints one line per such key whose value differs from the default — a clean start stays
+  silent — and the example template carries a comment in each place instead of a value. Nothing was
+  deleted: `deny_unknown_fields` makes removal a breaking change for the operator's own config, which
+  carries every one of these keys today. `scripts/audit-config-surface.py` re-derives the list instead
+  of asking anyone to trust it.
+- **iter-1122 — the configured speech-to-text model is the model that gets used.** `[tools.stt]
+  groq_model` and `openai_model` were parsed, defaulted, printed by `operant config show`, and
+  advertised in `operant.example.toml`, while `transcription_tool.rs` hardcoded
+  `whisper-large-v3-turbo` and `whisper-1` at its two call sites — a provider retiring a model name
+  was unfixable without a new build. Both sites now resolve per-call `model` → configured value →
+  provider default, with the previous strings as the defaults. Found by a config-surface audit; the
+  remaining 24 accepted-but-unread settings are triaged in the ledger (RT-136).
 - **iter-1121 — `operant dashboard server --stop` and `--status` stop being stubs.** Both printed a
   sentence telling the operator to kill the process by hand. The server now records its pid and URL in
   `$OPERANT_HOME/dashboard.pid` before it starts serving, `--status` reports that server (and removes a

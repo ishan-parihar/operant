@@ -210,14 +210,10 @@ backend = "none"
 theme = "opencode"
 rich_output = true
 show_tool_calls = true
-show_iterations = true
-landing_title = "HERMES"
-prompt_placeholder = "Ask anything... \"Fix a TODO in the codebase\""
-# Accepted for compatibility but IGNORED: the TUI frame cadence is adaptive
-# (fast while streaming, slower when idle or unfocused). Safe to delete.
-# refresh_rate_ms = 80
-compact_width = 96
-medium_width = 120
+# `show_iterations`, `landing_title`, `prompt_placeholder`, `compact_width`,
+# `medium_width` and `refresh_rate_ms` are accepted for compatibility but
+# UNREAD — the render layer consults none of them (RT-136). Setting one loads
+# and warns; the values are gone from this template on purpose.
 # Editor for the composer (Ctrl+G edits the prompt in it; saving loads the
 # text back). Empty = $VISUAL, then $EDITOR, then vi. Arguments allowed,
 # e.g. "code --wait" or "nvim -c 'set ft=markdown'" (whitespace-split).
@@ -308,8 +304,7 @@ enabled = false
 root_dir = "$HOME/.operant/skills"
 memory_dir = "$HOME/.operant/memory"
 autoload = true
-template_name = "new-skill"
-template_description = "Describe what this skill does."
+# `template_name` / `template_description` are accepted but UNREAD (RT-136).
 
 [gateway]
 telegram_enabled = false
@@ -362,7 +357,8 @@ admins = []
 
 [tools]
 registry_timeout_secs = 30
-event_channel_size = 100
+# `event_channel_size` is accepted but UNREAD (RT-136): the agent event
+# channels are built with fixed capacities.
 # disabled_tools = ["spotify_playback", "homeassistant"]
 # disabled_toolsets = ["messaging", "media", "smart_home"]
 # AFT (Agent File Tools) IDE-grade coding tools: 18 aft_* tools backed by
@@ -606,15 +602,9 @@ enabled = true
 # max_total_size_mb = 500
 # max_file_size_mb = 10
 
-# [pk]
-# Prime Kernel sidecar. Dark-merged: `enabled` defaults to false and the
-# sidecar is not spawned at all, so the `code_execution` tempfile path remains
-# the only Python surface until you opt in. Requires a working
-# `sidecar_script` and a built `vendor/prime-agent` submodule.
-# enabled = false
-# sidecar_script = "pk-sidecar/main.py"
-# ndjson_socket = "~/.operant/run/pk.sock"
-# exec_timeout_secs = 30
+# [pk] — NOT READ (RT-136). The live kernel surface is `[tools.kernel]`;
+# this superseded table is still accepted so older configs parse, and setting
+# any key warns. Do not add it to a new config.
 
 # [bylaws] — the permission-bylaws (per-seat policy) knobs.
 # See docs/PERMISSION-SCOPING-PLAN.md §5 P2. Seats without a policy row are
@@ -634,11 +624,9 @@ unrestricted_default = "yolo"
 # affected — their policy row already clamps unattended runs. This knob,
 # and only this knob, manages the unattended posture.
 unattended_posture = "yolo"
-# Days a department-head approval's grant stands (the HoD default is 7).
-# 0 or negative = never-standing for non-CEO approvals: the grant is
-# recorded already-lapsed, so the approval stays auditable while conferring
-# nothing. CEO+ (org-lead) approvals mint standing grants regardless.
-grant_ttl_days = 7
+# `grant_ttl_days` is RETIRED (RT-136): the grant ledger is gone — an
+# approved plan IS the grant (Holon compiles it to `policy.json`) — so the key
+# is accepted for old configs and warns when set. It is not advertised here.
 # Wave 3 — minutes a completed turn's rolling session summary remains a
 # valid continuation entry point (restart / session reload inside the
 # window begins from it); after the window the next session starts fresh.
@@ -694,7 +682,8 @@ weight_authority = 0.5
 [socialization]
 enabled = false
 schedule = "0 30 9 * * *"
-turn_budget = 3
+# `turn_budget` is accepted but UNREAD (RT-136): the phase-1 coordinator has
+# not landed (plan-2026-10-08-socialization-sessions.md §8).
 pairs = [
     ["premiere", "chief-of-staff"],
     ["chief-of-staff", "crew-chief"],

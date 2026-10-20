@@ -150,14 +150,13 @@ impl Default for AppConfig {
 /// `[bylaws]` — the permission-bylaws knobs (wave-2 slice F2,
 /// `docs/PERMISSION-SCOPING-PLAN.md` §5 P2 + §11's owner defaults).
 ///
-/// All knobs are live — the repo's `lifeos` rule forbids keys that
-/// gate nothing, so each field below states exactly which slice reads it.
+/// Each field below states exactly which slice reads it.
 ///
-/// - `grant_ttl_days` — LIVE (F2): the TTL in days a department-head
-///   approval mints (`SeatApprover::mint`). `0`/negative = never-standing
-///   for non-CEO approvals: the grant is recorded already-lapsed, so the
-///   approval is auditable while conferring nothing. CEO+ (org-lead)
-///   approvals mint standing grants (`expires_at = None`) regardless.
+/// - `grant_ttl_days` — RETIRED with the grant ledger (RT-136): there is no
+///   `SeatApprover::mint` any more — an approved plan IS the grant, compiled
+///   to `policy.json` by Holon (`org/seat_authority.rs`), so `has_grant` is
+///   structurally false and a TTL governs nothing. Accepted so old configs
+///   keep parsing; `AppConfig::unused_setting_warnings` says so when set.
 /// - `unrestricted_default` — consumed by the `/grant` command (P3, live
 ///   since iter-598) as the mode a newly-seated policy row carries when the
 ///   operator does not name one. The RUNTIME default for a seat without a
@@ -260,7 +259,10 @@ impl Default for ContextInjectionSettings {
 /// `[socialization]` — the daily seat-pairing sessions (gap 6,
 /// plan-2026-10-08-socialization-sessions.md). Pairs are DATA and ordered:
 /// each entry is `[senior, junior]` — the senior seat initiates; junior
-/// voice is an explicit grant, visibly exceptional.
+/// voice is an explicit grant, visibly exceptional. **Phase 1 has not
+/// landed (RT-136):** nothing in this tree reads the table — the coordinator
+/// is still `plan-2026-10-08-socialization-sessions.md` §8 phase 1, so
+/// `enabled = true` changes nothing and says so at load.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct SocializationSettings {
@@ -878,6 +880,10 @@ impl Default for LoggingSettings {
     }
 }
 
+/// `[tui]`. `show_iterations`, `landing_title`, `prompt_placeholder`,
+/// `compact_width` and `medium_width` are accepted but unread (RT-136): the
+/// render layer consults none of them. `refresh_rate_ms` is unread for the
+/// reason its own doc gives (frames are paced adaptively).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct TuiSettings {
@@ -1299,6 +1305,9 @@ impl Default for HarnessSettings {
 /// `ndjson_socket` later when the supervisor lands).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
+/// **Nothing reads this table (RT-136).** The live kernel surface is
+/// `[tools.kernel]`; these keys are kept so older configs still parse and
+/// are reported by `AppConfig::unused_setting_warnings` when set.
 pub struct PkSettings {
     /// Master switch. When `false` (the default), the sidecar is
     /// never spawned; the existing `code_execution` tempfile path is
@@ -2205,6 +2214,10 @@ pub fn load_app_config(explicit: Option<&Path>) -> Result<LoadedConfig> {
     config.browser.warn_legacy_keys();
     // (plan 11C3) [memory] provider is accepted-and-ignored now.
     config.memory.warn_legacy_keys();
+    // (RT-136) surface the loader still accepts but nothing reads.
+    for line in config.unused_setting_warnings() {
+        eprintln!("{line}");
+    }
     // (RT-3) [keybindings] is accepted-and-ignored until dispatch reads it.
     if config.keybindings.is_some() {
         eprintln!(
@@ -2494,6 +2507,77 @@ pub fn parse_config_str(raw: &str, source: &Path) -> Result<AppConfig> {
 }
 
 impl AppConfig {
+    /// Settings the loader still accepts — `deny_unknown_fields` makes
+    /// deletion a breaking change for every existing `operant.toml` — that
+    /// nothing reads (RT-136). One line per key whose value differs from the
+    /// default, because a deserialized struct cannot tell "written" from
+    /// "defaulted": a clean start stays silent.
+    pub fn unused_setting_warnings(&self) -> Vec<String> {
+        let d = Self::default();
+        let mut out = Vec::new();
+        macro_rules! flag {
+            ($changed:expr, $key:literal) => {
+                if $changed {
+                    out.push(format!(
+                        "warning: {} is accepted but unread — it has no effect. Remove the key from operant.toml.",
+                        $key
+                    ));
+                }
+            };
+        }
+        flag!(
+            self.tui.show_iterations != d.tui.show_iterations
+                || self.tui.landing_title != d.tui.landing_title
+                || self.tui.prompt_placeholder != d.tui.prompt_placeholder
+                || self.tui.refresh_rate_ms != d.tui.refresh_rate_ms
+                || self.tui.compact_width != d.tui.compact_width
+                || self.tui.medium_width != d.tui.medium_width,
+            "[tui]"
+        );
+        flag!(
+            self.skills.template_name != d.skills.template_name
+                || self.skills.template_description != d.skills.template_description,
+            "[skills] template_name / template_description"
+        );
+        flag!(
+            self.pk.enabled != d.pk.enabled
+                || self.pk.sidecar_script != d.pk.sidecar_script
+                || self.pk.ndjson_socket != d.pk.ndjson_socket
+                || self.pk.exec_timeout_secs != d.pk.exec_timeout_secs,
+            "[pk]"
+        );
+        flag!(
+            self.bylaws.grant_ttl_days != d.bylaws.grant_ttl_days,
+            "[bylaws] grant_ttl_days"
+        );
+        flag!(
+            self.socialization.enabled != d.socialization.enabled
+                || self.socialization.schedule != d.socialization.schedule
+                || self.socialization.turn_budget != d.socialization.turn_budget
+                || self.socialization.pairs != d.socialization.pairs,
+            "[socialization]"
+        );
+        flag!(
+            self.agent.max_consecutive_tool_only != d.agent.max_consecutive_tool_only,
+            "[agent] max_consecutive_tool_only"
+        );
+        flag!(
+            self.tools.event_channel_size != d.tools.event_channel_size
+                || self.tools.browser_binary_path != d.tools.browser_binary_path,
+            "[tools] event_channel_size / browser_binary_path"
+        );
+        flag!(
+            self.memory.agentmemory_url != d.memory.agentmemory_url
+                || self.memory.agentmemory_secret != d.memory.agentmemory_secret,
+            "[memory] agentmemory_url / agentmemory_secret"
+        );
+        flag!(
+            self.tools.tool_search.search_default_limit != d.tools.tool_search.search_default_limit
+                || self.tools.tool_search.max_search_limit != d.tools.tool_search.max_search_limit,
+            "[tools.tool_search] search_default_limit / max_search_limit"
+        );
+        out
+    }
     pub fn apply_env_overrides(&mut self) -> Result<()> {
         apply_string_option_override("OPENAI_API_KEY", &mut self.client.api_key)?;
         apply_string_value_override("OPENAI_BASE_URL", &mut self.client.base_url);
@@ -3195,6 +3279,30 @@ wonderful_unknown_key = 42
     }
 
     #[test]
+    fn unused_setting_warnings_name_only_the_keys_actually_set() {
+        // A clean config says nothing: defaults must not produce noise.
+        assert!(AppConfig::default().unused_setting_warnings().is_empty());
+        let raw = "[tui]\nlanding_title = \"Nope\"\n[skills]\ntemplate_name = \"x\"\n";
+        let config = parse_config_str(raw, Path::new("memory://unused-settings")).unwrap();
+        let warnings = config.unused_setting_warnings();
+        assert_eq!(warnings.len(), 2, "{warnings:?}");
+        assert!(warnings.iter().any(|w| w.contains("[tui]")), "{warnings:?}");
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("[skills] template_name")),
+            "{warnings:?}"
+        );
+        // An ENABLED unimplemented feature is the loudest case: the operator
+        // must learn that `enabled = true` did nothing.
+        let raw = "[socialization]\nenabled = true\n";
+        let config = parse_config_str(raw, Path::new("memory://unused-socialization")).unwrap();
+        let warnings = config.unused_setting_warnings();
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("[socialization]"), "{warnings:?}");
+    }
+
+    #[test]
     fn agent_block_env_knob_defaults_stay_dark() {
         // No [agent] keys → every new knob off, list empty (dark-mergeable:
         // an unchanged config file cannot change any behavior).
@@ -3221,8 +3329,10 @@ wonderful_unknown_key = 42
             err.is_err(),
             "removed bylaws key must hard-fail config load"
         );
-        // And the shipped example carries the live default TTL of 7 days,
-        // uncommented, where the gateway reads it.
+        // The field is still ACCEPTED (a config carrying it loads), but the
+        // TTL it names governs nothing since the grant ledger went away
+        // (RT-136) — so the example must not ASSIGN it (it may explain the
+        // retirement in a comment).
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .unwrap()
@@ -3231,8 +3341,8 @@ wonderful_unknown_key = 42
             .join("operant.example.toml");
         let example = std::fs::read_to_string(&root).unwrap();
         assert!(
-            example.contains("grant_ttl_days = 7"),
-            "the example must ship the HoD 7-day default, uncommented"
+            !example.contains("grant_ttl_days ="),
+            "the example must not advertise a key nothing reads (RT-136)"
         );
     }
 
