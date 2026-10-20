@@ -184,10 +184,26 @@ pub async fn handle_channel_command(
             if json {
                 println!(
                     "{}",
-                    serde_json::json!({"status":"added","channel": channel_type, "config": saved_at})
+                    serde_json::json!({
+                        "status": "added",
+                        "channel": channel_type,
+                        "config": saved_at,
+                        // Whether the agent can RECEIVE on this channel.
+                        // A platform that is send-only has a complete
+                        // inbound parser that nothing calls, so a message
+                        // sent to it never reaches the agent — and the
+                        // operator would otherwise believe the opposite.
+                        "inbound": operant_core::gateway::platform_can_receive(&channel_type),
+                    })
                 );
             } else {
                 println!("Added {channel_type} channel and persisted the config to {saved_at}.");
+                if !operant_core::gateway::platform_can_receive(&channel_type) {
+                    println!(
+                        "NOTE: {channel_type} is SEND-ONLY — operant can post to it, but \
+                         messages sent to it never reach the agent."
+                    );
+                }
                 println!("Run `operant channel doctor` to verify connectivity.");
             }
             Ok(())

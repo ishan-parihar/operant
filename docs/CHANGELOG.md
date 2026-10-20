@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-1089 — `operant channel add` says when the channel it added is send-only.** "Added slack channel" led an operator to believe the agent would see Slack messages.
+
 - **iter-1087 — `operant gateway status` now says which platforms can RECEIVE.** "Slack: enabled" led an operator to believe they could receive Slack messages; the status now says "send-only (no inbound)".
 
 - **iter-1085 — `operant channel list` shows SMS.** The gateway's registry has seven adapters; the list showed six.
