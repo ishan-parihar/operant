@@ -367,10 +367,28 @@ fn pick_asset<'a>(assets: &'a [ReleaseAsset], marker: &str) -> Option<&'a Releas
     })
 }
 
+/// The names a release may use for its checksum manifest.
+///
+/// `SHA256SUMS` is the sourcehound spelling; `checksums.sha256` is aft's.
+/// The guard used to match ONLY the first, so the SHA256 verification
+/// never fired for aft — the module doc claimed "SHA256-verifies when the
+/// release carries a `SHA256SUMS`" and for aft it never did, so the shared
+/// updater installed a freshly downloaded aft binary with NO checksum
+/// comparison at all. A verification that silently never runs is worse
+/// than none: it reads as protection.
+const SUMS_ASSET_NAMES: &[&str] = &["SHA256SUMS", "checksums.sha256"];
+
+/// The release's checksum manifest, if it carries one.
+fn sums_asset(assets: &[ReleaseAsset]) -> Option<&ReleaseAsset> {
+    assets.iter().find(|a| {
+        SUMS_ASSET_NAMES
+            .iter()
+            .any(|n| a.name.eq_ignore_ascii_case(n))
+    })
+}
+
 fn release_has_sums(assets: &[ReleaseAsset]) -> bool {
-    assets
-        .iter()
-        .any(|a| a.name.eq_ignore_ascii_case("SHA256SUMS"))
+    sums_asset(assets).is_some()
 }
 
 async fn download(url: &str) -> anyhow::Result<Vec<u8>> {
@@ -400,16 +418,31 @@ async fn download(url: &str) -> anyhow::Result<Vec<u8>> {
     Ok(response.bytes().await?.to_vec())
 }
 
+/// Verify `bytes` against a release's checksum manifest.
+///
+/// The manifest is the release's own `SHA256SUMS` / `checksums.sha256`
+/// asset, and the entry is looked up by the asset's name.
+///
+/// Public so a FIRST-INSTALL path (which downloads outside the shared
+/// updater) can verify the same way: the updater's own guard matched
+/// only the `SHA256SUMS` spelling, so for aft it never verified anything
+/// — and a first-install download that is executed has to be verified
+/// too.
+pub async fn verify_release_bytes(
+    release: &ReleaseInfo,
+    asset_name: &str,
+    bytes: &[u8],
+) -> anyhow::Result<()> {
+    verify_sha256(release, asset_name, bytes).await
+}
+
 async fn verify_sha256(
     release: &ReleaseInfo,
     asset_name: &str,
     bytes: &[u8],
 ) -> anyhow::Result<()> {
-    let sums_asset = release
-        .assets
-        .iter()
-        .find(|a| a.name.eq_ignore_ascii_case("SHA256SUMS"))
-        .ok_or_else(|| anyhow::anyhow!("release carries no SHA256SUMS"))?;
+    let sums_asset = sums_asset(&release.assets)
+        .ok_or_else(|| anyhow::anyhow!("release carries no checksum manifest"))?;
     let text = download(&sums_asset.url).await?;
     let text = String::from_utf8_lossy(&text);
     let want = text

@@ -383,9 +383,38 @@ async fn download_aft_release(tag: &str) -> Result<PathBuf> {
         .await
         .map_err(|e| Error::Agent(format!("aft download: failed to read body: {e}")))?;
 
+    // VERIFY BEFORE WRITING. This is the FIRST-INSTALL path, and it is
+    // the path that runs on a machine where the operator never installed
+    // aft by hand — `aft_enabled` defaults to true, so the bridge
+    // downloads a binary and EXECUTES it with the user's privileges. The
+    // download is over TLS, so a network MITM alone is not enough, but any
+    // compromise of the release, the GitHub account, or a local trust
+    // anchor substitutes arbitrary code that operant then runs on every
+    // subsequent session.
+    //
+    // The shared updater verified the bytes — but its guard matched only
+    // the `SHA256SUMS` spelling, and aft publishes `checksums.sha256`, so
+    // for aft the verification NEVER FIRED. A verification that silently
+    // never runs reads as protection. The name is fixed there too
+    // (binary_updater::SUMS_ASSET_NAMES); this path asks the release for
+    // its manifest and refuses to install without a matching checksum.
+    let assets = aft_release_assets(&normalized_tag).await?;
+    let release = crate::binary_updater::ReleaseInfo {
+        tag: normalized_tag.clone(),
+        assets,
+    };
+    crate::binary_updater::verify_release_bytes(&release, &asset_name, &bytes)
+        .await
+        .map_err(|e| Error::Agent(format!("aft download: {e}")))?;
+
     // Raw binary — write directly (no tar extraction; v0.49.x publishes
     // plain executables, not tarballs).
-    tokio::fs::write(&bin_path, &bytes)
+    //
+    // ATOMIC: write to a temp name and rename over the target, so an
+    // interrupted download can never leave a half-written binary at the
+    // path the bridge EXECUTES. The previous direct write could.
+    let tmp_path = bin_path.with_extension("part");
+    tokio::fs::write(&tmp_path, &bytes)
         .await
         .map_err(|e| Error::Agent(format!("aft download: failed to write binary: {e}")))?;
 
@@ -393,10 +422,58 @@ async fn download_aft_release(tag: &str) -> Result<PathBuf> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = tokio::fs::set_permissions(&bin_path, std::fs::Permissions::from_mode(0o755)).await;
+        let _ = tokio::fs::set_permissions(&tmp_path, std::fs::Permissions::from_mode(0o755)).await;
     }
 
+    tokio::fs::rename(&tmp_path, &bin_path)
+        .await
+        .map_err(|e| Error::Agent(format!("aft download: failed to install binary: {e}")))?;
+
     Ok(bin_path)
+}
+
+/// The release's ASSETS, for its checksum manifest.
+///
+/// The GitHub release API names the tag field `tag_name`, and
+/// `binary_updater::ReleaseInfo` is the `--jq` PROJECTION's shape (`tag`),
+/// not the API's — so deserializing the API response into `ReleaseInfo`
+/// directly fails on the missing `tag` field. This path never needs the
+/// tag (it already has one), only the assets.
+#[derive(serde::Deserialize)]
+struct ReleaseAssets {
+    assets: Vec<crate::binary_updater::ReleaseAsset>,
+}
+
+/// The release's asset list, for its checksum manifest.
+///
+/// Fails CLOSED: if the metadata cannot be read, the checksum manifest
+/// cannot be read, and a binary whose integrity cannot be verified is not
+/// installed.
+async fn aft_release_assets(tag: &str) -> Result<Vec<crate::binary_updater::ReleaseAsset>> {
+    let url = format!("https://api.github.com/repos/{AFT_REPO}/releases/tags/{tag}");
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(60))
+        .user_agent("operant-aft-bridge")
+        .build()
+        .map_err(|e| Error::Agent(format!("aft download: HTTP client build failed: {e}")))?;
+    let resp = client
+        .get(&url)
+        .header("Accept", "application/vnd.github+json")
+        .send()
+        .await
+        .map_err(|e| Error::Agent(format!("aft download: release metadata failed: {e}")))?;
+    if !resp.status().is_success() {
+        return Err(Error::Agent(format!(
+            "aft download: release metadata for {tag} is unavailable (HTTP {}) — \
+             the checksum manifest cannot be read, so the binary is NOT installed",
+            resp.status()
+        )));
+    }
+    let parsed: ReleaseAssets = resp
+        .json::<ReleaseAssets>()
+        .await
+        .map_err(|e| Error::Agent(format!("aft download: release metadata parse failed: {e}")))?;
+    Ok(parsed.assets)
 }
 
 /// Map the current platform to the aft release asset name (v0.49.x naming:
