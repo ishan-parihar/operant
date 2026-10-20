@@ -166,20 +166,20 @@ record touched by more than one commit was amended in place.
 |---|---|
 <!-- genome:end status -->
 
-<!-- genome:zone handoff sha=db7c31797cf1 -->
+<!-- genome:zone handoff sha=6d867da5f448 -->
 ## Handoff — 2026-10-20
 
-Repo branch `main`, HEAD `1b09ed460b753fc4119c1a6c885b65ad21755b87`. Working tree dirty (7 paths).
+Repo branch `main`, HEAD `8102c2db8ece6f13928529517d788f0b7b114b32`. Working tree dirty (11 paths).
 
 ## Open register rows
   (none)
 
 ## Recent worklog
-- **2026-10-20T06:52** · `omp` — iter-1018: the MCP tool's registry name is injective by construction again (RT-71) — iter-1014 shipped a claim that was false: the encoding left _ alone, so - and the literal _2d_ collided; the encoding is now a byte-wise escape joined by a single _, which is provably injective
 - **2026-10-20T06:52** · `omp` — iter-1019: the AFT binary is verified before it is installed, and the install is atomic (RT-70) — the shared updater's checksum guard matched only SHA256SUMS while aft publishes checksums.sha256, so the verification NEVER ran for aft, and the first-install path (which never went through the updater) downloaded and executed an unverified binary with a non-atomic write
 - **2026-10-20T18:50** · `jcode` — docs: the genome's own surfaces are reconciled — 39 stale board rows, a wrong register count, three dead command citations, and the first regression record
 - **2026-10-20T19:46** · `jcode` — docs: validation of the reconciliation found three defects — 31 board verdicts cited the wrong iteration, a 'next free label' note had gone stale twice, and the duplicate-label framing was materially misleading
 - **2026-10-20T20:13** · `jcode` — docs: the second validation found a doctrine violation in the first validation's own commit — RG-001 had been amended in place, bypassing the genome's immutability gate (RG-002)
+- **2026-10-20T20:42** · `jcode` — docs: the third validation found the detection law I had just minted was overbroad, and that my own table inside it was wrong on the first out-of-sample case (RG-003)
 
 Regenerate with `genome handoff --write`.
 <!-- genome:end handoff -->

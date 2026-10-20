@@ -106,3 +106,4 @@ Append-only: `kb log "<entry>"` — one entry per unit of work.
 - **2026-10-20T18:50** · `jcode` — docs: the genome's own surfaces are reconciled — 39 stale board rows, a wrong register count, three dead command citations, and the first regression record
 - **2026-10-20T19:46** · `jcode` — docs: validation of the reconciliation found three defects — 31 board verdicts cited the wrong iteration, a 'next free label' note had gone stale twice, and the duplicate-label framing was materially misleading
 - **2026-10-20T20:13** · `jcode` — docs: the second validation found a doctrine violation in the first validation's own commit — RG-001 had been amended in place, bypassing the genome's immutability gate (RG-002)
+- **2026-10-20T20:42** · `jcode` — docs: the third validation found the detection law I had just minted was overbroad, and that my own table inside it was wrong on the first out-of-sample case (RG-003)
