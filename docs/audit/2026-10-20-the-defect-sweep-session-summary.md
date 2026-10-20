@@ -2,7 +2,7 @@
 
 Date: 2026-10-20. Agent: `omp`.
 Range: iters 980–1046 (67 commits) on `origin/main`.
-Ledger: `docs/audit/2026-06-19-BUGS.md` — **201 rows closed, 2 open** (S1 and S2, both live-terminal checks that need a terminal this session did not have).
+Ledger: `docs/audit/2026-06-19-BUGS.md` — **207 rows closed, 2 open** (S1 and S2, both live-terminal checks that need a terminal this session did not have).
 
 This is the morning review. It names every defect the sweep found, how each
 was proven, and what is deliberately left open.
@@ -64,6 +64,12 @@ several rows here name the MECHANISM, not just the outcome.
 | RT-104 | A Telegram PERMISSION PROMPT that failed to send was reported as sent, and the turn waited forever for an approval the user was never shown. | The status decides; the error says the user was never asked, so the turn cannot proceed. |
 | RT-105 | On Discord and Slack the agent's answer was TRUNCATED to its first chunk: only Telegram could edit, so the later chunks' edits were no-ops, and the delivery marker suppressed the dispatch loop's full send. | An empty message id means "this platform cannot edit", so the marker is not recorded for it — the dispatch loop sends the whole answer. |
 | RT-106 | Discord and Slack could not EDIT a message at all (the trait's default is a no-op), so the streaming path had no incremental updates on either. | Both now override `send_message_return_id` and `edit_message`, so the streaming UX is the incremental one. |
+| RT-107 | The response-MIRROR feature is entirely inert: a complete `hermes` parity implementation with no config key and no production caller. | Recorded as a gap, not implemented — "what should mirroring mean" is a product decision, and a half-wired mirror is worse than none. |
+| RT-108 | The delivery ledger was visible NOWHERE: it is in-memory in the daemon, and `gateway status` reads the config file. | The gateway logs a delivery summary (delivered and failed counts) on stop. |
+| RT-109 | A Discord edit over the 2000-character limit TRUNCATED the answer, silently dropping its tail. | The edit now FAILS, so the dispatch loop sends the whole answer as a fresh message — the plain send chunks it. |
+| RT-110 | A Slack message over 40,000 characters was NOT delivered (Slack answers `ok: false` with a 200, which a status check alone does not catch), and a `DEBUG` print was left in the send path. | The send chunks; the debug print is removed. |
+| RT-111 | A WhatsApp message over 4096 characters was NOT delivered. | The send chunks. |
+| RT-112 | An SMS over 1600 characters was NOT delivered. | The send chunks. |
 | RT-69 | The context eviction could not meet the budget and said nothing; the reactive overflow path re-issued the request and earned the same provider 400. | Four mutations, each run separately. The pre-existing `loop_recovery_paths` test caught the over-strict first fix — the rule is a two-strike rule because of it. |
 | RT-83 | The token estimate counted only the message's text — and a tool-call turn's text is EMPTY by construction, so a 100 KB tool call was estimated at 4 tokens. The eviction was blind to the largest messages. | The mutation fails with "got 4". |
 | RT-78 | The LLM compression's HEAD boundary was a message count, so a `tool_use` and its `tool_result` could be separated by the summary. `repair_tool_pairs` existed and was never called. | Two mutations, run separately. |
