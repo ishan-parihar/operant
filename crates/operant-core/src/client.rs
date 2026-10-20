@@ -90,6 +90,12 @@ pub fn is_local_endpoint(base_url: &str) -> bool {
 /// timeout (see `OpenAIClient::stream_http_client`).
 fn stream_http_client(config: &ClientConfig) -> Client {
     Client::builder()
+        // ENV-2 (RT-131): reqwest honours HTTP(S)_PROXY/ALL_PROXY by default,
+        // so a stale variable from another tool silently sends every provider
+        // request to a dead port. The provider client never reads env proxies;
+        // a proxy must be configured explicitly in `[proxy]` (not yet plumbed
+        // to this builder — see the RT-131 residual).
+        .no_proxy()
         .connect_timeout(config.timeout)
         .build()
         .unwrap_or_else(|e| {
@@ -141,6 +147,9 @@ impl OpenAIClient {
         // panics on reqwest builder failure (e.g. TLS backend missing).
         // Fall back to a default client if the configured builder fails.)
         let http_client = Client::builder()
+            // ENV-2 (RT-131): see `stream_http_client` — provider traffic never
+            // follows env proxy variables.
+            .no_proxy()
             .timeout(config.timeout)
             .build()
             .unwrap_or_else(|e| {
@@ -3269,6 +3278,128 @@ Connection: close
         assert!(
             err.to_string().contains("empty vector"),
             "empty vector must be rejected, got: {err}"
+        );
+    }
+    /// ENV-2 (RT-131): provider traffic must never follow env proxy variables.
+    /// A stale `HTTP(S)_PROXY` inherited from another tool silently rerouted
+    /// every model request to a dead port (2026-10-19 report). The capture
+    /// listener stands in for that stale proxy and must accept ZERO
+    /// connections; the provider listener is the real destination.
+    #[tokio::test]
+    async fn env_proxy_is_ignored_by_the_provider_client() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let _lock = crate::platform::test_env_lock().await;
+
+        // The real destination: serve exactly one embeddings response.
+        let provider = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind provider");
+        let provider_addr = provider.local_addr().expect("provider addr");
+        let served = Arc::new(AtomicUsize::new(0));
+        let served_task = served.clone();
+        tokio::spawn(async move {
+            if let Ok((mut sock, _)) = provider.accept().await {
+                let mut buf = [0u8; 2048];
+                let _ = sock.read(&mut buf).await;
+                served_task.fetch_add(1, Ordering::SeqCst);
+                let body = r#"{"data":[{"index":0,"embedding":[0.5]}]}"#;
+                let reply = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = sock.write_all(reply.as_bytes()).await;
+            }
+        });
+
+        // The stale proxy stand-in: any connection here is the failure.
+        let capture = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind capture");
+        let capture_addr = capture.local_addr().expect("capture addr");
+        let proxied = Arc::new(AtomicUsize::new(0));
+        let proxied_task = proxied.clone();
+        tokio::spawn(async move {
+            loop {
+                let accepted =
+                    tokio::time::timeout(std::time::Duration::from_secs(5), capture.accept()).await;
+                match accepted {
+                    Ok(Ok((mut sock, _))) => {
+                        proxied_task.fetch_add(1, Ordering::SeqCst);
+                        let _ = sock
+                            .write_all(b"HTTP/1.1 502 Bad Gateway\r\ncontent-length: 0\r\n\r\n")
+                            .await;
+                    }
+                    _ => break,
+                }
+            }
+        });
+
+        let proxy_url = format!("http://{capture_addr}");
+        let keys = [
+            "HTTP_PROXY",
+            "HTTPS_PROXY",
+            "ALL_PROXY",
+            "http_proxy",
+            "https_proxy",
+            "all_proxy",
+        ];
+        let previous: Vec<(String, Option<String>)> = keys
+            .iter()
+            .map(|k| (k.to_string(), std::env::var(k).ok()))
+            .collect();
+        // SAFETY: the lock above serialises process-global env mutation.
+        for k in keys {
+            unsafe { std::env::set_var(k, &proxy_url) };
+        }
+
+        let config = ClientConfig {
+            base_url: format!("http://{provider_addr}/v1"),
+            api_key: Some("test-key".into()),
+            ..ClientConfig::default()
+        };
+        let client = OpenAIClient::new(config);
+        let result = client.embeddings("m", &["a".to_string()]).await;
+
+        // Loopback is bypassed by reqwest even without `no_proxy()`, so the
+        // discriminating request targets a TEST-NET-1 address instead: with
+        // env proxies honoured it lands on the capture listener, with
+        // `no_proxy()` it fails to connect directly.
+        let unreachable = ClientConfig {
+            base_url: "http://192.0.2.1:9/v1".into(),
+            api_key: Some("test-key".into()),
+            timeout: std::time::Duration::from_millis(500),
+            ..ClientConfig::default()
+        };
+        let unreachable_client = OpenAIClient::new(unreachable);
+        let direct = unreachable_client.embeddings("m", &["a".to_string()]).await;
+
+        // SAFETY: same lock; restore before asserting so a failure leaves no trace.
+        for (k, v) in previous {
+            match v {
+                Some(v) => unsafe { std::env::set_var(&k, v) },
+                None => unsafe { std::env::remove_var(&k) },
+            }
+        }
+
+        assert!(
+            result.is_ok(),
+            "direct request must succeed, got {result:?}"
+        );
+        assert!(direct.is_err(), "the TEST-NET-1 endpoint cannot answer");
+        assert_eq!(
+            served.load(Ordering::SeqCst),
+            1,
+            "provider must serve the request directly"
+        );
+        assert_eq!(
+            proxied.load(Ordering::SeqCst),
+            0,
+            "provider traffic must never reach the env proxy"
         );
     }
 }
