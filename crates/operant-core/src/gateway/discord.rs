@@ -31,6 +31,12 @@ impl DiscordAdapter {
 /// Discord returns `{"id": "1234", ...}`. The streaming path needs the
 /// id to EDIT the message, and the TRAIT's default returns an EMPTY id —
 /// which the streaming path reads as "this platform cannot edit" (RT-105).
+/// Discord's per-message character limit.
+///
+/// The API REJECTS a message over this limit (400 Bad Request) — it does
+/// not truncate — so every path that sends or edits must respect it.
+const DISCORD_MESSAGE_LIMIT: usize = 2000;
+
 fn discord_message_id(body: &str) -> String {
     serde_json::from_str::<serde_json::Value>(body)
         .ok()
@@ -130,7 +136,7 @@ impl PlatformAdapter for DiscordAdapter {
         // are silently rejected by the API (400 Bad Request) — the user
         // gets nothing. Chunk the text to stay under the limit.
         // (Bug #14 from iter-98 audit.)
-        let chunks = chunk_text(&message.content, 2000);
+        let chunks = chunk_text(&message.content, DISCORD_MESSAGE_LIMIT);
 
         // Deny @everyone/@here and role pings by default (hermes
         // `_build_allowed_mentions` parity) — echoed user content or LLM
@@ -196,7 +202,7 @@ impl PlatformAdapter for DiscordAdapter {
 
         // Discord's message limit is 2000 chars — the same limit the
         // plain send chunks for.
-        let chunks = chunk_text(&message.content, 2000);
+        let chunks = chunk_text(&message.content, DISCORD_MESSAGE_LIMIT);
         let allowed_mentions = serde_json::json!({
             "parse": ["users"],
             "replied_user": true,
@@ -251,15 +257,28 @@ impl PlatformAdapter for DiscordAdapter {
             .as_ref()
             .ok_or_else(|| Error::Config("Discord token not configured".to_string()))?;
 
-        // Discord's limit is 2000 characters — the same limit the plain
-        // send chunks for. An edit over the limit is rejected, so the
-        // content is truncated to what the API accepts rather than
-        // failing the edit.
-        let content = chunk_text(&message.content, 2000)
-            .into_iter()
-            .next()
-            .unwrap_or_default();
-        let body = serde_json::json!({ "content": content });
+        // Discord's limit is 2000 characters. An edit over the limit is
+        // REJECTED by the API (400 Bad Request) — and the message keeps
+        // its old content, so the user would see the answer truncated at
+        // whatever the last successful edit held.
+        //
+        // So the edit FAILS on an over-limit body rather than truncating
+        // it. That is deliberate: the streaming path treats a failed edit
+        // as "this platform cannot hold the accumulated text", drops the
+        // delivery marker, and the dispatch loop sends the WHOLE answer
+        // as a fresh message — and the plain send CHUNKS it correctly.
+        //
+        // Truncating here would silently drop the tail of the answer,
+        // which is the one thing the user must never lose.
+        if message.content.chars().count() > DISCORD_MESSAGE_LIMIT {
+            return Err(crate::error::Error::Agent(format!(
+                "the accumulated answer is {} characters, over Discord's {} limit — \
+                 the edit was refused so the full answer is sent as a new message",
+                message.content.chars().count(),
+                DISCORD_MESSAGE_LIMIT
+            )));
+        }
+        let body = serde_json::json!({ "content": message.content });
 
         let resp = client
             .patch(format!(
@@ -685,6 +704,33 @@ mod tests {
     fn a_discord_send_accepted_by_the_api_succeeds() {
         discord_send_outcome(200, r#"{"id":"1","channel_id":"1234"}"#)
             .expect("an accepted send must succeed");
+    }
+
+    /// An edit over Discord's limit must FAIL, not truncate.
+    ///
+    /// The API REJECTS an over-limit message (400 Bad Request) and keeps
+    /// the old content — so an edit that truncates would leave the user
+    /// looking at the first 2000 characters of the answer with no
+    /// indication that the rest was dropped.
+    ///
+    /// Failing is the right behaviour: the streaming path treats a failed
+    /// edit as "this platform cannot hold the accumulated text", drops the
+    /// delivery marker, and the dispatch loop sends the WHOLE answer as a
+    /// fresh message — and the plain send CHUNKS it correctly.
+    #[tokio::test]
+    async fn a_discord_edit_over_the_limit_fails_rather_than_truncating() {
+        let adapter = DiscordAdapter::new(Some("bot-token".to_string()));
+        let over = "x".repeat(DISCORD_MESSAGE_LIMIT + 1);
+        let message = OutgoingMessage::new("1234", &over);
+        let err = adapter
+            .edit_message("1234", "1", &message)
+            .await
+            .expect_err("an over-limit edit must fail");
+        let err = err.to_string();
+        assert!(
+            err.contains("2000"),
+            "the error must name the limit, got: {err}"
+        );
     }
 
     /// The message id must be recoverable from Discord's response body —

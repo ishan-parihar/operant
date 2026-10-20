@@ -68,6 +68,30 @@ fn send_outcome(status: u16) -> SendOutcome {
     }
 }
 
+/// Whether a Telegram PROMPT was delivered, given the status and body.
+///
+/// A prompt that FAILED to send is the worst case in the adapter: the
+/// user was never asked, so the turn waits for an answer that can never
+/// come, and the agent is stuck with no visible cause. The old code
+/// parsed the body for a message id without checking the status, and
+/// returned "no message id" — which the caller reads as "the prompt was
+/// never answered".
+///
+/// So the status decides, and the error says the user was never asked.
+///
+/// A PURE function over the response, so the decision can be tested
+/// without a server.
+fn telegram_prompt_outcome(status: u16, body: &str, what: &str) -> Result<()> {
+    if !(200..300).contains(&status) {
+        return Err(crate::error::Error::Agent(format!(
+            "Telegram rejected the {what}: HTTP {status} ({}). The user was \
+             never asked, so the turn cannot proceed.",
+            telegram_error_description(body)
+        )));
+    }
+    Ok(())
+}
+
 /// The description from a Telegram error body.
 ///
 /// The body is `{"ok": false, "error_code": N, "description": "..."}`.
@@ -729,14 +753,7 @@ impl PlatformAdapter for TelegramAdapter {
         // and the agent is stuck.
         let status = resp.status();
         let body_text = resp.text().await.unwrap_or_default();
-        if !status.is_success() {
-            return Err(crate::error::Error::Agent(format!(
-                "Telegram rejected the approval prompt: HTTP {} ({}). The user was \
-                 never asked, so the turn cannot proceed.",
-                status.as_u16(),
-                telegram_error_description(&body_text)
-            )));
-        }
+        telegram_prompt_outcome(status.as_u16(), &body_text, "approval prompt")?;
         let resp: serde_json::Value = serde_json::from_str(&body_text).unwrap_or_default();
         let msg_id = resp
             .get("result")
@@ -785,15 +802,8 @@ impl PlatformAdapter for TelegramAdapter {
         // a question that FAILED to send used to return `Ok(())`, so the
         // turn waited for an answer that could never come.
         let status = resp.status();
-        if !status.is_success() {
-            let body_text = resp.text().await.unwrap_or_default();
-            return Err(crate::error::Error::Agent(format!(
-                "Telegram rejected the question: HTTP {} ({}). The user was never \
-                 asked, so the turn cannot proceed.",
-                status.as_u16(),
-                telegram_error_description(&body_text)
-            )));
-        }
+        let body_text = resp.text().await.unwrap_or_default();
+        telegram_prompt_outcome(status.as_u16(), &body_text, "question")?;
         Ok(())
     }
 
@@ -1788,6 +1798,42 @@ mod tests {
     /// (403), a flood-control 429 and a 500 all looked like SUCCESS: the
     /// delivery ledger recorded "delivered" and the operator saw a silent
     /// no-op. That is the same defect class as the SMTP one (RT-73).
+    /// A Telegram PROMPT that failed to send must be a FAILURE.
+    ///
+    /// This is the worst instance of the "a failed send reported as a
+    /// success" class: a permission prompt is the one message the user
+    /// MUST see, and its failure mode is not a wrong answer — it is a
+    /// turn that waits forever for an approval the user was never asked
+    /// for, with nothing in the log.
+    ///
+    /// The old code parsed the body for a message id without checking the
+    /// status, and returned "no message id" — which the caller reads as
+    /// "the prompt was never answered".
+    #[test]
+    fn a_failed_telegram_prompt_is_a_failure_not_a_silent_stall() {
+        // A revoked token, a blocked bot, a flood control — all failures.
+        for status in [401u16, 403, 429, 500] {
+            let err =
+                telegram_prompt_outcome(status, r#"{"description":"nope"}"#, "approval prompt")
+                    .expect_err("a failed prompt must be an error");
+            let err = err.to_string();
+            assert!(
+                err.contains("never asked"),
+                "the error must say the user was never asked, got: {err}"
+            );
+            assert!(
+                err.contains("nope"),
+                "the error must carry Telegram's description, got: {err}"
+            );
+        }
+        // A delivered prompt is not an error.
+        assert!(
+            telegram_prompt_outcome(200, r#"{"result":{"message_id":1}}"#, "approval prompt")
+                .is_ok(),
+            "a delivered prompt must succeed"
+        );
+    }
+
     /// The error description from a Telegram body must reach the operator.
     #[test]
     fn the_telegram_error_description_reaches_the_operator() {

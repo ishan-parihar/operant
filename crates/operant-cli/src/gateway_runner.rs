@@ -77,6 +77,26 @@ type TurnUsageMap = Arc<Mutex<HashMap<ThreadKey, TurnUsage>>>;
 /// CLOSED — the same read-error discipline as `seat_policies`: a typo'd
 /// `lockdonw` silently re-opening unattended dangerous tools would be the
 /// exact widening the bylaws exists to prevent.
+/// Whether a streamed message counts as DELIVERED for the dispatch loop.
+///
+/// The dispatch loop skips its full send when the streaming path already
+/// delivered the answer. That suppression is only correct for a platform
+/// that can EDIT the message it sent: on Discord and Slack (before
+/// iter-1063) the later chunks' edits were no-ops, so the user received
+/// the FIRST CHUNK of the answer and never the rest.
+///
+/// Only Telegram overrode `send_message_return_id`; the default sends the
+/// message and returns an EMPTY id, which means "this platform cannot
+/// edit". So an empty id must NOT suppress the dispatch loop's full send.
+///
+/// The empty id is still kept as the streaming path's `stream_msg_id`
+/// sentinel — it keeps the later ticks on the EDIT branch instead of
+/// sending a new partial message every 500ms. This function decides only
+/// whether to record the DELIVERY.
+fn should_record_stream_delivery(message_id: &str) -> bool {
+    !message_id.is_empty()
+}
+
 fn unattended_no_channel_verdict(posture_raw: &str) -> Option<String> {
     use operant_core::org::seat_policy::SeatMode;
     use std::str::FromStr;
@@ -3108,7 +3128,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                                         // ticks on the EDIT branch instead
                                         // of sending a new partial
                                         // message every 500ms.
-                                        if !msg_id.is_empty() {
+                                        if should_record_stream_delivery(&msg_id) {
                                             let mut map = stream_delivery_for_events.lock().await;
                                             map.insert(
                                                 (platform.clone(), channel_id.clone(), thread_id),
@@ -3187,7 +3207,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                                     // full answer — the marker is only
                                     // recorded for a platform that can
                                     // edit the message it just sent.
-                                    if !msg_id.is_empty() {
+                                    if should_record_stream_delivery(&msg_id) {
                                         let mut map = stream_delivery_for_events.lock().await;
                                         map.insert(
                                             (platform.clone(), channel_id.clone(), thread_id),
@@ -4953,6 +4973,29 @@ fn enrich_document(raw: &serde_json::Value) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    /// An EMPTY message id must NOT suppress the dispatch loop's full
+    /// send.
+    ///
+    /// Only Telegram overrode `send_message_return_id`; the default sends
+    /// the message and returns an EMPTY id, which means "this platform
+    /// cannot edit". On Discord and Slack the later chunks' edits were
+    /// no-ops, so the user received the FIRST CHUNK of the answer and
+    /// never the rest — and the recorded delivery told the dispatch loop
+    /// to skip its full send (RT-105).
+    #[test]
+    fn an_empty_message_id_does_not_suppress_the_full_send() {
+        assert!(
+            !should_record_stream_delivery(""),
+            "an empty id means the platform cannot edit — the full answer \
+             must still be sent"
+        );
+        assert!(
+            should_record_stream_delivery("1234"),
+            "a real id means the platform can edit — the duplicate must be \
+             suppressed"
+        );
+    }
+
     #[test]
     fn endpoint_edit_is_reported_once_after_the_baseline() {
         let endpoint = |url: &str| ConfigEndpoint {
