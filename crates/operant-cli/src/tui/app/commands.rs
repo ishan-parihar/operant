@@ -1740,12 +1740,11 @@ impl App {
                 .servers
                 .iter()
                 .map(|server| {
-                    let transport = server
-                        .url
-                        .as_ref()
-                        .map(|_| format!("{:?}", server.transport).to_lowercase())
-                        .or_else(|| server.command.as_ref().map(|_| "stdio".to_string()))
-                        .unwrap_or_else(|| format!("{:?}", server.transport).to_lowercase());
+                    // The transport label, from the enum's own method —
+                    // it used to be the Debug of the variant lowercased,
+                    // which the /mcp pane's bucket list had to guess, and
+                    // it guessed wrong for the streamable-HTTP transport.
+                    let transport = server.transport.transport_label().to_string();
 
                     // Check if this server is connected in the core manager.
                     let connected = all_servers.contains_key(&server.name);
@@ -1833,12 +1832,9 @@ impl App {
             .servers
             .iter()
             .map(|server| {
-                let transport = server
-                    .url
-                    .as_ref()
-                    .map(|_| format!("{:?}", server.transport).to_lowercase())
-                    .or_else(|| server.command.as_ref().map(|_| "stdio".to_string()))
-                    .unwrap_or_else(|| format!("{:?}", server.transport).to_lowercase());
+                // The transport label, from the enum's own method — see
+                // the other site for why.
+                let transport = server.transport.transport_label().to_string();
                 let description = if let Some(url) = &server.url {
                     format!("Endpoint: {}", url)
                 } else if let Some(command) = &server.command {

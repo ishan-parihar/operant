@@ -60,7 +60,12 @@ impl McpViewStatus {
 #[derive(Debug, Clone)]
 pub struct McpServerView {
     pub name: String,
-    pub transport: String, // "stdio" | "sse" | "http"
+    /// The transport label, from `McpTransportKind::transport_label`:
+    /// "http" | "stdio" | "streamable-http".
+    ///
+    /// There is no "sse" — the enum has no SSE variant, so the bucket
+    /// that used to carry it was dead.
+    pub transport: String,
     pub status: McpViewStatus,
     pub tool_count: usize,
     pub resource_count: usize,
@@ -493,8 +498,19 @@ fn server_groups(state: &McpViewState) -> Vec<(&'static str, Vec<(usize, &McpSer
     };
     [
         ("stdio", by_transport("stdio")),
-        ("SSE", by_transport("sse")),
         ("HTTP", by_transport("http")),
+        // The streamable-HTTP transport (MCP spec 2025-06-18). The label
+        // used to be the Debug of the enum variant lowercased, and there
+        // was NO bucket for it, so a server configured with
+        // `transport = "streamable-http"` was in no group and was NEVER
+        // PAINTED. Worse, the "N more" count compared the number SHOWN
+        // against every server, so the invisible one was counted as
+        // scrolled-off: the pane said "1 more" for a server it had no
+        // group for.
+        //
+        // There is no "sse" bucket: the config's `McpTransportKind` has no
+        // SSE variant, so the one that was here never matched anything.
+        ("Streamable HTTP", by_transport("streamable-http")),
     ]
     .into_iter()
     .filter(|(_, group)| !group.is_empty())
@@ -877,6 +893,48 @@ mod tests {
                 input_schema: None,
             }],
         }
+    }
+
+    /// Every transport the config can express must land in a group.
+    ///
+    /// The bucket list is the Debug of the config's `McpTransportKind`
+    /// lowercased, and a transport with no bucket is a server that is
+    /// NEVER PAINTED — and, because the "N more" count compares the shown
+    /// count against every server, it is counted as scrolled-off. The
+    /// pane said "1 more" for a server it had no group for.
+    ///
+    /// The test is over the enum's variants, so a new one without a
+    /// bucket fails it.
+    #[test]
+    fn every_transport_lands_in_a_group() {
+        use operant_core::config::McpTransportKind;
+        let mut state = McpViewState::default();
+        for kind in [
+            McpTransportKind::Stdio,
+            McpTransportKind::Http,
+            McpTransportKind::StreamableHttp,
+        ] {
+            state.servers.push(McpServerView {
+                name: format!("server-{kind:?}"),
+                transport: kind.transport_label().to_string(),
+                status: McpViewStatus::Connected,
+                tool_count: 0,
+                resource_count: 0,
+                prompt_count: 0,
+                resources: Vec::new(),
+                prompts: Vec::new(),
+                error_message: None,
+                tools: Vec::new(),
+            });
+        }
+        let groups = server_groups(&state);
+        let grouped: usize = groups.iter().map(|(_, g)| g.len()).sum();
+        assert_eq!(
+            grouped,
+            state.servers.len(),
+            "every server must be in a group: the groups carry {grouped} of {}",
+            state.servers.len()
+        );
     }
 
     #[test]

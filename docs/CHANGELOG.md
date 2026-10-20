@@ -21,7 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **iter-1091 — the streaming send now records in the delivery ledger, so a streamed answer is not invisible in the delivery-health view.** `operant channel add sms` is no longer rejected, and `operant channel add webhook` no longer is either.
+- **iter-1092 — the TUI's `/mcp` pane now paints a streamable-HTTP server.** It was in no transport group, so it was never shown — and it was counted as scrolled-off.
+
+- **iter-1091 — the streaming send now records in the delivery ledger, so a streamed answer is not invisible in the delivery-health view.** `operant channel add sms` is no longer rejected, and `operant channel add webhook` no longer is either. The channel doctor now reports `"configured"` and `"health": "not probed"` instead of claiming a health it never checked, and `channel add` no longer tells the operator to verify connectivity with a command that does not reach the platform.
 
 - **iter-1089 — `operant channel add` says when the channel it added is send-only.** "Added slack channel" led an operator to believe the agent would see Slack messages.
 

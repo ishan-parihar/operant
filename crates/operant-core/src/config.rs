@@ -947,6 +947,27 @@ pub enum McpTransportKind {
     StreamableHttp,
 }
 
+impl McpTransportKind {
+    /// The label the TUI groups servers by.
+    ///
+    /// It used to be the Debug of the variant lowercased — "http",
+    /// "stdio", "streamablehttp" — which was an accident of the derive,
+    /// and the TUI's bucket list had to guess it. The guess got one
+    /// wrong: the streamable-HTTP transport had no bucket, so a server
+    /// configured with it was never painted, and the pane counted it as
+    /// scrolled-off.
+    ///
+    /// A named method makes the label a contract the bucket list can be
+    /// written against, and the test is over the enum's variants.
+    pub fn transport_label(&self) -> &'static str {
+        match self {
+            Self::Http => "http",
+            Self::Stdio => "stdio",
+            Self::StreamableHttp => "streamable-http",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct McpServerConfig {
