@@ -111,3 +111,4 @@ Append-only: `kb log "<entry>"` — one entry per unit of work.
 - **2026-10-20T21:49** · `jcode` — docs: a peer's commit swept the whole staged docs change set into their fix commit — nothing lost, but the label-to-content mapping in the log is unreliable
 - **2026-10-20T23:39** · `jcode` — docs: the fifth validation retracted a cause I asserted without testing — the peer swept my change set, but not by any mechanism I could reproduce (RG-007)
 - **2026-10-20T23:42** · `jcode` — docs: the board-row count I reported was 49, not 39 — the headline figure was never derived from the source (RG-008)
+- **2026-10-20T23:45** · `jcode` — docs: every number in the state snapshot re-derived rather than copied, and the open-work claim corrected — RT-117 and RT-119 are actionable and were not named

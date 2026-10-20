@@ -6,21 +6,26 @@ the prose above it is hand-written and is the part that goes stale.
 ## Where the project stands
 
 - Release line `0.2.1`. `origin/main` carries the autonomous defect sweep of
-  2026-10-19/20 (iters 980 onward, 94 commits at the time of writing and still
-  growing: each a separate pushed commit with a mutation-checked regression
-  test). Count it with
-  `git log origin/main --oneline | rg 'iter-9[89][0-9]|iter-10[0-6][0-9]' | wc -l`.
+  2026-10-19/20, from iter-980 onward and still growing: each a separate pushed
+  commit with a mutation-checked regression test. **Do not copy a count from
+  here** — derive it, per RG-008's law:
+  `git log origin/main --oneline | rg 'iter-9[89][0-9]|iter-1[0-9]{3}' | wc -l`.
   The summary of what the sweep found, how each was proven, and what remains
   open is [`docs/audit/2026-10-20-the-defect-sweep-session-summary.md`](../audit/2026-10-20-the-defect-sweep-session-summary.md).
-- The defect ledger `docs/audit/2026-06-19-BUGS.md` was measured at
-  **198 rows closed, 2 open** on 2026-10-20 ~14:08 IST (S1 and S2, both
-  live-terminal checks that need a terminal this environment does not have),
-  with 103 `RT-` rows and RT-103 the highest. **This count decays within the
-  hour**: the defect sweep is still running and the peer lands findings every
-  few minutes. Re-derive it with
-  `rg -c '^- \[x\]' docs/audit/2026-06-19-BUGS.md` before relying on it, and
-  treat the count itself as evidence that the ledger is being worked, not as a
-  fact to quote.
+- The defect ledger `docs/audit/2026-06-19-BUGS.md` is the owner of every
+  finding's fix state. **Derive, do not copy:**
+  `rg -c '^- \[x\]' docs/audit/2026-06-19-BUGS.md` for the closed count and
+  `rg -c '^- \[ \]' docs/audit/2026-06-19-BUGS.md` for the open one. The sweep
+  is still running, so both move within the hour.
+- **Four ledger rows are OPEN.** Two are live-terminal checks this environment
+  cannot make — S1 (pinned-image post-draw writes) and S2 (ambiguous/wide
+  glyph widths). **Two are ordinary, actionable defects** and are the real open
+  work: **RT-117** (the dashboard's served `/api/status` omits the fields the
+  bundled frontend reads, so the system panel renders empty) and **RT-119**
+  (`operant channel doctor` reports `healthy` for a channel it never probed —
+  the JSON sets the flag to the ENABLED state, so a channel with an invalid
+  token or no inbound path reports healthy). An executor starting now should
+  read those two rows first; S1 and S2 need a terminal.
 - The release binary is deployed to `~/.local/bin/operant` and the gateway
   daemon runs on it (the running process's `/proc/<pid>/exe` md5 matches the
   deployed file). A THIRD operant was cleared from PATH at iter-988:
@@ -135,12 +140,15 @@ git fetch origin
 git log origin/main --oneline | rg -o 'iter-[0-9]+' | head -1   # top label, then +1
 ```
 
-The duplicates are also systemic rather than new: roughly 200 labels are
-duplicated somewhere in `origin/main`'s history and 715 commits carry no label
-at all (the genome tool's own commits are among them), so a collision is the
-normal failure mode of the read-then-write race the fork protocol names, not a
-sign that this session went wrong. The next free label is computed at commit
-time, never copied from a document.
+The duplicates are also systemic rather than new: a few hundred labels are
+duplicated somewhere in `origin/main`'s history and a comparable number of
+commits carry no label at all (the genome tool's own commits are among them),
+so a collision is the normal failure mode of the read-then-write race the fork
+protocol names, not a sign that this session went wrong. Derive both if you
+need them:
+`git log origin/main --oneline | rg -o 'iter-[0-9]+' | sort | uniq -c | awk '$1>1' | wc -l`
+and `git log origin/main --oneline | rg -v 'iter-[0-9]+' | wc -l`. The next free
+label is computed at commit time, never copied from a document.
 
 ### A numbered record was amended in place — RG-002
 
@@ -169,20 +177,20 @@ record touched by more than one commit was amended in place.
 |---|---|
 <!-- genome:end status -->
 
-<!-- genome:zone handoff sha=e0b392dc45eb -->
+<!-- genome:zone handoff sha=97cb60dcf1f2 -->
 ## Handoff — 2026-10-20
 
-Repo branch `main`, HEAD `7787cd1a116745b695266c480db979b4cbd3ac33`. Working tree dirty (7 paths).
+Repo branch `main`, HEAD `7a5d926a6e527a6d1f3647cfbaf1000eb8e98b06`. Working tree dirty (5 paths).
 
 ## Open register rows
   (none)
 
 ## Recent worklog
-- **2026-10-20T20:42** · `jcode` — docs: the third validation found the detection law I had just minted was overbroad, and that my own table inside it was wrong on the first out-of-sample case (RG-003)
 - **2026-10-20T21:38** · `jcode` — docs: the fourth validation found my newest record asserted a tool limit that does not exist, and the experiment that disproved it performed the correction (the retired record is out of force; RG-006 carries the law)
 - **2026-10-20T21:49** · `jcode` — docs: a peer's commit swept the whole staged docs change set into their fix commit — nothing lost, but the label-to-content mapping in the log is unreliable
 - **2026-10-20T23:39** · `jcode` — docs: the fifth validation retracted a cause I asserted without testing — the peer swept my change set, but not by any mechanism I could reproduce (RG-007)
 - **2026-10-20T23:42** · `jcode` — docs: the board-row count I reported was 49, not 39 — the headline figure was never derived from the source (RG-008)
+- **2026-10-20T23:45** · `jcode` — docs: every number in the state snapshot re-derived rather than copied, and the open-work claim corrected — RT-117 and RT-119 are actionable and were not named
 
 Regenerate with `genome handoff --write`.
 <!-- genome:end handoff -->
