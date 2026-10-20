@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-1049 — the TUI no longer says "Connected to AWS Bedrock." when nothing changed.** Five catalogue providers have no usable endpoint URL, so the agent kept the previous provider's endpoint; the switch now says so.
+
 - **iter-1048 — `operant doctor` no longer reports a provider as "valid" that the runtime cannot serve.** Bedrock speaks AWS's Converse API and the runtime only speaks chat-completions and messages, so every request to a Bedrock configuration would have failed in the wrong protocol.
 
 - **iter-1042 — the CLI no longer compiles the `postgres` dependency for a crate it never called.** The `memory-postgres` feature and the unreferenced `ci-all` meta-feature are removed.

@@ -5387,6 +5387,43 @@ fn paste_and_burst_text_go_to_the_open_dialog_not_the_composer() {
     assert!(!app.insert_text_into_dialog("x"), "no dialog, no routing");
 }
 
+/// Connecting a provider with no endpoint URL must not say "Connected".
+///
+/// `bedrock` and `azure-foundry` have an empty `default_base_url`, and
+/// `azure` has a `{resource}` template that is not a URL until it is
+/// filled in — so `connect_endpoint` returns `None` for all three, and
+/// `retarget_endpoint` is skipped. The agent then keeps talking to the
+/// PREVIOUS provider's endpoint while the model name changes, and the
+/// operator was told "Connected to AWS Bedrock."
+///
+/// The message must say what actually happened.
+#[test]
+fn connecting_a_provider_with_no_endpoint_url_says_so() {
+    let mut app = make_app();
+    let before = app.config.client.base_url.clone();
+
+    app.activate_provider(
+        "bedrock".to_string(),
+        "AWS Bedrock".to_string(),
+        "Connected to",
+        None,
+    );
+
+    let message = app.status_message.clone().unwrap_or_default();
+    assert!(
+        message.contains("no endpoint URL"),
+        "the message must say the provider has no endpoint, got: {message:?}"
+    );
+    assert!(
+        !message.contains("Connected to AWS Bedrock."),
+        "the message must not claim a connection that did not happen: {message:?}"
+    );
+    assert_eq!(
+        app.config.client.base_url, before,
+        "the endpoint must be untouched — the agent is still on the old one"
+    );
+}
+
 #[test]
 fn connect_endpoint_prefers_custom_url_and_skips_virtual_providers() {
     assert_eq!(

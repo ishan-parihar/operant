@@ -173,6 +173,15 @@ impl App {
     /// Make `provider_id` the live provider. `endpoint` is the
     /// `(base_url, api_key)` the agent must now talk to — `None` for
     /// composite/virtual providers (free mode) that have no single endpoint.
+    ///
+    /// A `None` endpoint for a provider that DOES need one is a silent
+    /// failure: `retarget_endpoint` is skipped, so the agent keeps talking
+    /// to the PREVIOUS provider's endpoint while the model name changes,
+    /// and the operator is told "Connected to AWS Bedrock." Five providers
+    /// in the catalogue are in this state — `bedrock` and `azure-foundry`
+    /// have an empty `default_base_url`, and `azure` has a `{resource}`
+    /// template that is not a URL until it is filled in. So the message
+    /// says what actually happened.
     pub(super) fn activate_provider(
         &mut self,
         provider_id: String,
@@ -182,12 +191,52 @@ impl App {
     ) {
         let _picker_title = provider_name.clone();
         self.set_provider_default(provider_id.clone());
-        if let Some((base_url, api_key)) = endpoint {
-            self.retarget_endpoint(&provider_id, base_url, api_key);
-        }
+        // The message is computed FIRST and set LAST. `persist_provider_
+        // and_model` can call `set_status_notice`, which overwrites
+        // `status_message` — so setting the message before the persist
+        // meant a persist failure (including "no config file is loaded
+        // in this process", which is what a headless test sees) REPLACED
+        // the message the operator needed. The outcome of the switch is
+        // the more important of the two, so it goes last.
+        let message = match endpoint {
+            Some((base_url, api_key)) => {
+                self.retarget_endpoint(&provider_id, base_url, api_key);
+                self.has_credentials = true;
+                format!("{} {}.", status_prefix, provider_name)
+            }
+            None => {
+                // No endpoint. Either the provider is virtual (free mode
+                // and friends), or its catalogue entry carries no usable
+                // URL — in which case the agent is STILL POINTED AT THE
+                // PREVIOUS ENDPOINT, and saying "Connected" would be a
+                // lie the operator acts on.
+                // A VIRTUAL provider (an `acp://` or `cloudcode-pa://`
+                // scheme) legitimately has no single HTTP endpoint, and
+                // the agent talks to it another way. A provider whose
+                // catalogue URL is an HTTP one that `connect_endpoint`
+                // could NOT use — empty, or a `{resource}` template that
+                // is not a URL until it is filled in — is a provider that
+                // DOES need an endpoint, and the agent is still pointed
+                // at the previous one.
+                let needs_an_endpoint = crate::provider::provider_by_name(&provider_id)
+                    .is_some_and(|p| {
+                        let url = p.default_base_url;
+                        url.is_empty() || (url.starts_with("http") && url.contains('{'))
+                    });
+                if needs_an_endpoint {
+                    format!(
+                        "{status_prefix} {provider_name}, but it has no endpoint URL in the \
+                         catalogue — the agent is still using the previous provider's \
+                         endpoint. Set the provider's base URL before using it."
+                    )
+                } else {
+                    self.has_credentials = true;
+                    format!("{} {}.", status_prefix, provider_name)
+                }
+            }
+        };
         self.persist_provider_and_model();
-        self.has_credentials = true;
-        self.status_message = Some(format!("{} {}.", status_prefix, provider_name));
+        self.status_message = Some(message);
         // Mark onboarding as complete now that the user has connected a
         // provider. (P0-2 from UX audit — was never called.)
         let _ = Self::persist_onboarding_complete();
