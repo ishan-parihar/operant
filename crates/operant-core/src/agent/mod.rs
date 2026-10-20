@@ -775,10 +775,6 @@ pub struct ToolPermissionRequest {
     pub response_tx: tokio::sync::oneshot::Sender<ToolPermissionResponse>,
 }
 
-fn prefer_reported(reported: usize, heuristic: usize) -> usize {
-    if reported > 0 { reported } else { heuristic }
-}
-
 /// Tools that block waiting for a human to respond to an interactive dialog
 /// (`clarify` question, `approval_request` prompt). These must NOT be wrapped
 /// in the generic tool timeout — a 30s cap kills the dialog before the user
@@ -1331,12 +1327,50 @@ mod tests {
     use futures::stream::BoxStream;
     use serial_test::serial;
 
-    #[test]
-    fn estimate_current_tokens_prefers_reported_usage() {
-        // heuristic is used when the model has not reported usage yet
-        assert_eq!(prefer_reported(0, 120), 120);
-        // real reported prompt-token count wins over the heuristic
-        assert_eq!(prefer_reported(5_000, 120), 5_000);
+    /// The token estimate must be the LARGER of the current heuristic and
+    /// the reported count.
+    ///
+    /// The reported count is the provider's exact accounting — but for
+    /// the PREVIOUS request. Every tool result appended since is missing
+    /// from it, so preferring it UNDERSTATES the prompt the agent is about
+    /// to send. Taking the maximum is the safe rule: the heuristic can
+    /// overcount slightly, the reported count can undercount by a whole
+    /// turn's tool output, and neither alone is safe.
+    #[tokio::test]
+    async fn the_token_estimate_is_the_larger_of_the_heuristic_and_the_reported_count() {
+        let (agent, _dir) = bust_test_agent(200_000);
+
+        // No report yet: the heuristic is the estimate.
+        let messages = vec![Message::new(crate::client::Role::User, "x".repeat(400))];
+        let heuristic = crate::context_management::estimate_total_tokens(&messages);
+        assert_eq!(
+            agent.estimate_current_tokens(&messages),
+            heuristic,
+            "with no reported count the heuristic is the estimate"
+        );
+
+        // A reported count LARGER than the heuristic wins (the provider
+        // counted something the heuristic does not model).
+        agent
+            .last_prompt_tokens
+            .store(50_000, std::sync::atomic::Ordering::Relaxed);
+        assert_eq!(
+            agent.estimate_current_tokens(&messages),
+            50_000,
+            "a larger reported count must win"
+        );
+
+        // A reported count SMALLER than the heuristic does NOT win — that
+        // is the stale case, and the whole point of the rule.
+        agent
+            .last_prompt_tokens
+            .store(1, std::sync::atomic::Ordering::Relaxed);
+        assert_eq!(
+            agent.estimate_current_tokens(&messages),
+            heuristic,
+            "a stale, smaller reported count must not win — the current \
+             prompt is bigger"
+        );
     }
 
     #[test]

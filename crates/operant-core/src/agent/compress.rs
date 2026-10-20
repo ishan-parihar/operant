@@ -461,16 +461,31 @@ impl OperantAgent {
         &self.client
     }
 
-    /// Token estimate for the compression gate. Prefers the model-reported
-    /// prompt-token count from the last request (source of truth, matching
-    /// hermes context_engine), falling back to the char/4 heuristic when no
-    /// request has completed yet this session.
+    /// Token estimate for the compression gate and the output fit.
+    ///
+    /// The LARGER of two numbers:
+    ///
+    /// - the local char/4 heuristic over the CURRENT message list, which
+    ///   counts the tool results, the reasoning and the tool-call
+    ///   arguments — everything the request about to be sent will carry;
+    /// - the model-reported prompt-token count from the last request,
+    ///   which is the provider's own exact accounting.
+    ///
+    /// The reported count is exact, but it is exact for the PREVIOUS
+    /// request: every tool result appended since is missing from it. So
+    /// preferring it UNDERSTATES the prompt the agent is about to send —
+    /// which is how the output fitter came to size `max_tokens` from a
+    /// stale number and let a request exceed the window by exactly the
+    /// accumulated tool output (RT-116).
+    ///
+    /// Taking the larger of the two is the safe rule: the heuristic can
+    /// overcount slightly (and the fit has a headway term for that), and
+    /// the reported count can undercount by a whole turn's tool output.
+    /// Neither alone is safe; the maximum is.
     pub(crate) fn estimate_current_tokens(&self, messages: &[Message]) -> usize {
-        prefer_reported(
-            self.last_prompt_tokens
-                .load(std::sync::atomic::Ordering::Relaxed),
-            crate::context_management::estimate_total_tokens(messages),
-        )
+        self.last_prompt_tokens
+            .load(std::sync::atomic::Ordering::Relaxed)
+            .max(crate::context_management::estimate_total_tokens(messages))
     }
 
     #[expect(
@@ -497,31 +512,14 @@ impl OperantAgent {
         // The prompt size the fit must be sized against is the CURRENT
         // one — the size of the request about to be sent.
         //
-        // `estimate_current_tokens` PREFERS the provider's last REPORTED
-        // prompt count, which is exact — but it is exact for the PREVIOUS
-        // request. Every tool result appended since is missing from it, and
-        // `fit_output_tokens` skips its safety margin for a reported count
-        // ("reported is exact"). So the fit was sized against a prompt
-        // smaller than the real one by exactly the tool output the agent
-        // has been accumulating — and `max_tokens` came out too large, so
-        // the request could exceed the window by that much. That is the
-        // 400 the fitter exists to prevent.
-        //
-        // The CURRENT estimate is the safe one: it counts the tool
-        // results, the reasoning and the tool-call arguments (the
-        // estimator counts the arguments since iter-1030). It can be
-        // slightly high, and the fitter has a headway term for that.
-        let current = crate::context_management::estimate_total_tokens(messages);
-        let reported_count = self
-            .last_prompt_tokens
-            .load(std::sync::atomic::Ordering::Relaxed);
-        // The larger of the two. The reported count is exact but stale; the
-        // current estimate is fresh but approximate. Either one alone can
-        // understate the real prompt.
-        let prompt = current.max(reported_count);
-        // The margin applies whenever the number is an ESTIMATE. A reported
-        // count is exact for its own request — and we are not sizing that
-        // request.
+        // `estimate_current_tokens` takes the LARGER of the current
+        // estimate and the provider's last reported count. The reported
+        // count is exact but STALE (it is exact for the PREVIOUS
+        // request, and every tool result appended since is missing from
+        // it), and `fit_output_tokens` skips its safety margin for a
+        // reported count. So the fit is sized against an estimate, and the
+        // margin always applies.
+        let prompt = self.estimate_current_tokens(messages);
         let reported = false;
         // (plan 03) main turns carry the reasoning effort unless the model
         // rejected it this session. `Auto` shape resolves per endpoint.

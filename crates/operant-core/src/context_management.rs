@@ -126,8 +126,11 @@ const PROMPT_ESTIMATE_MARGIN_DIVISOR: u32 = 10;
 ///
 /// * `window` — the model's context window (0 or absent = unknown → no fit).
 /// * `prompt_tokens` — provider-reported prompt size when one is fresh
-///   (`estimate_current_tokens`'s `prefer_reported` already resolves this),
-///   else the local `estimate_total_tokens` heuristic.
+///   else the local `estimate_total_tokens` heuristic. NOTE: a reported
+///   count is exact for the PREVIOUS request, so the caller must not treat
+///   it as the size of the request it is about to send — the agent's
+///   `estimate_current_tokens` takes the larger of the two for that
+///   reason.
 /// * `prompt_is_reported` — true when `prompt_tokens` came from the
 ///   provider's own usage report (skip the 10% margin); false when it is a
 ///   local estimate (apply it).
