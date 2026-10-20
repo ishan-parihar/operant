@@ -1424,7 +1424,8 @@ impl McpSseClient {
             sse_url: sse_url.into(),
             post_url: Arc::new(RwLock::new(None)),
             auth_token,
-            // The STREAM client has NO total timeout.
+            // The STREAM client has NO TOTAL timeout, but the CONNECTION
+            // is bounded.
             //
             // An SSE stream is a long-lived GET: the server pushes
             // server-initiated requests over it and it has no natural end.
@@ -1433,10 +1434,17 @@ impl McpSseClient {
             // five times an hour, and a server that does not expect that
             // (the MCP SSE spec assumes a long-lived stream) breaks.
             //
-            // The real bounds are elsewhere and unchanged: the reader has
-            // a 10-second per-event timeout, and the POSTs use the client
-            // below, which has a 300-second timeout.
+            // The CONNECTION is still bounded: `connect_timeout` covers
+            // the TCP connect and the response headers, so a server that
+            // accepts the connection and never answers cannot hang the
+            // connect forever. (Without it the client had NO timeout at
+            // all, because the total timeout was what the split removed.)
+            //
+            // The other bounds are unchanged: the reader waits up to 10
+            // seconds for the server's endpoint event, and the POSTs use
+            // the client below, which has a 300-second total timeout.
             stream_client: reqwest::Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(30))
                 .build()
                 .unwrap_or_else(|_| reqwest::Client::new()),
             // The POST client: a tool call is a bounded request, so a

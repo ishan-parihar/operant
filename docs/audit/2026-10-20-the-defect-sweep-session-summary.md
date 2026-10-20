@@ -2,7 +2,7 @@
 
 Date: 2026-10-20. Agent: `omp`.
 Range: iters 980–1046 (67 commits) on `origin/main`.
-Ledger: `docs/audit/2026-06-19-BUGS.md` — **211 rows closed, 2 open** (S1 and S2, both live-terminal checks that need a terminal this session did not have).
+Ledger: `docs/audit/2026-06-19-BUGS.md` — **211 rows closed, 3 open** (S1 and S2, both live-terminal checks that need a terminal this session did not have).
 
 This is the morning review. It names every defect the sweep found, how each
 was proven, and what is deliberately left open.
@@ -67,12 +67,12 @@ several rows here name the MECHANISM, not just the outcome.
 | RT-107 | The response-MIRROR feature is entirely inert: a complete `hermes` parity implementation with no config key and no production caller. | Recorded as a gap, not implemented — "what should mirroring mean" is a product decision, and a half-wired mirror is worse than none. |
 | RT-108 | The delivery ledger was visible NOWHERE: it is in-memory in the daemon, and `gateway status` reads the config file. | The gateway logs a delivery summary (delivered and failed counts) on stop. |
 | RT-109 | A Discord edit over the 2000-character limit TRUNCATED the answer, silently dropping its tail. | The edit now FAILS, so the dispatch loop sends the whole answer as a fresh message — the plain send chunks it. |
-| RT-110 | A Slack message over 40,000 characters was NOT delivered (Slack answers `ok: false` with a 200, which a status check alone does not catch), and a `DEBUG` print was left in the send path. | The send chunks; the debug print is removed. |
+| RT-110 | A Slack message over 40,000 characters was NOT delivered (Slack answers `ok: false` with a 200, which a status check alone does not catch), and a `DEBUG` print was left in the send path. **The STREAMING path was the unchunked one** — `send_message` chunked, `send_message_return_id` (the path the streaming path uses) did not — so the first fix left the published claim false. | Both chunk now. The regression test drives the adapter against a counting mock server and asserts how many messages the body was sent as; mutation-checked ("an over-limit body must be sent as more than one message, got 1"). |
 | RT-111 | A WhatsApp message over 4096 characters was NOT delivered. | The send chunks. |
 | RT-112 | An SMS over 1600 characters was NOT delivered. | The send chunks. |
 | RT-113 | The Telegram VOICE send hard-coded `api.telegram.org` — the only one of the ten Telegram call sites that did not use the configured base. | It uses `api_url()` now, and a named `voice_url()` plus a test pin the shape: `api_url()` already carries `/bot{token}`, so the first fix produced `.../bot123/bot123/sendVoice` — which would have 404'd every voice message, and no test covered the path. The test is mutation-checked. |
 | RT-114 | The WhatsApp and Twilio API bases were HARD-CODED, so a deployment behind a proxy could reach Telegram, Discord and Slack but not those two. | WhatsApp has `whatsapp_api_base`; Twilio has `TWILIO_API_BASE`. |
-| RT-115 | The MCP SSE client's TOTAL timeout cut the long-lived stream every 300 seconds. | The stream and the POSTs use separate clients: the stream has no total timeout, the POSTs keep 300 s. |
+| RT-115 | The MCP SSE client's TOTAL timeout cut the long-lived stream every 300 seconds. **The first fix was incomplete**: it claimed a 10-second per-event timeout that does not exist (the 10 s bounds the wait for the endpoint EVENT during connect), and removing the client's only timeout made `connect()` UNBOUNDED. | The stream and the POSTs use separate clients: the stream has no total timeout but a 30-second `connect_timeout`, the POSTs keep 300 s. |
 | RT-116 | The output fitter sized `max_tokens` from the PREVIOUS request's reported prompt count, so a request could exceed the window by exactly the tool output accumulated since. | `estimate_current_tokens` now returns the LARGER of the current estimate and the reported count — one rule, every caller safe. |
 | RT-69 | The context eviction could not meet the budget and said nothing; the reactive overflow path re-issued the request and earned the same provider 400. | Four mutations, each run separately. The pre-existing `loop_recovery_paths` test caught the over-strict first fix — the rule is a two-strike rule because of it. |
 | RT-83 | The token estimate counted only the message's text — and a tool-call turn's text is EMPTY by construction, so a 100 KB tool call was estimated at 4 tokens. The eviction was blind to the largest messages. | The mutation fails with "got 4". |

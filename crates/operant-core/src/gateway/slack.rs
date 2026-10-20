@@ -78,12 +78,6 @@ impl SlackAdapter {
     }
 }
 
-/// The id of a message Slack has sent, from the response body.
-///
-/// Slack returns `{"ok": true, "ts": "1712.0001", ...}` — the `ts` is
-/// the message id, and it is what `chat.update` needs. The TRAIT's
-/// default `send_message_return_id` returns an EMPTY id, which the
-/// streaming path reads as "this platform cannot edit" (RT-105).
 /// The messages a Slack body is sent as.
 ///
 /// BOTH Slack send paths go through this: the plain send and the
@@ -91,8 +85,7 @@ impl SlackAdapter {
 /// implementations, and the streaming one was left unchunked for a while
 /// — so a long answer on Slack was rejected with `invalid_text` and lost
 /// while the plain send delivered it. The shared seam is what keeps them
-/// in step: a path that stops using it leaves the helper DEAD, which the
-/// clippy gate catches.
+/// in step.
 fn slack_chunks(text: &str) -> Vec<String> {
     chunk_text(text, SLACK_MESSAGE_LIMIT)
 }
@@ -103,6 +96,12 @@ fn slack_chunks(text: &str) -> Vec<String> {
 /// over this limit — a 200, so a status check alone does not catch it.
 const SLACK_MESSAGE_LIMIT: usize = 40_000;
 
+/// The id of a message Slack has sent, from the response body.
+///
+/// Slack returns `{"ok": true, "ts": "1712.0001", ...}` — the `ts` is
+/// the message id, and it is what `chat.update` needs. The TRAIT's
+/// default `send_message_return_id` returns an EMPTY id, which the
+/// streaming path reads as "this platform cannot edit" (RT-105).
 fn slack_message_id(body: &str) -> String {
     serde_json::from_str::<serde_json::Value>(body)
         .ok()
