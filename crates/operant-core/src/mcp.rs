@@ -1635,7 +1635,7 @@ pub struct McpNamespacedTool {
 
 impl McpNamespacedTool {
     fn new(server_name: &str, tool: McpTool) -> Self {
-        let qualified_name = qualified_tool_name(server_name, &tool.name());
+        let qualified_name = qualified_tool_name(server_name, tool.name());
         Self {
             qualified_name,
             tool,
@@ -1685,49 +1685,85 @@ impl McpNamespacedTool {
 /// readable: `github` + `create_issue` is `mcp_github-create_issue`.
 fn qualified_tool_name(server_name: &str, tool_name: &str) -> String {
     format!(
-        "mcp_{}-{}",
+        "mcp_{}_{}",
         escape_component(server_name),
         escape_component(tool_name)
     )
 }
 
-/// Escape the characters that the provider's tool-name alphabet rejects,
-/// or that could collide with the join separator.
+/// Escape one name component into the provider's alphabet, INJECTIVELY.
 ///
-/// The provider alphabet is `[a-zA-Z0-9_-]` (OpenAI strict) and
-/// `[a-zA-Z_][a-zA-Z0-9_.:-]` (Google). The INTERSECTION is
-/// `[a-zA-Z0-9_-]`, so a name carrying `.` or `:` is rejected outright by
-/// OpenAI — the whole request fails, not just that tool.
+/// Every byte outside `[A-Za-z0-9]` is encoded as `-` + two hex digits
+/// (`_` is `-5f`, `-` is `-2d`, `.` is `-2e`, `/` is `-2f`, `:` is `-3a`).
+/// The encoding is over BYTES, so a non-ASCII character — whose UTF-8
+/// bytes are all outside the alphabet — is encoded losslessly and decodes
+/// back to the same string.
 ///
-/// Every character outside `[a-zA-Z0-9_]` is therefore ENCODED as
-/// `_<hex>_`: `-` becomes `_2d_`, `/` becomes `_2f_`, `.` becomes `_2e_`,
-/// `:` becomes `_3a_`, and anything else becomes `_<hex>_` too. The
-/// encoding is lossless (the hex is recoverable) and stays inside the
-/// provider alphabet.
+/// Two properties make the qualified name unambiguous:
 ///
-/// The two components are joined with a SINGLE `-`, and the escaped
-/// components never contain a bare `-`, so the join is unambiguous and
-/// the encoding is injective: the pair is recovered by splitting on the
-/// single `-` and decoding each half.
+/// 1. The encoded component contains NO underscore (a literal `_` is
+///    encoded as `-5f`), and it contains a `-` ONLY as the start of an
+///    escape. So the encoding is UNIQUELY DECODABLE: scan, and on a `-`
+///    read the next two characters as a hex byte.
+/// 2. The two components are joined with a single `_`, which — by (1) —
+///    can only be the join. So the qualified name's body carries EXACTLY
+///    ONE underscore, and splitting on it recovers the two encoded
+///    components.
 ///
-/// `_` and the alphanumerics are left alone, so the common case stays
-/// readable: `github` + `create_issue` is `mcp_github-create_issue`.
+/// Together: the pair is recoverable, so two different (server, tool)
+/// pairs can never produce the same name.
+///
+/// WHY NOT "leave `_` alone and join with `_`": the first version of
+/// this did, and server `a` with tool `b_c` and server `a_b` with tool `c`
+/// both produced `mcp_a_b_c` — the registry REPLACES a tool with the same
+/// name, and the sync's teardown removes BY NAME, so the second
+/// registration silently replaced the first and tearing one server down
+/// removed the other's still-live tool. And a version that left `_` alone
+/// but encoded the illegal characters as `_<hex>_` was NOT injective
+/// either: `-` and the literal string `_2d_` both encoded to `_2d_`.
+///
+/// The common case stays readable: `github` + `create_issue` is
+/// `mcp_github_create-5fissue`.
 fn escape_component(name: &str) -> String {
     let mut out = String::with_capacity(name.len());
-    for ch in name.chars() {
-        if ch.is_ascii_alphanumeric() || ch == '_' {
-            out.push(ch);
+    for byte in name.as_bytes() {
+        if byte.is_ascii_alphanumeric() {
+            out.push(*byte as char);
             continue;
         }
-        // `-` is the join separator, so it must not survive in a
-        // component; everything else outside the alphabet is encoded the
-        // same way, for the same reason: the result has to be legal AND
-        // lossless.
-        out.push('_');
-        out.push_str(&format!("{:02x}", ch as u32));
-        out.push('_');
+        out.push('-');
+        out.push_str(&format!("{byte:02x}"));
     }
     out
+}
+
+/// Undo [`escape_component`].
+///
+/// The inverse of the byte-wise encoding: on a `-`, read the next two
+/// characters as a hex byte; anything else is a literal byte.
+///
+/// Test-only: the production path never decodes a qualified name — it
+/// only builds one. The decoder exists so the round-trip test can prove
+/// the encoding is injective BY CONSTRUCTION rather than by assertion.
+#[cfg(test)]
+fn decode_component(encoded: &str) -> String {
+    let bytes = encoded.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if bytes[i] == b'-' && i + 2 < bytes.len() {
+            let hex = &encoded[i + 1..i + 3];
+            if let Ok(byte) = u8::from_str_radix(hex, 16) {
+                out.push(byte);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    // The bytes came from a valid UTF-8 string, so this round-trips.
+    String::from_utf8(out).unwrap_or_else(|_| encoded.to_string())
 }
 
 #[async_trait]
@@ -2126,11 +2162,19 @@ mod tests {
             qualified_tool_name("a.b", "c"),
             "a dot must not reintroduce a collision"
         );
-        // The COMMON case stays readable: the tool name's underscores are
-        // untouched.
+        // The collision a NEAR-MISS encoding scheme produced: a `-` and
+        // the literal string `_2d_` both encoded to `_2d_`. The encoding
+        // now escapes `_` too, so the two differ.
+        assert_ne!(
+            qualified_tool_name("-", "x"),
+            qualified_tool_name("_2d_", "x"),
+            "an escaped character must not collide with its own literal spelling"
+        );
+        // The common case stays readable: the tool name's structure is
+        // visible, with only the underscore escaped.
         assert_eq!(
             qualified_tool_name("github", "create_issue"),
-            "mcp_github-create_issue",
+            "mcp_github_create-5fissue",
             "the common name must stay readable"
         );
     }
@@ -2163,6 +2207,11 @@ mod tests {
 
     /// The schema the PROVIDER sees must be the SAME name the registry
     /// keys on.
+    ///
+    /// `ToolSchema::new` runs `sanitize_tool_name` over its input, so a
+    /// qualified name carrying a character it rewrote produced a
+    /// mismatch: the model called one name, the dispatcher looked up
+    /// another, and the call silently failed.
     #[test]
     fn the_schema_name_equals_the_registry_name() {
         for (server, tool) in [
@@ -2188,11 +2237,11 @@ mod tests {
     /// The encoding is INJECTIVE by construction: the pair is recoverable
     /// from the qualified name.
     ///
-    /// The components are encoded with `_<hex>_` and joined with a single
-    /// `-`, which no encoded component contains. So splitting the
-    /// qualified name on that single `-` recovers the two encoded
-    /// components, and decoding each one recovers the original. Two
-    /// different pairs therefore cannot share a name.
+    /// The components are encoded with a byte-wise escape that never emits
+    /// an underscore, and joined with a single `_`. So splitting the
+    /// qualified name's body on that one underscore recovers the two
+    /// encoded components, and decoding each one recovers the original.
+    /// Two different pairs therefore cannot share a name.
     #[test]
     fn the_mcp_qualified_name_round_trips() {
         for (server, tool) in [
@@ -2204,52 +2253,31 @@ mod tests {
             ("a/b", "c"),
             ("", ""),
             ("ünïcode", "tööl"),
+            ("-", "_2d_"),
         ] {
             let name = qualified_tool_name(server, tool);
             let body = name
                 .strip_prefix("mcp_")
                 .unwrap_or_else(|| panic!("the name {name:?} must start with mcp_"));
-            let (server_part, tool_part) = body
-                .split_once('-')
-                .unwrap_or_else(|| panic!("the name {name:?} must contain the join"));
+            // Exactly ONE underscore: the join. The encoded components
+            // never contain one.
+            let parts: Vec<&str> = body.split('_').collect();
             assert_eq!(
-                decode_component(server_part),
+                parts.len(),
+                2,
+                "the encoded body {body:?} must hold exactly one join"
+            );
+            assert_eq!(
+                decode_component(parts[0]),
                 server,
                 "the server part must decode back (name {name:?})"
             );
             assert_eq!(
-                decode_component(tool_part),
+                decode_component(parts[1]),
                 tool,
                 "the tool part must decode back (name {name:?})"
             );
         }
-    }
-
-    /// Undo [`escape_component`].
-    fn decode_component(encoded: &str) -> String {
-        let mut out = String::with_capacity(encoded.len());
-        let mut rest = encoded;
-        while let Some(start) = rest.find("_") {
-            let (before, after) = rest.split_at(start);
-            out.push_str(before);
-            let after = &after[1..]; // the `_` that opened the escape
-            // The escape is `_<hex>_`. A `_` that is not followed by two
-            // hex digits and a closing `_` is a literal underscore.
-            let is_escape = after.len() >= 3
-                && after.as_bytes()[0].is_ascii_hexdigit()
-                && after.as_bytes()[1].is_ascii_hexdigit()
-                && after.as_bytes()[2] == b'_';
-            if !is_escape {
-                out.push('_');
-                rest = after;
-                continue;
-            }
-            let code = u32::from_str_radix(&after[..2], 16).expect("two hex digits");
-            out.push(char::from_u32(code).expect("a valid scalar value"));
-            rest = &after[3..];
-        }
-        out.push_str(rest);
-        out
     }
 
     #[test]
@@ -2398,13 +2426,13 @@ mod tests {
             .iter()
             .map(|s| s.name.clone())
             .collect();
-        // The qualified name joins the two components with a `-`, and a
-        // `-` INSIDE a component is encoded as `_2d_` — the separator
-        // must not be forgeable from a component, or the pair would be
-        // ambiguous. The server here is `test-server`, so it encodes to
-        // `test_2d_server`.
-        assert!(names.iter().any(|n| n == "mcp_test_2d_server-search"));
-        assert!(names.iter().any(|n| n == "mcp_test_2d_server-save"));
+        // The qualified name joins the two components with a `_`, and
+        // every byte outside `[A-Za-z0-9]` is encoded as `-` + two hex
+        // digits — so the join can never be forged from a component, and
+        // the pair is recoverable. The server here is `test-server`, so
+        // it encodes to `test-2dserver`.
+        assert!(names.iter().any(|n| n == "mcp_test-2dserver_search"));
+        assert!(names.iter().any(|n| n == "mcp_test-2dserver_save"));
 
         // Re-syncing is idempotent and reports the same count.
         let count2 = manager.sync_tools_to_registry(&registry).await;
