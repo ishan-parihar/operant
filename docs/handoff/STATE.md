@@ -72,20 +72,20 @@ Live claims: see `genome doctor`. Recent units of work:
 |---|---|
 <!-- genome:end status -->
 
-<!-- genome:zone handoff sha=bf1bf8e90726 -->
+<!-- genome:zone handoff sha=d6de41a6a9b3 -->
 ## Handoff — 2026-10-20
 
-Repo branch `main`, HEAD `f356c9a62ebfa233f08552bf480d0ecbeb46006f`. Working tree dirty (3 paths).
+Repo branch `main`, HEAD `b2429a4b27a2d4b2487b0458420b93b8c48a917a`. Working tree dirty (4 paths).
 
 ## Open register rows
   (none)
 
 ## Recent worklog
-- **2026-10-19T21:01** · `omp` — Autonomous defect sweep, iters 980-992: 13 iterations, each a separate pushed commit
-- **2026-10-19T22:32** · `omp` — Autonomous defect sweep, iters 980-1002: 23 iterations, each a separate pushed commit
-- **2026-10-19T23:07** · `omp` — Autonomous defect sweep, iters 980-1008: 29 iterations, each a separate pushed commit
-- **2026-10-19T23:45** · `omp` — iters 1010-1011: the review of the 2026-10-19 sweep turned up four defects the sweep had not found (RT-55 the supply-chain gate could not name the advisory it exists to report; RT-58 the checkpoint shadow store was snapshotting ITSELF, which is where the 1.5 GB came from; RT-56 a size-bound checkpoint skip was reported as the wrong cause; RT-57 the genome's role map and the docs disagreed about which files exist), plus the paperwork the sweep left behind
-- **2026-10-20T00:38** · `omp` — iters 1010-1012: a REVIEW of the sweep found eight reachable defects the sweep had not found (RT-55 to RT-65) and the paperwork it had left behind; the one decision is AD-041, the correction to AD-039's overstated decompression claim
+- **2026-10-20T04:35** · `omp` — iter-1017: the AFT binary is verified before it is installed and the install is atomic (RT-70), and the MCP qualified name is injective by construction again (RT-71) — the shared updater's checksum guard matched only SHA256SUMS while aft publishes checksums.sha256, so the verification never ran
+- **2026-10-20T06:52** · `omp` — iter-1016: a context overflow the compression cannot help now fails typed, and the eviction reports whether it met the budget (RT-69) — the two-strike rule: the first overflow retries (a provider overflow can be transient), the second fails typed; the eviction's final trim keeps tool groups whole and never drops the live turn
+- **2026-10-20T06:52** · `omp` — iter-1017: the Email adapter's TLS setup no longer panics, and the SMTP client no longer reports a rejected message as sent (RT-72, RT-73) — the rustls crypto provider is NAMED at the call site (the crate features are ambiguous under --all-features), and every SMTP server reply's status code is checked
+- **2026-10-20T06:52** · `omp` — iter-1018: the MCP tool's registry name is injective by construction again (RT-71) — iter-1014 shipped a claim that was false: the encoding left _ alone, so - and the literal _2d_ collided; the encoding is now a byte-wise escape joined by a single _, which is provably injective
+- **2026-10-20T06:52** · `omp` — iter-1019: the AFT binary is verified before it is installed, and the install is atomic (RT-70) — the shared updater's checksum guard matched only SHA256SUMS while aft publishes checksums.sha256, so the verification NEVER ran for aft, and the first-install path (which never went through the updater) downloaded and executed an unverified binary with a non-atomic write
 
 Regenerate with `genome handoff --write`.
 <!-- genome:end handoff -->
