@@ -112,10 +112,7 @@ impl PlatformAdapter for WhatsAppAdapter {
         // reach the WhatsApp API at all.
         let url = format!(
             "{}/v18.0/{}/messages",
-            crate::config::runtime_config()
-                .gateway
-                .whatsapp_api_base
-                .trim_end_matches('/'),
+            crate::tools::platform_bases::whatsapp_api_base(),
             phone_number_id
         );
 

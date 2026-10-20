@@ -1,6 +1,5 @@
 //! `discord` — extracted verbatim from gateway/mod.rs.
 
-use crate::config::runtime_config;
 use crate::error::{Error, Result};
 use async_trait::async_trait;
 use tokio::sync::mpsc;
@@ -22,7 +21,8 @@ impl DiscordAdapter {
     }
 
     pub(crate) fn api_url(&self) -> String {
-        runtime_config().gateway.discord_api_base
+        // One owner with the agent's tools (RT-129).
+        crate::tools::platform_bases::discord_api_base()
     }
 }
 

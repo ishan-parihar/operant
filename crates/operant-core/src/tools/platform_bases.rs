@@ -1,18 +1,17 @@
 //! The API base each messaging platform is reached at.
 //!
-//! The gateway's ADAPTERS read their base from the config
-//! (`[gateway] telegram_api_base` and friends), so a deployment that must
-//! reach a platform through a proxy — or point at a compatible endpoint —
-//! can. The agent's TOOLS did not: they hard-coded the public API URLs,
-//! so a deployment that reached Telegram through the gateway could not
-//! reach it through the agent's `send_message`.
-//!
-//! One owner, read from the same runtime config the adapters read, so the
-//! two cannot disagree.
+//! Both the gateway's ADAPTERS and the agent's TOOLS read their base from
+//! here. The tools used to hard-code the public API URLs; the adapters read
+//! the config directly and ignored the environment override — so with
+//! `TELEGRAM_API_BASE` set, the agent sent through the proxy while the
+//! gateway sent direct (RT-129, found while proving RT-126). One owner is
+//! what makes the two agree.
 //!
 //! Each base has an environment override, matching the precedent the SMS
-//! adapter set (`TWILIO_API_BASE`): the environment wins, so a container
-//! can point a tool at a proxy without rewriting the config file.
+//! adapter set (`TWILIO_API_BASE`): the environment wins over the config
+//! (`[gateway] telegram_api_base` and friends), so a container can point
+//! the gateway AND the agent's tools at a proxy without rewriting the
+//! config file.
 //!
 //! The bases are trimmed of a trailing `/` because the callers append
 //! their own path (`/bot{token}/sendMessage`), and a doubled slash is a

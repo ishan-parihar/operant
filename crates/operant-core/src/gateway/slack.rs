@@ -1,6 +1,5 @@
 //! `slack` — extracted verbatim from gateway/mod.rs.
 
-use crate::config::runtime_config;
 use crate::error::{Error, Result};
 use crate::gateway_markdown::markdown_to_slack_mrkdwn;
 use async_trait::async_trait;
@@ -61,7 +60,9 @@ impl SlackAdapter {
         if let Some(ref base) = self.api_base_override {
             return base.clone();
         }
-        runtime_config().gateway.slack_api_base.clone()
+        // One owner with the agent's tools (RT-129): a per-instance
+        // override still wins, then the env, then the config.
+        crate::tools::platform_bases::slack_api_base()
     }
 
     /// Point this adapter at a different Slack API base.

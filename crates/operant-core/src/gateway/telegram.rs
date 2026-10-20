@@ -1,6 +1,5 @@
 //! `telegram` — extracted verbatim from gateway/mod.rs.
 
-use crate::config::runtime_config;
 use crate::error::Result;
 use crate::gateway_markdown::markdown_to_telegram_html;
 use async_trait::async_trait;
@@ -159,7 +158,10 @@ impl TelegramAdapter {
     }
 
     pub(crate) fn api_url(&self) -> String {
-        let base = runtime_config().gateway.telegram_api_base;
+        // Through `platform_bases`, so the env override that the agent's
+        // tools honour reaches the adapter too (RT-129: reading the config
+        // directly made the two disagree exactly when the override was set).
+        let base = crate::tools::platform_bases::telegram_api_base();
         format!(
             "{}/bot{}",
             base.trim_end_matches('/'),
@@ -725,7 +727,7 @@ impl PlatformAdapter for TelegramAdapter {
         if let Some(msg) = Self::handle_callback_update(
             &self.client,
             self.token.as_deref().unwrap_or_default(),
-            &runtime_config().gateway.telegram_api_base,
+            &crate::tools::platform_bases::telegram_api_base(),
             update.clone(),
         )
         .await
@@ -854,7 +856,7 @@ impl PlatformAdapter for TelegramAdapter {
         tracing::info!("Telegram token verified via getMe");
 
         let token = self.token.clone().unwrap_or_default();
-        let base = runtime_config().gateway.telegram_api_base;
+        let base = crate::tools::platform_bases::telegram_api_base();
         let url = format!("{}/bot{}/getUpdates", base.trim_end_matches('/'), token);
         let running = self.running.clone();
         running.store(true, Ordering::SeqCst);
@@ -1818,6 +1820,32 @@ impl TelegramAdapter {
 
 #[cfg(test)]
 mod tests {
+    /// RT-129: the env override the agent's TOOLS honour must reach the
+    /// ADAPTER too. Reading the config directly made the gateway send to the
+    /// public API while the tools went to the proxy — the split the
+    /// `platform_bases` module exists to prevent.
+    #[test]
+    fn the_adapter_api_base_honours_the_environment_override() {
+        // The env is process-global; the lock serialises this against every
+        // other env-mutating test.
+        let _lock = crate::platform::test_env_lock_blocking();
+        let previous = std::env::var("TELEGRAM_API_BASE").ok();
+        // SAFETY: the env is process-global; the lock above serialises this
+        // test against every other test that mutates it.
+        unsafe { std::env::set_var("TELEGRAM_API_BASE", "http://127.0.0.1:9/tg/") };
+        let adapter = TelegramAdapter::new(Some("123:abc".to_string()));
+        let url = adapter.api_url();
+        // SAFETY: the lock above serialises this restore.
+        match previous {
+            Some(v) => unsafe { std::env::set_var("TELEGRAM_API_BASE", v) },
+            None => unsafe { std::env::remove_var("TELEGRAM_API_BASE") },
+        }
+        assert_eq!(
+            url, "http://127.0.0.1:9/tg/bot123:abc",
+            "the adapter must read the same base the tools read, slash-trimmed"
+        );
+    }
+
     use super::*;
 
     /// A Telegram HTTP status decides whether a send was DELIVERED.
