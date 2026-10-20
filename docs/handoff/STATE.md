@@ -177,20 +177,20 @@ record touched by more than one commit was amended in place.
 |---|---|
 <!-- genome:end status -->
 
-<!-- genome:zone handoff sha=736b0d245dc9 -->
+<!-- genome:zone handoff sha=e16973d5b838 -->
 ## Handoff — 2026-10-21
 
-Repo branch `main`, HEAD `f1c5386a2326d1a1698b83d2f89faa397485542c`. Working tree dirty (7 paths).
+Repo branch `main`, HEAD `e35805511ae2756577b66cd6010d41312fc9ba83`. Working tree dirty (7 paths).
 
 ## Open register rows
   (none)
 
 ## Recent worklog
-- **2026-10-20T23:45** · `jcode` — docs: every number in the state snapshot re-derived rather than copied, and the open-work claim corrected — RT-117 and RT-119 are actionable and were not named
 - **2026-10-20T23:50** · `jcode` — docs: the entry contract pointed the open queue at a section with nothing open in it — and two more summaries in the same file were stale too (RG-009)
 - **2026-10-20T23:57** · `jcode` — docs: AGENTS.md's CLI list was stale in BOTH directions and its count agreed with nothing — 52 variants, not 53 (RG-010)
 - **2026-10-21T00:05** · `jcode` — docs: the doc-claims check became a real gate, and it caught a tree entry for a file archived in iter-900 (RG-011)
 - **2026-10-21T00:16** · `jcode` — docs: extending the doc-claims gate found AGENTS.md stating the AFT tool count three different ways (the code has 20) and a TUI count as an uncheckable lower bound
+- **2026-10-21T00:21** · `jcode` — docs: AGENTS.md contradicted itself about the error taxonomy (12 classes vs 24) — the gate now checks AGREEMENT, not just the count
 
 Regenerate with `genome handoff --write`.
 <!-- genome:end handoff -->

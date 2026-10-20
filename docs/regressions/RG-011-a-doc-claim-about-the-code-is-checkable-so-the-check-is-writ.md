@@ -109,6 +109,8 @@ OK    CLI command variants: 52
 OK    CLI list: 52 entries, exact match
 OK    gateway platforms: 7
 OK    error classes: 24
+OK    taxonomy size: 24 stated consistently
+OK    hook events: 9
 OK    workspace members: 12
 OK    Architecture Overview tree: 41 paths, every one exists
 OK    AFT tools: 20
@@ -158,6 +160,34 @@ DRIFT TUI modules: doc says 50, code has 63
 ```
 
 and exits 1. Both restorations were reverted and the tree re-verified green.
+
+**The gate was extended AGAIN, and extending it found a self-contradiction.**
+AGENTS.md stated the error taxonomy's size in two incompatible ways *in the same
+document*: the Rust Code Standards said "ClassifiedError taxonomy (**12** classes
+in the agent loop)" while two other places said "**24** error classes" and
+"**24**-class ClassifiedError". There is no 12-variant enum anywhere in
+`crates/operant-core/src/agent/` — the taxonomy is `FailoverReason`, with 24
+variants. The "12" dated from iter-700, before the taxonomy was rewritten with
+23+ categories.
+
+The check added for it is not a count check. It asserts that **every** place the
+document states the taxonomy size agrees, across the prose forms ("N classes in
+the agent loop", "N error classes", "N-class ClassifiedError"). The count was
+never the point; the agreement was.
+
+That check needed one fix before it worked, and the fix is the point: the forms
+**wrap across line breaks** ("(12 classes in\n  the agent loop)"), so a
+single-line regex silently missed the wrapped form — which was exactly the form
+carrying the wrong number. The document is now flattened to one line before
+matching. Proved against the pre-fix document:
+
+```
+DRIFT taxonomy size: AGENTS.md states it several different ways: 12 24
+```
+
+and exits 1. The hook-events claim ("9 events + wildcard") was checked at the
+same time and is **correct** — `HookEvent` has exactly 9 variants — so it is now
+in the gate rather than in the trust-me category.
 
 The generalisable detector, and the one this session has now paid for nine
 times: **a doc claim about the code is a test in disguise.** The test is cheap,

@@ -736,8 +736,9 @@ code, not after.
   Cross-crate seams go through `operant-api` type aliases (`MemoryResult`,
   …) with `From` conversions — see "Memory error handling" above.
 - Use `?` for propagation, not `match` chains. Classify newly-introduced
-  failure paths into the existing `ClassifiedError` taxonomy (12 classes in
-  the agent loop) rather than inventing parallel error enums.
+  failure paths into the existing `ClassifiedError` taxonomy (24 classes in
+  the agent loop — `FailoverReason` in `crates/operant-core/src/agent/error_classifier.rs`)
+  rather than inventing parallel error enums.
 - Degrade, don't die, at subsystem seams: memory/provider/tool failures must
   turn into a logged miss or a helpful tool error, never a dead turn.
 

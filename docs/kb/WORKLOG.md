@@ -116,3 +116,4 @@ Append-only: `kb log "<entry>"` — one entry per unit of work.
 - **2026-10-20T23:57** · `jcode` — docs: AGENTS.md's CLI list was stale in BOTH directions and its count agreed with nothing — 52 variants, not 53 (RG-010)
 - **2026-10-21T00:05** · `jcode` — docs: the doc-claims check became a real gate, and it caught a tree entry for a file archived in iter-900 (RG-011)
 - **2026-10-21T00:16** · `jcode` — docs: extending the doc-claims gate found AGENTS.md stating the AFT tool count three different ways (the code has 20) and a TUI count as an uncheckable lower bound
+- **2026-10-21T00:21** · `jcode` — docs: AGENTS.md contradicted itself about the error taxonomy (12 classes vs 24) — the gate now checks AGREEMENT, not just the count

@@ -103,6 +103,41 @@ PY
 err_doc=$(grep -oE '[0-9]+ error classes' AGENTS.md | grep -oE '[0-9]+' | head -1)
 check "error classes" "$err_actual" "$err_doc"
 
+# Every place AGENTS.md states the taxonomy size must agree, INCLUDING the
+# prose forms ("12 classes in the agent loop", "24-class ClassifiedError").
+# A document that says 12 in one place and 24 in another is the failure this
+# catches — the count is not the point, the agreement is.
+#
+# The forms WRAP ACROSS LINES ("(12 classes in\n the agent loop)"), so the
+# document is flattened to one line before matching. A single-line regex
+# silently misses the wrapped form — which is exactly the form that carried
+# the wrong number.
+tax_alls=$(tr '\n' ' ' < AGENTS.md \
+           | grep -oE '[0-9]+[- ]+((error )?classes? (in the agent loop|with ClassifiedError)?|error classes|class .ClassifiedError)' \
+           | grep -oE '^[0-9]+' | sort -u | tr '\n' ' ')
+if [ "$(echo "$tax_alls" | wc -w)" -gt 1 ]; then
+  say "DRIFT taxonomy size: AGENTS.md states it several different ways: $tax_alls"
+  fail=1
+else
+  say "OK    taxonomy size: $err_actual stated consistently"
+fi
+
+# --- hook events ----------------------------------------------------------
+hook_actual=$(python3 - <<'PY'
+import re
+src = open('crates/operant-core/src/gateway_pipeline.rs').read()
+i = src.index('pub enum HookEvent {'); depth = 0
+for k in range(i + len('pub enum HookEvent {') - 1, len(src)):
+    if src[k] == '{': depth += 1
+    elif src[k] == '}':
+        depth -= 1
+        if depth == 0: end = k; break
+print(len(re.findall(r'^    ([A-Z][A-Za-z0-9]*)', src[i:end], re.M)))
+PY
+)
+hook_doc=$(grep -oE '[0-9]+ events \+ wildcard' AGENTS.md | grep -oE '[0-9]+' | head -1)
+check "hook events" "$hook_actual" "$hook_doc"
+
 # --- workspace members -----------------------------------------------------
 ws_actual=$(python3 -c "import tomllib;print(len(tomllib.load(open('Cargo.toml','rb'))['workspace']['members']))")
 ws_doc=$(grep -oE 'Workspace members \([0-9]+ crates' AGENTS.md | grep -oE '[0-9]+' | head -1)
