@@ -102,16 +102,23 @@ agent-runtime = [
 ]
 
 # Major subsystems
-browser-native = ["operant-tools/browser-native"]
+#
+# `browser-native` and `rag-pdf` are GONE (RT-88): both enabled a
+# dependency in `operant-tools` for a code path nothing reached —
+# `fantoccini` and `lopdf` — and `rag-pdf` was in the DEFAULT feature
+# list, so the cost was real. The `pdf_read` tool it advertised was
+# registered nowhere, so the feature delivered a capability the agent
+# could never call. A PDF reader, if it is wanted, belongs in
+# `operant-core/src/tools/`, where the tool trait and the path policy are
+# the ones the product uses.
 plugins-wasm = ["dep:operant-plugins"]
 memory-postgres = ["operant-memory/memory-postgres"]
-rag-pdf = ["operant-tools/rag-pdf"]
 anthropic = ["operant-core/anthropic"]  # cfg-gate for AnthropicModelClient import in main.rs
 
 # CI meta-feature
 ci-all = [
     "agent-runtime",
-    "browser-native", "plugins-wasm", "memory-postgres", "rag-pdf",
+    "plugins-wasm", "memory-postgres",
 ]
 
 [dev-dependencies]

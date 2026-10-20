@@ -1,27 +1,41 @@
 # operant-tools
 
-Tool implementations for agent-callable capabilities.
+CLI discovery for the doctor check.
 
 ## Purpose
 
-The concrete tools that agents can call. The crate root (`src/lib.rs`) declares about seventy modules, including file tools (`file_edit.rs`, `file_write.rs`, `glob_search.rs`, `content_search.rs`), `git_operations.rs`, `http_request.rs`, `web_fetch.rs`, `browser.rs`, `calculator.rs`, memory tools (`memory_store.rs`, `memory_recall.rs`, `memory_forget.rs`, `memory_purge.rs`, `memory_export.rs`), and MCP support (`mcp_client.rs`, `mcp_transport.rs`, `mcp_tool.rs`, `mcp_deferred.rs`).
+This crate used to hold about seventy tool modules — 30 860 lines — and the
+product called exactly ONE of them: `cli_discovery::discover_cli_tools`, from
+`operant-core/src/doctor.rs`.
 
-## Configuration
+The rest were a **parallel implementation** of the tools the core actually
+registers. The core carries its own `browser_tool.rs`, `file_tools.rs`,
+`http_tool.rs` and `web_search_tool.rs`, and `builtin.rs` registers *those*.
+Two implementations of the same tools, kept in step by hand, is a
+divergence waiting to happen: the Streamable-HTTP gap (RT-81) had to be
+fixed in the core while a copy in this crate — in an older form — was never
+consulted.
 
-- Cargo features: `browser-native` (enables `fantoccini`) and `rag-pdf` (enables `lopdf`). Default is empty.
-- The `probe` feature was removed on 2026-08-02 (comment in `Cargo.toml`).
-- Per-tool settings are not summarised in the crate docs; read the module for the tool.
+## What was removed, and why
+
+- **The tool modules** (RT-88). Deleted, not merged: the core's versions are
+  the registered ones, the tested ones, and the ones that speak the current
+  MCP protocol version. The duplicate here pinned
+  `MCP_PROTOCOL_VERSION = "2024-11-05"` while the core speaks `2025-06-18`.
+- **The MCP subset** (RT-87). Six modules, 3 232 lines, also unreachable.
+- **The `browser-native` and `rag-pdf` features.** Both enabled a
+  dependency (`fantoccini`, `lopdf`) for code paths nothing reached, and
+  `rag-pdf` was in `operant-cli`'s DEFAULT feature list — so the cost was
+  real. `pdf_read` was a 693-line module whose tool was registered nowhere:
+  the feature advertised a capability the agent could never call.
 
 ## Extension points
 
-- Implement the `Tool` trait from `operant-api` (`src/tool.rs` there) in a new module, then declare it with `pub mod` in `src/lib.rs`.
-- MCP-backed tools are built from `src/mcp_tool.rs` and `src/mcp_transport.rs`.
+The tools live in `operant-core/src/tools/`, which implements the core's
+`OperantTool` trait. A new tool is a new module there, registered in
+`builtin.rs`.
 
 ## Limitations
 
-- The crate docs have no per-tool documentation.
-- Some tools need optional features (`browser-native`, `rag-pdf`). Several wrap external CLIs, for example `codex_cli.rs`, `gemini_cli.rs`, and `claude_code.rs`.
-
-## Model experience
-
-These are the tools the model can call. Their interface is the `Tool` trait in `operant-api`. The crate docs do not describe how tools are advertised to the model; read `src/tool_search.rs` and `src/mcp_deferred.rs` for that.
+- This crate is not a public API (`publish = false`); nothing outside the
+  workspace depends on it.
