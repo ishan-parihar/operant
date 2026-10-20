@@ -91,8 +91,11 @@ Live claims: see `genome doctor`. Recent units of work:
 
 The four workflow boards under `docs/kb/workflows/` were stale, and stale in
 the direction that costs the most: they listed as **open** work that
-`docs/audit/2026-06-19-BUGS.md` had already recorded as **fixed**. 39 board
-rows described defects that were closed between iter-958 and iter-973. An
+`docs/audit/2026-06-19-BUGS.md` had already recorded as **fixed**. 49 board
+rows described defects that were closed between iter-958 and iter-973 (17 on
+`holon-seat-redteam`, 12 on `tui-redteam`, 2 on `org-tui-foundation` and 18
+rows of the `knowledge-base-redteam` findings table — KB-1 and KB-2 were
+already closed when that board was written). An
 agent reading a board to pick up work would have re-opened, re-diagnosed and
 re-fixed findings that are already fixed — and the boards are the collision
 guard, so a fresh claim on one of those rows would have looked legitimate.
@@ -166,20 +169,20 @@ record touched by more than one commit was amended in place.
 |---|---|
 <!-- genome:end status -->
 
-<!-- genome:zone handoff sha=af087d38c185 -->
+<!-- genome:zone handoff sha=e0b392dc45eb -->
 ## Handoff — 2026-10-20
 
-Repo branch `main`, HEAD `f659a2356015e3fe282e52cfc1867156b0bd1685`. Working tree dirty (9 paths).
+Repo branch `main`, HEAD `7787cd1a116745b695266c480db979b4cbd3ac33`. Working tree dirty (7 paths).
 
 ## Open register rows
   (none)
 
 ## Recent worklog
-- **2026-10-20T20:13** · `jcode` — docs: the second validation found a doctrine violation in the first validation's own commit — RG-001 had been amended in place, bypassing the genome's immutability gate (RG-002)
 - **2026-10-20T20:42** · `jcode` — docs: the third validation found the detection law I had just minted was overbroad, and that my own table inside it was wrong on the first out-of-sample case (RG-003)
 - **2026-10-20T21:38** · `jcode` — docs: the fourth validation found my newest record asserted a tool limit that does not exist, and the experiment that disproved it performed the correction (the retired record is out of force; RG-006 carries the law)
 - **2026-10-20T21:49** · `jcode` — docs: a peer's commit swept the whole staged docs change set into their fix commit — nothing lost, but the label-to-content mapping in the log is unreliable
 - **2026-10-20T23:39** · `jcode` — docs: the fifth validation retracted a cause I asserted without testing — the peer swept my change set, but not by any mechanism I could reproduce (RG-007)
+- **2026-10-20T23:42** · `jcode` — docs: the board-row count I reported was 49, not 39 — the headline figure was never derived from the source (RG-008)
 
 Regenerate with `genome handoff --write`.
 <!-- genome:end handoff -->
