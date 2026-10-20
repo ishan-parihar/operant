@@ -116,15 +116,24 @@ impl Default for QdrantConfig {
 /// Route an embedding hint to a specific provider + model.
 ///
 /// ```toml
-/// [[embedding_routes]]
+/// [providers]
+/// fallback = "primary"
+///
+/// [providers.models.primary]
+/// base_url = "https://api.openai.com/v1"
+///
+/// [[providers.embedding_routes]]
 /// hint = "semantic"
 /// provider = "openai"
 /// model = "text-embedding-3-small"
 /// dimensions = 1536
-///
-/// [memory]
-/// embedding_model = "hint:semantic"
 /// ```
+///
+/// The routes live UNDER `[providers]` — a top-level `[[embedding_routes]]`
+/// is rejected by the config's `deny_unknown_fields`. The
+/// `[memory] embedding_model` key this example used to show is rejected
+/// too: the core's `MemorySettings` has no such field, so a config
+/// carrying it fails to load with "unknown field `embedding_model`".
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
 pub struct EmbeddingRouteConfig {

@@ -2,7 +2,7 @@
 
 Date: 2026-10-20. Agent: `omp`.
 Range: iters 980–1046 (67 commits) on `origin/main`.
-Ledger: `docs/audit/2026-06-19-BUGS.md` — **190 rows closed, 2 open** (S1 and S2, both live-terminal checks that need a terminal this session did not have).
+Ledger: `docs/audit/2026-06-19-BUGS.md` — **192 rows closed, 2 open** (S1 and S2, both live-terminal checks that need a terminal this session did not have).
 
 This is the morning review. It names every defect the sweep found, how each
 was proven, and what is deliberately left open.
@@ -52,6 +52,8 @@ several rows here name the MECHANISM, not just the outcome.
 | RT-92 | The CLI compiled the `postgres` dependency for a crate it never called, through a `ci-all` feature no CI runs. | A workspace-wide search for `operant_memory::`. |
 | RT-94 | `operant doctor` reported a provider as "valid" that the runtime cannot serve. Bedrock speaks AWS's Converse API; the runtime only speaks chat-completions and messages. | The root was `default_wire_api`'s default saying "chat_completions" for a provider that does not speak it. The mutation fails the test. |
 | RT-95 | The TUI said "Connected to AWS Bedrock." while the agent kept talking to the PREVIOUS provider — five catalogue providers have no usable endpoint URL, so the retarget was skipped. | A second defect surfaced in the same fix: the status message was set BEFORE the persist, so a persist failure overwrote it. The mutation fails the test. |
+| RT-96 | `[[providers.model_routes]]` was a documented feature that did not work: the resolution lived only in `operant-providers`' router, which the runtime never calls, so `hint:reasoning` was sent to the provider as the MODEL NAME. | The hint now resolves where the model name becomes a request, and an unresolvable hint is an error rather than an API 404. The mutation fails the test. |
+| RT-97 | The DOCUMENTED config examples for the model routes were rejected by the config — the docs showed a top-level `[[model_routes]]` and a `[memory] embedding_model`, both of which the config refuses, so copying them produced a config that would not load. | Two tests now parse the documented TOML through the real deserializer. |
 | RT-69 | The context eviction could not meet the budget and said nothing; the reactive overflow path re-issued the request and earned the same provider 400. | Four mutations, each run separately. The pre-existing `loop_recovery_paths` test caught the over-strict first fix — the rule is a two-strike rule because of it. |
 | RT-83 | The token estimate counted only the message's text — and a tool-call turn's text is EMPTY by construction, so a 100 KB tool call was estimated at 4 tokens. The eviction was blind to the largest messages. | The mutation fails with "got 4". |
 | RT-78 | The LLM compression's HEAD boundary was a message count, so a `tool_use` and its `tool_result` could be separated by the summary. `repair_tool_pairs` existed and was never called. | Two mutations, run separately. |

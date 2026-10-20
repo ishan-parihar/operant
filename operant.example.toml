@@ -555,6 +555,24 @@ enabled = true
 # [[providers.fallback_chain]]
 # provider = "gemini"
 # model = "gemini-2.5-flash"
+#
+# Task routing. A route sends a HINT to a specific provider + model, and
+# the run path resolves `hint:<name>` in the model setting to it. The
+# routes live UNDER `[providers]` — a top-level `[[model_routes]]` is
+# refused by the config's `deny_unknown_fields`.
+#  # [[providers.model_routes]]
+#  # hint = "reasoning"
+#  # provider = "openrouter"
+#  # model = "anthropic/claude-opus-4-20250514"
+#
+#  # [[providers.model_routes]]
+#  # hint = "fast"
+#  # provider = "groq"
+#  # model = "llama-3.3-70b-versatile"
+#
+# Then set `agent.model = "hint:reasoning"` (or "hint:fast") and the
+# request goes to that route's provider and model. A hint that names no
+# route is an error at startup, not a model name sent to the provider.
 
 # [checkpoints]
 # Filesystem checkpoints. When enabled, the agent snapshots working directories

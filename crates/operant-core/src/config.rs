@@ -2569,6 +2569,52 @@ fn apply_path_override(name: &str, target: &mut PathBuf) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    /// A top-level `[[model_routes]]` is REJECTED by the config.
+    ///
+    /// The routes live under `[providers]`, and the config's
+    /// `deny_unknown_fields` refuses the top-level form — so an operator
+    /// copying the old documented example got a config that would not load
+    /// at all. This test pins the rejection, and the documented example's
+    /// own test pins the accepted form.
+    #[test]
+    fn a_top_level_model_routes_table_is_rejected() {
+        let toml = r#"
+[[model_routes]]
+hint = "reasoning"
+provider = "openrouter"
+model = "anthropic/claude-opus-4"
+"#;
+        let err = toml::from_str::<AppConfig>(toml).expect_err("the top-level table is rejected");
+        assert!(
+            err.to_string().contains("model_routes"),
+            "the error must name the offending field, got: {err}"
+        );
+    }
+
+    /// The documented `[[providers.model_routes]]` example LOADS.
+    #[test]
+    fn the_documented_providers_model_routes_example_loads() {
+        let toml = r#"
+[providers]
+fallback = "primary"
+
+[providers.models.primary]
+base_url = "https://api.openai.com/v1"
+
+[[providers.model_routes]]
+hint = "reasoning"
+provider = "openrouter"
+model = "anthropic/claude-opus-4-20250514"
+"#;
+        let config: AppConfig = toml::from_str(toml).expect("the documented example loads");
+        assert_eq!(config.providers.model_routes.len(), 1);
+        let route = config
+            .providers
+            .model_route_for_hint("hint:reasoning")
+            .expect("the hint resolves");
+        assert_eq!(route.provider, "openrouter");
+    }
+
     #[test]
     fn proxy_table_parses_from_operant_toml() {
         let config: AppConfig = toml::from_str(

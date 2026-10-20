@@ -2118,8 +2118,8 @@ pub(crate) async fn create_agent_without_events(
         None => {
             if config.providers.is_model_hint(&config.agent.model) {
                 anyhow::bail!(
-                    "the model is {:?}, but no [[model_routes]] entry has that hint. \
-                     Add one, or use a model name directly.",
+                    "the model is {:?}, but no [[providers.model_routes]] entry has \
+                     that hint. Add one, or use a model name directly.",
                     config.agent.model
                 );
             }

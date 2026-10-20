@@ -504,16 +504,26 @@ impl Default for ReliabilityConfig {
 /// Route a task hint to a specific provider + model.
 ///
 /// ```toml
-/// [[model_routes]]
+/// [providers]
+/// fallback = "primary"
+///
+/// [providers.models.primary]
+/// base_url = "https://api.openai.com/v1"
+///
+/// [[providers.model_routes]]
 /// hint = "reasoning"
 /// provider = "openrouter"
 /// model = "anthropic/claude-opus-4-20250514"
 ///
-/// [[model_routes]]
+/// [[providers.model_routes]]
 /// hint = "fast"
 /// provider = "groq"
 /// model = "llama-3.3-70b-versatile"
 /// ```
+///
+/// The routes live UNDER `[providers]` — a top-level `[[model_routes]]` is
+/// rejected by the config's `deny_unknown_fields`, so an operator copying
+/// the old example got a config that would not load at all.
 ///
 /// Usage: pass `hint:reasoning` as the model parameter to route the request.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -575,7 +585,7 @@ pub struct QueryClassificationConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
 pub struct ClassificationRule {
-    /// Must match a `[[model_routes]]` hint value.
+    /// Must match a `[[providers.model_routes]]` hint value.
     pub hint: String,
     /// Case-insensitive substring matches.
     #[serde(default)]

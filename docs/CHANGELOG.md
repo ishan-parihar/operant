@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-1052 — the documented config examples for the model routes are corrected, and tested.** The docs showed a top-level `[[model_routes]]` and a `[memory] embedding_model`; both are rejected by the config, so copying them produced a config that would not load.
+
 - **iter-1051 — `[[embedding_routes]]` is documented the same way `[[model_routes]]` was, and it did not work either.** The embedding hint now resolves, and an unresolvable one is a clear error instead of a model name sent to the provider.
 
 - **iter-1051 — `[[model_routes]]` now resolves, or the hint is rejected with a clear error.** The documented usage ("pass `hint:reasoning` as the model parameter") sent that literal string to the provider as the model name.
