@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-1059 — five proactive sends now log a delivery failure.** A permission prompt that could not be delivered left the turn blocked forever with no visible cause.
+
 - **iter-1058 — the delivery ledger now records PROACTIVE sends, not just replies.** A scheduled message, a cron push or a permission notice was invisible in the operator's view of delivery health, and a failed one was invisible everywhere (most call sites discard the result).
 
 - **iter-1056 — the Slack and Discord adapters now check the API's response.** They discarded it, so a rejected send (a revoked token, no channel access, a rate limit) was recorded as delivered. Slack needed more than a status check: it answers a rejected request with HTTP 200 and `ok: false`.

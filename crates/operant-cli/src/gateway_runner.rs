@@ -3016,7 +3016,17 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                         progress_tracker.close_group(&key);
                         let notice =
                             OutgoingMessage::new(&channel_id, &text).with_thread_id(thread_id);
-                        let _ = gw_for_events.send_to_platform(&platform, notice).await;
+                        if let Err(e) = gw_for_events.send_to_platform(&platform, notice).await {
+                            // A notice that could not be delivered is
+                            // invisible otherwise: the result is
+                            // discarded, and the delivery ledger is not
+                            // something an operator watches. Log it.
+                            tracing::warn!(
+                                platform = %platform,
+                                error = %e,
+                                "could not deliver a gateway notice"
+                            );
+                        }
                     } else {
                         // Streaming progressive edit (iter-100 — closes Bug #12).
                         // ONE bubble per turn, edited in place every 500ms
@@ -3273,7 +3283,17 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                     let msg = OutgoingMessage::new(&channel_id, &body)
                         .no_markdown()
                         .with_thread_id(thread_id);
-                    let _ = gw_for_events.send_to_platform(&platform, msg).await;
+                    if let Err(e) = gw_for_events.send_to_platform(&platform, msg).await {
+                        // An ERROR message that could not be delivered is
+                        // the worst kind of silent failure: the operator
+                        // sees nothing at all, and the turn's error is
+                        // lost with it.
+                        tracing::warn!(
+                            platform = %platform,
+                            error = %e,
+                            "could not deliver an error notice to the user"
+                        );
+                    }
                     // Reset streaming state + drop the dedup marker so the
                     // dispatch loop isn't left suppressing a future send.
                     stream_text.clear();
@@ -3392,7 +3412,16 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                     let msg = OutgoingMessage::new(channel_id, &prompt)
                         .no_markdown()
                         .with_thread_id(*thread_id);
-                    let _ = gw_for_perm.send_to_platform(platform, msg).await;
+                    if let Err(e) = gw_for_perm.send_to_platform(platform, msg).await {
+                        // A PERMISSION PROMPT that could not be delivered
+                        // leaves the turn blocked forever, with no
+                        // visible cause.
+                        tracing::warn!(
+                            platform = %platform,
+                            error = %e,
+                            "could not deliver a permission prompt to the user"
+                        );
+                    }
                     None
                 };
 
@@ -3557,7 +3586,15 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                     let msg = OutgoingMessage::new(channel_id, &body)
                         .no_markdown()
                         .with_thread_id(*thread_id);
-                    let _ = gw_for_uq.send_to_platform(platform, msg).await;
+                    if let Err(e) = gw_for_uq.send_to_platform(platform, msg).await {
+                        // A QUESTION that could not be delivered leaves the
+                        // turn waiting for an answer that can never come.
+                        tracing::warn!(
+                            platform = %platform,
+                            error = %e,
+                            "could not deliver a question to the user"
+                        );
+                    }
                 }
 
                 // Store the reply_tx (plus the original choices, so a button
@@ -4013,7 +4050,13 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                                     )
                                     .no_markdown()
                                     .with_thread_id(msg.thread_id);
-                                    let _ = gw.send_to_platform(&platform, ack).await;
+                                    if let Err(e) = gw.send_to_platform(&platform, ack).await {
+                                        tracing::warn!(
+                                            platform = %platform,
+                                            error = %e,
+                                            "could not deliver an acknowledgement"
+                                        );
+                                    }
                                     return Ok(true);
                                 }
                                 if let Some(g) =
