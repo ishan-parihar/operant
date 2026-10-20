@@ -657,20 +657,41 @@ mod tests {
     /// message into the channel, and a dropped receiver makes the send
     /// fail — which is a 500 AFTER the signature check, and would make
     /// the test measure the wrong thing.
+    /// Start the adapter on an ephemeral port.
+    ///
+    /// The port is chosen by binding a probe socket on port 0 and
+    /// DROPPING it — and that is a TOCTOU race: between the drop and the
+    /// adapter's own bind, another test's ephemeral bind can take the
+    /// port, and the adapter then fails with `AddrInUse`. With the
+    /// suite's 16 test threads, that is roughly one full-suite run in
+    /// ten — and it reads as a product failure ("the webhook adapter
+    /// cannot start") when it is a test-harness race.
+    ///
+    /// So: try a few ports. The retry is on the HARNESS side only — the
+    /// adapter's behaviour is not changed.
     async fn start_on_ephemeral(
         secret: Option<&str>,
     ) -> (u16, mpsc::UnboundedReceiver<IncomingMessage>) {
-        let probe = std::net::TcpListener::bind("127.0.0.1:0").expect("an ephemeral port");
-        let port = probe.local_addr().expect("the bound address").port();
-        drop(probe);
-        let mut adapter = WebhookAdapter::new(true).with_addr(format!("127.0.0.1:{port}"));
-        adapter = adapter.with_secret(secret.map(str::to_string));
-        let (tx, rx) = mpsc::unbounded_channel();
-        adapter
-            .start_with_channel(tx)
-            .await
-            .expect("the adapter starts");
-        (port, rx)
+        let mut last_error = None;
+        for _ in 0..5 {
+            let probe = std::net::TcpListener::bind("127.0.0.1:0").expect("an ephemeral port");
+            let port = probe.local_addr().expect("the bound address").port();
+            drop(probe);
+            let mut adapter = WebhookAdapter::new(true).with_addr(format!("127.0.0.1:{port}"));
+            adapter = adapter.with_secret(secret.map(str::to_string));
+            let (tx, rx) = mpsc::unbounded_channel();
+            match adapter.start_with_channel(tx).await {
+                Ok(()) => return (port, rx),
+                Err(e) => {
+                    let in_use = e.to_string().contains("Address already in use");
+                    last_error = Some(e);
+                    if !in_use {
+                        break;
+                    }
+                }
+            }
+        }
+        panic!("the adapter starts: {last_error:?}");
     }
 
     /// POST a body and return the status code.

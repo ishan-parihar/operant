@@ -19,13 +19,13 @@ fn leading_spaces(text: &str) -> usize {
     text.chars().take_while(|c| *c == ' ').count()
 }
 
+/// The environment lock for the system-glyph tests.
+///
+/// The CRATE-WIDE one — see `crate::config::test_env_lock`. It used to be
+/// a per-module lock, so this module and the config tests did not
+/// exclude each other, and the TUI's app tests had no lock at all.
 fn system_glyph_env_lock() -> std::sync::MutexGuard<'static, ()> {
-    use std::sync::{Mutex, OnceLock};
-
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+    crate::config::test_env_lock()
 }
 
 #[test]

@@ -168,15 +168,29 @@ impl Drop for WriteOriginGuard {
 }
 
 #[cfg(test)]
-pub(crate) static ORIGIN_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+pub(crate) static ORIGIN_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// Test-only: take the cross-module lock that serializes every test
 /// touching the process-global `WRITE_ORIGIN` slot (write_approval,
 /// skills_tool, and this module's own tests). One owner for the rule —
 /// per-module test locks would let two tests race the same global.
+///
+/// ASYNC-AWARE: a `std::sync::MutexGuard` held across an `.await` is a
+/// `!Send` hazard, and the memory-tools test brackets its await with the
+/// mutation.
 #[cfg(test)]
-pub(crate) fn origin_test_lock() -> std::sync::MutexGuard<'static, ()> {
-    ORIGIN_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+pub(crate) async fn origin_test_lock() -> tokio::sync::MutexGuard<'static, ()> {
+    ORIGIN_TEST_LOCK.lock().await
+}
+
+/// The origin lock, for a SYNCHRONOUS test.
+///
+/// The SAME lock as the async accessor — one lock, or the two would not
+/// exclude each other. `blocking_lock` is safe here: a sync `#[test]`
+/// runs outside any tokio runtime, and it panics if it finds one.
+#[cfg(test)]
+pub(crate) fn origin_test_lock_blocking() -> tokio::sync::MutexGuard<'static, ()> {
+    ORIGIN_TEST_LOCK.blocking_lock()
 }
 
 #[cfg(test)]
@@ -188,7 +202,7 @@ mod tests {
     /// don't race on the global static.
     #[test]
     fn test_write_origin_roundtrip() {
-        let _lock = origin_test_lock();
+        let _lock = origin_test_lock_blocking();
         let before = get_write_origin();
 
         // ── set / reset ──
@@ -238,7 +252,7 @@ mod tests {
     fn origin_test_lock_serializes_concurrent_writers() {
         let a = std::thread::spawn(|| {
             for _ in 0..2_000 {
-                let _lock = origin_test_lock();
+                let _lock = origin_test_lock_blocking();
                 let token = set_write_origin("thread_a");
                 std::thread::yield_now();
                 assert_eq!(get_write_origin(), "thread_a");
@@ -247,7 +261,7 @@ mod tests {
         });
         let b = std::thread::spawn(|| {
             for _ in 0..2_000 {
-                let _lock = origin_test_lock();
+                let _lock = origin_test_lock_blocking();
                 let token = set_write_origin("thread_b");
                 std::thread::yield_now();
                 assert_eq!(get_write_origin(), "thread_b");
@@ -266,13 +280,14 @@ mod tests {
     /// whole review window; the task-local scope keeps them isolated.
     /// Synchronization is deterministic: `entered_rx` guarantees the review
     /// scope is live before the main-task assertion, `release_tx` lets it end.
-    #[expect(
-        clippy::await_holding_lock,
-        reason = "test-only serialization: the lock must span the await window so other modules' origin tests cannot park values mid-assertion; the current_thread test runtime never migrates this task"
-    )]
+    // The lock is ASYNC-AWARE, so holding it across the await window is
+    // no longer a `!Send` hazard — the `#[expect(clippy::await_holding_lock)]`
+    // this used to need is gone. The lock still has to span the await
+    // window: other modules' origin tests must not park a value in the
+    // global mid-assertion.
     #[tokio::test]
     async fn task_scoped_origin_does_not_leak_to_concurrent_tasks() {
-        let _lock = origin_test_lock();
+        let _lock = origin_test_lock().await;
         // Capture whatever the process-global tier currently holds (other
         // test modules legitimately park values like "user" in it); the
         // invariant under test is that the review scope does NOT change it.

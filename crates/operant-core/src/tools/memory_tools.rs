@@ -396,6 +396,21 @@ mod tests {
     #[tokio::test]
     async fn memory_tools_route_through_the_provider() {
         let _guard = PROVIDER_TEST_GUARD.lock().await;
+        // PIN the write origin. `WRITE_ORIGIN` is process-global, and
+        // `is_background_review()` reads it when the caller is not inside
+        // a scoped tokio task — which is this test. So a test elsewhere
+        // that set it to "background_review" made the memory store REFUSE
+        // here ("Refused: background review does not write memory"), and
+        // the failure appeared in roughly one full-suite run in ten.
+        //
+        // The origin lock serialises against every other test that
+        // touches the global; setting it to "user" makes this test's
+        // expectation explicit rather than ambient.
+        let _origin_lock = crate::write_origin::origin_test_lock().await;
+        // The GUARD, not `set_write_origin`: the token has no `Drop`, so a
+        // bare `set_write_origin` would leak "user" into the global —
+        // the very leak this fixes.
+        let _origin = crate::write_origin::WriteOriginGuard::new("user");
         let dir = std::env::temp_dir().join(format!("operant-mw-tool-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let provider =

@@ -180,6 +180,11 @@ mod tests {
     #[serial_test::serial]
     #[tokio::test]
     async fn test_browser_cdp_unreachable_endpoint_errors() {
+        // The environment lock is CRATE-WIDE — see
+        // `crate::platform::test_env_lock`. `BROWSER_CDP_URL` is process
+        // global, and three modules mutate it; without one shared lock a
+        // module's test could see another module's value mid-test.
+        let _env_lock = crate::platform::test_env_lock().await;
         // An explicit but unreachable BROWSER_CDP_URL must surface a CDP error
         // (the tool now auto-provisions the managed session when the env var is
         // unset, so the deterministic failure path is a bad explicit endpoint).

@@ -1771,18 +1771,36 @@ mod tests {
         use tokio::sync::mpsc;
 
         // Grab a free ephemeral port.
-        let probe = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = probe.local_addr().unwrap();
-        drop(probe);
-
+        //
+        // The probe is DROPPED before the adapter binds, and that is a
+        // TOCTOU race: another test's ephemeral bind can take the port in
+        // between, and the adapter then fails with `AddrInUse`. So try a
+        // few ports — the retry is on the HARNESS side only.
         let (tx, mut rx) = mpsc::unbounded_channel::<IncomingMessage>();
-        let adapter = WebhookAdapter::new(true)
-            .with_addr(addr.to_string())
-            .with_secret(Some("topsecret".to_string()));
-        adapter
-            .start_with_channel(tx.clone())
-            .await
-            .expect("webhook adapter should start");
+        let mut addr = None;
+        let mut last_error = None;
+        for _ in 0..5 {
+            let probe = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let candidate = probe.local_addr().unwrap();
+            drop(probe);
+            let adapter = WebhookAdapter::new(true)
+                .with_addr(candidate.to_string())
+                .with_secret(Some("topsecret".to_string()));
+            match adapter.start_with_channel(tx.clone()).await {
+                Ok(()) => {
+                    addr = Some(candidate);
+                    break;
+                }
+                Err(e) => {
+                    let in_use = e.to_string().contains("Address already in use");
+                    last_error = Some(e);
+                    if !in_use {
+                        break;
+                    }
+                }
+            }
+        }
+        let addr = addr.unwrap_or_else(|| panic!("the webhook adapter starts: {last_error:?}"));
 
         let url = format!("http://{}/webhook/r14", addr);
         let client = reqwest::Client::new();

@@ -96,6 +96,11 @@ mod tests {
     #[serial_test::serial]
     #[tokio::test]
     async fn test_browser_dialog_missing_env() {
+        // The environment lock is CRATE-WIDE — see
+        // `crate::platform::test_env_lock`. `BROWSER_CDP_URL` is process
+        // global, and three modules mutate it; without one shared lock a
+        // module's test could see another module's value mid-test.
+        let _env_lock = crate::platform::test_env_lock().await;
         let saved = std::env::var("BROWSER_CDP_URL").ok();
         unsafe { std::env::remove_var("BROWSER_CDP_URL") };
 

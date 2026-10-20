@@ -21,6 +21,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-1053 — the test suite's environment locks are now crate-wide, async-aware and poison-tolerant.** Per-module locks did not exclude each other, so an interleaved `HOME`/`HERMES_HOME` or API-key mutation changed what another test saw — and one poisoned lock turned one failure into four.
+
+- **iter-1053 — the profile tests no longer write into the operator's real `~/.operant/profiles/`.** They had been, since at least 2026-08-12: two profile directories with the test's exact content were found in the real home. The tests now assert the resolved root is their temp sandbox before writing.
+
+- **iter-1053 — the test suite's environment lock is now crate-wide and poison-tolerant.** The per-module locks did not exclude each other, so an interleaved `HOME`/`HERMES_HOME` mutation changed the operant home mid-test; and one poisoned lock took four tests down with it.
+
 - **iter-1052 — the documented config examples for the model routes are corrected, and tested.** The docs showed a top-level `[[model_routes]]` and a `[memory] embedding_model`; both are rejected by the config, so copying them produced a config that would not load.
 
 - **iter-1051 — `[[embedding_routes]]` is documented the same way `[[model_routes]]` was, and it did not work either.** The embedding hint now resolves, and an unresolvable one is a clear error instead of a model name sent to the provider.

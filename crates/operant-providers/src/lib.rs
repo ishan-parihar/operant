@@ -2772,11 +2772,15 @@ pub mod test_util {
     use std::sync::{Mutex, MutexGuard, OnceLock};
 
     /// Process-wide lock for tests that mutate environment variables.
+    /// The environment lock for this crate's tests.
+    ///
+    /// POISON-TOLERANT: a test that panics while holding the lock must
+    /// not take every other environment test down with it — see RT-98.
     pub fn env_lock() -> MutexGuard<'static, ()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(()))
             .lock()
-            .expect("env lock poisoned")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// RAII guard that sets or unsets an env var and restores the original

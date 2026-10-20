@@ -2631,13 +2631,8 @@ model = "anthropic/claude-opus-4-20250514"
     use super::*;
     use serial_test::serial;
     use std::ffi::OsString;
-    use std::sync::{Mutex, OnceLock};
-
-    static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-
-    fn env_lock() -> &'static Mutex<()> {
-        ENV_LOCK.get_or_init(|| Mutex::new(()))
-    }
+    // The environment lock is CRATE-WIDE — see
+    // `crate::platform::test_env_lock`.
 
     // ── (plan 09) surgical config writes ────────────────────────────────
 
@@ -3193,7 +3188,7 @@ wonderful_unknown_key = 42
     #[serial]
     #[test]
     fn default_path_discovery_prefers_local_operant_toml() {
-        let _guard = env_lock().lock().unwrap();
+        let _guard = crate::platform::test_env_lock_blocking();
         let dir = temp_dir("default_path");
         std::fs::write(
             dir.join("operant.toml"),
@@ -3210,7 +3205,7 @@ wonderful_unknown_key = 42
     #[serial]
     #[test]
     fn explicit_path_overrides_defaults() {
-        let _guard = env_lock().lock().unwrap();
+        let _guard = crate::platform::test_env_lock_blocking();
         let dir = temp_dir("explicit_path");
         let explicit = dir.join("custom.toml");
         std::fs::write(dir.join("operant.toml"), "[agent]\nmodel = \"wrong\"\n").unwrap();
@@ -3282,7 +3277,7 @@ wonderful_unknown_key = 42
 
     #[test]
     fn env_overrides_apply_after_file_values() {
-        let _guard = env_lock().lock().unwrap();
+        let _guard = crate::platform::test_env_lock_blocking();
         let previous_model = set_env("HERMES_MODEL", "gpt-4.1");
         let previous_stream = set_env("HERMES_STREAM", "false");
         let previous_interval = set_env("HERMES_AUTONOMOUS_INTERVAL", "120");

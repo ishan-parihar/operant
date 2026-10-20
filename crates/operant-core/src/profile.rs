@@ -499,6 +499,35 @@ mod tests {
     use std::env;
     use std::fs;
 
+    /// Point the operant home at a temp directory and ASSERT it took.
+    ///
+    /// The profile tests set `HERMES_HOME` and then create and delete
+    /// profiles under it. If the variable is not honoured — because
+    /// another test mutated the environment concurrently, or because the
+    /// resolution changed — the test writes into the OPERATOR'S REAL
+    /// `~/.operant/profiles/`. That is not a hypothetical: `source` and
+    /// `target` profiles with this test's exact content
+    /// (`[agent]\nmodel = "gpt-4"`) were found in the real home, dated
+    /// months before this sweep.
+    ///
+    /// So the test ASSERTS the root before it writes anything. A test
+    /// that cannot prove it is writing to its own temp directory must not
+    /// write at all.
+    fn use_temp_home(name: &str) -> (PathBuf, Option<String>) {
+        let dir = temp_dir(name);
+        let original = env::var("HERMES_HOME").ok();
+        // SAFETY: test-only env mutation under the crate-wide env lock.
+        unsafe { env::set_var("HERMES_HOME", &dir) };
+        let root = get_default_operant_root();
+        assert_eq!(
+            root,
+            PathBuf::from(&dir),
+            "the operant home must be the test's temp directory — the test \
+             would otherwise write into the operator's real ~/.operant"
+        );
+        (dir, original)
+    }
+
     fn temp_dir(name: &str) -> PathBuf {
         let path = std::env::temp_dir().join(format!(
             "operant_profile_test_{}_{}_{}",
@@ -547,12 +576,8 @@ mod tests {
 
     #[test]
     fn test_list_profiles_includes_default() {
-        let _guard = env_lock().lock().unwrap();
-        let dir = temp_dir("list_profiles");
-        let original = env::var("HERMES_HOME").ok();
-
-        // SAFETY: test-only env mutation under exclusive lock
-        unsafe { env::set_var("HERMES_HOME", &dir) };
+        let _guard = crate::platform::test_env_lock_blocking();
+        let (dir, original) = use_temp_home("list_profiles");
 
         fs::create_dir_all(&dir).unwrap();
 
@@ -568,12 +593,8 @@ mod tests {
 
     #[test]
     fn test_create_and_delete_profile() {
-        let _guard = env_lock().lock().unwrap();
-        let dir = temp_dir("create_delete");
-        let original = env::var("HERMES_HOME").ok();
-
-        // SAFETY: test-only env mutation under exclusive lock
-        unsafe { env::set_var("HERMES_HOME", &dir) };
+        let _guard = crate::platform::test_env_lock_blocking();
+        let (dir, original) = use_temp_home("create_delete");
 
         // Create profile
         let profile_dir = create_profile("testprofile", None).unwrap();
@@ -601,12 +622,8 @@ mod tests {
 
     #[test]
     fn test_clone_profile() {
-        let _guard = env_lock().lock().unwrap();
-        let dir = temp_dir("clone");
-        let original = env::var("HERMES_HOME").ok();
-
-        // SAFETY: test-only env mutation under exclusive lock
-        unsafe { env::set_var("HERMES_HOME", &dir) };
+        let _guard = crate::platform::test_env_lock_blocking();
+        let (dir, original) = use_temp_home("clone");
 
         // Create source profile
         let source_dir = create_profile("source", None).unwrap();
@@ -632,12 +649,8 @@ mod tests {
 
     #[test]
     fn test_use_profile() {
-        let _guard = env_lock().lock().unwrap();
-        let dir = temp_dir("use_profile");
-        let original = env::var("HERMES_HOME").ok();
-
-        // SAFETY: test-only env mutation under exclusive lock
-        unsafe { env::set_var("HERMES_HOME", &dir) };
+        let _guard = crate::platform::test_env_lock_blocking();
+        let (dir, original) = use_temp_home("use_profile");
 
         // Create profile
         create_profile("switchto", None).unwrap();
@@ -660,7 +673,7 @@ mod tests {
 
     #[test]
     fn test_get_operant_home_override() {
-        let _guard = env_lock().lock().unwrap();
+        let _guard = crate::platform::test_env_lock_blocking();
         let original = env::var("HERMES_HOME").ok();
 
         let test_path = PathBuf::from("/tmp/test_override");
@@ -679,11 +692,9 @@ mod tests {
         }
     }
 
-    use std::sync::{Mutex, OnceLock};
-
-    static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-
-    fn env_lock() -> &'static Mutex<()> {
-        ENV_LOCK.get_or_init(|| Mutex::new(()))
-    }
+    // The environment lock is CRATE-WIDE — see
+    // `crate::platform::test_env_lock`. It used to be a per-module
+    // `OnceLock<Mutex<()>>`, so the modules did not exclude each other and
+    // an interleaved `HOME`/`HERMES_HOME` mutation from another module
+    // changed the root mid-test.
 }

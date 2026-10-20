@@ -7,6 +7,48 @@ use std::env;
 use std::path::PathBuf;
 use std::process::Command;
 
+/// A CRATE-WIDE lock for tests that mutate the process environment.
+///
+/// The environment is process-global, so any test that changes `HOME`,
+/// `HERMES_HOME` or a path derived from them changes what EVERY other
+/// test sees. Each module used to have its OWN `env_lock()`, so the
+/// modules did not exclude each other — and `get_default_operant_root()`
+/// computes the root from the CURRENT `HERMES_HOME` and `HOME`, so an
+/// interleaved mutation changes the root mid-test.
+///
+/// The observed symptom was `Profile 'testprofile' does not exist` in
+/// `profile.rs`'s tests, followed by three more failures with
+/// `PoisonError` — because the first failure poisoned that module's lock
+/// and every later `env_lock().lock().unwrap()` then panicked.
+///
+/// One lock, shared by every test that touches the environment. It is
+/// poison-tolerant: a test that panics while holding it must not take
+/// every other environment test down with it.
+#[cfg(test)]
+static TEST_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// The environment lock, for an ASYNC test.
+///
+/// The lock is async-aware: a `std::sync::MutexGuard` held across an
+/// `.await` is a `!Send` hazard, and the browser tests bracket the await
+/// with the mutation.
+#[cfg(test)]
+pub(crate) async fn test_env_lock() -> tokio::sync::MutexGuard<'static, ()> {
+    TEST_ENV_LOCK.lock().await
+}
+
+/// The environment lock, for a SYNCHRONOUS test.
+///
+/// The SAME lock as the async accessor — one lock, or the two would not
+/// exclude each other, which is the whole point.
+///
+/// `blocking_lock` is safe here: a sync `#[test]` runs outside any tokio
+/// runtime, and `blocking_lock` panics if it finds one.
+#[cfg(test)]
+pub(crate) fn test_env_lock_blocking() -> tokio::sync::MutexGuard<'static, ()> {
+    TEST_ENV_LOCK.blocking_lock()
+}
+
 // ---------------------------------------------------------------------------
 // 1. Shell detection
 // ---------------------------------------------------------------------------

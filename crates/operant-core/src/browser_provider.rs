@@ -240,13 +240,9 @@ pub fn build_browser_provider(_name: &str) -> std::sync::Arc<dyn BrowserProvider
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
 
-    static ENV_LOCK: std::sync::OnceLock<Mutex<()>> = std::sync::OnceLock::new();
-
-    fn env_lock() -> &'static Mutex<()> {
-        ENV_LOCK.get_or_init(|| Mutex::new(()))
-    }
+    // The environment lock is CRATE-WIDE — see
+    // `crate::platform::test_env_lock`.
 
     /// Mock sourcehound MCP server. Records every `tools/call` (name +
     /// arguments) as one JSON line per call into the log file, then answers
@@ -434,7 +430,7 @@ for line in sys.stdin:
 
     #[test]
     fn browser_profile_falls_back_to_operant() {
-        let _guard = env_lock().lock().unwrap();
+        let _guard = crate::platform::test_env_lock_blocking();
         let previous = std::env::var_os("OPERANT_BROWSER_PROFILE");
         // SAFETY: test-only env mutation under the module's exclusive lock.
         unsafe { std::env::remove_var("OPERANT_BROWSER_PROFILE") };

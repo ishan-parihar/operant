@@ -21,6 +21,29 @@ use serde_yaml::Value;
 // Top-Level CLI Config
 // =============================================================================
 
+/// The CRATE-WIDE lock for tests that mutate the process environment.
+///
+/// The environment is process-global, so a test that changes
+/// `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `HERMES_HOME` or a path
+/// derived from them changes what EVERY other test sees. The CLI used to
+/// have two per-module locks (this one and the TUI's
+/// `system_glyph_env_lock`) and the TUI's app tests had NONE — so the
+/// modules did not exclude each other.
+///
+/// ONE lock, shared by every test that touches the environment. It is
+/// poison-tolerant: a test that panics while holding it must not take
+/// every other environment test down with it.
+#[cfg(test)]
+pub(crate) static TEST_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Take the crate-wide environment lock.
+#[cfg(test)]
+pub(crate) fn test_env_lock() -> std::sync::MutexGuard<'static, ()> {
+    TEST_ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 /// CLI-specific configuration that extends the core `AppConfig`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -1443,8 +1466,6 @@ impl CliConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
-    use std::sync::OnceLock;
 
     /// Plan 015 drift-guard: one TOML snippet must parse consistently into the
     /// CLI V2 mirror and core KernelSettings (values + defaults agree).
@@ -1469,10 +1490,13 @@ mod tests {
         assert_eq!(default_core.max_output_bytes, 200_000);
     }
 
-    static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-
-    fn env_lock() -> &'static Mutex<()> {
-        ENV_LOCK.get_or_init(|| Mutex::new(()))
+    /// The environment lock for this crate's tests.
+    ///
+    /// The crate-wide one — see `crate::config::test_env_lock`. It used
+    /// to be a per-module lock, so the CLI's modules did not exclude each
+    /// other, and the TUI's app tests had no lock at all.
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        super::test_env_lock()
     }
 
     fn set_env(name: &str, value: &str) -> Option<std::ffi::OsString> {
@@ -1515,7 +1539,7 @@ mod tests {
 
     #[test]
     fn test_expand_simple_var() {
-        let _guard = env_lock().lock().unwrap();
+        let _guard = env_lock();
         let prev = set_env("TEST_HERMES_VAR", "hello");
         assert_eq!(expand_env_vars("$TEST_HERMES_VAR"), "hello");
         assert_eq!(expand_env_vars("${TEST_HERMES_VAR}"), "hello");
@@ -1539,7 +1563,7 @@ mod tests {
 
     #[test]
     fn test_expand_mixed_content() {
-        let _guard = env_lock().lock().unwrap();
+        let _guard = env_lock();
         let prev = set_env("TEST_NAME", "world");
         assert_eq!(expand_env_vars("hello $TEST_NAME!"), "hello world!");
         restore_env("TEST_NAME", prev);
@@ -1547,7 +1571,7 @@ mod tests {
 
     #[test]
     fn test_expand_recursive() {
-        let _guard = env_lock().lock().unwrap();
+        let _guard = env_lock();
         let prev_a = set_env("OUTER", "hello ${INNER}");
         let prev_b = set_env("INNER", "world");
         assert_eq!(expand_env_vars("${OUTER}"), "hello world");
@@ -1557,7 +1581,7 @@ mod tests {
 
     #[test]
     fn test_expand_multiple_vars() {
-        let _guard = env_lock().lock().unwrap();
+        let _guard = env_lock();
         let prev_a = set_env("A", "1");
         let prev_b = set_env("B", "2");
         assert_eq!(expand_env_vars("${A} + ${B} = 3"), "1 + 2 = 3");
@@ -1571,7 +1595,7 @@ mod tests {
 
     #[test]
     fn test_load_dotenv_file() {
-        let _guard = env_lock().lock().unwrap();
+        let _guard = env_lock();
         let dir = std::env::temp_dir().join(format!("operant_dotenv_test_{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
         let env_path = dir.join("test.env");
@@ -1594,7 +1618,7 @@ mod tests {
 
     #[test]
     fn test_dotenv_quoted_values() {
-        let _guard = env_lock().lock().unwrap();
+        let _guard = env_lock();
         let dir = std::env::temp_dir().join(format!("operant_dotenv_quote_{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
         let env_path = dir.join("quoted.env");
@@ -1624,7 +1648,7 @@ mod tests {
 
     #[test]
     fn test_operant_env_overrides_model() {
-        let _guard = env_lock().lock().unwrap();
+        let _guard = env_lock();
         let prev = set_env("HERMES_MODEL", "gpt-5");
 
         let mut config = CliConfig::default();
@@ -1636,7 +1660,7 @@ mod tests {
 
     #[test]
     fn test_operant_env_overrides_log_level() {
-        let _guard = env_lock().lock().unwrap();
+        let _guard = env_lock();
         let prev = set_env("HERMES_LOG_LEVEL", "DEBUG");
 
         let mut config = CliConfig::default();

@@ -4321,6 +4321,10 @@ fn with_cleared_auth_env<R>(f: impl FnOnce() -> R) -> R {
     // cleared window only affects other tests' App-init reads (the state
     // under test). Restored before the lock drops.
     unsafe {
+        // The environment is process-global, so this test's key removal
+        // must not interleave with another test that sets one. The
+        // crate-wide lock — see `crate::config::test_env_lock`.
+        let _env_lock = crate::config::test_env_lock();
         std::env::remove_var("ANTHROPIC_API_KEY");
         std::env::remove_var("OPENAI_API_KEY");
     }

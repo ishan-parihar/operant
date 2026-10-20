@@ -368,8 +368,15 @@ mod tests {
     /// two tests mutating `AGENTMEMORY_URL` concurrently race).
     static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
-    fn env_lock() -> &'static Mutex<()> {
-        ENV_LOCK.get_or_init(|| Mutex::new(()))
+    /// The environment lock for this crate's tests.
+    ///
+    /// POISON-TOLERANT: a test that panics while holding the lock must
+    /// not take every other environment test down with it — see RT-98.
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        ENV_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     #[test]
@@ -380,7 +387,7 @@ mod tests {
 
     #[test]
     fn new_resolves_env_url_and_secret() {
-        let _guard = env_lock().lock().unwrap();
+        let _guard = env_lock();
         let prev_url = std::env::var_os("AGENTMEMORY_URL");
         let prev_secret = std::env::var_os("AGENTMEMORY_SECRET");
         // SAFETY: test-only env mutation under exclusive lock, restored below.
@@ -403,7 +410,7 @@ mod tests {
 
     #[test]
     fn new_defaults_to_localhost_when_env_unset() {
-        let _guard = env_lock().lock().unwrap();
+        let _guard = env_lock();
         let prev_url = std::env::var_os("AGENTMEMORY_URL");
         // SAFETY: test-only env mutation under exclusive lock, restored below.
         unsafe { std::env::remove_var("AGENTMEMORY_URL") };

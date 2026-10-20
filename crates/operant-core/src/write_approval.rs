@@ -167,8 +167,7 @@ mod tests {
     // The integration tests that use these gates run in their own
     // process and are not affected.
     use super::*;
-    use crate::write_origin::{WriteOriginGuard, set_write_origin};
-    use std::sync::MutexGuard;
+    use crate::write_origin::WriteOriginGuard;
 
     /// Serializes every origin-touching test across modules: the globals
     /// (PENDING, ENABLED, WRITE_ORIGIN) are process-wide and tests run in
@@ -178,8 +177,8 @@ mod tests {
     /// test takes the lock via `reset()` and holds it for its duration.
     /// The lock itself lives in `write_origin.rs` so other modules' tests
     /// (e.g. skills_tool's curator-bridge test) serialize against these.
-    fn reset() -> MutexGuard<'static, ()> {
-        let guard = crate::write_origin::origin_test_lock();
+    fn reset() -> tokio::sync::MutexGuard<'static, ()> {
+        let guard = crate::write_origin::origin_test_lock_blocking();
         clear_pending_for_tests();
         // Clear all enabled toggles.
         ENABLED.write().unwrap_or_else(|e| e.into_inner()).clear();
@@ -309,10 +308,20 @@ mod tests {
         // Direct helper test — WriteOriginGuard is the public API.
         // WRITE_ORIGIN is process-global, so serialize against the module.
         let _lock = reset();
-        set_write_origin("test_origin");
-        assert_eq!(crate::write_origin::current_origin(), "test_origin");
-        // The global state leaks across tests, so reset back to "user" to
-        // avoid contaminating later tests.
-        set_write_origin("user");
+        // The GUARD, not a bare `set_write_origin`: the token has no
+        // `Drop`, and the old code reset the global to a HARD-CODED "user"
+        // — which clobbered whatever another test had set, and left "user"
+        // behind for the next one. The guard restores the PREVIOUS value
+        // on drop, so this test neither reads nor writes the ambient
+        // state it did not set.
+        {
+            let _origin = crate::write_origin::WriteOriginGuard::new("test_origin");
+            assert_eq!(crate::write_origin::current_origin(), "test_origin");
+        }
+        assert_ne!(
+            crate::write_origin::current_origin(),
+            "test_origin",
+            "the guard must restore the previous origin"
+        );
     }
 }
