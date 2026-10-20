@@ -2055,6 +2055,180 @@ mod tests {
         );
     }
 
+    /// A client whose every call fails with a provider context-overflow.
+    ///
+    /// The body carries "maximum context length", which is one of the
+    /// classifier's `CONTEXT_OVERFLOW_PATTERNS` — and NOT one of the
+    /// `REQUEST_VALIDATION_PATTERNS`, which are checked FIRST and would
+    /// classify the error as a `FormatError` (not compressible), so the
+    /// branch would never fire.
+    struct OverflowingClient {
+        /// Shared with the test: the agent takes ownership of the client,
+        /// so the counter has to be readable from outside.
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl OverflowingClient {
+        /// The provider error the classifier reads as a context overflow.
+        ///
+        /// The body carries "maximum context length", which is one of the
+        /// classifier's `CONTEXT_OVERFLOW_PATTERNS` — and NOT one of the
+        /// `REQUEST_VALIDATION_PATTERNS`, which are checked FIRST and
+        /// would classify the error as a `FormatError` (not compressible),
+        /// so the branch would never fire.
+        fn overflow_error(&self) -> Error {
+            let call = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Error::Provider {
+                status: 400,
+                body: format!(
+                    r#"{{"error":{{"message":"maximum context length exceeded","call":{call}}}}}"#
+                ),
+                retry_after: None,
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ModelClient for OverflowingClient {
+        fn provider_name(&self) -> &str {
+            "test"
+        }
+
+        async fn chat(&self, _request: ChatRequest) -> Result<ChatResponse> {
+            Err(self.overflow_error())
+        }
+
+        async fn chat_streaming(
+            &self,
+            _request: ChatRequest,
+        ) -> Result<BoxStream<'static, Result<StreamChunk>>> {
+            // The error must come FROM THIS CALL, not from inside the
+            // stream. An error yielded by the stream surfaces in the
+            // MID-STREAM recovery loop, where a context-overflow
+            // classification is not retryable (`retryable = classified
+            // .retryable && !classified.should_compress`) — so the turn
+            // would die with the raw provider error and the overflow
+            // branch would never be entered.
+            Err(self.overflow_error())
+        }
+    }
+
+    /// A provider context overflow must fail TYPED, and must not re-issue
+    /// the request.
+    ///
+    /// The reactive overflow path compresses the conversation and retries.
+    /// When the compression CANNOT fit the budget — because the PROTECTED
+    /// messages (the system prompt and the newest turn) are larger than
+    /// the window — the re-issued request earns the SAME provider 400, and
+    /// the turn dies with a raw provider error the gateway cannot act on.
+    ///
+    /// The compression now reports whether it fit, and a failure to fit is
+    /// `Error::ContextExhausted` — the typed error the gateway's
+    /// context-exhausted handler already understands.
+    ///
+    /// The scenario is the one that reproduces the defect: a LARGE
+    /// configured window, a SMALL limit learned from a prior overflow, and
+    /// a history that fits the configured window but not the learned one.
+    /// Only the `effective_context_window` version of the check reports
+    /// `ContextExhausted` here — with the configured window the history
+    /// fits, the compression "succeeds", and the request is re-issued.
+    #[tokio::test]
+    async fn a_provider_overflow_that_cannot_be_compressed_fails_typed() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db = Arc::new(Database::init(dir.path().join("overflow.sqlite")).expect("db"));
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let agent = OperantAgent::new(
+            AgentConfig {
+                // A large CONFIGURED window: the history below fits it.
+                context_window: 200_000,
+                ..AgentConfig::default()
+            },
+            Box::new(OverflowingClient {
+                calls: calls.clone(),
+            }),
+            ToolRegistry::new(Duration::from_secs(1)),
+            db,
+        );
+
+        // Teach a limit: a prior overflow of this size. It is LARGE enough
+        // that the build-time pre-flight guard (95% of the window) does
+        // not fire first — the request has to actually be SENT for the
+        // REACTIVE path to be the thing under test.
+        let overflowed = vec![Message::user("x".repeat(160_000))];
+        agent.learn_context_limit(&overflowed);
+        let learned = agent.effective_context_window();
+        assert!(
+            learned < 200_000,
+            "the learned limit must be lower than the configured window, got {learned}"
+        );
+
+        // A history that fits under the pre-flight line (95% of the
+        // learned window) but whose PROTECTED set — the system prompt and
+        // the newest turn — is larger than the effective budget
+        // (learned window minus the response reserve), so no compression
+        // can fit it.
+        let system = Message::new(Role::System, "s".repeat(148_000));
+        let newest = Message::new(Role::User, "n".repeat(148_000));
+        for i in 0..10 {
+            agent
+                .add_message(Message::new(Role::User, format!("old {i}")))
+                .await;
+        }
+        agent.add_message(system).await;
+        agent.add_message(newest).await;
+
+        let result = agent.run("go".to_string()).await;
+        // The call count is the discriminator, and it is TWO, not one:
+        //
+        // - A provider context-overflow can be TRANSIENT, so the FIRST
+        //   overflow is still retried — the compression runs and the
+        //   request is re-issued. A count of 1 would mean the fix
+        //   short-circuited the retry, turning a recoverable turn into a
+        //   hard failure.
+        // - The SECOND overflow, after a compression that did NOT reduce
+        //   the history, is where the turn fails typed. The mock always
+        //   overflows, so the retry overflows too.
+        //
+        // A count of 0 would mean the build-time pre-flight guard fired
+        // and the request was never sent, which would prove the BUILD
+        // path rather than the reactive one.
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "the request must be sent once and retried once: sent-once would \
+             short-circuit a recoverable overflow, sent-zero would be the \
+             build-time guard"
+        );
+        let Err(err) = result else {
+            panic!("a context overflow that cannot be compressed must fail");
+        };
+        match err {
+            Error::ContextExhausted { window, .. } => {
+                // The window must be the EFFECTIVE one — the configured
+                // window, lowered by a limit a prior overflow taught us —
+                // not the configured 200_000. That is what pins the
+                // `effective_context_window` change: with the configured
+                // window the history would fit, the compression would
+                // "succeed", and the request would be re-issued.
+                //
+                // It is NOT the `learned` captured before the run: the
+                // overflow itself teaches a smaller limit, so the value
+                // the error names is the one in force AT THE TIME.
+                assert!(
+                    window < 200_000,
+                    "the error must name the effective window, not the configured one: \
+                     got {window}"
+                );
+                assert_eq!(
+                    window,
+                    agent.effective_context_window(),
+                    "the error must name the window that was in force"
+                );
+            }
+            other => panic!("the turn must fail typed, got {other:?}"),
+        }
+    }
+
     #[tokio::test]
     async fn an_overflow_lowers_the_window_and_keeps_the_smallest() {
         let (agent, _dir) = bust_test_agent(10_000);
@@ -2404,7 +2578,7 @@ mod tests {
         // No llm_compressor attached → the deterministic eviction pass runs,
         // so the test needs no network.
         let messages = vec![Message::user("a".repeat(40_000))];
-        agent.compress_context_overflow(messages).await;
+        agent.compress_context_overflow_reporting(messages).await;
 
         let mut seen_started = None;
         let mut seen_completed = None;

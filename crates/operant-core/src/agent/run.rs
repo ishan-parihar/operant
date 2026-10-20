@@ -860,7 +860,20 @@ impl OperantAgent {
                             warn!(reason = %classified.reason, "Context overflow detected — compressing and retrying");
                             // Try LLM summarization first (intelligent compression),
                             // fall back to deterministic decay/eviction.
-                            messages = self.compress_context_overflow(messages).await;
+                            let (compressed, reduced) = self
+                                .compress_context_overflow_reporting(messages)
+                                .await;
+                            messages = compressed;
+                            // Did the compression REDUCE the history? If it
+                            // did not, the retry is sending the same prompt
+                            // the provider already rejected — but a provider
+                            // overflow can be TRANSIENT (a mis-reported
+                            // limit, a load balancer routing to a
+                            // differently-configured backend), so the FIRST
+                            // overflow is still retried. The verdict is
+                            // recorded, and the SECOND overflow fails typed
+                            // (see the `compress_attempted` arm below).
+                            retry_state.compress_reduced_history = reduced;
                             // Refund the iteration since the original LLM call
                             // was wasted on a context overflow — the retry gets
                             // a fresh consume() on the next loop iteration.
@@ -876,7 +889,41 @@ impl OperantAgent {
                             let tools = self.tools_for_turn(&messages).await;
                             let retry_request =
                                 self.fitted_request(&self.effective_model(), &messages, tools);
-                            self.client.chat_streaming(retry_request).await?
+                            // The retry's own error is handled HERE, not
+                            // propagated: the `?` would carry the raw
+                            // provider error straight out of the turn, past
+                            // the typed-failure check.
+                            //
+                            // The TWO-STRIKE rule: a provider overflow can
+                            // be transient, so the first one is always
+                            // retried. But if the RETRY overflows too, and
+                            // the compression did not reduce the history,
+                            // the retry sent the same prompt the provider
+                            // already rejected — re-issuing would send it
+                            // again. That is the point at which the turn
+                            // fails TYPED.
+                            match self.client.chat_streaming(retry_request).await {
+                                Ok(stream) => stream,
+                                Err(retry_err) => {
+                                    let retry_classified =
+                                        FallbackModelClient::classify_error(&retry_err);
+                                    if retry_classified.should_compress
+                                        && !retry_state.compress_reduced_history
+                                    {
+                                        let tokens = crate::context_management::
+                                            estimate_total_tokens(&messages);
+                                        return Err(Error::ContextExhausted {
+                                            tokens,
+                                            // The window the check compared
+                                            // against, so the two numbers
+                                            // in the error describe the
+                                            // same comparison.
+                                            window: self.effective_context_window(),
+                                        });
+                                    }
+                                    return Err(retry_err);
+                                }
+                            }
                         } else if classified.should_rotate_credential
                             && !retry_state.rotate_attempted
                         {
@@ -1092,7 +1139,16 @@ impl OperantAgent {
                             warn!(reason = %classified.reason, "Context overflow detected — compressing and retrying");
                             // Try LLM summarization first (intelligent compression),
                             // fall back to deterministic decay/eviction.
-                            messages = self.compress_context_overflow(messages).await;
+                            let (compressed, reduced) =
+                                self.compress_context_overflow_reporting(messages).await;
+                            messages = compressed;
+                            // Did the compression REDUCE the history? If it
+                            // did not, the retry is sending the same prompt
+                            // the provider already rejected — but a provider
+                            // overflow can be TRANSIENT, so the FIRST
+                            // overflow is still retried. The verdict is
+                            // recorded, and the SECOND overflow fails typed.
+                            retry_state.compress_reduced_history = reduced;
                             // Refund the iteration since the original LLM call
                             // was wasted on a context overflow.
                             self.iteration_budget.refund();
@@ -1131,8 +1187,32 @@ impl OperantAgent {
                                 let tools = self.tools_for_turn(&messages).await;
                                 let retry_request =
                                     self.fitted_request(&self.effective_model(), &messages, tools);
-                                self.call_with_loop_timeout(self.client.chat(retry_request))
-                                    .await?
+                                // The retry's own error is handled HERE —
+                                // see the streaming site's comment for the
+                                // two-strike rule.
+                                match self
+                                    .call_with_loop_timeout(self.client.chat(retry_request))
+                                    .await
+                                {
+                                    Ok(response) => response,
+                                    Err(retry_err) => {
+                                        let retry_classified =
+                                            FallbackModelClient::classify_error(&retry_err);
+                                        if retry_classified.should_compress
+                                            && !retry_state.compress_reduced_history
+                                        {
+                                            let tokens =
+                                                crate::context_management::estimate_total_tokens(
+                                                    &messages,
+                                                );
+                                            return Err(Error::ContextExhausted {
+                                                tokens,
+                                                window: self.effective_context_window(),
+                                            });
+                                        }
+                                        return Err(retry_err);
+                                    }
+                                }
                             } else {
                                 warn!("No more credentials to rotate — returning original error");
                                 return Err(self.annotate_thinking_timeout(e));

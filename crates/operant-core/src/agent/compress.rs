@@ -283,9 +283,29 @@ impl OperantAgent {
     /// back into the compressed history so the model keeps its plan across
     /// compactions (hermes conversation_compression.py:
     /// `todo_snapshot = agent._todo_store.format_for_injection()`).
-    pub(crate) async fn compress_context_overflow(&self, messages: Vec<Message>) -> Vec<Message> {
+    ///
+    /// Reports whether the compression actually SHRANK the history.
+    ///
+    /// The provider rejected a request of `before` tokens. If the
+    /// compressed request is not smaller, the retry is CERTAIN to overflow
+    /// the same way — re-issuing it burns a model call and dies with the
+    /// same raw provider error. So the caller is told when the compression
+    /// could not help, and fails typed instead.
+    ///
+    /// Note this is deliberately NOT a "does the result fit the window"
+    /// check: the reactive path is only reached when the request ALREADY
+    /// fit the window (the build-time guard passed) and the provider
+    /// overflowed anyway — so after compressing, the history is smaller,
+    /// and a fit check would never fail. Such a check is dead code.
+    pub(crate) async fn compress_context_overflow_reporting(
+        &self,
+        messages: Vec<Message>,
+    ) -> (Vec<Message>, bool) {
         let tokens_before = self.estimate_current_tokens(&messages);
         let messages_before = messages.len();
+        // The SIZE of the history the provider rejected, measured before
+        // it is consumed — this is the number the retry has to beat.
+        let rejected_tokens = crate::context_management::estimate_total_tokens(&messages);
         self.emit(AgentEvent::CompactionStarted { tokens_before })
             .await;
         let compressed = self.compress_context_overflow_inner(messages).await;
@@ -299,7 +319,31 @@ impl OperantAgent {
             messages_after: compressed.len(),
         })
         .await;
-        self.reinject_todos_after_compression(compressed)
+        let compressed = self.reinject_todos_after_compression(compressed);
+        // Did the compression actually HELP?
+        //
+        // The condition that can fail is the one that matters: did the
+        // compression REDUCE the history? The provider rejected a request
+        // of `rejected_tokens` tokens. If the compressed request is not
+        // smaller, the retry is CERTAIN to overflow the same way —
+        // re-issuing it burns a model call and dies with the same raw
+        // provider error.
+        //
+        // (The learned limit is not used here: `learn_context_limit` runs
+        // BEFORE this and sets the learned limit to the size of the
+        // request that JUST overflowed, so comparing against it would
+        // guarantee failure.)
+        let after = crate::context_management::estimate_total_tokens(&compressed);
+        let within_budget = after < rejected_tokens;
+        if !within_budget {
+            warn!(
+                rejected_tokens,
+                after,
+                "context compression did not reduce the history — the provider \\
+                 rejected a request of this size, so a retry would overflow again"
+            );
+        }
+        (compressed, within_budget)
     }
 
     /// hermes parity: fold the active todo list back into the compressed
@@ -332,13 +376,13 @@ impl OperantAgent {
                 let guard = compressor.lock().await;
                 if !guard.should_compress(self.estimate_current_tokens(&messages)) {
                     // Under threshold — deterministic fallback
-                    let budget = self.config.context_window;
+                    let budget = self.effective_context_window();
                     return crate::context_management::manage_context(messages, budget, 4096);
                 }
                 // Anti-thrash: skip LLM compression if in cooldown after recent failure.
                 if guard.is_in_cooldown() {
                     warn!("LLM compression in anti-thrash cooldown — using deterministic fallback");
-                    let budget = self.config.context_window;
+                    let budget = self.effective_context_window();
                     return crate::context_management::manage_context(messages, budget, 4096);
                 }
             }
@@ -363,7 +407,7 @@ impl OperantAgent {
             drop(guard);
         }
         // Deterministic fallback: decay + eviction
-        let budget = self.config.context_window;
+        let budget = self.effective_context_window();
         crate::context_management::manage_context(messages, budget, 4096)
     }
 
@@ -496,7 +540,7 @@ impl OperantAgent {
     ) -> ChatRequest {
         match crate::context_management::fit_output_tokens(
             request.max_tokens,
-            self.config.context_window,
+            self.effective_context_window(),
             prompt,
             reported,
         ) {

@@ -762,9 +762,55 @@ pub fn prompt_cache_guard(prefix: &[Message], after: &[Message]) -> bool {
 /// simplified to a single pass (magic-context uses idempotence latches
 /// + multi-pass; we don't need that for a first implementation).
 pub fn evict_to_budget(messages: Vec<Message>, budget_tokens: usize) -> Vec<Message> {
+    evict_to_budget_reporting(messages, budget_tokens).0
+}
+
+/// The outcome of an eviction pass.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EvictionOutcome {
+    /// The messages that survived.
+    pub kept: usize,
+    /// The estimated tokens that survived.
+    pub tokens: usize,
+    /// Whether the result met the budget.
+    ///
+    /// False when the PROTECTED messages — the system prompt and the
+    /// newest turns — are larger than the budget on their own. The system
+    /// prompt is never evicted (it is the agent's instructions), so no
+    /// eviction can meet the budget in that case, and the caller has to
+    /// know rather than send an over-budget request.
+    pub within_budget: bool,
+}
+
+/// Evict to the budget, and REPORT whether the budget was met.
+///
+/// [`evict_to_budget`] returns the surviving messages and nothing else, so
+/// a caller had no way to tell "the eviction did its job" from "the
+/// eviction ran out of things to evict and the result is still over
+/// budget". The tiered pass can only evict from the evictable set — the
+/// system prompt and the recency reserve are not candidates — so when the
+/// protected messages alone exceeded the budget, the result stayed over
+/// budget with no signal.
+///
+/// The reserve IS trimmed (oldest first, whole tool groups) before this
+/// gives up, so the only case that cannot meet the budget is a protected
+/// set that is larger than the budget by itself — and that is worth
+/// reporting rather than hiding.
+pub fn evict_to_budget_reporting(
+    messages: Vec<Message>,
+    budget_tokens: usize,
+) -> (Vec<Message>, EvictionOutcome) {
     let total = estimate_total_tokens(&messages);
     if total <= budget_tokens {
-        return messages;
+        let kept = messages.len();
+        return (
+            messages,
+            EvictionOutcome {
+                kept,
+                tokens: total,
+                within_budget: true,
+            },
+        );
     }
 
     // Recency reserve: scale with budget so large contexts preserve more
@@ -831,12 +877,131 @@ pub fn evict_to_budget(messages: Vec<Message>, budget_tokens: usize) -> Vec<Mess
         }
     }
 
-    messages
+    // ── The final trim ─────────────────────────────────────────────────
+    //
+    // The tiered pass can only evict from `evictable`, so it CANNOT meet a
+    // budget that the protected messages alone exceed: the system prompt
+    // at index 0 and the recency reserve are never candidates. When their
+    // combined size was over the budget, the loop exhausted `evictable`
+    // and the function returned a list that was STILL OVER BUDGET — with
+    // no signal to the caller, which had no way to know the eviction had
+    // not done its job. (Reproduced: a 40 KB system prompt against a
+    // 100-token budget returned 10,052 tokens.)
+    //
+    // So the reserve is trimmed here, oldest first, keeping the NEWEST
+    // turns — which is what the reserve is for. The system prompt stays:
+    // it is the agent's instructions, and dropping it makes the request
+    // meaningless rather than merely smaller.
+    //
+    // Tool groups stay whole: a group is dropped as a unit, so a
+    // `tool_use` is never separated from its `tool_result`.
+    if current_total > budget_tokens {
+        // The reserve runs from `reserve_start` to the end. Walk it from
+        // the OLDEST end, dropping whole groups until the budget is met.
+        //
+        // Two bounds keep the trim from destroying the conversation:
+        //
+        // - `trim_start` is at least 1 when index 0 is the system prompt.
+        //   `reserve_start` SATURATES AT 0 for a history shorter than
+        //   `keep_recent` (which is at least 6), so without this the trim
+        //   would start on the system prompt and drop it — the one thing
+        //   eviction must never do.
+        // - `trim_end` stops before the newest message: that is the live
+        //   turn, the one the model is answering.
+        let mut trim_start = n.saturating_sub(keep_recent);
+        if !messages.is_empty() && messages[0].role == crate::client::Role::System {
+            trim_start = trim_start.max(1);
+        }
+        let trim_end = n.saturating_sub(1);
+        if trim_start >= trim_end {
+            // Nothing but the protected floor is left to give.
+        } else {
+            // The PROTECTED floor: the system prompt and the newest turn.
+            // Nothing below may drop these, so when they alone exceed the
+            // budget, trimming the rest cannot help.
+            let protected_floor: usize = messages
+                .iter()
+                .enumerate()
+                .filter(|(j, m)| (*j == 0 && m.role == crate::client::Role::System) || *j + 1 == n)
+                .map(|(_, m)| estimate_message_tokens(m))
+                .sum();
+
+            // Snap DOWN to the GROUP START: `starts[i]` maps every member
+            // of a group to that group's FIRST index, so a reserve that
+            // begins in the middle of a group would otherwise have its
+            // tool_result dropped while its tool_use stayed — an orphaned
+            // tool_use, which is a malformed history the providers reject.
+            // `starts[x] <= x` always, so this is a plain snap down (a
+            // `.max()` would cancel it and the orphan would come back).
+            let mut i = starts[trim_start];
+            while i < trim_end && current_total > budget_tokens {
+                // Stop when trimming further cannot help: the PROTECTED
+                // floor (the system prompt and the newest turn) is
+                // already larger than the budget, so emptying the reserve
+                // would destroy the conversation and still miss the
+                // budget. The outcome reports `within_budget: false`, and
+                // the caller decides what to do about it.
+                if protected_floor > budget_tokens {
+                    break;
+                }
+                // Advance to the end of the group, so the group drops as a
+                // unit. The group may extend past `trim_end`; taking it
+                // whole is what keeps the pair together.
+                let mut end = i + 1;
+                while end < n && starts[end] == i {
+                    end += 1;
+                }
+                // Never drop a SYSTEM message: it is the agent's
+                // instructions, and dropping it makes the request
+                // meaningless rather than merely smaller. A group that
+                // CONTAINS one is left whole.
+                if (i..end).any(|j| messages[j].role == crate::client::Role::System) {
+                    break;
+                }
+                // A group that CONTAINS the newest message holds the live
+                // turn — the one the model is answering. Dropping it would
+                // answer a question the model has not been asked yet, so
+                // the group stays whole. The cost is that the trim cannot
+                // reclaim the last group's tokens, which is correct: the
+                // live turn is not reclaimable.
+                if end >= n {
+                    break;
+                }
+                for j in i..end {
+                    if keep[j] {
+                        current_total =
+                            current_total.saturating_sub(estimate_message_tokens(&messages[j]));
+                        keep[j] = false;
+                    }
+                }
+                i = end;
+            }
+        }
+    }
+
+    let kept_messages: Vec<Message> = messages
         .into_iter()
         .enumerate()
         .filter(|(i, _)| keep[*i])
         .map(|(_, msg)| msg)
-        .collect()
+        .collect();
+    let tokens = estimate_total_tokens(&kept_messages);
+    let outcome = EvictionOutcome {
+        kept: kept_messages.len(),
+        tokens,
+        within_budget: tokens <= budget_tokens,
+    };
+    if !outcome.within_budget {
+        // The caller has to know: the protected messages alone exceed the
+        // budget, so no eviction could meet it.
+        tracing::warn!(
+            tokens,
+            budget_tokens,
+            "context eviction could not meet the budget — the protected \
+             messages (system prompt and the newest turns) are larger than it"
+        );
+    }
+    (kept_messages, outcome)
 }
 
 /// Classify a message into an eviction tier. Higher = evicted first.
@@ -1067,18 +1232,34 @@ pub fn guard_tool_result(
 /// `budget_tokens` is the target context window (e.g. 120000 for GPT-4).
 /// `reserve_for_response` is the tokens to leave free for the model's
 /// response (e.g. 4096).
+///
+/// The returned outcome says whether the result actually met the budget.
+/// The eviction can only give up what is EVICTABLE — the system prompt and
+/// the newest turn are protected — so when those alone exceed the budget,
+/// the result is still over it, and the caller has to be told rather than
+/// send an over-budget request.
 pub fn manage_context(
     messages: Vec<Message>,
     budget_tokens: usize,
     reserve_for_response: usize,
 ) -> Vec<Message> {
+    let (kept, _outcome) = manage_context_reporting(messages, budget_tokens, reserve_for_response);
+    kept
+}
+
+/// [`manage_context`], reporting whether the budget was met.
+pub fn manage_context_reporting(
+    messages: Vec<Message>,
+    budget_tokens: usize,
+    reserve_for_response: usize,
+) -> (Vec<Message>, EvictionOutcome) {
     let effective_budget = budget_tokens.saturating_sub(reserve_for_response);
 
     // Step 1: decay-render older messages to compress them.
     let decayed = decay_render(messages, 200, 30.0);
 
     // Step 2: evict if still over budget.
-    evict_to_budget(decayed, effective_budget)
+    evict_to_budget_reporting(decayed, effective_budget)
 }
 
 #[cfg(test)]
@@ -1251,6 +1432,165 @@ mod tests {
         ];
         let result = evict_to_budget(msgs.clone(), 10000);
         assert_eq!(result.len(), msgs.len());
+    }
+
+    /// The eviction must MEET the budget, or REPORT that it could not.
+    ///
+    /// The tiered eviction loop breaks as soon as the total fits, but it
+    /// only evicts from the `evictable` set — the system prompt at index 0
+    /// and the whole recency reserve are never candidates. When their
+    /// combined size alone exceeded the budget, the loop exhausted
+    /// `evictable` and the function returned a list that was STILL OVER
+    /// BUDGET, with no signal to the caller. The caller had no way to know
+    /// the eviction had not done its job.
+    ///
+    /// The contract now: the result meets the budget, OR the outcome says
+    /// it did not.
+    #[test]
+    fn the_eviction_meets_the_budget_or_reports_that_it_could_not() {
+        // The system prompt alone is far larger than the budget. It is
+        // never evicted (it is the agent's instructions), so no eviction
+        // can meet this budget — and the caller must be told.
+        let mut msgs = vec![make_msg(Role::System, "s".repeat(40_000))];
+        for i in 0..10 {
+            msgs.push(make_msg(Role::User, format!("recent message {i}")));
+        }
+        let budget = 100;
+
+        let (result, outcome) = evict_to_budget_reporting(msgs, budget);
+        assert!(
+            !outcome.within_budget,
+            "an impossible budget must be reported as unmet, not hidden"
+        );
+        assert!(
+            outcome.tokens > budget,
+            "the reported tokens must be the ones that survived"
+        );
+        assert_eq!(
+            outcome.tokens,
+            estimate_total_tokens(&result),
+            "the reported tokens must match the messages that survived"
+        );
+        // The system prompt is never evicted, and the newest turn (the
+        // live one) survives too.
+        assert_eq!(
+            result.first().map(|m| m.role.clone()),
+            Some(Role::System),
+            "the system prompt must survive"
+        );
+        assert_eq!(
+            result.last().map(|m| m.role.clone()),
+            Some(Role::User),
+            "the newest turn must survive"
+        );
+    }
+
+    /// The reserve IS trimmed when that is what is blowing the budget, so
+    /// the "could not meet it" case is the narrow one.
+    ///
+    /// Without this the reserve was untouchable, and a conversation whose
+    /// recent turns were larger than the budget came out of eviction
+    /// unchanged — still over budget.
+    #[test]
+    fn the_eviction_trims_the_recency_reserve_when_it_is_what_exceeds_the_budget() {
+        // No system prompt: the reserve alone is over the budget.
+        let mut msgs = Vec::new();
+        for i in 0..20 {
+            msgs.push(make_msg(
+                Role::User,
+                format!("recent message {i} {}", "x".repeat(200)),
+            ));
+        }
+        let budget = 100;
+
+        let (result, outcome) = evict_to_budget_reporting(msgs, budget);
+        assert!(
+            outcome.within_budget,
+            "the reserve must be trimmed to meet the budget, got {} tokens",
+            outcome.tokens
+        );
+        assert!(
+            outcome.tokens <= budget,
+            "the result must be within the budget, got {}",
+            outcome.tokens
+        );
+        assert!(!result.is_empty(), "the newest turns must survive the trim");
+    }
+
+    /// The final trim must not cut a tool group in half.
+    ///
+    /// The trim starts at the recency reserve, which can begin in the
+    /// MIDDLE of a tool group — a `tool_result` whose `tool_use` sits at a
+    /// lower index. The tiered pass deliberately leaves such a group alone
+    /// (it skips a group that overlaps the reserve), so the trim is the
+    /// only code that touches it: without snapping to the group's start,
+    /// the lone `tool_result` was dropped and its `tool_use` survived — an
+    /// orphaned `tool_use`, which is a malformed history the providers
+    /// reject with a 400.
+    ///
+    /// The construction is exact, not approximate: with 11 messages the
+    /// reserve starts at index 5, which is EXACTLY the `tool_result`, and
+    /// the group's real start is index 4. Without the snap the trim drops
+    /// one message and the `tool_use` at index 4 survives alone.
+    #[test]
+    fn the_final_trim_never_orphans_a_tool_use_from_its_result() {
+        // system(0), u0..u2 (1..3), tool_use(4), tool(5), r0..r4 (6..10).
+        let mut msgs = vec![make_msg(Role::System, "sys")];
+        for i in 0..3 {
+            msgs.push(make_msg(Role::User, format!("u{i}")));
+        }
+        msgs.push(make_tool_use("call_1"));
+        msgs.push(Message::tool("call_1", "result ".repeat(200)));
+        for i in 0..5 {
+            msgs.push(make_msg(Role::User, format!("r{i}")));
+        }
+        assert_eq!(msgs.len(), 11, "the construction's length is load-bearing");
+
+        let (result, _outcome) = evict_to_budget_reporting(msgs, 60);
+        assert_no_orphans(&result);
+    }
+
+    /// The trim must not drop the LIVE turn.
+    ///
+    /// The newest message is the one the model is answering. When the
+    /// history ends on a `tool_result` whose `tool_use` sits at `n-2`, the
+    /// group is `[n-2, n)` — and a trim that drops the whole group takes
+    /// the newest message with it. The group must be kept WHOLE instead,
+    /// which is also what keeps the pair together: clamping the drop
+    /// RANGE to the reserve would split the group and bring the orphan
+    /// back.
+    ///
+    /// The fixture is tuned so the trim actually REACHES the live group:
+    /// the protected floor (the system prompt and the newest message) must
+    /// FIT the budget, or the trim stops before it starts and the live
+    /// turn survives for the wrong reason. The tool_use carries content so
+    /// there is a window: floor <= budget < floor + tool_use.
+    #[test]
+    fn the_final_trim_keeps_the_live_turn() {
+        // system(0), u0..u4 (1..5), tool_use(6), tool_result(7).
+        let mut msgs = vec![make_msg(Role::System, "sys")];
+        for i in 0..5 {
+            msgs.push(make_msg(Role::User, format!("u{i}")));
+        }
+        msgs.push(make_tool_use("call_2"));
+        msgs.push(Message::tool("call_2", "result ".repeat(200)));
+        assert_eq!(msgs.len(), 8, "the construction's length is load-bearing");
+
+        // The budget is chosen so the trim REACHES the live group:
+        // `protected_floor` (the system prompt + the newest message) is
+        // 358 tokens, so a budget of 360 lets the floor check pass, while
+        // the running total is still over the budget when the walk
+        // arrives at the tool_use. A smaller budget would stop the trim
+        // before it started, and the live turn would survive for the
+        // wrong reason.
+        let (result, _outcome) = evict_to_budget_reporting(msgs, 360);
+        assert!(
+            result
+                .iter()
+                .any(|m| m.tool_call_id.as_deref() == Some("call_2")),
+            "the live turn's tool_result must survive the trim"
+        );
+        assert_no_orphans(&result);
     }
 
     #[test]
