@@ -2111,6 +2111,20 @@ pub fn runtime_config() -> AppConfig {
         .unwrap_or_else(|_| AppConfig::default())
 }
 
+/// Files that sit beside the live config and are never read.
+///
+/// `operant-config`'s schema layer loads `config.toml`, but the binary's
+/// loader reads `operant.toml` — `~/.operant/config.toml` is in no load path
+/// at all (ENV-3). A dead file that looks authoritative is worth one line.
+fn ignored_config_files(chosen: &Path) -> Vec<PathBuf> {
+    let candidate = crate::platform::operant_home().join("config.toml");
+    if candidate.exists() && candidate != chosen {
+        vec![candidate]
+    } else {
+        Vec::new()
+    }
+}
+
 pub fn load_app_config(explicit: Option<&Path>) -> Result<LoadedConfig> {
     let (mut config, source) = if let Some(path) = explicit {
         if !path.exists() {
@@ -2161,6 +2175,21 @@ pub fn load_app_config(explicit: Option<&Path>) -> Result<LoadedConfig> {
     if config.harness.enabled || config.tools.kernel.enabled {
         config.harness.enabled = true;
         config.tools.kernel.enabled = true;
+    }
+
+    // (ENV-3) a `config.toml` beside the live file is never read; say so
+    // once per process rather than letting it look authoritative.
+    if let Some(chosen) = source.as_deref() {
+        static WARNED_IGNORED_CONFIG: std::sync::Once = std::sync::Once::new();
+        WARNED_IGNORED_CONFIG.call_once(|| {
+            for ignored in ignored_config_files(chosen) {
+                eprintln!(
+                    "warning: {} is not read — the live config is {}. Move its keys into operant.toml, or delete it.",
+                    ignored.display(),
+                    chosen.display()
+                );
+            }
+        });
     }
 
     // (plan 11C1) one-time migration warnings for the retired web-search
@@ -2697,6 +2726,30 @@ model = "anthropic/claude-opus-4-20250514"
             config.proxy.scope,
             operant_config::schema::ProxyScope::Environment
         );
+    }
+
+    /// ENV-3: a `config.toml` beside the live `operant.toml` is in no load
+    /// path — the warning must name it, and must NOT fire for the live file.
+    #[test]
+    #[serial]
+    fn config_toml_beside_operant_toml_is_reported_as_ignored() {
+        let _lock = crate::platform::test_env_lock_blocking();
+        let dir = std::env::temp_dir().join(format!("operant-env3-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let chosen = dir.join("operant.toml");
+        let dead = dir.join("config.toml");
+        std::fs::write(&chosen, "").expect("write chosen");
+        std::fs::write(&dead, "[providers.omniroute]\n").expect("write dead");
+        // SAFETY: the crate-wide env lock serialises process-global env mutation.
+        unsafe { std::env::set_var("HERMES_HOME", &dir) };
+        let ignored = ignored_config_files(&chosen);
+        let not_ignored = ignored_config_files(&dead);
+        // SAFETY: same lock.
+        unsafe { std::env::remove_var("HERMES_HOME") };
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(ignored, vec![dead], "the dead config.toml must be named");
+        assert!(not_ignored.is_empty(), "the chosen file is never ignored");
     }
 
     use super::*;

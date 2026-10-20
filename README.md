@@ -233,6 +233,14 @@ grant_ttl_days = 7    # HoD-approved escalation grants expire after a week
 
 See [`operant.example.toml`](operant.example.toml) for the full reference — every section is annotated.
 
+### What wins: environment, `.env`, or `operant.toml`
+
+1. **Process environment** — `OPENAI_BASE_URL`, `HERMES_MODEL` and the `OPERANT_*` aliases override the file on every load. `operant config show` lists every key that came from the environment and the loader warns once per key, so an export left over from another tool cannot win silently.
+2. **`~/.operant/.env`** — credential pins written by `/connect`, re-read before every gateway turn and TUI turn. A project-local `.env` is read only when the home file is absent; when both exist the loader warns once, naming the file it ignores.
+3. **`~/.operant/operant.toml`** — the file everything else falls back to.
+
+Two traps worth knowing: `~/.operant/config.toml` is read by no binary path (the loader warns when it sits beside `operant.toml`), and **proxy environment variables (`HTTP(S)_PROXY`, `ALL_PROXY`) never redirect provider traffic**.
+
 ### Terminal scrollback mode (opt-in)
 
 ```toml

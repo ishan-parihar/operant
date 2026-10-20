@@ -84,9 +84,31 @@ pub fn dotenv_path() -> std::path::PathBuf {
 /// environment already matched — the caller's job is to apply them, and a
 /// "no change" check against the environment would hide a rotation that the
 /// client has not seen yet.
+/// The working-directory `.env` that loses to the file the reload reads.
+///
+/// Both files exist only when a developer keeps a project-local `.env`: the
+/// home file wins, the local one is never read (ENV-4), and that used to be
+/// silent.
+fn ignored_cwd_dotenv(
+    used: &std::path::Path,
+    cwd_env: &std::path::Path,
+) -> Option<std::path::PathBuf> {
+    (used.exists() && cwd_env.exists() && used != cwd_env).then(|| cwd_env.to_path_buf())
+}
+
 pub fn reload_dotenv() -> DotenvReload {
     let mut rotated = DotenvReload::default();
     let path = dotenv_path();
+    static WARNED_SHADOW: std::sync::Once = std::sync::Once::new();
+    WARNED_SHADOW.call_once(|| {
+        if let Some(ignored) = ignored_cwd_dotenv(&path, std::path::Path::new(".env")) {
+            eprintln!(
+                "warning: {} is not read — the per-turn reload reads {}. Set OPERANT_ENV_FILE to choose one.",
+                ignored.display(),
+                path.display()
+            );
+        }
+    });
     let content = match std::fs::read_to_string(&path) {
         Ok(c) => c,
         Err(_) => return rotated,
@@ -264,5 +286,30 @@ mod tests {
 
         assert!(rotated.is_empty(), "no credential means nothing to rotate");
         assert!(rotated.api_key.is_none());
+    }
+
+    /// ENV-4: a working-directory `.env` loses to the home `.env`; the
+    /// warning must name the loser and never the file in use.
+    #[test]
+    fn a_working_directory_dotenv_shadowed_by_the_home_file_is_named() {
+        let dir = std::env::temp_dir().join(format!("operant-env4-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let home = dir.join("home.env");
+        let cwd = dir.join("local.env");
+        std::fs::write(&home, "A=1\n").expect("write home");
+        assert_eq!(
+            ignored_cwd_dotenv(&home, &cwd),
+            None,
+            "no local file means nothing to warn about"
+        );
+        std::fs::write(&cwd, "OPENAI_BASE_URL=http://127.0.0.1:9/v1\n").expect("write cwd");
+        assert_eq!(ignored_cwd_dotenv(&home, &cwd), Some(cwd.clone()));
+        assert_eq!(
+            ignored_cwd_dotenv(&cwd, &cwd),
+            None,
+            "the file in use is never shadowed"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

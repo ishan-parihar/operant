@@ -1,4 +1,10 @@
 # Hermes-RS configuration example
+#
+# Precedence: process env (OPENAI_BASE_URL, HERMES_MODEL, OPERANT_*) beats this
+# file on every load — `operant config show` marks such keys and the loader
+# warns once per key. `~/.operant/.env` holds credential pins (/connect) and is
+# re-read each turn. `~/.operant/config.toml` is NOT read by the binary, and
+# proxy environment variables never redirect provider traffic.
 
 terminal_backend = "local"
 
