@@ -31,6 +31,14 @@ use super::*;
 pub struct SlackAdapter {
     token: Option<String>,
     enabled: bool,
+    /// A per-instance override for the Slack API base.
+    ///
+    /// The default is the configured base. A per-instance override lets a
+    /// test point ONE adapter at a local server without touching the
+    /// process-global runtime config — which `runtime_config()` reads
+    /// from ~20 call sites, so mutating it in a test would leak into
+    /// every other test in the process.
+    api_base_override: Option<String>,
 }
 
 impl SlackAdapter {
@@ -41,11 +49,32 @@ impl SlackAdapter {
     /// inbound connection.
     pub fn new(token: Option<String>) -> Self {
         let enabled = token.is_some();
-        Self { token, enabled }
+        Self {
+            token,
+            enabled,
+            api_base_override: None,
+        }
     }
+
     /// The API base this adapter talks to.
     fn api_base(&self) -> String {
+        if let Some(ref base) = self.api_base_override {
+            return base.clone();
+        }
         runtime_config().gateway.slack_api_base.clone()
+    }
+
+    /// Point this adapter at a different Slack API base.
+    ///
+    /// A per-instance override, so a test can use a local server without
+    /// mutating the process-global runtime config — which
+    /// `runtime_config()` is read from ~20 call sites, so mutating it in a
+    /// test would leak the mock base into every other test in the
+    /// process.
+    #[cfg(test)]
+    pub(crate) fn with_api_base(mut self, base: &str) -> Self {
+        self.api_base_override = Some(base.to_string());
+        self
     }
 }
 
@@ -55,6 +84,19 @@ impl SlackAdapter {
 /// the message id, and it is what `chat.update` needs. The TRAIT's
 /// default `send_message_return_id` returns an EMPTY id, which the
 /// streaming path reads as "this platform cannot edit" (RT-105).
+/// The messages a Slack body is sent as.
+///
+/// BOTH Slack send paths go through this: the plain send and the
+/// streaming send (`send_message_return_id`). They are separate
+/// implementations, and the streaming one was left unchunked for a while
+/// — so a long answer on Slack was rejected with `invalid_text` and lost
+/// while the plain send delivered it. The shared seam is what keeps them
+/// in step: a path that stops using it leaves the helper DEAD, which the
+/// clippy gate catches.
+fn slack_chunks(text: &str) -> Vec<String> {
+    chunk_text(text, SLACK_MESSAGE_LIMIT)
+}
+
 /// Slack's per-message character limit.
 ///
 /// `chat.postMessage` answers `{"ok": false, "error": "invalid_text"}`
@@ -130,7 +172,7 @@ impl PlatformAdapter for SlackAdapter {
         // is CHUNKED, the way the Telegram and Discord sends are: a long
         // answer arrives as several messages instead of not at all.
         let text = markdown_to_slack_mrkdwn(&message.content);
-        let chunks = chunk_text(&text, SLACK_MESSAGE_LIMIT);
+        let chunks = slack_chunks(&text);
 
         for chunk in chunks {
             let body = serde_json::json!({
@@ -193,31 +235,51 @@ impl PlatformAdapter for SlackAdapter {
             .as_ref()
             .ok_or_else(|| Error::Config("Slack token not configured".to_string()))?;
 
+        // The text is CHUNKED, like the plain send. Over Slack's 40,000
+        // character limit `chat.postMessage` answers
+        // `{"ok": false, "error": "invalid_text"}` — a 200, so the status
+        // check alone does not catch it — and the message is NOT
+        // delivered.
+        //
+        // This is the path the STREAMING path uses, so the gap was not
+        // cosmetic: a long answer on Slack was rejected and lost, while
+        // the plain send (which chunks) delivered it.
         let text = markdown_to_slack_mrkdwn(&message.content);
-        let body = serde_json::json!({
-            "channel": message.channel_id,
-            "text": text,
-            "unfurl_links": false,
-            "unfurl_media": false,
-        });
+        let chunks = slack_chunks(&text);
 
-        let resp = client
-            .post(format!(
-                "{}/chat.postMessage",
-                self.api_base().trim_end_matches('/')
-            ))
-            .header("Authorization", format!("Bearer {}", token))
-            .header("Content-Type", "application/json")
-            .json(&body)
-            .send()
-            .await?;
+        // The id is the FIRST chunk's `ts` — that is the message the
+        // streaming path edits.
+        let mut first_id = String::new();
+        for (index, chunk) in chunks.into_iter().enumerate() {
+            let body = serde_json::json!({
+                "channel": message.channel_id,
+                "text": chunk,
+                "unfurl_links": false,
+                "unfurl_media": false,
+            });
 
-        let status = resp.status();
-        let body_text = resp.text().await.unwrap_or_default();
-        slack_send_outcome(status.as_u16(), &body_text)?;
+            let resp = client
+                .post(format!(
+                    "{}/chat.postMessage",
+                    self.api_base().trim_end_matches('/')
+                ))
+                .header("Authorization", format!("Bearer {}", token))
+                .header("Content-Type", "application/json")
+                .json(&body)
+                .send()
+                .await?;
 
-        // Slack's message id is the message's `ts`.
-        Ok(slack_message_id(&body_text))
+            let status = resp.status();
+            let body_text = resp.text().await.unwrap_or_default();
+            slack_send_outcome(status.as_u16(), &body_text)?;
+
+            if index == 0 {
+                // Slack's message id is the message's `ts`.
+                first_id = slack_message_id(&body_text);
+            }
+        }
+
+        Ok(first_id)
     }
 
     /// Edit a message Slack has already sent.
@@ -359,6 +421,7 @@ impl PlatformAdapter for SlackAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     /// A Slack send the API REJECTS must be reported as a failure.
     ///
@@ -396,6 +459,147 @@ mod tests {
                 "the error must name the status, got: {err}"
             );
         }
+    }
+
+    /// A counting HTTP server for the Slack API.
+    ///
+    /// It answers every `chat.postMessage` with a SUCCESS and COUNTS the
+    /// requests, so a test can assert how many messages a body was sent
+    /// as. It binds port 0 (an ephemeral port the OS picks) and keeps
+    /// answering until the test ends — so a second request is not
+    /// refused, and the port is not recycled under a later test.
+    ///
+    /// The count is shared with the test through an `Arc`, and the server
+    /// runs on the test's own runtime, so a request is answered.
+    async fn counting_slack_server() -> (String, Arc<std::sync::atomic::AtomicUsize>) {
+        let count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = count.clone();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind an ephemeral port");
+        let port = listener.local_addr().expect("the bound address").port();
+        tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                // Read the WHOLE request: the header block, then exactly
+                // `Content-Length` body bytes.
+                //
+                // Reading only the headers would answer mid-body, and
+                // reqwest would fail with "connection closed before
+                // message completed" — the over-limit body is 40,001
+                // bytes. Reading to EOF would deadlock: the client waits
+                // for the response, and the response waits for the
+                // client's EOF.
+                let mut buf = Vec::new();
+                let mut chunk = [0u8; 8192];
+                let header_end = loop {
+                    match socket.read(&mut chunk).await {
+                        Ok(0) | Err(_) => break None,
+                        Ok(n) => {
+                            buf.extend_from_slice(&chunk[..n]);
+                            if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                                break Some(pos + 4);
+                            }
+                        }
+                    }
+                };
+                let Some(header_end) = header_end else {
+                    continue;
+                };
+                // The content length, from the header block.
+                let headers = String::from_utf8_lossy(&buf[..header_end]).to_string();
+                let content_length = headers
+                    .lines()
+                    .find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        if name.trim().eq_ignore_ascii_case("content-length") {
+                            value.trim().parse::<usize>().ok()
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or(0);
+                // And the body.
+                while buf.len() < header_end + content_length {
+                    match socket.read(&mut chunk).await {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                    }
+                }
+                // The count means "messages sent", so it is taken once the
+                // request is fully read.
+                counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                // The response's Content-Length is COMPUTED from the
+                // payload — a wrong one makes reqwest read past the end
+                // of the body and fail the whole request.
+                let payload = r#"{"ok":true,"channel":"C1","ts":"1.0"}"#;
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
+                    payload.len()
+                );
+                let _ = socket.write_all(response.as_bytes()).await;
+            }
+        });
+        (format!("http://127.0.0.1:{port}"), count)
+    }
+
+    /// The STREAMING send must CHUNK an over-limit body.
+    ///
+    /// Over Slack's 40,000 character limit `chat.postMessage` answers
+    /// `{"ok": false, "error": "invalid_text"}` — a 200, so the status
+    /// check alone does not catch it — and the message is NOT delivered.
+    ///
+    /// `send_message` and `send_message_return_id` are SEPARATE
+    /// implementations, and the streaming one was left unchunked for a
+    /// while — so a long answer on Slack was rejected and lost while the
+    /// plain send delivered it.
+    ///
+    /// This test drives the ADAPTER against a counting server, so it
+    /// proves the streaming path really sends more than one message. A
+    /// test that asserted on the chunking HELPER would pass against the
+    /// pre-fix code — the helper was called, just not by the path that
+    /// mattered.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_slack_streaming_send_chunks_an_over_limit_body() {
+        let (base, count) = counting_slack_server().await;
+
+        // The per-instance base, NOT the process-global runtime config:
+        // `runtime_config()` is read from ~20 call sites, so mutating it
+        // in a test would leak the mock base into every other test in the
+        // process.
+        let adapter = SlackAdapter::new(Some("xoxb-token".to_string())).with_api_base(&base);
+        let body = "x".repeat(SLACK_MESSAGE_LIMIT + 1);
+        let message = OutgoingMessage::new("C1", &body);
+
+        let id = adapter
+            .send_message_return_id(message)
+            .await
+            .expect("the streaming send must succeed");
+        assert!(!id.is_empty(), "the send must return the message id");
+
+        assert!(
+            count.load(std::sync::atomic::Ordering::SeqCst) >= 2,
+            "an over-limit body must be sent as more than one message, got {}",
+            count.load(std::sync::atomic::Ordering::SeqCst)
+        );
+    }
+
+    /// A SHORT body is one message — the chunking must not split it.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_short_slack_body_is_one_message() {
+        let (base, count) = counting_slack_server().await;
+
+        let adapter = SlackAdapter::new(Some("xoxb-token".to_string())).with_api_base(&base);
+        let message = OutgoingMessage::new("C1", "a short answer");
+        adapter
+            .send_message_return_id(message)
+            .await
+            .expect("the streaming send must succeed");
+
+        assert_eq!(
+            count.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "a short body must be one message"
+        );
     }
 
     /// A Slack send the API ACCEPTS must succeed.

@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-1081 — the Slack streaming send chunks too.** `send_message_return_id` — the path the streaming path uses — still posted the whole body unchunked, so a long answer on Slack was rejected and lost while the plain send delivered it.
+
 - **iter-1078 — the output fitter is sized against the current prompt, not the previous request's.** It could exceed the window by exactly the tool output accumulated since.
 
 - **iter-1076 — the MCP SSE stream is no longer cut every 300 seconds.** The long-lived GET and the bounded POSTs now use separate clients, so the total timeout applies only to the calls.
