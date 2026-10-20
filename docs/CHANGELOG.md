@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-1087 — `operant gateway status` now says which platforms can RECEIVE.** "Slack: enabled" led an operator to believe they could receive Slack messages; the status now says "send-only (no inbound)".
+
 - **iter-1085 — `operant channel list` shows SMS.** The gateway's registry has seven adapters; the list showed six.
 
 - **iter-1081 — the Slack streaming send chunks too.** `send_message_return_id` — the path the streaming path uses — still posted the whole body unchunked, so a long answer on Slack was rejected and lost while the plain send delivered it.

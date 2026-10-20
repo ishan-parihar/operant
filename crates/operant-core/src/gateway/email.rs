@@ -287,7 +287,9 @@ impl PlatformAdapter for EmailAdapter {
             // inbound message never reaches the agent. The status report
             // used to say "enabled" and nothing more, so an operator
             // believed they could receive email messages. (RT-86.)
-            "inbound": false,
+            // The inbound truth, from the gateway's single table — so
+            // this and `operant gateway status` cannot disagree.
+            "inbound": crate::gateway::platform_can_receive("email"),
             "outbound": true,
         })
     }

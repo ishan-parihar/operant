@@ -6,6 +6,34 @@
 pub mod dispatch_breaker;
 pub mod lifecycle;
 
+/// The platforms whose inbound messages actually reach the agent.
+///
+/// A platform can be in the gateway's registry and still be OUTBOUND-ONLY:
+/// the adapter has a complete inbound parser, but nothing ever calls it.
+///
+/// The `PlatformAdapter::handle_update` trait method is DEAD — it has no
+/// production caller for ANY adapter. The platforms that receive use their
+/// own path instead: Telegram's and Discord's poll loops and the webhook
+/// adapter's own HTTP handler. The adapters that do NOT — Slack,
+/// WhatsApp, Email and SMS — have an inbound parser that nothing reaches,
+/// so a message sent to them is never seen by the agent.
+///
+/// This table is the single source of that truth, so the adapters' status
+/// reports and the `operant gateway status` command cannot disagree.
+pub const INBOUND_CAPABLE_PLATFORMS: &[&str] = &["telegram", "discord", "webhook"];
+
+/// Whether a platform's inbound messages reach the agent.
+///
+/// The name is matched case-insensitively, and an unknown platform is
+/// treated as OUTBOUND-ONLY: the safe direction, because claiming a
+/// platform can receive when it cannot is the failure that misleads the
+/// operator.
+pub fn platform_can_receive(platform: &str) -> bool {
+    INBOUND_CAPABLE_PLATFORMS
+        .iter()
+        .any(|p| p.eq_ignore_ascii_case(platform))
+}
+
 use chrono::Utc;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -1867,6 +1895,47 @@ mod tests {
     }
 
     // ── Adapter health check tests ──
+
+    /// The inbound table must name EXACTLY the platforms whose inbound
+    /// messages reach the agent.
+    ///
+    /// Telegram, Discord and Webhooks receive — through their own poll
+    /// loops and the webhook adapter's HTTP handler. The
+    /// `PlatformAdapter::handle_update` trait method is DEAD: it has no
+    /// production caller for ANY adapter. Slack, WhatsApp, Email and SMS
+    /// have an inbound parser that nothing reaches, so a message sent to
+    /// them is never seen by the agent — and the table must say so.
+    ///
+    /// The test is over the whole set, so a platform added to the gateway
+    /// without a decision here fails it.
+    #[test]
+    fn the_inbound_table_names_exactly_the_platforms_that_receive() {
+        // The platforms that receive.
+        for platform in ["telegram", "discord", "webhook"] {
+            assert!(
+                platform_can_receive(platform),
+                "{platform} receives messages and must be in the table"
+            );
+        }
+        // The platforms that do NOT.
+        for platform in ["slack", "whatsapp", "email", "sms"] {
+            assert!(
+                !platform_can_receive(platform),
+                "{platform} is send-only — its inbound parser is never called"
+            );
+        }
+        // An unknown platform is treated as send-only: the safe direction,
+        // because claiming a platform can receive when it cannot is the
+        // failure that misleads the operator.
+        assert!(
+            !platform_can_receive("carrier-pigeon"),
+            "an unknown platform must be treated as send-only"
+        );
+        // The match is case-insensitive, because the platform name comes
+        // from a config key and from the adapter's own name.
+        assert!(platform_can_receive("Telegram"));
+        assert!(platform_can_receive("TELEGRAM"));
+    }
 
     #[test]
     fn test_webhook_adapter_health() {

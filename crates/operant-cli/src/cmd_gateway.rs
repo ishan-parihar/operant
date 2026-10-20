@@ -207,35 +207,51 @@ fn cmd_status(config: &AppConfig, deep: bool, json: bool) -> Result<()> {
     println!();
 
     println!("Platforms:");
-    println!(
-        "  Telegram  {}",
-        indicator(gw.telegram_enabled, gw.telegram_token.is_some())
-    );
-    println!(
-        "  Discord   {}",
-        indicator(gw.discord_enabled, gw.discord_token.is_some())
-    );
-    println!(
-        "  Slack     {}",
-        indicator(gw.slack_enabled, gw.slack_token.is_some())
-    );
-    println!(
-        "  WhatsApp  {}",
-        indicator(gw.whatsapp_enabled, gw.whatsapp_token.is_some())
-    );
-    println!(
-        "  Email     {}",
-        indicator(gw.email_enabled, gw.email_smtp_host.is_some())
-    );
-    println!("  SMS       {}", indicator(gw.sms_twilio_enabled, false));
+    // The INBOUND truth.
+    //
+    // A platform can be enabled and still be OUTBOUND-ONLY: the adapter
+    // has a complete inbound parser, but nothing ever calls it. The
+    // operator used to see "enabled" and nothing more, so an operator
+    // with Slack or WhatsApp configured believed they could receive
+    // messages on them.
+    //
+    // The table is the gateway's single source (see
+    // `operant_core::gateway::INBOUND_CAPABLE_PLATFORMS`), so this and
+    // the adapters' own status reports cannot disagree.
+    let platforms: [(&str, bool, bool); 6] = [
+        ("Telegram", gw.telegram_enabled, gw.telegram_token.is_some()),
+        ("Discord", gw.discord_enabled, gw.discord_token.is_some()),
+        ("Slack", gw.slack_enabled, gw.slack_token.is_some()),
+        ("WhatsApp", gw.whatsapp_enabled, gw.whatsapp_token.is_some()),
+        ("Email", gw.email_enabled, gw.email_smtp_host.is_some()),
+        ("SMS", gw.sms_twilio_enabled, false),
+    ];
+    for (name, enabled, configured) in platforms {
+        let inbound = operant_core::gateway::platform_can_receive(&name.to_lowercase());
+        println!(
+            "  {:<9} {}  {}",
+            name,
+            indicator(enabled, configured),
+            if inbound {
+                "receives messages"
+            } else {
+                "send-only (no inbound)"
+            }
+        );
+    }
     println!();
     println!(
-        "Webhooks:  {}",
+        "Webhooks:  {}  {}",
         if gw.webhooks_enabled {
             let addr = gw.webhooks_addr.as_deref().unwrap_or("localhost:0");
             format!("enabled (listen on {addr})")
         } else {
             "disabled".to_string()
+        },
+        if operant_core::gateway::platform_can_receive("webhook") {
+            "receives messages"
+        } else {
+            "send-only (no inbound)"
         }
     );
     println!(
