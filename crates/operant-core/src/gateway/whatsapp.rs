@@ -51,6 +51,24 @@ impl WhatsAppAdapter {
     }
 }
 
+/// The message from a Graph API error body.
+///
+/// The body is `{"error": {"message": "...", "code": N, ...}}`. A body
+/// that does not parse, or has no message, yields a short marker rather
+/// than the raw body — the raw body can be large and can echo the
+/// request.
+fn graph_error_message(body: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| {
+            v.get("error")
+                .and_then(|e| e.get("message"))
+                .and_then(|m| m.as_str())
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| "<no error message in the response body>".to_string())
+}
+
 #[async_trait]
 impl PlatformAdapter for WhatsAppAdapter {
     fn name(&self) -> &str {
@@ -112,10 +130,17 @@ impl PlatformAdapter for WhatsAppAdapter {
             .await
             .map_err(|e| Error::Network(e.into()))?;
 
-        if !resp.status().is_success() {
+        let status = resp.status();
+        if !status.is_success() {
+            // The Graph API's body carries the REASON ("Unsupported post
+            // request.", "Invalid OAuth access token", the code), and a
+            // bare status leaves the operator guessing which of the four
+            // common causes it was.
+            let body = resp.text().await.unwrap_or_default();
             return Err(Error::Agent(format!(
-                "WhatsApp API error: {}",
-                resp.status()
+                "WhatsApp API error: {}: {}",
+                status,
+                graph_error_message(&body)
             )));
         }
 
@@ -186,5 +211,33 @@ impl PlatformAdapter for WhatsAppAdapter {
         msg.parse_markdown = message.parse_markdown;
         self.send_message(msg).await?;
         Ok(String::new())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The Graph API's error message must reach the operator.
+    ///
+    /// A bare "WhatsApp API error: 400" leaves four common causes
+    /// indistinguishable: an expired token, an unverified phone number, a
+    /// rejected template, and a message outside the 24-hour window.
+    #[test]
+    fn the_graph_api_error_message_reaches_the_operator() {
+        let body = r#"{"error":{"message":"Unsupported post request.","code":100,"type":"GraphMethodException"}}"#;
+        assert_eq!(graph_error_message(body), "Unsupported post request.");
+    }
+
+    /// A body that does not parse, or has no message, must not be echoed
+    /// raw — the raw body can be large and can echo the request.
+    #[test]
+    fn an_unparseable_graph_api_body_is_not_echoed() {
+        let msg = graph_error_message("<html>502 Bad Gateway</html>");
+        assert!(
+            !msg.contains("<html>"),
+            "the raw body must not be echoed, got: {msg}"
+        );
+        assert!(msg.contains("no error message"), "got: {msg}");
     }
 }

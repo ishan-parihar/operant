@@ -32,6 +32,20 @@ impl SmsAdapter {
     }
 }
 
+/// The message from a Twilio error body.
+///
+/// The body is `{"code": 21211, "message": "The 'To' number ...", ...}`.
+fn twilio_error_message(body: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| {
+            v.get("message")
+                .and_then(|m| m.as_str())
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| "<no error message in the response body>".to_string())
+}
+
 #[async_trait]
 impl PlatformAdapter for SmsAdapter {
     fn name(&self) -> &str {
@@ -83,8 +97,17 @@ impl PlatformAdapter for SmsAdapter {
             .await
             .map_err(|e| Error::Network(e.into()))?;
 
-        if !resp.status().is_success() {
-            return Err(Error::Agent(format!("Twilio API error: {}", resp.status())));
+        let status = resp.status();
+        if !status.is_success() {
+            // The body carries the REASON ("The 'To' number ... is not a
+            // valid phone number", "Unauthenticated"), and a bare status
+            // leaves the operator guessing.
+            let body = resp.text().await.unwrap_or_default();
+            return Err(Error::Agent(format!(
+                "Twilio API error: {}: {}",
+                status,
+                twilio_error_message(&body)
+            )));
         }
 
         Ok(())
@@ -153,5 +176,22 @@ impl PlatformAdapter for SmsAdapter {
         msg.parse_markdown = message.parse_markdown;
         self.send_message(msg).await?;
         Ok(String::new())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Twilio's error message must reach the operator.
+    #[test]
+    fn the_twilio_error_message_reaches_the_operator() {
+        let body = r#"{"code":21211,"message":"The 'To' number is not a valid phone number"}"#;
+        assert_eq!(
+            twilio_error_message(body),
+            "The 'To' number is not a valid phone number"
+        );
+        let msg = twilio_error_message("not json");
+        assert!(msg.contains("no error message"), "got: {msg}");
     }
 }
