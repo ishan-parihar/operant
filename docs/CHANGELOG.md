@@ -21,6 +21,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-1120 — the dashboard is one first-party page again, and it calls only the routes the server has.**
+  The served frontend was a 1.9 MB build artefact from a larger harness: it called 79 `/api/...` paths
+  against a four-route server and opened a `/api/ws` WebSocket that never existed, so every panel but
+  four rendered blank (RT-44). `dashboard/index.html` is now a single self-contained file (inline CSS/JS,
+  no fonts, no bundle step, no external requests) that renders `/api/status`, `/api/boards`, `/api/config`
+  and refreshes every five seconds; the unused 2.2 MB of JS/CSS/fonts/images and the `/assets` route are
+  gone. The contract is pinned by `the_page_calls_only_routes_the_server_serves`, which parses every
+  `getJSON` path out of the page and requests it from the real server — a fetch without a route fails
+  the test instead of blanking a panel. `/api/status` now nests its host metrics under `host` instead
+  of `serde(flatten)`ing them into the top level: the flat shape existed only for the deleted bundle,
+  and with it the new page read `host.cpu_count` from a payload that had no `host` object, so a live
+  browser showed "n/a" for hostname, CPU, load, memory and disk while the API returned every value.
+  The field test now encodes each value's ACCESS PATH (`host.cpu_count`, `s.version`), not just its
+  name, and the browser check is how the mismatch was caught.
+
 - **iter-1117 — a stale `OPENAI_BASE_URL` / `HERMES_MODEL` export can no longer win silently, and proxy environment variables no longer redirect provider traffic.** The loader records every env override, warns once per key, and `operant config show` marks the affected values; `HTTP(S)_PROXY` and `ALL_PROXY` are ignored by the provider client (a `[proxy]` table is the sanctioned path). A `~/.operant/config.toml` that the binary never reads, and a project-local `.env` that loses to `~/.operant/.env`, are now named in a one-time warning instead of being silently ignored. README documents the order: process env, then `.env` pins, then `operant.toml`.
 
 - **iter-1108 — the agent's tools, the command-menu registration and the doctor's probe now use the CONFIGURED platform base, and the command-menu client uses the configured proxy.** A deployment behind a proxy could reach Telegram through the gateway and not through the agent's `send_message`, `react_to_message`, or the boot-time `setMyCommands` that registers the command menu. Each base also takes an environment override (`TELEGRAM_API_BASE`, `DISCORD_API_BASE`, `SLACK_API_BASE`, `WHATSAPP_API_BASE`) that wins over the config.

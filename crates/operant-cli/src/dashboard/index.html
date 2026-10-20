@@ -1,17 +1,287 @@
 <!doctype html>
 <html lang="en">
   <head>
-    <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.ico" />
-    <meta
-      name="viewport"
-      content="width=device-width, initial-scale=1.0, viewport-fit=cover"
-    />
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>Operant - Dashboard</title>
-    <script type="module" crossorigin src="/assets/index-BB4BRelo.js"></script>
-    <link rel="stylesheet" crossorigin href="/assets/index-DJxmcHRv.css">
+    <!--
+      First-party dashboard. It is ONE file on purpose: the routes below are
+      the only routes `dashboard_server.rs` implements, and the bundle this
+      replaced was built against a larger harness and called 79 of them plus
+      a WebSocket that does not exist, so every panel but four was blank
+      (RT-44). The invariant is pinned by
+      `the_page_calls_only_routes_the_server_serves` in `dashboard_server.rs`:
+      adding a fetch here without adding the route there fails the test.
+    -->
+    <style>
+      :root {
+        --bg: #0d0f12;
+        --panel: #15181d;
+        --line: #242a32;
+        --text: #d7dce3;
+        --muted: #8b95a3;
+        --ok: #46b17b;
+        --warn: #d7a23c;
+        --err: #d15454;
+        --accent: #6aa9e0;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      }
+      header {
+        display: flex;
+        align-items: baseline;
+        gap: 16px;
+        padding: 18px 24px;
+        border-bottom: 1px solid var(--line);
+        flex-wrap: wrap;
+      }
+      header h1 { font-size: 15px; margin: 0; letter-spacing: 0.08em; text-transform: uppercase; }
+      .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; background: var(--muted); }
+      .dot.ok { background: var(--ok); }
+      .dot.err { background: var(--err); }
+      .muted { color: var(--muted); }
+      main {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+        gap: 16px;
+        padding: 16px 24px 40px;
+      }
+      section {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 14px 16px;
+        min-width: 0;
+      }
+      section h2 {
+        font-size: 11px;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: var(--muted);
+        margin: 0 0 10px;
+      }
+      dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; margin: 0; }
+      dt { color: var(--muted); }
+      dd { margin: 0; overflow-wrap: anywhere; }
+      table { width: 100%; border-collapse: collapse; }
+      th, td { text-align: right; padding: 3px 6px; border-bottom: 1px solid var(--line); }
+      th:first-child, td:first-child { text-align: left; }
+      th { color: var(--muted); font-weight: normal; font-size: 12px; }
+      .bar { height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; margin-top: 3px; }
+      .bar > span { display: block; height: 100%; background: var(--accent); }
+      .bar.warn > span { background: var(--warn); }
+      .bar.err > span { background: var(--err); }
+      #banner {
+        display: none;
+        margin: 16px 24px 0;
+        padding: 10px 14px;
+        border: 1px solid var(--err);
+        border-radius: 8px;
+        color: var(--err);
+      }
+    </style>
   </head>
   <body>
+    <header>
+      <h1>Operant</h1>
+      <span><span id="health-dot" class="dot"></span> <span id="health" class="muted">connecting</span></span>
+      <span class="muted" id="version"></span>
+      <span class="muted" id="updated"></span>
+    </header>
+    <div id="banner"></div>
+    <main>
+      <section>
+        <h2>Status</h2>
+        <dl id="status"></dl>
+      </section>
+      <section>
+        <h2>Host</h2>
+        <dl id="host"></dl>
+      </section>
+      <section>
+        <h2>Boards</h2>
+        <div id="boards" class="muted">loading</div>
+      </section>
+      <section>
+        <h2>Config</h2>
+        <dl id="config"></dl>
+      </section>
+    </main>
     <div id="root"></div>
+    <script>
+      (function () {
+        "use strict";
+        var TOKEN = window.__HERMES_SESSION_TOKEN__ || "";
+        var banner = document.getElementById("banner");
+        var timer = null;
+
+        function el(tag, text, className) {
+          var node = document.createElement(tag);
+          if (text !== undefined && text !== null) node.textContent = String(text);
+          if (className) node.className = className;
+          return node;
+        }
+
+        function bytes(n) {
+          if (typeof n !== "number" || !isFinite(n)) return "n/a";
+          var units = ["B", "KB", "MB", "GB", "TB"], i = 0;
+          while (n >= 1024 && i < units.length - 1) { n /= 1024; i += 1; }
+          return n.toFixed(i === 0 ? 0 : 1) + " " + units[i];
+        }
+
+        function duration(seconds) {
+          if (typeof seconds !== "number") return "n/a";
+          var d = Math.floor(seconds / 86400), h = Math.floor((seconds % 86400) / 3600),
+              m = Math.floor((seconds % 3600) / 60), s = Math.floor(seconds % 60);
+          if (d) return d + "d " + h + "h";
+          if (h) return h + "h " + m + "m";
+          if (m) return m + "m " + s + "s";
+          return s + "s";
+        }
+
+        function fill(id, rows) {
+          var dl = document.getElementById(id);
+          dl.textContent = "";
+          rows.forEach(function (row) {
+            dl.appendChild(el("dt", row[0]));
+            dl.appendChild(el("dd", row[1]));
+          });
+        }
+
+        function usage(stat) {
+          var row = document.createElement("div");
+          row.appendChild(el("div", stat && stat.total
+            ? bytes(stat.used) + " / " + bytes(stat.total) + " (" + stat.percent + "%)"
+            : "unavailable", "muted"));
+          if (stat && stat.percent !== undefined) {
+            var bar = el("div", null, "bar" + (stat.percent >= 90 ? " err" : stat.percent >= 75 ? " warn" : ""));
+            var inner = el("span");
+            inner.style.width = Math.max(0, Math.min(100, stat.percent)) + "%";
+            bar.appendChild(inner);
+            row.appendChild(bar);
+          }
+          return row;
+        }
+
+        function failure(reason) {
+          banner.style.display = "block";
+          banner.textContent = reason;
+          document.getElementById("health").textContent = "unavailable";
+          document.getElementById("health-dot").className = "dot err";
+        }
+
+        function showStatus(s) {
+          fill("status", [
+            ["state", s.status],
+            ["model", s.agent_model],
+            ["gateway", s.gateway_running ? "running" : "stopped"],
+            ["uptime", duration(s.uptime_seconds)],
+            ["kanban tasks", s.kanban_tasks],
+            ["database", s.database_path]
+          ]);
+          var host = s.host || {};
+          var load = Array.isArray(host.load_avg)
+            ? host.load_avg.map(function (v) { return v.toFixed(2); }).join(" / ")
+            : "n/a";
+          fill("host", [
+            ["hostname", host.hostname || "n/a"],
+            ["os", (host.os_release || "n/a") + " (" + (host.arch || "n/a") + ")"],
+            ["cpus", host.cpu_count || "n/a"],
+            ["cpu", host.cpu_percent === null || host.cpu_percent === undefined ? "n/a" : host.cpu_percent + "%"],
+            ["load 1/5/15", load]
+          ]);
+          var dl = document.getElementById("host");
+          dl.appendChild(el("dt", "memory"));
+          var memCell = el("dd");
+          memCell.appendChild(usage(host.memory));
+          dl.appendChild(memCell);
+          dl.appendChild(el("dt", "disk"));
+          var diskCell = el("dd");
+          diskCell.appendChild(usage(host.disk));
+          dl.appendChild(diskCell);
+          document.getElementById("version").textContent = "v" + s.version;
+        }
+
+        function showBoards(boards) {
+          var root = document.getElementById("boards");
+          root.textContent = "";
+          root.className = "";
+          if (!boards || !boards.length) {
+            root.className = "muted";
+            root.textContent = "no boards";
+            return;
+          }
+          var table = el("table");
+          var head = el("tr");
+          ["board", "ready", "running", "blocked", "done", "total"].forEach(function (h) {
+            head.appendChild(el("th", h));
+          });
+          table.appendChild(head);
+          boards.forEach(function (b) {
+            var counts = b.task_counts || {};
+            var row = el("tr");
+            row.appendChild(el("td", b.name || b.slug));
+            [counts.ready, counts.running, counts.blocked, counts.done, b.total].forEach(function (v) {
+              row.appendChild(el("td", v === undefined ? "n/a" : v));
+            });
+            table.appendChild(row);
+          });
+          root.appendChild(table);
+        }
+
+        function showConfig(c) {
+          fill("config", [
+            ["model", c.model],
+            ["base url", c.base_url],
+            ["platforms", (c.platforms_enabled || []).length ? c.platforms_enabled.join(", ") : "none"],
+            ["skills dir", c.skills_dir],
+            ["database", c.database_path]
+          ]);
+        }
+
+        function getJSON(path) {
+          var headers = {};
+          if (TOKEN) headers["X-Hermes-Session-Token"] = TOKEN;
+          return fetch(path, { headers: headers, credentials: "same-origin" }).then(function (r) {
+            if (r.status === 401) throw new Error("unauthorized");
+            if (!r.ok) throw new Error(path + " -> HTTP " + r.status);
+            return r.json();
+          });
+        }
+
+        function refresh() {
+          Promise.all([getJSON("/api/status"), getJSON("/api/config"), getJSON("/api/boards")])
+            .then(function (results) {
+              banner.style.display = "none";
+              document.getElementById("health").textContent = "ok";
+              document.getElementById("health-dot").className = "dot ok";
+              document.getElementById("updated").textContent = "seen " + new Date().toLocaleTimeString();
+              showStatus(results[0]);
+              showConfig(results[1]);
+              showBoards(results[2]);
+            })
+            .catch(function (error) {
+              if (error && error.message === "unauthorized") {
+                failure("Unauthorized. Open the URL `operant dashboard` printed, or reload after its cookie was issued.");
+                if (timer) { clearInterval(timer); timer = null; }
+                return;
+              }
+              failure("Dashboard unavailable: " + (error && error.message ? error.message : error));
+            });
+        }
+
+        document.addEventListener("visibilitychange", function () {
+          if (!document.hidden) refresh();
+        });
+
+        refresh();
+        timer = setInterval(function () { if (!document.hidden) refresh(); }, 5000);
+      })();
+    </script>
   </body>
 </html>

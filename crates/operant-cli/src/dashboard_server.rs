@@ -1,13 +1,15 @@
 //! Dashboard HTTP server.
 //! Serves the embedded web dashboard for Operant status monitoring.
 //!
-//! SCOPE. This is a FOUR-ROUTE status view, not the full operant web
-//! console. The bundled frontend (`dashboard/assets/index-BB4BRelo.js`) is
-//! a build artefact from a much larger harness and calls 79 distinct
-//! `/api/...` paths; this server implements four (`/api/status`,
-//! `/api/boards`, `/api/health`, `/api/config`). Every other call 404s,
-//! and the `/api/ws` WebSocket the bundle opens for live updates does not
-//! exist. See BUGS.md RT-44.
+//! SCOPE. This is a four-route status view, not the full operant web
+//! console: `/api/status`, `/api/boards`, `/api/health`, `/api/config`.
+//! The page (`dashboard/index.html`) is first-party and one file, and it
+//! calls ONLY those routes. It replaced a 1.9 MB bundle from a larger
+//! harness that called 79 routes and opened a `/api/ws` WebSocket this
+//! server never had, so every panel but four rendered blank (BUGS.md
+//! RT-44). The contract is testable now: `the_page_calls_only_routes_the_
+//! server_serves` fails if the page names a route the router does not
+//! mount, which is the exact defect the bundle caused.
 //!
 //! Security: the API endpoints (except /api/health) require a session
 //! token that is generated at startup and printed to the console. The
@@ -37,14 +39,14 @@
 //!
 //! The token is accepted from three places, and all three matter:
 //! `Authorization: Bearer` (a human or a script), `X-Hermes-Session-Token`
-//! (what the bundled frontend ACTUALLY sends — it never sends
-//! `Authorization`), and the dashboard cookie (what the browser sends on
-//! a same-origin fetch).
+//! (what the page sends, because a header survives even when the cookie is
+//! withheld), and the dashboard cookie (what the browser sends on a
+//! same-origin fetch).
 
 use anyhow::{Context, Result};
 use axum::{
     Router,
-    extract::{Path, Query, State},
+    extract::{Query, State},
     http::{HeaderMap, StatusCode, header},
     response::{Html, IntoResponse, Json, Response},
     routing::get,
@@ -57,61 +59,6 @@ use std::time::Instant;
 
 /// Embedded frontend HTML (compiled into binary).
 const INDEX_HTML: &str = include_str!("dashboard/index.html");
-
-/// Embedded static assets (JS, CSS, fonts, images).
-/// These are served at `/assets/<filename>` so the index.html script/link tags resolve.
-static ASSETS: &[(&str, &[u8], &str)] = &[
-    (
-        "index-BB4BRelo.js",
-        include_bytes!("dashboard/assets/index-BB4BRelo.js"),
-        "text/javascript",
-    ),
-    (
-        "index-DJxmcHRv.css",
-        include_bytes!("dashboard/assets/index-DJxmcHRv.css"),
-        "text/css",
-    ),
-    (
-        "Collapse-Bold-mgICk9-_.woff2",
-        include_bytes!("dashboard/assets/Collapse-Bold-mgICk9-_.woff2"),
-        "font/woff2",
-    ),
-    (
-        "Collapse-Regular-DysayoTY.woff2",
-        include_bytes!("dashboard/assets/Collapse-Regular-DysayoTY.woff2"),
-        "font/woff2",
-    ),
-    (
-        "Mondwest-Regular-CWscgue7.woff2",
-        include_bytes!("dashboard/assets/Mondwest-Regular-CWscgue7.woff2"),
-        "font/woff2",
-    ),
-    (
-        "RulesCompressed-Medium-CA76_CrB.woff2",
-        include_bytes!("dashboard/assets/RulesCompressed-Medium-CA76_CrB.woff2"),
-        "font/woff2",
-    ),
-    (
-        "RulesCompressed-Regular-BSXFyF4x.woff2",
-        include_bytes!("dashboard/assets/RulesCompressed-Regular-BSXFyF4x.woff2"),
-        "font/woff2",
-    ),
-    (
-        "RulesExpanded-Bold-DZA7s8Pa.woff2",
-        include_bytes!("dashboard/assets/RulesExpanded-Bold-DZA7s8Pa.woff2"),
-        "font/woff2",
-    ),
-    (
-        "RulesExpanded-Regular-l8uVympt.woff2",
-        include_bytes!("dashboard/assets/RulesExpanded-Regular-l8uVympt.woff2"),
-        "font/woff2",
-    ),
-    (
-        "filler-bg0-DxMaWJpb.webp",
-        include_bytes!("dashboard/assets/filler-bg0-DxMaWJpb.webp"),
-        "image/webp",
-    ),
-];
 
 /// Server state shared across all handlers.
 #[derive(Clone)]
@@ -162,7 +109,6 @@ pub fn build_app(
         .route("/api/boards", get(handle_boards))
         .route("/api/health", get(handle_health))
         .route("/api/config", get(handle_config))
-        .route("/assets/{filename}", get(handle_asset))
         .route("/", get(handle_index))
         .with_state(state.clone())
         // The middleware reads the allowed hosts from the state, and it is
@@ -409,32 +355,23 @@ fn cookie_token(headers: &HeaderMap) -> Option<String> {
 struct StatusResponse {
     status: String,
     version: String,
-    /// The name the bundled frontend prints next to its own name
-    /// (`v{hermes_version}`). The bundle is a build artefact from a larger
-    /// harness and has no `version` reader, so both keys are served:
-    /// `version` for anything scripted against THIS server, this one for the
-    /// panel. RT-117.
-    hermes_version: String,
     uptime_seconds: u64,
     gateway_running: bool,
     agent_model: String,
     kanban_tasks: usize,
     database_path: String,
-    #[serde(flatten)]
+    /// Nested, not flattened: the page reads `host.cpu_count`, and the old
+    /// flat shape (served for a bundle that is gone) made the panel render
+    /// "n/a" for every metric while the API returned real values.
     host: HostMetrics,
 }
 
-/// Host metrics for the bundled frontend's system panel (RT-117).
+/// Host metrics for the page's host panel (RT-117).
 ///
-/// The panel was written against a Python backend, and the bundle reads this
-/// exact shape: `memory.used` / `disk.used` are **bytes** (it formats them
-/// with its own B/KB/MB/GB helper), `load_avg` is the 1/5/15 **array** (a
-/// scalar renders nothing), and the truthy `psutil` flag is what hides the
-/// bundle's "install the `psutil` extra for CPU / memory / disk metrics"
-/// note. The name is inherited from that backend; it is not a claim about a
-/// Python package. Serving the shape is additive — every field this server
-/// already returned is untouched — and it is what makes the CPU, memory and
-/// disk panels show numbers instead of blanks.
+/// `memory.used` / `disk.used` are **bytes** (the page formats them with its
+/// own B/KB/MB/GB helper), `load_avg` is the 1/5/15 **array**, and every
+/// field is `Option` because a read can fail on a platform without
+/// `/proc` — `null` renders as "unavailable", never as a zero.
 #[derive(Serialize)]
 struct HostMetrics {
     cpu_count: Option<usize>,
@@ -445,7 +382,6 @@ struct HostMetrics {
     hostname: Option<String>,
     os_release: Option<String>,
     arch: &'static str,
-    psutil: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -469,9 +405,6 @@ impl HostMetrics {
             cpu_count: std::thread::available_parallelism().ok().map(|n| n.get()),
             cpu_percent: read_cpu_percent(),
             load_avg: read_load_avg(),
-            // The flag means "the metrics below are real", which is exactly
-            // what the bundle uses it for.
-            psutil: memory.is_some(),
             memory,
             disk: read_disk(),
             hostname: read_hostname(),
@@ -630,7 +563,6 @@ async fn handle_status(State(state): State<DashboardState>, headers: HeaderMap) 
 
     Json(StatusResponse {
         status: "running".to_string(),
-        hermes_version: version.clone(),
         version,
         uptime_seconds: state.start_time.elapsed().as_secs(),
         gateway_running: crate::gateway_runner::is_running().await,
@@ -856,25 +788,6 @@ async fn handle_index(
     Html(html).into_response()
 }
 
-/// Serve an embedded static asset (JS, CSS, font, image).
-async fn handle_asset(
-    State(_state): State<DashboardState>,
-    Path(filename): Path<String>,
-) -> Response {
-    // Look up the asset by filename.
-    for (name, bytes, content_type) in ASSETS {
-        if *name == filename {
-            return Response::builder()
-                .status(StatusCode::OK)
-                .header(header::CONTENT_TYPE, *content_type)
-                .header(header::CACHE_CONTROL, "public, max-age=86400")
-                .body(axum::body::Body::from(*bytes))
-                .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response());
-        }
-    }
-    StatusCode::NOT_FOUND.into_response()
-}
-
 // ── Helpers ──
 
 fn count_all_kanban_tasks(kanban_dir: &Option<std::path::PathBuf>) -> Result<usize> {
@@ -917,15 +830,15 @@ mod tests {
     use std::io::{BufRead, BufReader, Read, Write};
     use std::net::TcpStream;
 
-    /// The bundled frontend's built asset, the same file the server serves.
-    const BUNDLE: &str = include_str!("dashboard/assets/index-BB4BRelo.js");
+    /// The page the server serves — the frontend contract is read from
+    /// this, not from a doc comment.
+    const PAGE: &str = include_str!("dashboard/index.html");
 
     /// A status payload with every field filled, for shape assertions.
     fn status_sample() -> StatusResponse {
         StatusResponse {
             status: "running".to_string(),
             version: "0.0.0-test".to_string(),
-            hermes_version: "0.0.0-test".to_string(),
             uptime_seconds: 42,
             gateway_running: false,
             agent_model: "test-model".to_string(),
@@ -948,60 +861,78 @@ mod tests {
                 hostname: Some("host".to_string()),
                 os_release: Some("Test OS".to_string()),
                 arch: "x86_64",
-                psutil: true,
             },
         }
     }
 
     /// RT-117: the status payload and the system panel must agree on the
-    /// field names, in BOTH directions — this reads the panel's own bundle
-    /// and the server's own serializer, so a bundle swap (RT-44) fails here
-    /// instead of rendering blank panels in production.
+    /// field names, in BOTH directions — it reads the page's own source and
+    /// the server's own serializer, so dropping a field on EITHER side
+    /// fails here instead of rendering a blank panel in production.
     #[test]
     fn the_status_payload_carries_every_field_the_system_panel_reads() {
         let payload = serde_json::to_value(status_sample()).expect("the status is serializable");
 
-        for field in [
-            "cpu_count",
-            "cpu_percent",
-            "load_avg",
-            "memory",
-            "disk",
-            "hostname",
-            "os_release",
-            "arch",
-            "psutil",
-            "hermes_version",
-            "uptime_seconds",
+        // Each entry is (json key on the payload, the JS expression the page
+        // uses to read it). Encoding the ACCESS PATH is what catches the
+        // shape defect this test missed once: the payload carried the host
+        // fields at top level (serde flatten) while the page read
+        // `host.cpu_count`, so every host panel rendered "n/a" with a green
+        // API. Name-only checks pass through that.
+        for (field, access) in [
+            ("version", "s.version"),
+            ("uptime_seconds", "s.uptime_seconds"),
+            ("gateway_running", "s.gateway_running"),
+            ("agent_model", "s.agent_model"),
+            ("kanban_tasks", "s.kanban_tasks"),
+            ("database_path", "s.database_path"),
+            ("cpu_count", "host.cpu_count"),
+            ("cpu_percent", "host.cpu_percent"),
+            ("load_avg", "host.load_avg"),
+            ("memory", "host.memory"),
+            ("disk", "host.disk"),
+            ("hostname", "host.hostname"),
+            ("os_release", "host.os_release"),
+            ("arch", "host.arch"),
         ] {
             assert!(
-                BUNDLE.contains(&format!(".{field}")),
-                "the bundle no longer reads `{field}` — the panel changed shape, \
+                PAGE.contains(access),
+                "the page no longer reads `{access}` — the panel changed shape, \
                  so this list (and the response) must be re-derived from it"
             );
             assert!(
-                payload.get(field).is_some(),
+                PAGE.contains(field),
+                "the page no longer reads `{field}` — the panel changed shape, \
+                 so this list (and the response) must be re-derived from it"
+            );
+            let value = if access.starts_with("host.") {
+                payload["host"].get(field)
+            } else {
+                payload.get(field)
+            };
+            assert!(
+                value.is_some(),
                 "the system panel reads `{field}` and /api/status does not serve it: {payload}"
             );
         }
 
-        // The bundle formats these three numbers as BYTES; a value in MB or
+        // The page formats these three numbers as BYTES; a value in MB or
         // KB would render as "0.0 KB" and look like a broken host.
-        let memory = &payload["memory"];
+        let memory = &payload["host"]["memory"];
         assert!(
             memory["total"].as_u64().unwrap_or(0) > 1_000_000,
-            "memory.total is bytes in the bundle's formatter, got {memory}"
+            "memory.total is bytes in the page's formatter, got {memory}"
         );
         assert_eq!(
-            payload["load_avg"].as_array().map(|a| a.len()),
+            payload["host"]["load_avg"].as_array().map(|a| a.len()),
             Some(3),
-            "the panel requires the 1/5/15 array, not a scalar"
+            "the page requires the 1/5/15 array, not a scalar"
         );
     }
 
     /// On Linux the metrics are read for real, not stubbed to `None`: a
-    /// panel that says "install the psutil extra" on a host that has the
-    /// numbers is the same defect in reverse.
+    /// panel that says "unavailable" on a host that has the numbers is a
+    /// defect in its own right.
     #[cfg(target_os = "linux")]
     #[test]
     fn the_host_metrics_are_real_on_linux() {
@@ -1016,7 +947,6 @@ mod tests {
         assert!(disk.total > 0, "disk.total must be real bytes");
         assert!(disk.used <= disk.total, "{disk:?}");
 
-        assert!(host.psutil, "the metrics are present, so the flag is true");
         assert!(host.cpu_count.unwrap_or(0) > 0);
         assert!(
             host.hostname.as_deref().is_some_and(|h| !h.is_empty()),
@@ -1055,6 +985,52 @@ mod tests {
             let _ = axum::serve(listener, app).await;
         });
         TestServer { port }
+    }
+
+    /// RT-44: the page may only call routes this server mounts. The bundle
+    /// it replaced called 79 `/api/...` paths against a four-route server,
+    /// so every panel but four 404'd — a defect no unit test caught because
+    /// nothing compared the two sides. This compares them: every path the
+    /// page fetches is requested from the REAL server and must not 404.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_page_calls_only_routes_the_server_serves() {
+        let mut paths: Vec<&str> = Vec::new();
+        let mut rest = PAGE;
+        while let Some(at) = rest.find("getJSON(\"") {
+            rest = &rest[at + "getJSON(\"".len()..];
+            let end = rest.find('"').expect("the path literal is closed");
+            paths.push(&rest[..end]);
+        }
+        assert!(
+            !paths.is_empty(),
+            "the page must fetch something; parsing found no getJSON paths"
+        );
+        // A path in the HTML but not in this list is the bundle defect
+        // returning: assert the page's set is exactly the four routes.
+        for path in &paths {
+            assert!(
+                ["/api/status", "/api/config", "/api/boards", "/api/health"].contains(path),
+                "the page fetches `{path}`, which this list does not name — if the \
+                 server now mounts it, add it here; if not, remove the fetch"
+            );
+        }
+        assert!(
+            !PAGE.contains("new WebSocket") && !PAGE.contains("/api/ws"),
+            "the page must not open a WebSocket: this server has none (RT-44)"
+        );
+
+        let server = start("secret-token-value").await;
+        for path in &paths {
+            let (status, _, _) = get(
+                server.port,
+                path,
+                &[("X-Hermes-Session-Token", "secret-token-value")],
+            );
+            assert!(
+                !status.contains("404"),
+                "the page calls `{path}` and the server answers 404: {status}"
+            );
+        }
     }
 
     /// A minimal HTTP/1.1 GET, returning (status line, headers, body).
@@ -1288,16 +1264,16 @@ mod tests {
         );
     }
 
-    /// The API must accept the header the frontend bundle ACTUALLY sends.
+    /// The API must accept the header the page ACTUALLY sends.
     ///
-    /// The bundle's fetch wrapper sets `X-Hermes-Session-Token` on every
+    /// The page's fetch wrapper sets `X-Hermes-Session-Token` on every
     /// request; the string `Authorization` does not appear in it at all.
     /// The server used to read only `Authorization: Bearer`, so every API
     /// call the real dashboard made returned 401 — the UI was
     /// non-functional, and the "the dashboard works" claim was wrong.
     ///
-    /// This test reads the header name out of the BUNDLE, so a change to
-    /// the bundle's contract is caught here.
+    /// This test reads the header name out of the PAGE, so a change to
+    /// the page's contract is caught here.
     ///
     /// `check_auth` is exercised directly rather than through the server:
     /// the 200-path handlers read the SQLite database SYNCHRONOUSLY, and
@@ -1307,15 +1283,15 @@ mod tests {
     /// test.
     #[test]
     fn the_api_accepts_the_header_the_frontend_bundle_sends() {
-        // The bundle's own header name, read from the bundle itself.
-        let bundle = include_str!("dashboard/assets/index-BB4BRelo.js");
+        // The page's own header name, read from the page itself.
+        let bundle = PAGE;
         assert!(
             bundle.contains("X-Hermes-Session-Token"),
-            "the bundle's auth header name changed — update the server to match"
+            "the page's auth header name changed — update the server to match"
         );
         assert!(
             !bundle.contains("Authorization"),
-            "the bundle does not send an Authorization header; if it now does, \
+            "the page does not send an Authorization header; if it now does, \
              the server must still accept it"
         );
 
