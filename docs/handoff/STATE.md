@@ -118,10 +118,10 @@ done. The next free label is iter-1057.
 |---|---|
 <!-- genome:end status -->
 
-<!-- genome:zone handoff sha=0b01399cf4e6 -->
+<!-- genome:zone handoff sha=ec8a785fda1b -->
 ## Handoff — 2026-10-20
 
-Repo branch `main`, HEAD `2cd0451d19f61e60a81ef20aec315a2fd4274e6c`. Working tree dirty (3 paths).
+Repo branch `main`, HEAD `d911774f5d7194989babb19d67e21be795135bfb`. Working tree dirty (2 paths).
 
 ## Open register rows
   (none)
