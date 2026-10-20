@@ -56,6 +56,41 @@ const SUPPORTED_FORMATS: &[&str] = &[
 ];
 const MAX_FILE_SIZE: u64 = 25 * 1024 * 1024;
 
+const GROQ_DEFAULT_MODEL: &str = "whisper-large-v3-turbo";
+const OPENAI_DEFAULT_MODEL: &str = "whisper-1";
+
+/// Which model the request names: the per-call argument wins, then the
+/// operator's `[tools.stt]` setting, then the provider default. The setting
+/// exists because a provider retires model names — a hardcoded one turns into
+/// a 404 with no way out short of a new build. (`groq_model` / `openai_model`
+/// were accepted and advertised in `operant.example.toml` while nothing read
+/// them; this is the read.)
+fn resolve_model(explicit: &str, configured: Option<&str>, fallback: &str) -> String {
+    if !explicit.is_empty() {
+        return explicit.to_string();
+    }
+    match configured {
+        Some(model) if !model.is_empty() => model.to_string(),
+        _ => fallback.to_string(),
+    }
+}
+
+fn resolve_groq_model(config: &Option<AppConfig>, explicit: &str) -> String {
+    resolve_model(
+        explicit,
+        config.as_ref().map(|c| c.tools.stt.groq_model.as_str()),
+        GROQ_DEFAULT_MODEL,
+    )
+}
+
+fn resolve_openai_model(config: &Option<AppConfig>, explicit: &str) -> String {
+    resolve_model(
+        explicit,
+        config.as_ref().map(|c| c.tools.stt.openai_model.as_str()),
+        OPENAI_DEFAULT_MODEL,
+    )
+}
+
 fn get_groq_api_key(config: &Option<AppConfig>) -> Option<String> {
     if let Some(cfg) = config
         && let Some(ref key) = cfg.tools.stt.groq_api_key
@@ -297,20 +332,16 @@ impl OperantTool for TranscriptionTool {
                         );
                     }
                 };
-                let model = if model.is_empty() {
-                    "whisper-large-v3-turbo"
-                } else {
-                    model
-                };
-                transcribe_groq(&parsed.file_path, model, &api_key).await
+                let model = resolve_groq_model(&self.config, model);
+                transcribe_groq(&parsed.file_path, &model, &api_key).await
             }
             "openai" => {
                 let api_key = match get_openai_api_key(&self.config) {
                     Some(k) => k,
                     None => return ToolResult::error(self.name(), "OPENAI_API_KEY not set"),
                 };
-                let model = if model.is_empty() { "whisper-1" } else { model };
-                transcribe_openai(&parsed.file_path, model, &api_key).await
+                let model = resolve_openai_model(&self.config, model);
+                transcribe_openai(&parsed.file_path, &model, &api_key).await
             }
             other => {
                 return ToolResult::error(
@@ -343,6 +374,35 @@ mod tests {
         let tool = TranscriptionTool::new();
         let result = tool.execute(json!({}), ToolContext::default()).await;
         assert!(!result.success);
+    }
+
+    /// `[tools.stt] groq_model` / `openai_model` are advertised settings;
+    /// before this test they were parsed and ignored, so a retired model name
+    /// could only be worked around in a new build.
+    #[test]
+    fn a_configured_stt_model_overrides_the_builtin_default() {
+        let mut config = AppConfig::default();
+        config.tools.stt.groq_model = "whisper-large-v3".to_string();
+        config.tools.stt.openai_model = "gpt-4o-transcribe".to_string();
+        let config = Some(config);
+
+        assert_eq!(resolve_groq_model(&config, ""), "whisper-large-v3");
+        assert_eq!(resolve_openai_model(&config, ""), "gpt-4o-transcribe");
+        // A per-call model still wins, and an unreadable config falls back.
+        assert_eq!(
+            resolve_groq_model(&config, "whisper-turbo-x"),
+            "whisper-turbo-x"
+        );
+        assert_eq!(resolve_groq_model(&None, ""), GROQ_DEFAULT_MODEL);
+        assert_eq!(resolve_openai_model(&None, ""), OPENAI_DEFAULT_MODEL);
+    }
+
+    #[test]
+    fn an_empty_configured_stt_model_falls_back_to_the_default() {
+        let mut config = AppConfig::default();
+        config.tools.stt.groq_model = String::new();
+        let config = Some(config);
+        assert_eq!(resolve_groq_model(&config, ""), GROQ_DEFAULT_MODEL);
     }
 
     #[tokio::test]
