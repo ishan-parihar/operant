@@ -377,7 +377,21 @@ impl LlmCompressor {
         let pruned = self.prune_tool_results(&messages);
 
         // Step 2: Split into head / middle / tail
-        let head_n = self.config.protect_head_n.min(pruned.len());
+        //
+        // The head boundary must land on a TOOL GROUP boundary.
+        //
+        // The middle is REPLACED by the summary, so a `tool_use` in the
+        // head whose `tool_result` is in the middle is separated: the head
+        // keeps the request and the summary replaces the result. That is
+        // a malformed history, and strict providers reject it with a 400.
+        //
+        // The head is split by MESSAGE COUNT (`protect_head_n`, 3 by
+        // default), so it lands wherever the count says — which can be
+        // the middle of a tool group. The boundary is moved FORWARD to the
+        // END of the group, so the group travels with the head and is
+        // never cut in half. (The TAIL boundary is already group-aware;
+        // the head was not.)
+        let head_n = group_end_after(&pruned, self.config.protect_head_n.min(pruned.len()));
         let (head, middle_and_tail) = pruned.split_at(head_n);
 
         // Find the tail boundary. Facade callers (runtime reconciled.rs) map
@@ -441,6 +455,19 @@ impl LlmCompressor {
         result.extend_from_slice(head);
         result.push(summary_msg.clone());
         result.extend_from_slice(tail);
+
+        // The splice can orphan a tool pair in the OTHER direction too: a
+        // `tool_result` at the start of the tail whose `tool_use` was in
+        // the middle (i.e. summarized away) is a malformed history that
+        // strict providers reject with "unexpected tool_use_id in
+        // tool_result blocks". The head boundary is group-aware (so the
+        // head never keeps a request whose result was summarized away),
+        // but the TAIL's leading tool run is a separate case.
+        //
+        // `repair_tool_pairs` is the function for exactly this — and it
+        // existed since the compression path was written with NO caller
+        // anywhere outside its own tests.
+        crate::agent::compress::repair_tool_pairs(&mut result);
 
         let tokens_after = crate::context_management::estimate_total_tokens(&result);
 
@@ -689,12 +716,237 @@ impl LlmCompressor {
 // Tests
 // ---------------------------------------------------------------------------
 
+/// The index just past the END of the tool group containing `index`.
+///
+/// A tool group is an assistant `tool_use` turn plus the `Role::Tool`
+/// turns that answer it; the pair must travel together, so a boundary
+/// that falls inside one has to move to the group's end.
+///
+/// If `index` is already at a group boundary, the group END is returned —
+/// which moves the boundary FORWARD past the group, so the group travels
+/// with the side that keeps it whole.
+fn group_end_after(messages: &[Message], index: usize) -> usize {
+    let starts = crate::context_management::tool_group_starts(messages);
+    let Some(&group_start) = starts.get(index) else {
+        return index;
+    };
+    let mut end = index + 1;
+    while end < messages.len() && starts[end] == group_start {
+        end += 1;
+    }
+    end
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn make_msg(role: Role, content: impl Into<String>) -> Message {
         Message::new(role, content.into())
+    }
+
+    /// A mock client that answers the summariser call with a fixed string.
+    struct SummarizerClient {
+        text: String,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::agent::model_client::ModelClient for SummarizerClient {
+        fn provider_name(&self) -> &str {
+            "summarizer-mock"
+        }
+
+        async fn chat(
+            &self,
+            _request: crate::agent::model_client::ChatRequest,
+        ) -> crate::error::Result<crate::client::ChatResponse> {
+            use crate::client::{ChatResponse, Choice, MessageDelta, Usage};
+            Ok(ChatResponse {
+                id: "summary".to_string(),
+                object: "chat.completion".to_string(),
+                created: 0,
+                model: "mock".to_string(),
+                choices: vec![Choice {
+                    index: 0,
+                    message: MessageDelta {
+                        role: Some(Role::Assistant),
+                        content: Some(self.text.clone()),
+                        reasoning_content: None,
+                        tool_calls: None,
+                    },
+                    finish_reason: Some("stop".to_string()),
+                }],
+                usage: Usage {
+                    prompt_tokens: 0,
+                    completion_tokens: 0,
+                    total_tokens: 0,
+                },
+            })
+        }
+
+        async fn chat_streaming(
+            &self,
+            _request: crate::agent::model_client::ChatRequest,
+        ) -> crate::error::Result<
+            std::pin::Pin<
+                Box<
+                    dyn futures::Stream<
+                            Item = crate::error::Result<crate::agent::model_client::StreamChunk>,
+                        > + Send,
+                >,
+            >,
+        > {
+            unreachable!("the compressor does not stream")
+        }
+    }
+
+    /// The compression must not ORPHAN a tool pair.
+    ///
+    /// The head is split by MESSAGE COUNT (`protect_head_n`, 3 by default),
+    /// and the middle is REPLACED by the summary. So a `tool_use` in the
+    /// head whose `tool_result` is in the middle is separated: the head
+    /// keeps the request and the summary replaces the result. That is a
+    /// malformed history — strict providers reject it with a 400.
+    ///
+    /// The TAIL boundary is already group-aware (`tool_group_starts` is
+    /// applied to it). The HEAD boundary is not.
+    ///
+    /// The layout: [System, User, Assistant(tool_use), Tool(result), ...]
+    /// — the split at 3 puts the tool_use in the head and the result in
+    /// the middle.
+    #[tokio::test]
+    async fn the_compression_never_orphans_a_tool_use_from_its_result() {
+        let mut compressor = LlmCompressor::new(LlmCompressorConfig {
+            context_window: 100_000,
+            threshold_percent: 0.0,
+            protect_head_n: 3,
+            protect_tail_n: Some(2),
+            ..Default::default()
+        });
+
+        let mut messages = vec![
+            make_msg(Role::System, "system"),
+            make_msg(Role::User, "the request"),
+            Message::assistant("").with_tool_calls(vec![crate::client::ToolCall {
+                id: "call_1".to_string(),
+                function: crate::client::ToolCallFunction {
+                    name: "read_file".to_string(),
+                    arguments: r#"{"path":"a.rs"}"#.to_string(),
+                },
+            }]),
+            Message::tool("call_1", "the file contents"),
+        ];
+        // Enough middle to compress.
+        for i in 0..10 {
+            messages.push(make_msg(Role::User, format!("filler {i}")));
+            messages.push(make_msg(Role::Assistant, format!("reply {i}")));
+        }
+
+        let client = SummarizerClient {
+            text: "a summary".to_string(),
+        };
+        let result = compressor
+            .compress(messages, &client)
+            .await
+            .expect("compress");
+
+        // No tool_use may survive without its tool_result.
+        let answered: std::collections::HashSet<&str> = result
+            .messages
+            .iter()
+            .filter(|m| m.role == Role::Tool)
+            .filter_map(|m| m.tool_call_id.as_deref())
+            .collect();
+        let requested: std::collections::HashSet<&str> = result
+            .messages
+            .iter()
+            .filter(|m| crate::context_management::is_tool_use(m))
+            .flat_map(|m| m.tool_calls.as_ref().into_iter().flatten())
+            .map(|tc| tc.id.as_str())
+            .collect();
+        for id in &requested {
+            assert!(
+                answered.contains(id),
+                "tool_use {id} survived with no tool_result — the head split \
+                 separated the pair"
+            );
+        }
+        for id in &answered {
+            assert!(
+                requested.contains(id),
+                "tool_result {id} survived with no tool_use"
+            );
+        }
+    }
+
+    /// The summary splice must not leave a `tool_result` stranded after
+    /// the summary.
+    ///
+    /// The middle is replaced by the summary, so a `tool_result` that
+    /// lands immediately after the summary has no `tool_use` — a
+    /// malformed history that strict providers reject with "unexpected
+    /// tool_use_id in tool_result blocks".
+    ///
+    /// The group-aware head and tail boundaries keep a
+    /// `tool_use`+`tool_result` PAIR together, so what is left is a LONE
+    /// tool message — one with no `tool_use` in the history at all. That
+    /// is what `repair_tool_pairs` removes, and it had NO caller outside
+    /// its own tests.
+    ///
+    /// The layout puts the lone tool message at the START of the tail, so
+    /// it lands immediately after the summary.
+    #[tokio::test]
+    async fn the_compression_never_leaves_a_tool_result_stranded_after_the_summary() {
+        let mut compressor = LlmCompressor::new(LlmCompressorConfig {
+            context_window: 100_000,
+            threshold_percent: 0.0,
+            protect_head_n: 1,
+            protect_tail_n: Some(3),
+            ..Default::default()
+        });
+
+        // A history carrying a LONE tool message: no tool_use asks for it.
+        // The tail is the last three messages, so the lone tool message is
+        // the first of the tail and lands right after the summary.
+        let mut messages = vec![make_msg(Role::System, "system")];
+        for i in 0..10 {
+            messages.push(make_msg(Role::User, format!("filler {i}")));
+            messages.push(make_msg(Role::Assistant, format!("reply {i}")));
+        }
+        messages.push(Message::tool("call_orphan", "a result with no request"));
+        messages.push(make_msg(Role::Assistant, "after"));
+        messages.push(make_msg(Role::User, "the end"));
+
+        let client = SummarizerClient {
+            text: "a summary".to_string(),
+        };
+        let result = compressor
+            .compress(messages, &client)
+            .await
+            .expect("compress");
+
+        // The summary is in the result — so the splice happened.
+        assert!(
+            result
+                .messages
+                .iter()
+                .any(|m| m.content.contains(SUMMARY_PREFIX)),
+            "the test must exercise the splice, not a pass-through"
+        );
+        // And no tool_result may sit immediately after it.
+        for (i, m) in result.messages.iter().enumerate() {
+            if m.content.contains(SUMMARY_PREFIX) {
+                let next_is_tool = result
+                    .messages
+                    .get(i + 1)
+                    .is_some_and(|n| n.role == Role::Tool);
+                assert!(
+                    !next_is_tool,
+                    "a tool_result immediately after the summary has no \
+                     tool_use — the repair must remove it"
+                );
+            }
+        }
     }
 
     #[test]
