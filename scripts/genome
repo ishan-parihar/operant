@@ -1684,7 +1684,30 @@ def doctor_findings(cfg: Cfg) -> tuple[list[str], list[str]]:
     if cfg.has("state") and head:
         heads = re.findall(r"\b[0-9a-f]{40}\b", read(cfg.path("state")))
         if heads and heads[0] != head:
-            finds.append(f"stale state: {cfg.paths['state']} names {heads[0][:8]}, HEAD is {head[:8]}")
+            # The handoff WRITES HEAD into the doc and the commit carrying it
+            # moves HEAD, so `heads[0] != head` was stale the moment the doc
+            # landed and re-running the handoff could never converge (RT-125).
+            # A snapshot stops describing the tree only when a commit AFTER it
+            # changed something OTHER than the snapshot and its own archive.
+            # A close-out commit carries the snapshot TOGETHER with the worklog,
+            # the ledger and the archive row, so "doc-only" must mean "touched
+            # nothing outside the documentation roles" — anything narrower
+            # leaves the check permanently red for the routine it is meant to
+            # verify.
+            role_paths = {cfg.rel(cfg.path(role)) for role in cfg.paths if cfg.has(role)}
+            commits = [c for c in sh(cfg.root, "git", "rev-list", f"{heads[0]}..HEAD").split() if c]
+            if not commits:
+                finds.append(f"stale state: {cfg.paths['state']} names {heads[0][:8]}, "
+                             f"which is not in HEAD's history ({head[:8]}) — regenerate it")
+            else:
+                def _doc_only(commit: str) -> bool:
+                    return all(n.startswith("docs/") or n in role_paths
+                               for n in sh(cfg.root, "git", "show", "--name-only", "--format=", commit).split())
+                rest = [c for c in commits if not _doc_only(c)]
+                if rest:
+                    finds.append(f"stale state: {cfg.paths['state']} names {heads[0][:8]} and "
+                                 f"{len(rest)} commit(s) since changed more than it "
+                                 f"(latest {rest[0][:8]}, HEAD is {head[:8]}) — regenerate it")
     # append-only roles: no line removed over the last core.append_window commits, nor in the working tree.
     # A numbered worklog is a directory: its entries are append-only (renames allowed), its index is generated.
     window = int(cfg.get("core", "append_window", 10))
