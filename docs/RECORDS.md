@@ -55,8 +55,8 @@
 | RG-006 | A tool limit asserted from memory rather than from the CLI is a claim, and the experiment that tests it may be the fix | Medium | RG-004 declared that genome archive --section works only for living plans and that a numbered record can be superseded whole or not at all. Running the command proved the opposite and performed RG-003 |
 <!-- genome:end records -->
 
-<!-- genome:zone idmap sha=186deaaf8b7b -->
+<!-- genome:zone idmap sha=2a03e30bd9bd -->
 | Retired | Owner now | Status |
 |---|---|---|
-| RG-004 | — | Retired |
+| RG-004 | RG-006 | Retired |
 <!-- genome:end idmap -->

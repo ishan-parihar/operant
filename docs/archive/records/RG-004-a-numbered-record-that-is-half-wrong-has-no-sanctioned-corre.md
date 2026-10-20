@@ -2,6 +2,7 @@
 ID: "RG-004"
 Title: "A numbered record that is half wrong has no sanctioned correction: supersede applies to the whole record or nothing"
 Status: "Retired"
+SupersededBy: "RG-006"
 Date: "2026-10-20"
 Description: "RG-003 said it 'supersedes RG-002's Detection section only'. That is not a real operation: RG-002 is still Active with its Detection text byte-identical, and genome archive --section works only for living plans (W011), not numbered records. The genome can supersede a whole record or nothing."
 Severity: "Medium"
