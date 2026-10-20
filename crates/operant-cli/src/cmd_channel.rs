@@ -60,13 +60,32 @@ pub async fn handle_channel_command(
             if json {
                 let items: Vec<serde_json::Value> = channels
                     .iter()
-                    .map(|(name, enabled)| serde_json::json!({"name": name, "enabled": enabled}))
+                    .map(|c| {
+                        serde_json::json!({
+                            "name": c.label,
+                            "enabled": c.enabled,
+                            "inbound": c.can_receive(),
+                        })
+                    })
                     .collect();
                 println!("{}", serde_json::json!({"channels": items}));
             } else {
                 println!("Channels:");
-                for (name, enabled) in &channels {
-                    println!("  {} {}", if *enabled { "✅" } else { "❌" }, name);
+                for c in &channels {
+                    if c.is_platform() {
+                        println!(
+                            "  {} {:<9} {}",
+                            if c.enabled { "✅" } else { "❌" },
+                            c.label,
+                            if c.can_receive() {
+                                "receives messages"
+                            } else {
+                                "send-only (no inbound)"
+                            }
+                        );
+                    } else {
+                        println!("  {} {}", if c.enabled { "✅" } else { "❌" }, c.label);
+                    }
                 }
                 println!("\nTo start channels: `operant channel start`");
                 println!("To check health:   `operant channel doctor`");
@@ -146,14 +165,27 @@ pub async fn handle_channel_command(
         }
         ChannelSubcommand::Doctor => {
             let channels = build_channel_list(config);
-            let configured: Vec<_> = channels.iter().filter(|(_, e)| *e).collect();
+            let configured: Vec<_> = channels.iter().filter(|c| c.enabled).collect();
             if json {
                 println!(
                     "{}",
                     serde_json::json!({
                         "total": channels.len(),
                         "enabled": configured.len(),
-                        "channels": channels.iter().map(|(n, e)| serde_json::json!({"name": n, "enabled": e, "healthy": e})).collect::<Vec<_>>()
+                        "channels": channels.iter().map(|c| serde_json::json!({
+                            "name": c.label,
+                            "enabled": c.enabled,
+                            // The ENABLED flag, not a probe: the doctor does
+                            // not reach the platform, so it cannot know
+                            // whether the channel works. Kept for
+                            // compatibility.
+                            "healthy": c.enabled,
+                            // Whether the agent can RECEIVE on this
+                            // channel. A send-only platform has a complete
+                            // inbound parser that nothing calls, so a
+                            // message sent to it never reaches the agent.
+                            "inbound": c.can_receive(),
+                        })).collect::<Vec<_>>()
                     })
                 );
             } else {
@@ -162,8 +194,21 @@ pub async fn handle_channel_command(
                     configured.len(),
                     channels.len()
                 );
-                for (name, enabled) in &channels {
-                    println!("  {} {}", if *enabled { "✅" } else { "⏭️" }, name);
+                for c in &channels {
+                    if c.is_platform() {
+                        println!(
+                            "  {} {:<9} {}",
+                            if c.enabled { "✅" } else { "⏭️" },
+                            c.label,
+                            if c.can_receive() {
+                                "receives messages"
+                            } else {
+                                "send-only (no inbound)"
+                            }
+                        );
+                    } else {
+                        println!("  {} {}", if c.enabled { "✅" } else { "⏭️" }, c.label);
+                    }
                 }
             }
             Ok(())
@@ -408,19 +453,59 @@ fn persist_config(config: &AppConfig, config_path: Option<&Path>) -> Result<()> 
 }
 
 /// Build a list of (channel_name, is_enabled) from config.
-fn build_channel_list(config: &AppConfig) -> Vec<(String, bool)> {
+fn build_channel_list(config: &AppConfig) -> Vec<ChannelEntry> {
     let gw = &config.gateway;
     // Every platform in the gateway's registry. SMS was missing: the
     // registry has SEVEN adapters and the list showed six, so an operator
     // with `sms_twilio_enabled = true` saw no SMS in the channel list.
+    //
+    // The entry carries the platform KEY as well as the display label:
+    // the inbound lookup needs the key ("webhook"), and the label is
+    // "Webhooks" — looking the table up by the label silently missed it.
     vec![
-        ("CLI".to_string(), true),
-        ("Telegram".to_string(), gw.telegram_enabled),
-        ("Discord".to_string(), gw.discord_enabled),
-        ("Slack".to_string(), gw.slack_enabled),
-        ("WhatsApp".to_string(), gw.whatsapp_enabled),
-        ("Email".to_string(), gw.email_enabled),
-        ("SMS".to_string(), gw.sms_twilio_enabled),
-        ("Webhooks".to_string(), gw.webhooks_enabled),
+        ChannelEntry::new("cli", "CLI", true),
+        ChannelEntry::new("telegram", "Telegram", gw.telegram_enabled),
+        ChannelEntry::new("discord", "Discord", gw.discord_enabled),
+        ChannelEntry::new("slack", "Slack", gw.slack_enabled),
+        ChannelEntry::new("whatsapp", "WhatsApp", gw.whatsapp_enabled),
+        ChannelEntry::new("email", "Email", gw.email_enabled),
+        ChannelEntry::new("sms", "SMS", gw.sms_twilio_enabled),
+        ChannelEntry::new("webhook", "Webhooks", gw.webhooks_enabled),
     ]
+}
+
+/// One row of the channel list: the platform KEY (for the inbound
+/// lookup), the display LABEL, and whether it is enabled.
+struct ChannelEntry {
+    key: &'static str,
+    label: &'static str,
+    enabled: bool,
+}
+
+impl ChannelEntry {
+    fn new(key: &'static str, label: &'static str, enabled: bool) -> Self {
+        Self {
+            key,
+            label,
+            enabled,
+        }
+    }
+
+    /// Whether the agent can RECEIVE on this channel.
+    ///
+    /// The CLI is the operator's own terminal, not a messaging platform,
+    /// so it is not in the table — and it is not a send-only channel
+    /// either. It is simply not a channel, and the column does not apply
+    /// to it.
+    fn can_receive(&self) -> bool {
+        if self.key == "cli" {
+            return true;
+        }
+        operant_core::gateway::platform_can_receive(self.key)
+    }
+
+    /// Whether the inbound column applies to this row at all.
+    fn is_platform(&self) -> bool {
+        self.key != "cli"
+    }
 }
