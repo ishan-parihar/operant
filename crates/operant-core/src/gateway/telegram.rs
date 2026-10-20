@@ -68,6 +68,22 @@ fn send_outcome(status: u16) -> SendOutcome {
     }
 }
 
+/// The description from a Telegram error body.
+///
+/// The body is `{"ok": false, "error_code": N, "description": "..."}`.
+/// A body that does not parse, or has no description, yields a short
+/// marker rather than the raw body.
+fn telegram_error_description(body: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| {
+            v.get("description")
+                .and_then(|d| d.as_str())
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| "<no description in the response body>".to_string())
+}
+
 impl TelegramAdapter {
     /// Create a new Telegram adapter
     pub fn new(token: Option<String>) -> Self {
@@ -700,14 +716,28 @@ impl PlatformAdapter for TelegramAdapter {
         if let Some(tid) = thread_id {
             body["message_thread_id"] = serde_json::json!(tid);
         }
-        let resp: serde_json::Value = self
+        let resp = self
             .client
             .post(format!("{}/sendMessage", self.api_url()))
             .json(&body)
             .send()
-            .await?
-            .json()
             .await?;
+        // The status decides. A permission prompt that FAILED to send used
+        // to return `Ok(None)` — "no message id" — so the caller treated
+        // it as a prompt that was never answered, and the turn waited for
+        // an approval the user was never shown. The user sees nothing,
+        // and the agent is stuck.
+        let status = resp.status();
+        let body_text = resp.text().await.unwrap_or_default();
+        if !status.is_success() {
+            return Err(crate::error::Error::Agent(format!(
+                "Telegram rejected the approval prompt: HTTP {} ({}). The user was \
+                 never asked, so the turn cannot proceed.",
+                status.as_u16(),
+                telegram_error_description(&body_text)
+            )));
+        }
+        let resp: serde_json::Value = serde_json::from_str(&body_text).unwrap_or_default();
         let msg_id = resp
             .get("result")
             .and_then(|r| r.get("message_id"))
@@ -745,11 +775,25 @@ impl PlatformAdapter for TelegramAdapter {
         if let Some(tid) = thread_id {
             body["message_thread_id"] = serde_json::json!(tid);
         }
-        self.client
+        let resp = self
+            .client
             .post(format!("{}/sendMessage", self.api_url()))
             .json(&body)
             .send()
             .await?;
+        // The status decides, for the same reason as the approval prompt:
+        // a question that FAILED to send used to return `Ok(())`, so the
+        // turn waited for an answer that could never come.
+        let status = resp.status();
+        if !status.is_success() {
+            let body_text = resp.text().await.unwrap_or_default();
+            return Err(crate::error::Error::Agent(format!(
+                "Telegram rejected the question: HTTP {} ({}). The user was never \
+                 asked, so the turn cannot proceed.",
+                status.as_u16(),
+                telegram_error_description(&body_text)
+            )));
+        }
         Ok(())
     }
 
@@ -1744,6 +1788,21 @@ mod tests {
     /// (403), a flood-control 429 and a 500 all looked like SUCCESS: the
     /// delivery ledger recorded "delivered" and the operator saw a silent
     /// no-op. That is the same defect class as the SMTP one (RT-73).
+    /// The error description from a Telegram body must reach the operator.
+    #[test]
+    fn the_telegram_error_description_reaches_the_operator() {
+        let body = r#"{"ok":false,"error_code":403,"description":"bot was blocked by the user"}"#;
+        assert_eq!(
+            telegram_error_description(body),
+            "bot was blocked by the user"
+        );
+        let msg = telegram_error_description("<html>502</html>");
+        assert!(
+            !msg.contains("<html>"),
+            "the raw body must not be echoed, got: {msg}"
+        );
+    }
+
     #[test]
     fn a_failed_telegram_send_is_not_reported_as_a_success() {
         // The statuses a real Telegram failure carries.

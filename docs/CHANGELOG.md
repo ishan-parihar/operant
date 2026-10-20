@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-1061 — a Telegram permission prompt that failed to send is now a failure, not a silent stall.** It used to be reported as "no message id", which the caller reads as "the user never answered", so the turn waited forever for an approval that was never shown.
+
 - **iter-1060 — the WhatsApp and SMS adapters name WHY a send failed, not just the status.** Both APIs put the reason in the response body, and both bodies were discarded.
 
 - **iter-1059 — five proactive sends now log a delivery failure.** A permission prompt that could not be delivered left the turn blocked forever with no visible cause.
