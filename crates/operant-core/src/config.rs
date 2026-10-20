@@ -1077,6 +1077,11 @@ pub struct GatewaySettings {
     pub slack_api_base: String,
     pub whatsapp_enabled: bool,
     pub whatsapp_token: Option<String>,
+    /// The WhatsApp Cloud API base.
+    ///
+    /// The Graph API base, so a deployment behind a proxy (or on a
+    /// regional endpoint) can reach it. The default is Meta's public API.
+    pub whatsapp_api_base: String,
     /// WhatsApp Cloud API phone number ID (Meta Business Manager).
     /// Required for outbound sends — without it the Graph API URL has no
     /// `phone_number_id` segment and returns 404. (R22)
@@ -1131,6 +1136,7 @@ impl Default for GatewaySettings {
             slack_api_base: "https://slack.com/api".to_string(),
             whatsapp_enabled: false,
             whatsapp_token: None,
+            whatsapp_api_base: "https://graph.facebook.com".to_string(),
             whatsapp_phone_number_id: None,
             email_enabled: false,
             email_smtp_host: None,

@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-1075 — the WhatsApp and Twilio API bases are configurable.** They were hard-coded, so a deployment behind a proxy could reach Telegram, Discord and Slack but not those two.
+
 - **iter-1072 — the Telegram voice send now uses the configured API base.** It hard-coded `api.telegram.org`, so a deployment pointing the API elsewhere had its voice messages go to the real Telegram API.
 
 - **iter-1070 — an SMS over 1600 characters is now chunked instead of being lost.**

@@ -321,6 +321,8 @@ slack_enabled = false
 slack_api_base = "https://slack.com/api"
 whatsapp_enabled = false
 # whatsapp_token = ""
+# The Graph API base — change it for a proxy or a regional endpoint.
+whatsapp_api_base = "https://graph.facebook.com"
 email_enabled = false
 # email_smtp_host = "smtp.gmail.com"
 # email_smtp_user = ""

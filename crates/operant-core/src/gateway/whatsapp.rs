@@ -106,8 +106,16 @@ impl PlatformAdapter for WhatsAppAdapter {
                 "WhatsApp phone_number_id not configured. Set `whatsapp_phone_number_id` in your gateway config (or OPERANT_WHATSAPP_PHONE_NUMBER_ID env) — find it under Meta Business Manager > WhatsApp > API Setup. (R22)".to_string()
             )
         })?;
+        // The Graph API base comes from the configuration, like the
+        // Telegram, Discord and Slack adapters. It was hard-coded, so a
+        // deployment behind a proxy (or on a regional endpoint) could not
+        // reach the WhatsApp API at all.
         let url = format!(
-            "https://graph.facebook.com/v18.0/{}/messages",
+            "{}/v18.0/{}/messages",
+            crate::config::runtime_config()
+                .gateway
+                .whatsapp_api_base
+                .trim_end_matches('/'),
             phone_number_id
         );
 

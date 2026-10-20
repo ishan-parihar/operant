@@ -19,6 +19,12 @@ pub struct SmsAdapter {
     account_sid: Option<String>,
     auth_token: Option<String>,
     from_number: Option<String>,
+    /// The Twilio API base.
+    ///
+    /// From `TWILIO_API_BASE`, like the credentials above. It was
+    /// hard-coded to `api.twilio.com`, so a deployment behind a proxy (or
+    /// on a regional endpoint) could not reach the Twilio API at all.
+    api_base: String,
 }
 
 impl SmsAdapter {
@@ -28,6 +34,11 @@ impl SmsAdapter {
             account_sid: std::env::var("TWILIO_ACCOUNT_SID").ok(),
             auth_token: std::env::var("TWILIO_AUTH_TOKEN").ok(),
             from_number: std::env::var("TWILIO_FROM_NUMBER").ok(),
+            // The API base, like the credentials above. It was hard-coded
+            // to `api.twilio.com`, so a deployment behind a proxy (or on a
+            // regional endpoint) could not reach the Twilio API at all.
+            api_base: std::env::var("TWILIO_API_BASE")
+                .unwrap_or_else(|_| "https://api.twilio.com".to_string()),
         }
     }
 }
@@ -85,7 +96,8 @@ impl PlatformAdapter for SmsAdapter {
             .ok_or_else(|| Error::Config("TWILIO_FROM_NUMBER not set".to_string()))?;
 
         let url = format!(
-            "https://api.twilio.com/2010-04-01/Accounts/{}/Messages.json",
+            "{}/2010-04-01/Accounts/{}/Messages.json",
+            self.api_base.trim_end_matches('/'),
             sid
         );
         let client = shared_http_client().clone();
