@@ -6,13 +6,21 @@ the prose above it is hand-written and is the part that goes stale.
 ## Where the project stands
 
 - Release line `0.2.1`. `origin/main` carries the autonomous defect sweep of
-  2026-10-19/20 (iters 980-1056): 88 iterations in the sweep's range, each a
-  separate pushed commit, each with a mutation-checked regression test. The
-  summary of what the sweep found, how each was proven, and what remains open is
-  [`docs/audit/2026-10-20-the-defect-sweep-session-summary.md`](../audit/2026-10-20-the-defect-sweep-session-summary.md).
-- The defect ledger `docs/audit/2026-06-19-BUGS.md` is at **195 rows closed,
-  2 open** (S1 and S2, both live-terminal checks that need a terminal this
-  environment does not have). 100 `RT-` rows, the highest RT-100.
+  2026-10-19/20 (iters 980 onward, 94 commits at the time of writing and still
+  growing: each a separate pushed commit with a mutation-checked regression
+  test). Count it with
+  `git log origin/main --oneline | rg 'iter-9[89][0-9]|iter-10[0-6][0-9]' | wc -l`.
+  The summary of what the sweep found, how each was proven, and what remains
+  open is [`docs/audit/2026-10-20-the-defect-sweep-session-summary.md`](../audit/2026-10-20-the-defect-sweep-session-summary.md).
+- The defect ledger `docs/audit/2026-06-19-BUGS.md` was measured at
+  **198 rows closed, 2 open** on 2026-10-20 ~14:08 IST (S1 and S2, both
+  live-terminal checks that need a terminal this environment does not have),
+  with 103 `RT-` rows and RT-103 the highest. **This count decays within the
+  hour**: the defect sweep is still running and the peer lands findings every
+  few minutes. Re-derive it with
+  `rg -c '^- \[x\]' docs/audit/2026-06-19-BUGS.md` before relying on it, and
+  treat the count itself as evidence that the ledger is being worked, not as a
+  fact to quote.
 - The release binary is deployed to `~/.local/bin/operant` and the gateway
   daemon runs on it (the running process's `/proc/<pid>/exe` md5 matches the
   deployed file). A THIRD operant was cleared from PATH at iter-988:
@@ -104,34 +112,52 @@ iteration and cites the BUGS.md row or the AD that closed it. The two rows that
 were **decisions**, not fixes — the seat default for new org chats and the
 G-1 defect — are closed by AD-028 and GW-9/iter-968 respectively.
 
-### Duplicate iteration label — 2026-10-20
+### Duplicate iteration labels — 2026-10-20
 
-`iter-1056` appears twice on `origin/main`: `b03b3970` (docs, this
-reconciliation) and `2cd0451d` (fix, the Slack and Discord adapters). A peer
-agent and this leg computed the same next label from the same `origin/main`
-top within the same minute. Per AGENTS.md this is a **cosmetic defect, not an
-incident**: history is append-only, both commits stand, and no renumbering is
-done. The next free label is iter-1057.
+`iter-1056` is held by two commits (`b03b3970` docs, the genome
+reconciliation; `2cd0451d` fix, the Slack and Discord adapters), and `iter-1057`
+and `iter-1058` are each held twice as well. This leg and a peer agent computed
+their labels from the same `origin/main` top within the same minute, repeatedly.
+
+Per AGENTS.md this is a **cosmetic defect, not an incident**: history is
+append-only, both commits stand, and no renumbering is done.
+
+**Do not read a stale number here.** The peer is pushing every few minutes, so
+any "next free label" written in a document is false by the time it is read —
+this note said iter-1057 and both iter-1057 and iter-1058 were then taken twice.
+Re-read the authority before every push:
+
+```bash
+git fetch origin
+git log origin/main --oneline | rg -o 'iter-[0-9]+' | head -1   # top label, then +1
+```
+
+The duplicates are also systemic rather than new: roughly 200 labels are
+duplicated somewhere in `origin/main`'s history and 715 commits carry no label
+at all (the genome tool's own commits are among them), so a collision is the
+normal failure mode of the read-then-write race the fork protocol names, not a
+sign that this session went wrong. The next free label is computed at commit
+time, never copied from a document.
 
 <!-- genome:zone status sha=3c05967a2670 -->
 | status | items |
 |---|---|
 <!-- genome:end status -->
 
-<!-- genome:zone handoff sha=ec8a785fda1b -->
+<!-- genome:zone handoff sha=685fade5bf05 -->
 ## Handoff — 2026-10-20
 
-Repo branch `main`, HEAD `d911774f5d7194989babb19d67e21be795135bfb`. Working tree dirty (2 paths).
+Repo branch `main`, HEAD `c482f343e4d9c5aa72f7f92c8a1dd33b1fd45e3e`. Working tree dirty (13 paths).
 
 ## Open register rows
   (none)
 
 ## Recent worklog
-- **2026-10-20T06:52** · `omp` — iter-1016: a context overflow the compression cannot help now fails typed, and the eviction reports whether it met the budget (RT-69) — the two-strike rule: the first overflow retries (a provider overflow can be transient), the second fails typed; the eviction's final trim keeps tool groups whole and never drops the live turn
 - **2026-10-20T06:52** · `omp` — iter-1017: the Email adapter's TLS setup no longer panics, and the SMTP client no longer reports a rejected message as sent (RT-72, RT-73) — the rustls crypto provider is NAMED at the call site (the crate features are ambiguous under --all-features), and every SMTP server reply's status code is checked
 - **2026-10-20T06:52** · `omp` — iter-1018: the MCP tool's registry name is injective by construction again (RT-71) — iter-1014 shipped a claim that was false: the encoding left _ alone, so - and the literal _2d_ collided; the encoding is now a byte-wise escape joined by a single _, which is provably injective
 - **2026-10-20T06:52** · `omp` — iter-1019: the AFT binary is verified before it is installed, and the install is atomic (RT-70) — the shared updater's checksum guard matched only SHA256SUMS while aft publishes checksums.sha256, so the verification NEVER ran for aft, and the first-install path (which never went through the updater) downloaded and executed an unverified binary with a non-atomic write
 - **2026-10-20T18:50** · `jcode` — docs: the genome's own surfaces are reconciled — 39 stale board rows, a wrong register count, three dead command citations, and the first regression record
+- **2026-10-20T19:46** · `jcode` — docs: validation of the reconciliation found three defects — 31 board verdicts cited the wrong iteration, a 'next free label' note had gone stale twice, and the duplicate-label framing was materially misleading
 
 Regenerate with `genome handoff --write`.
 <!-- genome:end handoff -->

@@ -19,7 +19,7 @@ Method: a read-only sweep of the code, with file and line citations. The main ag
 
 ## Findings and where they are recorded
 
-Reconciled 2026-10-20 (iter-1053) against `docs/audit/2026-06-19-BUGS.md`, which is the
+Reconciled 2026-10-20 (iter-1056) against `docs/audit/2026-06-19-BUGS.md`, which is the
 owner of each row's fix state. Every row below was `open` when this board was
 written; every row is now closed, and the table names the iteration. The
 `Dedupe:` and `Limits:` notes in each BUGS.md row carry the residuals.

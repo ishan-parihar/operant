@@ -24,6 +24,23 @@ a stale `STATE.md` (a sha mismatch), which is real and separate. The boards
 passed lint, and `wf list` showed healthy row counts. Nothing in the tooling
 flagged the contradiction.
 
+### The reconciliation itself shipped a citation defect
+
+The same leg then wrote the wrong iteration into all 31 board verdicts.
+It reconciled the rows while `origin/main`'s top label read `iter-1053`, computed
+the label once, and the peer pushed three more commits (`iter-1053`, `iter-1054`,
+`iter-1055`) before this leg's commit landed as `iter-1056`. Every verdict
+column therefore read `reconciled iter-1053: <the fix that actually landed in
+iter-966>` — a note that named the reconciliation iteration wrongly and the
+FIXING iteration correctly, which is the most confusing possible shape, because
+half of each citation is verifiable and half is not.
+
+An independent validation pass found it by pattern:
+`rg -o 'reconciled iter-[0-9]+' docs/kb/workflows/*.md` against the label the
+commit actually carries. **The lesson generalises past boards: when a document
+cites the iteration that produced it, that citation is written BEFORE the label
+exists and can only be wrong.**
+
 ## Root cause
 
 The board is written when a defect is *found*, and the row is only closed by an
@@ -61,6 +78,11 @@ Consequences a future session must follow:
 4. Two rows on these boards were decisions, not fixes (the seat default for new
    org chats, and the G-1 defect). A decision closes a row too — with the AD
    that ruled, not with an iteration.
+5. **A note that cites its own producing iteration is a claim that cannot be
+   true yet.** Re-read the label after the commit and correct the note in the
+   same push, or omit it entirely. A citing note written before the push is
+   wrong by construction, and an executor auditing it cannot tell which half is
+   reliable.
 
 ## Detection
 
