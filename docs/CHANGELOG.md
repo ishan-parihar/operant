@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-1085 — `operant channel list` shows SMS.** The gateway's registry has seven adapters; the list showed six.
+
 - **iter-1081 — the Slack streaming send chunks too.** `send_message_return_id` — the path the streaming path uses — still posted the whole body unchunked, so a long answer on Slack was rejected and lost while the plain send delivered it.
 
 - **iter-1078 — the output fitter is sized against the current prompt, not the previous request's.** It could exceed the window by exactly the tool output accumulated since.

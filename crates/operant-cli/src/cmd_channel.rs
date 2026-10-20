@@ -394,6 +394,9 @@ fn persist_config(config: &AppConfig, config_path: Option<&Path>) -> Result<()> 
 /// Build a list of (channel_name, is_enabled) from config.
 fn build_channel_list(config: &AppConfig) -> Vec<(String, bool)> {
     let gw = &config.gateway;
+    // Every platform in the gateway's registry. SMS was missing: the
+    // registry has SEVEN adapters and the list showed six, so an operator
+    // with `sms_twilio_enabled = true` saw no SMS in the channel list.
     vec![
         ("CLI".to_string(), true),
         ("Telegram".to_string(), gw.telegram_enabled),
@@ -401,6 +404,7 @@ fn build_channel_list(config: &AppConfig) -> Vec<(String, bool)> {
         ("Slack".to_string(), gw.slack_enabled),
         ("WhatsApp".to_string(), gw.whatsapp_enabled),
         ("Email".to_string(), gw.email_enabled),
+        ("SMS".to_string(), gw.sms_twilio_enabled),
         ("Webhooks".to_string(), gw.webhooks_enabled),
     ]
 }
