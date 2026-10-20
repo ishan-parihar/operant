@@ -177,20 +177,20 @@ record touched by more than one commit was amended in place.
 |---|---|
 <!-- genome:end status -->
 
-<!-- genome:zone handoff sha=97cb60dcf1f2 -->
+<!-- genome:zone handoff sha=49844372471c -->
 ## Handoff — 2026-10-20
 
-Repo branch `main`, HEAD `7a5d926a6e527a6d1f3647cfbaf1000eb8e98b06`. Working tree dirty (5 paths).
+Repo branch `main`, HEAD `8daefa56bfe759719d83916c10a6e3799808a055`. Working tree dirty (9 paths).
 
 ## Open register rows
   (none)
 
 ## Recent worklog
-- **2026-10-20T21:38** · `jcode` — docs: the fourth validation found my newest record asserted a tool limit that does not exist, and the experiment that disproved it performed the correction (the retired record is out of force; RG-006 carries the law)
 - **2026-10-20T21:49** · `jcode` — docs: a peer's commit swept the whole staged docs change set into their fix commit — nothing lost, but the label-to-content mapping in the log is unreliable
 - **2026-10-20T23:39** · `jcode` — docs: the fifth validation retracted a cause I asserted without testing — the peer swept my change set, but not by any mechanism I could reproduce (RG-007)
 - **2026-10-20T23:42** · `jcode` — docs: the board-row count I reported was 49, not 39 — the headline figure was never derived from the source (RG-008)
 - **2026-10-20T23:45** · `jcode` — docs: every number in the state snapshot re-derived rather than copied, and the open-work claim corrected — RT-117 and RT-119 are actionable and were not named
+- **2026-10-20T23:50** · `jcode` — docs: the entry contract pointed the open queue at a section with nothing open in it — and two more summaries in the same file were stale too (RG-009)
 
 Regenerate with `genome handoff --write`.
 <!-- genome:end handoff -->

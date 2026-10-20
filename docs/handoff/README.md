@@ -5,10 +5,10 @@
 | 1 | `AGENTS.md` | the rules, the iteration protocol, and the documentation routing table |
 | 2 | `docs/handoff/STATE.md` | where the project stands right now |
 | 3 | `TODO.md` | the register: autonomous mode's `Implemented` / `Pending` / `Review` |
-| 4 | `docs/audit/2026-06-19-BUGS.md` (root) | open audit findings and their fix state — the repo-native issue ledger; the open queue is its `OPEN — Red-team: Holon seam, agentic-core seat and TUI (2026-10-19)` section |
+| 4 | `docs/audit/2026-06-19-BUGS.md` (root) | open audit findings and their fix state — the repo-native issue ledger. **The ledger is organised by AUDIT BATCH, not by open/closed state, so a section heading is not a status: several `## OPEN —` sections hold no open rows at all.** The open queue is the unchecked boxes, and nothing else: `rg -n '^- \[ \] \*\*' docs/audit/2026-06-19-BUGS.md` (count: `rg -c '^- \[ \]' docs/audit/2026-06-19-BUGS.md`) |
 | 5 | `docs/RUNBOOK.md` | exact commands, environment traps, fleet procedure |
 | 6 | `docs/kb/CLOSED.md` | what was tried and rejected — do not re-litigate |
-| 7 | `docs/plans/` | current pre-registered plans (dated, frozen); `docs/plans/2026-10-14-batch/00-INDEX.md` indexes the live batch |
+| 7 | `docs/plans/` | current pre-registered plans (dated, frozen). **There is no single live batch** — the directory holds dated plan sets side by side, and most of their subjects are already implemented. The newest are `plan-2026-10-19-plugin-ecosystem.md`, `plan-2026-10-17-remaining-implementation-gaps.md` and `plan-2026-10-17-redteam-audit-of-remaining-gaps.md`; `docs/plans/2026-10-14-batch/` is a 2026-10-14 set whose subjects are largely done. Files under 600 bytes are TOMBSTONES, not plans — read them for the archive pointer |
 | 8 | `docs/kb/WORKLOG.md` | what happened, unit of work by unit of work |
 
 Legacy one-off design/parity docs (`docs/HERMES_*`, `docs/ORGANISM-*`,

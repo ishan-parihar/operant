@@ -4,6 +4,11 @@ Append-only. An entry names the item, the verdict, and the measurement that
 killed it. Re-proposing a closed item needs new evidence, not enthusiasm.
 `kb status`-style verdicts cite the pointer that proves them.
 
+> **Note (2026-10-20, iter-1093):** the line above cites `kb status`, and `kb`
+> is dead — the binary is `./scripts/genome`, and the verdict vocabulary lives
+> in `genome status`. The line is left as written because this file is
+> append-only; read the note, not the command. (Recorded as RG-009.)
+
 - **[2026-10-17]** Re-adding phantom gateway platforms (matrix, mattermost, signal, …) without a real adapter implementation — **rejected**, iter-50 purged 20 phantoms and the registry stays at the 7 platforms with real code; AGENTS.md "Design Preferences" forbids re-adding. Do not re-litigate.
 - **[2026-10-17]** Running operant's web/browser engine in-process — **rejected**: the sourcehound `[patch.crates-io]` evaporates for consumers and drags an unconditional render stack; the MCP subprocess seam is the shipped design (AGENTS.md "Path Dependencies").
 - **[2026-10-17]** Re-triggering GitHub Actions on push/tag — **rejected**: the Actions quota is exhausted and every run burns minutes; workflows are `workflow_dispatch`-only and all verification is local (AGENTS.md release procedure).
