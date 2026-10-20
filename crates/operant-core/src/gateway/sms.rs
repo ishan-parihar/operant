@@ -32,6 +32,11 @@ impl SmsAdapter {
     }
 }
 
+/// Twilio's message-body character limit.
+///
+/// Over it, Twilio answers with a 400 and the message is not delivered.
+const SMS_MESSAGE_LIMIT: usize = 1600;
+
 /// The message from a Twilio error body.
 ///
 /// The body is `{"code": 21211, "message": "The 'To' number ...", ...}`.
@@ -85,29 +90,35 @@ impl PlatformAdapter for SmsAdapter {
         );
         let client = shared_http_client().clone();
 
-        let resp = client
-            .post(&url)
-            .basic_auth(sid, Some(token))
-            .form(&[
-                ("From", from.as_str()),
-                ("To", &message.channel_id),
-                ("Body", &message.content),
-            ])
-            .send()
-            .await
-            .map_err(|e| Error::Network(e.into()))?;
+        // Twilio's message-body limit is 1,600 characters. Over it,
+        // Twilio answers with a 400 and the message is NOT delivered — so
+        // a long answer was lost. The body is CHUNKED, the way the
+        // Telegram, Discord, Slack and WhatsApp sends are.
+        for chunk in crate::gateway::telegram::chunk_text(&message.content, SMS_MESSAGE_LIMIT) {
+            let resp = client
+                .post(&url)
+                .basic_auth(sid, Some(token))
+                .form(&[
+                    ("From", from.as_str()),
+                    ("To", &message.channel_id),
+                    ("Body", &chunk),
+                ])
+                .send()
+                .await
+                .map_err(|e| Error::Network(e.into()))?;
 
-        let status = resp.status();
-        if !status.is_success() {
-            // The body carries the REASON ("The 'To' number ... is not a
-            // valid phone number", "Unauthenticated"), and a bare status
-            // leaves the operator guessing.
-            let body = resp.text().await.unwrap_or_default();
-            return Err(Error::Agent(format!(
-                "Twilio API error: {}: {}",
-                status,
-                twilio_error_message(&body)
-            )));
+            let status = resp.status();
+            if !status.is_success() {
+                // The body carries the REASON ("The 'To' number ... is not a
+                // valid phone number", "Unauthenticated"), and a bare status
+                // leaves the operator guessing.
+                let body = resp.text().await.unwrap_or_default();
+                return Err(Error::Agent(format!(
+                    "Twilio API error: {}: {}",
+                    status,
+                    twilio_error_message(&body)
+                )));
+            }
         }
 
         Ok(())
