@@ -151,11 +151,7 @@ fn handle_list(config: &AppConfig, json: bool) -> Result<()> {
             .servers
             .iter()
             .map(|s| {
-                let transport = match s.transport {
-                    McpTransportKind::Http => "http",
-                    McpTransportKind::Stdio => "stdio",
-                    McpTransportKind::StreamableHttp => "streamable-http",
-                };
+                let transport = s.transport.transport_label();
                 let endpoint = match s.transport {
                     McpTransportKind::Http => s.url.as_deref().unwrap_or(""),
                     McpTransportKind::Stdio => s.command.as_deref().unwrap_or(""),
