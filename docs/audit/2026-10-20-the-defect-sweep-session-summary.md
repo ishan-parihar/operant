@@ -2,7 +2,7 @@
 
 Date: 2026-10-20. Agent: `omp`.
 Range: iters 980–1046 (67 commits) on `origin/main`.
-Ledger: `docs/audit/2026-06-19-BUGS.md` — **213 rows closed, 4 open** (S1 and S2, both live-terminal checks that need a terminal this session did not have).
+Ledger: `docs/audit/2026-06-19-BUGS.md` — **216 rows closed, 4 open** (S1 and S2, both live-terminal checks that need a terminal this session did not have).
 
 This is the morning review. It names every defect the sweep found, how each
 was proven, and what is deliberately left open.
@@ -78,6 +78,9 @@ several rows here name the MECHANISM, not just the outcome.
 | RT-118 | `operant channel list` omitted SMS: the registry has SEVEN adapters and the list showed six. | SMS is in the list. |
 | RT-119 | `operant channel doctor` reports "healthy" for a channel it never probed — the field is the ENABLED flag. | Open — probing means a network call per channel, which is a design decision. |
 | RT-120 | The `PlatformAdapter::handle_update` trait method is DEAD — zero production callers for ANY adapter. | Recorded; the inbound table encodes the truth. The method itself is RT-89's decision. |
+| RT-121 | `operant channel add` did not say the channel it added cannot receive — and its WRITE path was missing: "sms" was rejected as unsupported, and the platform key was "webhooks" where the config's key is `webhooks_enabled`. | The plural is an alias normalised to the canonical key, SMS is configurable, and the truth is printed. |
+| RT-122 | The STREAMING send did not record in the delivery ledger, so every streamed answer was invisible in the delivery-health view (the plain send always recorded). | The streaming path records, with the status from the outcome. Mutation-checked. |
+| RT-123 | The TUI's `/mcp` pane had no bucket for the streamable-HTTP transport, so such a server was never painted — and was counted as scrolled-off. The "sse" bucket was dead: the enum has no SSE variant. | The label is a named method on the enum; the buckets are its three variants. Mutation-checked. |
 | RT-86 (corrected) | The `"inbound": false` field existed but NOTHING read it — `Gateway::status()` had been deleted for having zero callers — so the operator still saw "Slack: enabled". | The gateway has ONE inbound table; `operant gateway status` PRINTS it: "Slack … send-only (no inbound)". |
 | RT-69 | The context eviction could not meet the budget and said nothing; the reactive overflow path re-issued the request and earned the same provider 400. | Four mutations, each run separately. The pre-existing `loop_recovery_paths` test caught the over-strict first fix — the rule is a two-strike rule because of it. |
 | RT-83 | The token estimate counted only the message's text — and a tool-call turn's text is EMPTY by construction, so a 100 KB tool call was estimated at 4 tokens. The eviction was blind to the largest messages. | The mutation fails with "got 4". |
