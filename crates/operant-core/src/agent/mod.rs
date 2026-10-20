@@ -1973,6 +1973,39 @@ mod tests {
         (agent, dir)
     }
 
+    /// The output fitter must size `max_tokens` against the CURRENT
+    /// prompt, not the previous request's reported count.
+    ///
+    /// The reported count is exact — but exact for the PREVIOUS request.
+    /// Every tool result appended since is missing from it, and the fitter
+    /// skipped its safety margin for a reported count ("reported is
+    /// exact"). So the fit was too large by exactly the accumulated tool
+    /// output, and the request could exceed the window by that much — the
+    /// 400 the fitter exists to prevent.
+    #[tokio::test]
+    async fn the_output_fitter_is_sized_against_the_current_prompt() {
+        let (agent, _dir) = bust_test_agent(20_000);
+
+        // The PREVIOUS request reported a small prompt.
+        agent
+            .last_prompt_tokens
+            .store(100, std::sync::atomic::Ordering::Relaxed);
+
+        // The CURRENT request carries a large tool result.
+        let messages = vec![Message::new(crate::client::Role::User, "x".repeat(40_000))];
+
+        let request = agent.fitted_request("gpt-4", &messages, Vec::new());
+        let max_tokens = request.max_tokens.expect("the fitter must cap the output");
+        let current_prompt = crate::context_management::estimate_total_tokens(&messages);
+        let window = agent.effective_context_window();
+
+        assert!(
+            current_prompt + max_tokens as usize <= window,
+            "the fitted request must fit the window: prompt {current_prompt} + \
+             max_tokens {max_tokens} > window {window}"
+        );
+    }
+
     #[tokio::test]
     async fn below_the_force_line_every_request_only_appends() {
         let (agent, _dir) = bust_test_agent(200_000);
