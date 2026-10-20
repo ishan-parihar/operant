@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-1066 — the gateway logs a delivery summary on stop.** The delivery ledger is in-memory in the daemon and nothing exposed it, so its counts — the whole point of the ledger — were invisible.
+
 - **iter-1065 — the response-mirror feature is recorded as a gap.** It has a complete `hermes` parity implementation, no config key, and no production caller: it cannot be reached at all.
 
 - **iter-1063 — Discord and Slack can now edit a sent message.** The streaming path's incremental updates were no-ops on both, so the user saw the first chunk of the answer and then the whole answer again as a second message.

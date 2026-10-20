@@ -323,6 +323,20 @@ impl Gateway {
             }
         }
 
+        // The delivery ledger's summary.
+        //
+        // The ledger is IN-MEMORY in this process, and nothing else
+        // exposes it: `operant gateway status` reads the CONFIG file, and
+        // the daemon writes no status file. So the counts the ledger was
+        // built for — how many sends were delivered, how many failed —
+        // were visible NOWHERE. The stop path is the one moment the
+        // operator is guaranteed to see the log.
+        let delivered = self.delivery_ledger.delivered_count().await;
+        let failed = self.delivery_ledger.failed_count().await;
+        if delivered > 0 || failed > 0 {
+            info!(delivered, failed, "gateway delivery summary");
+        }
+
         Ok(())
     }
 
