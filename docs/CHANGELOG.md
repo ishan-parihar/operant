@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-1042 — the CLI no longer compiles the `postgres` dependency for a crate it never called.** The `memory-postgres` feature and the unreferenced `ci-all` meta-feature are removed.
+
 - **iter-1041 — the installer no longer leaves a stale ONNX Runtime symlink.** The copy preserved symlinks, so an older `libonnxruntime.so.1` link survived and the installed binary could not start at all.
 
 ### Changed

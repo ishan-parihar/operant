@@ -21,7 +21,6 @@ operant-os = { workspace = true }
 # Optional subsystem crates — feature-gated like operant
 operant-tools = { workspace = true, optional = true }
 operant-plugins = { workspace = true, optional = true }
-operant-memory = { workspace = true, optional = true }
 
 # Async runtime
 tokio = { workspace = true, features = ["full"] }
@@ -112,14 +111,14 @@ agent-runtime = [
 # `operant-core/src/tools/`, where the tool trait and the path policy are
 # the ones the product uses.
 plugins-wasm = ["dep:operant-plugins"]
-memory-postgres = ["operant-memory/memory-postgres"]
 anthropic = ["operant-core/anthropic"]  # cfg-gate for AnthropicModelClient import in main.rs
 
-# CI meta-feature
-ci-all = [
-    "agent-runtime",
-    "plugins-wasm", "memory-postgres",
-]
+# The `memory-postgres` feature and the `ci-all` meta-feature are GONE
+# (RT-92). `ci-all` was referenced by NO workflow and NO script — the
+# GitHub Actions quota is exhausted, so there is no CI to run it — and
+# `memory-postgres` only reached `operant-memory`, a crate the CLI
+# references ZERO times. The `postgres` dependency was compiled for a
+# feature nobody asked for, in a crate nothing called.
 
 [dev-dependencies]
 serial_test = "3.2"
