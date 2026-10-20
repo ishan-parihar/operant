@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-1108 — the agent's tools, the command-menu registration and the doctor's probe now use the CONFIGURED platform base, and the command-menu client uses the configured proxy.** A deployment behind a proxy could reach Telegram through the gateway and not through the agent's `send_message`, `react_to_message`, or the boot-time `setMyCommands` that registers the command menu. Each base also takes an environment override (`TELEGRAM_API_BASE`, `DISCORD_API_BASE`, `SLACK_API_BASE`, `WHATSAPP_API_BASE`) that wins over the config.
+
 - **iter-1092 — the TUI's `/mcp` pane now paints a streamable-HTTP server.** It was in no transport group, so it was never shown — and it was counted as scrolled-off.
 
 - **iter-1091 — the streaming send now records in the delivery ledger, so a streamed answer is not invisible in the delivery-health view.** `operant channel add sms` is no longer rejected, and `operant channel add webhook` no longer is either. The channel doctor now reports `"configured"` and `"health": "not probed"` instead of claiming a health it never checked, and `channel add` no longer tells the operator to verify connectivity with a command that does not reach the platform.

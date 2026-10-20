@@ -2630,14 +2630,42 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
     let telegram_token = dispatch_config.telegram_token.clone();
 
     if let Some(ref token) = telegram_token {
-        let api_base = "https://api.telegram.org";
+        // The CONFIGURED base, not the public API: a deployment that
+        // reaches Telegram through a proxy (or a compatible endpoint)
+        // must register its command menu there too — this is the one
+        // request that used to go to the real API while every message
+        // went to the configured endpoint.
+        let api_base = operant_core::tools::platform_bases::telegram_api_base();
         let cmd_url = format!("{}/bot{}/setMyCommands", api_base, token);
         let cmd_body = format!(r#"{{"commands":{}}}"#, telegram_bot_commands());
         // Bounded retry: this fires once during boot — exactly when the
         // network may still be settling (the same race that kills adapter
         // starts). Without retries the command menu silently stays
         // unregistered until the next full gateway restart.
-        let client = reqwest::Client::builder()
+        // The same proxy the adapter's client uses. Without it the base
+        // was right but the transport was not: a deployment that reaches
+        // Telegram through a proxy could send messages (the adapter's
+        // client is proxied) and could not register its command menu
+        // (this client was not), so the menu silently stayed
+        // unregistered.
+        let mut client_builder = reqwest::Client::builder();
+        if let Some(proxy) = operant_core::runtime_config()
+            .gateway
+            .telegram_proxy
+            .as_deref()
+            .filter(|p| !p.trim().is_empty())
+        {
+            match reqwest::Proxy::all(proxy) {
+                Ok(proxy_obj) => {
+                    client_builder = client_builder.proxy(proxy_obj);
+                    tracing::info!("Telegram command registration using proxy: {}", proxy);
+                }
+                Err(e) => {
+                    tracing::warn!("Invalid telegram_proxy '{}', ignoring: {}", proxy, e);
+                }
+            }
+        }
+        let client = client_builder
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(60))
             .build()

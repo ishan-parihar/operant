@@ -350,9 +350,17 @@ impl SendMessageTool {
 
         for chunk in &chunks {
             let url = if is_document {
-                format!("https://api.telegram.org/bot{}/sendDocument", token)
+                format!(
+                    "{}/bot{}/sendDocument",
+                    crate::tools::platform_bases::telegram_api_base(),
+                    token
+                )
             } else {
-                format!("https://api.telegram.org/bot{}/sendMessage", token)
+                format!(
+                    "{}/bot{}/sendMessage",
+                    crate::tools::platform_bases::telegram_api_base(),
+                    token
+                )
             };
 
             let mut body = json!({
@@ -426,7 +434,11 @@ impl SendMessageTool {
             Err(e) => return ToolResult::error("send_message", e),
         };
 
-        let url = format!("https://discord.com/api/v10/channels/{}/messages", to);
+        let url = format!(
+            "{}/channels/{}/messages",
+            crate::tools::platform_bases::discord_api_base(),
+            to
+        );
         let chunks = Self::chunk_message(message, DISCORD_MAX_LEN);
         let mut results = Vec::new();
 
@@ -492,7 +504,10 @@ impl SendMessageTool {
             Err(e) => return ToolResult::error("send_message", e),
         };
 
-        let url = "https://slack.com/api/chat.postMessage";
+        let url = format!(
+            "{}/chat.postMessage",
+            crate::tools::platform_bases::slack_api_base()
+        );
         let chunks = Self::chunk_message(message, SLACK_MAX_LEN);
         let mut results = Vec::new();
 
@@ -503,7 +518,7 @@ impl SendMessageTool {
             });
 
             match client
-                .post(url)
+                .post(&url)
                 .header("Authorization", format!("Bearer {}", token))
                 .header("Content-Type", "application/json")
                 .json(&body)

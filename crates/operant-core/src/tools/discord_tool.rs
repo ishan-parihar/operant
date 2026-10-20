@@ -20,7 +20,6 @@ use std::time::Duration;
 use crate::schema::ToolSchema;
 use crate::tools::{OperantTool, ToolContext, ToolResult};
 
-const DISCORD_API_BASE: &str = "https://discord.com/api/v10";
 const TIMEOUT_SECS: u64 = 15;
 
 // ---------------------------------------------------------------------------
@@ -124,7 +123,7 @@ async fn discord_request(
             body: format!("Failed to create HTTP client: {e}"),
         })?;
 
-    let url = format!("{DISCORD_API_BASE}{path}");
+    let url = format!("{}{path}", crate::tools::platform_bases::discord_api_base());
 
     let mut req = client
         .request(

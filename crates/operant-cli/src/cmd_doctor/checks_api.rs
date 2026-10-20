@@ -282,7 +282,10 @@ async fn probe_telegram_bot(token: String) -> ProbeResult {
         Err(_) => return ProbeResult::warn("Telegram bot", "(could not create HTTP client)"),
     };
     match client
-        .get(format!("https://api.telegram.org/bot{token}/getMe"))
+        .get(format!(
+            "{}/bot{token}/getMe",
+            operant_core::tools::platform_bases::telegram_api_base()
+        ))
         .send()
         .await
     {

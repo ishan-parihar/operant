@@ -309,6 +309,11 @@ template_description = "Describe what this skill does."
 telegram_enabled = false
 # telegram_token = ""
 telegram_api_base = "https://api.telegram.org"
+# Each platform base can also be overridden by an environment variable,
+# which wins over the value above — so a container can point the GATEWAY
+# and the agent's TOOLS at a proxy without rewriting this file:
+#   TELEGRAM_API_BASE, DISCORD_API_BASE, SLACK_API_BASE, WHATSAPP_API_BASE
+# (The SMS adapter's Twilio base is `TWILIO_API_BASE`.)
 # Per-DM forum topics: when true, each private chat gets its own topic
 # (created via createForumTopic, thread id persisted across restarts) and
 # replies are routed into it. Hermes `_setup_dm_topics` parity.

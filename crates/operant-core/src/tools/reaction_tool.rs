@@ -224,7 +224,11 @@ impl ReactionTool {
             Ok(c) => c,
             Err(e) => return ToolResult::error("react_to_message", e),
         };
-        let url = format!("https://api.telegram.org/bot{}/setMessageReaction", token);
+        let url = format!(
+            "{}/bot{}/setMessageReaction",
+            crate::tools::platform_bases::telegram_api_base(),
+            token
+        );
         let body = json!({
             "chat_id": chat_id,
             "message_id": message_id,
@@ -277,8 +281,11 @@ impl ReactionTool {
         }
         let encoded = urlencode(&glyph);
         let url = format!(
-            "https://discord.com/api/v10/channels/{}/messages/{}/reactions/{}/@me",
-            channel_id, message_id, encoded
+            "{}/channels/{}/messages/{}/reactions/{}/@me",
+            crate::tools::platform_bases::discord_api_base(),
+            channel_id,
+            message_id,
+            encoded
         );
         let client = match build_client() {
             Ok(c) => c,
@@ -350,8 +357,12 @@ impl ReactionTool {
             "name": name,
             "timestamp": timestamp,
         });
+        let url = format!(
+            "{}/reactions.add",
+            crate::tools::platform_bases::slack_api_base()
+        );
         match client
-            .post("https://slack.com/api/reactions.add")
+            .post(url)
             .header("Authorization", format!("Bearer {}", token))
             .header("Content-Type", "application/json")
             .json(&body)
