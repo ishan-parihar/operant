@@ -6,8 +6,10 @@ the prose above it is hand-written and is the part that goes stale.
 ## Where the project stands
 
 - Release line `0.2.1`. `origin/main` carries the autonomous defect sweep of
-  2026-10-19 (iters 980-1004): 25 iterations, each a separate pushed
-  commit, each with a mutation-checked regression test.
+  2026-10-19/20 (iters 980-1024): 45 iterations, each a separate pushed
+  commit, each with a mutation-checked regression test. The summary of what
+  the sweep found, how each was proven, and what remains open is
+  [`docs/audit/2026-10-20-the-defect-sweep-session-summary.md`](../audit/2026-10-20-the-defect-sweep-session-summary.md).
 - The release binary is deployed to `~/.local/bin/operant` and the gateway
   daemon runs on it (the running process's `/proc/<pid>/exe` md5 matches the
   deployed file). A THIRD operant was cleared from PATH at iter-988:
@@ -17,6 +19,12 @@ the prose above it is hand-written and is the part that goes stale.
   new=0 stale=0`). It was red for several days from in-flight peer work
   (fleet rule 7: prove your own delta is zero, do not fix the peer's), and
   that is no longer the case.
+- The TUI visual corpus is GREEN (`verify PASSED: 0 drift`, 64 gated
+  scenarios) and it is in the local gate — it had been red for nine days
+  with no automated gate running it. Seven surfaces are parked in
+  `excluded.json`, each with a reason.
+- The documentation gate is green (`docs_lint: PASS`, 0 hard failures) and
+  the genome's own doctor reports healthy.
 - Docs-only iterations skip the R&D build/deploy step (AGENTS.md).
 
 ## The claim audit
