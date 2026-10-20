@@ -2529,9 +2529,53 @@ impl AppConfig {
 }
 
 fn read_env(name: &str) -> Option<String> {
-    std::env::var(name)
+    let value = std::env::var(name)
         .ok()
-        .filter(|value| !value.trim().is_empty())
+        .filter(|value| !value.trim().is_empty());
+    if value.is_some() {
+        record_env_override(name);
+    }
+    value
+}
+
+/// The environment variables that overrode the config file in THIS process,
+/// in insertion order (ENV-1 provenance).
+///
+/// Process-global because the environment is: `apply_env_overrides` runs on
+/// every config load, and two loads must not report the same key twice.
+static ENV_OVERRIDE_KEYS: std::sync::OnceLock<std::sync::Mutex<Vec<String>>> =
+    std::sync::OnceLock::new();
+
+/// Remember an override and warn the first time this process sees the key.
+///
+/// The 2026-10-19 report could not tell why the configured endpoint and model
+/// were ignored: `OPENAI_BASE_URL` and `HERMES_MODEL` beat `operant.toml` on
+/// every load with no trace (ENV-1). A warning plus `operant config show`
+/// naming the keys is what makes a stale shell export visible.
+fn record_env_override(name: &str) {
+    let keys = ENV_OVERRIDE_KEYS.get_or_init(|| std::sync::Mutex::new(Vec::new()));
+    let Ok(mut keys) = keys.lock() else {
+        // A poisoned lock only costs the trailer; never fail a load for it.
+        return;
+    };
+    if keys.iter().any(|k| k == name) {
+        return;
+    }
+    keys.push(name.to_string());
+    tracing::warn!(
+        env = name,
+        "environment variable overrides the configured value; unset it to use the config file"
+    );
+}
+
+/// The environment variables that overrode the config in this process, in the
+/// order they were first seen. Empty when the shell is clean.
+pub fn env_override_keys() -> Vec<String> {
+    ENV_OVERRIDE_KEYS
+        .get_or_init(|| std::sync::Mutex::new(Vec::new()))
+        .lock()
+        .map(|keys| keys.clone())
+        .unwrap_or_default()
 }
 
 fn apply_string_option_override(name: &str, target: &mut Option<String>) -> Result<()> {
@@ -3564,6 +3608,35 @@ mod keybindings_tests {
                 .unwrap()
                 .keybindings
                 .is_none()
+        );
+    }
+
+    /// ENV-1: an environment variable that overrides a config value is
+    /// recorded (and warned about) instead of winning silently — the
+    /// 2026-10-19 report could not tell why its configured model was
+    /// ignored, and `operant config show` must be able to say so.
+    #[test]
+    fn an_env_override_is_recorded_and_visible() {
+        let _lock = crate::platform::test_env_lock_blocking();
+        let previous = std::env::var("HERMES_MODEL").ok();
+        // SAFETY: the env is process-global; the lock above serialises this
+        // test against every other test that mutates it.
+        unsafe { std::env::set_var("HERMES_MODEL", "env-wins-model") };
+        let mut config = AppConfig::default();
+        config.apply_env_overrides().expect("override applies");
+        let recorded = crate::config::env_override_keys();
+        // SAFETY: the lock above serialises this restore.
+        match previous {
+            Some(v) => unsafe { std::env::set_var("HERMES_MODEL", v) },
+            None => unsafe { std::env::remove_var("HERMES_MODEL") },
+        }
+        assert_eq!(
+            config.agent.model, "env-wins-model",
+            "the override still wins — the fix is provenance, not precedence"
+        );
+        assert!(
+            recorded.iter().any(|k| k == "HERMES_MODEL"),
+            "the overridden key must be reported: {recorded:?}"
         );
     }
 }

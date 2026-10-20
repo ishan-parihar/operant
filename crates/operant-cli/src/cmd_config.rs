@@ -56,6 +56,18 @@ pub async fn handle_config_command(config: &AppConfig, cmd: ConfigSubcommand) ->
 fn handle_show(config: &AppConfig) -> Result<()> {
     let yaml = serde_yaml::to_string(config).context("Failed to serialize config as YAML")?;
     println!("{}", yaml);
+    // ENV-1 provenance: the values above are the EFFECTIVE ones, and an
+    // environment variable silently beats operant.toml on every load. Name
+    // the keys, so "why is my configured model ignored" has a visible answer
+    // instead of a shell archaeology session.
+    let overrides = operant_core::config::env_override_keys();
+    if !overrides.is_empty() {
+        println!("# The following environment variables overrode the config file:");
+        for key in &overrides {
+            println!("#   {key}");
+        }
+        println!("# Unset them to use the file's values.");
+    }
     Ok(())
 }
 
