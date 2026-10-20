@@ -43,6 +43,29 @@ impl SlackAdapter {
         let enabled = token.is_some();
         Self { token, enabled }
     }
+    /// The API base this adapter talks to.
+    fn api_base(&self) -> String {
+        runtime_config().gateway.slack_api_base.clone()
+    }
+}
+
+fn slack_send_outcome(status: u16, body: &str) -> Result<()> {
+    if !(200..300).contains(&status) {
+        return Err(Error::Agent(format!(
+            "Slack API error: HTTP {status}: {}",
+            body.chars().take(200).collect::<String>()
+        )));
+    }
+    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(body)
+        && parsed.get("ok").and_then(|v| v.as_bool()) == Some(false)
+    {
+        let err = parsed
+            .get("error")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
+        return Err(Error::Agent(format!("Slack API error: {err}")));
+    }
+    Ok(())
 }
 
 #[async_trait]
@@ -91,19 +114,34 @@ impl PlatformAdapter for SlackAdapter {
             "unfurl_media": false,
         });
 
-        client
+        eprintln!("DEBUG slack api_base = {:?}", self.api_base());
+        let resp = client
             .post(format!(
                 "{}/chat.postMessage",
-                runtime_config()
-                    .gateway
-                    .slack_api_base
-                    .trim_end_matches('/')
+                self.api_base().trim_end_matches('/')
             ))
             .header("Authorization", format!("Bearer {}", token))
             .header("Content-Type", "application/json")
             .json(&body)
             .send()
             .await?;
+
+        // The response must be CHECKED. Two ways a Slack send fails:
+        //
+        // 1. A non-2xx status — a revoked token (401), a missing scope
+        //    (403), a rate limit (429).
+        // 2. **A 200 with `{"ok": false, "error": "not_in_channel"}`** —
+        //    Slack's API convention. A status check alone does NOT catch
+        //    this, and it is the common case: a bot that is not in the
+        //    channel, or a message that violates a workspace rule.
+        //
+        // The old code discarded the response entirely, so BOTH looked
+        // like a success: the delivery ledger recorded "delivered" and
+        // the operator saw a silent no-op. (The same defect class as the
+        // SMTP reply discarding, RT-73, and the Telegram status, RT-71.)
+        let status = resp.status();
+        let body_text = resp.text().await.unwrap_or_default();
+        slack_send_outcome(status.as_u16(), &body_text)?;
 
         Ok(())
     }
@@ -181,5 +219,55 @@ impl PlatformAdapter for SlackAdapter {
         msg.reply_to = message.reply_to.clone();
         self.send_message(msg).await?;
         Ok(String::new())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A Slack send the API REJECTS must be reported as a failure.
+    ///
+    /// Slack answers a rejected request with **HTTP 200 and
+    /// `{"ok": false, "error": "..."}`** — so a status check alone does
+    /// not catch it, and the old code discarded the response entirely, so
+    /// the delivery ledger recorded "delivered" for a message that was
+    /// never sent.
+    ///
+    /// The check is a PURE function over the response, so the test does
+    /// not need a server. An earlier version drove it over HTTP, and two
+    /// tests raced: the OS reused the freed ephemeral port and the
+    /// process-global `reqwest` client's connection pool reused the
+    /// stale connection, so each test received the OTHER server's answer.
+    #[test]
+    fn a_slack_send_rejected_with_ok_false_is_a_failure() {
+        let err = slack_send_outcome(200, r#"{"ok":false,"error":"not_in_channel"}"#)
+            .expect_err("a rejected send must be an error");
+        let err = err.to_string();
+        assert!(
+            err.contains("not_in_channel"),
+            "the error must name the API's error, got: {err}"
+        );
+    }
+
+    /// A non-2xx status is a failure too.
+    #[test]
+    fn a_slack_send_with_an_error_status_is_a_failure() {
+        for status in [400u16, 401, 403, 429, 500] {
+            let err = slack_send_outcome(status, r#"{"ok":true}"#)
+                .expect_err("an error status must be an error");
+            let err = err.to_string();
+            assert!(
+                err.contains(&status.to_string()),
+                "the error must name the status, got: {err}"
+            );
+        }
+    }
+
+    /// A Slack send the API ACCEPTS must succeed.
+    #[test]
+    fn a_slack_send_accepted_by_the_api_succeeds() {
+        slack_send_outcome(200, r#"{"ok":true,"channel":"C123","ts":"1.0"}"#)
+            .expect("an accepted send must succeed");
     }
 }

@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-1056 — the Slack and Discord adapters now check the API's response.** They discarded it, so a rejected send (a revoked token, no channel access, a rate limit) was recorded as delivered. Slack needed more than a status check: it answers a rejected request with HTTP 200 and `ok: false`.
+
 - **iter-1055 — the WhatsApp, Email and SMS adapters now say in their status report that they cannot receive.** Like Slack, they implement an inbound parser that nothing in the runtime invokes, so an operator saw "enabled" and believed messages would arrive.
 
 - **iter-1053 — the test suite's environment locks are now crate-wide, async-aware and poison-tolerant.** Per-module locks did not exclude each other, so an interleaved `HOME`/`HERMES_HOME` or API-key mutation changed what another test saw — and one poisoned lock turned one failure into four.

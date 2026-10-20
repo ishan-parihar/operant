@@ -26,6 +26,16 @@ impl DiscordAdapter {
     }
 }
 
+fn discord_send_outcome(status: u16, body: &str) -> Result<()> {
+    if !(200..300).contains(&status) {
+        return Err(crate::error::Error::Agent(format!(
+            "Discord API error: HTTP {status}: {}",
+            body.chars().take(200).collect::<String>()
+        )));
+    }
+    Ok(())
+}
+
 #[async_trait]
 impl PlatformAdapter for DiscordAdapter {
     fn name(&self) -> &str {
@@ -130,13 +140,24 @@ impl PlatformAdapter for DiscordAdapter {
                 message.channel_id
             );
 
-            client
+            let resp = client
                 .post(&url)
                 .header("Authorization", format!("Bot {}", token))
                 .header("Content-Type", "application/json")
                 .json(&body)
                 .send()
                 .await?;
+
+            // The response must be CHECKED. A revoked token (401), a bot
+            // without access to the channel (403), a rate limit (429) and
+            // a message over the limit (400) are all real failures, and
+            // the old code discarded the response — so the delivery
+            // ledger recorded "delivered" and the operator saw a silent
+            // no-op. (The same defect class as the SMTP reply
+            // discarding, RT-73, and the Telegram status, RT-71.)
+            let status = resp.status();
+            let body_text = resp.text().await.unwrap_or_default();
+            discord_send_outcome(status.as_u16(), &body_text)?;
         }
 
         Ok(())
@@ -506,4 +527,41 @@ pub(crate) fn parse_discord_message(
         thread_id: None,
         media_urls: Vec::new(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A Discord send the API REJECTS must be reported as a failure.
+    ///
+    /// A revoked token (401), a bot without access to the channel (403), a
+    /// rate limit (429) and a message over the limit (400) are all real
+    /// failures — and the old code discarded the response, so the
+    /// delivery ledger recorded "delivered" and the operator saw a silent
+    /// no-op.
+    ///
+    /// The check is a PURE function over the response, so the test does
+    /// not need a server — an earlier version drove it over HTTP and two
+    /// tests raced on the OS's ephemeral-port reuse and the shared
+    /// connection pool.
+    #[test]
+    fn a_discord_send_the_api_rejects_is_a_failure() {
+        for status in [400u16, 401, 403, 429, 500] {
+            let err = discord_send_outcome(status, r#"{"code":50013}"#)
+                .expect_err("a rejected send must be an error");
+            let err = err.to_string();
+            assert!(
+                err.contains(&status.to_string()),
+                "the error must name the status, got: {err}"
+            );
+        }
+    }
+
+    /// A Discord send the API ACCEPTS must succeed.
+    #[test]
+    fn a_discord_send_accepted_by_the_api_succeeds() {
+        discord_send_outcome(200, r#"{"id":"1","channel_id":"1234"}"#)
+            .expect("an accepted send must succeed");
+    }
 }
