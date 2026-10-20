@@ -1,8 +1,8 @@
 # Audit: the 2026-10-19/20 defect sweep — what was found, what was fixed, and what remains
 
-Date: 2026-10-20. Agent: `omp`.
-Range: iters 980–1046 (67 commits) on `origin/main`.
-Ledger: `docs/audit/2026-06-19-BUGS.md` — **216 rows closed, 4 open** (S1 and S2, both live-terminal checks that need a terminal this session did not have).
+Date: 2026-10-20/21. Agent: `omp`.
+Range: iters 980–1102 on `origin/main`.
+Ledger: `docs/audit/2026-06-19-BUGS.md` — **217 rows closed, 6 open**. Five of the six are owner decisions or vendored-tooling findings; the two the sweep started with (S1 and S2) are live-terminal checks that need a terminal this session did not have.
 
 This is the morning review. It names every defect the sweep found, how each
 was proven, and what is deliberately left open.
@@ -179,6 +179,10 @@ code rather than adding a capability the core lacks.
 | RT-86 (Slack Socket Mode) | A feature: the `apps.connections.open` handshake, the WebSocket, the reconnect and the event routing. Until it exists, the channel is outbound-only and the status report says so. |
 | The 1.5 GB checkpoint store | Reclaimable with `operant checkpoints clear` (RT-61); the forward-looking bound is in place. |
 | Session/DB retention policy | A policy decision, not a defect. |
+| RT-117 (the dashboard's `/api/status` shape) | Part of the RT-44 decision: the bundle's system panel reads cpu/memory/disk/load/hostname that the served response does not carry, so it renders empty. `tui/operant_app/perf.rs` already collects load, cpu_count and memory. |
+| RT-119 (`operant channel doctor` reports healthy) | The field is the ENABLED flag. A real health check means a network call per channel — a decision about what the doctor is and how long it may take. |
+| RT-124 (`operant mcp add` cannot create a streamable-HTTP server) | The transport works; the creation command does not exist. The command's shape — two mutually exclusive flags — is a design decision. |
+| RT-125 (the handoff never passes the doctor's staleness check) | In the VENDORED genome tooling, not this repo: the handoff writes the current HEAD, and the commit that carries it changes HEAD. The fix is to compare against the state doc's own commit. |
 
 ## The gates, as they stand
 
@@ -186,7 +190,7 @@ code rather than adding a capability the core lacks.
 |---|---|
 | `cargo test --workspace --all-features` | green |
 | `scripts/clippy-warning-gate.sh` | `seen=24 allowlist=24 new=0 stale=0` — pass |
-| TUI corpus (`_run.py verify`) | 64 gated, 0 drift; 7 surfaces parked in `excluded.json` with a reason each |
+| TUI corpus (`_run.py verify`) | 64 gated, 0 drift, against the DEPLOYED binary; 7 surfaces parked in `excluded.json` with a reason each |
 | `scripts/genome lint` | clean |
 | `docs_lint` | PASS — 0 hard failures |
 | `scripts/genome doctor` | healthy |
