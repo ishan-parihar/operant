@@ -1,4 +1,4 @@
-<!-- genome:zone records sha=3d0c29356dc0 -->
+<!-- genome:zone records sha=c6de17db08d3 -->
 **Decisions** (41)
 
 | ID | Title | Status | Description |
@@ -45,14 +45,18 @@
 | AD-040 | The dashboard's session token is only ever handed to a holder of that token | Active | The dashboard served its session token on an unauthenticated route, so the bearer auth was theatre; the token is now exchanged for an HttpOnly cookie and the Host header is validated |
 | AD-041 | The PDF decompression bound covers the load path and the whole document, so AD-039's claim is now true | Active | AD-039 published 'the decompression bomb is now bounded', but only the extraction path was bounded: Document::load_mem uses LoadOptions::default(), whose max_decompressed_size is None, so the object a |
 
-**Regressions** (2)
+**Regressions** (4)
 
 | ID | Title | Severity | Description |
 |---|---|---|---|
 | RG-001 | A workflow board's status is a claim; the owner ledger is what decides the fix state | Medium | The four workflow boards under docs/kb/workflows/ listed as open work that docs/audit/2026-06-19-BUGS.md had already recorded as fixed, and genome doctor did not catch it because the boards were inter |
 | RG-002 | A numbered record is immutable once numbered: the CLI enforces it and a raw file edit is the way past | High | RG-001 was amended in place with a raw file edit two commits after it was minted, bypassing the genome CLI's records.mode=immutable gate. The genome refused a later 'rec amend'; only 'rec supersede' i |
+| RG-003 | A record touched twice is not evidence of a bypass: the discriminator is the revision trail, not the commit count | Medium | RG-002's detection law said a record touched by more than one commit was amended in place. That is false: AD-037 is touched by three commits through the genome's sanctioned supersession flow. The disc |
+| RG-006 | A tool limit asserted from memory rather than from the CLI is a claim, and the experiment that tests it may be the fix | Medium | RG-004 declared that genome archive --section works only for living plans and that a numbered record can be superseded whole or not at all. Running the command proved the opposite and performed RG-003 |
 <!-- genome:end records -->
 
-<!-- genome:zone idmap sha=a7a72b4c9dd0 -->
-(no retired records)
+<!-- genome:zone idmap sha=186deaaf8b7b -->
+| Retired | Owner now | Status |
+|---|---|---|
+| RG-004 | — | Retired |
 <!-- genome:end idmap -->

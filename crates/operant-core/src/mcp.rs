@@ -1401,6 +1401,10 @@ pub struct McpSseClient {
     auth_token: Option<String>,
     /// HTTP client for POST requests
     http_client: reqwest::Client,
+    /// The client for the SSE STREAM (the long-lived GET).
+    ///
+    /// It has no total timeout — see the constructor.
+    stream_client: reqwest::Client,
     /// Connected tools from this server
     tools: Arc<RwLock<Vec<McpTool>>>,
     /// Whether connected
@@ -1420,6 +1424,23 @@ impl McpSseClient {
             sse_url: sse_url.into(),
             post_url: Arc::new(RwLock::new(None)),
             auth_token,
+            // The STREAM client has NO total timeout.
+            //
+            // An SSE stream is a long-lived GET: the server pushes
+            // server-initiated requests over it and it has no natural end.
+            // A total timeout on the client therefore cuts the stream
+            // every 300 seconds — so the server has to re-establish it
+            // five times an hour, and a server that does not expect that
+            // (the MCP SSE spec assumes a long-lived stream) breaks.
+            //
+            // The real bounds are elsewhere and unchanged: the reader has
+            // a 10-second per-event timeout, and the POSTs use the client
+            // below, which has a 300-second timeout.
+            stream_client: reqwest::Client::builder()
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new()),
+            // The POST client: a tool call is a bounded request, so a
+            // total timeout is right here.
             http_client: reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(300))
                 .build()
@@ -1437,7 +1458,7 @@ impl McpSseClient {
         info!(url = %self.sse_url, "Connecting to MCP SSE server");
 
         // Start SSE stream
-        let mut req_builder = self.http_client.get(&self.sse_url);
+        let mut req_builder = self.stream_client.get(&self.sse_url);
         if let Some(ref token) = self.auth_token {
             req_builder = req_builder.header("Authorization", format!("Bearer {}", token));
         }
