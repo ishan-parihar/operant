@@ -496,7 +496,7 @@ operant/
 ├── Cargo.toml                 # Workspace members (12 crates, self-contained)
 ├── operant.example.toml       # Config template (7 gateway platforms)
 ├── TODO.md                    # Autonomous-mode task ledger
-├── BUGS.md                    # Open issues tracker
+├── docs/audit/2026-06-19-BUGS.md # Open issues tracker (the live ledger; the 2026-08-03 snapshot is in docs/archive/BUGS.md)
 └── AGENTS.md                  # THIS FILE
 ```
 
@@ -1279,7 +1279,7 @@ so the loop only works if every iteration ends with a push.
 
 ### Issue Tracking
 
-**File**: `docs/audit/2026-06-19-BUGS.md` (repo root)
+**File**: `docs/audit/2026-06-19-BUGS.md` (the repo's own issue ledger)
 
 **Format:**
 ```markdown
@@ -1452,7 +1452,7 @@ were adopted without moving files this repo already owns.
 | the decision and regression index (AD/RG by id, generated) | `docs/RECORDS.md` | generated — regenerate, never hand-edit |
 | exact commands, environment traps | `docs/RUNBOOK.md` | current, surgical edits |
 | superseded history (findable, never deleted) | `docs/archive/` (tombstones at the original paths, an `docs/archive/INDEX.md` row each) | tombstone + pointer |
-| open audit findings and fix state (repo-native) | `docs/audit/2026-06-19-BUGS.md` (root — NOT the kb ledger; the CLOSED ledger holds *rejected proposals*) | rows update, verdicts append |
+| open audit findings and fix state (repo-native) | `docs/audit/2026-06-19-BUGS.md` (the repo's own issue ledger — NOT the kb ledger; the CLOSED ledger holds *rejected proposals*) | rows update, verdicts append |
 | release history, dated | `docs/CHANGELOG.md` | append-only per release |
 | one-off 2026-08 design/parity/audit docs | `docs/*.md` reference shelf (HERMES_*, ORGANISM-*, *PLAN*, *AUDIT*) | frozen history — no edits, cite only |
 

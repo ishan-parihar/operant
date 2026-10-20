@@ -1,6 +1,6 @@
 | date | original | reason |
 |---|---|---|
-| 2026-10-17 | docs/BUGS.md | duplicate owner: this 2026-08-03 triage snapshot froze mid-triage; the live audit-fix ledger is root BUGS.md (same question, current) |
+| 2026-10-17 | docs/BUGS.md | duplicate owner: this 2026-08-03 triage snapshot froze mid-triage; the live audit-fix ledger is `docs/audit/2026-06-19-BUGS.md` (same question, current) |
 | 2026-10-17 | docs/2026-10-13-tui-visual-layer-handoff.md | superseded: the 2026-10-13 TUI handoff snapshot is replaced by the regenerated docs/handoff/STATE.md |
 | 2026-10-17 | plans/001-local-quality-baseline.md | 2026-08/09 remediation series (stamped d394c536, v0.1.4/R30): superseded by the dated plan series in docs/plans/ and the TODO.md register; kept for history |
 | 2026-10-17 | plans/002-config-secret-permissions.md | 2026-08/09 remediation series (stamped d394c536, v0.1.4/R30): superseded by the dated plan series in docs/plans/ and the TODO.md register; kept for history |

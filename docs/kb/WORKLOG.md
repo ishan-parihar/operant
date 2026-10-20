@@ -114,3 +114,4 @@ Append-only: `kb log "<entry>"` — one entry per unit of work.
 - **2026-10-20T23:45** · `jcode` — docs: every number in the state snapshot re-derived rather than copied, and the open-work claim corrected — RT-117 and RT-119 are actionable and were not named
 - **2026-10-20T23:50** · `jcode` — docs: the entry contract pointed the open queue at a section with nothing open in it — and two more summaries in the same file were stale too (RG-009)
 - **2026-10-20T23:57** · `jcode` — docs: AGENTS.md's CLI list was stale in BOTH directions and its count agreed with nothing — 52 variants, not 53 (RG-010)
+- **2026-10-21T00:05** · `jcode` — docs: the doc-claims check became a real gate, and it caught a tree entry for a file archived in iter-900 (RG-011)

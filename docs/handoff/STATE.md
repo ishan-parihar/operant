@@ -177,20 +177,20 @@ record touched by more than one commit was amended in place.
 |---|---|
 <!-- genome:end status -->
 
-<!-- genome:zone handoff sha=b0be9d2e227f -->
-## Handoff — 2026-10-20
+<!-- genome:zone handoff sha=6ae7a92d4c7b -->
+## Handoff — 2026-10-21
 
-Repo branch `main`, HEAD `a001d2e026302186ee423b9cde768e83e73a56cc`. Working tree dirty (7 paths).
+Repo branch `main`, HEAD `081bd3c9f95f5b9e4386f9792c396867a7502695`. Working tree dirty (13 paths).
 
 ## Open register rows
   (none)
 
 ## Recent worklog
-- **2026-10-20T23:39** · `jcode` — docs: the fifth validation retracted a cause I asserted without testing — the peer swept my change set, but not by any mechanism I could reproduce (RG-007)
 - **2026-10-20T23:42** · `jcode` — docs: the board-row count I reported was 49, not 39 — the headline figure was never derived from the source (RG-008)
 - **2026-10-20T23:45** · `jcode` — docs: every number in the state snapshot re-derived rather than copied, and the open-work claim corrected — RT-117 and RT-119 are actionable and were not named
 - **2026-10-20T23:50** · `jcode` — docs: the entry contract pointed the open queue at a section with nothing open in it — and two more summaries in the same file were stale too (RG-009)
 - **2026-10-20T23:57** · `jcode` — docs: AGENTS.md's CLI list was stale in BOTH directions and its count agreed with nothing — 52 variants, not 53 (RG-010)
+- **2026-10-21T00:05** · `jcode` — docs: the doc-claims check became a real gate, and it caught a tree entry for a file archived in iter-900 (RG-011)
 
 Regenerate with `genome handoff --write`.
 <!-- genome:end handoff -->
