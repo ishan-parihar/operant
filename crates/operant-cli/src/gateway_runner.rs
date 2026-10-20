@@ -3080,13 +3080,41 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                                         stream_msg_id = Some(msg_id.clone());
                                         last_stream_sent = stream_text.clone();
                                         // Record delivery so the dispatch loop
-                                        // skips the duplicate final send.
-                                        let mut map = stream_delivery_for_events.lock().await;
-                                        map.insert(
-                                            (platform.clone(), channel_id.clone(), thread_id),
-                                            msg_id,
-                                        );
-                                        drop(map);
+                                        // skips the duplicate final send —
+                                        // but ONLY for a platform that can
+                                        // EDIT the message it just sent.
+                                        //
+                                        // Only Telegram overrides
+                                        // `send_message_return_id`; the
+                                        // default sends the message and
+                                        // returns an EMPTY id, because
+                                        // the platform cannot edit. On
+                                        // Discord and Slack the later
+                                        // chunks' edits are no-ops, so the
+                                        // user received the FIRST CHUNK of
+                                        // the answer and never the rest —
+                                        // and the marker suppressed the
+                                        // dispatch loop's full send.
+                                        //
+                                        // So: an empty id means "this
+                                        // platform cannot edit", and the
+                                        // delivery is NOT recorded. The
+                                        // dispatch loop then sends the
+                                        // whole answer as a fresh message.
+                                        //
+                                        // The EMPTY id is still kept as
+                                        // `stream_msg_id` — it is the
+                                        // sentinel that keeps the later
+                                        // ticks on the EDIT branch instead
+                                        // of sending a new partial
+                                        // message every 500ms.
+                                        if !msg_id.is_empty() {
+                                            let mut map = stream_delivery_for_events.lock().await;
+                                            map.insert(
+                                                (platform.clone(), channel_id.clone(), thread_id),
+                                                msg_id,
+                                            );
+                                        }
                                         // Hermes `__reset__` linearization: a
                                         // content bubble just landed — close the
                                         // current tool-progress bubble so the
@@ -3152,11 +3180,20 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                             // fresh message.
                             match gw_for_events.send_message_return_id(&platform, msg).await {
                                 Ok(msg_id) => {
-                                    let mut map = stream_delivery_for_events.lock().await;
-                                    map.insert(
-                                        (platform.clone(), channel_id.clone(), thread_id),
-                                        msg_id,
-                                    );
+                                    // An EMPTY id means the platform cannot
+                                    // edit (only Telegram overrides
+                                    // `send_message_return_id`), so the
+                                    // dispatch loop must still send the
+                                    // full answer — the marker is only
+                                    // recorded for a platform that can
+                                    // edit the message it just sent.
+                                    if !msg_id.is_empty() {
+                                        let mut map = stream_delivery_for_events.lock().await;
+                                        map.insert(
+                                            (platform.clone(), channel_id.clone(), thread_id),
+                                            msg_id,
+                                        );
+                                    }
                                 }
                                 Err(e) => {
                                     tracing::warn!(
