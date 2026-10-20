@@ -1229,6 +1229,15 @@ impl BedrockProvider {
 
 #[async_trait]
 impl Provider for BedrockProvider {
+    // Bedrock speaks AWS's Converse API, not the chat-completions shape:
+    // `POST /model/{id}/converse` with `{"modelId", "messages"}` and
+    // SigV4 signing. Saying so is what lets a consumer dispatch on the
+    // wire API instead of sending a chat-completions request to an
+    // endpoint that cannot parse one.
+    fn default_wire_api(&self) -> &str {
+        operant_api::provider::CONVERSE_WIRE_API
+    }
+
     fn capabilities(&self) -> ProviderCapabilities {
         ProviderCapabilities {
             native_tool_calling: true,

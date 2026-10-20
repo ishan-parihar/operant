@@ -829,6 +829,12 @@ impl AnthropicProvider {
 #[async_trait]
 impl Provider for AnthropicProvider {
     // ── Provider-family defaults ──
+    fn default_wire_api(&self) -> &str {
+        // Anthropic's Messages API — a third shape, distinct from both
+        // chat completions and Converse.
+        operant_api::provider::MESSAGES_WIRE_API
+    }
+
     fn default_temperature(&self) -> f64 {
         TEMPERATURE_DEFAULT
     }

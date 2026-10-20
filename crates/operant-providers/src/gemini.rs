@@ -1283,6 +1283,14 @@ impl GeminiProvider {
 #[async_trait]
 impl Provider for GeminiProvider {
     // ── Provider-family defaults ──
+    fn default_wire_api(&self) -> &str {
+        // The NATIVE Gemini API. Gemini also publishes an
+        // OpenAI-compatible endpoint, so an OpenAI-compatible client
+        // reaches it — but only there, and the base URL this returns is
+        // the native one.
+        operant_api::provider::GENERATIVE_LANGUAGE_WIRE_API
+    }
+
     fn default_base_url(&self) -> Option<&str> {
         Some(BASE_URL)
     }

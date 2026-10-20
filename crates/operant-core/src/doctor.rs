@@ -134,6 +134,14 @@ fn check_config_semantics(config: &AppConfig, items: &mut Vec<CheckResult>) {
                     cat,
                     format!("default provider \"{provider}\" is invalid: {reason}"),
                 ));
+            } else if let Some(reason) = provider_unreachable_error(provider) {
+                // The name is KNOWN, so the name check passes — but the
+                // runtime cannot speak its protocol, so every request
+                // would fail. Reporting it as "valid" was the misreport.
+                items.push(CheckResult::error(
+                    cat,
+                    format!("default provider \"{provider}\" is not reachable: {reason}"),
+                ));
             } else {
                 items.push(CheckResult::ok(
                     cat,
@@ -195,6 +203,14 @@ fn check_config_semantics(config: &AppConfig, items: &mut Vec<CheckResult>) {
                 cat,
                 format!(
                     "fallback provider \"{}\" is invalid: {}",
+                    fb.provider, reason
+                ),
+            ));
+        } else if let Some(reason) = provider_unreachable_error(&fb.provider) {
+            items.push(CheckResult::warn(
+                cat,
+                format!(
+                    "fallback provider \"{}\" is not reachable: {}",
                     fb.provider, reason
                 ),
             ));
@@ -266,6 +282,39 @@ fn provider_validation_error(name: &str) -> Option<String> {
                 .into(),
         ),
     }
+}
+
+/// The wire APIs the RUNTIME can actually speak.
+///
+/// The runtime has exactly two model clients: `AnthropicModelClient`
+/// (Anthropic's Messages API) and `OpenAIModelClient` (the chat-
+/// completions shape). Every other provider the factory knows is
+/// implemented in `operant-providers` but is NOT reachable from the run
+/// path — the runtime's provider routing sends every non-anthropic
+/// provider to the OpenAI-compatible client.
+///
+/// So a provider whose wire API is neither of these two is configured but
+/// unreachable: the doctor used to report it as "valid", and every request
+/// would fail against an endpoint that speaks a different protocol.
+const RUNTIME_WIRE_APIS: &[&str] = &["chat_completions", "messages"];
+
+/// The reason a provider cannot be served by the runtime, if it cannot.
+///
+/// `None` means the runtime can serve it.
+fn provider_unreachable_error(name: &str) -> Option<String> {
+    let Ok(handle) = operant_providers::create_provider(name, None) else {
+        // An unknown name is the validation error's job, not this one's.
+        return None;
+    };
+    let wire_api = handle.default_wire_api();
+    if RUNTIME_WIRE_APIS.contains(&wire_api) {
+        return None;
+    }
+    Some(format!(
+        "it speaks the \"{wire_api}\" wire API, and the runtime only speaks \
+         chat-completions (OpenAI-compatible) and messages (Anthropic) — so \
+         every request to it would be sent in the wrong protocol"
+    ))
 }
 
 fn embedding_provider_validation_error(name: &str) -> Option<String> {
@@ -484,6 +533,46 @@ fn truncate_for_display(input: &str, max_chars: usize) -> String {
 
 #[cfg(test)]
 mod tests {
+    /// A provider the runtime CANNOT speak must not be reported as valid.
+    ///
+    /// Bedrock's name is known to the factory, so the name check passed
+    /// and the doctor printed `provider "bedrock" is valid` — but the
+    /// runtime's provider routing sends every non-anthropic provider to
+    /// the OpenAI-compatible client, and Bedrock speaks AWS's Converse
+    /// API. So an operator could select Bedrock in the TUI (it is in the
+    /// provider catalogue) and every request would fail against an
+    /// endpoint that cannot parse a chat-completions request.
+    ///
+    /// The check reads the provider's declared wire API, which is why the
+    /// three non-chat-completions providers now declare theirs — the
+    /// trait's default says "chat_completions", and a provider that does
+    /// NOT speak it must say so.
+    #[test]
+    fn a_provider_the_runtime_cannot_speak_is_not_reported_as_valid() {
+        // The name is known — so the NAME check passes.
+        assert!(
+            provider_validation_error("bedrock").is_none(),
+            "bedrock is a known provider name"
+        );
+        // But the runtime cannot serve it.
+        let reason = provider_unreachable_error("bedrock")
+            .expect("bedrock speaks a wire API the runtime does not");
+        assert!(
+            reason.contains("converse"),
+            "the reason must name the wire API, got: {reason}"
+        );
+
+        // And the providers the runtime CAN serve are still fine.
+        assert!(
+            provider_unreachable_error("openai").is_none(),
+            "openai is chat-completions — the runtime speaks it"
+        );
+        assert!(
+            provider_unreachable_error("anthropic").is_none(),
+            "anthropic is messages — the runtime speaks it"
+        );
+    }
+
     use super::*;
     use operant_config::schema::{EmbeddingRouteConfig, FallbackProviderConfig, ModelRouteConfig};
     use serial_test::serial;

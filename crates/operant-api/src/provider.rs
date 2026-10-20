@@ -323,6 +323,32 @@ pub const BASELINE_TIMEOUT_SECS: u64 = 120;
 /// classic chat completions shape.
 pub const BASELINE_WIRE_API: &str = "chat_completions";
 
+/// AWS Bedrock's Converse API.
+///
+/// Bedrock does NOT speak the chat-completions shape: it takes
+/// `{"modelId": ..., "messages": [{"role", "content": [{"text"}]}]}` at
+/// `POST /model/{id}/converse`, with SigV4 signing. A provider that
+/// speaks it must say so — a consumer that dispatches on the wire API
+/// (the runtime's provider routing, the doctor's provider check) would
+/// otherwise send a chat-completions request to an endpoint that cannot
+/// parse one.
+pub const CONVERSE_WIRE_API: &str = "converse";
+
+/// Anthropic's Messages API.
+///
+/// `POST /v1/messages` with `{"model", "max_tokens", "messages": [...],
+/// "system": ...}` — a third shape, distinct from both chat completions
+/// and Converse.
+pub const MESSAGES_WIRE_API: &str = "messages";
+
+/// Google's Generative Language API.
+///
+/// `POST /v1beta/models/{model}:generateContent` with `{"contents":
+/// [{"role", "parts": [{"text"}]}]}`. Gemini ALSO publishes an
+/// OpenAI-compatible endpoint, so an OpenAI-compatible client reaches it
+/// — but only at that endpoint, not at the native one.
+pub const GENERATIVE_LANGUAGE_WIRE_API: &str = "generate_content";
+
 #[async_trait]
 pub trait Provider: Send + Sync {
     /// Query provider capabilities.
