@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-1091 — the streaming send now records in the delivery ledger, so a streamed answer is not invisible in the delivery-health view.** `operant channel add sms` is no longer rejected, and `operant channel add webhook` no longer is either.
+
 - **iter-1089 — `operant channel add` says when the channel it added is send-only.** "Added slack channel" led an operator to believe the agent would see Slack messages.
 
 - **iter-1087 — `operant gateway status` now says which platforms can RECEIVE.** "Slack: enabled" led an operator to believe they could receive Slack messages; the status now says "send-only (no inbound)".

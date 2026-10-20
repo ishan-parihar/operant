@@ -713,6 +713,25 @@ impl Gateway {
         let outcome = adapter.send_message_return_id(message).await;
         self.breaker_record(platform, &channel_id, outcome.as_ref().err())
             .await;
+        // The delivery ledger.
+        //
+        // The plain send (`send_to_platform`) has always recorded here.
+        // The STREAMING path — this method — did NOT: so every answer
+        // the agent streamed to a platform was invisible in the delivery
+        // health the ledger exists to show, while the proactive sends
+        // around it were visible. The two paths disagreed about the same
+        // thing.
+        //
+        // The status is the OUTCOME of the send, so a failed send is
+        // recorded as failed rather than as a success.
+        let status = if outcome.is_ok() {
+            "delivered"
+        } else {
+            "failed"
+        };
+        self.delivery_ledger
+            .record(platform, &channel_id, "", status)
+            .await;
         outcome
     }
 
@@ -1935,6 +1954,58 @@ mod tests {
         // from a config key and from the adapter's own name.
         assert!(platform_can_receive("Telegram"));
         assert!(platform_can_receive("TELEGRAM"));
+    }
+
+    /// The delivery ledger must record what the STREAMING path did.
+    ///
+    /// The plain send (`send_to_platform`) has always recorded. The
+    /// streaming path (`send_message_return_id`) did NOT: so every answer
+    /// the agent streamed to a platform was invisible in the delivery
+    /// health the ledger exists to show, while the proactive sends around
+    /// it were visible. The two paths disagreed about the same thing.
+    ///
+    /// The test drives the STREAMING path for both outcomes, so a ledger
+    /// that recorded only successes (or only failures) fails it — and so
+    /// removing the record call fails it.
+    #[tokio::test]
+    async fn the_delivery_ledger_records_what_each_streamed_send_did() {
+        let gateway = Gateway::new(GatewayConfig::default());
+        let gateway = gateway
+            .with_adapter(Arc::new(SucceedingAdapter {
+                name: "ok-platform".to_string(),
+            }))
+            .with_adapter(Arc::new(FlakyAdapter {
+                name: "bad-platform".to_string(),
+                sends: Arc::new(AtomicUsize::new(0)),
+                error: "the platform refused it".to_string(),
+            }));
+
+        let ok = gateway
+            .send_message_return_id(
+                "ok-platform",
+                OutgoingMessage::new("chat-1".to_string(), "hello"),
+            )
+            .await;
+        assert!(ok.is_ok(), "the succeeding adapter must succeed");
+
+        let bad = gateway
+            .send_message_return_id(
+                "bad-platform",
+                OutgoingMessage::new("chat-2".to_string(), "hello"),
+            )
+            .await;
+        assert!(bad.is_err(), "the flaky adapter must fail");
+
+        assert_eq!(
+            gateway.delivery_ledger.delivered_count().await,
+            1,
+            "the successful streamed send must be recorded as delivered"
+        );
+        assert_eq!(
+            gateway.delivery_ledger.failed_count().await,
+            1,
+            "the failed streamed send must be recorded as failed"
+        );
     }
 
     #[test]

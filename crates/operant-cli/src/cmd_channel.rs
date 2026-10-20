@@ -177,9 +177,11 @@ pub async fn handle_channel_command(
                             "enabled": c.enabled,
                             // The ENABLED flag, not a probe: the doctor does
                             // not reach the platform, so it cannot know
-                            // whether the channel works. Kept for
-                            // compatibility.
-                            "healthy": c.enabled,
+                            // whether the channel works. Renamed from
+                            // "healthy", which claimed a health the
+                            // command never checked.
+                            "configured": c.enabled,
+                            "health": "not probed",
                             // Whether the agent can RECEIVE on this
                             // channel. A send-only platform has a complete
                             // inbound parser that nothing calls, so a
@@ -249,7 +251,10 @@ pub async fn handle_channel_command(
                          messages sent to it never reach the agent."
                     );
                 }
-                println!("Run `operant channel doctor` to verify connectivity.");
+                // The doctor does NOT reach the platform — it reports the
+                // configuration, not a probe — so telling the operator to
+                // "verify connectivity" with it was a false instruction.
+                println!("The doctor reports the CONFIGURED channels; it does not probe them.");
             }
             Ok(())
         }
@@ -338,11 +343,31 @@ pub async fn handle_channel_command(
 /// Normalize and validate a channel type name against the set this CLI can manage.
 fn normalize_channel_type(raw: &str) -> Result<String> {
     let t = raw.trim().to_ascii_lowercase();
+    // The CANONICAL platform keys — the ones the gateway's registry and
+    // the config use.
+    //
+    // "webhooks" was here, and it is not a platform key: the key is
+    // "webhook" (`webhooks_enabled`). So `operant channel add webhooks`
+    // wrote a key the config does not have, and `operant channel add
+    // webhook` — the correct spelling — was REJECTED as unsupported.
+    // The plural is accepted as an ALIAS and normalised to the
+    // canonical key, so both spellings work and the one that is written
+    // is the one the config reads.
+    //
+    // "sms" was missing entirely, so RT-118's fix — SMS in the channel
+    // LIST — had no way to be configured: `operant channel add sms` was
+    // rejected. The registry has SEVEN adapters and the list shows all
+    // seven; the write path now does too.
     const SUPPORTED: &[&str] = &[
-        "telegram", "discord", "slack", "whatsapp", "email", "webhooks",
+        "telegram", "discord", "slack", "whatsapp", "email", "sms", "webhook",
     ];
-    if SUPPORTED.contains(&t.as_str()) {
-        Ok(t)
+    let canonical = if t == "webhooks" {
+        "webhook"
+    } else {
+        t.as_str()
+    };
+    if SUPPORTED.contains(&canonical) {
+        Ok(canonical.to_string())
     } else {
         bail!(
             "Unsupported channel type '{t}'. Supported: {}",
@@ -416,7 +441,13 @@ fn set_channel_enabled(
         "email" => {
             gw.email_enabled = enabled;
         }
-        "webhooks" => {
+        "sms" => {
+            // The SMS adapter reads its Twilio credentials from the
+            // environment (`TWILIO_ACCOUNT_SID` and friends), so there
+            // is no token to store here — only the switch.
+            gw.sms_twilio_enabled = enabled;
+        }
+        "webhook" => {
             gw.webhooks_enabled = enabled;
         }
         other => bail!("Unsupported channel type '{other}'"),
@@ -507,5 +538,77 @@ impl ChannelEntry {
     /// Whether the inbound column applies to this row at all.
     fn is_platform(&self) -> bool {
         self.key != "cli"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every platform the gateway's registry has must be configurable.
+    ///
+    /// The list showed SMS (RT-118) but the WRITE path did not: the
+    /// supported set had no "sms", so `operant channel add sms` was
+    /// rejected. The list and the write path had drifted.
+    #[test]
+    fn every_platform_in_the_registry_is_configurable() {
+        for platform in [
+            "telegram", "discord", "slack", "whatsapp", "email", "sms", "webhook",
+        ] {
+            let normalized = normalize_channel_type(platform)
+                .unwrap_or_else(|e| panic!("{platform} must be configurable: {e}"));
+            assert_eq!(&normalized, platform, "{platform} must normalise to itself");
+        }
+    }
+
+    /// The platform key is "webhook" — the config's key is
+    /// `webhooks_enabled`, so the plural "webhooks" was never a valid
+    /// key. It is accepted as an ALIAS and normalised, so
+    /// `channel add webhooks` works AND `channel add webhook` (the
+    /// correct spelling) is not rejected.
+    #[test]
+    fn the_webhook_platform_key_is_canonicalised() {
+        assert_eq!(
+            normalize_channel_type("webhook").expect("webhook is supported"),
+            "webhook"
+        );
+        assert_eq!(
+            normalize_channel_type("webhooks").expect("the plural is an alias"),
+            "webhook",
+            "the plural must normalise to the canonical key"
+        );
+        assert_eq!(
+            normalize_channel_type("WebHooks").expect("the case is ignored"),
+            "webhook"
+        );
+    }
+
+    /// An unknown platform is still rejected.
+    #[test]
+    fn an_unknown_platform_is_rejected() {
+        assert!(normalize_channel_type("carrier-pigeon").is_err());
+    }
+
+    /// The switch must write the config key the gateway reads.
+    #[test]
+    fn the_sms_switch_writes_the_config_key() {
+        let mut config = AppConfig::default();
+        set_channel_enabled(&mut config, "sms", true, None).expect("sms is supported");
+        assert!(
+            config.gateway.sms_twilio_enabled,
+            "the SMS switch must set sms_twilio_enabled"
+        );
+    }
+
+    /// The webhook switch must write `webhooks_enabled` — the key the
+    /// config has — for the canonical platform name.
+    #[test]
+    fn the_webhook_switch_writes_the_config_key() {
+        let mut config = AppConfig::default();
+        set_channel_enabled(&mut config, "webhook", true, None).expect("webhook is supported");
+        assert!(
+            config.gateway.webhooks_enabled,
+            "the webhook switch must set webhooks_enabled"
+        );
     }
 }
