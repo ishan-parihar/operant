@@ -648,7 +648,18 @@ impl McpStdioClient {
         cmd.args(&self.args)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped());
+            .stderr(std::process::Stdio::piped())
+            // Kill the child when the handle is dropped.
+            //
+            // Without this, dropping the transport left the MCP server
+            // subprocess RUNNING as an orphan: tokio's default is
+            // `kill_on_drop = false`, and the only path that killed the
+            // child was `kill_child` — which is called on the RECONNECT
+            // path, not on drop. So every transport that was dropped
+            // without an explicit `disconnect()` (a failed connect, a
+            // manager teardown, the agent shutting down) left a live
+            // subprocess behind, and its stdin/stdout pipes with it.
+            .kill_on_drop(true);
 
         for (key, value) in &self.env {
             cmd.env(key, value);
@@ -2486,6 +2497,115 @@ for line in sys.stdin:
             HashMap::new(),
         );
         (client, dir)
+    }
+
+    /// A fake MCP server that IGNORES stdin EOF.
+    ///
+    /// The shared `FAKE_MCP_SERVER` reads `for line in sys.stdin:`, so it
+    /// EXITS when its stdin closes — and the transport's pipes close when
+    /// it is dropped. That made the drop test vacuous: the server died of
+    /// its own accord, and the test passed with `kill_on_drop` removed.
+    ///
+    /// This one keeps running until it is KILLED: it answers the
+    /// handshake, then sleeps forever, ignoring stdin entirely.
+    const STUBBORN_MCP_SERVER: &str = r#"import sys, json, time
+# Answer every request, echoing whatever id the client sent, then ignore
+# stdin entirely — only a KILL can stop this process.
+#
+# The client's handshake is TWO round trips: `initialize` and then
+# `tools/list`. A server that answers only the first leaves the client
+# waiting on the second.
+while True:
+    line = sys.stdin.readline()
+    if not line:
+        break
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        req = json.loads(line)
+    except Exception:
+        continue
+    if req.get('id') is None:
+        continue
+    if req.get('method') == 'tools/list':
+        result = {'tools': []}
+    else:
+        result = {'protocolVersion': '2025-06-18', 'capabilities': {'tools': {}}, 'serverInfo': {'name': 'stubborn', 'version': '1.0'}}
+    sys.stdout.write(json.dumps({'jsonrpc': '2.0', 'id': req['id'], 'result': result}) + chr(10))
+    sys.stdout.flush()
+# Never exit on stdin EOF — only a signal can stop this.
+while True:
+    time.sleep(3600)
+"#;
+
+    /// Build a stdio client pointed at a freshly-written copy of a fake
+    /// MCP server script that ignores stdin EOF. The temp dir is returned
+    /// so tests can keep it alive (or it is cleaned up by the OS on exit).
+    fn stubborn_stdio_client() -> (McpStdioClient, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!(
+            "operant_mcp_stubborn_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        let script = dir.join("stubborn_server.py");
+        std::fs::write(&script, STUBBORN_MCP_SERVER).expect("write the server");
+        let client = McpStdioClient::new(
+            "python3",
+            vec![script.to_string_lossy().to_string()],
+            HashMap::new(),
+        );
+        (client, dir)
+    }
+
+    /// Dropping the transport must KILL the MCP server subprocess.
+    ///
+    /// tokio's default is `kill_on_drop = false`, and the only path that
+    /// killed the child was `kill_child` — which is called on the
+    /// RECONNECT path, not on drop. So every transport dropped without an
+    /// explicit `disconnect()` (a failed connect, a manager teardown, the
+    /// agent shutting down) left a live subprocess behind, with its
+    /// stdin/stdout pipes.
+    ///
+    /// The child is a `python3` running the fake server, so the test can
+    /// observe its PID and check that the process is gone after the drop.
+    #[tokio::test]
+    async fn dropping_the_transport_kills_the_mcp_server_process() {
+        // The STUBBORN server: it ignores stdin EOF, so only a KILL can
+        // stop it. The shared fake server exits on EOF, which made this
+        // test pass with the fix removed.
+        let (client, _dir) = stubborn_stdio_client();
+        client.connect().await.expect("the server connect");
+        assert!(client.process_alive().await, "the child must be running");
+
+        let pid = {
+            let guard = client.child.read().await;
+            guard
+                .as_ref()
+                .and_then(|c| c.id())
+                .expect("the child must have a PID")
+        };
+
+        // Drop the transport — no explicit `disconnect`.
+        drop(client);
+
+        // The kill is asynchronous; give the OS a moment.
+        let mut alive = true;
+        for _ in 0..40 {
+            alive = std::path::Path::new(&format!("/proc/{pid}")).exists();
+            if !alive {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        assert!(
+            !alive,
+            "the MCP server subprocess {pid} must not outlive the transport"
+        );
     }
 
     #[tokio::test]
