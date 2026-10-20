@@ -320,13 +320,53 @@ static REASONING_DISPLAY_OVERRIDE: std::sync::RwLock<Option<ReasoningDisplayMode
     std::sync::RwLock::new(None);
 
 /// Serialises tests that read or write the process-global override cell —
-/// parallel test threads otherwise race on it. Hold the guard for the whole
-/// test, and reset the cell to `None` before dropping it.
+/// parallel test threads otherwise race on it — AND restores the cell when
+/// it is dropped.
+///
+/// The restore is the point. A test that sets the cell and resets it by
+/// hand leaks the value whenever it PANICS before the reset: the reset is
+/// after the assertions, so a failing assertion skips it, and the cell
+/// stays at whatever the test set. The next test that expects a different
+/// mode then sees the leaked one — which is how a suite that passes in
+/// isolation fails under load, with a failure that looks like a product
+/// bug ("the thinking did not render") and is not one.
+///
+/// Dropping the guard restores the cell to `None` — the snapshot default —
+/// on EVERY exit path, including a panic.
 #[cfg(test)]
-pub(crate) fn reasoning_override_test_guard() -> std::sync::MutexGuard<'static, ()> {
+pub(crate) struct ReasoningOverrideGuard {
+    // The serialising lock. Held for the guard's lifetime, so no other
+    // test touches the cell while this one does.
+    _lock: std::sync::MutexGuard<'static, ()>,
+}
+
+#[cfg(test)]
+impl Drop for ReasoningOverrideGuard {
+    fn drop(&mut self) {
+        // Restore the snapshot default, so the next test is not poisoned.
+        set_reasoning_display_override(None);
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn reasoning_override_test_guard() -> ReasoningOverrideGuard {
     static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    LOCK.lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+    ReasoningOverrideGuard {
+        _lock: LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+    }
+}
+
+/// The process-wide reasoning display mode, as currently set.
+///
+/// `None` means "the snapshot default applies".
+#[cfg(test)]
+pub(crate) fn current_reasoning_display_override() -> Option<ReasoningDisplayMode> {
+    REASONING_DISPLAY_OVERRIDE
+        .read()
+        .ok()
+        .and_then(|cell| *cell)
 }
 
 /// Set the process-wide reasoning display mode. Idempotent: first call
@@ -347,4 +387,42 @@ pub fn replace_reasoning_display_override(mode: Option<ReasoningDisplayMode>) {
 pub fn config() -> &'static Config {
     static SNAPSHOT: LazyLock<Config> = LazyLock::new(Config::default);
     &SNAPSHOT
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The guard must restore the cell when it is dropped.
+    ///
+    /// A test that sets the cell and resets it BY HAND leaks the value
+    /// whenever it PANICS before the reset — the reset is after the
+    /// assertions, so a failing assertion skips it. The next test that
+    /// expects a different mode then sees the leaked one, and fails with
+    /// a message that looks like a product bug ("the thinking did not
+    /// render") and is not one. That is how a suite that passes in
+    /// isolation fails under load.
+    ///
+    /// Dropping the guard restores the cell on EVERY exit path, including
+    /// a panic. This test proves the restore happens without a panic.
+    #[test]
+    fn the_guard_restores_the_cell_when_it_is_dropped() {
+        set_reasoning_display_override(Some(ReasoningDisplayMode::Off));
+        {
+            let _guard = reasoning_override_test_guard();
+            set_reasoning_display_override(Some(ReasoningDisplayMode::Off));
+            // Inside the guard the cell holds what the test set.
+            assert_eq!(
+                current_reasoning_display_override(),
+                Some(ReasoningDisplayMode::Off),
+                "the cell must hold the mode the test set"
+            );
+        }
+        // And after the guard is dropped, the snapshot default is back.
+        assert_eq!(
+            current_reasoning_display_override(),
+            None,
+            "the guard must restore the cell on drop"
+        );
+    }
 }
