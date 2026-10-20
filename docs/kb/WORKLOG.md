@@ -113,3 +113,4 @@ Append-only: `kb log "<entry>"` — one entry per unit of work.
 - **2026-10-20T23:42** · `jcode` — docs: the board-row count I reported was 49, not 39 — the headline figure was never derived from the source (RG-008)
 - **2026-10-20T23:45** · `jcode` — docs: every number in the state snapshot re-derived rather than copied, and the open-work claim corrected — RT-117 and RT-119 are actionable and were not named
 - **2026-10-20T23:50** · `jcode` — docs: the entry contract pointed the open queue at a section with nothing open in it — and two more summaries in the same file were stale too (RG-009)
+- **2026-10-20T23:57** · `jcode` — docs: AGENTS.md's CLI list was stale in BOTH directions and its count agreed with nothing — 52 variants, not 53 (RG-010)

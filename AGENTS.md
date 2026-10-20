@@ -858,14 +858,22 @@ asked — the user has accepted them as documented gaps.
 
 ## What IS Working (verified functional — iter-68 audit)
 
-### CLI (53 command variants — real handlers, except the two accepted stubs below)
-run, chat, autonomous, tools, test, config, sessions, mcp, skills, model,
-completion, cron, kanban, gateway (16 sub-actions), checkpoints, memory,
-profile, auth/login/logout, version, doctor, status, dump, logs, backup,
-import, uninstall, update, insights, webhook, debug, plugins, curator,
-setup, acp, dashboard, trajectory, architecture, channel, context, cookies,
-hardware, hooks, migrate, pause, peripheral, resume, service, sop,
-suggestions, tui
+### CLI (52 command variants — real handlers, except the two accepted stubs below)
+
+run, autonomous, tools, chat, test, config, sessions
+mcp, cookies, skills, model, completion, cron, pause
+resume, suggestions, kanban, org, gateway, checkpoints, memory
+context, profile, auth, login, logout, version, doctor
+status, dump, logs, backup, import, uninstall, update
+insights, webhook, hooks, debug, plugins, architecture, channel
+sop, migrate, service, curator, setup, acp, dashboard
+trajectory, tui, donate
+
+The list above is derived from the `Commands` enum in
+`crates/operant-cli/src/main.rs` (52 variants). It used to claim 53 and list
+`hardware` and `peripheral`, both removed in iter-892, while omitting `donate`
+and `org`, both real commands with handlers. Re-derive it rather than trusting
+it — see RG-010 for the check.
 
 ### Gateway (7 platform adapters — all have real code, platform registry)
 - Telegram: fully implemented (long-poll + Bot API)
