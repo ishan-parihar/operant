@@ -19,28 +19,33 @@ Method: a read-only sweep of the code, with file and line citations. The main ag
 
 ## Findings and where they are recorded
 
+Reconciled 2026-10-20 (iter-1053) against `docs/audit/2026-06-19-BUGS.md`, which is the
+owner of each row's fix state. Every row below was `open` when this board was
+written; every row is now closed, and the table names the iteration. The
+`Dedupe:` and `Limits:` notes in each BUGS.md row carry the residuals.
+
 | ID | Sev | One line | Status |
 |---|---|---|---|
 | KB-1 | H | `learning_manage` delete and edit followed a `node_id` out of the skills dir | fixed iter-958 |
 | KB-2 | H | `skill_manage` `find_skill` and `category` joined unchecked names | fixed iter-958 |
-| KB-3 | H | knowledge writes have no approval gate | open, policy decision |
-| KB-4 | H | the security scan on skill writes never runs | open |
-| KB-5 | H | skill descriptions enter the system prompt unescaped | open |
-| KB-6 | H | recalled memory is injected unescaped, and every turn is retained | open |
-| KB-7 | H | a deferred sync can retain one seat's turn into another seat's bank | open, timing-dependent |
-| KB-8 | M | unbound sessions share the personal bank | open, reachability not traced |
-| KB-9 | M | the Holon redirect does not cover `learning_manage` | open |
-| KB-10 | M | declared plugin permissions are not enforced (plugins-wasm) | open, Phase 1.1 of the plugin plan |
-| KB-11 | M | a plugin tool can replace a built-in (plugins-wasm) | open, Phase 1.2 of the plugin plan |
-| KB-12 | M | writes have no length caps, quotas, or rate limit | open |
-| KB-13 | M | secrets are stored in memory and in skills | open |
-| KB-14 | M | the memory store silently falls back to in-memory | open |
-| KB-15 | M | non-atomic writes and lost updates on memory and skill files | open |
-| KB-16 | L | symlinks inside a skill directory are followed | open |
-| KB-17 | L | the plugin HTTP host function accepts internal addresses (plugins-wasm) | open, Phase 1.3 of the plugin plan |
-| KB-18 | L | a WASM plugin is instantiated synchronously on every call | open |
-| KB-19 | L | `memory delete <id>` has no confirmation | open |
-| KB-20 | M | `operant plugins disable` has no effect on loading (plugins-wasm) | open, decision D1 |
+| KB-3 | H | knowledge writes have no approval gate | fixed iter-971 (AD-020) |
+| KB-4 | H | the security scan on skill writes never runs | fixed iter-962 |
+| KB-5 | H | skill descriptions enter the system prompt unescaped | fixed iter-962 |
+| KB-6 | H | recalled memory is injected unescaped, and every turn is retained | fixed iter-971 (AD-019); retention for untrusted channels is the owner gate |
+| KB-7 | H | a deferred sync can retain one seat's turn into another seat's bank | fixed iter-962 |
+| KB-8 | M | unbound sessions share the personal bank | fixed iter-971 (AD-019) |
+| KB-9 | M | the Holon redirect does not cover `learning_manage` | fixed iter-962 |
+| KB-10 | M | declared plugin permissions are not enforced (plugins-wasm) | fixed iter-972 (AD-023); FileRead/FileWrite stay declarative |
+| KB-11 | M | a plugin tool can replace a built-in (plugins-wasm) | fixed iter-972 (AD-023) |
+| KB-12 | M | writes have no length caps, quotas, or rate limit | fixed iter-971 (AD-021) |
+| KB-13 | M | secrets are stored in memory and in skills | fixed iter-971 (AD-021) |
+| KB-14 | M | the memory store silently falls back to in-memory | fixed iter-971 (AD-022) |
+| KB-15 | M | non-atomic writes and lost updates on memory and skill files | fixed iter-971 (AD-021) |
+| KB-16 | L | symlinks inside a skill directory are followed | fixed iter-971 (AD-021) |
+| KB-17 | L | the plugin HTTP host function accepts internal addresses (plugins-wasm) | fixed iter-972 (AD-023) |
+| KB-18 | L | a WASM plugin is instantiated synchronously on every call | fixed iter-972 (AD-023) |
+| KB-19 | L | `memory delete <id>` has no confirmation | fixed iter-971 (AD-022) |
+| KB-20 | M | `operant plugins disable` has no effect on loading (plugins-wasm) | fixed iter-972 (AD-023) |
 
 ## Checked and safe
 
@@ -62,8 +67,14 @@ Method: a read-only sweep of the code, with file and line citations. The main ag
 - memory-wire's SQLite locking lives in the external `memory-wire` crate, so it was not verified.
 - The plugin WASI filesystem scope (`Plugin::new(..., true)`) was not verified.
 - Panics on bad input: no panic path was found on the agent-facing paths read. The audit is not exhaustive.
-- KB-8 reachability: whether `allowed_users` enforcement stops a non-owner from reaching an unbound session was not traced.
+- KB-8 reachability: whether `allowed_users` enforcement stops a non-owner from reaching an unbound session was not traced. **Superseded by KB-8's fix (iter-971, AD-019):** the reachability question was about the gating mechanism, and the design that landed does not rely on `allowed_users` — an unbound sender who is not in `gateway.admins` runs in its own `MemoryScope::Sender`, so no two senders share a bank. The sender path is the gate now.
 
 ## Next
 
-The plugin items (KB-10, KB-11, KB-17, KB-20) are sequenced in `docs/plans/plan-2026-10-19-plugin-ecosystem.md`, Phase 1. KB-3 and KB-4 need a policy decision on whether knowledge writes from background review and gateway sessions are prompted.
+Nothing on this board is open. All 20 rows are closed, and the fix states above are read from `docs/audit/2026-06-19-BUGS.md`, which owns them.
+
+Two residuals are worth naming rather than closing, because they are the rows a future session would otherwise re-open:
+
+- KB-3 / KB-4, the policy question of whether knowledge writes from background review and gateway sessions are prompted — answered by AD-020 (iter-971). The staged-apply path was not built: the `write_approval` module still has no production caller.
+- KB-10, FileRead and FileWrite stay declarative (no host function checks them; AD-023).
+- The plugin items were sequenced in `docs/plans/plan-2026-10-19-plugin-ecosystem.md`, Phase 1, and are now closed in iter-972 (AD-023).

@@ -6,10 +6,13 @@ the prose above it is hand-written and is the part that goes stale.
 ## Where the project stands
 
 - Release line `0.2.1`. `origin/main` carries the autonomous defect sweep of
-  2026-10-19/20 (iters 980-1024): 45 iterations, each a separate pushed
-  commit, each with a mutation-checked regression test. The summary of what
-  the sweep found, how each was proven, and what remains open is
+  2026-10-19/20 (iters 980-1055): 76 iterations in the sweep's range, each a
+  separate pushed commit, each with a mutation-checked regression test. The
+  summary of what the sweep found, how each was proven, and what remains open is
   [`docs/audit/2026-10-20-the-defect-sweep-session-summary.md`](../audit/2026-10-20-the-defect-sweep-session-summary.md).
+- The defect ledger `docs/audit/2026-06-19-BUGS.md` is at **194 rows closed,
+  2 open** on `origin/main` (S1 and S2, both live-terminal checks that need a
+  terminal this environment does not have). 99 `RT-` rows, the highest RT-99.
 - The release binary is deployed to `~/.local/bin/operant` and the gateway
   daemon runs on it (the running process's `/proc/<pid>/exe` md5 matches the
   deployed file). A THIRD operant was cleared from PATH at iter-988:
@@ -51,7 +54,7 @@ workspace searched, not one file.
 
 ## Open register rows (TODO.md)
 
-`Implemented` holds 46 rows (the last is iter-856). `Pending` (3 items):
+`Implemented` holds 46 rows (the last is iter-970). `Pending` (3 items):
 rebuild `/settings` over `operant.toml`; `[keybindings]` overrides in
 `operant.toml`; unify the gateway's `agent.show_reasoning` with the TUI
 reasoning display mode. `Review` (5 items) holds owner decisions:
@@ -66,7 +69,8 @@ Adopted 2026-10-17 (iter-901): roles mapped in `genome.toml`;
 `docs/plans/` and `docs/audit/` are the single plan/audit owners; the
 `plans/` series and `docs/BUGS.md` were archived with tombstones
 (`docs/archive/INDEX.md`). The CLI is `./scripts/genome` (the `kb` name was
-the skill's original and is gone).
+the skill's original and is gone — the `kb` alias some docs still cite is
+dead).
 
 Wake routine: `./scripts/genome feed --to <your-agent-id>` then
 `./scripts/genome doctor`; `./scripts/genome lint` must be clean before any
@@ -75,15 +79,38 @@ docs commit.
 Live claims: see `genome doctor`. Recent units of work:
 `docs/kb/WORKLOG.md`.
 
+### Genome reconciliation — iter-1053
+
+The four workflow boards under `docs/kb/workflows/` were stale, and stale in
+the direction that costs the most: they listed as **open** work that
+`docs/audit/2026-06-19-BUGS.md` had already recorded as **fixed**. 39 board
+rows described defects that were closed between iter-958 and iter-973. An
+agent reading a board to pick up work would have re-opened, re-diagnosed and
+re-fixed findings that are already fixed — and the boards are the collision
+guard, so a fresh claim on one of those rows would have looked legitimate.
+
+The rule this exposes: **a board's status is a claim, and `docs/audit/2026-06-19-BUGS.md`
+is the owner of the fix state.** The board was written when the sweep found the
+defects; nothing ever walked back to mark the rows. `genome doctor` did not
+catch it, because the boards were internally consistent — open rows with a
+valid id are exactly what the schema expects.
+
+All four boards are now reconciled (0 open): `holon-seat-redteam` (17 rows),
+`tui-redteam` (12), `knowledge-base-redteam` (20 findings plus the reachability
+and next-work notes), and `org-tui-foundation` (3). Each row names the fixing
+iteration and cites the BUGS.md row or the AD that closed it. The two rows that
+were **decisions**, not fixes — the seat default for new org chats and the
+G-1 defect — are closed by AD-028 and GW-9/iter-968 respectively.
+
 <!-- genome:zone status sha=3c05967a2670 -->
 | status | items |
 |---|---|
 <!-- genome:end status -->
 
-<!-- genome:zone handoff sha=ed989d7d1036 -->
+<!-- genome:zone handoff sha=4df71e650c9b -->
 ## Handoff — 2026-10-20
 
-Repo branch `main`, HEAD `69ceb4de8f115ed3f7b1477463fe43eabcdf3b83`. Working tree dirty (3 paths).
+Repo branch `main`, HEAD `8fe47b9deec2bd17fb119ef56b26300230b34d40`. Working tree dirty (17 paths).
 
 ## Open register rows
   (none)

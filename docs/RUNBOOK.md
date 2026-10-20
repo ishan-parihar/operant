@@ -49,10 +49,14 @@ One autonomous agent works `TODO.md`. These rules cover that loop and anyone who
 | health: staleness, append-only violations, live claims | `./scripts/genome doctor` |
 | wake as a parallel agent | `./scripts/genome feed --to <your-id>` then `./scripts/genome doctor` |
 | claim / finish | `./scripts/genome claim <item>`; `./scripts/genome done <item> done --evidence <path>` |
-| mint records | `./scripts/genome plan "<title>"`, `kb audit`, `kb ad`, `kb rg` |
+| mint records | `./scripts/genome plan "<title>"`, `./scripts/genome audit "<title>"`, `./scripts/genome rec new ad <title>` / `rg <title>` — the CLI is `genome`; the old `kb` name is gone, so a doc or script citing `kb <verb>` cites a dead binary |
 | append entries | `./scripts/genome log "<entry>" --agent <id>` (full text in the argument: `--body` is dropped); `./scripts/genome post "<msg>" --wf <wf> --to @<agent>` |
 | supersede a doc | `./scripts/genome archive <path> --reason "<why>"` (tombstone + INDEX row; nothing is deleted) |
 | regenerate state | `./scripts/genome handoff --write` |
 
 Role→path map: `genome.toml`. Routing table (which doc answers what): AGENTS.md
-"Documentation Bylaws (bylaws)".
+"Documentation Genome (genome)".
+
+The command table is the one a fresh agent copies. Before a docs commit, run
+`./scripts/genome lint` (must be clean) and `./scripts/genome doctor` (the only
+finding allowed is a stale STATE.md you are about to regenerate).

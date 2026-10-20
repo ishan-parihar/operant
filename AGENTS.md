@@ -1439,6 +1439,9 @@ were adopted without moving files this repo already owns.
 | what happened, unit of work by unit of work | `docs/kb/WORKLOG.md` | append-only |
 | cross-agent messages, claims, mentions | `docs/kb/feed.md` | append-only |
 | in-flight work for ONE workflow, claim-guarded | `docs/kb/workflows/<wf>.md` | rows update, claims guarded |
+| which doc owns which question (the "one owner per question" rule, made checkable) | `docs/INDEX.md` | current, surgical edits |
+| what the operator was asked and what they ruled, and which owner doc it was applied to | `docs/kb/ASKS.md` | append-only, rows amended in place by ruling |
+| the decision and regression index (AD/RG by id, generated) | `docs/RECORDS.md` | generated — regenerate, never hand-edit |
 | exact commands, environment traps | `docs/RUNBOOK.md` | current, surgical edits |
 | superseded history (findable, never deleted) | `docs/archive/` (tombstones at the original paths, an `docs/archive/INDEX.md` row each) | tombstone + pointer |
 | open audit findings and fix state (repo-native) | `docs/audit/2026-06-19-BUGS.md` (root — NOT the kb ledger; the CLOSED ledger holds *rejected proposals*) | rows update, verdicts append |
