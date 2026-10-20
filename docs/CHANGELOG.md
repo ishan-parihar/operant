@@ -21,6 +21,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-1051 — `[[embedding_routes]]` is documented the same way `[[model_routes]]` was, and it did not work either.** The embedding hint now resolves, and an unresolvable one is a clear error instead of a model name sent to the provider.
+
+- **iter-1051 — `[[model_routes]]` now resolves, or the hint is rejected with a clear error.** The documented usage ("pass `hint:reasoning` as the model parameter") sent that literal string to the provider as the model name.
+
 - **iter-1049 — the TUI no longer says "Connected to AWS Bedrock." when nothing changed.** Five catalogue providers have no usable endpoint URL, so the agent kept the previous provider's endpoint; the switch now says so.
 
 - **iter-1048 — `operant doctor` no longer reports a provider as "valid" that the runtime cannot serve.** Bedrock speaks AWS's Converse API and the runtime only speaks chat-completions and messages, so every request to a Bedrock configuration would have failed in the wrong protocol.

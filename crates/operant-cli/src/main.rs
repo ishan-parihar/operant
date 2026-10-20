@@ -2104,10 +2104,32 @@ pub(crate) async fn create_agent_without_events(
     )
     .await?;
 
-    let provider = crate::tui::provider::infer_provider_from_model(&config.agent.model)
-        .unwrap_or_else(|| "openai".to_string());
+    // A `hint:<name>` model asks for a ROUTE, not a model. The config
+    // documents the usage — "pass `hint:reasoning` as the model parameter
+    // to route the request" — and the resolution used to live only in
+    // `operant-providers`' router, which the runtime never calls, so the
+    // literal string was sent to the provider AS THE MODEL NAME (RT-96).
+    //
+    // Resolve it here, where the model name becomes a request. An
+    // unresolvable hint is an ERROR, not a model name: silently sending
+    // `hint:typo` to a provider produces a confusing 404 from the API.
+    let (model_name, provider) = match config.providers.model_route_for_hint(&config.agent.model) {
+        Some(route) => (route.model.clone(), route.provider.clone()),
+        None => {
+            if config.providers.is_model_hint(&config.agent.model) {
+                anyhow::bail!(
+                    "the model is {:?}, but no [[model_routes]] entry has that hint. \
+                     Add one, or use a model name directly.",
+                    config.agent.model
+                );
+            }
+            let provider = crate::tui::provider::infer_provider_from_model(&config.agent.model)
+                .unwrap_or_else(|| "openai".to_string());
+            (config.agent.model.clone(), provider)
+        }
+    };
     let (model_client, pool_registry) =
-        create_model_client_with_fallback(&provider, &config.agent.model, config, None);
+        create_model_client_with_fallback(&provider, &model_name, config, None);
 
     let context_window = core.agent_config.context_window;
     Ok({
