@@ -46,10 +46,39 @@ pub fn estimate_tokens(text: &str) -> usize {
 }
 
 /// Estimate the token count of a single message (role + content).
+///
+/// The count covers the WHOLE message the provider sees — not just its
+/// text. A tool-call turn's `content` is EMPTY by construction (the text
+/// is suppressed so the provider sees a pure tool-call turn), and the
+/// payload is in `tool_calls[].function.arguments`; the reasoning is in
+/// `msg.reasoning` and is serialised back to the provider on the next
+/// request. Counting only `content` charged 4 tokens for a turn that
+/// carried 100 KB of tool arguments — so the eviction was blind to
+/// exactly the messages that carry the most payload, and the request the
+/// provider rejected was over-budget by an amount the estimator never
+/// saw.
 pub fn estimate_message_tokens(msg: &Message) -> usize {
     // 4 tokens overhead per message (role tags, separators) — matches
     // OpenAI's pricing model.
-    4 + estimate_tokens(&msg.content)
+    let mut tokens = 4 + estimate_tokens(&msg.content);
+
+    // The tool-call arguments. A `write_file` with a 100 KB body is
+    // ~25 000 real tokens.
+    if let Some(calls) = msg.tool_calls.as_ref() {
+        for call in calls {
+            tokens += estimate_tokens(&call.function.arguments);
+            // The tool name and the id travel with the call.
+            tokens += estimate_tokens(&call.function.name);
+            tokens += estimate_tokens(&call.id);
+        }
+    }
+
+    // The reasoning, which IS sent back to the provider.
+    if let Some(reasoning) = msg.reasoning.as_ref() {
+        tokens += estimate_tokens(reasoning);
+    }
+
+    tokens
 }
 
 /// Estimate total tokens for a slice of messages.
@@ -1593,6 +1622,68 @@ mod tests {
         assert_no_orphans(&result);
     }
 
+    /// The token estimate must see the WHOLE message the provider sees.
+    ///
+    /// A tool-call turn's `content` is EMPTY by construction — the text is
+    /// suppressed so the provider sees a pure tool-call turn — and the
+    /// payload is in `tool_calls[].function.arguments`. Counting only the
+    /// content charged 4 tokens for a turn that carried 100 KB of tool
+    /// arguments, so the eviction was blind to exactly the messages that
+    /// carry the most payload, and the request the provider rejected was
+    /// over-budget by an amount the estimator never saw.
+    ///
+    /// The reasoning counts too: it is serialised back to the provider on
+    /// the next request.
+    #[test]
+    fn the_token_estimate_sees_the_tool_arguments_and_the_reasoning() {
+        use crate::client::{Role, ToolCall, ToolCallFunction};
+
+        // A tool-call turn: empty content, a big argument payload.
+        let big_args = "x".repeat(40_000);
+        let tool_turn = Message {
+            role: Role::Assistant,
+            content: String::new(),
+            reasoning: None,
+            name: None,
+            tool_call_id: None,
+            tool_calls: Some(vec![ToolCall {
+                id: "call_1".to_string(),
+                function: ToolCallFunction {
+                    name: "write_file".to_string(),
+                    arguments: big_args.clone(),
+                },
+            }]),
+            extra_content: None,
+        };
+        let counted = estimate_message_tokens(&tool_turn);
+        assert!(
+            counted > 9_000,
+            "a tool turn carrying 40 KB of arguments must not be estimated at \
+             4 tokens — got {counted}"
+        );
+
+        // The reasoning counts too.
+        let reasoning_turn = Message {
+            role: Role::Assistant,
+            content: "the answer".to_string(),
+            reasoning: Some("y".repeat(40_000)),
+            name: None,
+            tool_call_id: None,
+            tool_calls: None,
+            extra_content: None,
+        };
+        let counted = estimate_message_tokens(&reasoning_turn);
+        assert!(
+            counted > 9_000,
+            "the reasoning is sent back to the provider, so it must be counted — \
+             got {counted}"
+        );
+
+        // A plain text message is unchanged.
+        let plain = Message::new(Role::User, "hello world");
+        assert_eq!(estimate_message_tokens(&plain), 4 + 3);
+    }
+
     #[test]
     fn evict_to_budget_removes_tool_results_first() {
         // System + user + tool_result + 6 recent messages (so the tool
@@ -1954,7 +2045,22 @@ mod tests {
 
     /// Budget at which the prefix cut ends at G3's start (index 5), so the
     /// release fact at [6] is on the wrong side of the recency cut.
-    const DRIFT_BUDGET: usize = 60;
+    ///
+    /// The token counts are the CORRECTED ones — the estimate now counts a
+    /// tool-call turn's ARGUMENTS and its reasoning, not just its (empty)
+    /// content. The cumulative cost of the fixture is
+    /// [11, 22, 30, 37, 44, 55, 71, 82, 94, 100], so a recency cut that
+    /// keeps indices 0..5 (dropping the fact at 6) needs a budget of 55 to
+    /// 70 — and the SEMANTIC cut needs 63 to hold the system group (11) +
+    /// the goal group (12) + the opening question (11) + the tool group
+    /// (29).
+    ///
+    /// So the window is [55, 70] and 63 sits in it, satisfying both
+    /// premises: the recency cut loses the goal fact, the semantic cut
+    /// keeps it. Under the OLD (blind) estimate the tool group cost 20 and
+    /// 60 was enough. The budget is a property of the fixture AND the
+    /// estimator, and the estimator changed.
+    const DRIFT_BUDGET: usize = 63;
 
     #[tokio::test]
     async fn semantic_cut_should_still_respect_safe_compaction_cutoff() {

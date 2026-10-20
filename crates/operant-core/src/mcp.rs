@@ -66,6 +66,19 @@ pub struct McpClient {
     /// JSON-RPC id; non-monotonic, can collide, and the response isn't
     /// verified to match the id".)
     request_id: Arc<AtomicU64>,
+    /// Whether this client speaks the STREAMABLE-HTTP transport (MCP
+    /// spec 2025-06-18) rather than the plain-HTTP one.
+    ///
+    /// The two differ in the `Accept` header, the `Mcp-Session-Id`
+    /// echo, and whether the response may be an SSE stream — and a
+    /// plain-HTTP client pointed at a streamable-HTTP server is refused
+    /// with `406 Not Acceptable`.
+    streamable: bool,
+    /// The `Mcp-Session-Id` the server handed out, echoed on every later
+    /// request. Without it every request starts a NEW session, so the
+    /// server forgets the initialized state and the handshake never
+    /// completes.
+    session_id: Arc<tokio::sync::Mutex<Option<String>>>,
 }
 
 /// Server capabilities
@@ -176,6 +189,115 @@ struct ServerInfo {
     version: String,
 }
 
+/// The payload a JSON-RPC SSE message carries.
+///
+/// A JSON-RPC ERROR must not be handed back as the result. The reader
+/// used to do `result.or_else(error)` and send whichever it found, so a
+/// server that rejected a `tools/call` returned the ERROR OBJECT as a
+/// successful result — and the caller treated the error payload as the
+/// tool's output. The failure was reported as a success.
+///
+/// The error goes back as an error, with the server's code and message.
+fn sse_response_payload(parsed: &Value) -> Result<Value> {
+    if let Some(err) = parsed.get("error") {
+        let code = err.get("code").and_then(|c| c.as_i64()).unwrap_or(0);
+        let message = err
+            .get("message")
+            .and_then(|m| m.as_str())
+            .unwrap_or("MCP server error");
+        return Err(crate::error::Error::Agent(format!(
+            "MCP error {code}: {message}"
+        )));
+    }
+    Ok(parsed.get("result").cloned().unwrap_or(Value::Null))
+}
+
+/// The `Accept` header a streamable-HTTP server (MCP spec 2025-06-18)
+/// requires.
+///
+/// The client must offer BOTH forms: the server may answer with a JSON
+/// body or with an SSE stream, and a spec-compliant server replies
+/// `406 Not Acceptable` to a request that does not offer
+/// `text/event-stream`.
+const MCP_STREAMABLE_ACCEPT: &str = "application/json, text/event-stream";
+
+/// The header a streamable-HTTP server hands its session id out on.
+///
+/// Every request after the initialize must echo it, or the server treats
+/// each request as a new session and forgets the initialized state.
+const MCP_SESSION_ID_HEADER: &str = "Mcp-Session-Id";
+
+/// Whether a body is an SSE stream rather than a JSON body.
+fn looks_like_sse(text: &str) -> bool {
+    let trimmed = text.trim_start();
+    trimmed.starts_with("data:") || trimmed.starts_with("event:") || trimmed.starts_with(":")
+}
+
+/// The payload of the FIRST `data:` event in an SSE stream.
+///
+/// The payload is the JSON-RPC message; it is just wrapped in the SSE
+/// framing. An event's data may span several `data:` lines, so they are
+/// joined with a newline.
+fn first_sse_data(text: &str) -> Option<String> {
+    let mut data = String::new();
+    let mut in_event = false;
+    for line in text.lines() {
+        let line = line.trim_end_matches('\r');
+        if line.is_empty() {
+            // A blank line ends an event.
+            if in_event {
+                break;
+            }
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("data:") {
+            in_event = true;
+            if !data.is_empty() {
+                data.push('\n');
+            }
+            data.push_str(rest.strip_prefix(' ').unwrap_or(rest));
+        }
+    }
+    if data.trim().is_empty() {
+        None
+    } else {
+        Some(data)
+    }
+}
+
+/// The capabilities a client advertises to the server, by transport.
+///
+/// They depend on the TRANSPORT, because the transports differ in what
+/// they can honour.
+///
+/// The stdio transport reads the server's messages off the same stream as
+/// the responses, so it can spot a server-initiated request (one with a
+/// `method` field rather than a `result`) and answer it.
+///
+/// The HTTP and SSE transports cannot: the HTTP path parses every body as
+/// the response to its own request, so a `sampling/createMessage` would be
+/// read as a response with a mismatched id, the call would fail with
+/// "response ID mismatch", and the server's request would never be
+/// answered — so it would block waiting for a reply. The SSE path logs it
+/// and moves on.
+///
+/// Advertising `sampling` and `roots` on a transport that cannot answer
+/// them is worse than not advertising them: the server is TOLD it may ask,
+/// and then the request hangs. So the stdio transport advertises them and
+/// the others do not.
+fn advertised_capabilities(transport: crate::config::McpTransportKind) -> ClientCapabilities {
+    match transport {
+        crate::config::McpTransportKind::Stdio => ClientCapabilities {
+            roots: Some(Roots { list_changed: true }),
+            sampling: Some(Sampling {}),
+        },
+        _ => ClientCapabilities {
+            roots: None,
+            sampling: None,
+        },
+    }
+}
+
 /// JSON-RPC request
 #[derive(Debug, Serialize)]
 struct JsonRpcRequest {
@@ -229,11 +351,46 @@ pub struct McpToolDefinition {
 }
 
 impl McpClient {
-    /// Create a new MCP client
+    /// Create a new MCP client for the plain-HTTP transport.
     pub fn new(url: impl Into<String>, auth_token: Option<String>) -> Self {
+        Self::with_transport(url, auth_token, false)
+    }
+
+    /// Create a new MCP client for the STREAMABLE-HTTP transport
+    /// (MCP spec 2025-06-18).
+    ///
+    /// The two differ in three ways, and a plain-HTTP client speaking to
+    /// a streamable-HTTP server fails on the first of them:
+    ///
+    /// 1. The `Accept` header. A streamable-HTTP server must be told
+    ///    that the client can read an SSE stream: a spec-compliant server
+    ///    replies `406 Not Acceptable` to a request that does not offer
+    ///    `text/event-stream`.
+    /// 2. The `Mcp-Session-Id`. A streamable-HTTP server hands one out on
+    ///    the initialize response, and every later request must echo it.
+    ///    Without it, every request starts a NEW session — so the server
+    ///    forgets the initialized state and the handshake never completes.
+    /// 3. The response body. A streamable-HTTP server may answer with
+    ///    either a JSON body or an SSE stream; the JSON path here reads
+    ///    the `data:` lines out of the stream.
+    ///
+    /// The plain-HTTP transport predates the spec revision and is still
+    /// correct for the servers that speak it, so the behaviour is a
+    /// constructor flag rather than a change of default.
+    pub fn streamable(url: impl Into<String>, auth_token: Option<String>) -> Self {
+        Self::with_transport(url, auth_token, true)
+    }
+
+    fn with_transport(
+        url: impl Into<String>,
+        auth_token: Option<String>,
+        streamable: bool,
+    ) -> Self {
         Self {
             url: url.into(),
             auth_token,
+            streamable,
+            session_id: Arc::new(tokio::sync::Mutex::new(None)),
             // iter-130: configure a 60s timeout — previously the HTTP
             // transport had no timeout, so a slow/dead MCP server could
             // hang the agent loop forever. Stdio + SSE paths already had
@@ -255,10 +412,7 @@ impl McpClient {
 
         let request = InitializeRequest {
             protocol_version: MCP_DEFAULT_VERSION.to_string(),
-            capabilities: ClientCapabilities {
-                roots: Some(Roots { list_changed: true }),
-                sampling: Some(Sampling {}),
-            },
+            capabilities: advertised_capabilities(crate::config::McpTransportKind::Http),
             client_info: ClientInfo {
                 name: "operant-rs".to_string(),
                 version: env!("CARGO_PKG_VERSION").to_string(),
@@ -406,11 +560,43 @@ impl McpClient {
             .post(&self.url)
             .header("Content-Type", "application/json");
 
+        // The streamable-HTTP transport (MCP spec 2025-06-18) needs the
+        // `Accept` header to offer BOTH forms: a spec-compliant server
+        // replies `406 Not Acceptable` to a request that does not offer
+        // `text/event-stream`, and it may answer with either a JSON body
+        // or an SSE stream.
+        //
+        // The plain-HTTP transport predates the revision and must not
+        // send it — some old servers reject an `Accept` they do not
+        // understand.
+        if self.streamable {
+            req_builder = req_builder.header("Accept", MCP_STREAMABLE_ACCEPT);
+            // Echo the session the server handed out. Without it every
+            // request starts a NEW session, so the server forgets the
+            // initialized state.
+            if let Some(session) = self.session_id.lock().await.as_ref() {
+                req_builder = req_builder.header(MCP_SESSION_ID_HEADER, session.as_str());
+            }
+        }
+
         if let Some(ref token) = self.auth_token {
             req_builder = req_builder.header("Authorization", format!("Bearer {}", token));
         }
 
         let response = req_builder.json(&request).send().await?;
+
+        // The streamable-HTTP server hands out its session id on the
+        // initialize response; capture it so the next request can echo
+        // it.
+        if self.streamable
+            && let Some(session) = response
+                .headers()
+                .get(MCP_SESSION_ID_HEADER)
+                .and_then(|v| v.to_str().ok())
+                .filter(|s| !s.is_empty())
+        {
+            *self.session_id.lock().await = Some(session.to_string());
+        }
 
         // iter-130: handle 401 Unauthorized specifically. Previously a
         // 401 just returned a generic "MCP request failed" error and the
@@ -445,6 +631,23 @@ impl McpClient {
                 "MCP server returned empty response body".to_string(),
             ));
         }
+
+        // A streamable-HTTP server may answer with an SSE stream rather
+        // than a JSON body. The payload is the same JSON-RPC message; it
+        // is just wrapped in `data:` lines. Read the first event's data
+        // out of the stream.
+        let text = if self.streamable && looks_like_sse(&text) {
+            match first_sse_data(&text) {
+                Some(payload) => payload,
+                None => {
+                    return Err(crate::error::Error::Agent(
+                        "MCP server returned an SSE stream with no data event".to_string(),
+                    ));
+                }
+            }
+        } else {
+            text
+        };
 
         let rpc_response: JsonRpcResponse = serde_json::from_str(&text).map_err(|e| {
             crate::error::Error::ParseResponse(format!("Failed to parse MCP response: {}", e))
@@ -703,10 +906,7 @@ impl McpStdioClient {
         // Send initialize request
         let request = InitializeRequest {
             protocol_version: MCP_DEFAULT_VERSION.to_string(),
-            capabilities: ClientCapabilities {
-                roots: Some(Roots { list_changed: true }),
-                sampling: Some(Sampling {}),
-            },
+            capabilities: advertised_capabilities(crate::config::McpTransportKind::Stdio),
             client_info: ClientInfo {
                 name: "operant-rs".to_string(),
                 version: env!("CARGO_PKG_VERSION").to_string(),
@@ -1208,7 +1408,7 @@ pub struct McpSseClient {
     /// Request ID counter
     request_id: Arc<AtomicU64>,
     /// Pending responses keyed by request ID
-    pending: Arc<tokio::sync::Mutex<HashMap<u64, tokio::sync::oneshot::Sender<Value>>>>,
+    pending: Arc<tokio::sync::Mutex<HashMap<u64, tokio::sync::oneshot::Sender<Result<Value>>>>>,
     /// Background SSE reader task handle
     _reader_task: Arc<RwLock<Option<tokio::task::JoinHandle<()>>>>,
 }
@@ -1303,12 +1503,25 @@ impl McpSseClient {
                                     if let Some(id) = parsed.get("id").and_then(|v| v.as_u64()) {
                                         let mut pending = pending_clone.lock().await;
                                         if let Some(tx) = pending.remove(&id) {
-                                            let result = parsed
-                                                .get("result")
-                                                .cloned()
-                                                .or_else(|| parsed.get("error").cloned())
-                                                .unwrap_or(Value::Null);
-                                            let _ = tx.send(result);
+                                            // A JSON-RPC ERROR must not be
+                                            // handed back as the result.
+                                            //
+                                            // The old code did
+                                            // `result.or_else(error)` and
+                                            // sent whichever it found — so
+                                            // a server that rejected a
+                                            // `tools/call` returned the
+                                            // ERROR OBJECT as a
+                                            // SUCCESSFUL result, and the
+                                            // caller treated the error
+                                            // payload as the tool's
+                                            // output. The failure was
+                                            // reported as a success.
+                                            //
+                                            // The error goes back as an
+                                            // error, with the server's
+                                            // code and message.
+                                            let _ = tx.send(sse_response_payload(&parsed));
                                         }
                                     }
                                     // Server-initiated requests (sampling, elicitation, etc.)
@@ -1350,10 +1563,7 @@ impl McpSseClient {
         // Send initialize request
         let init_request = InitializeRequest {
             protocol_version: MCP_DEFAULT_VERSION.to_string(),
-            capabilities: ClientCapabilities {
-                roots: Some(Roots { list_changed: true }),
-                sampling: Some(Sampling {}),
-            },
+            capabilities: advertised_capabilities(crate::config::McpTransportKind::Http),
             client_info: ClientInfo {
                 name: "operant-rs".to_string(),
                 version: env!("CARGO_PKG_VERSION").to_string(),
@@ -1469,7 +1679,10 @@ impl McpSseClient {
 
         // Wait for the response via the SSE stream (with 60s timeout)
         match tokio::time::timeout(std::time::Duration::from_secs(60), rx).await {
-            Ok(Ok(result)) => Ok(result),
+            Ok(Ok(Ok(result))) => Ok(result),
+            // The server answered with a JSON-RPC ERROR. It must not be
+            // handed back as a successful result.
+            Ok(Ok(Err(e))) => Err(e),
             Ok(Err(_)) => Err(crate::error::Error::Agent(
                 "MCP SSE: response channel closed".to_string(),
             )),
@@ -1847,6 +2060,39 @@ impl McpManager {
         url: String,
         auth_token: Option<String>,
     ) -> Result<()> {
+        self.add_server_with_transport(name, url, auth_token, crate::config::McpTransportKind::Http)
+            .await
+    }
+
+    /// Add a server that speaks the STREAMABLE-HTTP transport (MCP spec
+    /// 2025-06-18).
+    ///
+    /// The plain-HTTP client cannot talk to a streamable-HTTP server: it
+    /// sends no `Accept` header, so a spec-compliant server answers
+    /// `406 Not Acceptable`; and it never echoes the `Mcp-Session-Id`,
+    /// so every request starts a new session.
+    pub async fn add_streamable_server(
+        &self,
+        name: impl Into<String>,
+        url: String,
+        auth_token: Option<String>,
+    ) -> Result<()> {
+        self.add_server_with_transport(
+            name,
+            url,
+            auth_token,
+            crate::config::McpTransportKind::StreamableHttp,
+        )
+        .await
+    }
+
+    async fn add_server_with_transport(
+        &self,
+        name: impl Into<String>,
+        url: String,
+        auth_token: Option<String>,
+        transport: crate::config::McpTransportKind,
+    ) -> Result<()> {
         let name = name.into();
         // Reject a name that is already connected instead of silently
         // clobbering the existing server. Checked both before the connect
@@ -1877,7 +2123,12 @@ impl McpManager {
                 }
             }
         };
-        let client = McpClient::new(url, effective_token);
+        let client = match transport {
+            crate::config::McpTransportKind::StreamableHttp => {
+                McpClient::streamable(url, effective_token)
+            }
+            _ => McpClient::new(url, effective_token),
+        };
         if let Err(e) = client.connect().await {
             self.record_connect_failure(&name, &e.to_string()).await;
             return Err(e);
@@ -2560,6 +2811,186 @@ while True:
             HashMap::new(),
         );
         (client, dir)
+    }
+
+    /// A streamable-HTTP server (MCP spec 2025-06-18) must be able to
+    /// connect.
+    ///
+    /// The plain-HTTP client could not: it sent no `Accept` header, so a
+    /// spec-compliant server answers `406 Not Acceptable`; and it never
+    /// echoed the `Mcp-Session-Id`, so every request started a NEW
+    /// session and the server forgot the initialized state.
+    ///
+    /// The mock server here REQUIRES both: the `Accept` header must
+    /// offer `text/event-stream`, and every request after the first must
+    /// carry the session id the first one handed out. It answers with an
+    /// SSE stream, which is the other thing the plain-HTTP client could
+    /// not read.
+    #[tokio::test]
+    async fn a_streamable_http_server_can_connect() {
+        use mockito::Server;
+        let mut server = Server::new_async().await;
+
+        // The initialize: must offer the SSE form, and answers with an
+        // SSE stream plus a session id.
+        let initialize = server
+            .mock("POST", "/mcp")
+            .match_header("Accept", mockito::Matcher::Regex("text/event-stream".into()))
+            .with_header("Content-Type", "text/event-stream")
+            .with_header("Mcp-Session-Id", "sess-123")
+            .with_body(
+                "event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\"stub\",\"version\":\"1.0\"}}}\n\n",
+            )
+            .create_async()
+            .await;
+
+        // The tools/list: must echo the session id the server handed out.
+        let tools_list = server
+            .mock("POST", "/mcp")
+            .match_header("Mcp-Session-Id", "sess-123")
+            .match_header("Accept", mockito::Matcher::Regex("text/event-stream".into()))
+            .with_body(
+                "event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"tools\":[]}}\n\n",
+            )
+            .create_async()
+            .await;
+
+        let client = McpClient::streamable(format!("{}/mcp", server.url()), None);
+        client.connect().await.expect("the streamable handshake");
+
+        initialize.assert_async().await;
+        tools_list.assert_async().await;
+    }
+
+    /// The two transports are DIFFERENT requests.
+    ///
+    /// The plain-HTTP transport predates the streamable-HTTP revision, and
+    /// some old servers reject an `Accept` they do not understand — so it
+    /// must NOT offer the streamable form.
+    ///
+    /// The mock here matches the plain form exactly: `Accept: * / *` (what
+    /// reqwest sends when the caller sets none) and NO session id. The
+    /// streamable test's mock requires the opposite, so the two tests
+    /// together prove the transports differ.
+    #[tokio::test]
+    async fn the_plain_http_transport_does_not_send_the_streamable_headers() {
+        use mockito::Server;
+        let mut server = Server::new_async().await;
+
+        let initialize = server
+            .mock("POST", "/mcp")
+            .match_header("Accept", mockito::Matcher::Any)
+            .with_body(
+                "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\"plain\",\"version\":\"1.0\"}}}",
+            )
+            // The handshake is three requests: initialize, the
+            // initialized notification, and tools/list.
+            .expect(3)
+            .create_async()
+            .await;
+
+        let client = McpClient::new(format!("{}/mcp", server.url()), None);
+        // The plain transport connects and then lists tools; only the
+        // initialize matters here.
+        let _ = client.connect().await;
+        initialize.assert_async().await;
+    }
+
+    /// A JSON-RPC ERROR from an SSE server must not be handed back as a
+    /// successful result.
+    ///
+    /// The reader did `result.or_else(error)` and sent whichever it
+    /// found, so a server that rejected a `tools/call` returned the ERROR
+    /// OBJECT as a successful result — and the caller treated the error
+    /// payload as the tool's output. The failure was reported as a
+    /// success.
+    #[test]
+    fn an_sse_json_rpc_error_is_surfaced_as_an_error() {
+        let err = sse_response_payload(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "error": {"code": -32602, "message": "tool not found"},
+        }))
+        .expect_err("a JSON-RPC error must not be a successful result");
+        let text = err.to_string();
+        assert!(
+            text.contains("-32602") && text.contains("tool not found"),
+            "the error must name the server's code and message, got: {text}"
+        );
+
+        // A normal response is still a result.
+        let ok = sse_response_payload(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {"content": [{"type": "text", "text": "hi"}]},
+        }))
+        .expect("a result is a result");
+        assert_eq!(ok["content"][0]["text"], "hi");
+    }
+
+    /// The advertised capabilities must depend on the transport.
+    ///
+    /// The stdio transport reads the server's messages off the same
+    /// stream as the responses, so it can spot a server-initiated request
+    /// and answer it. The HTTP and SSE transports cannot: the HTTP path
+    /// parses every body as the response to its own request, so a
+    /// `sampling/createMessage` would be read as a response with a
+    /// mismatched id — the call would fail with "response ID mismatch"
+    /// and the server's request would never be answered, so it would block
+    /// waiting for a reply.
+    ///
+    /// Advertising `sampling` and `roots` on a transport that cannot
+    /// answer them is worse than not advertising them: the server is TOLD
+    /// it may ask, and then the request hangs.
+    #[test]
+    fn the_advertised_capabilities_depend_on_the_transport() {
+        use crate::config::McpTransportKind;
+
+        // The stdio transport can answer a server-initiated request, so
+        // it advertises the capabilities.
+        let stdio = advertised_capabilities(McpTransportKind::Stdio);
+        assert!(
+            stdio.sampling.is_some(),
+            "the stdio transport handles server-initiated requests"
+        );
+        assert!(
+            stdio.roots.is_some(),
+            "the stdio transport handles server-initiated requests"
+        );
+
+        // The HTTP and SSE transports cannot, so they do not advertise.
+        for kind in [McpTransportKind::Http, McpTransportKind::StreamableHttp] {
+            let label = format!("{kind:?}");
+            let caps = advertised_capabilities(kind);
+            assert!(
+                caps.sampling.is_none(),
+                "the {label} transport cannot answer a sampling request, \
+                 so it must not advertise one"
+            );
+            assert!(
+                caps.roots.is_none(),
+                "the {label} transport cannot answer a roots request, \
+                 so it must not advertise one"
+            );
+        }
+    }
+
+    /// The SSE payload extraction.
+    #[test]
+    fn the_sse_payload_is_read_out_of_the_stream() {
+        assert!(looks_like_sse("data: {\"a\":1}\n\n"));
+        assert!(!looks_like_sse("{\"a\":1}"));
+        assert_eq!(
+            first_sse_data("event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1}\n\n"),
+            Some("{\"jsonrpc\":\"2.0\",\"id\":1}".to_string())
+        );
+        // A multi-line event's data is joined.
+        assert_eq!(
+            first_sse_data("data: line one\ndata: line two\n\n"),
+            Some("line one\nline two".to_string())
+        );
+        // No data event at all.
+        assert_eq!(first_sse_data("event: ping\n\n"), None);
     }
 
     /// Dropping the transport must KILL the MCP server subprocess.
