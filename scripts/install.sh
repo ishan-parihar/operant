@@ -110,9 +110,29 @@ PROBE
 }
 if [ -d "$ORT_DIR" ] && ort_serves_api_24 "$ORT_DIR/libonnxruntime.so"; then
     mkdir -p "$RUNTIME_LIB_DIR"
+    # Remove the destination's existing ONNX Runtime files and symlinks
+    # FIRST. `cp -a` preserves symlinks, and the destination may already
+    # hold a `libonnxruntime.so.1` symlink from an EARLIER install that
+    # points at a DIFFERENT version — the copy then leaves that stale
+    # symlink in place (or writes through it), and the installed binary
+    # fails to start with
+    #     libonnxruntime.so.1: version `VERS_1.24.4' not found
+    #     (required by .../operant)
+    # because the loader follows the OLD link. That is not hypothetical: it
+    # is what left this machine's `~/.local/lib/operant/libonnxruntime.so.1`
+    # pointing at 1.20.1 while the binary needs 1.24.4, and the binary
+    # could not start at all. The versioned library is copied by name, and
+    # the symlink is recreated to point at the one that was just copied.
+    rm -f "$RUNTIME_LIB_DIR"/libonnxruntime.so* 2>/dev/null || true
     cp -a "$ORT_DIR"/libonnxruntime.so* "$RUNTIME_LIB_DIR"/ 2>/dev/null \
         && echo "  ok   libonnxruntime -> $RUNTIME_LIB_DIR" \
         || echo "  WARN could not copy libonnxruntime; operant may not start"
+    # The loader resolves `libonnxruntime.so.1`, so make sure that name
+    # points at the version that is actually present.
+    if [ -f "$RUNTIME_LIB_DIR/libonnxruntime.so.1.24.4" ]; then
+        ln -sf libonnxruntime.so.1.24.4 "$RUNTIME_LIB_DIR/libonnxruntime.so.1"
+    fi
+    ln -sf libonnxruntime.so.1 "$RUNTIME_LIB_DIR/libonnxruntime.so" 2>/dev/null || true
 else
     echo "  WARN no local ONNX Runtime at $ORT_DIR — run scripts/provision-build-deps.sh"
     echo "       before installing, or operant will not start on this machine."

@@ -19,6 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **iter-1041 — the installer no longer leaves a stale ONNX Runtime symlink.** The copy preserved symlinks, so an older `libonnxruntime.so.1` link survived and the installed binary could not start at all.
+
 ### Changed
 
 - **iter-1040 — `default_provider_config` no longer claims three callers it does not have.** It had none; the per-provider defaults it reads are unwired, which is recorded as RT-89.
