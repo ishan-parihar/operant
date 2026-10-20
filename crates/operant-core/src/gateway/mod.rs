@@ -1391,6 +1391,47 @@ mod tests {
         assert_eq!(json["outbound"], serde_json::json!(true));
     }
 
+    /// EVERY outbound-only adapter must say so in its status report.
+    ///
+    /// `PlatformAdapter::handle_update` is called from NOWHERE in the
+    /// workspace — the Telegram and Discord poll loops use their own
+    /// static parsers, and the webhook adapter has its own HTTP handler.
+    /// So the trait method is dead for all seven adapters, and the
+    /// adapters that implement a complete inbound parser — Slack,
+    /// WhatsApp, Email, SMS — never receive anything.
+    ///
+    /// The status report used to say "enabled" and nothing more, so an
+    /// operator believed they could receive messages on a channel that
+    /// cannot deliver them. Every outbound-only adapter now carries
+    /// `"inbound": false`.
+    ///
+    /// The test is over ALL FOUR, so adding a fifth adapter without the
+    /// field fails it.
+    #[tokio::test]
+    async fn every_outbound_only_adapter_says_it_cannot_receive() {
+        let adapters: Vec<(&str, serde_json::Value)> = vec![
+            (
+                "slack",
+                SlackAdapter::new(Some("xoxb-token".to_string())).config_json(),
+            ),
+            ("whatsapp", WhatsAppAdapter::new(true).config_json()),
+            ("email", EmailAdapter::new(true).config_json()),
+            ("sms", SmsAdapter::new(true).config_json()),
+        ];
+        for (platform, json) in adapters {
+            assert_eq!(
+                json["inbound"],
+                serde_json::json!(false),
+                "the {platform} adapter's status report must say it cannot receive"
+            );
+            assert_eq!(
+                json["outbound"],
+                serde_json::json!(true),
+                "the {platform} adapter can send"
+            );
+        }
+    }
+
     // ── SessionStore tests ──
 
     #[test]

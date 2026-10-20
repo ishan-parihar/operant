@@ -127,6 +127,13 @@ impl PlatformAdapter for SmsAdapter {
             "enabled": self.enabled,
             "account_sid_configured": self.account_sid.is_some(),
             "from_number": self.from_number,
+            // The adapter can SEND but not RECEIVE: nothing in the
+            // runtime invokes this adapter's `handle_update`, so an
+            // inbound message never reaches the agent. The status report
+            // used to say "enabled" and nothing more, so an operator
+            // believed they could receive SMS messages. (RT-86.)
+            "inbound": false,
+            "outbound": true,
         })
     }
 

@@ -160,6 +160,13 @@ impl PlatformAdapter for WhatsAppAdapter {
             "enabled": self.enabled,
             "token_configured": self.token.is_some(),
             "phone_number_id_configured": self.phone_number_id.is_some(),
+            // The adapter can SEND but not RECEIVE: nothing in the
+            // runtime invokes this adapter's `handle_update`, so an
+            // inbound message never reaches the agent. The status report
+            // used to say "enabled" and nothing more, so an operator
+            // believed they could receive WhatsApp messages. (RT-86.)
+            "inbound": false,
+            "outbound": true,
         })
     }
 

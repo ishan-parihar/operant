@@ -282,6 +282,13 @@ impl PlatformAdapter for EmailAdapter {
             "enabled": self.enabled,
             "smtp_host": self.smtp_host,
             "smtp_user_configured": self.smtp_user.is_some(),
+            // The adapter can SEND but not RECEIVE: nothing in the
+            // runtime invokes this adapter's `handle_update`, so an
+            // inbound message never reaches the agent. The status report
+            // used to say "enabled" and nothing more, so an operator
+            // believed they could receive email messages. (RT-86.)
+            "inbound": false,
+            "outbound": true,
         })
     }
 
