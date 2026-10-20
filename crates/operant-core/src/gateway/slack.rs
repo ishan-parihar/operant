@@ -55,6 +55,12 @@ impl SlackAdapter {
 /// the message id, and it is what `chat.update` needs. The TRAIT's
 /// default `send_message_return_id` returns an EMPTY id, which the
 /// streaming path reads as "this platform cannot edit" (RT-105).
+/// Slack's per-message character limit.
+///
+/// `chat.postMessage` answers `{"ok": false, "error": "invalid_text"}`
+/// over this limit — a 200, so a status check alone does not catch it.
+const SLACK_MESSAGE_LIMIT: usize = 40_000;
+
 fn slack_message_id(body: &str) -> String {
     serde_json::from_str::<serde_json::Value>(body)
         .ok()
@@ -117,44 +123,53 @@ impl PlatformAdapter for SlackAdapter {
         // Slack uses mrkdwn format, NOT standard Markdown. Raw **bold**
         // renders as literal asterisks. Convert before sending.
         // (Bug #15 from iter-98 audit.)
+        //
+        // Slack's limit is 40,000 characters per message — over that,
+        // `chat.postMessage` answers `{"ok": false, "error":
+        // "invalid_text"}` and the message is NOT delivered. So the text
+        // is CHUNKED, the way the Telegram and Discord sends are: a long
+        // answer arrives as several messages instead of not at all.
         let text = markdown_to_slack_mrkdwn(&message.content);
+        let chunks = chunk_text(&text, SLACK_MESSAGE_LIMIT);
 
-        let body = serde_json::json!({
-            "channel": message.channel_id,
-            "text": text,
-            // Prevent link-preview noise.
-            "unfurl_links": false,
-            "unfurl_media": false,
-        });
+        for chunk in chunks {
+            let body = serde_json::json!({
+                "channel": message.channel_id,
+                "text": chunk,
+                // Prevent link-preview noise.
+                "unfurl_links": false,
+                "unfurl_media": false,
+            });
 
-        eprintln!("DEBUG slack api_base = {:?}", self.api_base());
-        let resp = client
-            .post(format!(
-                "{}/chat.postMessage",
-                self.api_base().trim_end_matches('/')
-            ))
-            .header("Authorization", format!("Bearer {}", token))
-            .header("Content-Type", "application/json")
-            .json(&body)
-            .send()
-            .await?;
+            let resp = client
+                .post(format!(
+                    "{}/chat.postMessage",
+                    self.api_base().trim_end_matches('/')
+                ))
+                .header("Authorization", format!("Bearer {}", token))
+                .header("Content-Type", "application/json")
+                .json(&body)
+                .send()
+                .await?;
 
-        // The response must be CHECKED. Two ways a Slack send fails:
-        //
-        // 1. A non-2xx status — a revoked token (401), a missing scope
-        //    (403), a rate limit (429).
-        // 2. **A 200 with `{"ok": false, "error": "not_in_channel"}`** —
-        //    Slack's API convention. A status check alone does NOT catch
-        //    this, and it is the common case: a bot that is not in the
-        //    channel, or a message that violates a workspace rule.
-        //
-        // The old code discarded the response entirely, so BOTH looked
-        // like a success: the delivery ledger recorded "delivered" and
-        // the operator saw a silent no-op. (The same defect class as the
-        // SMTP reply discarding, RT-73, and the Telegram status, RT-71.)
-        let status = resp.status();
-        let body_text = resp.text().await.unwrap_or_default();
-        slack_send_outcome(status.as_u16(), &body_text)?;
+            // The response must be CHECKED. Two ways a Slack send fails:
+            //
+            // 1. A non-2xx status — a revoked token (401), a missing scope
+            //    (403), a rate limit (429).
+            // 2. **A 200 with `{"ok": false, "error": "not_in_channel"}`** —
+            //    Slack's API convention. A status check alone does NOT catch
+            //    this, and it is the common case: a bot that is not in the
+            //    channel, or a message that violates a workspace rule.
+            //
+            // The old code discarded the response entirely, so BOTH looked
+            // like a success: the delivery ledger recorded "delivered" and
+            // the operator saw a silent no-op. (The same defect class as
+            // the SMTP reply discarding, RT-73, and the Telegram status,
+            // RT-71.)
+            let status = resp.status();
+            let body_text = resp.text().await.unwrap_or_default();
+            slack_send_outcome(status.as_u16(), &body_text)?;
+        }
 
         Ok(())
     }

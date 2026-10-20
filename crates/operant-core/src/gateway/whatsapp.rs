@@ -51,6 +51,11 @@ impl WhatsAppAdapter {
     }
 }
 
+/// WhatsApp's per-message character limit.
+///
+/// The Graph API rejects a text message over this limit.
+const WHATSAPP_MESSAGE_LIMIT: usize = 4096;
+
 /// The message from a Graph API error body.
 ///
 /// The body is `{"error": {"message": "...", "code": N, ...}}`. A body
@@ -115,33 +120,39 @@ impl PlatformAdapter for WhatsAppAdapter {
             message.content.clone()
         };
 
-        let body = json!({
-            "messaging_product": "whatsapp",
-            "to": phone,
-            "type": "text",
-            "text": {"body": body_text}
-        });
+        // WhatsApp's text-message limit is 4096 characters. Over it, the
+        // Graph API rejects the request and the message is NOT delivered —
+        // so a long answer was silently lost. The text is CHUNKED, the way
+        // the Telegram, Discord and Slack sends are.
+        for chunk in crate::gateway::telegram::chunk_text(&body_text, WHATSAPP_MESSAGE_LIMIT) {
+            let body = json!({
+                "messaging_product": "whatsapp",
+                "to": phone,
+                "type": "text",
+                "text": {"body": chunk}
+            });
 
-        let resp = client
-            .post(&url)
-            .header("Authorization", format!("Bearer {}", token))
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| Error::Network(e.into()))?;
+            let resp = client
+                .post(&url)
+                .header("Authorization", format!("Bearer {}", token))
+                .json(&body)
+                .send()
+                .await
+                .map_err(|e| Error::Network(e.into()))?;
 
-        let status = resp.status();
-        if !status.is_success() {
-            // The Graph API's body carries the REASON ("Unsupported post
-            // request.", "Invalid OAuth access token", the code), and a
-            // bare status leaves the operator guessing which of the four
-            // common causes it was.
-            let body = resp.text().await.unwrap_or_default();
-            return Err(Error::Agent(format!(
-                "WhatsApp API error: {}: {}",
-                status,
-                graph_error_message(&body)
-            )));
+            let status = resp.status();
+            if !status.is_success() {
+                // The Graph API's body carries the REASON ("Unsupported post
+                // request.", "Invalid OAuth access token", the code), and a
+                // bare status leaves the operator guessing which of the four
+                // common causes it was.
+                let body = resp.text().await.unwrap_or_default();
+                return Err(Error::Agent(format!(
+                    "WhatsApp API error: {}: {}",
+                    status,
+                    graph_error_message(&body)
+                )));
+            }
         }
 
         Ok(())

@@ -21,6 +21,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-1069 — a WhatsApp message over 4096 characters is now chunked instead of being lost.**
+
+- **iter-1068 — a Slack message over 40,000 characters is now chunked instead of silently not delivered.** A debug print left in the send path is also removed.
+
+- **iter-1067 — a Discord edit over the 2000-character limit no longer truncates the answer.** It now fails, so the full answer is sent as a fresh message instead of losing its tail silently.
+
 - **iter-1066 — the gateway logs a delivery summary on stop.** The delivery ledger is in-memory in the daemon and nothing exposed it, so its counts — the whole point of the ledger — were invisible.
 
 - **iter-1065 — the response-mirror feature is recorded as a gap.** It has a complete `hermes` parity implementation, no config key, and no production caller: it cannot be reached at all.
