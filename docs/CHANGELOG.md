@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-1065 — the response-mirror feature is recorded as a gap.** It has a complete `hermes` parity implementation, no config key, and no production caller: it cannot be reached at all.
+
 - **iter-1063 — Discord and Slack can now edit a sent message.** The streaming path's incremental updates were no-ops on both, so the user saw the first chunk of the answer and then the whole answer again as a second message.
 
 - **iter-1062 — on Discord and Slack the agent's answer was truncated to its first chunk.** Only Telegram can edit a sent message, so the streaming path's edits were no-ops there, and the delivery marker suppressed the full send that would have delivered the rest.
