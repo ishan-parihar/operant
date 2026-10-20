@@ -428,7 +428,7 @@ These are the user's intentional design choices. Do not replace, remove, or
   complete set of messaging surfaces.
 
 ### Native Tool Integrations
-- **AFT (Agent File Tools)**: 15 IDE-grade coding tools via subprocess
+- **AFT (Agent File Tools)**: 20 IDE-grade coding tools via subprocess
   (`aft_bridge.rs` + `aft_tools.rs`)
   - Auto-downloads from GitHub releases, auto-updates
   - When `aft_enabled=true`, basic file/terminal tools are auto-disabled (no duplication)
@@ -467,7 +467,7 @@ operant/
 │   │   │   ├── tools/         # Tool registry + all tool implementations
 │   │   │   │   ├── builtin.rs # register_builtin_tools()
 │   │   │   │   ├── sourcehound.rs # web_search/scrape/extract/crawl + MCP seam (subprocess)
-│   │   │   │   ├── aft_tools.rs   # 21 AFT IDE tools
+│   │   │   │   ├── aft_tools.rs   # 20 AFT IDE tools
 │   │   │   │   └── memory_tools.rs # memory_* tools (memory-wire/builtin)
 │   │   │   ├── memory_wire.rs # MemoryWireProvider (in-process, catch_unwind)
 │   │   │   ├── memory_provider.rs # memory-wire + BuiltinProvider
@@ -481,7 +481,7 @@ operant/
 │       ├── src/
 │       │   ├── main.rs        # CLI entry point, Clap enum, agent setup
 │       │   ├── mcp_serve.rs   # Operant as an MCP SERVER over stdio (`operant mcp serve`); the CLIENT lives in operant-core/src/mcp.rs
-│       │   ├── tui/           # 50+ TUI modules (app, render, prompt_input, dialogs)
+│       │   ├── tui/           # 63 TUI modules (303 .rs files) — (app, render, prompt_input, dialogs)
 │       │   ├── gateway_runner.rs # Gateway mode agent handler
 │       │   ├── autonomous.rs  # Autonomous coding mode
 │       │   ├── config.rs      # CLI config
@@ -1025,7 +1025,7 @@ MUST know before touching the render layer:
 - Auto-compression on `context_overflow` errors (iter-63)
 
 ### Native Tool Integrations
-- AFT: 15 IDE-grade tools (subprocess + auto-update, iter-40/41)
+- AFT: 20 IDE-grade tools (subprocess + auto-update, iter-40/41)
 - sourcehound: web_search + web_scrape + web_extract + web_crawl + sourcehound browser provider (MCP subprocess, no API keys)
 - LifeOS: 22 Notion tools (feature-gated, iter-47/48)
 - AFT dedup: basic file/terminal tools auto-disabled when AFT enabled (iter-51)

@@ -164,6 +164,45 @@ print(f"OK    Architecture Overview tree: {checked} paths, every one exists")
 PY
 [ $? -ne 0 ] && fail=1
 
+# --- AFT tools -------------------------------------------------------------
+aft_actual=$(python3 - <<'PY'
+import re
+src = open('crates/operant-core/src/tools/aft_tools.rs').read()
+# the REGISTERED tools, counted the way the code registers them
+n_reg = len(re.findall(r'\.register\(Aft', src))
+# the distinct tool names, counted from the schema definitions
+n_names = len({m for m in re.findall(r'"(aft_[a-z_]+)"', src)})
+if n_reg != n_names:
+    print(f"DRIFT AFT internal: {n_reg} registered but {n_names} distinct names")
+    raise SystemExit(2)
+print(n_reg)
+PY
+) || { say "DRIFT AFT: registered tools and distinct names disagree"; fail=1; }
+aft_doc=$(grep -oE '[0-9]+ (IDE-grade coding tools|AFT IDE tools|IDE-grade tools)' AGENTS.md | grep -oE '[0-9]+' | head -1)
+check "AFT tools" "$aft_actual" "$aft_doc"
+# every AFT count in the doc must agree with the code
+aft_alls=$(grep -oE '[0-9]+ (IDE-grade coding tools|AFT IDE tools|IDE-grade tools)' AGENTS.md | grep -oE '[0-9]+' | sort -u | tr '\n' ' ')
+if [ "$(echo "$aft_alls" | wc -w)" -gt 1 ]; then
+  say "DRIFT AFT: AGENTS.md states the AFT count several different ways: $aft_alls"
+  fail=1
+fi
+
+# --- TUI modules -----------------------------------------------------------
+tui_actual=$(grep -c 'pub mod' crates/operant-cli/src/tui/mod.rs)
+# The doc may write the count as "63 TUI modules" or as a lower bound
+# ("50+ TUI modules"). A lower bound is NOT a checkable claim, so it is
+# reported as such rather than silently accepted or silently ignored.
+tui_doc=$(grep -oE '[0-9]+\+? TUI modules' AGENTS.md | head -1 | grep -oE '^[0-9]+')
+if [ -z "$tui_doc" ]; then
+  say "DRIFT TUI modules: AGENTS.md states no countable TUI-module count"
+  fail=1
+elif [ "$tui_doc" != "$tui_actual" ]; then
+  say "DRIFT TUI modules: doc says $tui_doc, code has $tui_actual"
+  fail=1
+else
+  say "OK    TUI modules: $tui_actual"
+fi
+
 # --- the live issue ledger's path -----------------------------------------
 if [ -f docs/audit/2026-06-19-BUGS.md ]; then
   say "OK    issue ledger path: docs/audit/2026-06-19-BUGS.md exists"

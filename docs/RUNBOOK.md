@@ -13,7 +13,7 @@ authority for the iteration loop itself is AGENTS.md ("START HERE").
 | clippy gate | `bash scripts/clippy-warning-gate.sh` | red at the pristine tip during peer W-zone work — prove your own delta is zero, don't fix the peer's (fleet rule 7) |
 | supply-chain gate | `bash scripts/supply-chain-gate.sh` | `cargo audit` against the committed lockfile; fails on any advisory the committed allowlist does not cover. `cargo-audit` is NOT on PATH — the script looks in `~/.cargo/bin`. `cargo-deny` is not installed, so the licence and duplicate-version policies in `deny.toml` stay unexecuted by design. |
 | test compile gate | `bash scripts/test-compile-gate.sh` | every kept crate's TEST targets compile |
-| doc claims gate | `bash scripts/check-doc-claims.sh` | derives AGENTS.md's code-surface claims (CLI command count and list, gateway platforms, error classes, workspace members, every path in the Architecture Overview tree) FROM THE CODE and prints the differences. Exits 1 on any drift. A doc claim about the code is a test in disguise — RG-011. |
+| doc claims gate | `bash scripts/check-doc-claims.sh` | derives AGENTS.md's code-surface claims (CLI command count and list, gateway platforms, error classes, workspace members, AFT tools, TUI modules, every path in the Architecture Overview tree) FROM THE CODE and prints the differences. Exits 1 on any drift. A doc claim about the code is a test in disguise — RG-011. |
 | build script tests | `bash scripts/tests/libclang_resolve_test.sh && bash scripts/tests/supply_chain_gate_test.sh` | the libclang resolver (three scripts resolving libclang three different ways broke the build) and the supply-chain gate's own fail-on-new-advisory contract |
 | format | `cargo fmt --all` | |
 

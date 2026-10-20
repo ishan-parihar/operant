@@ -111,6 +111,8 @@ OK    gateway platforms: 7
 OK    error classes: 24
 OK    workspace members: 12
 OK    Architecture Overview tree: 41 paths, every one exists
+OK    AFT tools: 20
+OK    TUI modules: 63
 OK    issue ledger path: docs/audit/2026-06-19-BUGS.md exists
 ```
 
@@ -133,6 +135,29 @@ DRIFT AGENTS.md tree still names a root BUGS.md
 ```
 
 Both restorations were reverted and the tree re-verified green.
+
+**The gate was then EXTENDED, and extending it found more drift.** A gate that
+checks some claims is an invitation to assume the rest, so the AFT and TUI
+surfaces were added. The first run of the extended gate found that AGENTS.md
+stated the AFT tool count **three different ways** — "15 IDE-grade coding tools",
+"21 AFT IDE tools", "15 IDE-grade tools" — where the code has **20**
+(`register_aft_tools` registers 20, and there are 20 distinct `aft_*` names).
+And "50+ TUI modules" was a lower bound where the code has 63 `pub mod`
+declarations (303 `.rs` files). The AFT check now also asserts that the
+REGISTERED count and the distinct-NAME count agree inside the code itself, and
+that the doc does not state the AFT count several different ways. The TUI check
+treats a lower bound as what it is — an uncheckable claim — and reports it as
+drift rather than accepting or ignoring it.
+
+The extended gate was proved against the pre-fix document:
+
+```
+DRIFT AFT tools: doc says 15, code has 20
+DRIFT AFT: AGENTS.md states the AFT count several different ways: 15 21
+DRIFT TUI modules: doc says 50, code has 63
+```
+
+and exits 1. Both restorations were reverted and the tree re-verified green.
 
 The generalisable detector, and the one this session has now paid for nine
 times: **a doc claim about the code is a test in disguise.** The test is cheap,

@@ -115,3 +115,4 @@ Append-only: `kb log "<entry>"` — one entry per unit of work.
 - **2026-10-20T23:50** · `jcode` — docs: the entry contract pointed the open queue at a section with nothing open in it — and two more summaries in the same file were stale too (RG-009)
 - **2026-10-20T23:57** · `jcode` — docs: AGENTS.md's CLI list was stale in BOTH directions and its count agreed with nothing — 52 variants, not 53 (RG-010)
 - **2026-10-21T00:05** · `jcode` — docs: the doc-claims check became a real gate, and it caught a tree entry for a file archived in iter-900 (RG-011)
+- **2026-10-21T00:16** · `jcode` — docs: extending the doc-claims gate found AGENTS.md stating the AFT tool count three different ways (the code has 20) and a TUI count as an uncheckable lower bound
