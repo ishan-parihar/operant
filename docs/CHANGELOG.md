@@ -27,6 +27,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **iter-1043 — the orphan `operant-infra` crate is recorded with what it holds.** It has no dependents, and its message debouncer and stall watchdog are capabilities the gateway does not have.
+
 - **iter-1040 — `default_provider_config` no longer claims three callers it does not have.** It had none; the per-provider defaults it reads are unwired, which is recorded as RT-89.
 
 - **iter-1038 — 43 923 lines of provider, memory and session implementations are compiled into every binary and the product calls almost none of it.** The measurement and the three resolutions are recorded as RT-89; the configuration surface that silently ignores a provider or a memory backend is the part that needs the owner's decision.

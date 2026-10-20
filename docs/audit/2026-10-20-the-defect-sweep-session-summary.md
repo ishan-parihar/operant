@@ -34,9 +34,22 @@ bite. Those are called out, because the shape recurs.
 
 | Row | Defect | Evidence |
 |---|---|---|
+| RT-75/76/77 | A failed Telegram send was reported as delivered; `edit_message` swallowed every 400; the poll looped silently every two seconds. | The same class as the SMTP defect (RT-73), in the platform with the most users. |
+| RT-86 | The Slack adapter is OUTBOUND-ONLY — there is no Socket Mode WebSocket, so a Slack message never reached the agent, while the gateway reported the adapter as "enabled". | The status report now carries `inbound: false`. |
+| RT-87/88 | `operant-tools` was a 30 860-line parallel tool library the product called ONCE. Deleted: 30 695 lines. | A closure analysis over the module graph, then the workspace build. |
+| RT-89 | 43 923 lines of provider, memory and session implementations are compiled into every binary and no configuration can reach them. | Measured by an exact module-path search per crate. |
+| RT-90 | `default_provider_config` claimed three callers it did not have. | A workspace-wide search for the name. |
+| RT-91 | The installer's `cp -a` left a STALE ONNX Runtime symlink, and the installed binary could not start at all. | The machine could not run the binary; the corpus read "0 gated, 70 drifts" and that was not a regression. |
+| RT-92 | The CLI compiled the `postgres` dependency for a crate it never called, through a `ci-all` feature no CI runs. | A workspace-wide search for `operant_memory::`. |
 | RT-69 | The context eviction could not meet the budget and said nothing; the reactive overflow path re-issued the request and earned the same provider 400. | Four mutations, each run separately. The pre-existing `loop_recovery_paths` test caught the over-strict first fix — the rule is a two-strike rule because of it. |
+| RT-83 | The token estimate counted only the message's text — and a tool-call turn's text is EMPTY by construction, so a 100 KB tool call was estimated at 4 tokens. The eviction was blind to the largest messages. | The mutation fails with "got 4". |
+| RT-78 | The LLM compression's HEAD boundary was a message count, so a `tool_use` and its `tool_result` could be separated by the summary. `repair_tool_pairs` existed and was never called. | Two mutations, run separately. |
+| RT-81 | A `transport = "streamable-http"` MCP server could not connect at all: no `Accept` header (406), no `Mcp-Session-Id` echo (a new session per request), no SSE-framed response reading. | Two mutations. |
+| RT-84 | A JSON-RPC error from an MCP SSE server was handed back as a successful result — the caller treated the error payload as the tool's output. | The mutation fails with the error object as the "result". |
+| RT-82 | Every MCP transport advertised `sampling` and `roots`; the HTTP and SSE ones cannot answer a server-initiated request, so the server blocked waiting for a reply. | The mutation fails. |
 | RT-67 | An MCP tool's registry name was not injective: server `a` + tool `b_c` and server `a_b` + tool `c` produced the same name. The registry REPLACES on a name collision and the sync tears down BY NAME, so a hostile MCP server could shadow another's tool. | Fixed; then iter-1018 found that iter-1014's own "injective by construction" claim was FALSE (`-` and the literal `_2d_` collided) and corrected it. |
-| RT-68 | The gateway session store's `prune_old_entries` existed since it was written and its only callers were its own tests — so every conversation the gateway ever saw stayed forever. | A periodic sweep plus `[gateway] session_retention_days`. The mutation: emptying the sweep body fails the test. |
+| RT-80 | Dropping an MCP stdio transport left the server subprocess running as an orphan (`kill_on_drop` defaults to false; no `impl Drop`). | Four attempts to make the test non-vacuous, then the mutation fails. |
+| RT-79 | A TUI test could poison the process-global reasoning-mode cell for every test after it — 5 failures in 20 runs, 0 in 25 after. | Found with a tracer, not by reading: a search for "the setter is called" does not say "and the CALLER holds the guard". |
 | RT-66 | The CLI and the core resolved the operant home differently on Windows, so the startup `.env` loader and the per-turn reload read two different files. | One resolver. |
 | RT-55/56 | The supply-chain gate could not report the finding it exists to report (it treated cargo-audit's non-zero exit as "the DB is unreadable"), and a size-bound checkpoint skip was reported as the wrong cause. | The gate's stub now exits non-zero, which is what made the path reachable at all. |
 | RT-52 | The TUI corpus had been RED for nine days and no gate ran it. | `scripts/self-test.sh` runs it now; the corpus is green (64 gated, 0 drift). |
