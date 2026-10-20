@@ -1179,8 +1179,15 @@ impl PlatformAdapter for TelegramAdapter {
     }
 
     async fn send_voice(&self, channel_id: &str, audio_data: &[u8], format: &str) -> Result<()> {
+        // The API base comes from the configuration, like every other
+        // Telegram call. This one hard-coded `https://api.telegram.org`
+        // — so a deployment that points the Telegram API elsewhere (a
+        // test, a proxy, a regional endpoint) had its VOICE messages go
+        // to the real Telegram API while everything else went to the
+        // configured one. Nine other sites in this file use `api_url()`.
         let url = format!(
-            "https://api.telegram.org/bot{}/sendVoice",
+            "{}/bot{}/sendVoice",
+            self.api_url().trim_end_matches('/'),
             self.token.as_deref().unwrap_or("")
         );
         let filename = format!("voice.{}", format);
