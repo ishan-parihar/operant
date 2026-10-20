@@ -367,7 +367,7 @@ async fn handle_test(config: &AppConfig, mcp_manager: &McpManager, name: String)
         .with_context(|| format!("No MCP server named '{}' found in config", name))?;
 
     println!("Testing MCP server '{}' ...", name);
-    println!("  Transport:  {:?}", server.transport);
+    println!("  Transport:  {}", server.transport.transport_label());
     println!(
         "  Enabled:    {}",
         if server.enabled { "yes" } else { "no" }
