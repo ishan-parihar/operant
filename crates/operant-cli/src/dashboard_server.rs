@@ -409,11 +409,214 @@ fn cookie_token(headers: &HeaderMap) -> Option<String> {
 struct StatusResponse {
     status: String,
     version: String,
+    /// The name the bundled frontend prints next to its own name
+    /// (`v{hermes_version}`). The bundle is a build artefact from a larger
+    /// harness and has no `version` reader, so both keys are served:
+    /// `version` for anything scripted against THIS server, this one for the
+    /// panel. RT-117.
+    hermes_version: String,
     uptime_seconds: u64,
     gateway_running: bool,
     agent_model: String,
     kanban_tasks: usize,
     database_path: String,
+    #[serde(flatten)]
+    host: HostMetrics,
+}
+
+/// Host metrics for the bundled frontend's system panel (RT-117).
+///
+/// The panel was written against a Python backend, and the bundle reads this
+/// exact shape: `memory.used` / `disk.used` are **bytes** (it formats them
+/// with its own B/KB/MB/GB helper), `load_avg` is the 1/5/15 **array** (a
+/// scalar renders nothing), and the truthy `psutil` flag is what hides the
+/// bundle's "install the `psutil` extra for CPU / memory / disk metrics"
+/// note. The name is inherited from that backend; it is not a claim about a
+/// Python package. Serving the shape is additive — every field this server
+/// already returned is untouched — and it is what makes the CPU, memory and
+/// disk panels show numbers instead of blanks.
+#[derive(Serialize)]
+struct HostMetrics {
+    cpu_count: Option<usize>,
+    cpu_percent: Option<f64>,
+    load_avg: Option<[f64; 3]>,
+    memory: Option<MemoryStats>,
+    disk: Option<DiskStats>,
+    hostname: Option<String>,
+    os_release: Option<String>,
+    arch: &'static str,
+    psutil: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct MemoryStats {
+    used: u64,
+    total: u64,
+    percent: f64,
+}
+
+#[derive(Debug, Serialize)]
+struct DiskStats {
+    used: u64,
+    total: u64,
+    percent: f64,
+}
+
+impl HostMetrics {
+    fn collect() -> Self {
+        let memory = read_memory();
+        Self {
+            cpu_count: std::thread::available_parallelism().ok().map(|n| n.get()),
+            cpu_percent: read_cpu_percent(),
+            load_avg: read_load_avg(),
+            // The flag means "the metrics below are real", which is exactly
+            // what the bundle uses it for.
+            psutil: memory.is_some(),
+            memory,
+            disk: read_disk(),
+            hostname: read_hostname(),
+            os_release: read_os_release(),
+            arch: std::env::consts::ARCH,
+        }
+    }
+}
+
+/// A percentage rounded to one decimal — the panel prints the value raw.
+fn percent_of(used: u64, total: u64) -> f64 {
+    if total == 0 {
+        return 0.0;
+    }
+    (used as f64 / total as f64 * 1000.0).round() / 10.0
+}
+
+/// CPU counters from the PREVIOUS status poll, so `cpu_percent` is the
+/// utilisation since that poll. An average since boot (the total jiffies)
+/// barely moves on a long-running host.
+static LAST_CPU_SAMPLE: std::sync::Mutex<Option<(u64, u64)>> = std::sync::Mutex::new(None);
+
+#[cfg(target_os = "linux")]
+fn read_cpu_percent() -> Option<f64> {
+    let stat = std::fs::read_to_string("/proc/stat").ok()?;
+    let values: Vec<u64> = stat
+        .lines()
+        .next()?
+        .split_whitespace()
+        .skip(1)
+        .filter_map(|v| v.parse().ok())
+        .collect();
+    if values.len() < 4 {
+        return None;
+    }
+    let idle = values[3] + values.get(4).copied().unwrap_or(0);
+    let total: u64 = values.iter().sum();
+    let mut last = LAST_CPU_SAMPLE.lock().ok()?;
+    let percent = last.and_then(|(prev_total, prev_idle)| {
+        let total_delta = total.saturating_sub(prev_total);
+        let idle_delta = idle.saturating_sub(prev_idle);
+        (total_delta > 0).then(|| {
+            ((total_delta - idle_delta) as f64 / total_delta as f64 * 1000.0).round() / 10.0
+        })
+    });
+    *last = Some((total, idle));
+    percent
+}
+
+#[cfg(not(target_os = "linux"))]
+fn read_cpu_percent() -> Option<f64> {
+    // No /proc: the first poll would have no previous sample to subtract, and
+    // this server has no background sampler. The panel shows nothing rather
+    // than a made-up number.
+    None
+}
+
+#[cfg(unix)]
+fn read_load_avg() -> Option<[f64; 3]> {
+    let mut avg = [0f64; 3];
+    // SAFETY: getloadavg writes at most the count passed (3) into the array.
+    let written = unsafe { libc::getloadavg(avg.as_mut_ptr(), 3) };
+    (written == 3).then_some(avg)
+}
+
+#[cfg(not(unix))]
+fn read_load_avg() -> Option<[f64; 3]> {
+    None
+}
+
+#[cfg(target_os = "linux")]
+fn read_memory() -> Option<MemoryStats> {
+    let text = std::fs::read_to_string("/proc/meminfo").ok()?;
+    let field = |key: &str| -> Option<u64> {
+        text.lines()
+            .find(|line| line.starts_with(key))
+            .and_then(|line| line.split_whitespace().nth(1))
+            .and_then(|value| value.parse::<u64>().ok())
+    };
+    let total = field("MemTotal:")? * 1024;
+    let available = field("MemAvailable:")? * 1024;
+    let used = total.saturating_sub(available);
+    Some(MemoryStats {
+        used,
+        total,
+        percent: percent_of(used, total),
+    })
+}
+
+#[cfg(not(target_os = "linux"))]
+fn read_memory() -> Option<MemoryStats> {
+    None
+}
+
+#[cfg(unix)]
+fn read_disk() -> Option<DiskStats> {
+    let path = std::ffi::CString::new("/").ok()?;
+    // SAFETY: statvfs only writes into the struct we hand it, which is fully
+    // zeroed first and freed by its own Drop.
+    let mut vfs: libc::statvfs = unsafe { std::mem::zeroed() };
+    // SAFETY: `path` is a valid NUL-terminated C string for the call's life.
+    if unsafe { libc::statvfs(path.as_ptr(), &mut vfs) } != 0 {
+        return None;
+    }
+    let unit = if vfs.f_frsize > 0 {
+        vfs.f_frsize as u64
+    } else {
+        vfs.f_bsize as u64
+    };
+    let total = (vfs.f_blocks as u64).saturating_mul(unit);
+    let free = (vfs.f_bfree as u64).saturating_mul(unit);
+    let used = total.saturating_sub(free);
+    Some(DiskStats {
+        used,
+        total,
+        percent: percent_of(used, total),
+    })
+}
+
+#[cfg(not(unix))]
+fn read_disk() -> Option<DiskStats> {
+    None
+}
+
+#[cfg(unix)]
+fn read_hostname() -> Option<String> {
+    let mut buf = [0u8; 256];
+    // SAFETY: the buffer is 256 bytes and its length is passed alongside.
+    if unsafe { libc::gethostname(buf.as_mut_ptr().cast(), buf.len()) } != 0 {
+        return None;
+    }
+    let end = buf.iter().position(|b| *b == 0).unwrap_or(buf.len());
+    String::from_utf8(buf[..end].to_vec()).ok()
+}
+
+#[cfg(not(unix))]
+fn read_hostname() -> Option<String> {
+    std::env::var("COMPUTERNAME").ok()
+}
+
+fn read_os_release() -> Option<String> {
+    let text = std::fs::read_to_string("/etc/os-release").ok()?;
+    text.lines()
+        .find_map(|line| line.strip_prefix("PRETTY_NAME="))
+        .map(|value| value.trim_matches('"').to_string())
 }
 
 async fn handle_status(State(state): State<DashboardState>, headers: HeaderMap) -> Response {
@@ -423,14 +626,18 @@ async fn handle_status(State(state): State<DashboardState>, headers: HeaderMap) 
 
     let kanban_task_count = count_all_kanban_tasks(&state.kanban_dir).unwrap_or(0);
 
+    let version = env!("CARGO_PKG_VERSION").to_string();
+
     Json(StatusResponse {
         status: "running".to_string(),
-        version: env!("CARGO_PKG_VERSION").to_string(),
+        hermes_version: version.clone(),
+        version,
         uptime_seconds: state.start_time.elapsed().as_secs(),
         gateway_running: crate::gateway_runner::is_running().await,
         agent_model: state.app_config.agent.model.clone(),
         kanban_tasks: kanban_task_count,
         database_path: state.app_config.database_path.display().to_string(),
+        host: HostMetrics::collect(),
     })
     .into_response()
 }
@@ -709,6 +916,113 @@ mod tests {
     use super::*;
     use std::io::{BufRead, BufReader, Read, Write};
     use std::net::TcpStream;
+
+    /// The bundled frontend's built asset, the same file the server serves.
+    const BUNDLE: &str = include_str!("dashboard/assets/index-BB4BRelo.js");
+
+    /// A status payload with every field filled, for shape assertions.
+    fn status_sample() -> StatusResponse {
+        StatusResponse {
+            status: "running".to_string(),
+            version: "0.0.0-test".to_string(),
+            hermes_version: "0.0.0-test".to_string(),
+            uptime_seconds: 42,
+            gateway_running: false,
+            agent_model: "test-model".to_string(),
+            kanban_tasks: 0,
+            database_path: "/tmp/database.db".to_string(),
+            host: HostMetrics {
+                cpu_count: Some(8),
+                cpu_percent: Some(12.5),
+                load_avg: Some([0.5, 0.4, 0.3]),
+                memory: Some(MemoryStats {
+                    used: 4 * 1024 * 1024 * 1024,
+                    total: 16 * 1024 * 1024 * 1024,
+                    percent: 25.0,
+                }),
+                disk: Some(DiskStats {
+                    used: 250 * 1024 * 1024 * 1024,
+                    total: 1000 * 1024 * 1024 * 1024,
+                    percent: 25.0,
+                }),
+                hostname: Some("host".to_string()),
+                os_release: Some("Test OS".to_string()),
+                arch: "x86_64",
+                psutil: true,
+            },
+        }
+    }
+
+    /// RT-117: the status payload and the system panel must agree on the
+    /// field names, in BOTH directions — this reads the panel's own bundle
+    /// and the server's own serializer, so a bundle swap (RT-44) fails here
+    /// instead of rendering blank panels in production.
+    #[test]
+    fn the_status_payload_carries_every_field_the_system_panel_reads() {
+        let payload = serde_json::to_value(status_sample()).expect("the status is serializable");
+
+        for field in [
+            "cpu_count",
+            "cpu_percent",
+            "load_avg",
+            "memory",
+            "disk",
+            "hostname",
+            "os_release",
+            "arch",
+            "psutil",
+            "hermes_version",
+            "uptime_seconds",
+        ] {
+            assert!(
+                BUNDLE.contains(&format!(".{field}")),
+                "the bundle no longer reads `{field}` — the panel changed shape, \
+                 so this list (and the response) must be re-derived from it"
+            );
+            assert!(
+                payload.get(field).is_some(),
+                "the system panel reads `{field}` and /api/status does not serve it: {payload}"
+            );
+        }
+
+        // The bundle formats these three numbers as BYTES; a value in MB or
+        // KB would render as "0.0 KB" and look like a broken host.
+        let memory = &payload["memory"];
+        assert!(
+            memory["total"].as_u64().unwrap_or(0) > 1_000_000,
+            "memory.total is bytes in the bundle's formatter, got {memory}"
+        );
+        assert_eq!(
+            payload["load_avg"].as_array().map(|a| a.len()),
+            Some(3),
+            "the panel requires the 1/5/15 array, not a scalar"
+        );
+    }
+
+    /// On Linux the metrics are read for real, not stubbed to `None`: a
+    /// panel that says "install the psutil extra" on a host that has the
+    /// numbers is the same defect in reverse.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_host_metrics_are_real_on_linux() {
+        let host = HostMetrics::collect();
+
+        let memory = host.memory.expect("/proc/meminfo is readable");
+        assert!(memory.total > 0, "memory.total must be real bytes");
+        assert!(memory.used <= memory.total, "{memory:?}");
+        assert!((0.0..=100.0).contains(&memory.percent), "{memory:?}");
+
+        let disk = host.disk.expect("statvfs on / succeeds");
+        assert!(disk.total > 0, "disk.total must be real bytes");
+        assert!(disk.used <= disk.total, "{disk:?}");
+
+        assert!(host.psutil, "the metrics are present, so the flag is true");
+        assert!(host.cpu_count.unwrap_or(0) > 0);
+        assert!(
+            host.hostname.as_deref().is_some_and(|h| !h.is_empty()),
+            "the panel prints the hostname"
+        );
+    }
 
     /// A running dashboard on an ephemeral port.
     struct TestServer {
