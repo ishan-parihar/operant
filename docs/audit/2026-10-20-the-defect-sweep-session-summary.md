@@ -2,7 +2,7 @@
 
 Date: 2026-10-20. Agent: `omp`.
 Range: iters 980–1046 (67 commits) on `origin/main`.
-Ledger: `docs/audit/2026-06-19-BUGS.md` — **207 rows closed, 2 open** (S1 and S2, both live-terminal checks that need a terminal this session did not have).
+Ledger: `docs/audit/2026-06-19-BUGS.md` — **208 rows closed, 2 open** (S1 and S2, both live-terminal checks that need a terminal this session did not have).
 
 This is the morning review. It names every defect the sweep found, how each
 was proven, and what is deliberately left open.
@@ -70,6 +70,7 @@ several rows here name the MECHANISM, not just the outcome.
 | RT-110 | A Slack message over 40,000 characters was NOT delivered (Slack answers `ok: false` with a 200, which a status check alone does not catch), and a `DEBUG` print was left in the send path. | The send chunks; the debug print is removed. |
 | RT-111 | A WhatsApp message over 4096 characters was NOT delivered. | The send chunks. |
 | RT-112 | An SMS over 1600 characters was NOT delivered. | The send chunks. |
+| RT-113 | The Telegram VOICE send hard-coded `api.telegram.org` — the only one of the ten Telegram call sites that did not use the configured base. | It uses `api_url()` now, and a named `voice_url()` plus a test pin the shape: `api_url()` already carries `/bot{token}`, so the first fix produced `.../bot123/bot123/sendVoice` — which would have 404'd every voice message, and no test covered the path. The test is mutation-checked. |
 | RT-69 | The context eviction could not meet the budget and said nothing; the reactive overflow path re-issued the request and earned the same provider 400. | Four mutations, each run separately. The pre-existing `loop_recovery_paths` test caught the over-strict first fix — the rule is a two-strike rule because of it. |
 | RT-83 | The token estimate counted only the message's text — and a tool-call turn's text is EMPTY by construction, so a 100 KB tool call was estimated at 4 tokens. The eviction was blind to the largest messages. | The mutation fails with "got 4". |
 | RT-78 | The LLM compression's HEAD boundary was a message count, so a `tool_use` and its `tool_result` could be separated by the summary. `repair_tool_pairs` existed and was never called. | Two mutations, run separately. |
