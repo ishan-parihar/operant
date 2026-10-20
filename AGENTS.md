@@ -1433,8 +1433,8 @@ were adopted without moving files this repo already owns.
 | what is left to do, decided per item (autonomous mode's ledger) | `TODO.md` | rows update, verdicts append — never delete |
 | how we will do X (pre-registered, current work) | `docs/plans/` (dated `plan-YYYY-MM-DD-*`, frozen) | dated-frozen |
 | what was audited, what was found | `docs/audit/` (dated, frozen) | dated-frozen |
-| why X is the way it is | `docs/decisions/` (AD-NNN-*.md) | immutable once numbered |
-| what bit us, and the law it produced | `docs/regressions/` (RG-NNN-*.md) | immutable once numbered |
+| why X is the way it is | `docs/decisions/` (AD-NNN-*.md) | immutable once numbered — the CLI enforces it; a correction is a NEW record (`genome rec supersede`), never a file edit (RG-002) |
+| what bit us, and the law it produced | `docs/regressions/` (RG-NNN-*.md) | immutable once numbered — same rule: `genome rec supersede`, never a file edit (RG-002) |
 | what was tried and rejected — do not re-litigate | `docs/kb/CLOSED.md` | append-only |
 | what happened, unit of work by unit of work | `docs/kb/WORKLOG.md` | append-only |
 | cross-agent messages, claims, mentions | `docs/kb/feed.md` | append-only |
@@ -1472,6 +1472,7 @@ were adopted without moving files this repo already owns.
 ./scripts/genome claim <item> / ./scripts/genome done <item> done --evidence <path>
 ./scripts/genome log "<entry>" --agent <id>
 ./scripts/genome rec recon <keywords>` (prior art first), then `./scripts/genome rec new ad\|rg "<title>" --recon <token> --orthogonal "<why>"
+./scripts/genome rec supersede <id> --by <new-id> --reason "<why>"   # CORRECTING a numbered record: the only sanctioned way. NEVER edit a file under docs/decisions/ or docs/regressions/ (RG-002)
 ./scripts/genome handoff --write         # regenerate STATE.md (archives the old)
 ```
 

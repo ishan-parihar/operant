@@ -139,25 +139,47 @@ normal failure mode of the read-then-write race the fork protocol names, not a
 sign that this session went wrong. The next free label is computed at commit
 time, never copied from a document.
 
+### A numbered record was amended in place — RG-002
+
+Disclosed here because it is a doctrine violation committed by this same leg and
+it is the kind that a green `lint` will never surface.
+
+RG-001 was minted in iter-1056 with the header every numbered record carries —
+"Immutable once numbered: a correction is a new record that supersedes this
+one" — and was then edited **in place** with a raw text edit in iter-1062, to
+add the citation defect and a fifth law. No revision row, no reason, no date.
+
+`./scripts/genome lint` was clean before and after, and `--advisory` agrees. The
+gate is real, and it had already been walked around: when `genome rec amend`
+later ran it was **refused** — `records.mode is immutable — correct a record with
+genome rec supersede`. The CLI enforces the rule; a text editor does not ask.
+
+The correction is **RG-002**, minted through the sanctioned `rec new` path rather
+than by editing the record again, which records the violation instead of hiding
+it. AGENTS.md's routing table and CLI quickstart now name `rec supersede` as the
+only sanctioned correction for a numbered record, and the detection gate is
+`git log --follow --oneline -- docs/regressions/ docs/decisions/`: a numbered
+record touched by more than one commit was amended in place.
+
 <!-- genome:zone status sha=3c05967a2670 -->
 | status | items |
 |---|---|
 <!-- genome:end status -->
 
-<!-- genome:zone handoff sha=685fade5bf05 -->
+<!-- genome:zone handoff sha=db7c31797cf1 -->
 ## Handoff — 2026-10-20
 
-Repo branch `main`, HEAD `c482f343e4d9c5aa72f7f92c8a1dd33b1fd45e3e`. Working tree dirty (13 paths).
+Repo branch `main`, HEAD `1b09ed460b753fc4119c1a6c885b65ad21755b87`. Working tree dirty (7 paths).
 
 ## Open register rows
   (none)
 
 ## Recent worklog
-- **2026-10-20T06:52** · `omp` — iter-1017: the Email adapter's TLS setup no longer panics, and the SMTP client no longer reports a rejected message as sent (RT-72, RT-73) — the rustls crypto provider is NAMED at the call site (the crate features are ambiguous under --all-features), and every SMTP server reply's status code is checked
 - **2026-10-20T06:52** · `omp` — iter-1018: the MCP tool's registry name is injective by construction again (RT-71) — iter-1014 shipped a claim that was false: the encoding left _ alone, so - and the literal _2d_ collided; the encoding is now a byte-wise escape joined by a single _, which is provably injective
 - **2026-10-20T06:52** · `omp` — iter-1019: the AFT binary is verified before it is installed, and the install is atomic (RT-70) — the shared updater's checksum guard matched only SHA256SUMS while aft publishes checksums.sha256, so the verification NEVER ran for aft, and the first-install path (which never went through the updater) downloaded and executed an unverified binary with a non-atomic write
 - **2026-10-20T18:50** · `jcode` — docs: the genome's own surfaces are reconciled — 39 stale board rows, a wrong register count, three dead command citations, and the first regression record
 - **2026-10-20T19:46** · `jcode` — docs: validation of the reconciliation found three defects — 31 board verdicts cited the wrong iteration, a 'next free label' note had gone stale twice, and the duplicate-label framing was materially misleading
+- **2026-10-20T20:13** · `jcode` — docs: the second validation found a doctrine violation in the first validation's own commit — RG-001 had been amended in place, bypassing the genome's immutability gate (RG-002)
 
 Regenerate with `genome handoff --write`.
 <!-- genome:end handoff -->
