@@ -402,10 +402,15 @@ These are the user's intentional design choices. Do not replace, remove, or
 - **Supported: 7 platforms** in the gateway registry (`platform_registry()` in
   `crates/operant-cli/src/gateway_runner.rs`) — telegram, discord, slack,
   whatsapp, email_smtp, sms_twilio, webhooks
-- **All seven have a real adapter** in `operant-core/src/gateway/`. Telegram,
-  Discord and Slack are long-polling / Socket Mode platforms. WhatsApp
-  (Graph API), Email (SMTP) and SMS (Twilio) are OUTBOUND-ONLY: they send
-  through the provider's API and receive nothing. Webhooks is INBOUND-ONLY:
+- **All seven have a real adapter** in `operant-core/src/gateway/`. Telegram
+  and Discord are the long-polling platforms, and they RECEIVE.
+  **Slack is OUTBOUND-ONLY**: operant can post to Slack, but there is no
+  Socket Mode WebSocket in this tree — `start()` logs and returns, and
+  nothing opens a `wss://` connection, so Slack messages never reach the
+  agent. Its `handle_update` parser is dead code (no caller feeds it).
+  WhatsApp (Graph API), Email (SMTP) and SMS (Twilio) are also
+  OUTBOUND-ONLY: they send through the provider's API and receive nothing.
+  Webhooks is INBOUND-ONLY:
   it runs a real axum server with HMAC-SHA256 signature validation
   (including the Slack `v0:` timestamped variant), and `send_message` is
   deliberately a no-op.
@@ -865,7 +870,7 @@ suggestions, tui
 ### Gateway (7 platform adapters — all have real code, platform registry)
 - Telegram: fully implemented (long-poll + Bot API)
 - Discord: fully implemented (Gateway WS + REST API)
-- Slack: fully implemented (Socket Mode + Web API)
+- Slack: outbound only — the Socket Mode WebSocket does not exist (RT-86)
 - WhatsApp: implemented (Cloud API outbound + webhook inbound)
 - Email: implemented (SMTP outbound + webhook inbound)
 - SMS: implemented (Twilio API outbound + Twilio webhook inbound)

@@ -9,18 +9,36 @@ use tracing::info;
 
 use super::*;
 
-/// Slack adapter
+/// Slack adapter.
+///
+/// **OUTBOUND ONLY.** Operant can post to Slack; it cannot receive from
+/// it. The Socket Mode WebSocket the doc used to describe DOES NOT EXIST
+/// in this tree: `start()` logs "event-based, no polling" and returns, and
+/// nothing opens a `wss://` connection or reads the Events API.
+///
+/// The `handle_update` parser below is therefore DEAD CODE — no caller
+/// ever feeds it an update (the trait's `handle_update` is dispatched by
+/// the Telegram and Discord pollers, and by the webhook adapter's HTTP
+/// handler; Slack has neither).
+///
+/// The gateway reports this adapter as "enabled" when a token is
+/// configured, which made an operator believe they could receive Slack
+/// messages. `config_json` now says `inbound: false`.
+///
+/// Fixing it means implementing Socket Mode: the `apps.connections.open`
+/// handshake, the WebSocket, the reconnect, and the event routing. That
+/// is a feature, not a patch, and it is tracked as RT-86.
 pub struct SlackAdapter {
     token: Option<String>,
     enabled: bool,
 }
 
 impl SlackAdapter {
-    /// Create a new Slack adapter (Socket Mode — authenticated by the bot
-    /// token over the WebSocket; signed-request verification is not part
-    /// of this transport. Slack-over-HTTP ingress is served by
-    /// `WebhookAdapter`, which verifies `x-slack-signature` against
-    /// `gateway.webhooks_secret` — see webhook.rs).
+    /// Create a new Slack adapter.
+    ///
+    /// The token is used for the OUTBOUND `chat.postMessage` call. It
+    /// does not authenticate an inbound connection, because there is no
+    /// inbound connection.
     pub fn new(token: Option<String>) -> Self {
         let enabled = token.is_some();
         Self { token, enabled }
@@ -137,7 +155,12 @@ impl PlatformAdapter for SlackAdapter {
         serde_json::json!({
             "platform": "slack",
             "enabled": self.enabled,
-            "has_token": self.token.is_some()
+            "has_token": self.token.is_some(),
+            // The adapter can SEND but not RECEIVE. The gateway's status
+            // report used to say "enabled" and nothing more, so an
+            // operator believed they could receive Slack messages.
+            "inbound": false,
+            "outbound": true,
         })
     }
 

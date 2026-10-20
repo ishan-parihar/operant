@@ -1371,6 +1371,26 @@ mod tests {
         assert!(!adapter.is_enabled());
     }
 
+    /// The Slack adapter's status report must say it cannot RECEIVE.
+    ///
+    /// The gateway's report used to say "enabled" and nothing more, so an
+    /// operator who configured a Slack token believed they could receive
+    /// Slack messages. There is no Socket Mode WebSocket in this tree:
+    /// `start()` logs and returns, and nothing opens a `wss://`
+    /// connection — so Slack messages never reach the agent.
+    #[tokio::test]
+    async fn the_slack_adapter_reports_that_it_cannot_receive() {
+        let adapter = SlackAdapter::new(Some("xoxb-token".to_string()));
+        assert!(adapter.is_enabled());
+        let json = adapter.config_json();
+        assert_eq!(
+            json["inbound"],
+            serde_json::json!(false),
+            "the status report must say the adapter cannot receive"
+        );
+        assert_eq!(json["outbound"], serde_json::json!(true));
+    }
+
     // ── SessionStore tests ──
 
     #[test]
