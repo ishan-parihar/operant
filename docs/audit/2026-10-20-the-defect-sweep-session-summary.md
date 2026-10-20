@@ -2,7 +2,7 @@
 
 Date: 2026-10-20. Agent: `omp`.
 Range: iters 980–1046 (67 commits) on `origin/main`.
-Ledger: `docs/audit/2026-06-19-BUGS.md` — **211 rows closed, 3 open** (S1 and S2, both live-terminal checks that need a terminal this session did not have).
+Ledger: `docs/audit/2026-06-19-BUGS.md` — **213 rows closed, 4 open** (S1 and S2, both live-terminal checks that need a terminal this session did not have).
 
 This is the morning review. It names every defect the sweep found, how each
 was proven, and what is deliberately left open.
@@ -74,6 +74,11 @@ several rows here name the MECHANISM, not just the outcome.
 | RT-114 | The WhatsApp and Twilio API bases were HARD-CODED, so a deployment behind a proxy could reach Telegram, Discord and Slack but not those two. | WhatsApp has `whatsapp_api_base`; Twilio has `TWILIO_API_BASE`. |
 | RT-115 | The MCP SSE client's TOTAL timeout cut the long-lived stream every 300 seconds. **The first fix was incomplete**: it claimed a 10-second per-event timeout that does not exist (the 10 s bounds the wait for the endpoint EVENT during connect), and removing the client's only timeout made `connect()` UNBOUNDED. | The stream and the POSTs use separate clients: the stream has no total timeout but a 30-second `connect_timeout`, the POSTs keep 300 s. |
 | RT-116 | The output fitter sized `max_tokens` from the PREVIOUS request's reported prompt count, so a request could exceed the window by exactly the tool output accumulated since. | `estimate_current_tokens` now returns the LARGER of the current estimate and the reported count — one rule, every caller safe. |
+| RT-117 | The dashboard's SERVED `/api/status` omits the fields the bundled frontend reads (cpu_percent, cpu_count, memory, disk, load_avg, hostname, os_release, arch), so the system panel renders empty. | Open — part of the RT-44 owner decision. |
+| RT-118 | `operant channel list` omitted SMS: the registry has SEVEN adapters and the list showed six. | SMS is in the list. |
+| RT-119 | `operant channel doctor` reports "healthy" for a channel it never probed — the field is the ENABLED flag. | Open — probing means a network call per channel, which is a design decision. |
+| RT-120 | The `PlatformAdapter::handle_update` trait method is DEAD — zero production callers for ANY adapter. | Recorded; the inbound table encodes the truth. The method itself is RT-89's decision. |
+| RT-86 (corrected) | The `"inbound": false` field existed but NOTHING read it — `Gateway::status()` had been deleted for having zero callers — so the operator still saw "Slack: enabled". | The gateway has ONE inbound table; `operant gateway status` PRINTS it: "Slack … send-only (no inbound)". |
 | RT-69 | The context eviction could not meet the budget and said nothing; the reactive overflow path re-issued the request and earned the same provider 400. | Four mutations, each run separately. The pre-existing `loop_recovery_paths` test caught the over-strict first fix — the rule is a two-strike rule because of it. |
 | RT-83 | The token estimate counted only the message's text — and a tool-call turn's text is EMPTY by construction, so a 100 KB tool call was estimated at 4 tokens. The eviction was blind to the largest messages. | The mutation fails with "got 4". |
 | RT-78 | The LLM compression's HEAD boundary was a message count, so a `tool_use` and its `tool_result` could be separated by the summary. `repair_tool_pairs` existed and was never called. | Two mutations, run separately. |
