@@ -25,6 +25,10 @@ pub enum McpSubcommand {
         /// Command for stdio MCP servers (required for stdio transport)
         #[arg(long)]
         command: Option<String>,
+        /// Transport to use: `http` (the default for --url), `streamable-http`,
+        /// or `stdio` (the default for --command)
+        #[arg(long, value_name = "KIND")]
+        transport: Option<String>,
         /// Arguments for stdio MCP server command (can be repeated)
         #[arg(long, num_args = 0..)]
         args: Vec<String>,
@@ -109,9 +113,24 @@ pub async fn handle_mcp_command(
             name,
             url,
             command,
+            transport,
             args,
             env,
-        } => handle_add(config, mcp_manager, name, url, command, args, env).await,
+        } => {
+            handle_add(
+                config,
+                mcp_manager,
+                name,
+                AddRequest {
+                    url,
+                    command,
+                    transport,
+                    args,
+                    env,
+                },
+            )
+            .await
+        }
         McpSubcommand::Remove { name } => handle_remove(name),
         McpSubcommand::Test { name } => handle_test(config, mcp_manager, name).await,
         McpSubcommand::Serve { verbose } => handle_serve(config, verbose).await,
@@ -229,15 +248,51 @@ fn handle_list(config: &AppConfig, json: bool) -> Result<()> {
     Ok(())
 }
 
+/// Resolve the `--transport` value for `operant mcp add`.
+///
+/// `None` keeps the historical inference (--url means plain HTTP, --command
+/// means stdio). A named value must be one of the three transports the config
+/// and the client support; anything else is rejected rather than silently
+/// falling back, because a typo would otherwise add the server on the wrong
+/// transport and the connect error would blame the server.
+fn parse_transport(value: Option<&str>) -> Result<Option<McpTransportKind>> {
+    Ok(match value {
+        None => None,
+        Some("http") => Some(McpTransportKind::Http),
+        Some("streamable-http") => Some(McpTransportKind::StreamableHttp),
+        Some("stdio") => Some(McpTransportKind::Stdio),
+        Some(other) => {
+            anyhow::bail!("Unknown transport '{other}'. Use http, streamable-http or stdio.")
+        }
+    })
+}
+
+/// The `operant mcp add` flags that describe the server being added.
+///
+/// A struct rather than six positional parameters: three of them are
+/// `Option<String>` and two more are `Vec<String>`, so a call that swapped
+/// any pair would still compile and would add the wrong server.
+struct AddRequest {
+    url: Option<String>,
+    command: Option<String>,
+    transport: Option<String>,
+    args: Vec<String>,
+    env: Vec<String>,
+}
+
 async fn handle_add(
     config: &AppConfig,
     mcp_manager: &McpManager,
     name: String,
-    url: Option<String>,
-    command: Option<String>,
-    args: Vec<String>,
-    env: Vec<String>,
+    req: AddRequest,
 ) -> Result<()> {
+    let AddRequest {
+        url,
+        command,
+        transport,
+        args,
+        env,
+    } = req;
     if config.mcp.servers.iter().any(|s| s.name == name) {
         anyhow::bail!(
             "An MCP server named '{}' is already configured. Use `operant mcp remove {}` first, or edit the config file directly.",
@@ -246,27 +301,50 @@ async fn handle_add(
         );
     }
 
+    // The transport the operator asked for. `None` keeps the historical
+    // inference: --url means plain HTTP, --command means stdio.
+    let transport = parse_transport(transport.as_deref())?;
+    if transport == Some(McpTransportKind::Stdio) && command.is_none() {
+        anyhow::bail!("--transport stdio requires --command <CMD>.");
+    }
+    if matches!(
+        transport,
+        Some(McpTransportKind::Http) | Some(McpTransportKind::StreamableHttp)
+    ) && url.is_none()
+    {
+        anyhow::bail!("--transport http/streamable-http requires --url <URL>.");
+    }
+
     match (url.as_ref(), command.as_ref()) {
         (Some(_), Some(_)) => {
             anyhow::bail!(
-                "Provide either --url (for HTTP transport) or --command (for stdio transport), not both."
+                "Provide either --url (for http or streamable-http transport) or --command (for stdio transport), not both."
             );
         }
         (None, None) => {
             anyhow::bail!(
-                "Provide either --url <URL> (for HTTP transport) or --command <CMD> (for stdio transport)."
+                "Provide either --url <URL> (for http or streamable-http transport) or --command <CMD> (for stdio transport)."
             );
         }
         (Some(url_val), None) => {
+            let kind = transport.unwrap_or(McpTransportKind::Http);
             println!(
-                "Testing connection to HTTP MCP server '{}' at {} ...",
-                name, url_val
+                "Testing connection to {} MCP server '{}' at {} ...",
+                kind.transport_label(),
+                name,
+                url_val
             );
 
-            mcp_manager
-                .add_server(&name, url_val.clone(), None)
-                .await
-                .context(format!("Failed to connect to MCP server at {}", url_val))?;
+            match kind {
+                McpTransportKind::StreamableHttp => mcp_manager
+                    .add_streamable_server(&name, url_val.clone(), None)
+                    .await
+                    .context(format!("Failed to connect to MCP server at {}", url_val))?,
+                _ => mcp_manager
+                    .add_server(&name, url_val.clone(), None)
+                    .await
+                    .context(format!("Failed to connect to MCP server at {}", url_val))?,
+            }
 
             if let Some(transport) = mcp_manager.get(&name).await {
                 let tools = transport.get_tools().await;
@@ -284,7 +362,7 @@ async fn handle_add(
             println!();
             println!("  [[mcp.servers]]");
             println!("  name = \"{}\"", name);
-            println!("  transport = \"http\"");
+            println!("  transport = \"{}\"", kind.transport_label());
             println!("  url = \"{}\"", url_val);
             println!("  enabled = true");
         }
@@ -665,4 +743,38 @@ fn handle_mcp_configure(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_omitted_transport_keeps_the_flag_inference() {
+        assert_eq!(parse_transport(None).expect("no value is valid"), None);
+    }
+
+    #[test]
+    fn the_streamable_transport_is_selectable() {
+        // RT-124: the third transport the config and the client support had
+        // no way to be created from the CLI.
+        assert_eq!(
+            parse_transport(Some("streamable-http")).expect("streamable-http is a transport"),
+            Some(McpTransportKind::StreamableHttp)
+        );
+        assert_eq!(
+            parse_transport(Some("http")).expect("http is a transport"),
+            Some(McpTransportKind::Http)
+        );
+        assert_eq!(
+            parse_transport(Some("stdio")).expect("stdio is a transport"),
+            Some(McpTransportKind::Stdio)
+        );
+    }
+
+    #[test]
+    fn an_unknown_transport_is_rejected_rather_than_inferred() {
+        let err = parse_transport(Some("sse")).expect_err("sse is not a transport");
+        assert!(err.to_string().contains("Unknown transport 'sse'"), "{err}");
+    }
 }
