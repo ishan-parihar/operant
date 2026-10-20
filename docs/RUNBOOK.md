@@ -38,7 +38,7 @@ One autonomous agent works `TODO.md`. These rules cover that loop and anyone who
 
 | trap | rule |
 |---|---|
-| dirty tree | `operant autonomous` publishes with `git add --all .` (`crates/operant-cli/src/autonomous.rs`, `publish_changes`). Start it only when `git status --short` is empty; otherwise it commits everyone's uncommitted files to `[autonomous] git_branch`. The fix is a `## Review` item in TODO.md |
+| dirty tree | `operant autonomous` stages and commits **only the paths its own tick changed** (AD-027): `publish_changes` diffs the tree at tick start against tick end, and passes that path list to both `git add --` and `git commit` (`crates/operant-cli/src/autonomous.rs:664-704`; test `a_tick_does_not_commit_a_file_the_owner_left_dirty` at `:1698`). A file that was already dirty when the tick started is the owner's and is left alone. This row used to say it published with `git add --all .` — that was true before AD-027 and is stale now. |
 | manual commit | stage explicit paths and check `git diff --cached --name-only` first: the index can hold a peer's staged deletions. If it does, commit from a temporary index: `GIT_INDEX_FILE=<tmp> git read-tree HEAD`, `git update-index --cacheinfo` for a shared file (blob = HEAD plus your lines), `git add -- <paths>`, `git write-tree`, `git commit-tree <tree> -p HEAD -F <msg>`, then `git update-ref refs/heads/main <new> <old>` |
 
 ## Documentation CLI (`./scripts/genome`)

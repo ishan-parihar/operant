@@ -166,20 +166,20 @@ record touched by more than one commit was amended in place.
 |---|---|
 <!-- genome:end status -->
 
-<!-- genome:zone handoff sha=a4e10250b7cc -->
+<!-- genome:zone handoff sha=af087d38c185 -->
 ## Handoff — 2026-10-20
 
-Repo branch `main`, HEAD `b30bff8e9dface3ebde92c673fdc00315626eacf`. Working tree dirty (4 paths).
+Repo branch `main`, HEAD `f659a2356015e3fe282e52cfc1867156b0bd1685`. Working tree dirty (9 paths).
 
 ## Open register rows
   (none)
 
 ## Recent worklog
-- **2026-10-20T19:46** · `jcode` — docs: validation of the reconciliation found three defects — 31 board verdicts cited the wrong iteration, a 'next free label' note had gone stale twice, and the duplicate-label framing was materially misleading
 - **2026-10-20T20:13** · `jcode` — docs: the second validation found a doctrine violation in the first validation's own commit — RG-001 had been amended in place, bypassing the genome's immutability gate (RG-002)
 - **2026-10-20T20:42** · `jcode` — docs: the third validation found the detection law I had just minted was overbroad, and that my own table inside it was wrong on the first out-of-sample case (RG-003)
 - **2026-10-20T21:38** · `jcode` — docs: the fourth validation found my newest record asserted a tool limit that does not exist, and the experiment that disproved it performed the correction (the retired record is out of force; RG-006 carries the law)
 - **2026-10-20T21:49** · `jcode` — docs: a peer's commit swept the whole staged docs change set into their fix commit — nothing lost, but the label-to-content mapping in the log is unreliable
+- **2026-10-20T23:39** · `jcode` — docs: the fifth validation retracted a cause I asserted without testing — the peer swept my change set, but not by any mechanism I could reproduce (RG-007)
 
 Regenerate with `genome handoff --write`.
 <!-- genome:end handoff -->

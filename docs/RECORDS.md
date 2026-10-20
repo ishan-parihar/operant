@@ -1,4 +1,4 @@
-<!-- genome:zone records sha=c6de17db08d3 -->
+<!-- genome:zone records sha=f0f1ea9e0b87 -->
 **Decisions** (41)
 
 | ID | Title | Status | Description |
@@ -45,7 +45,7 @@
 | AD-040 | The dashboard's session token is only ever handed to a holder of that token | Active | The dashboard served its session token on an unauthenticated route, so the bearer auth was theatre; the token is now exchanged for an HttpOnly cookie and the Host header is validated |
 | AD-041 | The PDF decompression bound covers the load path and the whole document, so AD-039's claim is now true | Active | AD-039 published 'the decompression bomb is now bounded', but only the extraction path was bounded: Document::load_mem uses LoadOptions::default(), whose max_decompressed_size is None, so the object a |
 
-**Regressions** (4)
+**Regressions** (5)
 
 | ID | Title | Severity | Description |
 |---|---|---|---|
@@ -53,6 +53,7 @@
 | RG-002 | A numbered record is immutable once numbered: the CLI enforces it and a raw file edit is the way past | High | RG-001 was amended in place with a raw file edit two commits after it was minted, bypassing the genome CLI's records.mode=immutable gate. The genome refused a later 'rec amend'; only 'rec supersede' i |
 | RG-003 | A record touched twice is not evidence of a bypass: the discriminator is the revision trail, not the commit count | Medium | RG-002's detection law said a record touched by more than one commit was amended in place. That is false: AD-037 is touched by three commits through the genome's sanctioned supersession flow. The disc |
 | RG-006 | A tool limit asserted from memory rather than from the CLI is a claim, and the experiment that tests it may be the fix | Medium | RG-004 declared that genome archive --section works only for living plans and that a numbered record can be superseded whole or not at all. Running the command proved the opposite and performed RG-003 |
+| RG-007 | A mechanism asserted to explain an observation is a claim, and it went into a commit message unverified | Low | A peer's commit swept an entire staged docs change set. The cause was asserted as a git add -A sweep in a commit message, a worklog entry and a feed post. Three candidate mechanisms were then tested a |
 <!-- genome:end records -->
 
 <!-- genome:zone idmap sha=2a03e30bd9bd -->

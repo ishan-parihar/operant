@@ -109,3 +109,4 @@ Append-only: `kb log "<entry>"` — one entry per unit of work.
 - **2026-10-20T20:42** · `jcode` — docs: the third validation found the detection law I had just minted was overbroad, and that my own table inside it was wrong on the first out-of-sample case (RG-003)
 - **2026-10-20T21:38** · `jcode` — docs: the fourth validation found my newest record asserted a tool limit that does not exist, and the experiment that disproved it performed the correction (the retired record is out of force; RG-006 carries the law)
 - **2026-10-20T21:49** · `jcode` — docs: a peer's commit swept the whole staged docs change set into their fix commit — nothing lost, but the label-to-content mapping in the log is unreliable
+- **2026-10-20T23:39** · `jcode` — docs: the fifth validation retracted a cause I asserted without testing — the peer swept my change set, but not by any mechanism I could reproduce (RG-007)
