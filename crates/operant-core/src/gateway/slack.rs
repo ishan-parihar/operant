@@ -49,6 +49,19 @@ impl SlackAdapter {
     }
 }
 
+/// The id of a message Slack has sent, from the response body.
+///
+/// Slack returns `{"ok": true, "ts": "1712.0001", ...}` — the `ts` is
+/// the message id, and it is what `chat.update` needs. The TRAIT's
+/// default `send_message_return_id` returns an EMPTY id, which the
+/// streaming path reads as "this platform cannot edit" (RT-105).
+fn slack_message_id(body: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| v.get("ts").and_then(|t| t.as_str()).map(str::to_string))
+        .unwrap_or_default()
+}
+
 fn slack_send_outcome(status: u16, body: &str) -> Result<()> {
     if !(200..300).contains(&status) {
         return Err(Error::Agent(format!(
@@ -144,6 +157,112 @@ impl PlatformAdapter for SlackAdapter {
         slack_send_outcome(status.as_u16(), &body_text)?;
 
         Ok(())
+    }
+
+    /// Send a message and return its id, so the streaming path can EDIT
+    /// it.
+    ///
+    /// The TRAIT's default sends the message and returns an EMPTY id,
+    /// which the streaming path reads as "this platform cannot edit" — so
+    /// on Slack the user saw the first chunk of the answer and then the
+    /// full answer as a second message, with no incremental updates
+    /// (RT-105). Slack CAN edit, so it returns the real id.
+    ///
+    /// The send is done here rather than by calling `send_message`,
+    /// because the id has to be read out of the response — and the plain
+    /// send discards it.
+    async fn send_message_return_id(&self, message: OutgoingMessage) -> Result<String> {
+        let client = shared_http_client().clone();
+        let token = self
+            .token
+            .as_ref()
+            .ok_or_else(|| Error::Config("Slack token not configured".to_string()))?;
+
+        let text = markdown_to_slack_mrkdwn(&message.content);
+        let body = serde_json::json!({
+            "channel": message.channel_id,
+            "text": text,
+            "unfurl_links": false,
+            "unfurl_media": false,
+        });
+
+        let resp = client
+            .post(format!(
+                "{}/chat.postMessage",
+                self.api_base().trim_end_matches('/')
+            ))
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await?;
+
+        let status = resp.status();
+        let body_text = resp.text().await.unwrap_or_default();
+        slack_send_outcome(status.as_u16(), &body_text)?;
+
+        // Slack's message id is the message's `ts`.
+        Ok(slack_message_id(&body_text))
+    }
+
+    /// Edit a message Slack has already sent.
+    ///
+    /// Slack's edit is `POST /chat.update` with the channel and the
+    /// message's `ts`. The TRAIT's default is a no-op that returns
+    /// `Ok("")` — so before this, the streaming path's edits on Slack did
+    /// nothing.
+    ///
+    /// Slack's error convention is a 200 with `{"ok": false}`, so BOTH the
+    /// status and the body decide (the same rule as the plain send,
+    /// RT-100).
+    async fn edit_message(
+        &self,
+        channel_id: &str,
+        message_id: &str,
+        message: &OutgoingMessage,
+    ) -> Result<String> {
+        let client = shared_http_client().clone();
+        let token = self
+            .token
+            .as_ref()
+            .ok_or_else(|| Error::Config("Slack token not configured".to_string()))?;
+
+        let text = markdown_to_slack_mrkdwn(&message.content);
+        let body = serde_json::json!({
+            "channel": channel_id,
+            "ts": message_id,
+            "text": text,
+        });
+
+        let resp = client
+            .post(format!(
+                "{}/chat.update",
+                self.api_base().trim_end_matches('/')
+            ))
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await?;
+
+        let status = resp.status();
+        let body_text = resp.text().await.unwrap_or_default();
+        if !status.is_success() {
+            return Err(Error::Agent(format!(
+                "Slack API error: HTTP {status}: {}",
+                body_text.chars().take(200).collect::<String>()
+            )));
+        }
+        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&body_text)
+            && parsed.get("ok").and_then(|v| v.as_bool()) == Some(false)
+        {
+            let err = parsed
+                .get("error")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+            return Err(Error::Agent(format!("Slack API error: {err}")));
+        }
+        Ok(message_id.to_string())
     }
 
     async fn handle_update(&self, update: serde_json::Value) -> Result<Option<IncomingMessage>> {
@@ -269,5 +388,24 @@ mod tests {
     fn a_slack_send_accepted_by_the_api_succeeds() {
         slack_send_outcome(200, r#"{"ok":true,"channel":"C123","ts":"1.0"}"#)
             .expect("an accepted send must succeed");
+    }
+
+    /// The message id must be recoverable from Slack's response body —
+    /// the streaming path needs it to EDIT the message.
+    ///
+    /// The TRAIT's default `send_message_return_id` returns an EMPTY id,
+    /// which the streaming path reads as "this platform cannot edit" — so
+    /// on Slack the user saw the first chunk of the answer and then the
+    /// full answer as a second message (RT-105).
+    #[test]
+    fn the_slack_message_id_is_recoverable() {
+        assert_eq!(
+            slack_message_id(r#"{"ok":true,"ts":"1712.0001","channel":"C1"}"#),
+            "1712.0001"
+        );
+        // A body with no ts yields an empty id — which is the sentinel
+        // that keeps the later ticks on the edit branch.
+        assert_eq!(slack_message_id(r#"{"ok":true,"channel":"C1"}"#), "");
+        assert_eq!(slack_message_id("not json"), "");
     }
 }

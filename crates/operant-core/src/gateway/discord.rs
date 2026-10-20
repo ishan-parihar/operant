@@ -26,6 +26,18 @@ impl DiscordAdapter {
     }
 }
 
+/// The id of a message Discord has sent, from the response body.
+///
+/// Discord returns `{"id": "1234", ...}`. The streaming path needs the
+/// id to EDIT the message, and the TRAIT's default returns an EMPTY id —
+/// which the streaming path reads as "this platform cannot edit" (RT-105).
+fn discord_message_id(body: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| v.get("id").and_then(|i| i.as_str()).map(str::to_string))
+        .unwrap_or_default()
+}
+
 fn discord_send_outcome(status: u16, body: &str) -> Result<()> {
     if !(200..300).contains(&status) {
         return Err(crate::error::Error::Agent(format!(
@@ -161,6 +173,116 @@ impl PlatformAdapter for DiscordAdapter {
         }
 
         Ok(())
+    }
+
+    /// Send a message and return its id, so the streaming path can EDIT
+    /// it.
+    ///
+    /// The TRAIT's default sends the message and returns an EMPTY id,
+    /// which the streaming path reads as "this platform cannot edit" — so
+    /// on Discord the user saw the first chunk of the answer and then the
+    /// full answer as a second message, with no incremental updates
+    /// (RT-105). Discord CAN edit, so it returns the real id.
+    ///
+    /// The send is done here rather than by calling `send_message`,
+    /// because the id has to be read out of the response — and the plain
+    /// send discards it.
+    async fn send_message_return_id(&self, message: OutgoingMessage) -> Result<String> {
+        let client = shared_http_client().clone();
+        let token = self
+            .token
+            .as_ref()
+            .ok_or_else(|| Error::Config("Discord token not configured".to_string()))?;
+
+        // Discord's message limit is 2000 chars — the same limit the
+        // plain send chunks for.
+        let chunks = chunk_text(&message.content, 2000);
+        let allowed_mentions = serde_json::json!({
+            "parse": ["users"],
+            "replied_user": true,
+        });
+
+        let mut message_id = None;
+        for chunk in chunks {
+            let body = serde_json::json!({
+                "content": chunk,
+                "allowed_mentions": allowed_mentions,
+            });
+            let url = format!(
+                "{}/channels/{}/messages",
+                self.api_url(),
+                message.channel_id
+            );
+            let resp = client
+                .post(&url)
+                .header("Authorization", format!("Bot {}", token))
+                .header("Content-Type", "application/json")
+                .json(&body)
+                .send()
+                .await?;
+            let status = resp.status();
+            let body_text = resp.text().await.unwrap_or_default();
+            discord_send_outcome(status.as_u16(), &body_text)?;
+            let id = discord_message_id(&body_text);
+            if !id.is_empty() {
+                message_id = Some(id);
+            }
+        }
+        Ok(message_id.unwrap_or_default())
+    }
+
+    /// Edit a message Discord has already sent.
+    ///
+    /// Discord's edit is `PATCH /channels/{channel}/messages/{message}`.
+    /// The TRAIT's default is a no-op that returns `Ok("")` — so before
+    /// this, the streaming path's edits on Discord did nothing at all.
+    ///
+    /// The status decides, for the same reason as the plain send (RT-100):
+    /// a failed edit must not look like a delivered one.
+    async fn edit_message(
+        &self,
+        channel_id: &str,
+        message_id: &str,
+        message: &OutgoingMessage,
+    ) -> Result<String> {
+        let client = shared_http_client().clone();
+        let token = self
+            .token
+            .as_ref()
+            .ok_or_else(|| Error::Config("Discord token not configured".to_string()))?;
+
+        // Discord's limit is 2000 characters — the same limit the plain
+        // send chunks for. An edit over the limit is rejected, so the
+        // content is truncated to what the API accepts rather than
+        // failing the edit.
+        let content = chunk_text(&message.content, 2000)
+            .into_iter()
+            .next()
+            .unwrap_or_default();
+        let body = serde_json::json!({ "content": content });
+
+        let resp = client
+            .patch(format!(
+                "{}/channels/{}/messages/{}",
+                self.api_url(),
+                channel_id,
+                message_id
+            ))
+            .header("Authorization", format!("Bot {}", token))
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await?;
+
+        let status = resp.status();
+        let body_text = resp.text().await.unwrap_or_default();
+        if !status.is_success() {
+            return Err(crate::error::Error::Agent(format!(
+                "Discord edit failed: HTTP {status}: {}",
+                body_text.chars().take(200).collect::<String>()
+            )));
+        }
+        Ok(message_id.to_string())
     }
 
     async fn handle_update(&self, update: serde_json::Value) -> Result<Option<IncomingMessage>> {
@@ -563,5 +685,24 @@ mod tests {
     fn a_discord_send_accepted_by_the_api_succeeds() {
         discord_send_outcome(200, r#"{"id":"1","channel_id":"1234"}"#)
             .expect("an accepted send must succeed");
+    }
+
+    /// The message id must be recoverable from Discord's response body —
+    /// the streaming path needs it to EDIT the message.
+    ///
+    /// The TRAIT's default `send_message_return_id` returns an EMPTY id,
+    /// which the streaming path reads as "this platform cannot edit" — so
+    /// on Discord the user saw the first chunk of the answer and then the
+    /// full answer as a second message (RT-105).
+    #[test]
+    fn the_discord_message_id_is_recoverable() {
+        assert_eq!(
+            discord_message_id(r#"{"id":"1234","channel_id":"9"}"#),
+            "1234"
+        );
+        // A body with no id yields an empty id — which is the sentinel
+        // that keeps the later ticks on the edit branch.
+        assert_eq!(discord_message_id(r#"{"channel_id":"9"}"#), "");
+        assert_eq!(discord_message_id("not json"), "");
     }
 }
