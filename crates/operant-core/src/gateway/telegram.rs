@@ -167,6 +167,17 @@ impl TelegramAdapter {
         )
     }
 
+    /// The URL of the `sendVoice` endpoint.
+    ///
+    /// `api_url()` ALREADY includes the `/bot{token}` segment, so the URL
+    /// is `{api_url()}/sendVoice` — the same shape the other nine call
+    /// sites use. Adding the bot segment again produces
+    /// `.../bot123/bot123/sendVoice`, which 404s for every voice
+    /// message.
+    pub(crate) fn voice_url(&self) -> String {
+        format!("{}/sendVoice", self.api_url())
+    }
+
     /// Send a message to a Telegram chat and return the message_id.
     /// Uses HTML parse_mode; falls back to plain text on 400 Bad Request.
     pub(crate) async fn send_telegram_inner(
@@ -1185,11 +1196,7 @@ impl PlatformAdapter for TelegramAdapter {
         // test, a proxy, a regional endpoint) had its VOICE messages go
         // to the real Telegram API while everything else went to the
         // configured one. Nine other sites in this file use `api_url()`.
-        let url = format!(
-            "{}/bot{}/sendVoice",
-            self.api_url().trim_end_matches('/'),
-            self.token.as_deref().unwrap_or("")
-        );
+        let url = self.voice_url();
         let filename = format!("voice.{}", format);
         let mime = match format {
             "ogg" | "opus" => "audio/ogg",
@@ -1838,6 +1845,42 @@ mod tests {
             telegram_prompt_outcome(200, r#"{"result":{"message_id":1}}"#, "approval prompt")
                 .is_ok(),
             "a delivered prompt must succeed"
+        );
+    }
+
+    /// Every Telegram URL must have the bot segment EXACTLY ONCE.
+    ///
+    /// `api_url()` returns `{base}/bot{token}` — it already includes the
+    /// bot segment. A call site that adds `/bot{token}` again produces
+    /// `.../bot123/bot123/sendVoice`, which 404s for EVERY voice message.
+    ///
+    /// The voice send was the one site that hard-coded the base, and
+    /// fixing it wrongly (adding the bot segment again) would have
+    /// swapped one defect for a worse one. This test is the check that
+    /// the URL shape is right.
+    #[test]
+    fn a_telegram_url_carries_the_bot_segment_exactly_once() {
+        let adapter = TelegramAdapter::new(Some("123456:ABC".to_string()));
+        let url = adapter.api_url();
+        assert!(
+            url.ends_with("/bot123456:ABC"),
+            "api_url must end with the bot segment, got: {url}"
+        );
+        assert_eq!(
+            url.matches("/bot").count(),
+            1,
+            "the bot segment must appear exactly once, got: {url}"
+        );
+        // And the voice send's REAL URL — the one it actually calls.
+        let voice = adapter.voice_url();
+        assert_eq!(
+            voice.matches("/bot").count(),
+            1,
+            "the voice URL must carry the bot segment exactly once, got: {voice}"
+        );
+        assert!(
+            voice.ends_with("/sendVoice"),
+            "the voice URL must end with the method, got: {voice}"
         );
     }
 
