@@ -29,13 +29,28 @@ consulted.
   real. `pdf_read` was a 693-line module whose tool was registered nowhere:
   the feature advertised a capability the agent could never call.
 
+## Configuration
+
+No Cargo features. The crate has no dependencies beyond `serde` and no
+configuration of its own; the only entry point takes the list of
+additional CLIs to look for and the list to exclude, and the caller
+supplies both.
+
 ## Extension points
 
-The tools live in `operant-core/src/tools/`, which implements the core's
-`OperantTool` trait. A new tool is a new module there, registered in
-`builtin.rs`.
+There is no extension point here any more. A tool belongs in
+`operant-core/src/tools/`, which implements the core's `OperantTool` trait;
+a new tool is a new module there, registered in `builtin.rs`.
 
 ## Limitations
 
 - This crate is not a public API (`publish = false`); nothing outside the
   workspace depends on it.
+- The doctor check reports the CLIs it finds in `PATH`. It does not check
+  whether they are configured, authenticated, or working.
+
+## Model experience
+
+None: no tool in this crate is callable by the model. The tools the model
+can call are registered by `operant-core/src/tools/builtin.rs` from the
+core's own modules.
