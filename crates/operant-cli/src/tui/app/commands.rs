@@ -255,7 +255,7 @@ impl App {
     /// inherits stdio, so interactive wizards work and plain output lands in
     /// the terminal the TUI returns to. The subcommand-parity arms
     /// (/cron, /kanban, /curator, /suggestions, /profile, /logs, /pause,
-    /// /unpause, /org, /platforms, /mcp <args>, /setup) all funnel here —
+    /// /unpause, /org, /platforms, /mcp `<args>`, /setup) all funnel here —
     /// one pattern, the actual subcommand, zero re-implementation.
     fn shell_out_to_subcommand(&mut self, subcommand: &str, args: &str) {
         self.close_secondary_views();

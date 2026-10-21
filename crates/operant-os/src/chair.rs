@@ -105,10 +105,10 @@ pub async fn run_as_chair(
     Ok(stdout)
 }
 
-/// W5 (O-14): a Chair message that names a decision ("approve <ref>",
-/// "reject <ref> …") routes straight to the kernel's own decision
+/// W5 (O-14): a Chair message that names a decision ("approve `<ref>`",
+/// "reject `<ref>` …") routes straight to the kernel's own decision
 /// commands through `run_as_chair` — the acceptance's exact scenario:
-/// "approve <id>" from the Chair approves a pending plan; the same
+/// "approve `<id>`" from the Chair approves a pending plan; the same
 /// text from anyone else is chat (the gateway's `is_chair` gate, before
 /// this function is ever reached). Anything else falls through to the
 /// classifier as before. The `ref` is passed as a single argv token —

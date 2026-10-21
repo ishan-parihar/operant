@@ -156,7 +156,7 @@ impl AuthRoute {
     }
 }
 
-/// Typed view of [`ModelRoute::api_method`].
+/// Typed view of `ModelRoute::api_method`.
 ///
 /// The wire format intentionally remains a string so older clients and saved
 /// catalogs continue to round-trip, but routing/picker code should parse it at

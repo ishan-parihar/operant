@@ -12,7 +12,7 @@
 //! (which message, which row inside it) and is resolved against the geometry of
 //! the frame being drawn.
 //!
-//! Identity is the [`MessageBoundary::msg_hash`] already carried by the frame,
+//! Identity is the [`super::prepared::MessageBoundary::msg_hash`] already carried by the frame,
 //! plus an occurrence index to disambiguate messages with identical content.
 //!
 //! Ceiling: the occurrence is an ordinal counted from the start of *one* frame.

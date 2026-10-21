@@ -693,7 +693,7 @@ impl OperantAgent {
     }
 
     /// The bound employee's charter (org system prompt), if the gateway set
-    /// one. Appended to the frozen prefix — see [`Self::build_frozen_prefix`].
+    /// one. Appended to the frozen prefix — see `Self::build_frozen_prefix`.
     #[expect(
         clippy::expect_used,
         reason = "poisoned lock: panic is the intended recovery"

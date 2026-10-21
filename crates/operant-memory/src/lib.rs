@@ -13,8 +13,8 @@
 //!
 //! | Prefix | Purpose | Detection function |
 //! |---|---|---|
-//! | `assistant_resp` / `assistant_resp_*` | Model-authored assistant summaries (untrusted context) | [`is_assistant_autosave_key`] |
-//! | `user_msg` / `user_msg_*` | Raw per-turn user messages (consolidation queue) | [`is_user_autosave_key`] |
+//! | `assistant_resp` / `assistant_resp_*` | Model-authored assistant summaries (untrusted context) | `is_assistant_autosave_key` |
+//! | `user_msg` / `user_msg_*` | Raw per-turn user messages (consolidation queue) | `is_user_autosave_key` |
 //!
 //! Channel-scoped variants (e.g. `telegram_user_msg_*`, `discord_*`) are
 //! **not** filtered — they use different prefixes and are handled separately.

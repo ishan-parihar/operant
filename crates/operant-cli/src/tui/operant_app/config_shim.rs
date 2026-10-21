@@ -214,7 +214,7 @@ pub struct DisplayConfig {
     /// :137 (`Some(Full)`).
     pub reasoning_display: Option<ReasoningDisplayMode>,
     /// [port-adaptation] Runtime override for the reasoning mode, set by
-    /// the TUI at boot from the parsed AppConfig ([display]
+    /// the TUI at boot from the parsed AppConfig (`display`
     /// show_reasoning) and flipped live by /thinking-display. The static
     /// LazyLock snapshot cannot see App state, so the override rides in a
     /// process-wide cell the resolver reads after the file-level field.

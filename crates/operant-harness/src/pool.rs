@@ -40,7 +40,7 @@
 //! ## Bundling is symlink-based
 //!
 //! AD-060 expresses pooling as exact-name symlinks inside `sub-systems/`.
-//! [`compile_dir`] walks that directory and emits one `pool.bundle` row per
+//! `compile_dir` walks that directory and emits one `pool.bundle` row per
 //! entry actually present, rather than trusting a declared field that a
 //! real pool may not carry (only 1 live `_pool.yaml` and 1 live `_org.yaml`
 //! declare any sub-system list at all).

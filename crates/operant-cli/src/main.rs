@@ -908,7 +908,7 @@ fn wrap_pooled(
     ))
 }
 
-/// Build a [`ProviderRegistry`](crate::provider::ProviderRegistry) from the `[providers]` section — hermes
+/// Build a [`ProviderRegistry`](operant_core::agent::provider_registry::ProviderRegistry) from the `[providers]` section — hermes
 /// `fallback_providers` parity for cross-provider switching.
 ///
 /// Chain order: primary (entry 0), then `providers.fallback_chain` in

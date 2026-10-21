@@ -14,7 +14,7 @@ use super::*;
 /// Routes:
 ///   POST /webhook/{route}  — receives a JSON payload, validates HMAC
 ///   signature (if configured), and forwards as an IncomingMessage.
-///   POST /webhook/notion   — with [holon] enabled: hands the event to the
+///   POST /webhook/notion   — with `[holon]` enabled: hands the event to the
 ///   kernel's notion adapter in line (`apply`), so nothing resident stays
 ///   between Notion and the organization (boundary doc R4; the poll remains
 ///   the fallback).

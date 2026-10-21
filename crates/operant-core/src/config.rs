@@ -340,7 +340,7 @@ fn default_max_concurrent_runs() -> usize {
     2
 }
 
-/// O-26: expand a leading `~` in a [holon] path. The plan's own example
+/// O-26: expand a leading `~` in a `[holon]` path. The plan's own example
 /// writes `home = "~/holon"` — without this it reaches the API as a
 /// literal `~` and fails with "work database not found at ~/holon/…".
 fn expand_holon_path(p: &std::path::Path) -> std::path::PathBuf {
@@ -359,7 +359,7 @@ fn expand_holon_path(p: &std::path::Path) -> std::path::PathBuf {
 }
 
 impl HolonSettings {
-    /// O-26: resolve `~` in every [holon] path field, once, at load.
+    /// O-26: resolve `~` in every `[holon]` path field, once, at load.
     pub fn expand_tilde(mut self) -> Self {
         self.home = expand_holon_path(&self.home);
         if let Some(b) = self.bin.clone() {

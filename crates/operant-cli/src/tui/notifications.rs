@@ -3,7 +3,7 @@
 //! The overlay-banner queue, the countdown progress bar, the error modal
 //! and the `OPERANT_FROZEN_NOTIFICATION_CLOCK` test seam are all gone
 //! (2026-10-12 purge). What remains is the *classification* —
-//! [`NotificationKind`] — consumed by [`App::push_notice`] to route:
+//! [`NotificationKind`] — consumed by [`App::push_notice`](crate::tui::app::App::push_notice) to route:
 //! transient kinds to the 3s status-line notice, `Error` to a persistent
 //! inline transcript card.
 

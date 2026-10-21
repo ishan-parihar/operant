@@ -533,7 +533,7 @@ impl CronScheduler {
     }
 
     /// iter-678: fail-open side effect for a budget refusal — the gate's
-    /// mirror of [`Self::record_gate_block`]: persist the block on the job
+    /// mirror of `record_gate_block`: persist the block on the job
     /// row, append the history row with its own forensically distinct
     /// `budget_block` origin, advance `next_run_at` (no busy-spin), and
     /// return without executing.

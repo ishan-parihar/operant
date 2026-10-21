@@ -12,7 +12,7 @@
 //! The accessibility preference `reduce_motion` (persisted in
 //! `~/.operant/settings.json`, toggled from the settings screen) overrides the
 //! detected tier down to [`PerformanceTier::Minimal`] and makes
-//! [`crate::tui::render::shimmer_spans`] emit static text.
+//! `crate::tui::render::shimmer_spans` emit static text.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;

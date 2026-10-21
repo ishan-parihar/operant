@@ -1071,7 +1071,7 @@ fn swarm_dock_engaged(state: &WidgetsState) -> bool {
 /// recently showing - the same agents.
 ///
 /// The strip is built before widget placement runs each frame, so this checks
-/// the previous frame's state, like [`widget_visible_facts`]. Engagement
+/// the previous frame's state, like `widget_visible_facts`. Engagement
 /// includes hidden-in-place anchors, and disengagement is debounced by
 /// [`SWARM_STRIP_STAND_DOWN_LINGER`]: both exist so the dock's frame-to-frame
 /// placement churn cannot toggle the strip row on and off, which resizes the

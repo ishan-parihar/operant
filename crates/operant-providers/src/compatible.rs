@@ -780,7 +780,7 @@ struct ToolCall {
     )]
     parameters: Option<serde_json::Value>,
 
-    /// See [`operant_api::ToolCall::extra_content`].
+    /// See [`operant_api::provider::ToolCall::extra_content`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     extra_content: Option<serde_json::Value>,
 }

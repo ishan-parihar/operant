@@ -16,7 +16,7 @@
 //! runtime `workspace_dir` (SOUL.md/AGENTS.md presence there), and daemon
 //! heartbeat state (the `operant-runtime` daemon supervisor has no callers,
 //! so `daemon_state.json` is never written anywhere). See
-//! `docs/CHANGELOG.md` [Unreleased].
+//! `docs/CHANGELOG.md` `[Unreleased]`.
 
 use serde::Serialize;
 use std::io::Write;

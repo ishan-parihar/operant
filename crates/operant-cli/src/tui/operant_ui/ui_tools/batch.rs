@@ -5,11 +5,11 @@
 use super::tool_output_looks_failed;
 
 /// Parse batch result content to determine per-sub-call success/error.
-/// Returns a Vec<bool> where `true` means that sub-call errored.
+/// Returns a `Vec<bool>` where `true` means that sub-call errored.
 /// The batch output format is:
-///   --- [1] tool_name ---
+///   --- `1` tool_name ---
 ///   <output or Error: ...>
-///   --- [2] tool_name ---
+///   --- `2` tool_name ---
 ///   ...
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct BatchSubResult {

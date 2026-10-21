@@ -11,7 +11,7 @@
 /// translate this to the configured root effort (maximum by default) when
 /// building API requests, while the UI/session keep the literal `swarm` marker
 /// so the agent knows to
-/// inject [`SWARM_EFFORT_DIRECTIVE`].
+/// inject [`SWARM_EFFORT`].
 pub const SWARM_EFFORT: &str = "swarm";
 
 /// Reasoning-effort sentinel for the **deep task graph** mode: configured root
@@ -20,7 +20,7 @@ pub const SWARM_EFFORT: &str = "swarm";
 /// one rung above [`SWARM_EFFORT`] on the effort ladder: `... xhigh`, `swarm`
 /// (light fan-out), `swarm-deep` (deep task graph). Providers translate this to
 /// the configured root effort, while the UI/session keep the literal marker so
-/// the agent knows to inject [`SWARM_DEEP_EFFORT_DIRECTIVE`].
+/// the agent knows to inject [`SWARM_DEEP_EFFORT`].
 pub const SWARM_DEEP_EFFORT: &str = "swarm-deep";
 
 /// Returns true when `effort` is either swarm sentinel (light or deep),

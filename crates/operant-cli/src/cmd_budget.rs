@@ -41,7 +41,7 @@ pub enum BudgetSubcommand {
     },
     /// List every seat's budget override
     List,
-    /// Remove a seat's override (the seat inherits the [bylaws] default)
+    /// Remove a seat's override (the seat inherits the `[bylaws]` default)
     Clear {
         /// Employee/seat id
         seat: String,

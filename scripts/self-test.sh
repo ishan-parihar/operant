@@ -110,6 +110,13 @@ run_test "Doc claims (scripts/check-doc-claims.sh)" "bash scripts/check-doc-clai
 # without anyone deciding what to do about it (RT-159).
 run_test "Config surface (scripts/audit-config-surface.py --check)" "python3 scripts/audit-config-surface.py --check 2>&1"
 
+# 4d. The rustdoc gate. `./scripts/check.sh doc` is the exact command the
+# dead CI job ran (cargo doc --workspace --no-deps --all-features under
+# -Dwarnings); since the Actions quota died, nothing ran it, and it had
+# drifted RED with ~70 broken intra-doc links — a gate that was red and
+# nobody could see it is how RT-166 happened (RT-166).
+run_test "Rustdoc gate (scripts/check.sh doc)" "./scripts/check.sh doc 2>&1"
+
 # 3d. The TUI visual-regression corpus. This gate was RED for nine days
 # and nobody noticed, because the corpus was not in ANY automated gate:
 # `scripts/check.sh` forwards to cargo, and the corpus is a Python script.

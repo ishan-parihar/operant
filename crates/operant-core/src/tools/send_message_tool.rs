@@ -43,7 +43,7 @@ struct SendMessageArgs {
     /// Text content of the message
     message: Option<String>,
 
-    /// Optional media reference: "MEDIA:<path>" format or a URL
+    /// Optional media reference: "`MEDIA:<path>`" format or a URL
     media: Option<String>,
 
     /// Telegram forum-topic thread id (`message_thread_id`) to post into.

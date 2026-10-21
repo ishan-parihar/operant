@@ -3,7 +3,7 @@
 //! Holon writes `runs/<id>/policy.json` at claim (its H3). This module is
 //! operant's MUST-side: the document compiled at claim becomes the seat policy
 //! the agent loop consults on every tool call, through the existing
-//! [`SeatPolicySource`] seam — no second enforcement convention.
+//! [`SeatPolicySource`](operant_core::org::seat_policy::SeatPolicySource) seam — no second enforcement convention.
 //!
 //! Posture mapping (the adapter's two config files give way to this):
 //!

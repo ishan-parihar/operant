@@ -324,15 +324,15 @@ pub trait TuiState {
     /// How long since the user last pressed a key, scrolled, or pasted, or
     /// `None` when they have not interacted yet.
     ///
-    /// Distinct from [`time_since_activity`], which tracks provider output:
+    /// Distinct from [`Self::time_since_activity`], which tracks provider output:
     /// typing into an idle session produces no stream events, so only this can
     /// tell "actively composing" from "sitting untouched".
     fn time_since_user_interaction(&self) -> Option<Duration> {
         None
     }
     /// Distinct learned-keybinding nudge shown in its own pop-out color, e.g.
-    /// "you usually do X the slow way, press <key>". Separate from
-    /// [`status_notice`] so the UI can style it differently.
+    /// "you usually do X the slow way, press `<key>`". Separate from
+    /// [`Self::status_notice`] so the UI can style it differently.
     fn learn_hint(&self) -> Option<String> {
         None
     }

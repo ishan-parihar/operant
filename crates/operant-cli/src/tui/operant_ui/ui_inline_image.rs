@@ -209,12 +209,12 @@ impl PayloadRegistry {
     }
 }
 
-/// Record an image payload so [`materialize_visible`] can decode it on demand.
+/// Record an image payload so `materialize_visible` can decode it on demand.
 ///
 /// Skipped entirely for images that are already materialized: their decoded
 /// bytes live in the render cache (memory) and cache dir (disk), so staging
 /// the base64 copy again would just hold multi-megabyte payloads resident
-/// twice. [`materialize_visible`] rediscovers evicted entries from disk.
+/// twice. `materialize_visible` rediscovers evicted entries from disk.
 pub(crate) fn register_payload(id: u64, media_type: &str, data_b64: &str) {
     if let Ok(mut requested) = PAYLOAD_RESTAGE_IDS.lock() {
         requested.remove(&id);
@@ -473,7 +473,7 @@ fn resolve_anchored_items_inner(
     result
 }
 
-/// One-slot cache for [`resolve_anchored_items`], keyed by the image-set
+/// One-slot cache for `resolve_anchored_items`, keyed by the image-set
 /// signature. Resolving hashes every image payload (for ids), so body
 /// preparation must not redo it per rebuild; the signature is already cached
 /// per transcript version on the app side.

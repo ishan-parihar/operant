@@ -53,7 +53,7 @@
 //! allocator counter cannot observe it): [`TurnEnd`] has no message or
 //! history field of any kind — no `Vec<Message>`, no `Arc<Vec<..>>`. It is
 //! built from four scalars plus `&str` slices that are copied through
-//! [`summarize`], which truncates to [`RESULT_SUMMARY_LIMIT`] bytes on a
+//! `summarize`, which truncates to [`RESULT_SUMMARY_LIMIT`] bytes on a
 //! char boundary. The emit call site passes `&result.content` — a string
 //! the agent already owns — and never touches `messages`. Cloning
 //! `messages` at that point would be a strictly larger operation than

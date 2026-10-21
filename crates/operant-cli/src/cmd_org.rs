@@ -165,7 +165,7 @@ pub enum OrgSubcommand {
     Budget(BudgetSubcommand),
 
     /// Views over a Holon organization through its published read API
-    /// (docs/agentic-os/ phase B). Read-only; requires [holon] enabled.
+    /// (docs/agentic-os/ phase B). Read-only; requires `[holon]` enabled.
     /// `org holon archive` is the one-time org-store snapshot (phase G).
     #[command(subcommand)]
     Holon(HolonAction),
@@ -182,7 +182,7 @@ pub async fn handle_org_command(config: &AppConfig, cmd: OrgSubcommand) -> Resul
 /// Views over the Holon organization (docs/agentic-os/ phase B): the
 /// read-API panels at the CLI. Every one is read-only — the published
 /// api_* views are the only surface, and writes to the org go through
-/// Holon itself (boundary law S1). Off unless [holon] enabled (invariant 5).
+/// Holon itself (boundary law S1). Off unless `[holon]` enabled (invariant 5).
 #[derive(Debug, Clone, Subcommand)]
 pub enum HolonAction {
     /// The roster: employees with departments and managers
@@ -220,12 +220,12 @@ pub enum HolonAction {
 
     /// Phase E (CONTRACT §11): one supervision pass — claim the next ready
     /// stage for the employee, run the body, hand it in. `--loop` keeps
-    /// supervising until interrupted. Runs regardless of [holon] supervise
+    /// supervising until interrupted. Runs regardless of `[holon]` supervise
     /// (that flag gates the gateway's resident organ; the CLI loop is a
     /// manual foreground tool) — it needs supervise_employees in the
     /// config, or the employee ids as arguments.
     Supervise {
-        /// The employee to serve (defaults to [holon] supervise_employees,
+        /// The employee to serve (defaults to `[holon]` supervise_employees,
         /// served in order)
         #[arg(long, value_name = "EMP_ID")]
         employee: Option<String>,
@@ -244,7 +244,7 @@ pub enum HolonAction {
 
     /// Phase G (docs/agentic-os/): the one-time archive of the org stores —
     /// copy, never delete (ORG-LAYER-DISPOSITION.md §4). Writes
-    /// <operant home>/archive/org-<date>/ with a checksum manifest.
+    /// `<operant home>/archive/org-<date>/` with a checksum manifest.
     /// Date defaults to today (UTC). One snapshot per date.
     Archive {
         /// The snapshot's date tag (YYYY-MM-DD); defaults to today

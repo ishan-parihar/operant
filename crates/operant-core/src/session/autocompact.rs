@@ -29,7 +29,7 @@
 //! job. So the lossy step is gated on a **floor**, and the floor is the
 //! substance of this module.
 //!
-//! See [`COMPACTION_FLOOR_TOKENS`] for the derivation. The short version: the
+//! See [`crate::session::autocompact::COMPACTION_FLOOR_TOKENS`] for the derivation. The short version: the
 //! floor is 4 000 tokens — the value §4.5 specifies — and it sits several times
 //! above the size of the fixed prompt material a real operant session carries on
 //! every single turn, so the floor means "substantially more than the
@@ -41,15 +41,15 @@
 //! the surviving shape is always a valid conversation:
 //!
 //! - **Head** — every leading `System` message, plus the first
-//!   [`KEEP_HEAD_MESSAGES`] non-system messages. The system prompt boundary is
+//!   [`crate::session::autocompact::KEEP_HEAD_MESSAGES`] non-system messages. The system prompt boundary is
 //!   never crossed: a compaction cannot remove or reorder the persona block, and
 //!   the opening exchange is never summarised, so the session's original
 //!   framing survives verbatim.
-//! - **Tail** — the most recent messages up to [`KEEP_TAIL_TOKENS`]. The active
+//! - **Tail** — the most recent messages up to [`crate::session::autocompact::KEEP_TAIL_TOKENS`]. The active
 //!   context of the job that just finished, and the seed for the next one.
 //! - **Middle** — everything between head and tail. The only region that is
 //!   dropped, and it is never dropped silently: it is replaced by a
-//!   [`COMPACTION_MARKER`] system message naming the session, how many messages
+//!   [`crate::session::autocompact::COMPACTION_MARKER`] system message naming the session, how many messages
 //!   were dropped, how many tokens they held, and which compaction generation
 //!   this is. §4.5's "compaction must not silently lose the employee's turns
 //!   without a record" is satisfied by that marker.
@@ -72,17 +72,17 @@
 //! 2. **A marker-only middle is refused.** If what remains between head and the
 //!    newest marker is at most that marker itself, there is no unmarked material
 //!    left to lose, and the pass reports
-//!    [`CompactionOutcome::SkippedNothingToCompact`] having changed nothing.
+//!    [`crate::session::autocompact::CompactionOutcome::SkippedNothingToCompact`] having changed nothing.
 //!
 //! Without both, a transcript that still holds unmarked middle material would
 //! re-compact on its next pass and replace its own record with a record of a
 //! record — the compounding loss this module exists to prevent.
-//! [`KEEP_TAIL_TOKENS`] (8 000) being larger than [`COMPACTION_FLOOR_TOKENS`]
+//! [`crate::session::autocompact::KEEP_TAIL_TOKENS`] (8 000) being larger than [`crate::session::autocompact::COMPACTION_FLOOR_TOKENS`]
 //! (4 000) additionally means a well-compacted transcript, whose surviving size
 //! is head + marker + tail, sits **above** the floor rather than below it, so
 //! neither rule is load-bearing on its own: rule 1 keeps the tail intact and
 //! rule 2 refuses the marker-only middle, and the transcript is returned
-//! unchanged with [`CompactionOutcome::SkippedNothingToCompact`].
+//! unchanged with [`crate::session::autocompact::CompactionOutcome::SkippedNothingToCompact`].
 //!
 //! # Durability
 //!
@@ -131,7 +131,7 @@ use crate::session::{SessionKey, SessionStore};
 /// | **Fixed preamble on every turn** | **~4 580** | **~1 150** |
 ///
 /// Add a first user prompt and a first assistant reply — the two messages
-/// [`KEEP_HEAD_MESSAGES`] already protects — and the fixed cost of an average
+/// [`crate::session::autocompact::KEEP_HEAD_MESSAGES`] already protects — and the fixed cost of an average
 /// operant turn reaches roughly **1 600 tokens** before any real work happens.
 ///
 /// The floor is **4 000 tokens**, for four reasons:
@@ -178,7 +178,7 @@ pub const KEEP_HEAD_MESSAGES: usize = 3;
 /// Verbatim tail budget, in estimated tokens.
 ///
 /// Sized to exceed a single scheduled job's active context (a handful of tool
-/// round-trips) and to exceed [`COMPACTION_FLOOR_TOKENS`] **on purpose**: the
+/// round-trips) and to exceed [`crate::session::autocompact::COMPACTION_FLOOR_TOKENS`] **on purpose**: the
 /// module's idempotence section depends on the tail being the larger of the
 /// two, so a compaction always has a middle to drop and the protected region is
 /// never the whole transcript. 8 000 keeps that ordering against the 4 000
@@ -302,14 +302,14 @@ pub struct AutocompactStats {
 #[derive(Debug, Clone)]
 pub struct AutocompactConfig {
     /// Minimum estimated token count at or below which the lossy step is
-    /// skipped. Defaults to [`COMPACTION_FLOOR_TOKENS`]. Set to `0` for
+    /// skipped. Defaults to [`crate::session::autocompact::COMPACTION_FLOOR_TOKENS`]. Set to `0` for
     /// unconditional compaction.
     pub floor_tokens: usize,
     /// Verbatim tail budget in estimated tokens. Defaults to
-    /// [`KEEP_TAIL_TOKENS`].
+    /// [`crate::session::autocompact::KEEP_TAIL_TOKENS`].
     pub keep_tail_tokens: usize,
     /// Leading non-system messages kept verbatim. Defaults to
-    /// [`KEEP_HEAD_MESSAGES`].
+    /// [`crate::session::autocompact::KEEP_HEAD_MESSAGES`].
     pub keep_head_messages: usize,
     /// Whether the post-run compaction runs at all.
     pub enabled: bool,
@@ -422,7 +422,7 @@ impl Autocompactor {
 
     /// Compact `key` if it is over the floor. Synchronous and deterministic.
     ///
-    /// The dropped middle is replaced by a [`COMPACTION_MARKER`] record rather
+    /// The dropped middle is replaced by a [`crate::session::autocompact::COMPACTION_MARKER`] record rather
     /// than a summary, so a scheduled run's autocompaction needs no model, no
     /// network, and no API key, and cannot fail because an auxiliary provider is
     /// unreachable.

@@ -9,7 +9,7 @@
 //!
 //! Also holds the deterministic tool-loop anomaly detectors
 //! ([`Anomaly`], [`detect_anomalies`]) and the capped retry feedback
-//! ([`anomaly_retry_feedback`]). The detectors are pure string analysis so
+//! ([`detect_anomalies`]). The detectors are pure string analysis so
 //! they are unit-testable in isolation; the *injection* reuses the existing
 //! continuation shape in `agent/run.rs` (append a user `Message`, refund the
 //! iteration, `continue`) — there is no second loop.
@@ -229,8 +229,8 @@ fn first_line(body: &str) -> String {
 }
 
 /// True when `body` carries an error-class payload: its first non-empty
-/// line starts with one of [`ERROR_PREFIXES`] or contains one of
-/// [`ERROR_SUBSTRINGS`].
+/// line starts with one of `ERROR_PREFIXES` or contains one of
+/// `ERROR_SUBSTRINGS`.
 pub fn has_error_signal(body: &str) -> bool {
     let line = first_line(body);
     if line.is_empty() {

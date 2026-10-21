@@ -300,14 +300,14 @@ pub(crate) fn word_wrap(text: &str, width: usize) -> Vec<String> {
 ///   │  This will execute a shell command.             │
 ///   │  This may modify system-wide security policy.   │
 ///   │                                                │
-///   │  [y] Yes, allow once                           │
-///   │  [Y] Yes, allow this session                   │
-///   │▶ [p] Yes, always allow (persistent)            │
-///   │  [n] No, deny                                  │
+///   │  `y` Yes, allow once                           │
+///   │  `Y` Yes, allow this session                   │
+///   │▶ `p` Yes, always allow (persistent)            │
+///   │  `n` No, deny                                  │
 ///   ╰────────────────────────────────────────────────╯
 ///
 /// For `Bash` with a `suggested_prefix`, a 5th option is shown:
-///   │  [g] Allow commands matching git*              │
+///   │  `g` Allow commands matching git*              │
 ///
 pub fn render_permission_dialog(frame: &mut Frame, pr: &PermissionRequest, area: Rect) {
     // The wrap width depends on the *clamped* dialog width, which only

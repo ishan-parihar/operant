@@ -74,7 +74,7 @@ impl PooledModelClient {
         }
     }
 
-    /// Allow an empty pool to pass through (see [`Self::keyless_ok`]).
+    /// Allow an empty pool to pass through (see `Self::keyless_ok`).
     pub fn with_keyless_ok(self, ok: bool) -> Self {
         self.keyless_ok
             .store(ok, std::sync::atomic::Ordering::Relaxed);

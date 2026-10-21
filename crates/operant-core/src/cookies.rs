@@ -317,7 +317,7 @@ fn aes128_cbc_decrypt(key: &[u8; 16], iv: &[u8; 16], data: &[u8]) -> Option<Vec<
 ///
 /// Resolution order (standard Linux Chromium scheme):
 /// 1. `os_crypt.encrypted_key` in Local State — base64 blob, AES-128-CBC
-///    wrapped with key = SHA256("peanuts")[:16], IV = 16 zeros. On Windows
+///    wrapped with key = `SHA256("peanuts")[:16]`, IV = 16 zeros. On Windows
 ///    the blob carries a "DPAPI" prefix; on Linux there is none.
 /// 2. The OS keyring (Linux): Chromium stores the raw AES key in the
 ///    Secret Service / KWallet when `encrypted_key` is absent. Queried via

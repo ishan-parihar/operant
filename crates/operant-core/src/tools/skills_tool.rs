@@ -719,7 +719,7 @@ fn warn_unreferenced_resources(
 
 // ── Nested-references walk helpers (registry.py parity) ──────────────────
 
-/// Markdown link: [label](target). Captures: 1 = label, 2 = target.
+/// Markdown link: `[label](target)`. Captures: 1 = label, 2 = target.
 #[expect(clippy::expect_used, reason = "infallible once-init / static init")]
 static MD_LINK_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"\[([^\]]*)\]\(([^)\s]+)\)")
@@ -1274,7 +1274,7 @@ fn frontmatter_tags(frontmatter: &Value) -> Vec<String> {
     Vec::new()
 }
 
-/// Resolve `related_skills` from metadata.<ns>.related_skills OR top-level.
+/// Resolve `related_skills` from `metadata.<ns>.related_skills` OR top-level.
 fn frontmatter_related_skills(frontmatter: &Value) -> Vec<String> {
     let meta = frontmatter.get("metadata");
     for ns in ["hermes", "operant"] {

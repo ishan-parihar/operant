@@ -18,7 +18,7 @@
 //!   must not open the breaker for an auth-dead token, and an auth death
 //!   must not be explained as "the network is down".
 //! - **Capped exponential cooldown** — `base * 2^n` clamped to
-//!   [`COOLDOWN_CAP`]; the first open waits [`COOLDOWN_BASE`] before the
+//!   [`COOLDOWN_CAP_SECS`]; the first open waits [`COOLDOWN_BASE_SECS`] before the
 //!   half-open probe, a repeatedly-failing channel backs off to the cap and
 //!   stays there.
 //! - **One probe in flight** — the half-open open window allows exactly one

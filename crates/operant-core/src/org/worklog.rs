@@ -216,7 +216,7 @@ pub struct OutcomeSignals {
     /// chokepoint and the worklog records the *outcome*, not the cause.
     /// §3.4 is explicit that `ClassifiedError { reason, status_code, … }`
     /// "supplies the cause, not the outcome" — so the cause lands in
-    /// [`TurnObservation::blockers`], and only the boolean lands here.
+    /// `TurnObservation::blockers`, and only the boolean lands here.
     pub turn_errored: bool,
     /// The last `last_status` the turn saw was clean. Operant has no
     /// `last_status` field today (see the §3.4 coverage notes); a framework

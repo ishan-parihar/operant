@@ -4,7 +4,7 @@
 //!
 //! All presentation logic (status colors, role glyphs, age formatting, header,
 //! sorting, layout config) lives in the shared
-//! [`operant_tui_render::swarm_gallery`] module so the live TUI and the
+//! `operant_tui_render::swarm_gallery` module so the live TUI and the
 //! `swarm_gallery_live` demo render identically. This adapter only handles
 //! turning a [`SwarmMemberStatus`] into a renderer-agnostic
 //! [`GalleryMember`] (label + body lines).

@@ -233,7 +233,7 @@ pub fn log_path() -> Option<PathBuf> {
     Some(log_dir.join(format!("operant-{}.log", date)))
 }
 
-/// Core of [`cleanup_old_logs`], parameterized on the directory and "now" so it
+/// Core of [`cleanup_old_logs_in`], parameterized on the directory and "now" so it
 /// can be unit-tested without touching the real log directory or process env.
 // (plan 01, S1b) best-effort failure surfacing during log rotation.
 #[allow(clippy::print_stderr, reason = "logger cleanup: best-effort surfacing")]

@@ -1362,7 +1362,7 @@ pub enum LaunchMode {
 /// `pending_shell_command` → `run_suspended_shell_command` (the /setup
 /// escape hatch) and runs a one-shot operant session.
 ///
-/// argv[0] is `current_exe()` per the /setup precedent: a bare "operant"
+/// argv`0` is `current_exe()` per the /setup precedent: a bare "operant"
 /// would resolve against PATH and could run a different version than the
 /// TUI the user is sitting in.
 ///

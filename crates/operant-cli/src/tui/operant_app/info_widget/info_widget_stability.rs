@@ -423,7 +423,7 @@ fn rects_overlap(a: &PlacedRect, b: &PlacedRect) -> bool {
 /// one content line at a time, and return the placements observed at each scroll
 /// position. `content_widths[i]` is the rendered text width of content line `i`.
 ///
-/// This faithfully exercises the production [`calculate_placements`] including the
+/// This faithfully exercises the production [`super::calculate_placements`] including the
 /// sticky carry-over pass, so the resulting metrics reflect the real algorithm.
 pub fn simulate_scroll(
     content_widths: &[u16],

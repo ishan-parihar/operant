@@ -59,7 +59,7 @@ fn five_to_six(expr: &str) -> Result<String, Error> {
     }
 }
 
-/// Expand "every N<unit>" into a 6-field expression. `None` when the
+/// Expand "every `N<unit>`" into a 6-field expression. `None` when the
 /// phrasing is not understood or the interval is out of range.
 fn every_interval(input: &str) -> Option<String> {
     let lower = input.to_ascii_lowercase();
@@ -104,7 +104,7 @@ pub fn next_run_from_schedule(schedule: &str) -> Option<String> {
     parsed.upcoming(chrono::Utc).next().map(|t| t.to_rfc3339())
 }
 
-/// Split "<digits><unit>" (e.g. "6h", "30d") into (6, "h").
+/// Split "`<digits><unit>`" (e.g. "6h", "30d") into (6, "h").
 fn split_num_unit(rest: &str) -> Option<(u32, &str)> {
     let idx = rest.find(|c: char| !c.is_ascii_digit())?;
     let num: u32 = rest[..idx].parse().ok()?;

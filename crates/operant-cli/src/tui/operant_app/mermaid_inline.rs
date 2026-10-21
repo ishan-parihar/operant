@@ -122,7 +122,7 @@ fn inline_fit_geometry_impl(
 // rather than borrow fake draw bodies here.
 
 /// Upstream mermaid_content.rs:77-96 ported nearly verbatim (only the upstream
-/// `mermaid_style_hint_text()` import had nowhere to go; the [color] styling
+/// `mermaid_style_hint_text()` import had nowhere to go; the `color` styling
 /// constants stay flexible — their physical lines remain identical).
 pub fn text_image_fallback_note_line() -> Line<'static> {
     let style = Style::default()
