@@ -21,6 +21,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-1131 — `operant gateway status` no longer claims the gateway is down while it is up.** The
+  running check read one source, `~/.operant/gateway.pid`; a gateway run under systemd (the documented
+  way to run it) has no such file, so the command printed "Runtime: not running" on a live box — and
+  then deleted the pid file, leaving even less to go on. The check now consults the pid file AND the
+  systemd unit, names the pid and its source, and only removes a stale pid file when neither source says
+  the gateway is up.
 - **iter-1130 — the doctor names WHICH `operant` copy is stale.** It used to report "2 copies of
   operant on PATH" and list both paths, leaving the operator to pick — and the wrong pick is a silent
   downgrade, because the shell resolves `~/.local/bin` first. Two copies of the same build were reported

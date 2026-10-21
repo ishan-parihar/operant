@@ -154,6 +154,84 @@ pub async fn handle_gateway_command(
 
 // ── Private handlers ──────────────────────────────────────────────────
 
+/// What the status command reports about the running gateway.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GatewayRuntime {
+    /// No gateway process was found.
+    NotRunning,
+    /// A gateway process is running.
+    Running {
+        /// Its process id.
+        pid: u32,
+        /// Where the pid came from: the PID file, or the systemd unit.
+        source: &'static str,
+    },
+}
+
+/// Combine the two sources of truth about a running gateway.
+///
+/// The PID file wins when both are present: it is the process that wrote
+/// it, and a systemd unit that is "active" while a foreground gateway runs
+/// is the foreground one the operator is talking to.
+fn classify_runtime(pid_file_pid: Option<u32>, systemd_pid: Option<u32>) -> GatewayRuntime {
+    if let Some(pid) = pid_file_pid {
+        return GatewayRuntime::Running {
+            pid,
+            source: "pid file",
+        };
+    }
+    match systemd_pid {
+        Some(pid) if pid > 0 => GatewayRuntime::Running {
+            pid,
+            source: "systemd",
+        },
+        _ => GatewayRuntime::NotRunning,
+    }
+}
+
+/// The pid in the PID file, when that process is still alive.
+fn alive_pid_from_file(pid_path: &std::path::Path) -> Option<u32> {
+    let pid: u32 = std::fs::read_to_string(pid_path)
+        .ok()?
+        .trim()
+        .parse()
+        .ok()?;
+    let alive = std::process::Command::new("kill")
+        .arg("-0")
+        .arg(pid.to_string())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    alive.then_some(pid)
+}
+
+/// The main pid of the gateway systemd unit, when the unit is active.
+fn systemd_gateway_pid() -> Option<u32> {
+    let active = std::process::Command::new("systemctl")
+        .args(["--user", "is-active", "operant-gateway"])
+        .output()
+        .ok()?;
+    if !String::from_utf8_lossy(&active.stdout)
+        .trim()
+        .eq_ignore_ascii_case("active")
+    {
+        return None;
+    }
+    let pid = std::process::Command::new("systemctl")
+        .args([
+            "--user",
+            "show",
+            "-p",
+            "MainPID",
+            "--value",
+            "operant-gateway",
+        ])
+        .output()
+        .ok()?;
+    let value = String::from_utf8_lossy(&pid.stdout).trim().to_string();
+    value.parse::<u32>().ok().filter(|p| *p > 0)
+}
+
 /// Print gateway status from configuration.
 ///
 /// Shows which platforms are enabled, the webhook state, and a reminder
@@ -161,24 +239,21 @@ pub async fn handle_gateway_command(
 fn cmd_status(config: &AppConfig, deep: bool, json: bool) -> Result<()> {
     let gw = &config.gateway;
 
-    // Cross-process running check via PID file
+    // Cross-process running check: the PID file (a `gateway run` process)
+    // AND the systemd unit (the documented way to run the gateway). The
+    // PID file alone was not enough: it is removed by an earlier status run
+    // whose pid had gone stale, and after a restart it is briefly absent —
+    // so the status command said "not running" while the gateway was
+    // serving messages. (RT-144.)
     let pid_path = operant_core::platform::operant_home().join("gateway.pid");
-    let running = std::fs::read_to_string(&pid_path)
-        .ok()
-        .and_then(|pid_str| pid_str.trim().parse::<u32>().ok())
-        .map(|pid| {
-            std::process::Command::new("kill")
-                .arg("-0")
-                .arg(pid.to_string())
-                .status()
-                .map(|s| s.success())
-                .unwrap_or(false)
-        })
-        .unwrap_or(false);
+    let pid_file_pid = alive_pid_from_file(&pid_path);
+    let systemd_pid = systemd_gateway_pid();
+    let runtime = classify_runtime(pid_file_pid, systemd_pid);
 
-    if !running && pid_path.exists() {
+    if runtime == GatewayRuntime::NotRunning && pid_path.exists() {
         let _ = std::fs::remove_file(&pid_path);
     }
+    let running = matches!(runtime, GatewayRuntime::Running { .. });
 
     if json {
         let status = serde_json::json!({
@@ -264,10 +339,11 @@ fn cmd_status(config: &AppConfig, deep: bool, json: bool) -> Result<()> {
     );
     println!();
 
-    if running {
-        println!("Runtime: running (PID from {})", pid_path.display());
-    } else {
-        println!("Runtime: not running");
+    match runtime {
+        GatewayRuntime::Running { pid, source } => {
+            println!("Runtime: running (PID {pid}, {source})");
+        }
+        GatewayRuntime::NotRunning => println!("Runtime: not running"),
     }
 
     if deep {
@@ -964,4 +1040,41 @@ fn cmd_pairing_revoke(_config: &AppConfig, id: &str) -> Result<()> {
     println!("Start the gateway and try again.");
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{GatewayRuntime, classify_runtime};
+
+    /// RT-144: a gateway running under systemd (no PID file) must NOT be
+    /// reported as "not running" — the live box ran the gateway exactly
+    /// that way and the status command claimed it was down.
+    #[test]
+    fn a_systemd_gateway_counts_as_running_without_a_pid_file() {
+        assert_eq!(
+            classify_runtime(None, Some(4242)),
+            GatewayRuntime::Running {
+                pid: 4242,
+                source: "systemd"
+            }
+        );
+    }
+
+    #[test]
+    fn the_pid_file_wins_when_both_sources_agree() {
+        assert_eq!(
+            classify_runtime(Some(7), Some(4242)),
+            GatewayRuntime::Running {
+                pid: 7,
+                source: "pid file"
+            }
+        );
+    }
+
+    #[test]
+    fn nothing_running_reports_not_running() {
+        assert_eq!(classify_runtime(None, None), GatewayRuntime::NotRunning);
+        // systemd reports MainPID 0 for a unit with no process.
+        assert_eq!(classify_runtime(None, Some(0)), GatewayRuntime::NotRunning);
+    }
 }
