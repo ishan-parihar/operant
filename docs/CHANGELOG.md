@@ -21,6 +21,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-1129 — `operant doctor` stopped asking for a fix it cannot perform.** The skills-hub check
+  warned "run: operant skills list" and listed "Initialize skills hub" among the issues to address — but
+  that command does not create `~/.operant/skills/.hub`, and nothing else in the tree does either (the
+  marketplace installs skills flat). On a machine with 103 working skills, the operator was told to fix
+  something that could not be fixed. The check is now informational and never actionable.
 - **iter-1128 — the second config surface is labelled, not silently live.** `operant_config::schema::Config`
   is never loaded in production (`Config::load_or_init` has no production caller), yet it holds 123 structs
   and 645 fields with no production reader outside its crate, so a setting added there looks live and is

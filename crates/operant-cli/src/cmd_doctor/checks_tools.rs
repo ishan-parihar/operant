@@ -603,59 +603,11 @@ pub fn run_platform_checks(
     // D. Skills Hub
     // =====================================================================
     section_header("Skills Hub");
-
-    let hub_dir = operant_home().join("skills").join(".hub");
-    if hub_dir.exists() {
-        check_ok("Skills Hub directory", "(exists)");
-
-        let lock_file = hub_dir.join("lock.json");
-        if lock_file.exists() {
-            match std::fs::read_to_string(&lock_file) {
-                Ok(content) => {
-                    if let Ok(lock_data) = serde_json::from_str::<serde_json::Value>(&content) {
-                        let count = lock_data
-                            .get("installed")
-                            .and_then(|i| i.as_object())
-                            .map(|o| o.len())
-                            .unwrap_or(0);
-                        check_ok("Lock file OK", &format!("({count} hub-installed skill(s))"));
-                    } else {
-                        check_warn("Lock file", "(corrupted or unreadable)");
-                    }
-                }
-                Err(_) => {
-                    check_warn("Lock file", "(unreadable)");
-                }
-            }
-        } else {
-            check_info("No lock.json found (skills hub not fully initialized)");
-        }
-
-        let quarantine = hub_dir.join("quarantine");
-        if quarantine.exists() {
-            let q_count = std::fs::read_dir(&quarantine)
-                .map(|entries| {
-                    entries
-                        .filter_map(|e| e.ok())
-                        .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
-                        .count()
-                })
-                .unwrap_or(0);
-            if q_count > 0 {
-                check_warn(
-                    "Quarantine",
-                    &format!("({q_count} skill(s) in quarantine — pending review)"),
-                );
-            }
-        }
-    } else {
-        check_warn(
-            "Skills Hub directory not initialized",
-            "(run: operant skills list)",
-        );
-        // Advisory: rendered as ⚠, and an uninitialized hub costs the user a
-        // lazily-created directory, not a working install.
-        manual_issues.push("Initialize skills hub with 'operant skills list'".to_string());
+    // The advice is returned rather than pushed, so it can be tested: a
+    // check that names a fix the operator cannot perform must not produce
+    // one (RT-142).
+    if let Some(advice) = check_skills_hub() {
+        manual_issues.push(advice);
     }
 
     // =====================================================================
@@ -1012,4 +964,83 @@ mod operant_binary_tests {
 
         assert_eq!(found.len(), 2);
     }
+
+    /// RT-142: the skills-hub directory has no producer in this tree, so
+    /// the doctor must not tell the operator to run a command that cannot
+    /// create it, and must not list it among the issues to address.
+    #[test]
+    fn the_skills_hub_check_never_asks_for_an_unfollowable_fix() {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("operant-home");
+        std::fs::create_dir_all(home.join("skills")).unwrap();
+        // SAFETY: single-threaded test; the env is restored right after.
+        unsafe { std::env::set_var("HERMES_HOME", &home) };
+        let advice = check_skills_hub();
+        unsafe { std::env::remove_var("HERMES_HOME") };
+        assert!(
+            advice.is_none(),
+            "the hub check must not ask for a fix it cannot perform: {advice:?}"
+        );
+    }
+}
+
+/// The skills-hub directory check.
+///
+/// `~/.operant/skills/.hub` has NO producer in this tree: the marketplace
+/// installs skills FLAT (`skills_dir.join(name)`), and `operant skills list`
+/// does not create the directory. The old warning named `operant skills
+/// list` as the fix — an instruction the operator could follow and still
+/// see the warning — and pushed it into the ACTIONABLE issue list even
+/// though an absent hub costs nothing. The directory is now reported as
+/// informational when it is absent, and it never becomes an issue.
+/// (RT-142.)
+fn check_skills_hub() -> Option<String> {
+    let hub_dir = operant_home().join("skills").join(".hub");
+    if hub_dir.exists() {
+        check_ok("Skills Hub directory", "(exists)");
+
+        let lock_file = hub_dir.join("lock.json");
+        if lock_file.exists() {
+            match std::fs::read_to_string(&lock_file) {
+                Ok(content) => {
+                    if let Ok(lock_data) = serde_json::from_str::<serde_json::Value>(&content) {
+                        let count = lock_data
+                            .get("installed")
+                            .and_then(|i| i.as_object())
+                            .map(|o| o.len())
+                            .unwrap_or(0);
+                        check_ok("Lock file OK", &format!("({count} hub-installed skill(s))"));
+                    } else {
+                        check_warn("Lock file", "(corrupted or unreadable)");
+                    }
+                }
+                Err(_) => {
+                    check_warn("Lock file", "(unreadable)");
+                }
+            }
+        } else {
+            check_info("No lock.json found (skills hub not fully initialized)");
+        }
+
+        let quarantine = hub_dir.join("quarantine");
+        if quarantine.exists() {
+            let q_count = std::fs::read_dir(&quarantine)
+                .map(|entries| {
+                    entries
+                        .filter_map(|e| e.ok())
+                        .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
+                        .count()
+                })
+                .unwrap_or(0);
+            if q_count > 0 {
+                check_warn(
+                    "Quarantine",
+                    &format!("({q_count} skill(s) in quarantine — pending review)"),
+                );
+            }
+        }
+    } else {
+        check_info("Skills Hub directory (not in use in this build — skills install flat)");
+    }
+    None
 }
