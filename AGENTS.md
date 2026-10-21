@@ -884,8 +884,8 @@ it — see RG-010 for the check.
 
 ### Operator-facing surfaces (re-verified 2026-10-21, iters 1124-1131)
 - `operant tools disable` removes the tool from the agent's toolset — the
-  `tool_state.json` file is read by the runtime, not just written by the CLI
-  (iter-1124; before it, the command changed nothing)
+  tool-state JSON file next to the database is read by the runtime, not just
+  written by the CLI (iter-1124; before it, the command changed nothing)
 - `operant hooks` runs the operator's own commands on the agent's four
   lifecycle events (`agent_start`, `agent_end`, `turn_start`, `turn_end`).
   The `HookRegistry` is created unconditionally; the harness bridge is
