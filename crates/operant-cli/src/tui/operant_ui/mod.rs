@@ -866,6 +866,7 @@ fn full_prep_cache() -> &'static Mutex<FullPrepCacheState> {
 pub(crate) const COPY_BADGE_KEYS: [char; 12] =
     ['s', 'd', 'f', 'g', 'w', 'e', 'r', 't', 'x', 'c', 'v', 'b'];
 
+/// A copy target the badge overlay can offer.
 #[derive(Clone, Debug)]
 pub(crate) struct VisibleCopyTarget {
     pub key: char,
@@ -874,6 +875,13 @@ pub(crate) struct VisibleCopyTarget {
     // UI reads the content, so the label pair was dead weight built per
     // target per frame. The kind's own accessors stay in copy_targets.rs
     // where a consumer that wants them can call them directly.
+    #[cfg_attr(
+        test,
+        allow(
+            dead_code,
+            reason = "jcode-parity port: the payload the copy path reads back from the region, not from this record"
+        )
+    )]
     pub content: String,
     /// Screen cells occupied by the rendered shortcut badge in the latest frame.
     pub badge_rect: Option<Rect>,
@@ -1180,6 +1188,17 @@ pub(crate) fn request_tail_follow_snap() {
 }
 
 // [port-source] ui.rs:537-545
+/// The diff the user is scanning, plus the anchors the renderer keys it by.
+///
+/// `msg_index` and `file_path` are carried for the anchor resolution a future
+/// diff-pane consumer needs; the live renderer reads the line anchors only.
+#[cfg_attr(
+    test,
+    allow(
+        dead_code,
+        reason = "jcode-parity port: anchor fields the tests populate but no live consumer reads"
+    )
+)]
 #[derive(Clone, Debug)]
 struct ActiveFileDiffContext {
     edit_index: usize,
@@ -1376,6 +1395,16 @@ pub(crate) fn record_status_area(area: Rect) {
 }
 
 // [port-source] ui.rs:1398-1500
+/// The frame's cell geometry. The four areas are recorded so a handler outside
+/// `draw` can resolve a viewport anchor; only `messages_area` has a live reader
+/// today.
+#[cfg_attr(
+    test,
+    allow(
+        dead_code,
+        reason = "jcode-parity port: recorded geometry only the messages area has a live reader for"
+    )
+)]
 #[derive(Clone, Copy, Debug)]
 pub struct LayoutSnapshot {
     pub messages_area: Rect,
@@ -1484,7 +1513,21 @@ enum CopyViewportData {
     Dense {
         wrapped_plain_lines: Arc<Vec<String>>,
         wrapped_copy_offsets: Arc<Vec<usize>>,
+        #[cfg_attr(
+            test,
+            allow(
+                dead_code,
+                reason = "jcode-parity port: raw-line cache the tests populate but the copy path reads the wrapped lines"
+            )
+        )]
         raw_plain_lines: Arc<Vec<String>>,
+        #[cfg_attr(
+            test,
+            allow(
+                dead_code,
+                reason = "jcode-parity port: wrapped-to-raw map kept for the selection-math path under construction"
+            )
+        )]
         wrapped_line_map: Arc<Vec<WrappedLineMap>>,
     },
     ChatFrame {
@@ -1493,6 +1536,14 @@ enum CopyViewportData {
 }
 
 #[derive(Clone)]
+/// The copy viewport's pane, its wrapped-line data and the scroll window.
+#[cfg_attr(
+    test,
+    allow(
+        dead_code,
+        reason = "jcode-parity port: pane and visible_end are recorded per frame; the live copy path reads the wrapped data and the scroll offset"
+    )
+)]
 struct CopyViewportSnapshot {
     pane: crate::tui::operant_ui::copy_selection::CopySelectionPane,
     data: CopyViewportData,

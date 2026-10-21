@@ -21,7 +21,16 @@
 //! pickers) are unported waves; no ported renderer calls them.
 //! context_info/context_snapshot stay (ContextInfo and ContextSnapshot are
 //! ported). Everything else in the trait is verbatim.
-
+/// A background task row's status. `Running` and `Completed` are the two states
+/// the live row never shows — the ported row renders the task's own outcome
+/// text, so only `Failed` has a reader.
+#[cfg_attr(
+    test,
+    allow(
+        dead_code,
+        reason = "jcode-parity port: row states the live renderer replaces with the task's own outcome"
+    )
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BackgroundTaskRowStatus {
     Running,
@@ -236,6 +245,15 @@ pub(crate) fn detect_kv_cache_problem(
 pub enum PickerKind {
     Model,
     Account,
+    // [port-excision] Login — the operant-provider-metadata cascade that would
+    // populate it is not ported, so no picker opens on this kind.
+    #[cfg_attr(
+        test,
+        allow(
+            dead_code,
+            reason = "[port-excision] the metadata cascade that populates a login picker is not ported"
+        )
+    )]
     Login,
     Usage,
 }
@@ -332,6 +350,19 @@ impl PickerKind {
     }
 }
 
+/// What the account picker does with the chosen credential.
+///
+/// `Add`, `Replace` and `OpenCenter` are the actions that MUTATE the stored
+/// account set. No live picker path performs one yet (the picker shows and
+/// selects), so the three variants are dead here and kept as the picker's
+/// action vocabulary.
+#[cfg_attr(
+    test,
+    allow(
+        dead_code,
+        reason = "jcode-parity port: the account picker's mutating actions; no live picker path performs one"
+    )
+)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AccountPickerAction {
     Switch { provider_id: String, label: String },
@@ -340,6 +371,18 @@ pub enum AccountPickerAction {
     OpenCenter { provider_filter: Option<String> },
 }
 
+/// Which agent a model choice applies to.
+///
+/// `Review`, `Judge`, `Memory` and `Ambient` name the sub-agent targets the
+/// model picker can retarget; the live picker only switches the main agent, so
+/// the four are dead here and kept as the picker's target vocabulary.
+#[cfg_attr(
+    test,
+    allow(
+        dead_code,
+        reason = "jcode-parity port: sub-agent retarget vocabulary; the live picker switches the main agent only"
+    )
+)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgentModelTarget {
     Swarm,
@@ -349,6 +392,19 @@ pub enum AgentModelTarget {
     Ambient,
 }
 
+/// What the picker decided.
+///
+/// `RemoteLogin`, `RemoteImportDecision`, `LogoutAll` and `SubagentModelChoice`
+/// are the actions that carry a decision back to the account/session layer. No
+/// live picker returns one yet (the pickers render and accept a selection), so
+/// the four variants are dead here and kept as the picker's result vocabulary.
+#[cfg_attr(
+    test,
+    allow(
+        dead_code,
+        reason = "jcode-parity port: the picker's decision-carrying results; no live picker returns one"
+    )
+)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PickerAction {
     Model,
@@ -398,6 +454,17 @@ pub struct InlineInteractiveState {
 }
 
 /// A reusable picker entry with one or more available actions/options.
+///
+/// `recommendation_rank` and `usage_score` are the ordering signals the picker
+/// would sort by. The live picker renders in insertion order, so the two fields
+/// have no reader; they are kept so ordering is a data change, not a rewrite.
+#[cfg_attr(
+    test,
+    allow(
+        dead_code,
+        reason = "jcode-parity port: ordering signals; the live picker renders in insertion order"
+    )
+)]
 #[derive(Debug, Clone)]
 pub struct PickerEntry {
     pub name: String,
@@ -439,6 +506,18 @@ impl PickerEntry {
 }
 
 /// A single available option for a picker entry.
+///
+/// `estimated_reference_cost_micros` prices the option against the provider's
+/// reference rates. The live option row does not render a price, so the field
+/// has no reader; it is kept so a price display is a render change, not a data
+/// one.
+#[cfg_attr(
+    test,
+    allow(
+        dead_code,
+        reason = "jcode-parity port: the option's priced cost; the live row does not render a price"
+    )
+)]
 #[derive(Debug, Clone)]
 pub struct PickerOption {
     pub provider: String,

@@ -183,7 +183,21 @@ fn status_rank(status: &str) -> u8 {
 /// output tail vs. status detail); everything else about how the tile looks is
 /// handled here.
 /// [port-source] swarm_gallery.rs:195-233
+///
+/// One member on the swarm strip. `task`, `body`, `todo`, `todo_items`,
+/// `effort` and `elapsed_secs` describe what the member is doing; the strip
+/// renders the name, the glyph and the task line, so the rest have no reader in
+/// this build. They stay as the strip's data contract with the feed that reports
+/// a member's work.
+#[cfg_attr(
+    test,
+    allow(
+        dead_code,
+        reason = "jcode-parity port: the member's work detail; the strip renders the name, glyph and task line"
+    )
+)]
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 pub struct GalleryMember {
     /// Display title (friendly name or short id).
     pub label: String,
@@ -221,6 +235,16 @@ pub struct GalleryMember {
 
 /// One compact todo entry shown in the focused swarm detail view.
 /// [port-source] swarm_gallery.rs:235-243
+///
+/// One todo line for a member. `content`, `status` and `tool_intents` are the
+/// item's own detail; the gallery renders the line, so they have no reader yet.
+#[cfg_attr(
+    test,
+    allow(
+        dead_code,
+        reason = "jcode-parity port: the todo item's own detail; the gallery renders the line"
+    )
+)]
 #[derive(Clone, Debug)]
 pub struct GalleryTodo {
     pub content: String,
@@ -231,6 +255,17 @@ pub struct GalleryTodo {
 }
 
 /// [port-source] swarm_gallery.rs:245-253
+///
+/// One tool call a todo item made. `tool_name`, `intent`, `status` and
+/// `progress` describe the call; the gallery renders the intent text, so the
+/// rest have no reader yet.
+#[cfg_attr(
+    test,
+    allow(
+        dead_code,
+        reason = "jcode-parity port: the tool call's full detail; the gallery renders the intent text"
+    )
+)]
 #[derive(Clone, Debug)]
 pub struct GalleryToolIntent {
     pub tool_name: String,

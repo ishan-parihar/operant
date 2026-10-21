@@ -105,6 +105,19 @@ pub fn item_matches_filter(item: &UsageOverlayItem, filter: &str) -> bool {
         .all(|needle| haystack.contains(&needle.to_lowercase()))
 }
 
+/// The usage overlay's state: its title, the item list, the filter window and
+/// the selection.
+///
+/// `title` and the `UsageOverlaySummary` it holds are populated at
+/// construction; the live overlay renders the items and the filter line only,
+/// so the two summary fields have no reader in this build.
+#[cfg_attr(
+    test,
+    allow(
+        dead_code,
+        reason = "jcode-parity port: the overlay's title and summary; the live render draws items and the filter line"
+    )
+)]
 #[derive(Debug, Clone)]
 pub struct UsageOverlay {
     title: String,

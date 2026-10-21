@@ -313,6 +313,18 @@ impl ToolCall {
 }
 
 /// Connection phase for status bar transparency.
+///
+/// The five transport steps. No live transport in this build emits any of them
+/// (the status bar shows `ProcessingStatus::Connecting` instead), so the whole
+/// vocabulary is dead here; it is the ported status vocabulary and stays so the
+/// first live transport has phases to report rather than a new ad-hoc enum.
+#[cfg_attr(
+    test,
+    allow(
+        dead_code,
+        reason = "jcode-parity port: the transport's connection-phase vocabulary; no live transport emits a phase"
+    )
+)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum ConnectionPhase {
     /// Refreshing OAuth token

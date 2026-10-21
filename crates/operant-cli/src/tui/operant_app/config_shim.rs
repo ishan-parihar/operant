@@ -195,6 +195,13 @@ impl AgentsConfig {
 
 // [port-decision] dedup: derive(Default) collided with the manual impl below;
 // dropped Default from the derive, kept the manual impl (carries real values).
+#[cfg_attr(
+    test,
+    allow(
+        dead_code,
+        reason = "jcode-parity port: shape-compat display shim; the fields exist so the config round-trips, not because a renderer reads each one"
+    )
+)]
 #[derive(Debug, Clone)]
 pub struct DisplayConfig {
     pub pin_todos: bool,

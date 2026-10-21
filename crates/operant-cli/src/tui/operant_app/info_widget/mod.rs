@@ -276,6 +276,17 @@ pub struct WidgetPlacement {
 pub use self::info_widget_layout::Margins;
 
 /// Swarm/subagent status for the info widget
+///
+/// `selected` and `focused` mirror the inline swarm panel's selection state so
+/// both surfaces agree. The dock renders the member list, so neither field has a
+/// reader in this build; they stay because the mirroring IS the contract.
+#[cfg_attr(
+    test,
+    allow(
+        dead_code,
+        reason = "jcode-parity port: the dock's mirrored selection state; the dock renders the member list"
+    )
+)]
 #[derive(Debug, Default, Clone)]
 pub struct SwarmInfo {
     /// Number of sessions in the same swarm (same working directory)
@@ -303,6 +314,17 @@ pub struct SwarmInfo {
 }
 
 /// Background task status for the info widget
+///
+/// `progress_summary`, `memory_agent_active` and `memory_agent_turns` carry the
+/// memory sub-agent's own progress. The widget renders the running count and the
+/// task names, so the three have no reader yet.
+#[cfg_attr(
+    test,
+    allow(
+        dead_code,
+        reason = "jcode-parity port: the memory sub-agent's progress; the widget renders the count and names"
+    )
+)]
 #[derive(Debug, Default, Clone)]
 pub struct BackgroundInfo {
     /// Number of running background tasks
@@ -320,6 +342,17 @@ pub struct BackgroundInfo {
 }
 
 /// Which provider the usage info is for
+///
+/// `Copilot` names GitHub Copilot's session-token accounting. No live usage
+/// report is built for it in this build (the report path is ported but
+/// unwired — see `usage.rs`), so the variant has no constructor.
+#[cfg_attr(
+    test,
+    allow(
+        dead_code,
+        reason = "jcode-parity port: Copilot's session-token accounting; no live usage report names it"
+    )
+)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum UsageProvider {
     #[default]
@@ -347,6 +380,17 @@ impl UsageProvider {
 }
 
 /// Authentication method used to access the model
+///
+/// The five credential kinds the widget can label. No live auth probe fills them
+/// yet, so the variants have no constructor; the enum is the widget's label
+/// vocabulary and stays so a probe is a fill, not a new type.
+#[cfg_attr(
+    test,
+    allow(
+        dead_code,
+        reason = "jcode-parity port: the credential-kind label vocabulary; no live auth probe fills one"
+    )
+)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum AuthMethod {
     #[default]
@@ -372,6 +416,17 @@ pub enum AuthMethod {
 }
 
 /// Subscription usage info for the info widget
+///
+/// `cache_read_tokens`, `cache_write_tokens` and `output_tps` are the API-key
+/// provider's cache and throughput counters. The widget renders the token totals
+/// and the cost, so the three have no reader yet.
+#[cfg_attr(
+    test,
+    allow(
+        dead_code,
+        reason = "jcode-parity port: the API-key provider's cache and throughput counters; the widget renders token totals and cost"
+    )
+)]
 #[derive(Debug, Default, Clone)]
 pub struct UsageInfo {
     /// Which provider this usage is for
@@ -515,6 +570,17 @@ impl UsageInfo {
 }
 
 /// Memory statistics for the info widget
+///
+/// The full statistic set: totals plus the project/global split, the
+/// per-category breakdown, and the sidecar's availability and model. The widget
+/// renders the total, so the breakdown fields have no reader yet.
+#[cfg_attr(
+    test,
+    allow(
+        dead_code,
+        reason = "jcode-parity port: the full statistic set; the widget renders the total count only"
+    )
+)]
 #[derive(Debug, Default, Clone)]
 pub struct MemoryInfo {
     /// Total memory count (project + global)
@@ -652,6 +718,18 @@ pub struct AmbientWidgetData {
 const PAGE_SWITCH_SECONDS: u64 = 30;
 
 /// Data to display in the info widget
+///
+/// The widget's whole snapshot. Most fields are populated by the agent's state
+/// feed but only some have a renderer in this build; the rest are kept because
+/// the struct IS the widget's contract with the feed, and dropping a field would
+/// make the feed's snapshot silently incomplete.
+#[cfg_attr(
+    test,
+    allow(
+        dead_code,
+        reason = "jcode-parity port: fields the feed populates but no renderer reads yet; the struct is the widget's data contract"
+    )
+)]
 #[derive(Debug, Default, Clone)]
 pub struct InfoWidgetData {
     pub todos: Vec<TodoItem>,

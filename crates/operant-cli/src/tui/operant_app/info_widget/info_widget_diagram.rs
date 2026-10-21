@@ -16,5 +16,12 @@ pub struct DiagramInfo {
     /// Original PNG height
     pub height: u32,
     /// Optional label/title
+    #[cfg_attr(
+        test,
+        allow(
+            dead_code,
+            reason = "jcode-parity port: the diagram's title; the widget renders the image, not the title"
+        )
+    )]
     pub label: Option<String>,
 }

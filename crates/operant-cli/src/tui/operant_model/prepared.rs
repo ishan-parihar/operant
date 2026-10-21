@@ -140,6 +140,18 @@ pub enum PreparedSectionKind {
 }
 
 #[derive(Clone)]
+/// The prepared transcript frame: its sections plus the totals the renderer
+/// and the copy path resolve against.
+///
+/// `total_raw_lines` is the pre-wrap line count the tests assert against; no
+/// live consumer reads it (the renderer needs the WRAPPED count).
+#[cfg_attr(
+    test,
+    allow(
+        dead_code,
+        reason = "jcode-parity port: pre-wrap total the tests assert against, unused by the renderer"
+    )
+)]
 pub struct PreparedChatFrame {
     pub sections: Vec<PreparedSection>,
     pub total_wrapped_lines: usize,

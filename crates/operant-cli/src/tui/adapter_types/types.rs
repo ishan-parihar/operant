@@ -10,12 +10,27 @@ pub enum Role {
 /// Each variant corresponds to a distinct visual element in the conversation
 /// view.  These are NOT LLM API types — they are purely display-layer concepts
 /// assembled from `AgentEvent` values in `App::handle_agent_event`.
+///
+/// The enum is a WIRE vocabulary: every variant and field is deserialized from
+/// adapter JSON, so `dead_code` is expected in production (the variants are
+/// parsed, not built) AND in the test profile (the tests parse the payloads
+/// without reading every field back). Two cfg arms, one reason each — a single
+/// `#[cfg_attr(not(test), expect(...))]` silences the production profile only and
+/// leaves the test-profile warnings standing, which is what `--all-targets`
+/// was reporting for this file.
 #[derive(Debug, Clone)]
 #[cfg_attr(
     not(test),
     expect(
         dead_code,
         reason = "AD-034: adapter wire enum; variants are parsed from adapter JSON, not built here"
+    )
+)]
+#[cfg_attr(
+    test,
+    allow(
+        dead_code,
+        reason = "AD-034: same wire vocabulary; the test profile parses the payloads without reading every field back"
     )
 )]
 pub enum ContentBlock {

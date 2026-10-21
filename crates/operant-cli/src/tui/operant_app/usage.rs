@@ -44,6 +44,16 @@ pub(crate) fn usage_reset_passed<'a>(
 // ─── Combined usage for /usage command ───────────────────────────────────────
 
 /// Normalized OpenAI/Codex usage window info used by the TUI widget.
+///
+/// `name` labels the window. The live widget renders the ratio and the reset
+/// time and derives its own header, so the field has no reader.
+#[cfg_attr(
+    test,
+    allow(
+        dead_code,
+        reason = "jcode-parity port: the window's label; the live widget derives its own header"
+    )
+)]
 #[derive(Debug, Clone, Default)]
 pub struct OpenAIUsageWindow {
     pub name: String,
@@ -148,6 +158,20 @@ pub struct AnthropicLimitResetOffer {
 }
 
 /// Verbatim from crates/operant-usage-types/src/lib.rs:26.
+///
+/// A provider's usage report. `name`, `openai_reset_credits`,
+/// `anthropic_limit_reset` and `last_used_unix_secs` are carried for parity with
+/// the upstream type; this build's overlay reads the limits, the extra info and
+/// the hard-limit flag. The whole report type has exactly one constructor in the
+/// tree — `usage_overlay.rs`'s own test — so the report path is ported but not
+/// yet wired to a live fetch.
+#[cfg_attr(
+    test,
+    allow(
+        dead_code,
+        reason = "jcode-parity port: verbatim upstream fields; one test constructs the report, no live fetch populates it"
+    )
+)]
 #[derive(Debug, Clone, Default)]
 pub struct ProviderUsage {
     pub provider_name: String,

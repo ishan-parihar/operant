@@ -8,6 +8,18 @@ use ratatui::prelude::*;
 const INLINE_IMAGE_MARKER_PREFIX: &str = "\x00IIMG:";
 const INLINE_IMAGE_MARKER_SUFFIX: &str = ":END";
 
+/// The result of rendering a block: either an inline image to place, or the
+/// error text to show in its place.
+///
+/// `Image` is produced by the inline-image path; in this build the fallback
+/// path only reaches `Error`, so the image arm is dead here.
+#[cfg_attr(
+    test,
+    allow(
+        dead_code,
+        reason = "jcode-parity port: the fallback path only reaches the Error arm in this build"
+    )
+)]
 #[derive(Debug, Clone)]
 pub enum RenderResult {
     Image {

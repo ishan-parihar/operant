@@ -54,6 +54,18 @@ pub fn swarm_root_reasoning_effort(effort: &str) -> Option<&'static str> {
 }
 
 /// Information about what's loaded in the context window
+///
+/// A full accounting of the prompt's sections. The live context panel shows a
+/// subset, so several of these counters have no reader in this build; they are
+/// kept because the struct is the accounting surface a `/context` breakdown
+/// reports against, and dropping a counter would make that report lie.
+#[cfg_attr(
+    test,
+    allow(
+        dead_code,
+        reason = "jcode-parity port: the context accounting surface; the live panel reports a subset of the counters"
+    )
+)]
 #[derive(Debug, Clone, Default)]
 pub struct ContextInfo {
     // === Static (System Prompt) ===

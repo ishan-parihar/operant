@@ -7,6 +7,13 @@
 #[derive(Debug, Clone)]
 pub struct GraphNode {
     /// Stable node ID from memory graph (mem:*, tag:*, cluster:*)
+    #[cfg_attr(
+        test,
+        allow(
+            dead_code,
+            reason = "jcode-parity port: the graph's stable id; the rendered topology draws the label, not the id"
+        )
+    )]
     pub id: String,
     /// Human-readable display label
     pub label: String,

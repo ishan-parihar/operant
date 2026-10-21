@@ -124,6 +124,13 @@ fn current_phase() -> &'static str {
 
 /// Snapshot of cheap process-level resource counters.
 #[derive(Debug, Default, Clone, Copy)]
+#[cfg_attr(
+    test,
+    allow(
+        dead_code,
+        reason = "jcode-parity port: the RSS half of the watchdog snapshot; the panel renders threads and fds today"
+    )
+)]
 pub struct ResourceSnapshot {
     pub rss_mb: u64,
     pub threads: usize,
