@@ -1120,7 +1120,12 @@ pub struct OnboardingConfig {
 #[derive(Debug)]
 pub enum ConfigError {
     Io(std::io::Error),
-    #[allow(dead_code)]
+    // `#[expect]`, not `#[allow]` (rust-best-practices ch.2): one concrete
+    // variant in a hand-written enum, so the lint fires on every build and
+    // this escape hatch EXPIRES the moment a caller constructs a Parse error
+    // again. The Display arm stays because the variant is part of the
+    // public surface an operator may see in a log.
+    #[expect(dead_code)]
     Parse(String),
 }
 

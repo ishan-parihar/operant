@@ -123,10 +123,17 @@ static REVIEW_READ_SKILLS: LazyLock<RwLock<HashSet<String>>> =
 /// `.usage.json` writer. Plan 007 removed the legacy writer; the
 /// curator tracker takes its own `with_exclusive_lock` (advisory OS
 /// file lock + atomic save) so this is no longer needed. Kept as
-/// dead-code with a `#[expect]` so future agents who grep for the
-/// name see the migration note rather than re-introducing the
-/// legacy writer.
-#[allow(dead_code)]
+/// dead-code so future agents who grep for the name see the migration note
+/// rather than re-introducing the legacy writer.
+///
+/// `#[expect]`, not `#[allow]` (rust-best-practices ch.2): this is ONE
+/// concrete item rather than a macro expansion, so the expectation is
+/// fulfilled on every build and the escape hatch EXPIRES the moment
+/// something consumes the lock again — which is the point. With `#[allow]`
+/// the suppression would stay green after the legacy writer came back and
+/// silently cover the very dead code it was written for. (This doc claimed
+/// a `#[expect]` while the attribute was an `#[allow]` until iter-1163.)
+#[expect(dead_code)]
 static USAGE_TELEMETRY_LOCK: LazyLock<std::sync::Mutex<()>> =
     LazyLock::new(|| std::sync::Mutex::new(()));
 

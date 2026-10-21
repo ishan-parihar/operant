@@ -22,7 +22,15 @@ struct LoadedPlugin {
     plugin_dir: PathBuf,
     /// Resolved path to the WASM file. `None` for skill-only plugins.
     wasm_path: Option<PathBuf>,
-    #[allow(dead_code)]
+    // The signature-verification verdict for this plugin. The plugin is only
+    // stored when it PASSES (or when verification is disabled), so this is
+    // written and never read — but a security verdict that is dropped on the
+    // floor is the kind of field that should not silently disappear, and
+    // `#[expect]` rather than `#[allow]` (rust-best-practices ch.2) means it
+    // EXPIRES if something ever starts reading it, which is the day this
+    // becomes a real accessor. Wire it into `plugins()` when plugin
+    // verification is surfaced to the operator.
+    #[expect(dead_code)]
     verification: VerificationResult,
 }
 

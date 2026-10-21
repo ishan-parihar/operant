@@ -55,6 +55,16 @@ macro_rules! semantic_state {
             // strings only. Deleting an unused accessor per-enum would break
             // the uniform schema, so the impl opts out of the dead-code lint
             // with the reason attached here rather than at each use site.
+            //
+            // `allow`, not `expect`, and that is a deliberate exception to
+            // rust-best-practices ch.2's preference: `#[expect]` requires the
+            // lint to fire on EVERY expansion of the item, and rustc reports
+            // "this lint expectation is unfulfilled" the moment one enum has
+            // a consumer. Verified: swapping these to `#[expect]` produced
+            // exactly two unfulfilled-expectation warnings at these lines,
+            // because `ConfidenceState` really does consume both accessors.
+            // A macro-generated uniform schema cannot express per-expansion
+            // expectations; only the crate-level `allow` can.
             #[allow(dead_code)]
             pub fn as_str(&self) -> &'static str {
                 match self {

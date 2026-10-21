@@ -12,11 +12,13 @@ use parking_lot::Mutex;
 use rusqlite::{Connection, params};
 use std::path::{Path, PathBuf};
 
-/// SQLite-backed session store with FTS5 and WAL mode.
+/// SQLite-backed sessions store with FTS5 and WAL mode.
 pub struct SqliteSessionBackend {
+    // The db path is deliberately not retained. `new` opens the file and
+    // nothing reads it back — every diagnostic formats the path at the call
+    // site that has it, so a stored `db_path` would be a field carrying one
+    // write and zero reads, which is what `#[allow(dead_code)]` was covering.
     conn: Mutex<Connection>,
-    #[allow(dead_code)]
-    db_path: PathBuf,
 }
 
 impl SqliteSessionBackend {
@@ -110,7 +112,6 @@ impl SqliteSessionBackend {
 
         Ok(Self {
             conn: Mutex::new(conn),
-            db_path,
         })
     }
 
