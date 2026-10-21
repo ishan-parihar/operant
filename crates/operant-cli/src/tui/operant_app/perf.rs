@@ -46,11 +46,12 @@ impl std::fmt::Display for PerformanceTier {
 
 #[derive(Debug, Clone)]
 pub struct SystemProfile {
-    pub load_avg_1m: Option<f64>,
-    pub cpu_count: Option<usize>,
-    pub available_memory_mb: Option<u64>,
-    pub total_memory_mb: Option<u64>,
-    pub is_ssh: bool,
+    // Detection inputs (load average, cpu count, memory, ssh) are NOT stored:
+    // `compute_tier` consumes them once, during detection, and only the
+    // resulting `tier` outlives it. Keeping them here would make the struct
+    // carry five fields nothing ever reads — dead_code on every one — and
+    // would imply to the next reader that the profile is queryable for them.
+    // If a consumer needs them, they are cheap to re-detect (perf.rs detect_*).
     pub is_wsl: bool,
     pub terminal: String,
     pub tier: PerformanceTier,
@@ -225,15 +226,12 @@ fn detect() -> SystemProfile {
     });
 
     SystemProfile {
-        load_avg_1m,
-        cpu_count,
-        available_memory_mb,
-        total_memory_mb,
-        is_ssh,
         is_wsl,
+        // Borrowed BEFORE the move into the struct: the glyph-atlas probe reads
+        // the terminal name, so it has to run while the local is still owned.
         fragile_glyph_cache: detect_fragile_glyph_cache(&terminal),
-        terminal,
         tier,
+        terminal,
     }
 }
 

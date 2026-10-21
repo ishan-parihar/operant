@@ -869,8 +869,11 @@ pub(crate) const COPY_BADGE_KEYS: [char; 12] =
 #[derive(Clone, Debug)]
 pub(crate) struct VisibleCopyTarget {
     pub key: char,
-    pub kind_label: String,
-    pub copied_notice: String,
+    // `kind_label` and `copied_notice` were written at construction from
+    // `target.kind` and read by nothing — the badge renders the key and the
+    // UI reads the content, so the label pair was dead weight built per
+    // target per frame. The kind's own accessors stay in copy_targets.rs
+    // where a consumer that wants them can call them directly.
     pub content: String,
     /// Screen cells occupied by the rendered shortcut badge in the latest frame.
     pub badge_rect: Option<Rect>,

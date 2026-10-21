@@ -634,8 +634,6 @@ pub(super) fn draw_messages(
         let key = COPY_BADGE_KEYS[slot];
         visible_copy_targets.push(VisibleCopyTarget {
             key,
-            kind_label: target.kind.label(),
-            copied_notice: target.kind.copied_notice(),
             content: target.content.clone(),
             badge_rect: None,
         });
