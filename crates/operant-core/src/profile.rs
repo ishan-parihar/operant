@@ -21,47 +21,21 @@ const PROFILE_ID_RE: &str = r"^[a-z0-9][a-z0-9_-]{0,63}$";
 /// Reserved profile names that cannot be used.
 const RESERVED_NAMES: &[&str] = &["operant", "default", "test", "tmp", "root", "sudo"];
 
-thread_local! {
-    static HERMES_HOME_OVERRIDE: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
-}
-
-/// Set a thread-local override for HERMES_HOME.
+/// Get the current HERMES_HOME.
 ///
-/// Returns a token that can be used to restore the previous value.
-pub fn set_operant_home_override(path: impl Into<PathBuf>) -> OperantHomeToken {
-    let previous = HERMES_HOME_OVERRIDE.with(|cell| cell.replace(Some(path.into())));
-    OperantHomeToken(previous)
-}
-
-/// Reset the HERMES_HOME override using a token from `set_operant_home_override`.
-pub fn reset_operant_home_override(token: OperantHomeToken) {
-    HERMES_HOME_OVERRIDE.with(|cell| cell.replace(token.0));
-}
-
-/// Token for restoring HERMES_HOME override.
-pub struct OperantHomeToken(Option<PathBuf>);
-
-/// Get the current HERMES_HOME with profile awareness.
+/// The resolution order is the ENVIRONMENT variable, then the default
+/// `~/.operant` — the same order `platform::operant_home()` uses, and the
+/// same function, because there is exactly one resolver for the home.
 ///
-/// Resolution order:
-/// 1. Thread-local override (from `set_operant_home_override`)
-/// 2. `HERMES_HOME` environment variable
-/// 3. Default: `~/.operant`
+/// (iter-1134) This used to consult a THREAD-LOCAL override first, set by
+/// `set_operant_home_override`. That seam was broken: the stores that live
+/// under the home read `platform::operant_home()`, which never consulted
+/// the thread-local — so a test that "redirected the home" through it
+/// still wrote to the operator's real `~/.operant` (the gateway test
+/// overwrote the operator's `gateway.pid`). A thread-local override is
+/// also the wrong shape for a server: the work happens on other threads.
+/// The environment variable is process-global, so every thread sees it.
 pub fn get_operant_home() -> PathBuf {
-    // 1. Check thread-local override
-    let override_path = HERMES_HOME_OVERRIDE.with(|cell| cell.borrow().clone());
-    if let Some(path) = override_path {
-        return path;
-    }
-
-    // 2. Check environment variable
-    if let Ok(val) = std::env::var("HERMES_HOME")
-        && !val.is_empty()
-    {
-        return PathBuf::from(val);
-    }
-
-    // 3. Default
     platform::operant_home()
 }
 
@@ -672,16 +646,10 @@ mod tests {
     }
 
     #[test]
-    fn test_get_operant_home_override() {
+    fn test_get_operant_home_reads_the_environment() {
         let _guard = crate::platform::test_env_lock_blocking();
         let original = env::var("HERMES_HOME").ok();
 
-        let test_path = PathBuf::from("/tmp/test_override");
-        let token = set_operant_home_override(&test_path);
-        assert_eq!(get_operant_home(), test_path);
-
-        reset_operant_home_override(token);
-        // Should fall back to env var or default
         // SAFETY: test-only env mutation under exclusive lock
         unsafe { env::set_var("HERMES_HOME", "/tmp/test_env") };
         assert_eq!(get_operant_home(), PathBuf::from("/tmp/test_env"));

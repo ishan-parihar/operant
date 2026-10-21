@@ -196,8 +196,9 @@ pub use plugins::{
     handle_plugin_command, is_plugin_command, register_plugin_command, resolve_plugin_command,
 };
 pub use process_registry::{ProcessRegistry, ProcessSession, ProcessStatus};
-// (iter-159: profile re-exports deleted — only set_operant_home_override is
-// used externally, and it's accessed via operant_core::profile:: directly.)
+// (iter-159: profile re-exports deleted — the profile API is reached through
+// operant_core::profile:: directly. iter-1134: the thread-local HERMES_HOME
+// override went with them: it was a broken seam, not a resolver.)
 pub use skill_usage::{LifecycleState, SkillUsageTracker, UsageRecord, UsageTelemetry};
 pub use skills::{Skill, SkillManager};
 pub use skills_guard::{

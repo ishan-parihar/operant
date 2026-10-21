@@ -5971,12 +5971,38 @@ mod tests {
         assert!(msg.contains("Unknown platform"), "unexpected error: {msg}");
     }
 
+    /// The gateway start/stop round trip, with no platform enabled.
+    ///
+    /// The home is isolated through the ENVIRONMENT, not through the
+    /// thread-local profile override: `platform::operant_home()` reads the
+    /// env var, and the gateway's stores live there — the PID FILE above
+    /// all. With the thread-local override the test wrote the operator's
+    /// REAL `~/.operant/gateway.pid` and then deleted it, so a test run
+    /// destroyed the pid of a gateway the operator had running. That is the
+    /// same class as the ESTOP incident (iter-935). (iter-1134)
     #[tokio::test]
+    #[expect(
+        clippy::await_holding_lock,
+        reason = "test-only: the std mutex serialises process-env mutation across the whole test"
+    )]
     async fn test_gateway_start_stop_with_disabled_platforms() {
-        stop_gateway().await.ok();
-
+        let _env_lock = crate::config::test_env_lock();
         let tmp = tempfile::tempdir().unwrap();
-        let _guard = operant_core::profile::set_operant_home_override(tmp.path().to_path_buf());
+        let previous_home = std::env::var("HERMES_HOME").ok();
+        // SAFETY: serialised by the crate's environment lock.
+        unsafe { std::env::set_var("HERMES_HOME", tmp.path()) };
+        // PROVE the isolation before writing anything (the RT-99 pattern):
+        // a test that cannot prove it is writing to its own sandbox must not
+        // write at all.
+        assert_eq!(
+            operant_core::platform::operant_home(),
+            tmp.path(),
+            "the operant home must be the test's temp directory — the gateway \
+             writes its pid file there, and the operator's real one must not \
+             be touched"
+        );
+
+        stop_gateway().await.ok();
 
         // Ensure a fresh DB exists with the full schema before gateway touches it
         let db_path = tmp.path().join("database.db");
@@ -5994,17 +6020,31 @@ mod tests {
             ..Default::default()
         };
 
-        let msg = start_gateway(&config).await.unwrap();
-        assert!(msg.contains("0 platform(s)"));
-
+        let start_msg = start_gateway(&config).await.unwrap();
         let running = is_running().await;
-        assert!(running);
-
         let stop_msg = stop_gateway().await.unwrap();
-        assert!(stop_msg.contains("stopped"));
-
         let not_running = is_running().await;
+
+        // The PID file must be the TEST's, in the TEST's home — never the
+        // operator's.
+        let pid_path = tmp.path().join("gateway.pid");
+        let pid_after_stop = std::fs::read_to_string(&pid_path).ok();
+
+        // Restore the environment BEFORE any assertion, so a failing assert
+        // cannot leave the rest of the test binary with a redirected home.
+        match previous_home {
+            Some(v) => unsafe { std::env::set_var("HERMES_HOME", v) },
+            None => unsafe { std::env::remove_var("HERMES_HOME") },
+        }
+
+        assert!(start_msg.contains("0 platform(s)"));
+        assert!(running);
+        assert!(stop_msg.contains("stopped"));
         assert!(!not_running);
+        assert_eq!(
+            pid_after_stop, None,
+            "the gateway pid file must be removed on stop, in the test's own home"
+        );
     }
 }
 

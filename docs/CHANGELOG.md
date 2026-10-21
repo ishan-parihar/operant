@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-1134 — the CLI test suite no longer overwrites the operator's real `~/.operant/gateway.pid`.** The gateway start/stop test isolated its home with a THREAD-LOCAL override, but the stores under the home read the ENVIRONMENT variable and never consulted it — so `start_gateway` wrote the pid file into the operator's real `~/.operant` and the stop deleted it. The test now isolates through the environment (process-global, so every thread sees it) and proves the isolation before writing anything. The broken seam is gone with it: the thread-local override and the second home resolver are deleted, so there is one resolver for the home.
 - **iter-1133 — `operant tui keybindings` no longer writes a file nothing reads.** The command created
   `~/.operant/keybindings.json` and opened it in `$EDITOR`; the loaders were deleted in the 2026-10-14
   batch (plan 10) because they were no-op stubs, so editing the file changed nothing. It now prints the
