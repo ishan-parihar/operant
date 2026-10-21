@@ -177,20 +177,20 @@ record touched by more than one commit was amended in place.
 |---|---|
 <!-- genome:end status -->
 
-<!-- genome:zone handoff sha=4b10edd2def3 -->
+<!-- genome:zone handoff sha=8bc1cbb1f29e -->
 ## Handoff — 2026-10-21
 
-Repo branch `main`, HEAD `b39eb602a5f7605e2e9565e86901ea743bfed860`. Working tree dirty (3 paths).
+Repo branch `main`, HEAD `9a694b56b36a3fc97690a4e526f23e40482ba623`. Working tree dirty (4 paths).
 
 ## Open register rows
   (none)
 
 ## Recent worklog
-- **2026-10-20T23:50** · `jcode` — docs: the entry contract pointed the open queue at a section with nothing open in it — and two more summaries in the same file were stale too (RG-009)
-- **2026-10-20T23:57** · `jcode` — docs: AGENTS.md's CLI list was stale in BOTH directions and its count agreed with nothing — 52 variants, not 53 (RG-010)
-- **2026-10-21T00:05** · `jcode` — docs: the doc-claims check became a real gate, and it caught a tree entry for a file archived in iter-900 (RG-011)
-- **2026-10-21T00:16** · `jcode` — docs: extending the doc-claims gate found AGENTS.md stating the AFT tool count three different ways (the code has 20) and a TUI count as an uncheckable lower bound
-- **2026-10-21T00:21** · `jcode` — docs: AGENTS.md contradicted itself about the error taxonomy (12 classes vs 24) — the gate now checks AGREEMENT, not just the count
+- **2026-10-21T02:30** · `omp` — iter-1125: the `operant hooks` family is real (RT-138) — the store moved into core, the hook registry is created unconditionally, and the operator's own commands run on the agent's four lifecycle events
+- **2026-10-21T02:30** · `omp` — iter-1126: the agent can read the operator's SOP playbooks (RT-139) — the store moved into core and a `sop` tool was registered with the builtins
+- **2026-10-21T02:30** · `omp` — iter-1127: `operant webhook test` really posts a signed ping (RT-140, partly) — the store moved into core, the signing scheme matches the inbound adapter, and the dispatch remains an open, recorded decision
+- **2026-10-21T02:30** · `omp` — iter-1128: the parallel config schema is labelled, guarded and planned for retirement (RT-141) — 123 of its 145 structs have no production reader, and a static guard fails if the surface starts being loaded by accident
+- **2026-10-21T08:15** · `omp` — iter-1129/1130/1131: the operator-facing status surfaces stopped lying (RT-142, RT-143, RT-144) — the doctor named a fix it could not perform (the skills hub has no producer), it named neither of two `operant` copies as the stale one, and `operant gateway status` called a systemd-run gateway "not running" and deleted the pid file that would have told it otherwise
 
 Regenerate with `genome handoff --write`.
 <!-- genome:end handoff -->
