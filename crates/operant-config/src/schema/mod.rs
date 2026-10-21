@@ -28,53 +28,19 @@
 //! the open item is RT-141 in `docs/audit/2026-06-19-BUGS.md`. The guard
 //! test `tests/schema_is_not_loaded.rs` fails if the aggregate comes back.
 
-mod agent_cfg;
-mod backup;
-mod channels_cfg;
 mod core;
 mod cost;
-mod delegate;
-mod gateway;
-mod hardware;
 mod helpers;
-mod mcp;
 mod media;
 mod memory_store;
-mod ops_cfg;
 mod platform_cfg;
 mod prop_kinds;
 mod proxy;
-mod runners;
-mod scheduler;
-mod security_cfg;
-mod skills;
-mod sop;
-mod stt;
-mod tts;
-mod tunnels;
-mod web_tools;
 
-pub use agent_cfg::*;
-pub use backup::*;
-pub use channels_cfg::*;
 pub use core::*;
 pub use cost::*;
-pub use delegate::*;
-pub use gateway::*;
-pub use hardware::*;
-pub use helpers::*;
-pub use mcp::*;
+pub(crate) use helpers::*;
 pub use media::*;
 pub use memory_store::*;
-pub use ops_cfg::*;
 pub use platform_cfg::*;
 pub use proxy::*;
-pub use runners::*;
-pub use scheduler::*;
-pub use security_cfg::*;
-pub use skills::*;
-pub use sop::*;
-pub use stt::*;
-pub use tts::*;
-pub use tunnels::*;
-pub use web_tools::*;

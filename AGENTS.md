@@ -916,13 +916,15 @@ it — see RG-010 for the check.
   (iter-1126)
 - `operant webhook test` really POSTs a signed ping; the runtime still does
   not dispatch events to a subscription (RT-140, open)
-- The parallel config AGGREGATE is GONE (iter-1138): `operant_config::schema::Config`,
-  its loader, its migration and its 7K-line test file were deleted — it was
-  never loaded in production. The live config is
-  `operant_core::config::AppConfig`. What remains in `operant-config/src/schema/`
-  are the TYPES the live config composes; the dormant SECTION structs are
-  still there and are the rest of RT-141 (open — guarded by a test, plan
-  attached)
+- The parallel config AGGREGATE is GONE (iter-1138) and the dormant SECTION
+  structs with it (iter-1140): `operant_config::schema::Config`, its
+  loader, its migration, its 7K-line test file, 17 whole section files and
+  11 dead crate modules — ~24K lines, all of it never loaded in production.
+  `operant-config` is 7.1K lines and now holds only the types the live
+  config composes. The live config is `operant_core::config::AppConfig`.
+  RT-141 stays open for ONE thing: the `Configurable` derive machinery
+  (`operant-macros`) is still here because the live types derive it, but
+  nothing calls what it generates
 - The `operant-providers` crate is a SECOND provider surface that production
   never calls: outside its own crate the workspace names only `models_dev`
   and the doctor's `create_provider` probe. The live provider path is

@@ -5,7 +5,6 @@
 //! machinery needed them, and the section structs that carry the enums still
 //! derive them.
 
-use crate::autonomy::AutonomyLevel;
 use crate::traits::{HasPropKind, PropKind};
 
 use super::*;
@@ -19,26 +18,7 @@ macro_rules! impl_enum_prop_kind {
     };
 }
 
-impl_enum_prop_kind!(
-    SwarmStrategy,
-    HardwareTransport,
-    McpTransport,
-    ToolFilterGroupMode,
-    SkillsPromptInjectionMode,
-    FirecrawlMode,
-    ProxyScope,
-    SearchMode,
-    CronScheduleDecl,
-    StreamMode,
-    WhatsAppWebMode,
-    WhatsAppChatPolicy,
-    LineDmPolicy,
-    LineGroupPolicy,
-    LarkReceiveMode,
-    OtpMethod,
-    SandboxBackend,
-    AutonomyLevel,
-);
+impl_enum_prop_kind!(ProxyScope, SearchMode,);
 
 impl HasPropKind for ModelPricing {
     // ModelPricing is a 2-field struct (`input`, `output`). Wire form is a

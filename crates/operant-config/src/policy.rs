@@ -1731,49 +1731,6 @@ impl SecurityPolicy {
         })
     }
 
-    /// Build from config sections
-    pub fn from_config(
-        autonomy_config: &crate::schema::AutonomyConfig,
-        workspace_dir: &Path,
-    ) -> Self {
-        // When autonomy is Full, disable workspace_only so the agent can
-        // access paths outside the workspace.  Forbidden-path checks still
-        // apply, preventing access to sensitive system directories.
-        // See issue #5463.
-        let effective_workspace_only = if autonomy_config.level == AutonomyLevel::Full {
-            false
-        } else {
-            autonomy_config.workspace_only
-        };
-
-        Self {
-            autonomy: autonomy_config.level,
-            workspace_dir: workspace_dir.to_path_buf(),
-            workspace_only: effective_workspace_only,
-            allowed_commands: autonomy_config.allowed_commands.clone(),
-            forbidden_paths: autonomy_config.forbidden_paths.clone(),
-            allowed_roots: autonomy_config
-                .allowed_roots
-                .iter()
-                .map(|root| {
-                    let expanded = expand_user_path(root);
-                    if expanded.is_absolute() {
-                        expanded
-                    } else {
-                        workspace_dir.join(expanded)
-                    }
-                })
-                .collect(),
-            max_actions_per_hour: autonomy_config.max_actions_per_hour,
-            max_cost_per_day_cents: autonomy_config.max_cost_per_day_cents,
-            require_approval_for_medium_risk: autonomy_config.require_approval_for_medium_risk,
-            block_high_risk_commands: autonomy_config.block_high_risk_commands,
-            shell_env_passthrough: autonomy_config.shell_env_passthrough.clone(),
-            shell_timeout_secs: autonomy_config.shell_timeout_secs,
-            tracker: PerSenderTracker::new(),
-        }
-    }
-
     /// Render a human-readable summary of the active security constraints
     /// suitable for injection into the LLM system prompt.
     ///
@@ -2344,87 +2301,6 @@ mod tests {
     }
 
     // ── from_config ─────────────────────────────────────────
-
-    #[test]
-    fn from_config_maps_all_fields() {
-        let autonomy_config = crate::schema::AutonomyConfig {
-            level: AutonomyLevel::Full,
-            workspace_only: false,
-            allowed_commands: vec!["docker".into()],
-            forbidden_paths: vec!["/secret".into()],
-            max_actions_per_hour: 100,
-            max_cost_per_day_cents: 1000,
-            require_approval_for_medium_risk: false,
-            block_high_risk_commands: false,
-            shell_env_passthrough: vec!["DATABASE_URL".into()],
-            ..crate::schema::AutonomyConfig::default()
-        };
-        let workspace = PathBuf::from("/tmp/test-workspace");
-        let policy = SecurityPolicy::from_config(&autonomy_config, &workspace);
-
-        assert_eq!(policy.autonomy, AutonomyLevel::Full);
-        assert!(!policy.workspace_only);
-        assert_eq!(policy.allowed_commands, vec!["docker"]);
-        assert_eq!(policy.forbidden_paths, vec!["/secret"]);
-        assert_eq!(policy.max_actions_per_hour, 100);
-        assert_eq!(policy.max_cost_per_day_cents, 1000);
-        assert!(!policy.require_approval_for_medium_risk);
-        assert!(!policy.block_high_risk_commands);
-        assert_eq!(policy.shell_env_passthrough, vec!["DATABASE_URL"]);
-        assert_eq!(policy.workspace_dir, PathBuf::from("/tmp/test-workspace"));
-    }
-
-    #[test]
-    fn from_config_full_autonomy_overrides_workspace_only() {
-        // Issue #5463: Full autonomy should disable workspace_only even if the
-        // config default keeps it true.
-        let autonomy_config = crate::schema::AutonomyConfig {
-            level: AutonomyLevel::Full,
-            ..crate::schema::AutonomyConfig::default()
-        };
-        let workspace = PathBuf::from("/tmp/test-workspace");
-        let policy = SecurityPolicy::from_config(&autonomy_config, &workspace);
-
-        assert_eq!(policy.autonomy, AutonomyLevel::Full);
-        assert!(
-            !policy.workspace_only,
-            "Full autonomy must override workspace_only to false"
-        );
-    }
-
-    #[test]
-    fn from_config_supervised_preserves_workspace_only() {
-        let autonomy_config = crate::schema::AutonomyConfig {
-            level: AutonomyLevel::Supervised,
-            ..crate::schema::AutonomyConfig::default()
-        };
-        let workspace = PathBuf::from("/tmp/test-workspace");
-        let policy = SecurityPolicy::from_config(&autonomy_config, &workspace);
-
-        assert!(
-            policy.workspace_only,
-            "Supervised autonomy must preserve workspace_only default (true)"
-        );
-    }
-
-    #[test]
-    fn from_config_normalizes_allowed_roots() {
-        let autonomy_config = crate::schema::AutonomyConfig {
-            allowed_roots: vec!["~/Desktop".into(), "shared-data".into()],
-            ..crate::schema::AutonomyConfig::default()
-        };
-        let workspace = PathBuf::from("/tmp/test-workspace");
-        let policy = SecurityPolicy::from_config(&autonomy_config, &workspace);
-
-        let expected_home_root = if let Some(home) = std::env::var_os("HOME") {
-            PathBuf::from(home).join("Desktop")
-        } else {
-            PathBuf::from("~/Desktop")
-        };
-
-        assert_eq!(policy.allowed_roots[0], expected_home_root);
-        assert_eq!(policy.allowed_roots[1], workspace.join("shared-data"));
-    }
 
     #[test]
     fn resolved_path_violation_message_includes_allowed_roots_guidance() {
@@ -3237,24 +3113,6 @@ mod tests {
     }
 
     // ── Edge cases: from_config preserves tracker ────────────
-
-    #[test]
-    fn from_config_creates_fresh_tracker() {
-        let autonomy_config = crate::schema::AutonomyConfig {
-            level: AutonomyLevel::Full,
-            workspace_only: false,
-            allowed_commands: vec![],
-            forbidden_paths: vec![],
-            max_actions_per_hour: 10,
-            max_cost_per_day_cents: 100,
-            require_approval_for_medium_risk: true,
-            block_high_risk_commands: true,
-            ..crate::schema::AutonomyConfig::default()
-        };
-        let workspace = PathBuf::from("/tmp/test");
-        let policy = SecurityPolicy::from_config(&autonomy_config, &workspace);
-        assert!(!policy.is_rate_limited());
-    }
 
     // ══════════════════════════════════════════════════════════
     // SECURITY CHECKLIST TESTS

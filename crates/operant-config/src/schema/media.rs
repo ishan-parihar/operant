@@ -2,12 +2,9 @@
 //! former schema.rs monolith (dedup pass). Placement is navigational;
 //! every item is re-exported from `schema::`.
 
-use anyhow::Result;
-use operant_macros::Configurable;
-#[cfg(feature = "schema-export")]
-use serde::{Deserialize, Serialize};
-
 use super::*;
+use operant_macros::Configurable;
+use serde::{Deserialize, Serialize};
 
 /// Multimodal (image) handling configuration (`[multimodal]` section).
 ///

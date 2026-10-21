@@ -64,6 +64,37 @@ own") was Option 1, retire. Step 1 of it shipped in iter-1138:
 Step 2 (the dormant SECTION structs — 123 of them, 645 fields) is the rest
 of Option 1 and is NOT yet done.
 
+## Phase B1 — the dormant SECTION structs are gone (shipped in iter-1140)
+
+- The 17 wholly-dormant schema files are deleted: `agent_cfg`, `backup`,
+  `channels_cfg`, `delegate`, `gateway`, `hardware`, `mcp`, `ops_cfg`,
+  `runners`, `scheduler`, `security_cfg`, `skills`, `sop`, `stt`, `tts`,
+  `tunnels`, `web_tools`.
+- The six files that carry a live type are trimmed to it: `core.rs`
+  (`ModelProviderConfig`), `cost.rs` (`ModelPricing`), `media.rs`
+  (`MultimodalConfig`), `memory_store.rs` (`EmbeddingRouteConfig`),
+  `platform_cfg.rs` (six types), `proxy.rs` (`ProxyConfig`, `ProxyScope`
+  and the five proxy client builders).
+- The crate's own dormant modules go with them: `scattered_types`,
+  `comment_writer`, `domain_matcher`, `pairing`, `typed_value`,
+  `api_error`, `validation_warnings`, `workspace`, `cost`, `platform`,
+  `migration`.
+- The compiler was the oracle: every item it reported as unreachable after
+  the deletions was removed, and the items the live types still reference
+  (the `default_*` helpers, the `HasPropKind` impls, the `Configurable`
+  derive and its support traits) were kept.
+- `operant-config` is 7.1K lines, down from ~31K. The audit script now
+  reports 10 schema structs, 1 flagged (a false positive:
+  `EmbeddingRouteConfig` is carried by the live `ProvidersConfig`).
+
+What is left is ONE thing: the `Configurable` derive machinery
+(`operant-macros`, ~1.3K lines) is still here because the live types
+derive it — for `#[secret]` and `#[prefix]` — but the methods it generates
+are called by nothing. Dropping the derive from the live types would
+retire the crate; the `#[secret]`/`#[prefix]` attributes have to be
+re-homed first (the live config's secret handling is `operant-core`'s
+`fs_secrets`, not the derive).
+
 ## Phase B — the owner's choice
 
 ### Option 1: retire the schema surface
