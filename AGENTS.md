@@ -865,7 +865,7 @@ outright because `kill(0, …)` addresses the caller's process group.
 
 ## What IS Working (verified functional — iter-68 audit)
 
-### CLI (52 command variants — real handlers, except the two accepted stubs below)
+### CLI (52 command variants — real handlers, except the one accepted stub below)
 
 run, autonomous, tools, chat, test, config, sessions
 mcp, cookies, skills, model, completion, cron, pause
@@ -881,6 +881,24 @@ The list above is derived from the `Commands` enum in
 `hardware` and `peripheral`, both removed in iter-892, while omitting `donate`
 and `org`, both real commands with handlers. Re-derive it rather than trusting
 it — see RG-010 for the check.
+
+### Operator-facing surfaces (re-verified 2026-10-21, iters 1124-1131)
+- `operant tools disable` removes the tool from the agent's toolset — the
+  `tool_state.json` file is read by the runtime, not just written by the CLI
+  (iter-1124; before it, the command changed nothing)
+- `operant hooks` runs the operator's own commands on the agent's four
+  lifecycle events (`agent_start`, `agent_end`, `turn_start`, `turn_end`).
+  The `HookRegistry` is created unconditionally; the harness bridge is
+  registered on it when the harness is on (iter-1125)
+- The agent reads the operator's SOP playbooks (`~/.operant/sops/*.toml`)
+  through the `sop` tool — the same files `operant sop list` shows
+  (iter-1126)
+- `operant webhook test` really POSTs a signed ping; the runtime still does
+  not dispatch events to a subscription (RT-140, open)
+- The parallel config surface (`operant_config::schema::Config`) is a SPEC,
+  never loaded in production; the live config is
+  `operant_core::config::AppConfig` (RT-141, open — labelled, guarded by a
+  test, retirement planned)
 
 ### Gateway (7 platform adapters — all have real code, platform registry)
 - Telegram: fully implemented (long-poll + Bot API)
