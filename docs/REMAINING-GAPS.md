@@ -4,6 +4,23 @@
 > (iter-528). Every claim below was checked by grep or by building a worktree
 > from `origin/main` alone, not inferred from a design document.
 >
+> **AMENDED (2026-10-21, iter-1154) — the subject of this inventory retired.**
+> The organ stores it audits (`employees`, `notices`, `worklog`, the grant
+> ledger, the escalation queue, the hierarchy edges, the cast) moved to Holon
+> under the owner order of 2026-10-15, and operant deleted its own copies
+> (iter-838). Every Wave 2/3/4 entry below therefore describes code that no
+> longer exists: GAP-2.4 (`org check`), GAP-2.5 (the `org employee/notice/
+> worklog/sync/import/check/list` groups), GAP-2.6 (`NoticeBoard::retention_gc`)
+> and GAP-2.7 (the worklog feed) name deleted commands and deleted stores.
+> What operant still owns of the org surface is `operant org budget` (the
+> per-seat budget overrides) and `operant org holon` (the read-API views over a
+> Holon instance) — see `crates/operant-cli/src/cmd_org.rs`.
+>
+> The gaps that are still open live in `docs/agentic-os/REMAINING-GAPS.md` (the
+> Holon integration, current) and in `docs/audit/2026-06-19-BUGS.md` (the
+> defect ledger). This file is kept as the dated record of what the organ
+> program still owed on 2026-10-01; its own claims are not edited.
+>
 > **Scope note.** This covers the owner's organism-OS program only. A separate
 > TUI effort is in flight on this repo (iter-519..528 plus uncommitted work);
 > its files are not mine and are excluded here.
