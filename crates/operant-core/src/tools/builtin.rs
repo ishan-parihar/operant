@@ -46,6 +46,7 @@ pub use super::process_tool::ProcessTool;
 pub use super::reaction_tool::ReactionTool;
 pub use super::send_message_tool::SendMessageTool;
 pub use super::skills_tool::{SkillManageTool, SkillViewTool, SkillsTool};
+pub use super::sop_tool::SopTool;
 pub use super::sourcehound::{WebCrawlTool, WebExtractTool, WebScrapeTool};
 pub use super::spotify_tool::{
     SpotifyAlbumsTool, SpotifyDevicesTool, SpotifyLibraryTool, SpotifyPlaybackTool,
@@ -131,6 +132,8 @@ pub async fn register_builtin_tools(
     registry
         .register(SkillManageTool::new(skills_dir.to_path_buf()))
         .await?;
+    // The operator's SOP playbooks (iter-1126) — the agent reads them.
+    registry.register(SopTool).await?;
     registry
         .register(ProcessTool::new(ProcessRegistry::new()))
         .await?;
@@ -287,6 +290,7 @@ pub fn builtin_tool_names() -> Vec<&'static str> {
         "skills_list",
         "skill_manage",
         "skill_view",
+        "sop",
         "terminal",
         "tool_backend",
         "timestamp",
@@ -423,5 +427,12 @@ mod tests {
             builtin_tool_names().len()
         );
         assert!(registry.contains("delegate_task").await);
+        // iter-1126: the operator's SOP playbooks must be reachable BY THE
+        // AGENT — the `sop` tool is registered with the builtins, so the
+        // playbook directory is not an operator-only dead end.
+        assert!(
+            registry.contains("sop").await,
+            "the sop tool must be registered with the builtins"
+        );
     }
 }

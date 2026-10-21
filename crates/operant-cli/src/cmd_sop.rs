@@ -1,9 +1,15 @@
+//! CLI subcommand for the operator's standard operating procedures.
+//!
+//! An SOP is a TOML file in `~/.operant/sops/` — a playbook for a recurring
+//! task. The files are the same ones the agent's `sop` tool reads (iter-1126),
+//! so what the operator lists here is what the agent can follow.
+
 use anyhow::Result;
 use clap::Subcommand;
 use serde::{Deserialize, Serialize};
-use std::path::Path;
 
 use operant_core::config::AppConfig;
+use operant_core::sops::{discover_sops, sops_dir};
 
 #[derive(Subcommand, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum SopSubcommand {
@@ -22,19 +28,16 @@ pub enum SopSubcommand {
 }
 
 pub async fn handle_sop_command(_config: &AppConfig, cmd: SopSubcommand, json: bool) -> Result<()> {
-    let sop_dir = dirs::home_dir()
-        .unwrap_or_default()
-        .join(".operant")
-        .join("sops");
+    let sop_dir = sops_dir();
+    let sops = discover_sops(&sop_dir);
 
     match cmd {
         SopSubcommand::List => {
-            let sops = discover_sops(&sop_dir);
             if json {
                 println!(
                     "{}",
                     serde_json::json!({
-                        "sops": sops.iter().map(|(n, d)| serde_json::json!({"name": n, "description": d})).collect::<Vec<_>>()
+                        "sops": sops.iter().map(|s| serde_json::json!({"name": s.name, "description": s.description})).collect::<Vec<_>>()
                     })
                 );
             } else if sops.is_empty() {
@@ -42,27 +45,26 @@ pub async fn handle_sop_command(_config: &AppConfig, cmd: SopSubcommand, json: b
                 println!("\nAdd .toml files to {} to define SOPs.", sop_dir.display());
             } else {
                 println!("Loaded SOPs ({}):", sops.len());
-                for (name, desc) in &sops {
-                    println!("  • {} — {}", name, desc);
+                for sop in &sops {
+                    println!("  • {} — {}", sop.name, sop.description);
                 }
             }
             Ok(())
         }
         SopSubcommand::Validate { name } => {
-            let sops = discover_sops(&sop_dir);
             let to_validate: Vec<_> = match &name {
-                Some(n) => sops.iter().filter(|(nm, _)| nm == n).collect(),
+                Some(n) => sops.iter().filter(|sop| &sop.name == n).collect(),
                 None => sops.iter().collect(),
             };
             if json {
                 let results: Vec<_> = to_validate
                     .iter()
-                    .map(|(n, _)| serde_json::json!({"name": n, "valid": true}))
+                    .map(|sop| serde_json::json!({"name": sop.name, "valid": true}))
                     .collect();
                 println!("{}", serde_json::json!({"results": results}));
             } else {
-                for (n, _) in &to_validate {
-                    println!("✅ '{}' is valid", n);
+                for sop in &to_validate {
+                    println!("✅ '{}' is valid", sop.name);
                 }
                 if to_validate.is_empty() {
                     println!("No SOPs to validate.");
@@ -71,67 +73,40 @@ pub async fn handle_sop_command(_config: &AppConfig, cmd: SopSubcommand, json: b
             Ok(())
         }
         SopSubcommand::Show { name } => {
-            let sop_file = sop_dir.join(format!("{}.toml", name));
-            if json {
-                if sop_file.exists() {
-                    let content = std::fs::read_to_string(&sop_file).unwrap_or_default();
-                    println!(
-                        "{}",
-                        serde_json::json!({
-                            "name": name,
-                            "path": sop_file.to_string_lossy(),
-                            "content": content
-                        })
-                    );
-                } else {
-                    println!(
-                        "{}",
-                        serde_json::json!({"error": format!("SOP '{}' not found", name)})
-                    );
+            let wanted = name.trim().to_ascii_lowercase();
+            let found = sops
+                .iter()
+                .find(|sop| sop.name.to_ascii_lowercase() == wanted);
+            match found {
+                Some(sop) => {
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::json!({
+                                "name": sop.name,
+                                "path": sop.path.to_string_lossy(),
+                                "content": sop.content
+                            })
+                        );
+                    } else {
+                        println!("=== SOP: {} ===", sop.name);
+                        println!("Path: {}", sop.path.display());
+                        println!();
+                        println!("{}", sop.content);
+                    }
                 }
-            } else if sop_file.exists() {
-                let content = std::fs::read_to_string(&sop_file).unwrap_or_default();
-                println!("=== SOP: {} ===", name);
-                println!("Path: {}", sop_file.display());
-                println!();
-                println!("{}", content);
-            } else {
-                println!("SOP '{}' not found in {}", name, sop_dir.display());
+                None => {
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::json!({"error": format!("SOP '{}' not found", name)})
+                        );
+                    } else {
+                        println!("SOP '{}' not found in {}", name, sop_dir.display());
+                    }
+                }
             }
             Ok(())
         }
     }
-}
-
-/// Discover SOPs from a directory by scanning for .toml files.
-fn discover_sops(sop_dir: &Path) -> Vec<(String, String)> {
-    let mut sops = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(sop_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().is_some_and(|e| e == "toml") {
-                let name = path
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("unknown")
-                    .to_string();
-                // Use proper TOML parsing to extract the description field
-                let desc = std::fs::read_to_string(&path)
-                    .ok()
-                    .and_then(|c| {
-                        c.parse::<toml::Value>()
-                            .ok()
-                            .and_then(|v| v.get("description").cloned())
-                            .map(|v| match v {
-                                toml::Value::String(s) => s,
-                                _ => v.to_string(),
-                            })
-                    })
-                    .unwrap_or_else(|| "(no description)".to_string());
-                sops.push((name, desc));
-            }
-        }
-    }
-    sops.sort_by(|a, b| a.0.cmp(&b.0));
-    sops
 }

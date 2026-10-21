@@ -21,6 +21,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-1126 — the agent can read the operator's SOP playbooks.** `operant sop` read
+  `~/.operant/sops/*.toml` with a loader private to the CLI; nothing else in the tree read that
+  directory, so a playbook the harness could have followed sat unused. The store now lives in core
+  (`operant-core/src/sops.rs`), the CLI shares that loader, and the agent got a `sop` tool (call it
+  with no name to list the playbooks, with a name to read one) registered with the builtins.
 - **iter-1125 — `operant hooks` is a real surface now.** The family read `~/.operant/data/hooks/*.hook`
   files that nothing wrote and nothing loaded, and the hook registry existed only when
   `[harness].enabled` was on — so in a normal install no hook could fire at all, while

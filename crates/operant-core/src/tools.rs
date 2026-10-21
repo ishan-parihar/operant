@@ -49,6 +49,7 @@ pub mod reaction_tool;
 pub mod send_message_tool;
 pub mod session_search_tool;
 pub mod skills_tool;
+pub mod sop_tool;
 pub mod sourcehound;
 pub mod sourcehound_update;
 pub mod spotify_tool;
