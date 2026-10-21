@@ -10,7 +10,6 @@ pub(crate) static RUNTIME_PROXY_CONFIG: OnceLock<RwLock<ProxyConfig>> = OnceLock
 pub(crate) static RUNTIME_PROXY_CLIENT_CACHE: OnceLock<RwLock<HashMap<String, reqwest::Client>>> =
     OnceLock::new();
 use anyhow::{Context, Result};
-use operant_macros::Configurable;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{OnceLock, RwLock};
@@ -107,9 +106,8 @@ pub enum ProxyScope {
 }
 
 /// Proxy configuration for outbound HTTP/HTTPS/SOCKS5 traffic (`[proxy]` section).
-#[derive(Debug, Clone, Serialize, Deserialize, Configurable)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
-#[prefix = "proxy"]
 pub struct ProxyConfig {
     /// Enable proxy support for selected scope.
     #[serde(default)]

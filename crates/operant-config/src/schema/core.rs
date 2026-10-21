@@ -3,17 +3,27 @@
 //! every item is re-exported from `schema::`.
 
 use super::*;
-use operant_macros::Configurable;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// Named provider profile definition.
-#[derive(Debug, Clone, Serialize, Deserialize, Configurable, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
-#[prefix = "providers.models"]
 pub struct ModelProviderConfig {
-    /// Secret API token for this provider — grab it from the provider's dashboard (OpenAI platform, Anthropic console, OpenRouter keys page, etc.). Stored via the OS keyring when possible; never commit it to config.toml directly.
-    #[secret]
+    /// API token for this provider — grab it from the provider's dashboard
+    /// (OpenAI platform, Anthropic console, OpenRouter keys page, etc.).
+    ///
+    /// **It is written to `operant.toml` in PLAINTEXT** (the file itself is
+    /// 0600, owner-only). It used to be marked `#[secret]`, and the field
+    /// claimed the key was "stored via the OS keyring when possible" — but
+    /// the only code that honoured that marker was the config AGGREGATE's
+    /// `save()`, which was never loaded in production (RT-141). The live
+    /// write path (`operant_core::config::persist_config_key`) writes the
+    /// value as given, and the live loader never decrypts one, so a key
+    /// here is plaintext. The ENCRYPTED store is the provider auth-profile
+    /// file (`operant-providers`' `auth-profiles.json`, written through
+    /// `SecretStore`); use that for long-lived OAuth tokens, and keep
+    /// `operant.toml` out of a shared git repository.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_key: Option<String>,
     /// Additional API keys for this provider's credential pool (hermes
@@ -22,11 +32,7 @@ pub struct ModelProviderConfig {
     /// error-class bench (hermes `load_pool(provider)` seeds every key a
     /// provider owns). Empty by default.
     ///
-    /// `#[secret]`: each element is encrypted on save exactly like `api_key`.
-    /// Without it these keys were written to config.toml in plaintext on every
-    /// `save()`, which also contradicted the `api_key` doc comment above
-    /// ("never commit it to config.toml directly") — see BUGS.md R40-15.
-    #[secret]
+    /// Plaintext in `operant.toml`, exactly like `api_key` above.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub api_keys: Vec<String>,
     /// Override the provider type label. Rarely needed — only useful when you run two profiles against the same provider type (e.g. two different OpenAI-compatible gateways) and want to tell them apart in logs.

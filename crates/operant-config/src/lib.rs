@@ -15,7 +15,6 @@ pub const DEFAULT_AGENTMEMORY_VERSION: &str = "0.9.29";
 /// Autonomy levels and agent control settings.
 pub mod autonomy;
 /// Property helpers shared by the derive-generated code.
-pub mod helpers;
 /// Security policy, autonomy, and tool-execution gating types.
 pub mod policy;
 pub mod provider_aliases;
@@ -27,16 +26,3 @@ pub mod schema;
 pub mod secrets;
 /// Derive-support traits (`HasPropKind`, `ChannelConfig`, `OnboardUi`, ...).
 pub mod traits;
-
-/// Shim module so `Configurable` derive macro's generated `crate::config::*` paths resolve.
-/// The macro was written assuming it runs inside the root crate where `mod config` exists.
-pub mod config {
-    pub use crate::helpers::*;
-    pub use crate::traits::*;
-}
-
-/// Shim module so `Configurable` derive macro's generated `crate::security::*` paths resolve.
-pub mod security {
-    pub use crate::policy::SecurityPolicy;
-    pub use crate::secrets::SecretStore;
-}

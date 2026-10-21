@@ -10,7 +10,6 @@ members = [
     "crates/operant-memory",
     "crates/operant-plugins",
     "crates/operant-infra",
-    "crates/operant-macros",
     "crates/operant-tools",
     "crates/operant-harness",
 ]
@@ -31,7 +30,6 @@ operant-providers = { path = "crates/operant-providers" }
 operant-memory = { path = "crates/operant-memory" }
 operant-plugins = { path = "crates/operant-plugins" }
 operant-infra = { path = "crates/operant-infra" }
-operant-macros = { path = "crates/operant-macros" }
 operant-tools = { path = "crates/operant-tools" }
 operant-harness = { path = "crates/operant-harness" }
 operant-os = { path = "crates/operant-os" }

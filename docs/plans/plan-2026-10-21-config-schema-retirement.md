@@ -95,6 +95,25 @@ retire the crate; the `#[secret]`/`#[prefix]` attributes have to be
 re-homed first (the live config's secret handling is `operant-core`'s
 `fs_secrets`, not the derive).
 
+## Phase B2 — the derive machinery is gone (shipped in iter-1141) — RT-141 CLOSED
+
+- The derive is dropped from the six live types, and with it the
+  `#[secret]` and `#[prefix]` attributes.
+- `operant-macros` (1.3K lines) is deleted from the workspace, along with
+  the crate-level `helpers.rs` it needed and the `config`/`security` shim
+  modules its generated paths resolved through. `traits.rs` keeps only the
+  two items that outlived it (`PropKind`, `HasPropKind`).
+- `scripts/test-compile-gate.sh`'s crate list is updated.
+- The residue the retirement exposed is RT-154: the `#[secret]` marker was
+  the only thing that ever claimed the config's provider keys were
+  encrypted, and nothing in the live path honoured it. The field's doc now
+  says what is true (plaintext in a 0600 file; the ENCRYPTED store is the
+  provider auth-profile file).
+
+Option 1 (retire) is COMPLETE. `operant-config` is ~5K lines and holds
+the live types, the provider config, the security policy and the encrypted
+secret store — one config system, not two.
+
 ## Phase B — the owner's choice
 
 ### Option 1: retire the schema surface

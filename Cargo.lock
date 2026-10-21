@@ -3465,7 +3465,6 @@ dependencies = [
  "directories",
  "hex",
  "operant-api",
- "operant-macros",
  "parking_lot",
  "rand 0.8.7",
  "regex",
@@ -3581,15 +3580,6 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
-]
-
-[[package]]
-name = "operant-macros"
-version = "0.2.1"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.119",
 ]
 
 [[package]]

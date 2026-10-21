@@ -2,7 +2,6 @@
 //! Re-exported from `schema` so every path is unchanged.
 
 use super::*;
-use operant_macros::Configurable;
 use serde::{Deserialize, Serialize};
 
 /// Search strategy for memory recall.
@@ -20,9 +19,8 @@ pub enum SearchMode {
 }
 
 /// Memory policy configuration (`[memory.policy]` section).
-#[derive(Debug, Clone, Default, Serialize, Deserialize, Configurable)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
-#[prefix = "memory.policy"]
 pub struct MemoryPolicyConfig {
     /// Maximum entries per namespace (0 = unlimited).
     #[serde(default)]
@@ -39,9 +37,8 @@ pub struct MemoryPolicyConfig {
 }
 
 /// Observability backend configuration (`[observability]` section).
-#[derive(Debug, Clone, Serialize, Deserialize, Configurable)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
-#[prefix = "observability"]
 pub struct ObservabilityConfig {
     /// "none" | "log" | "verbose" | "prometheus" | "otel"
     pub backend: String,
@@ -94,9 +91,8 @@ impl Default for ObservabilityConfig {
 /// Reliability and supervision configuration (`[reliability]` section).
 ///
 /// Controls provider retries, fallback chains, API key rotation, and channel restart backoff.
-#[derive(Debug, Clone, Serialize, Deserialize, Configurable)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
-#[prefix = "reliability"]
 pub struct ReliabilityConfig {
     /// Retries per provider before failing over.
     #[serde(default = "default_provider_retries")]

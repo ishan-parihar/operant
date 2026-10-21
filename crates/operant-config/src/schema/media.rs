@@ -3,7 +3,6 @@
 //! every item is re-exported from `schema::`.
 
 use super::*;
-use operant_macros::Configurable;
 use serde::{Deserialize, Serialize};
 
 /// Multimodal (image) handling configuration (`[multimodal]` section).
@@ -20,9 +19,8 @@ use serde::{Deserialize, Serialize};
 /// image budget, but operators running shell-style tools over directories of
 /// personal or sensitive images should be aware of the upload semantics. See
 /// `docs/book/src/contributing/privacy.md` for the project's privacy stance.
-#[derive(Debug, Clone, Serialize, Deserialize, Configurable)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
-#[prefix = "multimodal"]
 pub struct MultimodalConfig {
     /// Maximum number of image attachments accepted per request.
     ///

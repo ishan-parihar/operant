@@ -1,6 +1,5 @@
 //! Provider section (`[providers]`) types: model profiles, routing, fallback.
 
-use operant_macros::Configurable;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -10,9 +9,8 @@ use super::schema::{
 
 /// Top-level `[providers]` section. Wraps model provider profiles, routing rules,
 /// and an optional fallback reference.
-#[derive(Debug, Clone, Serialize, Deserialize, Configurable, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
-#[prefix = "providers"]
 pub struct ProvidersConfig {
     /// Key of the provider entry to use when no route matches.
     /// Optional — if unset, requests without a matching route fail at runtime.
@@ -21,7 +19,6 @@ pub struct ProvidersConfig {
 
     /// Named model provider profiles keyed by id.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    #[nested]
     pub models: HashMap<String, ModelProviderConfig>,
 
     /// Model routing rules — route `hint:<name>` to specific provider+model combos.

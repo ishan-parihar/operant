@@ -24,6 +24,10 @@ cd "$DIR/.."
 # Kept crates (every workspace member except the six phase-1 deletion
 # targets). `--keep-going` so one broken crate reports every broken
 # target in a single run instead of failing at the first.
+#
+# `operant-macros` was here until iter-1141: the `Configurable` derive it
+# carried existed only for the retired config aggregate (RT-141), and the
+# crate is gone with it.
 KEEP_CRATES=(
     operant-core
     operant-cli
@@ -31,7 +35,6 @@ KEEP_CRATES=(
     operant-harness
     operant-plugins
     operant-api
-    operant-macros
 )
 PS_ARGS=()
 for c in "${KEEP_CRATES[@]}"; do PS_ARGS+=(-p "$c"); done

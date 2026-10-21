@@ -8,7 +8,6 @@ publish = false
 
 [dependencies]
 operant-api.workspace = true
-operant-macros.workspace = true
 anyhow = "1.0"
 async-trait = "0.1"
 chacha20poly1305 = "0.10"
