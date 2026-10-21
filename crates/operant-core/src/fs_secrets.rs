@@ -19,15 +19,49 @@ use std::path::Path;
 /// small-window lossy write is acceptable for human-driven `setup` /
 /// `operant.toml` saves; the agent path never invokes this).
 pub fn write_secret_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    // An EXISTING file keeps its mode when it is opened, so a loose file
+    // would hold the new content while it is still world-readable. Tighten
+    // it BEFORE the write (a no-op for a file that does not exist yet).
+    match set_secret_perms(path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    // Create with mode 0o600 in the SAME open(2). `File::create` applies the
+    // umask default (0644 on a stock system), and a chmod that follows the
+    // write leaves a window where the secret is world-readable — the R40-1
+    // class. `operant-config`'s identically named writer and `operant-cli`'s
+    // `.env` writer already create owner-only; this one did not.
+    create_owner_only(path)?.write_all(bytes)?;
+    set_secret_perms(path)?;
+    Ok(())
+}
+
+/// Open `path` for writing, creating it OWNER-ONLY on Unix.
+///
+/// The mode is applied by the same `open(2)` that creates the file, so the
+/// file is never world-readable — not even for the instant before the first
+/// byte is written. A create-then-chmod sequence cannot close that window:
+/// the bytes are already in the file when the chmod runs.
+#[cfg(unix)]
+fn create_owner_only(path: &Path) -> io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
     OpenOptions::new()
         .write(true)
         .create(true)
         .truncate(true)
-        .open(path)?
-        .write_all(bytes)?;
+        .mode(0o600)
+        .open(path)
+}
 
-    set_secret_perms(path)?;
-    Ok(())
+/// Non-Unix has no POSIX mode bits; the platform default applies.
+#[cfg(not(unix))]
+fn create_owner_only(path: &Path) -> io::Result<std::fs::File> {
+    OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(path)
 }
 
 /// Set file mode to 0o600 on Unix. On non-Unix, no-op.
@@ -99,6 +133,25 @@ mod tests {
             .read_to_string(&mut s)
             .unwrap();
         assert_eq!(s, "key = \"v\"\n");
+    }
+
+    #[test]
+    fn the_file_is_owner_only_before_a_single_byte_is_written() {
+        // The window this pins: a create-then-chmod writer has the file at
+        // the umask default (0644 on a stock system) while the secret is
+        // already IN it. Creating it owner-only means there is no such
+        // instant — the mode is right from the creating open(2).
+        let dir = tempdir();
+        let path = dir.join("owner-only.toml");
+        let file = create_owner_only(&path).expect("create owner-only");
+        assert!(path.exists(), "the file is created by the same call");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "expected 0o600, got {mode:o}");
+        }
+        drop(file);
     }
 
     #[test]

@@ -2338,7 +2338,12 @@ pub fn persist_config_key(dotted: &str, raw_value: &str) -> Result<PathBuf> {
     // a reader never sees a half-written file. The mode (0600 where
     // secrets live by design) must survive the round-trip.
     let tmp = path.with_extension("toml.tmp");
-    std::fs::write(&tmp, doc.to_string())
+    // The config can carry provider keys, so the temp file is written
+    // OWNER-ONLY — the mode is applied by the same open(2) that creates it.
+    // A plain write would leave it at the umask default (0644 on a stock
+    // system) until the chmod below, with the secret already inside.
+    let rendered = doc.to_string();
+    crate::fs_secrets::write_secret_file(&tmp, rendered.as_bytes())
         .map_err(|e| crate::error::Error::Config(format!("write {}: {e}", tmp.display())))?;
     if let Ok(mode) = std::fs::metadata(&path).map(|m| m.permissions()) {
         let _ = std::fs::set_permissions(&tmp, mode);
