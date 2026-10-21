@@ -52,7 +52,7 @@ at the end of this file): `./scripts/genome doctor` for live claims and stalenes
 
 ```bash
 # 0. (only at the start of a session) sync to latest
-cd /home/z/my-project/operant
+cd "$(git rev-parse --show-toplevel)"
 git pull --ff-only
 
 # 1. Make the change (surgical, see "Behavioral Guidelines" below).
@@ -61,7 +61,7 @@ git pull --ff-only
 #    - Do not "improve" adjacent code.
 
 # 2. Verify locally with the dev-env applied.
-source /home/z/my-project/operant/scripts/dev-env.sh
+source scripts/dev-env.sh
 cargo fmt --all
 ./scripts/check.sh check -p operant-core --lib            # fast: crate being edited
 ./scripts/check.sh check -p operant-cli --bin operant      # if CLI touched
@@ -495,7 +495,7 @@ operant/
 │   │   │   ├── gateway/       # Platform adapters (Telegram/Discord/Slack/WhatsApp/Email/SMS/Webhook)
 │   │   │   ├── mcp.rs         # MCP client (HTTP + Stdio + SSE)
 │   │   │   └── config.rs      # AppConfig, BehaviorSettings, ToolSettings
-│   │   └── Cargo.toml         # Features: anthropic (memory-wire git-dep baked in; sourcehound is a spawned binary, not a dep)
+│   │   └── Cargo.toml         # Features: anthropic (the memory-wire git-dep is baked in; sourcehound is a spawned binary, not a dep)
 │   └── operant-cli/           # CLI + TUI
 │       ├── src/
 │       │   ├── main.rs        # CLI entry point, Clap enum, agent setup
@@ -506,7 +506,7 @@ operant/
 │       │   ├── config.rs      # CLI config
 │       │   ├── cmd_*.rs       # CLI subcommand handlers
 │       │   └── dashboard_server.rs # axum dashboard backend
-│       └── Cargo.toml         # Features: agent-runtime, browser-native, plugins-wasm, memory-postgres, rag-pdf, anthropic, ci-all
+│       └── Cargo.toml         # Features: agent-runtime, anthropic, plugins-wasm
 ├── scripts/
 │   ├── dev-env.sh             # Source this before any cargo command
 │   ├── check.sh               # Wrapper that applies dev-env + cargo
@@ -523,17 +523,20 @@ operant/
 
 ## Path Dependencies
 
-Operant depends on two sibling-project git dependencies (see `Cargo.toml`).
+Operant depends on ONE sibling-project git dependency (see `Cargo.toml`).
 External binaries are spawned, not path deps:
 
-- **memory-wire** — in-process memory engine: `memory-wire = { git =
-  "https://github.com/ishan-parihar/memory-wire", branch = "main" }`.
-  Advance with `scripts/sync-vendors.sh`; pin `rev =` at release.
-- **sourcehound** — MCP-subprocess web/browser engine: `sourcehound_mcp =
-  { package = "sourcehound", git =
-  "https://github.com/ishan-parihar/sourcehound", branch = "master" }`.
-  In-process was measured unviable (their `[patch.crates-io]` evaporates for
-  consumers; unconditional render stack). Same sync discipline.
+- **memory-wire** — the ONE in-process dependency: `memory-wire = { git =
+  "https://github.com/ishan-parihar/memory-wire", branch = "main" }` (a cargo
+  git-dependency, not a path dep). Advance with `scripts/sync-vendors.sh`;
+  pin `rev =` at release.
+- **sourcehound** — NOT a cargo dependency: the web/browser engine is the
+  `sourcehound` BINARY driven over its MCP server (stdio). The
+  `sourcehound_mcp` git dependency is HELD OUT in `operant-core/Cargo.toml`
+  ("vendored obscura-render breaks against registry taffy 0.12.2 … + cosmic-
+  text feature-union divergence — 36 errors"), and the subprocess over their
+  MCP server is the live mechanism. Read the comment in that manifest before
+  re-adding it.
 
 If `cargo check` fails at workspace resolution, it's a workspace-internal
 issue, not a missing clone.
@@ -543,31 +546,33 @@ issue, not a missing clone.
 ## Build Environment Setup
 
 The build needs libclang (for bindgen), ONNX Runtime (for kokoro-tiny), and
-alsa runtime libs (for cpal). All of these are pre-provisioned under
-`/home/z/my-project/local/`. The two scripts under `scripts/` apply the
-required env vars.
+alsa runtime libs (for cpal). All of these are pre-provisioned under the
+repo's own `local/` directory (`$LOCAL_DIR`; `scripts/dev-env.sh` derives it
+from the script's own location, and `LOCAL_DIR=<path>` overrides it). The two
+scripts under `scripts/` apply the required env vars.
 
 ```bash
 # 1. Source the dev env (sets LIBCLANG_PATH, ORT_LIB_LOCATION, etc.)
-source /home/z/my-project/operant/scripts/dev-env.sh
+source scripts/dev-env.sh
 
 # 2. Use the check.sh wrapper (applies RUSTFLAGS + CARGO_INCREMENTAL=0 + dev-env)
-/home/z/my-project/operant/scripts/check.sh check -p operant-core --lib
-/home/z/my-project/operant/scripts/check.sh test  -p operant-core --lib -- <test_filter>
+./scripts/check.sh check -p operant-core --lib
+./scripts/check.sh test  -p operant-core --lib -- <test_filter>
 
 # 3. Or set env manually (equivalent to dev-env.sh):
-source /home/z/.cargo/env
-export LIBCLANG_PATH=/home/z/my-project/local/libclang_extract/usr/lib/x86_64-linux-gnu
-export ORT_LIB_LOCATION=/home/z/my-project/local/onnxruntime-linux-x64-1.24.4/lib
+source "$HOME/.cargo/env"
+export LOCAL_DIR="$PWD/local"
+export LIBCLANG_PATH="$LOCAL_DIR/libclang_extract/usr/lib/x86_64-linux-gnu"
+export ORT_LIB_LOCATION="$LOCAL_DIR/onnxruntime-linux-x64-1.24.4/lib"
 export ORT_PREFER_DYNAMIC_LINK=1
 export BINDGEN_EXTRA_CLANG_ARGS="-I/usr/lib/gcc/x86_64-linux-gnu/14/include -I/usr/include"
-export PKG_CONFIG_PATH=/home/z/my-project/local/pkgconfig
-export LD_LIBRARY_PATH=/home/z/my-project/local/lib:/home/z/my-project/local/onnxruntime-linux-x64-1.24.4/lib
-export RUSTFLAGS="-L native=/home/z/my-project/local/lib"
+export PKG_CONFIG_PATH="$LOCAL_DIR/pkgconfig"
+export LD_LIBRARY_PATH="$LOCAL_DIR/lib:$LOCAL_DIR/onnxruntime-linux-x64-1.24.4/lib"
+export RUSTFLAGS="-L native=$LOCAL_DIR/lib"
 export CARGO_INCREMENTAL=0
 
 # 4. For fresh environments, run provision first:
-/home/z/my-project/operant/scripts/provision-build-deps.sh
+./scripts/provision-build-deps.sh
 ```
 
 ### Build entry point — scripts/build.sh (2026-10-14 batch, plan 11A)
@@ -1193,7 +1198,7 @@ MUST know before touching the render layer:
 
 ```bash
 # 0. Sync to latest main.
-cd /home/z/my-project/operant
+cd "$(git rev-parse --show-toplevel)"
 git pull --ff-only
 
 # 1. Apply dev env.
@@ -1232,7 +1237,9 @@ cargo test -p operant-cli  --bin operant
 6. Commit + push.
 
 **Port from Python (hermes-agent)**
-1. Find the Python file in `/home/z/my-project/hermes-agent/`.
+1. Find the Python file in the `hermes-agent` checkout — the operator's Python
+   reference. It is NOT vendored here and its path is machine-specific (on
+   some layouts it sits beside this repo); find it before assuming it exists.
 2. Read and understand the implementation.
 3. Create the Rust equivalent under `crates/operant-core/src/`.
 4. Follow existing Rust patterns (async/await, `Result`, no `unwrap` in lib code).

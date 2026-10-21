@@ -157,6 +157,7 @@ block = m.group(1)
 root = None
 stack = []          # (indent, name)
 bad = []
+bad_features = []
 checked = 0
 for line in block.splitlines():
     if not line.strip():
@@ -181,6 +182,22 @@ for line in block.splitlines():
     if not path or path.startswith('crates/') is False and '/' not in path and not path.startswith('docs'):
         pass
     checked += 1
+    # A tree line that ends in `Cargo.toml` and names FEATURES is a claim
+    # about that crate's `[features]` table — check it the same way the paths
+    # are checked.
+    if path.endswith('Cargo.toml'):
+        m_feat = re.search(r'#\s*Features:\s*(.+)$', line)
+        if m_feat:
+            import tomllib
+            declared = set()
+            try:
+                declared = set(tomllib.load(open(path, 'rb')).get('features', {}))
+            except Exception:
+                pass
+            # The list ends at the first parenthesis — the rest is a gloss.
+            for feat in [f.strip().strip('`') for f in m_feat.group(1).split('(')[0].split(',')]:
+                if feat and feat not in declared:
+                    bad_features.append(f"{path}: {feat}")
     if '*' in path:                       # a glob like cmd_*.rs
         d = os.path.dirname(path) or '.'
         base = os.path.basename(path)     # listdir returns BARE names
@@ -195,6 +212,8 @@ for line in block.splitlines():
 
 if bad:
     print("DRIFT tree paths that do not exist:", bad); sys.exit(1)
+if bad_features:
+    print("DRIFT features named in the tree that the crate does not declare:", bad_features); sys.exit(1)
 print(f"OK    Architecture Overview tree: {checked} paths, every one exists")
 PY
 [ $? -ne 0 ] && fail=1
