@@ -21,6 +21,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-1128 — the second config surface is labelled, not silently live.** `operant_config::schema::Config`
+  is never loaded in production (`Config::load_or_init` has no production caller), yet it holds 123 structs
+  and 645 fields with no production reader outside its crate, so a setting added there looks live and is
+  unreachable. The schema module now says so in its first lines, a static guard test fails if any
+  non-test file starts loading the aggregate, and `scripts/audit-parallel-config.py` re-derives the counts.
+  The retirement itself is planned, not executed: `docs/audit/2026-10-21-PARALLEL-CONFIG-SURFACE.md` and
+  `docs/plans/plan-2026-10-21-config-schema-retirement.md`.
 - **iter-1127 — `operant webhook test` really posts.** The command used to print "This would send a POST
   request with an HMAC-SHA256 signature to the webhook URL" and send nothing. The subscription store moved
   into core (`operant-core/src/gateway/webhook_subscriptions.rs`) with the signing scheme the inbound

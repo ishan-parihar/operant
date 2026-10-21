@@ -990,12 +990,15 @@ MUST know before touching the render layer:
 - Routes: `/api/status`, `/api/boards`, `/api/health`, `/api/config`,
   `/assets/:filename`, `/`
 - Static assets: fonts, JS, CSS served from `crates/operant-cli/src/dashboard/`
-- The dashboard is a FOUR-ROUTE status view, not the full operant web
-  console. The bundled frontend (`dashboard/assets/index-BB4BRelo.js`) is a
-  build artefact from a larger harness and calls 79 distinct `/api/...`
-  paths; the server implements four, so most panels 404 and the
-  `/api/ws` WebSocket does not exist. See BUGS.md RT-44 for the options
-  (build the routes, swap the bundle, or ship the four as the dashboard).
+- The dashboard is a FOUR-ROUTE status view served from a first-party page
+  (`crates/operant-cli/src/dashboard/index.html`, inlined with
+  `include_str!`), not the full operant web console. The bundled frontend
+  that used to sit here — a build artefact from a larger harness, calling 79
+  distinct `/api/...` paths the server never implemented — was removed in
+  iter-1120 and replaced by that page; see RT-44, closed.
+  `operant dashboard server --stop` and `--status` work (pid file + SIGTERM
+  + bounded wait; pid 0 is refused because `kill(0, …)` targets the
+  caller's process group).
 - Auth: a session token, generated at startup, printed to the console. The
   index route serves the token-bearing page only to a request that already
   holds it (the CLI's browser launch exchanges it for an HttpOnly cookie),
