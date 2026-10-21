@@ -148,34 +148,45 @@ mod tests {
     /// layout paths are both covered.
     #[test]
     fn the_ported_layout_republishes_the_hit_test_cells() {
-        for (width, height) in [(120u16, 40u16), (80, 24)] {
-            let app = make_app();
-            let mut terminal =
-                Terminal::new(TestBackend::new(width, height)).expect("test backend");
-            terminal.draw(|f| render_app(f, &app)).expect("draw");
+        // `make_app` calls `App::new`, which writes the process-global
+        // palette. The two theme-asserting tests below hold the palette lock
+        // across their whole body (and so across their `make_app`); this one
+        // did not, so its `App::new` reset the palette CONCURRENTLY with
+        // theirs — between their `set_active_theme` and the read of the role
+        // palette their assertion compares against. That is the whole of the
+        // `accent_role_reaches_the_frame` flake: the frame was painted under
+        // one theme and the assertion compared it against another.
+        // (iter-1136, RT-149)
+        with_palette_lock(|| {
+            for (width, height) in [(120u16, 40u16), (80, 24)] {
+                let app = make_app();
+                let mut terminal =
+                    Terminal::new(TestBackend::new(width, height)).expect("test backend");
+                terminal.draw(|f| render_app(f, &app)).expect("draw");
 
-            let input = app.last_input_area.get();
-            assert!(
-                input.width > 0 && input.height > 0,
-                "{width}x{height}: the input band was published empty — every click \
-                 would route as 'not the input' and cursor up/down would compute a \
-                 zero-width cell"
-            );
-            assert!(
-                input.y + input.height <= height,
-                "{width}x{height}: the input band runs past the frame ({input:?})"
-            );
+                let input = app.last_input_area.get();
+                assert!(
+                    input.width > 0 && input.height > 0,
+                    "{width}x{height}: the input band was published empty — every click \
+                     would route as 'not the input' and cursor up/down would compute a \
+                     zero-width cell"
+                );
+                assert!(
+                    input.y + input.height <= height,
+                    "{width}x{height}: the input band runs past the frame ({input:?})"
+                );
 
-            let painted =
-                crate::tui::operant_ui::last_resolved_chat_scroll().min(u16::MAX as usize) as u16;
-            assert_eq!(
-                app.last_render_scroll_offset.get(),
-                painted,
-                "{width}x{height}: the published scroll row does not match the \
-                 ported chrome's resolved scroll — the prepend correction would \
-                 drift the reader"
-            );
-        }
+                let painted = crate::tui::operant_ui::last_resolved_chat_scroll()
+                    .min(u16::MAX as usize) as u16;
+                assert_eq!(
+                    app.last_render_scroll_offset.get(),
+                    painted,
+                    "{width}x{height}: the published scroll row does not match the \
+                     ported chrome's resolved scroll — the prepend correction would \
+                     drift the reader"
+                );
+            }
+        });
     }
 
     use super::*;

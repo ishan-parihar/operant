@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-1136 — the `accent_role_reaches_the_frame` flake is gone.** The palette is a process-global, and `App::new` writes it. One test in the TUI's render module built an `App` without taking the palette lock the theme-asserting tests hold, so it reset the palette between their `set_active_theme` and the read of the role palette their assertion compares against — the frame was painted under one theme and compared against another. The test now takes the lock, like its two twin helpers already do. The repo's own gate (`scripts/self-test.sh`) inherited this flake at roughly 1 run in 4.
 - **iter-1135 — `operant tui keybindings` lines its columns up.** The action was rendered with a
   Debug format spec applied straight to the enum, and a spec on a tuple variant pads the FIELD
   rather than the variant: `KeyAction::Custom(1)` came out as `Custom(` + a 34-wide number + `)`,
