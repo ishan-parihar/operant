@@ -21,6 +21,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-1124 — `operant tools disable` now actually disables.** The CLI wrote `tool_state.json` next to
+  the database and nothing read it: the runtime's disabled set came only from the TOML
+  `[tools] disabled_tools`, so a tool the operator turned off kept reaching the agent while the
+  command reported success. The state file now lives in core (`tools::tool_state`) and the registry
+  build applies it, so the CLI and the agent read the same file. `operant tools list` also stopped
+  hiding the disabled tools it was supposed to mark — it now prints every registered tool with a
+  `[disabled]` marker and an "N registered, M enabled" count, and `operant tools enable` says when
+  the TOML still disables the tool.
 - **iter-1123 — accepted-but-unread config keys now say so, and the template stops advertising them.**
   `operant config show`, `operant.example.toml` and the loader all presented as live 19 settings nothing
   reads: the six `[tui]` presentation keys (`show_iterations`, `landing_title`, `prompt_placeholder`,

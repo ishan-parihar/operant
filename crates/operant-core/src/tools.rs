@@ -58,6 +58,7 @@ pub mod terminal_tool;
 pub mod todo_tool;
 pub mod tool_backend_helpers;
 pub mod tool_search;
+pub mod tool_state;
 pub mod transcription_tool;
 pub mod tts_command_provider;
 pub mod tts_provider;
@@ -528,6 +529,19 @@ impl ToolRegistry {
     pub async fn set_disabled_toolsets(&self, toolsets: HashSet<String>) {
         let mut disabled = self.disabled_toolsets.write().await;
         *disabled = toolsets;
+    }
+
+    /// Every registered tool, INCLUDING the ones the disabled filters hide.
+    /// `operant tools list` shows the full surface with a status marker —
+    /// filtering the disabled tools out would hide the very tool the
+    /// operator just disabled.
+    pub async fn get_schemas_all(&self) -> Vec<ToolSchema> {
+        let tools = self.tools.read().await;
+        tools
+            .values()
+            .filter(|t| t.is_available())
+            .map(|t| t.schema())
+            .collect()
     }
 
     pub async fn get_schemas(&self) -> Vec<ToolSchema> {

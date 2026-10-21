@@ -7,12 +7,13 @@
 //! - `operant tools disable <name>`  — disable a tool
 //!
 //! Tool enable/disable state is persisted to a JSON file (`tool_state.json`)
-//! in the Operant config directory, independent of the main TOML config.
+//! in the Operant config directory, independent of the main TOML config — and
+//! since iter-1124 the RUNTIME reads that file, so `operant tools disable`
+//! actually removes the tool from the agent's toolset.
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::Subcommand;
 use operant_core::client::{ClientConfig, OpenAIClient};
 use operant_core::config::AppConfig;
@@ -82,16 +83,20 @@ async fn handle_list(config: &AppConfig, _platform: Option<String>) -> Result<()
         }
     }
 
-    let tools = registry.get_schemas().await;
+    // The FULL registry, not the filtered view: a disabled tool must stay
+    // visible (with its status) — hiding it would leave the operator
+    // unable to see what they turned off.
+    let tools = registry.get_schemas_all().await;
 
     if tools.is_empty() {
         println!("No tools registered.");
         return Ok(());
     }
 
-    let count = tools.len();
-    let disabled = load_disabled_tools(config);
-    println!("Available tools ({}):", count);
+    // The effective disabled set = the TOML list UNION the CLI state file.
+    let disabled = operant_core::tools::tool_state::disabled_tool_names(config);
+    let enabled = tools.iter().filter(|t| !disabled.contains(&t.name)).count();
+    println!("Tools ({} registered, {} enabled):", tools.len(), enabled);
     println!();
 
     for tool in &tools {
@@ -118,7 +123,7 @@ fn handle_enable(config: &AppConfig, names: Vec<String>) -> Result<()> {
         return Ok(());
     }
 
-    let mut disabled = load_disabled_tools(config);
+    let mut disabled = operant_core::tools::tool_state::load_disabled_tools(config);
     for name in &names {
         let was_disabled = disabled.remove(name);
         if was_disabled {
@@ -126,9 +131,16 @@ fn handle_enable(config: &AppConfig, names: Vec<String>) -> Result<()> {
         } else {
             println!("Tool '{}' was already enabled.", name);
         }
+        if config.tools.disabled_tools.iter().any(|t| t == name) {
+            println!(
+                "  note: '{}' is still disabled by [tools] disabled_tools in the config file.",
+                name
+            );
+        }
     }
 
-    save_disabled_tools(config, &disabled)?;
+    operant_core::tools::tool_state::save_disabled_tools(config, &disabled)
+        .map_err(anyhow::Error::msg)?;
     Ok(())
 }
 
@@ -139,7 +151,7 @@ fn handle_disable(config: &AppConfig, names: Vec<String>) -> Result<()> {
         return Ok(());
     }
 
-    let mut disabled = load_disabled_tools(config);
+    let mut disabled = operant_core::tools::tool_state::load_disabled_tools(config);
     for name in &names {
         if disabled.contains(name) {
             println!("Tool '{}' was already disabled.", name);
@@ -149,61 +161,7 @@ fn handle_disable(config: &AppConfig, names: Vec<String>) -> Result<()> {
         }
     }
 
-    save_disabled_tools(config, &disabled)?;
+    operant_core::tools::tool_state::save_disabled_tools(config, &disabled)
+        .map_err(anyhow::Error::msg)?;
     Ok(())
-}
-
-// ---------------------------------------------------------------------------
-// Tool state persistence (JSON file in Operant config directory)
-// ---------------------------------------------------------------------------
-
-/// Path to the tool state file.
-fn tool_state_path(config: &AppConfig) -> PathBuf {
-    // Use the database_path parent as the config directory (~/.operant/)
-    let dir = config
-        .database_path
-        .parent()
-        .unwrap_or_else(|| std::path::Path::new("."));
-    dir.join("tool_state.json")
-}
-
-/// Load the set of disabled tool names from the state file.
-fn load_disabled_tools(config: &AppConfig) -> std::collections::HashSet<String> {
-    let path = tool_state_path(config);
-    if !path.exists() {
-        return std::collections::HashSet::new();
-    }
-    match std::fs::read_to_string(&path) {
-        Ok(content) => {
-            let state: serde_json::Result<ToolState> = serde_json::from_str(&content);
-            match state {
-                Ok(s) => s.disabled.into_iter().collect(),
-                Err(_) => std::collections::HashSet::new(),
-            }
-        }
-        Err(_) => std::collections::HashSet::new(),
-    }
-}
-
-/// Save the set of disabled tool names to the state file.
-fn save_disabled_tools(
-    config: &AppConfig,
-    disabled: &std::collections::HashSet<String>,
-) -> Result<()> {
-    let path = tool_state_path(config);
-    let mut list: Vec<String> = disabled.iter().cloned().collect();
-    list.sort();
-    let state = ToolState { disabled: list };
-    let content =
-        serde_json::to_string_pretty(&state).context("Failed to serialise tool state as JSON")?;
-    std::fs::write(&path, &content)
-        .with_context(|| format!("Failed to write tool state to '{}'", path.display()))?;
-    println!("  Tool state saved to {}", path.display());
-    Ok(())
-}
-
-/// JSON schema for the tool state file.
-#[derive(serde::Serialize, serde::Deserialize)]
-struct ToolState {
-    disabled: Vec<String>,
 }

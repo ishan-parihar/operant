@@ -1343,18 +1343,20 @@ pub(crate) async fn build_registry(
     registry.set_tool_timeout("clarify", std::time::Duration::from_secs(300));
     registry.set_tool_timeout("approval_request", std::time::Duration::from_secs(300));
 
-    let mut disabled_tools: std::collections::HashSet<String> =
-        config.tools.disabled_tools.iter().cloned().collect();
+    // iter-1124: the disabled set is the TOML list UNION the CLI state file
+    // (`operant tools disable <name>` writes `tool_state.json`). Before this
+    // the file was read by nobody, so the CLI's disable was a no-op.
     let disabled_toolsets: std::collections::HashSet<String> =
         config.tools.disabled_toolsets.iter().cloned().collect();
 
     // Merge the AFT-replaced native tools into the config-driven set so a
     // single `set_disabled_tools` (which REPLACES, not unions) applies both.
-    disabled_tools.extend(aft_replaced_tools);
-
-    if !disabled_tools.is_empty() {
-        registry.set_disabled_tools(disabled_tools).await;
-    }
+    operant_core::tools::tool_state::apply_disabled_tools(
+        &registry,
+        config,
+        aft_replaced_tools.into_iter().collect(),
+    )
+    .await;
     if !disabled_toolsets.is_empty() {
         registry.set_disabled_toolsets(disabled_toolsets).await;
     }
