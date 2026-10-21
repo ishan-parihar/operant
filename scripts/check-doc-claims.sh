@@ -238,6 +238,40 @@ else
   say "OK    TUI modules: $tui_actual"
 fi
 
+# --- cargo features named in AGENTS.md must exist --------------------------
+# A feature name in the document is a claim that the crate declares it. The
+# LifeOS claim was the counter-example: AGENTS.md said "the `lifeos` cargo
+# feature" for a feature no crate declared and the tool module no tree
+# carries.
+python3 - <<'PY'
+import glob, re, sys, tomllib
+
+text = open('AGENTS.md').read()
+named = set()
+for m in re.finditer(r'`([a-z][a-z0-9_-]*)`\s+cargo feature', text):
+    before = text[max(0, m.start() - 40):m.start()].lower()
+    # A NEGATED mention ("there is no `lifeos` cargo feature") is not a claim.
+    if re.search(r'\b(no|not|never|without)\b[^.]*$', before):
+        continue
+    named.add(m.group(1))
+
+declared = set()
+for path in glob.glob('crates/*/Cargo.toml') + ['Cargo.toml']:
+    try:
+        data = tomllib.load(open(path, 'rb'))
+    except Exception:
+        continue
+    declared |= set(data.get('features', {}))
+    declared |= set(data.get('workspace', {}).get('features', {}))
+
+missing = sorted(named - declared)
+if missing:
+    print("DRIFT cargo features named in AGENTS.md that no crate declares:", missing)
+    sys.exit(1)
+print(f"OK    cargo features: {len(named)} named in AGENTS.md, every one declared")
+PY
+[ $? -ne 0 ] && fail=1
+
 # --- the live issue ledger's path -----------------------------------------
 if [ -f docs/audit/2026-06-19-BUGS.md ]; then
   say "OK    issue ledger path: docs/audit/2026-06-19-BUGS.md exists"

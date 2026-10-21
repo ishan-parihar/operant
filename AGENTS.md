@@ -437,9 +437,7 @@ These are the user's intentional design choices. Do not replace, remove, or
   `web_extract`, `web_crawl` + sourcehound browser provider (`tools/sourcehound.rs`
   + `browser_provider.rs`), driven over the `sourcehound` binary's MCP server
   (stdio). No API keys required
-- **LifeOS**: 22 Notion-backed holonic life-management tools (the `lifeos` cargo feature; the tool module is not in this tree)
-  - Feature flag: `lifeos` cargo feature + `lifeos_enabled` in config
-  - Requires `NOTION_API_TOKEN` env var
+- **LifeOS**: NOT INTEGRATED. The 22 Notion-backed life-management tools were ported at iter-47/48 and are gone from the tree — there is no `lifeos` cargo feature, no tool module, and no `lifeos_enabled` config key (the key was removed because it gated nothing; `config.rs::lifeos_key_is_gone_from_config` locks its absence). The Notion surface that DOES exist is the `ntn` CLI, used by the `notion` skill (`skills/productivity/notion`) — a skill, not a built-in tool. Do not add a LifeOS claim here without the code behind it.
 
 ### Context Management
 - **Tiered eviction + decay curve** ported from `cortexkit/magic-context`
@@ -672,26 +670,30 @@ bash scripts/clippy-warning-gate.sh --update           # refresh allowlist if yo
 
 ### `--all-features` now compiles (was broken) — use it freely
 
-All previously-broken feature combinations are fixed (2026-08-03):
+All previously-broken feature combinations are fixed (2026-08-03). **Three of
+the five crates in that table were DELETED** (the 2026-10-17 purge removed
+`operant-gateway`, `operant-runtime` and `operant-hardware`; the workspace has
+11 crates now), so their rows are the record of what was fixed and not
+instructions:
 
 | Crate | Broken feature | Fix |
 |-------|---------------|-----|
 | operant-tools | `probe` | feature + dead code removed |
 | operant-core | `anthropic` | temp released before send (non-Send guard across .await) |
-| operant-gateway | `schema-export` | feature-gated import; `build.rs` registers check-cfg |
-| operant-runtime | observability (`otel`, `prometheus`) | features wired to real deps (opentelemetry 0.27 / prometheus 0.14); otel.rs adapted; tests use `#[tokio::test(flavor = "multi_thread")]` |
-| operant-hardware | `hardware` | firmware/ assets committed; vendor-SDK modules (nusb, probe-rs, tokio-serial, aardvark-sys, rppal) gated behind the undeclared `hardware-vendor` cfg (see build.rs) |
+| operant-gateway (DELETED, iter-892) | `schema-export` | feature-gated import; `build.rs` registers check-cfg |
+| operant-runtime (DELETED, iter-892) | observability (`otel`, `prometheus`) | features wired to real deps (opentelemetry 0.27 / prometheus 0.14); otel.rs adapted; tests use `#[tokio::test(flavor = "multi_thread")]` |
+| operant-hardware (DELETED, iter-892) | `hardware` | firmware/ assets committed; vendor-SDK modules (nusb, probe-rs, tokio-serial, aardvark-sys, rppal) gated behind the undeclared `hardware-vendor` cfg (see build.rs) |
 
 `cargo check --workspace --all-features` and per-crate `--all-features` are
 validated to compile with **0 errors / 0 warnings** (see the G4 gate battery in
 `docs/RUST_BEST_PRACTICES_PLAN.md`).
 
-**operant-hardware `hardware` feature**: enables the self-contained modules
-(pico_code, datasheet, firmware-embedded arduino/uno-q peripherals). The
-vendor SDK modules (USB discovery, serial transport, probe-rs introspect,
-Aardvark I2C/SPI, RPi GPIO) were never wired and stay gated behind the
-*undeclared* `hardware-vendor` cfg so `--all-features` stays green; wire them
-properly (declare deps + rename cfg) when the SDKs are available.
+**operant-hardware's `hardware` feature** (DELETED with the crate): it enabled
+the self-contained modules (pico_code, datasheet, firmware-embedded
+arduino/uno-q peripherals), and the vendor SDK modules (USB discovery, serial
+transport, probe-rs introspect, Aardvark I2C/SPI, RPi GPIO) were never wired
+and stayed gated behind the *undeclared* `hardware-vendor` cfg so
+`--all-features` stayed green. Kept for the record; there is no crate to wire.
 
 ### The prompt_input/ decomposition (LANDED)
 
@@ -1083,13 +1085,11 @@ MUST know before touching the render layer:
 ### Native Tool Integrations
 - AFT: 20 IDE-grade tools (subprocess + auto-update, iter-40/41)
 - sourcehound: web_search + web_scrape + web_extract + web_crawl + sourcehound browser provider (MCP subprocess, no API keys)
-- LifeOS: 22 Notion tools (feature-gated, iter-47/48)
 - AFT dedup: basic file/terminal tools auto-disabled when AFT enabled (iter-51)
 
 ### Unique Features (operant has, hermes doesn't)
 - AFT bridge: IDE-grade coding tools via subprocess with auto-update
 - sourcehound bridge: web_search/scrape/extract/crawl + browser provider over MCP subprocess
-- LifeOS: 22 Notion-backed holonomic life-management tools
 - Context management: tiered eviction + decay curve (ported from magic-context)
 - Prompt-cache frozen prefix: Anthropic `cache_control` breakpoints
 - Rust safety: memory-safe, no GC, single binary, fast startup
