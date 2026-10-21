@@ -60,6 +60,7 @@ mod types;
 // gateway_runner.rs builds a HolonHook on the CLI side, so the module
 // must be public).
 pub mod webhook;
+pub mod webhook_subscriptions;
 mod whatsapp;
 pub use admin::*;
 pub use discord::*;

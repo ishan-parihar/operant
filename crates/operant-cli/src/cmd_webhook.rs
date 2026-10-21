@@ -1,61 +1,22 @@
-//! CLI subcommand for managing webhook subscriptions.
+//! CLI subcommand for managing webhook subscriptions (`operant webhook`).
 //!
-//! Provides `operant webhook <subcommand>` for managing webhook subscriptions
-//! backed by a JSON file at `~/.operant/webhook_subscriptions.json`.
+//! A subscription records an outbound destination: a URL, the events that
+//! should reach it, an optional prompt and signing secret. The store lives
+//! in core (`operant_core::gateway::webhook_subscriptions`) so the CLI and
+//! the runtime read the same file.
+//!
+//! `operant webhook test <url>` REALLY posts the ping (signed with the
+//! subscription's secret when it has one) and reports the answer — before
+//! iter-1127 it only printed what it would have done.
 
 use std::collections::HashMap;
-use std::fs;
-use std::path::PathBuf;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::{Args, Subcommand};
 use operant_core::config::AppConfig;
-use serde::{Deserialize, Serialize};
-
-/// A single webhook subscription entry.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct WebhookSubscription {
-    url: String,
-    prompt: Option<String>,
-    events: Vec<String>,
-    description: Option<String>,
-    skills: Vec<String>,
-    deliver: Option<String>,
-    deliver_chat_id: Option<String>,
-    secret: Option<String>,
-    deliver_only: bool,
-}
-
-/// Path to the webhook subscriptions JSON file.
-fn subscriptions_path() -> Result<PathBuf> {
-    let dir = operant_core::platform::operant_data_dir();
-    Ok(dir.join("webhook_subscriptions.json"))
-}
-
-/// Load subscriptions from disk.
-fn load_subscriptions() -> Result<HashMap<String, WebhookSubscription>> {
-    let path = subscriptions_path()?;
-    if !path.exists() {
-        return Ok(HashMap::new());
-    }
-    let content =
-        fs::read_to_string(&path).with_context(|| format!("Failed to read {}", path.display()))?;
-    serde_json::from_str(&content).with_context(|| format!("Failed to parse {}", path.display()))
-}
-
-/// Save subscriptions to disk atomically.
-fn save_subscriptions(subs: &HashMap<String, WebhookSubscription>) -> Result<()> {
-    let path = subscriptions_path()?;
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    // Write to a temp file first, then rename for atomicity.
-    let tmp = path.with_extension("json.tmp");
-    let content = serde_json::to_string_pretty(subs)?;
-    fs::write(&tmp, &content)?;
-    fs::rename(&tmp, &path)?;
-    Ok(())
-}
+use operant_core::gateway::webhook_subscriptions::{
+    WebhookSubscription, load_subscriptions, post_json, save_subscriptions,
+};
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum WebhookSubcommand {
@@ -124,7 +85,7 @@ pub async fn handle_webhook_command(_config: &AppConfig, cmd: WebhookSubcommand)
 }
 
 async fn cmd_subscribe(args: WebhookSubscribeArgs) -> Result<()> {
-    let mut subs = load_subscriptions()?;
+    let mut subs = load_subscriptions().map_err(anyhow::Error::msg)?;
 
     let subscription = WebhookSubscription {
         url: args.url.clone(),
@@ -150,13 +111,20 @@ async fn cmd_subscribe(args: WebhookSubscribeArgs) -> Result<()> {
     };
 
     subs.insert(args.url.clone(), subscription);
-    save_subscriptions(&subs)?;
+    save_subscriptions(&subs).map_err(anyhow::Error::msg)?;
     println!("Subscribed webhook: {}", args.url);
+    // Honest about what the store does today: the destination is recorded,
+    // but the runtime does not yet dispatch events to it (RT-140).
+    println!("  NOTE: recorded only — the runtime does not yet dispatch events to a subscription.");
+    println!(
+        "  Use `operant webhook test {}` to check that the endpoint answers.",
+        args.url
+    );
     Ok(())
 }
 
 async fn cmd_list() -> Result<()> {
-    let subs = load_subscriptions()?;
+    let subs = load_subscriptions().map_err(anyhow::Error::msg)?;
     if subs.is_empty() {
         println!("No webhook subscriptions.");
         return Ok(());
@@ -188,9 +156,9 @@ async fn cmd_list() -> Result<()> {
 }
 
 async fn cmd_remove(url: &str) -> Result<()> {
-    let mut subs = load_subscriptions()?;
+    let mut subs = load_subscriptions().map_err(anyhow::Error::msg)?;
     if subs.remove(url).is_some() {
-        save_subscriptions(&subs)?;
+        save_subscriptions(&subs).map_err(anyhow::Error::msg)?;
         println!("Removed webhook subscription: {}", url);
     } else {
         println!("No subscription found for URL: {}", url);
@@ -198,17 +166,47 @@ async fn cmd_remove(url: &str) -> Result<()> {
     Ok(())
 }
 
+/// POST the ping to the URL and report what came back. When the URL is a
+/// known subscription, its secret signs the request.
 async fn cmd_test(url: &str) -> Result<()> {
-    println!("Testing webhook: {}", url);
-    println!();
-    println!("This would send a POST request with an HMAC-SHA256 signature");
-    println!("to the webhook URL using the configured secret (if any).");
-    println!();
-    println!("To test manually:");
-    println!("  curl -X POST {} \\", url);
-    println!("    -H \"Content-Type: application/json\" \\");
-    println!("    -d '{{\"event\":\"ping\",\"source\":\"operant-cli\"}}'");
+    let subs: HashMap<String, WebhookSubscription> =
+        load_subscriptions().map_err(anyhow::Error::msg)?;
+    let secret = subs.get(url).and_then(|sub| sub.secret.clone());
+    let body = serde_json::json!({
+        "event": "ping",
+        "source": "operant-cli",
+        "timestamp": chrono_now(),
+    })
+    .to_string();
+
+    println!("Testing webhook: {url}");
+    match post_json(url, &body, secret.as_deref()).await {
+        Ok(outcome) => {
+            if outcome.status >= 200 && outcome.status < 300 {
+                println!("  HTTP {} — the endpoint answered.", outcome.status);
+            } else {
+                println!(
+                    "  HTTP {} — the endpoint rejected the ping.",
+                    outcome.status
+                );
+            }
+            if !outcome.body.trim().is_empty() {
+                println!("  Body: {}", outcome.body.trim());
+            }
+        }
+        Err(err) => {
+            println!("  FAILED: {err}");
+        }
+    }
     Ok(())
+}
+
+/// Seconds since the epoch — the payload's timestamp.
+fn chrono_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 fn truncate(s: &str, max: usize) -> String {

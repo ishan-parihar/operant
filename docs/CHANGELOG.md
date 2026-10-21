@@ -21,6 +21,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-1127 — `operant webhook test` really posts.** The command used to print "This would send a POST
+  request with an HMAC-SHA256 signature to the webhook URL" and send nothing. The subscription store moved
+  into core (`operant-core/src/gateway/webhook_subscriptions.rs`) with the signing scheme the inbound
+  webhook adapter already accepts, and `operant webhook test` now posts the ping — signed with the
+  subscription's secret when it has one — and reports the status and body. `operant webhook subscribe`
+  now says plainly that the destination is recorded only: the runtime still does not dispatch events to a
+  subscription, and the ledger row (RT-140) records the two candidate models and what each one still
+  needs.
 - **iter-1126 — the agent can read the operator's SOP playbooks.** `operant sop` read
   `~/.operant/sops/*.toml` with a loader private to the CLI; nothing else in the tree read that
   directory, so a playbook the harness could have followed sat unused. The store now lives in core
