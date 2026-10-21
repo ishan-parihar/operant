@@ -88,6 +88,17 @@ export BINDGEN_EXTRA_CLANG_ARGS="${BINDGEN_EXTRA_CLANG_ARGS:--I/usr/lib/gcc/x86_
 # pkg-config for alsa (we ship a synthetic alsa.pc pointing at the runtime libasound.so.2)
 export PKG_CONFIG_PATH="${PKG_CONFIG_PATH:-$LOCAL_DIR/pkgconfig}"
 
+# The linker search path for the repo's own static libraries (libsonic.a, the
+# one crates/operant-core/build.rs looks for) and CARGO_INCREMENTAL=0 (this
+# host has two CPUs; an incremental rebuild costs more here than a fresh one).
+# check.sh used to set these ITSELF while re-implementing the rest of this
+# file by hand — and the copy drifted (it dropped the ONNX link flags below,
+# so a binary built through check.sh carried no RUNPATH and exited 127 in any
+# shell that had not sourced this file). The environment is ONE source now:
+# check.sh sources this file (RT-167).
+export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-L native=$LOCAL_DIR/lib"
+export CARGO_INCREMENTAL=0
+
 # Runtime linker path so the built binary can find libonnxruntime + libasound
 export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-$LOCAL_DIR/lib:$ORT_DIR/lib}"
 
