@@ -8,6 +8,16 @@
 //! memory/activity.rs: MEMORY_ACTIVITY (:7), STALENESS_TIMEOUT_SECS (:13),
 //! check_staleness (:123). [port-excision] activity.rs's remote-snapshot
 //! plumbing and the rest of memory-types (graph, store) are not ported.
+//! [port-excision] the render state the ported activity enums carry: MemoryState's
+//! `Embedding` and `SidecarChecking`, StepStatus's `FoundRelevant` / `Extracting` /
+//! `Maintaining` / `ToolAction`, and StepResult's `Error` and `Skipped` arms are
+//! never constructed by a live path — the info widget reads `is_processing()` and
+//! the staleness check, which need only `Idle` and `Running`. They are
+//! `#[allow(dead_code)]` with the explicit arms kept, so the first live
+//! construction is a visible decision point (the shape `operant_model/adapter.rs`
+//! documents for its `ContentBlock` variants). Measured: the PRODUCTION profile
+//! (`cargo clippy -p operant-cli --bin operant`) reports 0 for this file — the
+//! warnings are test-profile only, which is what `--all-targets` adds.
 use std::sync::Mutex;
 use std::time::Instant;
 
@@ -36,6 +46,15 @@ impl MemoryActivity {
 }
 
 /// Status of a single pipeline step.
+///
+/// `Error` and `Skipped` carry the pipeline's failure/abstention outcomes. No
+/// live path constructs them in this build (see the module head), so they are
+/// `#[allow(dead_code)]` rather than deleted — the arms in `RenderResult`'s
+/// sibling match stay explicit for the same reason.
+#[cfg_attr(
+    test,
+    allow(dead_code, reason = "jcode-parity port: never constructed today")
+)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum StepStatus {
     Pending,
@@ -46,9 +65,22 @@ pub enum StepStatus {
 }
 
 /// Result data for a completed pipeline step.
+///
+/// `Error` and `Skipped` are the two outcomes no live step produces (module head).
+#[cfg_attr(
+    test,
+    allow(dead_code, reason = "jcode-parity port: never constructed today")
+)]
 #[derive(Debug, Clone)]
 pub struct StepResult {
     pub summary: String,
+    #[cfg_attr(
+        test,
+        allow(
+            dead_code,
+            reason = "jcode-parity port: no live step reports its latency"
+        )
+    )]
     pub latency_ms: u64,
 }
 
@@ -104,6 +136,14 @@ impl PipelineState {
 }
 
 /// State of the memory sidecar.
+///
+/// `Embedding` and `SidecarChecking` are the two in-flight states the live panel
+/// never enters — the staleness timer and `is_processing()` cover `Idle` and
+/// `Running` (module head).
+#[cfg_attr(
+    test,
+    allow(dead_code, reason = "jcode-parity port: never constructed today")
+)]
 #[derive(Debug, Clone, PartialEq, Default)]
 pub enum MemoryState {
     /// Idle, no activity.
@@ -126,12 +166,38 @@ pub enum MemoryState {
 // [port-decision] leaf port: MemoryEventKind + InjectedMemoryItem verbatim from
 // operant-memory-types/src/lib.rs:143-201,137-141 — referenced by MemoryEvent.kind
 // (upstream reached them via the memory-types crate's glob).
+#[cfg_attr(
+    test,
+    allow(
+        dead_code,
+        reason = "jcode-parity port: leaf type, read only by its own tests"
+    )
+)]
 #[derive(Debug, Clone)]
 pub struct InjectedMemoryItem {
     pub section: String,
+    #[cfg_attr(
+        test,
+        allow(
+            dead_code,
+            reason = "jcode-parity port: the panel reads `section`, not the payload"
+        )
+    )]
     pub content: String,
 }
 
+/// The ported memory-event vocabulary.
+///
+/// `FoundRelevant`, `Extracting`, `Maintaining` and `ToolAction` are the four
+/// variants no live path emits today (module head). Kept because the enum is a
+/// wire vocabulary the port maps 1:1, not because something reads them.
+#[cfg_attr(
+    test,
+    allow(
+        dead_code,
+        reason = "jcode-parity port: four variants never emitted today"
+    )
+)]
 #[derive(Debug, Clone)]
 pub enum MemoryEventKind {
     /// Embedding search started.
@@ -200,8 +266,22 @@ pub struct MemoryEvent {
     /// Type of event.
     pub kind: MemoryEventKind,
     /// When it happened.
+    #[cfg_attr(
+        test,
+        allow(
+            dead_code,
+            reason = "jcode-parity port: no live consumer renders the event's wall clock"
+        )
+    )]
     pub timestamp: Instant,
     /// Optional details.
+    #[cfg_attr(
+        test,
+        allow(
+            dead_code,
+            reason = "jcode-parity port: no live consumer renders the event's detail"
+        )
+    )]
     pub detail: Option<String>,
 }
 

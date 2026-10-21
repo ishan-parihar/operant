@@ -25,6 +25,17 @@ use std::time::Instant;
 pub(crate) const COMMAND_SUGGESTION_VISIBLE_LIMIT: usize = 8;
 
 /// Current processing status
+///
+/// `Connecting` carries the transport's connection-phase detail, which no live
+/// transport emits in this build — the other five states cover the whole live
+/// sequence.
+#[cfg_attr(
+    test,
+    allow(
+        dead_code,
+        reason = "jcode-parity port: no live transport emits a connection phase"
+    )
+)]
 #[derive(Clone, Default, Debug)]
 pub enum ProcessingStatus {
     #[default]

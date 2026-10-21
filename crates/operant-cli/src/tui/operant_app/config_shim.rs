@@ -56,6 +56,15 @@ pub enum SessionPickerResumeAction {
 /// Layout of the swarm status strip. Verbatim variants from
 /// crates/operant-config-types/src/lib.rs:756-:763 (doc comments elided;
 /// the `parse` fn at :765 is unported — no ported caller reads config text).
+/// `Horizontal` is the packed-chips layout no live strip renders; it stays so a
+/// config asking for it is a visible decision point, not a silent fallback.
+#[cfg_attr(
+    test,
+    allow(
+        dead_code,
+        reason = "jcode-parity port: config-named alternative layout, never selected live"
+    )
+)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SwarmStripLayout {
     /// One agent per row: session icon + status glyph + task label, capped to
@@ -69,6 +78,16 @@ pub enum SwarmStripLayout {
 /// Shape-compat subset of upstream KeybindingsConfig
 /// (crates/operant-config-types/src/lib.rs:1001-:1077): only the field the
 /// ported session_picker renderers read. Upstream default at :1128.
+///
+/// `session_picker_enter` no live reader in this profile — the shim carries it
+/// so the shape matches upstream, not because a renderer consumes it.
+#[cfg_attr(
+    test,
+    allow(
+        dead_code,
+        reason = "jcode-parity port: shape-compat shim field with no live reader"
+    )
+)]
 #[derive(Debug, Clone)]
 pub struct KeybindingsConfig {
     /// Session picker Enter action: "current-terminal" (default) or
@@ -303,6 +322,13 @@ pub struct AgentsConfig {
     pub swarm_deep_root_effort: Option<String>,
     /// Layout of the swarm status strip. Upstream
     /// crates/operant-config-types/src/lib.rs:590, default at :680.
+    #[cfg_attr(
+        test,
+        allow(
+            dead_code,
+            reason = "jcode-parity port: shape-compat field; the live strip never reads it in this profile"
+        )
+    )]
     pub swarm_strip_layout: SwarmStripLayout,
 }
 
@@ -311,6 +337,13 @@ pub struct Config {
     pub display: DisplayConfig,
     pub features: FeaturesConfig,
     pub agents: AgentsConfig,
+    #[cfg_attr(
+        test,
+        allow(
+            dead_code,
+            reason = "jcode-parity port: shape-compat aggregate field, read only by its own tests"
+        )
+    )]
     pub keybindings: KeybindingsConfig,
 }
 

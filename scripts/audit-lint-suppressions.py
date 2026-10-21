@@ -48,7 +48,21 @@ TRACKED = {
     "unused_assignments",
 }
 
-RE_ATTR = re.compile(r"#\[\s*(?P<kind>allow|expect)\s*\(\s*(?P<lints>[^)]*?)\s*\)")
+# Matches BOTH spellings of a suppression. The bare form is
+#     #[allow(dead_code)]                       / #[expect(dead_code, reason = "..")]
+# and the cfg-conditional form puts the lint INSIDE cfg_attr's parens:
+#     #[cfg_attr(test, allow(dead_code, reason = ".."))]
+# The first attempt wrote the cfg group as an optional PREFIX
+# (`(?:cfg_attr\([^()]*\)\s*,\s*)?allow...`) and matched NOTHING of the
+# cfg_attr form — in cfg_attr the `allow` sits inside the outer parens, not
+# after them, so the pattern could never align. Measured: that regex returned
+# `False` for all three shapes above; this one returns a match for each, with
+# `lints` holding the inner group so the `reason = ...` key is split out rather
+# than read as a lint name.
+RE_ATTR = re.compile(
+    r"#\[\s*(?:cfg_attr\s*\(\s*(?P<cfg>[^()]*?)\s*,\s*)?"
+    r"(?P<kind>allow|expect)\s*\(\s*(?P<lints>[^()]*?)\s*\)"
+)
 
 # ---------------------------------------------------------------------------
 # THE BASELINE. Every suppression that is known, with the reason it is still
@@ -213,6 +227,95 @@ BASELINE = {
         "the 401-recovery path keeps the parameter for the poisoning handler's "
         "signature",
     ),
+    # ------------------------------------------------------------------
+    # iter-1168. The first version of this gate's regex matched only the bare
+    # `#[allow(...)]`/`#[expect(...)]` spelling, so every `#[cfg_attr(not(test),
+    # allow(...))]` and every rustfmt-split multi-line attribute was invisible
+    # to it — 50 of the repo's suppressions, including ones carrying their own
+    # `reason = "..."`. A gate that cannot see a suppression cannot govern it,
+    # which is the same defect class RG-013 records for the doc gate. The regex
+    # now matches both spellings and the scan joins a rustfmt-split attribute
+    # before matching; these entries are what the widened scan found, each
+    # carrying the reason the site's own text states where it states one.
+    # ------------------------------------------------------------------
+    "operant-cli/src/commands.rs::dead_code::TuiSlashCommand": ("yes", "description/aliases are table data rendered only by the legacy help path"),
+    "operant-cli/src/config.rs::dead_code::Parse": ("no", "iter-1163: a Construct error variant nothing reads yet; expect because clippy's dead_code fires on every build"),
+    "operant-cli/src/tui/adapter_types/types.rs::dead_code::ToolResultContent": ("yes", "AD-034: adapter wire enum; variants are parsed from adapter JSON, not built here"),
+    "operant-cli/src/tui/keybindings.rs::dead_code::Redo": ("yes", "AD-034: kept so a future redo has a variant to bind; the catalogue guard test pins that no binding uses it"),
+    "operant-cli/src/tui/operant_app/app.rs::dead_code::ProcessingStatus": ("yes", "jcode-parity port: no live transport emits a connection phase"),
+    "operant-cli/src/tui/operant_app/config_shim.rs::dead_code::KeybindingsConfig": ("yes", "jcode-parity port: shape-compat shim field with no live reader"),
+    "operant-cli/src/tui/operant_app/config_shim.rs::dead_code::keybindings": ("yes", "jcode-parity port: shape-compat aggregate field, read only by its own tests"),
+    "operant-cli/src/tui/operant_app/config_shim.rs::dead_code::SwarmStripLayout": ("yes", "jcode-parity port: config-named alternative layout, never selected live"),
+    "operant-cli/src/tui/operant_app/config_shim.rs::dead_code::swarm_strip_layout": ("yes", "jcode-parity port: shape-compat field; the live strip never reads it in this profile"),
+    "operant-cli/src/tui/operant_app/memory.rs::dead_code::content": ("yes", "jcode-parity port: the panel reads `section`, not the payload"),
+    "operant-cli/src/tui/operant_app/memory.rs::dead_code::detail": ("yes", "cfg_attr(test): test-profile only, so the lint does NOT fire every build and expect would be unfulfilled in production"),
+    "operant-cli/src/tui/operant_app/memory.rs::dead_code::InjectedMemoryItem": ("yes", "jcode-parity port: leaf type, read only by its own tests"),
+    "operant-cli/src/tui/operant_app/memory.rs::dead_code::latency_ms": ("yes", "jcode-parity port: no live step reports its latency"),
+    "operant-cli/src/tui/operant_app/memory.rs::dead_code::MemoryEventKind": ("yes", "jcode-parity port: four variants never emitted today"),
+    "operant-cli/src/tui/operant_app/memory.rs::dead_code::MemoryState": ("yes", "jcode-parity port: never constructed today"),
+    "operant-cli/src/tui/operant_app/memory.rs::dead_code::StepResult": ("yes", "jcode-parity port: never constructed today"),
+    "operant-cli/src/tui/operant_app/memory.rs::dead_code::StepStatus": ("yes", "jcode-parity port: never constructed today"),
+    "operant-cli/src/tui/operant_app/memory.rs::dead_code::timestamp": ("yes", "cfg_attr(test): test-profile only, so the lint does NOT fire every build and expect would be unfulfilled in production"),
+    "operant-cli/src/tui/operant_app/todo.rs::dead_code::as_str": ("no", "macro-generated uniform schema for eleven enums; ConfidenceState consumes both, so expect is unfulfilled on 2 of 11 expansions (measured iter-1160)"),
+    "operant-cli/src/tui/operant_app/todo.rs::dead_code::legacy_score": ("no", "same macro expansion as as_str"),
+    "operant-cli/src/tui/operant_ui/ui_viewport.rs::unused_variables::centered": ("yes", "W6 inline-image block local; allow where expect would work (the lint fires every build)"),
+    "operant-cli/src/tui/operant_ui/ui_viewport.rs::unused_variables::diagram_mode": ("yes", "W6 inline-image block local; allow where expect would work"),
+    "operant-cli/src/tui/operant_ui/ui_viewport.rs::unused_variables::pinned_diagrams": ("yes", "W6 inline-image block local; allow where expect would work"),
+    "operant-config/src/policy.rs::unused_mut::mut": ("yes", "unused_mut that a future policy arm needs; allow where expect would work"),
+    "operant-core/examples/simple_agent.rs::dead_code::CalcArgs": ("yes", "example serde args struct; allow where expect would work"),
+    "operant-core/examples/simple_agent.rs::dead_code::EchoArgs": ("yes", "example serde args struct; allow where expect would work"),
+    "operant-core/src/agent/clients/prompt_caching.rs::dead_code::as_str": ("yes", "reserved for TTL introspection/debugging"),
+    "operant-core/src/agent/run.rs::unused_assignments::mut": ("yes", "unused_assignments on a diagnostic accumulator; allow where expect would work"),
+    "operant-core/src/agent/turn_finalizer.rs::dead_code::explanation": ("yes", "Prepared for UI integration; will surface turn-exit reasons"),
+    "operant-core/src/mcp_oauth.rs::dead_code::is_interactive": ("yes", "reserved for TTY-only OAuth flows"),
+    "operant-core/src/mcp_oauth.rs::unused_variables::handle_401": ("yes", "reserved for the 401-retry path; allow where expect would work"),
+    "operant-core/src/mcp.rs::dead_code::data": ("yes", "Deserialized from MCP server; may contain debug info"),
+    "operant-core/src/mcp.rs::dead_code::jsonrpc": ("yes", "Deserialized from MCP server; protocol field kept for completeness"),
+    "operant-core/src/mcp.rs::dead_code::list_changed": ("yes", "Deserialized from MCP server response; kept for protocol completeness"),
+    "operant-core/src/mcp.rs::dead_code::list_changed": ("yes", "Deserialized from MCP server response; kept for protocol completeness"),
+    "operant-core/src/mcp.rs::dead_code::subscribe": ("yes", "Deserialized from MCP server response; kept for protocol completeness"),
+    "operant-core/src/schema.rs::dead_code::CoercionParams": ("yes", "test-only schema struct"),
+    "operant-core/src/schema.rs::dead_code::NumberParams": ("yes", "test-only schema struct"),
+    "operant-core/src/schema.rs::dead_code::TestParams": ("yes", "test-only schema struct"),
+    "operant-core/src/tools/browser_cdp_tool.rs::dead_code::BrowserCdpArgs": ("yes", "serde-argument struct: fields deserialized from tool-call JSON; optional fields kept for schema parity"),
+    "operant-core/src/tools/checkpoint_tool.rs::dead_code::CheckpointArgs": ("yes", "serde-argument struct: fields deserialized from tool-call JSON; optional fields kept for schema parity"),
+    "operant-core/src/tools/config_tool.rs::dead_code::ConfigManageArgs": ("yes", "serde-argument struct: fields deserialized from tool-call JSON"),
+    "operant-core/src/tools/debug_helpers.rs::dead_code::EnvVarArgs": ("yes", "serde-argument struct: fields deserialized from tool-call JSON; optional fields kept for schema parity"),
+    "operant-core/src/tools/feishu_tool.rs::dead_code::FeishuDocArgs": ("yes", "serde-argument struct: fields deserialized from tool-call JSON; optional fields kept for schema parity"),
+    "operant-core/src/tools/feishu_tool.rs::dead_code::FeishuDriveArgs": ("yes", "serde-argument struct: fields deserialized from tool-call JSON; optional fields kept for schema parity"),
+    "operant-core/src/tools/home_assistant_tool.rs::dead_code::HomeAssistantArgs": ("yes", "serde-argument struct: fields deserialized from tool-call JSON; optional fields kept for schema parity"),
+    "operant-core/src/tools/kernel/sidecar.rs::dead_code::bridge_rx": ("yes", "sidecar channel half kept for the shutdown path; allow where expect would work"),
+    "operant-core/src/tools/notification_tool.rs::dead_code::ApprovalRequestArgs": ("yes", "serde-argument struct: fields deserialized from tool-call JSON; optional fields kept for schema parity"),
+    "operant-core/src/tools/notification_tool.rs::dead_code::NotifyArgs": ("yes", "serde-argument struct: fields deserialized from tool-call JSON; optional fields kept for schema parity"),
+    "operant-core/src/tools/osv_check.rs::dead_code::OsvVulnerability": ("yes", "deserialize-only response struct from the OSV API"),
+    "operant-core/src/tools/process_tool.rs::dead_code::ProcessToolArgs": ("yes", "serde-argument struct: fields deserialized from tool-call JSON; optional fields kept for schema parity"),
+    "operant-core/src/tools/reaction_tool.rs::dead_code::ReactArgs": ("yes", "serde-argument struct: fields deserialized from tool-call JSON; optional fields kept for schema parity"),
+    "operant-core/src/tools.rs::dead_code::TestArgs": ("yes", "test-only argument struct"),
+    "operant-core/src/tools/send_message_tool.rs::dead_code::SendMessageArgs": ("yes", "serde-argument struct: fields deserialized from tool-call JSON; optional fields kept for schema parity"),
+    "operant-core/src/tools/session_search_tool.rs::dead_code::SessionSearchArgs": ("yes", "serde-argument struct: fields deserialized from tool-call JSON; optional fields kept for schema parity"),
+    "operant-core/src/tools/skills_tool.rs::dead_code::SkillsListArgs": ("yes", "serde-argument struct: fields deserialized from tool-call JSON; optional fields kept for schema parity"),
+    "operant-core/src/tools/skills_tool.rs::dead_code::SkillViewArgs": ("yes", "serde-argument struct: fields deserialized from tool-call JSON; optional fields kept for schema parity"),
+    "operant-core/src/tools/skills_tool.rs::dead_code::USAGE_TELEMETRY_LOCK": ("no", "iter-1163: a mutex read only when telemetry is enabled; cfg-conditional, so expect cannot expire correctly"),
+    "operant-core/src/tools/spotify_tool.rs::dead_code::DevicesArgs": ("yes", "serde-argument struct: fields deserialized from tool-call JSON; optional fields kept for schema parity"),
+    "operant-core/src/tools/spotify_tool.rs::dead_code::QueueArgs": ("yes", "serde-argument struct: fields deserialized from tool-call JSON; optional fields kept for schema parity"),
+    "operant-core/src/tools/spotify_tool.rs::dead_code::SearchArgs": ("yes", "serde-argument struct: fields deserialized from tool-call JSON; optional fields kept for schema parity"),
+    "operant-core/src/tools/sub_agent_tool.rs::dead_code::DelegationTask": ("yes", "serde-argument struct: fields deserialized from tool-call JSON; optional fields kept for schema parity"),
+    "operant-core/src/tools/sub_agent_tool.rs::dead_code::SubAgentArgs": ("yes", "serde-argument struct: fields deserialized from tool-call JSON; optional fields kept for schema parity"),
+    "operant-core/src/tools/tool_backend_helpers.rs::dead_code::ToolBackendArgs": ("yes", "serde-argument struct: fields deserialized from tool-call JSON; optional fields kept for schema parity"),
+    "operant-core/src/tools/verification_tool.rs::dead_code::VerifyArgs": ("yes", "serde-argument struct: fields deserialized from tool-call JSON; optional fields kept for schema parity"),
+    "operant-core/tests/cron_session_isolation.rs::dead_code::cron": ("yes", "keeps the cron agent alive for the scheduler's lifetime"),
+    "operant-core/tests/seat_policy_run_path.rs::dead_code::prompt": ("yes", "schema-only: the stub never reads the prompt"),
+    "operant-harness/src/row.rs::dead_code::config": ("no", "carried for the host to read; the Phase 3 stub does not consume it yet (row.rs:16 and row.rs:74 share the name, so both keys exist)"),
+    "operant-harness/src/row.rs::dead_code::FakeFilePromptSection": ("no", "a test stub the config-row prompt tests drive; cfg(test)-adjacent so expect would be unfulfilled outside the test profile"),
+    "operant-harness/tests/builder_factories.rs::dead_code::_host_smoke": ("no", "a smoke harness kept for the next host boot; test-only by construction"),
+    "operant-harness/tests/host_boot.rs::dead_code::_ensure_noop_linked": ("no", "a verification harness kept for the next host boot; test-only by construction"),
+    "operant-memory/src/knowledge_graph.rs::dead_code::db_path": ("yes", "db path retained for diagnostics/reindex alongside the live conn"),
+    "operant-plugins/src/host.rs::dead_code::verification": ("no", "iter-1163 converted this to #[expect]; a security verdict written and never read, to be wired into plugins() when verification is surfaced"),
+    "operant-providers/src/anthropic.rs::dead_code::cache_creation_input_tokens": ("yes", "deserialized usage field for cache-accounting parity"),
+    "operant-providers/src/bedrock.rs::dead_code::Other": ("no", "the deserialized catch-all arm of a wire enum; kept so an unknown block decodes rather than failing the response"),
+    "operant-providers/src/bedrock.rs::dead_code::role": ("yes", "deserialized message role for payload parity"),    "operant-harness/src/pool_provider.rs::dead_code::PoolBundlePayload": ("no", "a serde payload shape the pool keeps for its own decode round-trip; feature-adjacent, so expect would go unfulfilled under one feature set"),
+    "operant-providers/src/bedrock.rs::dead_code::stop_reason": ("yes", "deserialized stop reason for response metadata parity"),
+    "operant-providers/src/gemini.rs::dead_code::InternalGenerateContentResponse": ("no", "cfg-dependent: read by the default-feature response path, unused with the full provider set; expect would go unfulfilled under one of the two feature sets (the site's own comment says so)"),
 }
 
 # Files whose text mention of the attribute is a note about its REMOVAL, not
@@ -278,10 +381,31 @@ def item_after(lines: list[str], start: int) -> str | None:
         attribute is INLINE, so the identifier is on the SAME line and to the
         LEFT — handled by `item_on_line`)
 
+    `start` is the 0-based index of the attribute's FIRST line, and the walk
+    must first get out of the attribute's own body: rustfmt splits a long
+    `#[cfg_attr(...)]` across lines, so the line after the opener is `test,` —
+    which reads as an identifier and was being returned as the item name for
+    every cfg_attr site in the repo. The walk therefore skips until the
+    attribute's paren depth closes, THEN looks for the item.
+
     Returns None when no name can be read, and the caller keys the site by its
     line number instead — which is safe as long as it is rare and reported.
     """
-    for raw in lines[start : start + 4]:
+    depth = 0
+    seen_open = False
+    idx = start
+    while idx < len(lines):
+        raw = lines[idx]
+        for ch in raw:
+            if ch == "(":
+                depth += 1
+                seen_open = True
+            elif ch == ")":
+                depth -= 1
+        idx += 1
+        if seen_open and depth <= 0:
+            break
+    for raw in lines[idx : idx + 4]:
         text = raw.strip()
         if not text or text.startswith("//") or text.startswith("#["):
             continue
@@ -331,7 +455,48 @@ def scan() -> list[tuple[str, str, str, int]]:
             lines = path.read_text(encoding="utf-8").splitlines()
         except (OSError, UnicodeDecodeError):
             continue
+        # rustfmt splits any attribute whose text exceeds the line width, so
+        # `#[cfg_attr(test, allow(dead_code, reason = "..."))]` reaches the disk
+        # as four lines. A per-line regex cannot see it, and a gate that cannot
+        # see a suppression is the blind spot this script exists to close.
+        # Join each unclosed `#[` through its matching `)]` into one logical
+        # line, keeping the ORIGINAL line numbers so a report still names the
+        # line the reader sees. Comment lines are never joined.
+        logical: list[tuple[int, str]] = []
+        buf: list[str] = []
+        start = 0
+        depth = 0
         for i, line in enumerate(lines):
+            if depth == 0:
+                stripped = line.lstrip()
+                if stripped.startswith(("//", "/*", "*")):
+                    logical.append((i + 1, line))
+                    continue
+                start = i + 1
+                buf = [line]
+                depth = line.count("(") - line.count(")")
+                if "#[" in line and depth <= 0:
+                    logical.append((start, " ".join(buf)))
+                    buf = []
+                continue
+            buf.append(line)
+            depth += line.count("(") - line.count(")")
+            if depth <= 0:
+                logical.append((start, " ".join(buf)))
+                buf = []
+                depth = 0
+        if buf:
+            logical.append((start, " ".join(buf)))
+
+        for lineno, line in logical:
+            # A `#[allow(...)]` written INSIDE a doc comment is prose, not an
+            # attribute — this repo's module heads cite the suppressions they
+            # carry (`//! ... #[allow(checked_code)] ...`). Rust does not read
+            # those; a gate that does reports the same site twice and invents
+            # items named after the sentence around it (observed on memory.rs:
+            # "dead_code on `None`" for the words `line16`/`test` nearby).
+            if line.lstrip().startswith(("//", "/*", "*")):
+                continue
             m = RE_ATTR.search(line)
             if not m:
                 continue
@@ -346,9 +511,15 @@ def scan() -> list[tuple[str, str, str, int]]:
                 # would be keyed as inline and read the wrong identifier. The
                 # test is: is there NON-WHITESPACE before the `#[`?
                 before = line[: m.start()]
-                inline = bool(before.strip()) and not before.strip().startswith("//")
-                item = item_on_line(line) if inline else (item_after(lines, i + 1) or f"line{i + 1}")
-                out.append((rel, lint.strip(), item, i + 1))
+                inline = bool(before.strip())
+                # `lineno` is 1-based (what a reader sees in an editor) and
+                # `item_after` takes the 0-based index of the line AFTER the
+                # attribute. Passing `lineno` directly started the walk one line
+                # late and skipped the item, so every leading attribute in this
+                # repo was keyed by line number instead of by name — which is
+                # exactly the ambiguity the key was chosen to avoid.
+                item = item_on_line(line) if inline else (item_after(lines, lineno - 1) or f"line{lineno}")
+                out.append((rel, lint.strip(), item, lineno))
     return out
 
 
