@@ -1059,11 +1059,16 @@ async fn handle_keybindings(_config: &AppConfig) -> Result<()> {
             Some(why) => format!("  ⚠ {why}"),
             None => String::new(),
         };
+        // The action is rendered to a STRING first and padded after: a
+        // Debug spec applied to a tuple variant pads the FIELD, not the
+        // variant ("Custom(" + 34-wide number + ")"), and a unit variant
+        // ignores the width altogether — so `{:<34?}` mis-aligns both.
+        let action = format!("{:?}", binding.action);
         println!(
-            "  {:<16} {:<34} {:<34?}{}",
+            "  {:<16} {:<34} {:<34}{}",
             binding.chord(),
             binding.description.as_deref().unwrap_or(""),
-            binding.action,
+            action,
             flag
         );
     }
@@ -2150,6 +2155,40 @@ mod tests {
             None => unsafe { std::env::remove_var("HOME") },
         }
         let _ = std::fs::remove_dir_all(&home);
+    }
+
+    /// The action column is padded as a WHOLE string.
+    ///
+    /// A Debug spec applied straight to the enum pads the tuple FIELD
+    /// instead of the variant, so `KeyAction::Custom(1)` rendered as
+    /// "Custom(" + a 34-wide number + ")" and a unit variant ignored the
+    /// width — the column came out ragged. The live probe caught it.
+    #[test]
+    fn the_keybinding_action_column_is_padded_as_a_whole() {
+        use crate::tui::keybindings::{KeyAction, KeyBinding};
+        let binding = KeyBinding {
+            key: crossterm::event::KeyCode::Char('x'),
+            modifiers: crossterm::event::KeyModifiers::NONE,
+            action: KeyAction::Custom(1),
+            context: None,
+            description: Some("An action".to_string()),
+        };
+        let action = format!("{:?}", binding.action);
+        let line = format!(
+            "  {:<16} {:<34} {:<34}",
+            binding.chord(),
+            binding.description.as_deref().unwrap_or(""),
+            action
+        );
+        assert!(
+            line.contains("Custom(1)"),
+            "the action must be rendered whole: {line}"
+        );
+        assert_eq!(
+            line.chars().count(),
+            2 + 16 + 1 + 34 + 1 + 34,
+            "the columns must line up: {line:?}"
+        );
     }
 
     /// The plan struct is the single shape the CLI hands to run_headless:
