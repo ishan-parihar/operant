@@ -23,13 +23,19 @@ pub(super) struct ChangelogGroup {
 
 /// Parse changelog entries from the embedded changelog string.
 ///
-/// Current format per entry:
-///   "hash<RS>tag<RS>timestamp<RS>subject"
-/// where tag is either a version like "v0.4.2" or empty, timestamp is a
-/// Unix epoch seconds string, and entries are separated by ASCII unit
-/// separator (0x1F).
+/// Current format per entry, with the fields separated by ASCII RS (0x1E) and
+/// entries separated by ASCII US (0x1F):
+///   `"hash<RS>tag<RS>timestamp<RS>subject"`
+/// (the `<RS>` above is escaped so rustdoc does not read it as an HTML tag —
+/// the literal record separator character is what stands between the fields,
+/// the same way `splitn(4, '\x1e')` below splits it). The tag is either a
+/// version like `v0.4.2` or empty, and the timestamp is a Unix epoch seconds
+/// string.
 ///
-/// Older binaries used "hash:tag:subject"; we keep parsing that format too.
+/// Older binaries used `"hash:tag:subject"`; we keep parsing that format too.
+/// (This paragraph was `"hash<RS>tag<RS>timestamp<RS>subject"` unescaped until
+/// iter-1166: the doc gate reads `<RS>` as an unclosed HTML tag, so the gate
+/// could not go green until the note said what the character is.)
 fn parse_changelog_from_impl(changelog: &str) -> Vec<ChangelogEntry<'_>> {
     if changelog.is_empty() {
         return Vec::new();
