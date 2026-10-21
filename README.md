@@ -13,9 +13,6 @@
 - [Development](#development)
 - [Licensing](#licensing)
 
-
-[![CI](https://github.com/ishan-parihar/operant/actions/workflows/ci.yml/badge.svg)](https://github.com/ishan-parihar/operant/actions/workflows/ci.yml)
-
 **Your terminal-native AI agent.** Persistent memory, 70+ JSON-schema tools, skills, MCP, and messaging channels — built in Rust, run from your shell, and fully under your control.
 
 ![Operant hero](assets/readme/hero.svg)
@@ -116,30 +113,21 @@ Skills are **markdown instruction packs** — the same mechanism hermes-agent us
 
 **SOPs** are the operator's own playbooks for recurring tasks: TOML files in `~/.operant/sops/` (`operant sop list` shows them). The agent reaches them through the `sop` tool — list the playbooks, read one — so a procedure you wrote down is one the harness can actually follow.
 
-### Directory layoutOperant ships a **categorized** pool in the repo, and installs it **flat** into the user skills directory (matching `operant skills seed`):
+### Directory layout
+
+Operant ships a **categorized** pool in the repo, and installs it **flat** into the user skills directory (matching `operant skills seed`):
 
 ```
-repo:                                   installed (user):
-skills/                                 ~/.operant/skills/
-├── devops/                             ├── cli/                 # skills are
-│   ├── cli/SKILL.md                     │   ├── docker-management/  # FLAT — each
-│   └── docker-management/SKILL.md      │   ├── …                  # leaf skill is
-├── github/                             ├── systematic-debugging/  # a direct
-├── mcp/                                ├── test-driven-development/ # subdir
-├── productivity/                       ├── …
-├── research/                           └── <107 skills in the repo pool>
-├── security/
-├── software-development/
-├── workspace-lint/
-├── autonomous-ai-agents/               (hermes-core parity — apple, creative,
-├── apple/                               email, media, mlops, note-taking,
-├── creative/                            smart-home, social-media + operant
-├── email/                               self-skill)
-├── media/
-├── mlops/
-├── note-taking/
-├── smart-home/
-└── social-media/
+repo:                                 installed (user):
+skills/                               ~/.operant/skills/
+├── devops/  github/  mcp/            ├── cli/
+├── productivity/  research/         ├── docker-management/
+├── security/  software-development/ ├── systematic-debugging/
+├── workspace-lint/                   ├── test-driven-development/
+├── autonomous-ai-agents/  apple/     ├── …
+├── creative/  email/  media/        └── <107 skills in the repo pool>
+├── mlops/  note-taking/
+├── smart-home/  social-media/
 ```
 
 Each skill is a directory containing a `SKILL.md` (required) plus any reference files, scripts, and templates:
@@ -213,24 +201,18 @@ base_url = "https://api.openai.com/v1"
 
 [agent]
 model = "gpt-4"
-fallbacks = [ { model = "gpt-4o-mini" } ]
+fallback_models = ["gpt-4o-mini"]   # tried in order when the primary fails
 max_iterations = 20
 show_reasoning = true # TUI: thinking stays until your next prompt; /thinking-display full|current|off
 
 [memory]
 provider = "memory-wire"      # the only engine; other names warn + are ignored
 
-[tools.web]
-preferred_provider = "sourcehound"   # the only web engine; other names warn + are ignored
-
 [browser]
 provider = "sourcehound"      # the only browser engine; other names warn + are ignored
 
 [skills]
 autoload = true
-
-[bylaws]              # per-employee permission scoping (the org's bylaws)
-grant_ttl_days = 7    # HoD-approved escalation grants expire after a week
 ```
 
 See [`operant.example.toml`](operant.example.toml) for the full reference — every section is annotated.
@@ -323,6 +305,10 @@ Development conventions enforced by the gate: no `.unwrap()`/`.expect()` in
 production code (justified sites carry `#[expect(..., reason)]`), typed errors
 in library crates (`thiserror`-style; `anyhow` only in binaries), and scoped
 compilation to keep iteration cycles fast.
+
+The GitHub Actions quota for this repo is exhausted, so **the local loop is the
+gate** — no workflow runs on a push or a tag. The commands above are what
+verifies a change; `scripts/self-test.sh` runs the whole sweep.
 
 Work is planned in dated docs (`docs/plan-YYYY-MM-DD-*.md`) with executed rows
 marked in place, and every user-visible change lands in
