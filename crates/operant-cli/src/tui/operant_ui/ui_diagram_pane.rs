@@ -414,39 +414,6 @@ fn build_pinned_diagram_live_snapshot_with_font(
     }
 }
 
-#[cfg(test)]
-#[expect(
-    clippy::too_many_arguments,
-    reason = "test probe; every argument is an independent layout input"
-)]
-pub(crate) fn debug_probe_pinned_diagram_with_font(
-    diagram: &info_widget::DiagramInfo,
-    area: Rect,
-    inner: Rect,
-    focused: bool,
-    scroll_x: i32,
-    scroll_y: i32,
-    zoom_percent: u8,
-    font_size: Option<(u16, u16)>,
-) -> PinnedDiagramLiveDebugSnapshot {
-    build_pinned_diagram_live_snapshot_with_font(
-        diagram,
-        PinnedDiagramSnapshotLayout {
-            area,
-            inner,
-            index: 0,
-            total: 1,
-        },
-        PinnedDiagramSnapshotView {
-            focused,
-            scroll_x,
-            scroll_y,
-            zoom_percent,
-        },
-        font_size,
-    )
-}
-
 thread_local! {
     static PINNED_DIAGRAM_DEBUG_STATE: RefCell<PinnedDiagramDebugState> = RefCell::new(PinnedDiagramDebugState::default());
 }

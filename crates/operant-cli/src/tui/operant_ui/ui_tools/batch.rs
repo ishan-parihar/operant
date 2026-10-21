@@ -100,13 +100,6 @@ pub(crate) fn finalize_batch_section(raw: &str) -> BatchSubResult {
     BatchSubResult { errored, content }
 }
 
-#[cfg(test)]
-pub(crate) fn parse_batch_sub_outputs(content: &str) -> Vec<BatchSubResult> {
-    parse_batch_sub_outputs_by_index(content)
-        .into_values()
-        .collect()
-}
-
 pub(crate) fn parse_batch_sub_outputs_by_index(
     content: &str,
 ) -> std::collections::BTreeMap<usize, BatchSubResult> {

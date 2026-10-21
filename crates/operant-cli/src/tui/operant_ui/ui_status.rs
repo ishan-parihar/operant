@@ -50,29 +50,6 @@ pub(super) fn is_running_stable_release() -> bool {
     })
 }
 
-#[cfg(test)]
-pub(crate) fn calculate_input_lines(input: &str, line_width: usize) -> usize {
-    use unicode_width::UnicodeWidthChar;
-
-    if line_width == 0 {
-        return 1;
-    }
-    if input.is_empty() {
-        return 1;
-    }
-
-    let mut total_lines = 0;
-    for line in input.split("\n") {
-        if line.is_empty() {
-            total_lines += 1;
-        } else {
-            let display_width: usize = line.chars().map(|c| c.width().unwrap_or(0)).sum();
-            total_lines += display_width.div_ceil(line_width);
-        }
-    }
-    total_lines.max(1)
-}
-
 pub(super) fn shorten_model_name(model: &str) -> String {
     if model.contains('/') {
         return model.to_string();

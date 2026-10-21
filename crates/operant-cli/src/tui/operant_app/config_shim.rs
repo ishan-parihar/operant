@@ -357,19 +357,14 @@ pub(crate) fn reasoning_override_test_guard() -> ReasoningOverrideGuard {
     }
 }
 
-/// The lock the test guard serialises on.
+/// The single lock the test guard serialises on.
 ///
-/// ONE lock, shared by the guard and by the tests that inspect it — a
-/// per-caller static would not serialise anything.
+/// ONE lock, held by the guard for its lifetime: the reasoning cell is
+/// process-global, so two tests writing it concurrently land in each other's
+/// window — that is the RT-149/P6.11 flake class. A guard that made its own
+/// lock would serialise nothing; this is the static it takes.
 #[cfg(test)]
 static TEST_GUARD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-/// The test guard's lock, for the leak tracer.
-#[cfg(test)]
-pub(crate) fn test_guard_lock() -> &'static std::sync::Mutex<()> {
-    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    &LOCK
-}
 
 /// The process-wide reasoning display mode, as currently set.
 ///

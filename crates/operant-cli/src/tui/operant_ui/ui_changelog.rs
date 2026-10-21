@@ -30,11 +30,6 @@ pub(super) struct ChangelogGroup {
 /// separator (0x1F).
 ///
 /// Older binaries used "hash:tag:subject"; we keep parsing that format too.
-#[cfg(test)]
-pub(super) fn parse_changelog_from(changelog: &str) -> Vec<ChangelogEntry<'_>> {
-    parse_changelog_from_impl(changelog)
-}
-
 fn parse_changelog_from_impl(changelog: &str) -> Vec<ChangelogEntry<'_>> {
     if changelog.is_empty() {
         return Vec::new();
@@ -77,15 +72,6 @@ fn parse_changelog() -> Vec<ChangelogEntry<'static>> {
 fn format_changelog_timestamp(timestamp: i64) -> Option<String> {
     chrono::DateTime::<chrono::Utc>::from_timestamp(timestamp, 0)
         .map(|dt| dt.format("%Y-%m-%d %H:%M UTC").to_string())
-}
-
-#[cfg(test)]
-pub(super) fn group_changelog_entries(
-    entries: &[ChangelogEntry<'_>],
-    current_version: &str,
-    current_git_date: &str,
-) -> Vec<ChangelogGroup> {
-    group_changelog_entries_impl(entries, current_version, current_git_date)
 }
 
 fn group_changelog_entries_impl(

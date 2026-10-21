@@ -47,6 +47,15 @@ macro_rules! semantic_state {
         }
 
         impl $name {
+            // The macro generates ONE uniform schema for all eleven
+            // semantic-state enums, and which of these accessors a given
+            // enum has consumers for varies: `ConfidenceState` aggregates
+            // numerically through `legacy_score`/`from_legacy_score`
+            // (info_widget_todos.rs), while the goal-level enums are read as
+            // strings only. Deleting an unused accessor per-enum would break
+            // the uniform schema, so the impl opts out of the dead-code lint
+            // with the reason attached here rather than at each use site.
+            #[allow(dead_code)]
             pub fn as_str(&self) -> &'static str {
                 match self {
                     $( Self::$variant => $label, )+
@@ -72,6 +81,7 @@ macro_rules! semantic_state {
 
             /// Representative 0-100 score for consumers (telemetry) that still
             /// aggregate numerically.
+            #[allow(dead_code)]
             pub fn legacy_score(&self) -> u8 {
                 match self {
                     $( Self::$variant => $score, )+
