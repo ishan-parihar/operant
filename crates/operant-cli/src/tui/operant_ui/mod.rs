@@ -247,8 +247,8 @@ use theme_support::{
 //   helper list; if a ported child needs them they are tiny state accessors to port from
 //   ui.rs :445-505, :608-660 in the same cutover pass.
 // [port-excision] record_layout_snapshot, last_layout_snapshot, layout_snapshot, LayoutSnapshot,
-//   LAST_LAYOUT, last_layout_state, last_chat_frame, render_state_test_lock,
-//   RenderStateTestGuard, PromptViewportState, PROMPT_VIEWPORT_STATE, prompt_viewport_state,
+//   LAST_LAYOUT, last_layout_state, last_chat_frame,
+//   PromptViewportState, PROMPT_VIEWPORT_STATE, prompt_viewport_state,
 //   clear_prompt_viewport_state, record_copy_viewport_frame_snapshot, clear_copy_viewport_snapshot,
 //   copy_snapshot_for_pane, copy_point_from_screen, record_pane_snapshot_from_lines,
 //   copy_pane_vertical_edge_point, copy_selection text helpers — parent plumbing feeding the
@@ -1465,32 +1465,19 @@ pub(crate) fn last_chat_frame() -> Option<Arc<PreparedChatFrame>> {
     }
 }
 
-/// Guard for [`render_state_test_lock`] that also records ownership on this
-/// thread, so a nested `clear_test_render_state_for_tests` can tell it is
-/// already inside the lock instead of deadlocking on it.
-#[cfg(test)]
-pub(crate) struct RenderStateTestGuard {
-    _guard: std::sync::MutexGuard<'static, ()>,
-}
-
-#[cfg(test)]
-impl Drop for RenderStateTestGuard {
-    fn drop(&mut self) {
-        RENDER_STATE_LOCK_HELD.with(|held| held.set(false));
-    }
-}
-
-#[cfg(test)]
-thread_local! {
-    /// Whether this thread currently holds the render-state lock. Set by
-    /// [`render_state_test_lock`]'s guard so nested clears can detect it.
-    static RENDER_STATE_LOCK_HELD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
 // [port-source] ui.rs:1605-1616 — the upstream test-only onboarding draw hook
 // (draw_onboarding_welcome_for_tests) was excised with the onboarding module
 // path (see the [port-excised] note at the file head): it called a module that
 // was never vendored and compiled under `#[cfg(any())]`.
+// [port-excision] render_state_test_lock, RenderStateTestGuard and its thread-local
+//   RENDER_STATE_LOCK_HELD — a test-only ownership recorder for a lock that does
+//   not exist. The guard documented a nested-clear deadlock guard against
+//   `render_state_test_lock`, which was never ported: nothing in the tree called
+//   it, so the guard recorded ownership of nothing. Verified by grep across
+//   crates/ for all three names before removal; the surviving render state is
+//   `set_last_chat_frame` / `last_chat_frame`, which take no lock in the test
+//   profile (thread-local slots) and a Mutex in production.
+
 // [port-source] ui.rs:1618-1727
 #[derive(Clone)]
 enum CopyViewportData {
