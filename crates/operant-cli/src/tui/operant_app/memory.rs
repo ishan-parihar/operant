@@ -96,6 +96,13 @@ pub struct PipelineState {
     pub inject_result: Option<StepResult>,
     pub maintain: StepStatus,
     pub maintain_result: Option<StepResult>,
+    #[cfg_attr(
+        test,
+        allow(
+            dead_code,
+            reason = "jcode-parity port: the pipeline's start time; the live panel shows per-step state, not a run duration"
+        )
+    )]
     pub started_at: Instant,
 }
 

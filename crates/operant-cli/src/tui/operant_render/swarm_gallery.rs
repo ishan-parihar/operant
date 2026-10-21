@@ -197,7 +197,6 @@ fn status_rank(status: &str) -> u8 {
     )
 )]
 #[derive(Clone, Debug)]
-#[allow(dead_code)]
 pub struct GalleryMember {
     /// Display title (friendly name or short id).
     pub label: String,
