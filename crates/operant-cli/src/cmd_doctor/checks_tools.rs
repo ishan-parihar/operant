@@ -123,23 +123,99 @@ fn executables_named(dirs: impl IntoIterator<Item = PathBuf>, name: &str) -> Vec
 
 /// Warns when more than one `operant` is on PATH (BUGS CR-6). The deploy
 /// updates one copy; the one a user launches may be the other.
+/// The copies of `operant` on PATH, classified.
+#[derive(Debug, Clone, PartialEq)]
+pub enum BinaryCopies {
+    /// Exactly one copy.
+    Single,
+    /// More than one, and they are the same build — noise, not a problem.
+    Identical(Vec<PathBuf>),
+    /// More than one, and they differ. `running` is the one the shell
+    /// launches (the first on PATH); `stale` holds the older ones.
+    Differing {
+        running: PathBuf,
+        stale: Vec<PathBuf>,
+    },
+}
+
+/// Classify the copies found on PATH.
+fn classify_binaries(found: Vec<PathBuf>) -> BinaryCopies {
+    if found.len() <= 1 {
+        return BinaryCopies::Single;
+    }
+    let mut stamps: Vec<(PathBuf, std::time::SystemTime, u64)> = found
+        .iter()
+        .filter_map(|path| {
+            let meta = std::fs::metadata(path).ok()?;
+            let modified = meta.modified().ok()?;
+            Some((path.clone(), modified, meta.len()))
+        })
+        .collect();
+    if stamps.len() < 2 {
+        return BinaryCopies::Single;
+    }
+    stamps.sort_by_key(|a| std::cmp::Reverse(a.1));
+    let identical = stamps
+        .windows(2)
+        .all(|w| w[0].1 == w[1].1 && w[0].2 == w[1].2);
+    if identical {
+        return BinaryCopies::Identical(found);
+    }
+    let running = stamps[0].0.clone();
+    let stale = stamps[1..]
+        .iter()
+        .map(|(path, _, _)| path.clone())
+        .collect();
+    BinaryCopies::Differing { running, stale }
+}
+
+/// Warns when more than one `operant` is on PATH (BUGS CR-6). The deploy
+/// updates one copy; the one a user launches may be the other.
+///
+/// Two copies are only a PROBLEM when they differ: the same build installed
+/// twice is noise, and a stale copy is the one the operator might not be
+/// running. The check therefore names WHICH copy is stale (the older one)
+/// and which one the shell will actually launch (the first on PATH) —
+/// before, it listed both paths and left the operator to work out which to
+/// remove, with the wrong choice costing them a downgrade.
 pub fn check_operant_binaries(manual_issues: &mut Vec<String>) {
     let dirs: Vec<PathBuf> = std::env::var_os("PATH")
         .map(|p| std::env::split_paths(&p).collect())
         .unwrap_or_default();
     let found = executables_named(dirs, "operant");
-    if found.len() > 1 {
-        let paths: Vec<String> = found.iter().map(|p| p.display().to_string()).collect();
-        check_warn(
-            "operant",
-            &format!("({} copies on PATH: {})", found.len(), paths.join(", ")),
-        );
-        manual_issues.push(format!(
-            "Remove or replace the stale operant copy so one binary is on PATH: {}",
-            paths.join(", ")
-        ));
-    } else {
-        check_ok("operant", "(one copy on PATH)");
+    match classify_binaries(found) {
+        BinaryCopies::Single => check_ok("operant", "(one copy on PATH)"),
+        BinaryCopies::Identical(paths) => {
+            let listed: Vec<String> = paths.iter().map(|p| p.display().to_string()).collect();
+            check_ok(
+                "operant",
+                &format!(
+                    "({} identical copies on PATH: {})",
+                    listed.len(),
+                    listed.join(", ")
+                ),
+            );
+        }
+        BinaryCopies::Differing { running, stale } => {
+            let running_display = running.display().to_string();
+            let stale_display: Vec<String> =
+                stale.iter().map(|p| p.display().to_string()).collect();
+            check_warn(
+                "operant",
+                &format!(
+                    "({} copies on PATH; the shell runs {} — {} is older)",
+                    stale.len() + 1,
+                    running_display,
+                    stale_display.join(", ")
+                ),
+            );
+            manual_issues.push(format!(
+                "Replace the stale operant copy with the one that runs ({} is older than {}): {}",
+                stale_display.join(", "),
+                running_display,
+                stale_display.join(", ")
+            ));
+        }
     }
 }
 
@@ -963,6 +1039,70 @@ mod operant_binary_tests {
         let found = executables_named(vec![a.clone(), b, a], "operant");
 
         assert_eq!(found.len(), 2);
+    }
+
+    /// Two copies of DIFFERENT builds: the check must name the stale one,
+    /// because removing the other downgrades the operator to the build they
+    /// did not intend to run. Before, it listed both paths and left the
+    /// choice to them.
+    #[test]
+    fn two_copies_with_different_builds_name_the_stale_one() {
+        let root = tempfile::tempdir().unwrap();
+        let first = root.path().join("first");
+        let second = root.path().join("second");
+        std::fs::create_dir_all(&first).unwrap();
+        std::fs::create_dir_all(&second).unwrap();
+        let running = first.join("operant");
+        let stale = second.join("operant");
+        std::fs::write(&running, b"new build").unwrap();
+        std::fs::write(&stale, b"old build").unwrap();
+        let set_modified = |path: &std::path::Path, secs: u64| {
+            let file = std::fs::File::options().write(true).open(path).unwrap();
+            let when = std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs);
+            file.set_times(std::fs::FileTimes::new().set_modified(when))
+                .unwrap();
+        };
+        set_modified(&running, 2_000_000_000);
+        set_modified(&stale, 1_000_000_000);
+
+        // Deliberately in mtime order (stale first): the classifier must
+        // find the NEWER copy itself, not trust the order it was handed.
+        match classify_binaries(vec![stale.clone(), running.clone()]) {
+            BinaryCopies::Differing {
+                running: r,
+                stale: st,
+            } => {
+                assert_eq!(r, running, "the copy that runs is the newer one");
+                assert_eq!(st, vec![stale], "the older copy is the stale one");
+            }
+            other => panic!("expected differing copies, got {other:?}"),
+        }
+    }
+
+    /// Two copies of the SAME build are noise, not an issue: the operator
+    /// has nothing to fix.
+    #[test]
+    fn two_identical_copies_are_not_an_issue() {
+        let root = tempfile::tempdir().unwrap();
+        let first = root.path().join("first");
+        let second = root.path().join("second");
+        std::fs::create_dir_all(&first).unwrap();
+        std::fs::create_dir_all(&second).unwrap();
+        let a = first.join("operant");
+        let b = second.join("operant");
+        std::fs::write(&a, b"same build").unwrap();
+        std::fs::write(&b, b"same build").unwrap();
+        let when = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000_000);
+        for path in [&a, &b] {
+            let file = std::fs::File::options().write(true).open(path).unwrap();
+            file.set_times(std::fs::FileTimes::new().set_modified(when))
+                .unwrap();
+        }
+
+        assert!(matches!(
+            classify_binaries(vec![a, b]),
+            BinaryCopies::Identical(_)
+        ));
     }
 
     /// RT-142: the skills-hub directory has no producer in this tree, so

@@ -21,6 +21,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-1130 — the doctor names WHICH `operant` copy is stale.** It used to report "2 copies of
+  operant on PATH" and list both paths, leaving the operator to pick — and the wrong pick is a silent
+  downgrade, because the shell resolves `~/.local/bin` first. Two copies of the same build were reported
+  the same way although they are nothing to fix. The check now says which copy runs and which one is
+  older, and treats identical copies as healthy.
 - **iter-1129 — `operant doctor` stopped asking for a fix it cannot perform.** The skills-hub check
   warned "run: operant skills list" and listed "Initialize skills hub" among the issues to address — but
   that command does not create `~/.operant/skills/.hub`, and nothing else in the tree does either (the
