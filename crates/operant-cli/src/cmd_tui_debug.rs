@@ -95,7 +95,8 @@ pub enum TuiSubcommand {
         state: Option<String>,
     },
 
-    /// Open the user keybindings file in $EDITOR (parity gap #10).
+    /// Show the key bindings in effect (the same catalogue `/keys` lists).
+    /// Custom overrides are not implemented yet.
     Keybindings,
 }
 
@@ -1025,33 +1026,61 @@ async fn handle_vim(_config: &AppConfig, state: Option<String>) -> Result<()> {
     Ok(())
 }
 
-#[expect(
-    clippy::unwrap_used,
-    reason = "kb_path is config_dir() joined with a file name, so it always has a parent"
-)]
-/// `operant tui keybindings` — open the user keybindings file in $EDITOR.
+/// `operant tui keybindings` — the key bindings that are in effect.
+///
+/// It USED to create `~/.operant/config/keybindings.json` and open it in
+/// `$EDITOR`. Nothing ever read that file: the loaders were deleted in the
+/// 2026-10-14 batch (plan 10) because they were no-op stubs with zero
+/// callers, and the TUI's `/keybindings` command went with them. The CLI
+/// command survived, so it still created a file whose only content was a
+/// pointer to a schema that does not exist — the operator edited it and
+/// nothing changed. (iter-1133)
+///
+/// It now prints the bindings in effect and says plainly that overrides
+/// are not implemented: the registry is the catalogue `/keys` and
+/// `/hotkeys` read, but the DISPATCH is still the if-chain in
+/// `tui/app/key_handling.rs`, so an override table would be a promise the
+/// runtime cannot keep.
 async fn handle_keybindings(_config: &AppConfig) -> Result<()> {
-    let kb_path =
-        crate::tui::adapter_types::config::Settings::config_dir().join("keybindings.json");
-    if !kb_path.exists() {
-        // Write a default empty keybindings file.
-        std::fs::create_dir_all(kb_path.parent().unwrap())?;
-        std::fs::write(
-            &kb_path,
-            "{\n  \"//\": \"User keybindings. See docs for the schema.\"\n}\n",
-        )?;
-        println!("Created default keybindings file: {}", kb_path.display());
+    use crate::tui::keybindings::{BindingContext, DEFAULT_KEYBINDINGS, os_conflict_reason};
+
+    let registry = &*DEFAULT_KEYBINDINGS;
+    println!(
+        "Keybindings — {} binding(s) in effect. `/keys` shows the same list inside the TUI.",
+        registry.catalogue().len()
+    );
+    let mut current: Option<BindingContext> = None;
+    for (context, binding) in registry.catalogue() {
+        if current != Some(context) {
+            current = Some(context);
+            println!("\n[{}]", context.label());
+        }
+        let flag = match os_conflict_reason(&binding.chord()) {
+            Some(why) => format!("  ⚠ {why}"),
+            None => String::new(),
+        };
+        println!(
+            "  {:<16} {:<34} {:<34?}{}",
+            binding.chord(),
+            binding.description.as_deref().unwrap_or(""),
+            binding.action,
+            flag
+        );
     }
 
-    let editor = std::env::var("EDITOR")
-        .or_else(|_| std::env::var("VISUAL"))
-        .unwrap_or_else(|_| "vi".to_string());
-
-    println!("Opening {} in {}…", kb_path.display(), editor);
-    let status = std::process::Command::new(&editor).arg(&kb_path).status()?;
-    if !status.success() {
-        anyhow::bail!("Editor exited with non-zero status");
+    let stale = crate::tui::adapter_types::config::Settings::config_dir().join("keybindings.json");
+    if stale.exists() {
+        println!(
+            "\nNote: {} exists, and nothing reads it — it was written by an older \
+             build that created the file and never used it.",
+            stale.display()
+        );
     }
+    println!(
+        "\nCustom overrides are not implemented: the binding registry is the catalogue, \
+         not the dispatcher, so a `[keybindings]` table in operant.toml is read and \
+         ignored (the loader warns when it finds one)."
+    );
     Ok(())
 }
 
@@ -2083,6 +2112,44 @@ mod tests {
         // Malformed forms are rejected, not silently passed.
         assert!(evaluate_screen_assertions(&screen, "count:needle=x").is_err());
         assert!(evaluate_screen_assertions(&screen, "count:==3").is_err());
+    }
+
+    /// The `operant tui keybindings` command must not create a file nothing
+    /// reads.
+    ///
+    /// It used to write `~/.operant/keybindings.json` and open it in
+    /// `$EDITOR`. The loaders were deleted in the 2026-10-14 batch (plan
+    /// 10) because they were no-op stubs, and the TUI's `/keybindings`
+    /// command went with them — the CLI command survived and kept writing
+    /// the dead file, so the operator edited it and nothing changed.
+    /// (iter-1133)
+    #[tokio::test]
+    #[expect(
+        clippy::await_holding_lock,
+        reason = "test-only: the std mutex serialises process-env mutation across the whole test"
+    )]
+    async fn the_keybindings_command_creates_no_file() {
+        let _env_lock = crate::config::test_env_lock();
+        let home = std::env::temp_dir().join(format!("operant-tui-kb-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&home).expect("the temp home");
+        let previous = std::env::var("HOME").ok();
+        // SAFETY: serialised by the crate's environment lock.
+        unsafe { std::env::set_var("HOME", &home) };
+
+        handle_keybindings(&AppConfig::default())
+            .await
+            .expect("the command runs");
+
+        assert!(
+            !home.join(".operant").join("keybindings.json").exists(),
+            "the command must not create a file no reader consumes"
+        );
+        match previous {
+            Some(v) => unsafe { std::env::set_var("HOME", v) },
+            None => unsafe { std::env::remove_var("HOME") },
+        }
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     /// The plan struct is the single shape the CLI hands to run_headless:

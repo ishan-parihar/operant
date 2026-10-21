@@ -65,7 +65,7 @@ Working a `## Pending` row, one row per iteration:
 ## Pending
 
 - Rebuild `/settings` over `operant.toml` (toml_edit, comments kept), tabs per config section, live-apply where supported; retire the legacy settings.json screen
-- `[keybindings]` user overrides in `operant.toml` (`/keys` now shows the effective registry bindings + conflicts — iter-820; overrides remain)
+- `[keybindings]` user overrides in `operant.toml` (`/keys` now shows the effective registry bindings + conflicts — iter-820; overrides remain). The blocker is the DISPATCH: `tui/app/key_handling.rs` still runs the if-chain, and the registry is the catalogue, not the dispatcher — the keybindings module calls migrating it "a separate, riskier change". Until then the table is read-and-ignored with a warning, and `operant tui keybindings` prints the bindings in effect instead of opening a dead file (iter-1133, RT-146).
 - Unify the gateway's `agent.show_reasoning` with the TUI reasoning display mode
 
 ## Review

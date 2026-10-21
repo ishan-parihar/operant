@@ -21,6 +21,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-1133 — `operant tui keybindings` no longer writes a file nothing reads.** The command created
+  `~/.operant/keybindings.json` and opened it in `$EDITOR`; the loaders were deleted in the 2026-10-14
+  batch (plan 10) because they were no-op stubs, so editing the file changed nothing. It now prints the
+  bindings that are in effect — the same catalogue `/keys` and `/hotkeys` read — and says plainly that
+  custom overrides are not implemented, because the binding registry is the catalogue and not the
+  dispatcher.
 - **iter-1132 — the test suite stopped reaching GitHub, and the proxy guard it broke is green again.** `client::tests::env_proxy_is_ignored_by_the_provider_client` failed in the full `operant-core` suite and passed in isolation, on a clean `origin/main`. The connection the guard counted was not provider traffic: it was `CONNECT api.github.com:443`, made by the BACKGROUND auto-update check, which fires on the first use of the aft/sourcehound integration, shells out to `gh`, and lands in whatever test is running at the time. The background check now does not run in a test build, and `OPERANT_NO_AUTO_UPDATE=1` turns it off in any binary. The explicit paths (the doctor's integration check, `operant update --integrations`) are untouched.
 - **iter-1132 — `operant webhook` subscriptions now DISPATCH.** The store was written and read by nothing:
   `subscribe` recorded a subscription and no runtime path ever delivered to it, so a subscription was a
