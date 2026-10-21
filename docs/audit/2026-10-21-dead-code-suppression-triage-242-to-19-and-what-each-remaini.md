@@ -87,3 +87,64 @@ agent can re-run it rather than re-derive it.
 an entry outside a baseline carrying its reason — the same shape
 `scripts/audit-config-surface.py` took in iter-1153 (RT-159), which turned a
 permanently-red check into one that can express "new".
+
+---
+
+## Addendum (iter-1164 to iter-1169, same session)
+
+**The recommended next step above was built, and it immediately found that it
+did not work.** `scripts/audit-lint-suppressions.py` landed in iter-1164
+modelled on `audit-config-surface.py`, and when it was first run against the
+annotations this sweep was adding it governed **30 of the repo's 80
+suppressions** -- because its regex matched only the bare `#[allow(...)]` /
+`#[expect(...)]` spelling. Every `#[cfg_attr(not(test), allow(...))]` and every
+rustfmt-split multi-line attribute was invisible to it, including ones carrying
+their own `reason` string. A gate that cannot see a suppression cannot govern
+it: the same defect class RG-013 records for the doc gate, recreated in the tool
+meant to close it. Four defects, all measured:
+
+1. `RE_ATTR` could not align the cfg_attr form -- in `#[cfg_attr(test,
+   allow(...))]` the `allow` sits INSIDE cfg_attr's parens, not after them, so
+   the optional-prefix pattern returned `False` for every cfg_attr line.
+2. a per-line scan cannot see an attribute rustfmt split over four lines; the
+   scan now joins each unclosed `#[...]` through its matching paren.
+3. `item_after()` walked from the attribute's first line and read the cfg
+   predicate (`test,`) as the item name, so every cfg_attr site was keyed `test`.
+4. `item_after` was called with a 1-based line number as a 0-based index.
+
+**The dead-code sweep itself: 54 warnings to 0, all test-profile.** A sweep of
+`cargo clippy -p operant-cli --bin operant --all-targets` measured 54 warnings,
+every one `dead_code`, with the PRODUCTION profile clean at 0 throughout
+(re-checked after each file, never assumed). Each was one of: a wire-format
+field the tests parse but no live row reads; render state the live panel never
+enters; a picker action or result vocabulary no live picker returns; a
+config-shim field kept so the shape matches upstream. Each was annotated with
+`#[cfg_attr(test, allow(dead_code, reason = ...))]` -- the TEST-profile arm,
+because an `#[expect]` would be unfulfilled in production where the lint does
+not fire. The idiom is the one `operant_model/adapter.rs` already documents
+(name the dead variants in the module head, keep the explicit arms, so the first
+live construction is a visible decision point).
+
+**Final state:** 119 suppressions across 61 files, 119 baseline entries, 0
+unexplained. `cargo clippy -p operant-cli --bin operant --all-targets` emits
+ZERO warnings, verified after forcing a rebuild of every touched file.
+operant-cli stays 1638 passed / 0 failed.
+
+**Two gate defects found by the gate itself while widening it**, both fixed:
+28 duplicate `BASELINE` keys entered in iter-1168 (one collided so two different
+`row.rs` `config` fields shared a single reason), and the second field's
+`(2)`-suffixed key was among the deleted.
+
+**Mutation-checked twice, and the second run corrected the first.** Adding an
+unexplained `#[allow(dead_code)]` on an item that already carries a suppression
+matches an existing baseline key and is correctly NOT a new site -- the gate was
+right and my mutation was wrong. The valid mutation (a suppression on an
+unsuppressed item) makes the gate name the file and line and exit 1.
+
+**What is still open, with the reason:** RT-168's two `CopyTargetKind` enums are
+annotated (the suppressions now point at the row) but NOT collapsed, for the
+three reasons its own row records. RT-169's doc gate blind spot is recorded with
+a measurement and deliberately not fixed. The `usage.rs` report path is ported
+and has exactly one constructor -- its own module's test -- so it is
+ported-but-unwired, which is now stated in the type's doc rather than left for a
+reader to discover.
