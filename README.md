@@ -114,6 +114,8 @@ operant
 
 Skills are **markdown instruction packs** — the same mechanism hermes-agent uses — that the agent loads and injects into its context on demand. They teach operant *how to do* things (debugging protocols, git workflows, security methodology) so it behaves like an experienced operator rather than a generic model. Invoke one in the TUI with `/skill <name>`; the agent can also call the `skill` tool itself mid-loop.
 
+**SOPs** are the operator's own playbooks for recurring tasks: TOML files in `~/.operant/sops/` (`operant sop list` shows them). The agent reaches them through the `sop` tool — list the playbooks, read one — so a procedure you wrote down is one the harness can actually follow.
+
 ### Directory layoutOperant ships a **categorized** pool in the repo, and installs it **flat** into the user skills directory (matching `operant skills seed`):
 
 ```
