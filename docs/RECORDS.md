@@ -1,4 +1,4 @@
-<!-- genome:zone records sha=70d3b4b73a37 -->
+<!-- genome:zone records sha=6e3373e39b53 -->
 **Decisions** (42)
 
 | ID | Title | Status | Description |
@@ -46,7 +46,7 @@
 | AD-041 | The PDF decompression bound covers the load path and the whole document, so AD-039's claim is now true | Active | AD-039 published 'the decompression bomb is now bounded', but only the extraction path was bounded: Document::load_mem uses LoadOptions::default(), whose max_decompressed_size is None, so the object a |
 | AD-042 | The webhook subscription family is INBOUND (R1): the subscription claims a route, the agent answers, and the answer is delivered to the target | Active | The webhook subscription family is INBOUND (R1): the subscription claims a route, the agent answers, and the answer is delivered to the target |
 
-**Regressions** (9)
+**Regressions** (10)
 
 | ID | Title | Severity | Description |
 |---|---|---|---|
@@ -59,6 +59,7 @@
 | RG-009 | A pointer to a section is not a pointer to the work: the entry contract named an open-queue section with nothing open in it | High | docs/handoff/README.md — the entry contract, the file AGENTS.md names as what a fresh agent reads — pointed at the 'OPEN — Red-team: Holon seam, agentic-core seat and TUI (2026-10-19)' section of BUGS |
 | RG-010 | A list of the code's surface goes stale in BOTH directions, and the count in the heading is a third, independent error | Medium | AGENTS.md's 'What IS Working' listed 53 CLI command variants. The Commands enum has 52. The list named hardware and peripheral, both deleted in iter-892, and omitted donate and org, both real commands |
 | RG-011 | A doc claim about the code is checkable, so the check is written down and run against the broken state | Medium | scripts/check-doc-claims.sh derives AGENTS.md's code-surface claims from the code and reports every difference. It was verified by running it against the pre-fix documents: it catches the stale CLI li |
+| RG-013 | the doc gate cannot see a cfg(test) item, which is where doc rot hides | High | the doc gate cannot see a cfg(test) item, which is where doc rot hides |
 <!-- genome:end records -->
 
 <!-- genome:zone idmap sha=2a03e30bd9bd -->
