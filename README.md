@@ -82,9 +82,11 @@ operant
 │   ├── operant-plugins      WASM plugin bridge
 │   ├── operant-config       config schema · validation · defaults
 │   ├── operant-harness      unified harness (persistence seam + config)
-│   └── …                    api · infra · macros (12 crates total —
+│   └── …                    api · infra (11 crates total —
 │                           the 6 crates the binary never called were
-│                           deleted in the 2026-10-17 purge)
+│                           deleted in the 2026-10-17 purge, and
+│                           `operant-macros` with the retired config
+│                           derive in the 2026-10-21 retirement)
 ```
 
 ---
@@ -101,7 +103,7 @@ operant
 | **MCP** | Native client (stdio + HTTP, deferred loading) **and** server (`operant mcp serve` — stdio: `initialize` → `tools/list` → `tools/call`); reconnect materializes tools mid-session |
 | **Channels** | Telegram · Discord · Slack · WhatsApp · email · SMS · webhooks via the gateway (7 platforms) |
 | **Autonomy** | `operant autonomous` — a self-directed dev loop over `TODO.md` with test-command guardrails |
-| **Org governance** | Per-employee permission scoping — seat policies (`yolo`/`standard`/`scoped`/`lockdown`) with deny/allow globs, a TTL'd grant ledger, durable escalation queue (unattended cron runs ask-and-deny; a senior's `/approve` mints a grant), reporting lines, and one attributable worklog row per scheduled run |
+| **Org governance** | Per-employee permission scoping — seat policies (`yolo`/`standard`/`scoped`/`lockdown`) with deny/allow globs, plus per-seat budget overrides. An interactive approval resolves an in-flight ask; the grant ledger, the escalation queue and the worklog store live in [Holon](docs/agentic-os/), not here |
 | **Plugins** | WASM plugin tools · **Hooks** — a lifecycle hook registry (`agent_start`, `agent_end`, `turn_start`, `turn_end`) plus the operator's own shell commands (`operant hooks add --event agent_end -- <cmd>`) |
 | **Interface** | ratatui TUI · interactive chat · scriptable `run` · one-shot `test` |
 

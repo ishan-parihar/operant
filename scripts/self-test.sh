@@ -95,6 +95,14 @@ run_test "Build script tests" "bash scripts/tests/libclang_resolve_test.sh && ba
 # 4. Formatting
 run_test "Check formatting" "./scripts/check.sh fmt --all 2>&1"
 
+# 4b. The code-surface claims in AGENTS.md, diffed against the code.
+# This check existed and ran only when a human remembered to run it — which
+# is how "Workspace members (12 crates)" survived the deletion of the
+# `operant-macros` crate, and how the README kept advertising a grant ledger
+# and a durable escalation queue that retired to Holon (RT-160). A check
+# nobody runs is a comment, so it is a step of the gate now.
+run_test "Doc claims (scripts/check-doc-claims.sh)" "bash scripts/check-doc-claims.sh 2>&1"
+
 # 3d. The TUI visual-regression corpus. This gate was RED for nine days
 # and nobody noticed, because the corpus was not in ANY automated gate:
 # `scripts/check.sh` forwards to cargo, and the corpus is a Python script.
@@ -112,30 +120,38 @@ run_test "Check formatting" "./scripts/check.sh fmt --all 2>&1"
 # goldens it proves, and a concurrent verify reads them mid-rewrite and
 # reports dozens of phantom drifts.
 run_test "TUI visual corpus (crates/operant-cli/tests/tui_scenarios/_run.py verify)" \
-    "cd '$REPO_ROOT/crates/operant-cli/tests/tui_scenarios' && env -u OPENAI_BASE_URL -u OPENAI_API_KEY OPERANT_BIN='$REPO_ROOT/target/release/operant' python3 -u _run.py verify 2>&1"
+    "(cd '$REPO_ROOT/crates/operant-cli/tests/tui_scenarios' && env -u OPENAI_BASE_URL -u OPENAI_API_KEY OPERANT_BIN='$REPO_ROOT/target/release/operant' python3 -u _run.py verify 2>&1)"
+
+# The corpus step above `cd`s into a subdirectory. It runs in a SUBSHELL, so
+# the script's working directory stays at the repository root — otherwise
+# every later step's relative path (`./target/release/operant`) resolves
+# against the scenarios directory and fails with "No such file or directory".
+# The binary is also named absolutely, so the steps do not depend on the
+# caller's cwd at all.
+BIN="$REPO_ROOT/target/release/operant"
 
 # 5. CLI version
-run_test "CLI version" "./target/release/operant --version 2>&1"
+run_test "CLI version" "$BIN --version 2>&1"
 
 # 5b. The shipped architecture example must stay valid (r16 audit C5:
 # without this, a malformed example can ship unnoticed — the CI half was
 # dropped with harness.yml, so self-test.sh is the only automated gate).
-run_test "Validate architecture example" "./target/release/operant architecture validate --file architecture.toml.example 2>&1"
+run_test "Validate architecture example" "$BIN architecture validate --file architecture.toml.example 2>&1"
 
 # 6. CLI help
-run_test "CLI help" "./target/release/operant --help 2>&1"
+run_test "CLI help" "$BIN --help 2>&1"
 
 # 7. CLI chat help
-run_test "CLI chat help" "./target/release/operant chat --help 2>&1"
+run_test "CLI chat help" "$BIN chat --help 2>&1"
 
 # 8. CLI run help
-run_test "CLI run help" "./target/release/operant run --help 2>&1"
+run_test "CLI run help" "$BIN run --help 2>&1"
 
 # 9. CLI dashboard help
-run_test "CLI dashboard help" "./target/release/operant dashboard --help 2>&1"
+run_test "CLI dashboard help" "$BIN dashboard --help 2>&1"
 
 # 10. Quick run test
-run_test "Quick run test" "./target/release/operant run --query 'Hello' --max-iterations 1 2>&1"
+run_test "Quick run test" "$BIN run --query 'Hello' --max-iterations 1 2>&1"
 
 # Summary
 echo ""

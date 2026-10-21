@@ -514,7 +514,7 @@ operant/
 │   ├── check.sh               # Wrapper that applies dev-env + cargo
 │   ├── self-test.sh           # Build + test + clippy + fmt sweep
 │   └── provision-build-deps.sh # One-time dependency provisioning
-├── Cargo.toml                 # Workspace members (12 crates, self-contained)
+├── Cargo.toml                 # Workspace members (11 crates, self-contained)
 ├── operant.example.toml       # Config template (7 gateway platforms)
 ├── TODO.md                    # Autonomous-mode task ledger
 ├── docs/audit/2026-06-19-BUGS.md # Open issues tracker (the live ledger; the 2026-08-03 snapshot is in docs/archive/BUGS.md)
