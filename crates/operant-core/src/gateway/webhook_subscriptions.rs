@@ -1,8 +1,9 @@
 //! Webhook subscriptions — the store behind `operant webhook`.
 //!
-//! A subscription records an outbound destination: a URL, the events that
-//! should reach it, an optional prompt, an optional signing secret, and
-//! where the agent's answer goes (`deliver` / `deliver_chat_id`).
+//! A subscription records an INBOUND route: the path segment under
+//! `/webhook/` that the external service posts to, the prompt and skills
+//! that shape how the agent handles the event, and where the answer goes
+//! (`deliver` / `deliver_chat_id`).
 //!
 //! Before iter-1127 the whole family lived in the CLI: the store was
 //! written by `operant webhook subscribe` and read by NOTHING — the
@@ -11,21 +12,33 @@
 //! now lives in core so the signing scheme, the loader and the POST are
 //! one implementation, and `operant webhook test` really posts.
 //!
-//! The DISPATCH itself is still open: the runtime does not yet deliver
-//! events to a subscription. That gap is recorded in the audit ledger
-//! (RT-140) together with the two candidate models, because the choice
-//! between them is a product decision, not an implementation detail.
+//! (iter-1132) The DISPATCH landed with the R1 (inbound) model: the
+//! subscription's route is matched by the inbound adapter, the event is
+//! handled by the agent, and the answer is delivered to the subscription's
+//! `deliver` target instead of to the dead inbound channel. The R2
+//! (outbound) alternative was rejected: `deliver`, `deliver_chat_id` and
+//! `deliver_only` only mean anything when WE receive the event and answer
+//! it somewhere. The reasoning is recorded in the audit ledger (RT-140).
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use super::types::DeliveryTarget;
+
 /// One webhook subscription.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WebhookSubscription {
-    /// Where the event is posted.
+    /// The public URL of the endpoint (the map key). For an inbound
+    /// subscription the route is derived from its last path segment unless
+    /// `route` names one explicitly.
     pub url: String,
+    /// The path segment under `/webhook/` this subscription answers to.
+    /// `None` = the subscription is recorded but no route claims it (it
+    /// never dispatches).
+    #[serde(default)]
+    pub route: Option<String>,
     /// The prompt that accompanies the event.
     #[serde(default)]
     pub prompt: Option<String>,
@@ -35,7 +48,8 @@ pub struct WebhookSubscription {
     /// The operator's description of the subscription.
     #[serde(default)]
     pub description: Option<String>,
-    /// Skills enabled for the event.
+    /// Skills the event's handling should use (the agent reads them with
+    /// the skills tool).
     #[serde(default)]
     pub skills: Vec<String>,
     /// Where the agent's answer goes (e.g. "telegram:chat_id").
@@ -44,12 +58,108 @@ pub struct WebhookSubscription {
     /// The delivery chat id, when it differs from the deliver target.
     #[serde(default)]
     pub deliver_chat_id: Option<String>,
-    /// The HMAC-SHA256 secret used to sign the request.
+    /// The HMAC-SHA256 secret used to sign the request. A subscription
+    /// with its own secret is verified against THAT secret, so two routes
+    /// can use different ones.
     #[serde(default)]
     pub secret: Option<String>,
     /// Deliver only — do not run the agent for the event.
     #[serde(default)]
     pub deliver_only: bool,
+}
+
+impl WebhookSubscription {
+    /// Where the answer to an event on this subscription goes.
+    ///
+    /// `deliver` is `platform:chat_id`; `deliver_chat_id` replaces the chat
+    /// id when the operator wants a different conversation on the same
+    /// platform. `None` when no usable target is named — the answer would
+    /// otherwise go to the inbound channel, which cannot carry it.
+    pub fn delivery_target(&self) -> Option<DeliveryTarget> {
+        let spec = self.deliver.as_deref()?;
+        let mut target = DeliveryTarget::parse(spec)?;
+        if let Some(chat) = self
+            .deliver_chat_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|c| !c.is_empty())
+        {
+            target.channel_id = chat.to_string();
+        }
+        Some(target)
+    }
+
+    /// The content the agent sees for an event: the operator's prompt, the
+    /// skills the event should use, and the event body itself.
+    pub fn compose_event_prompt(&self, event: &str) -> String {
+        let mut out = String::new();
+        if let Some(prompt) = self
+            .prompt
+            .as_deref()
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+        {
+            out.push_str(prompt);
+            out.push_str("\n\n");
+        }
+        if !self.skills.is_empty() {
+            out.push_str("<webhook_skills>\n");
+            for skill in &self.skills {
+                out.push_str(skill.trim());
+                out.push('\n');
+            }
+            out.push_str("</webhook_skills>\n\n");
+        }
+        out.push_str("<webhook_event>\n");
+        out.push_str(event);
+        out.push_str("\n</webhook_event>");
+        out
+    }
+    /// Whether this subscription handles an event with this name.
+    ///
+    /// An empty list — or a list containing `*` — accepts every event. A
+    /// payload that names no event is a "message" event, which is what the
+    /// CLI subscribes to by default.
+    pub fn accepts_event(&self, event: &str) -> bool {
+        self.events.is_empty()
+            || self
+                .events
+                .iter()
+                .any(|name| name.trim() == "*" || name.trim() == event)
+    }
+}
+
+/// The route a URL claims: its last path segment.
+///
+/// `https://example.com/webhook/orders` claims the route `orders`, so the
+/// external service posts to `POST /webhook/orders`. A segment that is not
+/// a plain path token claims nothing — the operator then names the route
+/// explicitly.
+pub fn route_from_url(url: &str) -> Option<String> {
+    let without_query = url.split(['?', '#']).next().unwrap_or(url);
+    let last = without_query
+        .trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .filter(|s| !s.is_empty())?;
+    if last.is_empty()
+        || !last
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return None;
+    }
+    Some(last.to_string())
+}
+
+/// The subscription that claims `route`, if any.
+///
+/// The store is read per request so a subscription the operator adds takes
+/// effect without a gateway restart; the file is a handful of entries.
+pub fn subscription_for_route(route: &str) -> Option<WebhookSubscription> {
+    let subs = load_subscriptions().ok()?;
+    subs.into_values()
+        .find(|sub| sub.route.as_deref() == Some(route))
 }
 
 /// Where the subscriptions live.
@@ -199,5 +309,113 @@ mod tests {
             .await
             .expect_err("must fail");
         assert!(err.contains("could not reach"), "{err}");
+    }
+
+    /// The route a URL claims is its last path segment — so the operator's
+    /// existing `subscribe <url>` starts naming a route without a new flag.
+    #[test]
+    fn the_route_is_the_last_path_segment_of_the_url() {
+        assert_eq!(
+            route_from_url("https://example.com/webhook/orders").as_deref(),
+            Some("orders")
+        );
+        assert_eq!(
+            route_from_url("https://example.com/webhook/orders/").as_deref(),
+            Some("orders")
+        );
+        assert_eq!(
+            route_from_url("https://example.com/webhook/orders?x=1").as_deref(),
+            Some("orders")
+        );
+        // A segment that is not a plain path token claims nothing: the
+        // operator then names the route explicitly.
+        assert_eq!(route_from_url("https://example.com/webhook/ord ers"), None);
+        assert_eq!(route_from_url("https://example.com/"), None);
+    }
+
+    /// The delivery target is `platform:chat_id`, and `deliver_chat_id`
+    /// replaces the chat id on the same platform.
+    #[test]
+    fn the_delivery_target_is_parsed_from_the_deliver_spec() {
+        let mut sub = subscription("https://example.com/webhook/orders");
+        assert!(sub.delivery_target().is_none());
+
+        sub.deliver = Some("telegram:chat-42".to_string());
+        let target = sub.delivery_target().expect("a target");
+        assert_eq!(target.platform, "telegram");
+        assert_eq!(target.channel_id, "chat-42");
+
+        sub.deliver_chat_id = Some("chat-99".to_string());
+        let target = sub.delivery_target().expect("a target");
+        assert_eq!(target.platform, "telegram");
+        assert_eq!(target.channel_id, "chat-99");
+
+        // A spec with no platform or no chat id is no target at all: the
+        // answer would otherwise be sent to the dead inbound channel.
+        sub.deliver = Some("telegram".to_string());
+        assert!(sub.delivery_target().is_none());
+        sub.deliver = Some("telegram:".to_string());
+        assert!(sub.delivery_target().is_none());
+    }
+
+    /// The prompt and the skills shape the event the agent sees; the event
+    /// body is always there.
+    #[test]
+    fn the_composed_event_carries_the_prompt_the_skills_and_the_body() {
+        let mut sub = subscription("https://example.com/webhook/orders");
+        sub.prompt = Some("Summarise the order".to_string());
+        sub.skills = vec!["billing".to_string(), "shipping".to_string()];
+
+        let composed = sub.compose_event_prompt("{\"order_id\":\"A-17\"}");
+        assert!(composed.contains("Summarise the order"), "{composed}");
+        assert!(composed.contains("billing"), "{composed}");
+        assert!(composed.contains("shipping"), "{composed}");
+        assert!(composed.contains("A-17"), "{composed}");
+
+        // With no prompt and no skills, the event body is the whole thing.
+        let bare = subscription("https://example.com/webhook/orders");
+        let composed = bare.compose_event_prompt("hello");
+        assert!(composed.contains("hello"), "{composed}");
+        assert!(!composed.contains("webhook_skills"), "{composed}");
+    }
+
+    /// A subscription with a route is found by that route; one without is
+    /// never dispatched.
+    #[test]
+    fn a_subscription_is_found_by_its_route() {
+        let mut claimed = subscription("https://example.com/webhook/orders");
+        claimed.route = Some("orders".to_string());
+        let unclaimed = subscription("https://example.com/webhook/other");
+        let subs: HashMap<String, WebhookSubscription> = HashMap::from([
+            (claimed.url.clone(), claimed),
+            (unclaimed.url.clone(), unclaimed),
+        ]);
+
+        let found = subs
+            .values()
+            .find(|sub| sub.route.as_deref() == Some("orders"))
+            .expect("the claimed subscription");
+        assert_eq!(found.url, "https://example.com/webhook/orders");
+        assert!(
+            subs.values()
+                .all(|sub| sub.route.as_deref() != Some("other")),
+            "a subscription with no route claims nothing"
+        );
+    }
+
+    /// A subscription with every field the CLI writes.
+    fn subscription(url: &str) -> WebhookSubscription {
+        WebhookSubscription {
+            url: url.to_string(),
+            route: None,
+            prompt: None,
+            events: vec!["message".to_string()],
+            description: None,
+            skills: Vec::new(),
+            deliver: None,
+            deliver_chat_id: None,
+            secret: None,
+            deliver_only: false,
+        }
     }
 }

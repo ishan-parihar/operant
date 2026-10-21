@@ -1,9 +1,11 @@
 //! CLI subcommand for managing webhook subscriptions (`operant webhook`).
 //!
-//! A subscription records an outbound destination: a URL, the events that
-//! should reach it, an optional prompt and signing secret. The store lives
-//! in core (`operant_core::gateway::webhook_subscriptions`) so the CLI and
-//! the runtime read the same file.
+//! A subscription records an INBOUND route: the path segment under
+//! `/webhook/` that an external service posts to, the prompt and skills
+//! that shape how the agent handles the event, and where the answer goes
+//! (`deliver` / `deliver_chat_id`). The store lives in core
+//! (`operant_core::gateway::webhook_subscriptions`) so the CLI, the
+//! inbound adapter and the agent read the same file.
 //!
 //! `operant webhook test <url>` REALLY posts the ping (signed with the
 //! subscription's secret when it has one) and reports the answer — before
@@ -15,7 +17,7 @@ use anyhow::Result;
 use clap::{Args, Subcommand};
 use operant_core::config::AppConfig;
 use operant_core::gateway::webhook_subscriptions::{
-    WebhookSubscription, load_subscriptions, post_json, save_subscriptions,
+    WebhookSubscription, load_subscriptions, post_json, route_from_url, save_subscriptions,
 };
 
 #[derive(Debug, Clone, Subcommand)]
@@ -38,8 +40,15 @@ pub enum WebhookSubcommand {
 
 #[derive(Debug, Clone, Args)]
 pub struct WebhookSubscribeArgs {
-    /// Webhook URL to subscribe
+    /// Public URL of the endpoint (the subscription's key). Its last path
+    /// segment is the route the subscription claims, unless `--route`
+    /// names one.
     pub url: String,
+
+    /// The path segment under `/webhook/` the subscription answers to.
+    /// Defaults to the last segment of the URL.
+    #[arg(long)]
+    pub route: Option<String>,
 
     /// Prompt to use when handling webhook events
     #[arg(long)]
@@ -87,8 +96,18 @@ pub async fn handle_webhook_command(_config: &AppConfig, cmd: WebhookSubcommand)
 async fn cmd_subscribe(args: WebhookSubscribeArgs) -> Result<()> {
     let mut subs = load_subscriptions().map_err(anyhow::Error::msg)?;
 
+    // The route is the path segment under `/webhook/` that the external
+    // service posts to. Derived from the URL when not named explicitly.
+    let route = args
+        .route
+        .clone()
+        .or_else(|| route_from_url(&args.url))
+        .map(|r| r.trim().trim_matches('/').to_string())
+        .filter(|r| !r.is_empty());
+
     let subscription = WebhookSubscription {
         url: args.url.clone(),
+        route: route.clone(),
         prompt: args.prompt,
         events: args
             .events
@@ -110,12 +129,38 @@ async fn cmd_subscribe(args: WebhookSubscribeArgs) -> Result<()> {
         deliver_only: args.deliver_only,
     };
 
+    // Computed BEFORE the subscription is moved into the store.
+    let delivery_target = subscription.delivery_target();
+    let deliver_only = subscription.deliver_only;
+
     subs.insert(args.url.clone(), subscription);
     save_subscriptions(&subs).map_err(anyhow::Error::msg)?;
     println!("Subscribed webhook: {}", args.url);
-    // Honest about what the store does today: the destination is recorded,
-    // but the runtime does not yet dispatch events to it (RT-140).
-    println!("  NOTE: recorded only — the runtime does not yet dispatch events to a subscription.");
+    match &route {
+        Some(route) => {
+            println!("  Route:       {route}  (POST /webhook/{route})");
+            if deliver_only {
+                println!(
+                    "  Mode:        deliver-only — the event is delivered, the agent is not run."
+                );
+            }
+            match delivery_target {
+                Some(target) => {
+                    println!("  Answer goes: {}:{}", target.platform, target.channel_id)
+                }
+                None => println!(
+                    "  Answer goes: nowhere — the inbound channel cannot carry it. \
+                     Set --deliver <platform:chat_id>."
+                ),
+            }
+            println!("  The gateway dispatches this route; no restart is needed.");
+        }
+        None => println!(
+            "  NOTE: no route — the subscription is recorded only. Name one with \
+             `--route <name>` (or use a URL whose last path segment is a plain \
+             token) for the gateway to dispatch it."
+        ),
+    }
     println!(
         "  Use `operant webhook test {}` to check that the endpoint answers.",
         args.url
@@ -135,6 +180,10 @@ async fn cmd_list() -> Result<()> {
     for (url, sub) in &subs {
         println!();
         println!("  URL:         {}", url);
+        match &sub.route {
+            Some(route) => println!("  Route:       {route}  (POST /webhook/{route})"),
+            None => println!("  Route:       — (recorded only; the gateway dispatches nothing)"),
+        }
         if let Some(desc) = &sub.description {
             println!("  Description: {}", desc);
         }

@@ -1045,6 +1045,16 @@ impl MessageHandler for GatewayMessageHandler {
     }
 
     async fn handle(&self, message: IncomingMessage) -> operant_core::Result<OutgoingMessage> {
+        // (iter-1132) A webhook subscription with `deliver_only` wants the
+        // EVENT delivered, not an answer about it: no agent run, the event
+        // body IS the message. The delivery target (if any) is applied by
+        // the gateway when the response comes back.
+        if message.deliver_only {
+            return Ok(OutgoingMessage::new(
+                message.channel_id.clone(),
+                message.content.clone(),
+            ));
+        }
         // (iter-161: Check for pending user-question reply before routing
         // to the agent. If there's a pending clarify() question for this
         // channel, route the user's message as the reply instead.)
@@ -4522,13 +4532,23 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                                     "Stream already delivered response to {}; skipping duplicate send",
                                     channel_id
                                 );
-                            } else if let Err(e) = gw.send_to_platform(&platform, response).await {
-                                tracing::error!(
-                                    "Failed to send response on {} to {}: {}",
-                                    platform,
-                                    channel_id,
-                                    redact_err(&e)
-                                );
+                            } else {
+                                // (iter-1132) A webhook subscription's
+                                // `deliver` target names the platform the
+                                // answer goes to. Without one, the answer goes
+                                // back to where the message came from.
+                                let send_platform = response
+                                    .target_platform
+                                    .clone()
+                                    .unwrap_or_else(|| platform.clone());
+                                if let Err(e) = gw.send_to_platform(&send_platform, response).await {
+                                    tracing::error!(
+                                        "Failed to send response on {} to {}: {}",
+                                        send_platform,
+                                        channel_id,
+                                        redact_err(&e)
+                                    );
+                                }
                             }
                             save_turn_state_exit(
                                 &channel_id,

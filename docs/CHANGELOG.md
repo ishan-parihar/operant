@@ -21,6 +21,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-1132 — the test suite stopped reaching GitHub, and the proxy guard it broke is green again.** `client::tests::env_proxy_is_ignored_by_the_provider_client` failed in the full `operant-core` suite and passed in isolation, on a clean `origin/main`. The connection the guard counted was not provider traffic: it was `CONNECT api.github.com:443`, made by the BACKGROUND auto-update check, which fires on the first use of the aft/sourcehound integration, shells out to `gh`, and lands in whatever test is running at the time. The background check now does not run in a test build, and `OPERANT_NO_AUTO_UPDATE=1` turns it off in any binary. The explicit paths (the doctor's integration check, `operant update --integrations`) are untouched.
+- **iter-1132 — `operant webhook` subscriptions now DISPATCH.** The store was written and read by nothing:
+  `subscribe` recorded a subscription and no runtime path ever delivered to it, so a subscription was a
+  promise with no fulfillment. The model is now INBOUND (AD-042): the subscription claims a route under
+  `/webhook/`, the external service posts to it, the agent handles the event, and the answer is delivered
+  to the target the operator named (`--deliver platform:chat_id`) — because the inbound channel cannot
+  carry a reply, so the answer used to be dropped on the floor. The route is the last path segment of the
+  subscribed URL (`https://example.com/webhook/orders` claims `orders`), with `--route` to name one
+  explicitly; a subscription that carries its own secret is verified against that secret. Two defects went
+  with it: every webhook event was refused with "You are not authorized to use this bot." in any deployment
+  that configures `admins` (the gate is a USER gate and a verified machine event has no user), and the
+  agent's answer to an event was discarded by the inbound-only adapter.
+
 - **iter-1131 — `operant gateway status` no longer claims the gateway is down while it is up.** The
   running check read one source, `~/.operant/gateway.pid`; a gateway run under systemd (the documented
   way to run it) has no such file, so the command printed "Runtime: not running" on a live box — and

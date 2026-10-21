@@ -168,7 +168,8 @@ impl PlatformAdapter for WebhookAdapter {
                  to /webhook/<route> is accepted unverified and forwarded into \
                  the agent as a message. Set [gateway] webhooks_secret to enable \
                  HMAC-SHA256 verification, or bind the adapter to a private \
-                 address."
+                 address. (A route claimed by a webhook subscription that has \
+                 its own secret IS verified against that secret.)"
             );
         }
 
@@ -367,6 +368,21 @@ impl PlatformAdapter for WebhookAdapter {
                             }
                         }
 
+                        // (iter-1132) The route may be claimed by a webhook
+                        // subscription. A subscription with its own secret is
+                        // verified against THAT secret, so two routes can use
+                        // different ones; without one, the adapter's global
+                        // `[gateway] webhooks_secret` applies.
+                        let subscription =
+                            super::webhook_subscriptions::subscription_for_route(&route);
+                        let effective_secret: Option<String> = subscription
+                            .as_ref()
+                            .and_then(|s| s.secret.clone())
+                            .or_else(|| secret.clone());
+                        // A signature that verified is what makes the event a
+                        // machine event rather than an anonymous request.
+                        let mut authenticated = false;
+
                         // Validate HMAC signature if secret is configured.
                         // Uses standard HMAC-SHA256(secret, body) — not the
                         // old non-standard SHA256(route+secret). Supports
@@ -374,7 +390,7 @@ impl PlatformAdapter for WebhookAdapter {
                         // x-webhook-signature (custom), x-hub-signature-256
                         // (GitHub), Stripe-Signature (Stripe).
                         // (iter-101 — closes Bug #9 from iter-98 audit.)
-                        if let Some(ref sec) = secret {
+                        if let Some(ref sec) = effective_secret {
                             // Slack-specific signature verification: Slack uses
                             // `X-Slack-Signature` (HMAC-SHA256 hex of
                             // "v0:<X-Slack-Request-Timestamp>:<body>") +
@@ -478,9 +494,12 @@ impl PlatformAdapter for WebhookAdapter {
                                         axum::http::StatusCode::UNAUTHORIZED,
                                         "Missing signature header (x-slack-signature / x-webhook-signature / x-hub-signature-256 / stripe-signature)",
                                     )
-                                        .into_response();
+                                    .into_response();
                                 }
                             }
+                            // The signature matched (both branches above
+                            // return on a mismatch).
+                            authenticated = true;
                         }
 
                         // Parse the body as the message content. Try JSON
@@ -527,6 +546,9 @@ impl PlatformAdapter for WebhookAdapter {
                                                         .and_then(|s| s.split('.').next().and_then(|n| n.parse::<i64>().ok())),
                                                     raw: v.clone(),
                                                     media_urls: Vec::new(),
+                                                    deliver_to: None,
+                                                    deliver_only: false,
+                                                    authenticated,
                                                 };
                                                 let _ = tx.send(slack_msg);
                                             }
@@ -555,6 +577,9 @@ impl PlatformAdapter for WebhookAdapter {
                                                     timestamp: msg.get("timestamp").and_then(|t| t.as_str()).and_then(|s| s.parse::<i64>().ok()).unwrap_or_else(|| chrono::Utc::now().timestamp()),
                                                     thread_id: None,
                                                     media_urls: Vec::new(),
+                                                    deliver_to: None,
+                                                    deliver_only: false,
+                                                    authenticated,
                                                     raw: msg.clone(),
                                                 };
                                                 let _ = tx.send(wa_msg);
@@ -564,20 +589,57 @@ impl PlatformAdapter for WebhookAdapter {
                                     }
                         }
 
-                        let content = if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&body) {
+                        let (content, event_name) = if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&body) {
+                            // The event NAME: the payload names it, and a
+                            // payload that names none is a "message" event —
+                            // which is what the CLI subscribes to by default.
+                            let name = v
+                                .get("event")
+                                .or_else(|| v.get("type"))
+                                .and_then(|n| n.as_str())
+                                .unwrap_or("message")
+                                .to_string();
                             // Try common fields: text, message, content, body, data.
                             // If none match, pretty-print the whole JSON.
-                            v.get("text")
+                            let text = v.get("text")
                                 .or_else(|| v.get("message"))
                                 .or_else(|| v.get("content"))
                                 .or_else(|| v.get("body"))
                                 .or_else(|| v.get("data"))
                                 .and_then(|t| t.as_str())
                                 .map(|s| s.to_string())
-                                .unwrap_or_else(|| serde_json::to_string_pretty(&v).unwrap_or_default())
+                                .unwrap_or_else(|| serde_json::to_string_pretty(&v).unwrap_or_default());
+                            (text, name)
                         } else {
                             // Not JSON — use raw UTF-8 text.
-                            String::from_utf8_lossy(&body).to_string()
+                            (String::from_utf8_lossy(&body).to_string(), "message".to_string())
+                        };
+
+                        // (iter-1132) A subscription that does not list this
+                        // event does not apply: the event is handled exactly
+                        // as before. (The route's subscription still governs
+                        // the SIGNATURE — that was decided before the body
+                        // was read.)
+                        let subscription = subscription
+                            .as_ref()
+                            .filter(|sub| sub.accepts_event(&event_name))
+                            .cloned();
+
+                        // (iter-1132) The subscription that claims this route
+                        // shapes the event and names where the answer goes.
+                        // Without one, the event is handled exactly as before.
+                        let (content, deliver_to, deliver_only) = match &subscription {
+                            // deliver-only: the EVENT is delivered, so the
+                            // agent's prompt has no reader — deliver the body.
+                            Some(sub) if sub.deliver_only => {
+                                (content, sub.delivery_target(), true)
+                            }
+                            Some(sub) => (
+                                sub.compose_event_prompt(&content),
+                                sub.delivery_target(),
+                                false,
+                            ),
+                            None => (content, None, false),
                         };
 
                         let msg = IncomingMessage {
@@ -591,6 +653,9 @@ impl PlatformAdapter for WebhookAdapter {
                             timestamp: chrono::Utc::now().timestamp(),
                             thread_id: None,
                             media_urls: Vec::new(),
+                            deliver_to,
+                            deliver_only,
+                            authenticated,
                             raw: serde_json::from_slice(&body).unwrap_or(serde_json::json!({"route": route})),
                         };
 
@@ -696,16 +761,23 @@ mod tests {
 
     /// POST a body and return the status code.
     async fn post(port: u16, path: &str, headers: &[(&str, &str)]) -> u16 {
+        post_body(port, path, headers, "{}").await
+    }
+
+    /// POST a specific body and return the status code.
+    async fn post_body(port: u16, path: &str, headers: &[(&str, &str)], body: &str) -> u16 {
         let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", port))
             .await
             .expect("connect");
         let mut request = format!(
-            "POST {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Length: 2\r\nConnection: close\r\n"
+            "POST {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Length: {}\r\nConnection: close\r\n",
+            body.len()
         );
         for (name, value) in headers {
             request.push_str(&format!("{name}: {value}\r\n"));
         }
-        request.push_str("\r\n{}");
+        request.push_str("\r\n");
+        request.push_str(body);
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         stream.write_all(request.as_bytes()).await.expect("write");
         let mut response = String::new();
@@ -753,5 +825,100 @@ mod tests {
         let forwarded = rx.try_recv().expect("the message was forwarded");
         assert_eq!(forwarded.platform, "webhook");
         assert_eq!(forwarded.channel_id, "webhook:github");
+    }
+
+    /// A subscription that claims a route DISPATCHES: the event is shaped
+    /// by the subscription's prompt and skills, the answer's destination is
+    /// named, and the request is authenticated by the subscription's own
+    /// secret.
+    ///
+    /// This is the RT-140 dispatch. Without it the store was written and
+    /// read by nothing: the event was handled by the agent and the answer
+    /// was dropped on the floor (the webhook adapter is inbound-only).
+    #[tokio::test]
+    async fn a_subscription_route_dispatches_the_event() {
+        use std::collections::HashMap;
+
+        let _guard = crate::platform::test_env_lock().await;
+        let home = std::env::temp_dir().join(format!("operant-webhook-sub-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(home.join("data")).expect("the data dir");
+        // The home is set BEFORE the store is written: the store path is
+        // derived from it, so writing first would touch the operator's real
+        // `~/.operant/data/webhook_subscriptions.json`.
+        unsafe { std::env::set_var("HERMES_HOME", &home) };
+        let mut subs: HashMap<String, super::webhook_subscriptions::WebhookSubscription> =
+            HashMap::new();
+        subs.insert(
+            "https://example.com/webhook/orders".to_string(),
+            super::webhook_subscriptions::WebhookSubscription {
+                url: "https://example.com/webhook/orders".to_string(),
+                route: Some("orders".to_string()),
+                prompt: Some("Summarise the order".to_string()),
+                events: vec!["message".to_string()],
+                description: None,
+                skills: vec!["billing".to_string()],
+                deliver: Some("telegram:chat-42".to_string()),
+                deliver_chat_id: None,
+                secret: Some("shared-secret".to_string()),
+                deliver_only: false,
+            },
+        );
+        super::webhook_subscriptions::save_subscriptions(&subs).expect("the store is written");
+
+        let (port, mut rx) = start_on_ephemeral(None).await;
+        let body = r#"{"order_id":"A-17","total":42}"#;
+        let signature = super::webhook_subscriptions::sign_body("shared-secret", body.as_bytes());
+        let status = post_body(
+            port,
+            "/webhook/orders",
+            &[("x-webhook-signature", signature.as_str())],
+            body,
+        )
+        .await;
+        assert_eq!(status, 200, "a signed event on a claimed route is accepted");
+
+        let forwarded = rx.recv().await.expect("the message was forwarded");
+        assert!(
+            forwarded.content.contains("Summarise the order"),
+            "the subscription's prompt shapes the event: {}",
+            forwarded.content
+        );
+        assert!(
+            forwarded.content.contains("billing"),
+            "the subscription's skills shape the event: {}",
+            forwarded.content
+        );
+        assert!(
+            forwarded.content.contains("A-17"),
+            "the event body reaches the agent: {}",
+            forwarded.content
+        );
+        let target = forwarded
+            .deliver_to
+            .as_ref()
+            .expect("the subscription names where the answer goes");
+        assert_eq!(target.platform, "telegram");
+        assert_eq!(target.channel_id, "chat-42");
+        assert!(!forwarded.deliver_only);
+        assert!(
+            forwarded.authenticated,
+            "a verified signature is what makes the event a machine event"
+        );
+
+        // A route nobody claimed is NOT authenticated: the adapter's own
+        // secret applies, and with none configured the event is anonymous.
+        let (port2, mut rx2) = start_on_ephemeral(None).await;
+        let status = post_body(port2, "/webhook/unclaimed", &[], "{}").await;
+        assert_eq!(status, 200);
+        let anonymous = rx2.recv().await.expect("the message was forwarded");
+        assert!(
+            !anonymous.authenticated,
+            "an unclaimed route with no secret is an anonymous event"
+        );
+        assert!(anonymous.deliver_to.is_none());
+
+        unsafe { std::env::remove_var("HERMES_HOME") };
+        let _ = std::fs::remove_dir_all(&home);
     }
 }

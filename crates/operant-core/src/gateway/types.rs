@@ -102,6 +102,38 @@ impl Default for GatewayConfig {
     }
 }
 
+/// Where a message's answer is delivered when it is not back to the sender.
+///
+/// A webhook subscription names its target as `platform:chat_id` — the same
+/// shape the operator writes in `operant webhook subscribe --deliver`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeliveryTarget {
+    /// The platform whose adapter carries the message.
+    pub platform: String,
+    /// The channel/chat id on that platform.
+    pub channel_id: String,
+}
+
+impl DeliveryTarget {
+    /// Parse a `platform:chat_id` spec.
+    ///
+    /// `None` when the spec has no platform or no chat id: a target we
+    /// cannot deliver to is worse than no target, because the answer would
+    /// be sent to the dead inbound channel instead.
+    pub fn parse(spec: &str) -> Option<Self> {
+        let (platform, channel_id) = spec.split_once(':')?;
+        let platform = platform.trim();
+        let channel_id = channel_id.trim();
+        if platform.is_empty() || channel_id.is_empty() {
+            return None;
+        }
+        Some(Self {
+            platform: platform.to_string(),
+            channel_id: channel_id.to_string(),
+        })
+    }
+}
+
 /// Incoming message from a platform
 #[derive(Debug, Clone)]
 pub struct IncomingMessage {
@@ -133,6 +165,18 @@ pub struct IncomingMessage {
     /// (vision_analyze for images, file_read/STT for others) — hermes
     /// `event.media_urls` parity. Empty when the message is plain text.
     pub media_urls: Vec<String>,
+    /// Where the answer goes when it is not back to the sender — a webhook
+    /// subscription's `deliver` target (RT-140). `None` = answer the sender.
+    pub deliver_to: Option<DeliveryTarget>,
+    /// Deliver the event WITHOUT running the agent — a webhook
+    /// subscription's `deliver_only`.
+    pub deliver_only: bool,
+    /// The event was authenticated (an HMAC-verified webhook).
+    ///
+    /// The admin gate is a USER gate: a verified machine event has no user,
+    /// so it can never be an admin — but refusing it would make the webhook
+    /// route dead in every deployment that configures `admins`.
+    pub authenticated: bool,
 }
 
 impl IncomingMessage {
@@ -159,6 +203,9 @@ impl IncomingMessage {
             is_channel_post: false,
             thread_id: None,
             media_urls: Vec::new(),
+            deliver_to: None,
+            deliver_only: false,
+            authenticated: false,
         }
     }
 
@@ -209,6 +256,10 @@ pub struct OutgoingMessage {
     /// incoming message so replies land in the same topic the user sent
     /// from instead of the general chat).
     pub thread_id: Option<i64>,
+    /// Deliver to this platform instead of the one the message arrived on
+    /// (a webhook subscription's `deliver` target). `None` = the platform
+    /// the message came from.
+    pub target_platform: Option<String>,
 }
 
 impl OutgoingMessage {
@@ -220,6 +271,7 @@ impl OutgoingMessage {
             parse_markdown: true,
             reply_to: None,
             thread_id: None,
+            target_platform: None,
         }
     }
 

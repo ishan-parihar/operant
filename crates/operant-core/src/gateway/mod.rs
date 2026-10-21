@@ -298,7 +298,7 @@ impl Gateway {
         let result = handler.handle(message.clone()).await;
         self.stall_tracker.complete(session_key).await;
 
-        let response = match result {
+        let mut response = match result {
             Ok(r) => r,
             Err(e) => {
                 self.delivery_ledger
@@ -308,10 +308,23 @@ impl Gateway {
             }
         };
 
+        // (iter-1132) A webhook subscription's `deliver` target: the answer
+        // goes to the platform the operator named, not back to the inbound
+        // channel — the webhook adapter is inbound-only, so an answer sent
+        // there is dropped on the floor.
+        let ledger_target = match &message.deliver_to {
+            Some(target) => {
+                response.channel_id = target.channel_id.clone();
+                response.target_platform = Some(target.platform.clone());
+                (target.platform.clone(), target.channel_id.clone())
+            }
+            None => (message.platform.clone(), message.channel_id.clone()),
+        };
+
         self.delivery_ledger
             .record(
-                &message.platform,
-                &message.channel_id,
+                &ledger_target.0,
+                &ledger_target.1,
                 &response.content,
                 "delivered",
             )
@@ -548,8 +561,17 @@ impl Gateway {
             let _ = store.get_or_create_session(&source, false);
         }
 
-        // Check if user is admin
-        if !self.config.admins.is_empty() && !self.config.admins.contains(&message.user_id) {
+        // Check if user is admin.
+        //
+        // An AUTHENTICATED event is not a user: the gate is a user gate, and
+        // the user of a signature-verified webhook is the operator's own
+        // external service. Without this exemption every webhook event was
+        // refused with "You are not authorized" in any deployment that
+        // configures `admins` — which is every real deployment. (iter-1132)
+        if !message.authenticated
+            && !self.config.admins.is_empty()
+            && !self.config.admins.contains(&message.user_id)
+        {
             debug!(user = %message.user_id, "User not authorized");
             return Ok(Some(
                 OutgoingMessage::new(
@@ -1503,6 +1525,86 @@ mod tests {
         );
         assert!(gw.mirror_targets("telegram", "c9").is_empty());
         assert!(gw.mirror_targets("discord", "c1").is_empty());
+    }
+
+    /// A webhook event is not a user: the admin gate is a USER gate.
+    ///
+    /// Before iter-1132 every webhook event was refused with "You are not
+    /// authorized to use this bot." in any deployment that configures
+    /// `admins` — which is every real deployment. An AUTHENTICATED event (a
+    /// signature-verified webhook) is the operator's own service talking, so
+    /// the gate must not apply to it. An unauthenticated one is still
+    /// refused: a public webhook is not a user either.
+    #[tokio::test]
+    async fn an_authenticated_event_is_not_refused_by_the_admin_gate() {
+        let handler = Arc::new(BlockingEchoHandler { gate: None });
+        let config = GatewayConfig {
+            admins: vec!["alice".to_string()],
+            ..GatewayConfig::default()
+        };
+        let gw = Arc::new(Gateway::new(config).with_handler(handler));
+
+        let mut event = IncomingMessage::new(
+            "webhook",
+            "webhook",
+            "Webhook",
+            "webhook:orders",
+            "an order",
+        );
+        let refused = gw
+            .route_message(event.clone())
+            .await
+            .expect("route ok")
+            .expect("a reply");
+        assert!(
+            refused.content.contains("not authorized"),
+            "an unauthenticated event must still be refused: {}",
+            refused.content
+        );
+
+        event.authenticated = true;
+        let answered = gw
+            .route_message(event)
+            .await
+            .expect("route ok")
+            .expect("a reply");
+        assert_eq!(answered.content, "echo:an order");
+    }
+
+    /// A webhook subscription's `deliver` target moves the answer.
+    ///
+    /// The inbound channel cannot carry a reply (the webhook adapter is
+    /// inbound-only), so without this the agent's answer was dropped on the
+    /// floor — the event was handled and the operator never learned the
+    /// outcome.
+    #[tokio::test]
+    async fn a_delivery_target_moves_the_answer_to_the_named_platform() {
+        let handler = Arc::new(BlockingEchoHandler { gate: None });
+        let gw = Arc::new(Gateway::new(GatewayConfig::default()).with_handler(handler));
+
+        let mut event = IncomingMessage::new(
+            "webhook",
+            "webhook",
+            "Webhook",
+            "webhook:orders",
+            "an order",
+        );
+        event.deliver_to = Some(DeliveryTarget {
+            platform: "telegram".to_string(),
+            channel_id: "chat-42".to_string(),
+        });
+        let response = gw
+            .route_message(event)
+            .await
+            .expect("route ok")
+            .expect("a reply");
+        assert_eq!(response.channel_id, "chat-42");
+        assert_eq!(response.target_platform.as_deref(), Some("telegram"));
+
+        // The ledger records the delivery where it actually went.
+        let recent = gw.delivery_ledger().recent(5).await;
+        assert_eq!(recent[0].platform, "telegram");
+        assert_eq!(recent[0].channel_id, "chat-42");
     }
 
     #[tokio::test]

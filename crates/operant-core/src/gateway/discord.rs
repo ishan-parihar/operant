@@ -667,6 +667,9 @@ pub(crate) fn parse_discord_message(
         is_channel_post: false,
         thread_id: None,
         media_urls: Vec::new(),
+        deliver_to: None,
+        deliver_only: false,
+        authenticated: false,
     })
 }
 

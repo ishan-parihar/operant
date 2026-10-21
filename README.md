@@ -243,6 +243,8 @@ See [`operant.example.toml`](operant.example.toml) for the full reference — ev
 
 Two traps worth knowing: `~/.operant/config.toml` is read by no binary path (the loader warns when it sits beside `operant.toml`), and **proxy environment variables (`HTTP(S)_PROXY`, `ALL_PROXY`) never redirect provider traffic**.
 
+One switch worth knowing: operant checks GitHub once per session for a newer `aft`/`sourcehound` build, in the background. `OPERANT_NO_AUTO_UPDATE=1` turns that off — set it on a machine that must not reach GitHub on its own.
+
 ### Terminal scrollback mode (opt-in)
 
 ```toml

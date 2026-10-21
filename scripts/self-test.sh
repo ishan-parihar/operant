@@ -7,6 +7,12 @@ set -e
 # below `cd`s into a subdirectory, and a relative path would break there.
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+# The background auto-update check must not reach GitHub from a test run.
+# It shells out to `gh`, which resolves through the process's proxy
+# variables, and it runs in the background — so it lands in whatever test
+# is running at the time. (iter-1132)
+export OPERANT_NO_AUTO_UPDATE=1
+
 echo "=== Hermes-RS Self-Test ==="
 echo ""
 

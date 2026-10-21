@@ -184,10 +184,41 @@ pub async fn check(spec: &IntegrationSpec) -> anyhow::Result<Versions> {
     Ok(Versions { installed, latest })
 }
 
+/// Whether the BACKGROUND auto-update check may run.
+///
+/// A unit test must not reach GitHub. The check shells out to `gh`, which
+/// resolves through the process's PROXY variables, and it runs in the
+/// BACKGROUND — so it lands in whatever test happens to be running and
+/// corrupts the process-global env state another test depends on. That is
+/// not hypothetical: `client::tests::env_proxy_is_ignored_by_the_provider_client`
+/// failed in the full suite and passed in isolation, because this kick
+/// fired a `gh api` call into that test's capture listener — the guard
+/// counted a connection that was not provider traffic at all.
+/// (iter-1132)
+///
+/// `OPERANT_NO_AUTO_UPDATE=1` turns it off in ANY binary: the escape hatch
+/// for an operator who does not want operant reaching GitHub on its own,
+/// and the switch the test harnesses use.
+fn auto_update_allowed() -> bool {
+    auto_update_allowed_in(cfg!(test))
+}
+
+/// The decision, with the "is this a test build" signal passed in, so the
+/// rule is testable without a test build.
+fn auto_update_allowed_in(is_test_build: bool) -> bool {
+    if std::env::var("OPERANT_NO_AUTO_UPDATE").is_ok_and(|v| !v.is_empty() && v != "0") {
+        return false;
+    }
+    !is_test_build
+}
+
 /// Background entry point for "first use per session": fires at most once
 /// per process per integration and only when the on-disk throttle has
 /// expired. Never blocks the caller — the work is spawned.
 pub fn kick_session_update(spec: IntegrationSpec) {
+    if !auto_update_allowed() {
+        return;
+    }
     if once_guard_fired(spec.name) {
         return;
     }
@@ -594,6 +625,42 @@ mod tests {
         assert_eq!(parse_version("sourcehound 1.6.0"), Some((1, 6, 0)));
         assert_eq!(parse_version("v0.59.0"), Some((0, 59, 0)));
         assert_eq!(parse_version("nope"), None);
+    }
+
+    /// The BACKGROUND update check must not run in a test build.
+    ///
+    /// It shells out to `gh`, which resolves through the process's PROXY
+    /// variables, and it runs in the background — so it lands in whatever
+    /// test happens to be running and corrupts the process-global env state
+    /// another test depends on. That is exactly what broke
+    /// `client::tests::env_proxy_is_ignored_by_the_provider_client`: it
+    /// failed in the full suite and passed in isolation, because the kick
+    /// fired a `gh api` call into that test's capture listener and the
+    /// guard counted a connection that was not provider traffic. (iter-1132)
+    #[test]
+    fn the_background_update_check_is_off_in_a_test_build() {
+        assert!(
+            !auto_update_allowed_in(true),
+            "a test build must not reach GitHub on its own"
+        );
+        assert!(
+            auto_update_allowed_in(false),
+            "a production build checks for updates"
+        );
+    }
+
+    /// The operator can turn the background check off, in any binary.
+    #[test]
+    fn the_operator_can_turn_the_background_check_off() {
+        let _guard = crate::platform::test_env_lock_blocking();
+        // SAFETY: serialised by the crate's environment lock.
+        unsafe { std::env::set_var("OPERANT_NO_AUTO_UPDATE", "1") };
+        assert!(
+            !auto_update_allowed_in(false),
+            "OPERANT_NO_AUTO_UPDATE=1 must stop the background check"
+        );
+        unsafe { std::env::remove_var("OPERANT_NO_AUTO_UPDATE") };
+        assert!(auto_update_allowed_in(false));
     }
 
     /// The raw binary must win over an archive that also matches the

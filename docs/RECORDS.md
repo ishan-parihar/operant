@@ -1,5 +1,5 @@
-<!-- genome:zone records sha=a13797416152 -->
-**Decisions** (41)
+<!-- genome:zone records sha=70d3b4b73a37 -->
+**Decisions** (42)
 
 | ID | Title | Status | Description |
 |---|---|---|---|
@@ -44,6 +44,7 @@
 | AD-039 | PDF text extraction moves to lopdf 0.45, and the decompression bomb is bounded | Active | pdf-extract 0.12 pins lopdf 0.42, which reaches ttf-parser (RUSTSEC-2026-0192); pdf_read is ported to lopdf 0.45, which has no ttf-parser and bounds each page's decompressed content |
 | AD-040 | The dashboard's session token is only ever handed to a holder of that token | Active | The dashboard served its session token on an unauthenticated route, so the bearer auth was theatre; the token is now exchanged for an HttpOnly cookie and the Host header is validated |
 | AD-041 | The PDF decompression bound covers the load path and the whole document, so AD-039's claim is now true | Active | AD-039 published 'the decompression bomb is now bounded', but only the extraction path was bounded: Document::load_mem uses LoadOptions::default(), whose max_decompressed_size is None, so the object a |
+| AD-042 | The webhook subscription family is INBOUND (R1): the subscription claims a route, the agent answers, and the answer is delivered to the target | Active | The webhook subscription family is INBOUND (R1): the subscription claims a route, the agent answers, and the answer is delivered to the target |
 
 **Regressions** (9)
 

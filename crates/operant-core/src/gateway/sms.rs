@@ -162,6 +162,9 @@ impl PlatformAdapter for SmsAdapter {
             timestamp: chrono::Utc::now().timestamp(),
             thread_id: None,
             media_urls: Vec::new(),
+            deliver_to: None,
+            deliver_only: false,
+            authenticated: false,
 
             raw: update,
         }))

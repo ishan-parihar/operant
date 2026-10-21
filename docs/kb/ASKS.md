@@ -18,3 +18,4 @@ that the ruling was applied.
 
 | id | asked | status | question | ruling | applied-to |
 |---|---|---|---|---|---|
+| Q1 | 2026-10-21 | ruled | RT-140: which model does the webhook subscription family implement — R2 (outbound: we POST to a subscribed URL) or R1 (inbound: the subscription claims a route the external service posts to)? | R1 (inbound). The subscription claims a route under /webhook/, the external service posts to it, the agent handles the event, and the answer is delivered to the operator's target. The subscription's own fields decide it: deliver, deliver_chat_id and deliver_only only mean anything when we RECEIVE the event and answer it somewhere, and prompt/skills shape how the AGENT handles it. The owner delegated the model choice to the agent ('choose recommended best decisions on your own'), so it was decided from the data model. | `docs/decisions/AD-042-the-webhook-subscription-family-is-inbound-r1-the-subscripti.md` |
