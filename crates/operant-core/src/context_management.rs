@@ -2029,7 +2029,7 @@ mod tests {
     /// A conversation that drifted: two weather turns, then a tool exchange
     /// carrying a release fact, then the user restating the release goal.
     /// Index map (5 groups): G0=[0,1) system · G1=[1,3) weather ·
-    /// G2=[3,5) weather · G3=[5,8) tool exchange (the release fact at [6]) ·
+    /// G2=[3,5) weather · G3=[5,8) tool exchange (the release fact at \[6]) ·
     /// G4=[8,10) the restated goal.
     fn drifted_conversation() -> Vec<Message> {
         vec![
@@ -2047,7 +2047,7 @@ mod tests {
     }
 
     /// Budget at which the prefix cut ends at G3's start (index 5), so the
-    /// release fact at [6] is on the wrong side of the recency cut.
+    /// release fact at \[6] is on the wrong side of the recency cut.
     ///
     /// The token counts are the CORRECTED ones — the estimate now counts a
     /// tool-call turn's ARGUMENTS and its reasoning, not just its (empty)

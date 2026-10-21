@@ -53,6 +53,18 @@ if [ "${1:-}" = "doc" ]; then
     shift
     export RUSTDOCFLAGS="${RUSTDOCFLAGS:--Dwarnings}"
     exec cargo doc --workspace --no-deps --all-features --document-private-items "$@"
+elif [ "${1:-}" = "doc-test" ]; then
+    # The SECOND doc profile RG-013 prescribes: `cfg(test)` ON, so a
+    # `#[cfg(test)]` item is in the AST rustdoc sees and a broken doc link in
+    # test-only documentation fails the gate instead of hiding from it. The
+    # production gate above cannot see that class at all (measured: a
+    # `#[cfg(test)]` item is absent when cfg(test) is off), so this is a
+    # separate script with its own three-measurement header rather than a
+    # flag on the line above — `--cfg test` is not a valid cargo argument
+    # (cargo 1.98 rejects it), and it must ride RUSTDOCFLAGS scoped to one
+    # crate at a time or it leaks into every dependency.
+    shift
+    exec "$DIR/check-doc-test-profile.sh" "$@"
 fi
 
 exec cargo "$@"

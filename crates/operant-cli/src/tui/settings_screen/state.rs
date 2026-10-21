@@ -176,28 +176,105 @@ impl SettingsScreen {
                         self.file_autocomplete_limit = value.clone();
                     }
                 }
-                "fileInjectionMaxSize" => {
-                    if let Ok(n) = value.parse::<usize>() {
-                        settings.config.file_injection_max_size = n;
-                        self.file_injection_max_size = value.clone();
-                    }
+                "fileAutocompleteShowHiddenFiles" => {
+                    let on = matches!(value.as_str(), "true" | "on" | "1" | "yes");
+                    settings.config.file_autocomplete_show_hidden_files = on;
+                    self.file_autocomplete_show_hidden_files = on;
+                }
+                "fileInjectionEnabled" => {
+                    let on = matches!(value.as_str(), "true" | "on" | "1" | "yes");
+                    settings.config.file_injection_enabled = on;
+                    self.file_injection_enabled = on;
+                }
+                "auto_compact" => {
+                    let on = matches!(value.as_str(), "true" | "on" | "1" | "yes");
+                    settings.auto_compact = on;
+                    self.auto_compact = on;
+                }
+                "notifications" => {
+                    let on = matches!(value.as_str(), "true" | "on" | "1" | "yes");
+                    settings.notifications = on;
+                    self.notifications = on;
+                }
+                "show_turn_duration" => {
+                    let on = matches!(value.as_str(), "true" | "on" | "1" | "yes");
+                    settings.show_turn_duration = on;
+                    self.show_turn_duration = on;
+                }
+                "reduce_motion" => {
+                    let on = matches!(value.as_str(), "true" | "on" | "1" | "yes");
+                    settings.reduce_motion = on;
+                    self.reduce_motion = on;
+                }
+                "terminal_progress_bar" => {
+                    let on = matches!(value.as_str(), "true" | "on" | "1" | "yes");
+                    settings.terminal_progress_bar = on;
+                    self.terminal_progress_bar = on;
+                }
+                "show_cwd" => {
+                    let on = matches!(value.as_str(), "true" | "on" | "1" | "yes");
+                    settings.show_cwd = on;
+                    self.show_cwd = on;
+                }
+                "show_git_branch" => {
+                    let on = matches!(value.as_str(), "true" | "on" | "1" | "yes");
+                    settings.show_git_branch = on;
+                    self.show_git_branch = on;
+                }
+                "disable_claude_mds" => {
+                    let on = matches!(value.as_str(), "true" | "on" | "1" | "yes");
+                    settings.config.disable_claude_mds = on;
+                    self.disable_claude_mds = on;
+                }
+                "auto_commits" => {
+                    settings.config.auto_commits =
+                        Some(matches!(value.as_str(), "true" | "on" | "1" | "yes"));
+                    self.auto_commits = matches!(value.as_str(), "true" | "on" | "1" | "yes");
+                }
+                "output_format" => {
+                    let parsed = match value.as_str() {
+                        "json" => crate::tui::adapter_types::config::OutputFormat::Json,
+                        "stream_json" => {
+                            crate::tui::adapter_types::config::OutputFormat::StreamJson
+                        }
+                        _ => crate::tui::adapter_types::config::OutputFormat::Text,
+                    };
+                    settings.config.output_format = parsed.clone();
+                    self.output_format = value.clone();
+                }
+                "cursor_blink_enabled" => {
+                    let on = matches!(value.as_str(), "true" | "on" | "1" | "yes");
+                    settings.config.cursor_blink_enabled = on;
+                    self.cursor_blink_enabled = on;
+                }
+                "verbose" => {
+                    let on = matches!(value.as_str(), "true" | "on" | "1" | "yes");
+                    settings.config.verbose = on;
+                    self.verbose = on;
                 }
                 _ => {}
             }
         }
+        // The snapshot is rebuilt wholesale below, and until iter-1176 that
+        // rebuild ALSO threw away values the screen does not edit:
+        // `verbose`, `cursor_blink_enabled`, `disable_claude_mds`,
+        // `file_injection_enabled` and `output_format` were written as
+        // constants instead of carried forward, so saving ANY setting reset
+        // them. Every field below is now taken from `settings`, which this
+        // loop has just updated with whatever the operator changed.
         self.settings_snapshot.config = crate::tui::adapter_types::config::InnerConfig {
-            verbose: false,
-            cursor_blink_enabled: false,
-            auto_commits: None,
-            disable_claude_mds: false,
-            file_injection_enabled: false,
+            verbose: settings.config.verbose,
+            cursor_blink_enabled: settings.config.cursor_blink_enabled,
+            auto_commits: settings.config.auto_commits,
+            disable_claude_mds: settings.config.disable_claude_mds,
+            file_injection_enabled: settings.config.file_injection_enabled,
             file_autocomplete_limit: settings.config.file_autocomplete_limit,
             file_autocomplete_show_hidden_files: settings
                 .config
                 .file_autocomplete_show_hidden_files,
             file_injection_max_size: settings.config.file_injection_max_size,
             output_style: settings.output_style.clone(),
-            output_format: crate::tui::adapter_types::config::OutputFormat::default(),
+            output_format: settings.config.output_format.clone(),
             compact_threshold: config.agent.context_compression_threshold,
             theme: settings.theme.clone(),
             max_tokens: config.agent.context_window,

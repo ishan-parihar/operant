@@ -341,6 +341,22 @@ mod tests {
     /// writing to a store nobody reads.
     async fn test_memory_store_and_recall() {
         let _guard = PROVIDER_TEST_GUARD.lock().await;
+        // PIN THE ORIGIN. `PROVIDER_TEST_GUARD` serialises this test against
+        // the sibling that installs a provider, but `WRITE_ORIGIN` is a
+        // DIFFERENT process-global and this test never touched it — so the
+        // origin whichever earlier test left installed was still installed
+        // here. A leaked "background_review" makes `store.execute` answer
+        // "Refused: background review does not write memory" instead of
+        // "No memory backend", so the assertion below failed in a
+        // serializer whose order is not fixed: measured as 1 failure in one
+        // full-suite run (2458/1) and 0 failures in isolation and in every
+        // run since (RT-170's family — the test reading ambient global state
+        // rather than a fixture). Same shape and same fix as the sibling's
+        // comment at `memory_tools_route_through_the_provider`: take the
+        // origin's lock FIRST (so no holder is mid-write), then install a
+        // guard whose Drop ends the pin.
+        let _origin_lock = crate::write_origin::origin_test_lock().await;
+        let _origin = crate::write_origin::WriteOriginGuard::new("user");
         clear_active_memory_provider_for_tests().await;
         let store = MemoryStoreTool;
         let recall = MemoryRecallTool;
@@ -449,6 +465,47 @@ mod tests {
 
         *ACTIVE_MEMORY_PROVIDER.write().await = None;
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+/// Guards the invariant `test_memory_store_and_recall` lost: a memory-tool
+/// call with NO provider attached must fail naming the ABSENT BACKEND, and
+/// must never fail naming the caller's write origin.
+///
+/// Why this is a test of its own: both tests above hold
+/// `PROVIDER_TEST_GUARD`, which serialises them against each other, but
+/// `WRITE_ORIGIN` is a SEPARATE process-global that neither guard order
+/// covers for a reader outside the module. A future test that installs a
+/// `WriteOriginGuard` and leaves it held across an await — or that sets the
+/// origin without the guard, so its Drop never restores the previous value —
+/// reintroduces exactly this failure. The assertions name both halves, so
+/// the reader is told which global leaked.
+#[cfg(test)]
+mod absent_backend_error_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn the_absent_backend_is_reported_independently_of_the_write_origin() {
+        let _guard = PROVIDER_TEST_GUARD.lock().await;
+        let _origin_lock = crate::write_origin::origin_test_lock().await;
+        let _origin = crate::write_origin::WriteOriginGuard::new("user");
+
+        clear_active_memory_provider_for_tests().await;
+        let store_result = MemoryStoreTool
+            .execute(json!({"key": "k", "content": "c"}), ToolContext::default())
+            .await;
+
+        assert!(!store_result.success, "no backend = honest error");
+        let err = store_result.error.unwrap_or_default();
+        assert!(
+            err.contains("No memory backend"),
+            "the error must name the absent backend, not the caller's origin: {err:?}"
+        );
+        assert!(
+            !err.contains("background review"),
+            "the error must not be a write-origin refusal, which would mean a leaked WRITE_ORIGIN global: {err:?}"
+        );
     }
 }
 

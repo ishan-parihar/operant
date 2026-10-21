@@ -129,6 +129,26 @@ run_test "Lint suppressions (scripts/audit-lint-suppressions.py --check)" "pytho
 # nobody could see it is how RT-166 happened (RT-166).
 run_test "Rustdoc gate (scripts/check.sh doc)" "./scripts/check.sh doc 2>&1"
 
+# 4e. The SECOND rustdoc profile — `cfg(test)` ON. The gate above cannot
+# certify a `#[cfg(test)]` doc link at all (RG-013/RT-169): a binary target's
+# doc build runs with cfg(test) OFF, so test-only scaffolding is absent from
+# the AST rustdoc sees, and that is exactly where the jcode port's doc rot
+# accumulated. iter-1176 measured why the obvious fix is not a flag tweak and
+# closed it: `--cfg test` is not a cargo argument on cargo 1.98 (it must ride
+# RUSTDOCFLAGS), an unscoped flag bleeds into every dependency and dies on
+# memchr's quickcheck dev-deps (so it is one crate per invocation), and
+# `--no-deps` makes the profile UNBUILDABLE rather than merely blind (it does
+# not resolve [dev-dependencies], and operant-core/operant-cli both import
+# one). All 11 crates GREEN.
+#
+# This step is LONG (it re-documents every crate, about 4 minutes) and it
+# overlaps the gate above, so it is opt-in via OPERANT_DOC_TEST=1: the
+# production profile runs on every self-test, and the test profile runs when
+# the operator asks for it or before a push that touches test code.
+if [ "${OPERANT_DOC_TEST:-0}" = "1" ]; then
+  run_test "Rustdoc cfg(test) profile (scripts/check.sh doc-test)" "./scripts/check.sh doc-test 2>&1"
+fi
+
 # 3d. The TUI visual-regression corpus. This gate was RED for nine days
 # and nobody noticed, because the corpus was not in ANY automated gate:
 # `scripts/check.sh` forwards to cargo, and the corpus is a Python script.
