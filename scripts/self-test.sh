@@ -110,6 +110,18 @@ run_test "Doc claims (scripts/check-doc-claims.sh)" "bash scripts/check-doc-clai
 # without anyone deciding what to do about it (RT-159).
 run_test "Config surface (scripts/audit-config-surface.py --check)" "python3 scripts/audit-config-surface.py --check 2>&1"
 
+# 4c-2. The lint-suppression surface. rust-best-practices ch.2 says prefer
+# `#[expect]` over `#[allow]`, because an allow never expires while an expect
+# reports itself unfulfilled the moment the lint stops firing. A prose claim
+# about that surface cannot stay true (RUST_BEST_PRACTICES_PLAN.md still
+# reports 242 suppressions from a 2026-08-02 measurement; the live figure is
+# 33), so the claim is a script with a reason-carrying baseline, gated here.
+# `--check` fails on a suppression the baseline does not explain — a new
+# escape hatch nobody decided on — and on a baseline entry with no reason.
+# Mutation-checked: adding an unexplained `#[allow(dead_code)]` to
+# operant-harness/src/row.rs makes it name the file and line and exit 1.
+run_test "Lint suppressions (scripts/audit-lint-suppressions.py --check)" "python3 scripts/audit-lint-suppressions.py --check 2>&1"
+
 # 4d. The rustdoc gate. `./scripts/check.sh doc` is the exact command the
 # dead CI job ran (cargo doc --workspace --no-deps --all-features under
 # -Dwarnings); since the Actions quota died, nothing ran it, and it had
