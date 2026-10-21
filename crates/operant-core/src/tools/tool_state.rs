@@ -103,9 +103,10 @@ mod tests {
     use super::*;
 
     fn config_with_db(dir: &Path) -> AppConfig {
-        let mut config = AppConfig::default();
-        config.database_path = dir.join("operant.db");
-        config
+        AppConfig {
+            database_path: dir.join("operant.db"),
+            ..AppConfig::default()
+        }
     }
 
     fn temp_dir(tag: &str) -> PathBuf {

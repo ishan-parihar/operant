@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
 //! The parallel config schema must not start being loaded by accident.
 //!
 //! `operant_config::schema::Config` is a SPEC, not the live config: the

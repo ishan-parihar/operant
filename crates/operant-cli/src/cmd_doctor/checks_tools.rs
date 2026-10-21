@@ -1022,6 +1022,67 @@ pub async fn run_integration_checks(issues: &mut Vec<String>, manual_issues: &mu
     }
 }
 
+/// The skills-hub directory check.
+///
+/// `~/.operant/skills/.hub` has NO producer in this tree: the marketplace
+/// installs skills FLAT (`skills_dir.join(name)`), and `operant skills list`
+/// does not create the directory. The old warning named `operant skills
+/// list` as the fix — an instruction the operator could follow and still
+/// see the warning — and pushed it into the ACTIONABLE issue list even
+/// though an absent hub costs nothing. The directory is now reported as
+/// informational when it is absent, and it never becomes an issue.
+/// (RT-142.)
+fn check_skills_hub() -> Option<String> {
+    let hub_dir = operant_home().join("skills").join(".hub");
+    if hub_dir.exists() {
+        check_ok("Skills Hub directory", "(exists)");
+
+        let lock_file = hub_dir.join("lock.json");
+        if lock_file.exists() {
+            match std::fs::read_to_string(&lock_file) {
+                Ok(content) => {
+                    if let Ok(lock_data) = serde_json::from_str::<serde_json::Value>(&content) {
+                        let count = lock_data
+                            .get("installed")
+                            .and_then(|i| i.as_object())
+                            .map(|o| o.len())
+                            .unwrap_or(0);
+                        check_ok("Lock file OK", &format!("({count} hub-installed skill(s))"));
+                    } else {
+                        check_warn("Lock file", "(corrupted or unreadable)");
+                    }
+                }
+                Err(_) => {
+                    check_warn("Lock file", "(unreadable)");
+                }
+            }
+        } else {
+            check_info("No lock.json found (skills hub not fully initialized)");
+        }
+
+        let quarantine = hub_dir.join("quarantine");
+        if quarantine.exists() {
+            let q_count = std::fs::read_dir(&quarantine)
+                .map(|entries| {
+                    entries
+                        .filter_map(|e| e.ok())
+                        .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
+                        .count()
+                })
+                .unwrap_or(0);
+            if q_count > 0 {
+                check_warn(
+                    "Quarantine",
+                    &format!("({q_count} skill(s) in quarantine — pending review)"),
+                );
+            }
+        }
+    } else {
+        check_info("Skills Hub directory (not in use in this build — skills install flat)");
+    }
+    None
+}
+
 #[cfg(test)]
 mod operant_binary_tests {
     use super::*;
@@ -1122,65 +1183,4 @@ mod operant_binary_tests {
             "the hub check must not ask for a fix it cannot perform: {advice:?}"
         );
     }
-}
-
-/// The skills-hub directory check.
-///
-/// `~/.operant/skills/.hub` has NO producer in this tree: the marketplace
-/// installs skills FLAT (`skills_dir.join(name)`), and `operant skills list`
-/// does not create the directory. The old warning named `operant skills
-/// list` as the fix — an instruction the operator could follow and still
-/// see the warning — and pushed it into the ACTIONABLE issue list even
-/// though an absent hub costs nothing. The directory is now reported as
-/// informational when it is absent, and it never becomes an issue.
-/// (RT-142.)
-fn check_skills_hub() -> Option<String> {
-    let hub_dir = operant_home().join("skills").join(".hub");
-    if hub_dir.exists() {
-        check_ok("Skills Hub directory", "(exists)");
-
-        let lock_file = hub_dir.join("lock.json");
-        if lock_file.exists() {
-            match std::fs::read_to_string(&lock_file) {
-                Ok(content) => {
-                    if let Ok(lock_data) = serde_json::from_str::<serde_json::Value>(&content) {
-                        let count = lock_data
-                            .get("installed")
-                            .and_then(|i| i.as_object())
-                            .map(|o| o.len())
-                            .unwrap_or(0);
-                        check_ok("Lock file OK", &format!("({count} hub-installed skill(s))"));
-                    } else {
-                        check_warn("Lock file", "(corrupted or unreadable)");
-                    }
-                }
-                Err(_) => {
-                    check_warn("Lock file", "(unreadable)");
-                }
-            }
-        } else {
-            check_info("No lock.json found (skills hub not fully initialized)");
-        }
-
-        let quarantine = hub_dir.join("quarantine");
-        if quarantine.exists() {
-            let q_count = std::fs::read_dir(&quarantine)
-                .map(|entries| {
-                    entries
-                        .filter_map(|e| e.ok())
-                        .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
-                        .count()
-                })
-                .unwrap_or(0);
-            if q_count > 0 {
-                check_warn(
-                    "Quarantine",
-                    &format!("({q_count} skill(s) in quarantine — pending review)"),
-                );
-            }
-        }
-    } else {
-        check_info("Skills Hub directory (not in use in this build — skills install flat)");
-    }
-    None
 }
