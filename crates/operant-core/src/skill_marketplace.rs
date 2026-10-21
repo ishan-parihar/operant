@@ -112,9 +112,7 @@ impl SkillMarketplace {
     pub fn new() -> Self {
         let registry_url = std::env::var("OPERANT_SKILL_REGISTRY")
             .unwrap_or_else(|_| DEFAULT_REGISTRY_URL.to_string());
-        let cache_path = dirs::home_dir()
-            .map(|h| h.join(".operant").join("skill-registry.json"))
-            .unwrap_or_else(|| PathBuf::from(".skill-registry.json"));
+        let cache_path = crate::platform::operant_home().join("skill-registry.json");
         Self {
             registry_url,
             cache_path,

@@ -129,10 +129,7 @@ pub fn handle_service_command(
             Ok(())
         }
         ServiceSubcommand::Logs { lines, follow } => {
-            let log_dir = dirs::home_dir()
-                .unwrap_or_default()
-                .join(".operant")
-                .join("logs");
+            let log_dir = operant_core::platform::operant_home().join("logs");
             let log_file = log_dir.join("operant.log");
 
             if json {

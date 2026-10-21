@@ -51,9 +51,7 @@ pub struct CheckpointConfig {
 
 impl Default for CheckpointConfig {
     fn default() -> Self {
-        let base_dir = dirs::home_dir()
-            .map(|h| h.join(".operant").join("checkpoints"))
-            .unwrap_or_else(|| PathBuf::from("/tmp/operant-checkpoints"));
+        let base_dir = crate::platform::operant_home().join("checkpoints");
 
         Self {
             base_dir,

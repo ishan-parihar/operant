@@ -276,14 +276,9 @@ impl AccountStore {
     }
 
     /// The default location, `<operant home>/accounts.json`
-    /// (`$HERMES_HOME` or `~/.operant`).
+    /// (`$HERMES_HOME`, the active profile, or `~/.operant`).
     pub fn default_path() -> PathBuf {
-        std::env::var("HERMES_HOME")
-            .ok()
-            .map(PathBuf::from)
-            .or_else(|| dirs::home_dir().map(|h| h.join(".operant")))
-            .unwrap_or_else(|| PathBuf::from(".operant"))
-            .join(STORE_FILENAME)
+        crate::platform::operant_home().join(STORE_FILENAME)
     }
 
     /// A store rooted at [`AccountStore::default_path`].

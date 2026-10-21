@@ -11,12 +11,10 @@ use anyhow::Result;
 use std::path::{Path, PathBuf};
 
 pub fn operant_dir() -> Result<PathBuf> {
-    if let Ok(path) = std::env::var("OPERANT_HOME") {
-        return Ok(PathBuf::from(path));
-    }
-
-    let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("No home directory"))?;
-    Ok(home.join(".operant"))
+    // The ONE home resolver. This used to read a THIRD spelling of the home
+    // (`OPERANT_HOME`), so the TUI's logs could live in a different tree
+    // than the rest of the operator's state.
+    Ok(operant_core::platform::operant_home())
 }
 
 pub fn logs_dir() -> Result<PathBuf> {

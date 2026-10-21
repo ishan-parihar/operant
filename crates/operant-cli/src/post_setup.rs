@@ -103,9 +103,7 @@ fn open_in_editor() -> Result<()> {
             }
         });
 
-    let operant_home = dirs::home_dir()
-        .map(|p| p.join(".operant").join("operant.toml"))
-        .unwrap_or_else(|| std::path::PathBuf::from("~/.operant/operant.toml"));
+    let operant_home = operant_core::platform::operant_home().join("operant.toml");
 
     let path_str = operant_home.to_string_lossy().to_string();
 
@@ -185,9 +183,7 @@ fn print_tool_summary(config: &AppConfig) {
 
 /// Show config file location.
 fn print_config_location() {
-    let operant_home = dirs::home_dir()
-        .map(|p| p.join(".operant"))
-        .unwrap_or_else(|| std::path::PathBuf::from("~/.operant"));
+    let operant_home = operant_core::platform::operant_home();
 
     print_header("Configuration Location");
     print_info(&format!(

@@ -238,14 +238,11 @@ pub struct McpOAuthConfig {
 
 /// Return the Operant home directory.
 ///
-/// Checks `HERMES_HOME` env var first, then falls back to `~/.operant`.
-/// Matches the Python `get_operant_home()`.
+/// The ONE resolver: `crate::platform::operant_home()` — `HERMES_HOME`,
+/// then the active profile, then `~/.operant`. This module used to carry
+/// its own copy, which resolved an EMPTY `HERMES_HOME` to a relative path.
 fn operant_home() -> PathBuf {
-    std::env::var("HERMES_HOME")
-        .map(PathBuf::from)
-        .ok()
-        .or_else(|| dirs::home_dir().map(|h| h.join(".operant")))
-        .unwrap_or_else(|| PathBuf::from(".operant"))
+    crate::platform::operant_home()
 }
 
 /// Return the OAuth token storage directory.

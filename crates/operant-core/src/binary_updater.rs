@@ -111,10 +111,12 @@ struct ThrottleFile {
 }
 
 fn throttle_path() -> PathBuf {
-    let home = std::env::var("OPERANT_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| dirs::home_dir().unwrap_or_default().join(".operant"));
-    home.join("cache").join("updates.json")
+    // The ONE home resolver. This used to read a THIRD spelling of the home
+    // (`OPERANT_HOME`), so the update throttle lived in a different tree
+    // than every other store.
+    crate::platform::operant_home()
+        .join("cache")
+        .join("updates.json")
 }
 
 const THROTTLE: Duration = Duration::from_secs(6 * 3600);

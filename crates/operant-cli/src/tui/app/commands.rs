@@ -749,10 +749,7 @@ impl App {
             // /transcript — write the session transcript (markdown) to
             // ~/.operant/transcripts/ and open it in the external editor.
             "transcript" => {
-                let dir = dirs::home_dir()
-                    .unwrap_or_else(|| std::path::PathBuf::from("."))
-                    .join(".operant")
-                    .join("transcripts");
+                let dir = operant_core::platform::operant_home().join("transcripts");
                 let stamp = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.as_secs())

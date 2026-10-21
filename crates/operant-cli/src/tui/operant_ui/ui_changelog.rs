@@ -168,9 +168,7 @@ pub(super) fn get_unseen_changelog_entries() -> &'static Vec<String> {
             return Vec::new();
         }
 
-        let state_file = dirs::home_dir()
-            .map(|h| h.join(".operant").join("last_seen_changelog"))
-            .unwrap_or_else(|| std::path::PathBuf::from(".operant/last_seen_changelog"));
+        let state_file = operant_core::platform::operant_home().join("last_seen_changelog");
 
         let last_seen_hash = std::fs::read_to_string(&state_file)
             .ok()

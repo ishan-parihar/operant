@@ -154,9 +154,10 @@ pub fn protected_path_reason(path: &Path) -> Option<String> {
 
     let home = home_dir()?;
     let home_lower = lexical_absolute(&home).to_string_lossy().to_lowercase();
-    let data_lower = lexical_absolute(&operant_data_dir())
-        .to_string_lossy()
-        .to_lowercase();
+    let data_lowers: Vec<String> = operant_data_dirs()
+        .iter()
+        .map(|dir| lexical_absolute(dir).to_string_lossy().to_lowercase())
+        .collect();
 
     let matches_under = |base_lower: &str, rel: &str| {
         let candidate = Path::new(base_lower).join(rel.to_lowercase());
@@ -166,7 +167,9 @@ pub fn protected_path_reason(path: &Path) -> Option<String> {
     };
 
     for rel in BUILTIN_PROTECTED_RELATIVE {
-        if matches_under(&home_lower, rel) || matches_under(&data_lower, rel) {
+        if matches_under(&home_lower, rel)
+            || data_lowers.iter().any(|data| matches_under(data, rel))
+        {
             return Some(format!(
                 "matches built-in protected credential pattern '{rel}'"
             ));
@@ -175,7 +178,9 @@ pub fn protected_path_reason(path: &Path) -> Option<String> {
 
     // Registered files (relative to home or data dir).
     for rel in registered_credential_files() {
-        if matches_under(&home_lower, &rel) || matches_under(&data_lower, &rel) {
+        if matches_under(&home_lower, &rel)
+            || data_lowers.iter().any(|data| matches_under(data, &rel))
+        {
             return Some(format!("matches registered credential file '{rel}'"));
         }
     }
@@ -189,16 +194,27 @@ fn home_dir() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-/// Operant data dir: `OPERANT_CONFIG_DIR` or `~/.operant`.
-fn operant_data_dir() -> PathBuf {
+/// The roots the operant's own state lives under: the operant HOME
+/// (`HERMES_HOME`, the active profile, or `~/.operant`), the OS default
+/// home, and — when it is set — `OPERANT_CONFIG_DIR`.
+///
+/// The home is the ONE resolver, so a profile's own credential files are
+/// protected too. The OS default home stays a root even when `HERMES_HOME`
+/// points elsewhere: `~/.operant/.env` is a credential store in every
+/// deployment, and dropping it from the protected set would be a silent
+/// narrowing of what the agent may not read. `OPERANT_CONFIG_DIR` is an
+/// isolation knob, kept for the same reason.
+fn operant_data_dirs() -> Vec<PathBuf> {
+    let mut dirs = vec![
+        crate::platform::operant_home(),
+        crate::platform::os_default_home(),
+    ];
     if let Some(dir) = std::env::var_os("OPERANT_CONFIG_DIR")
         && !dir.is_empty()
     {
-        return PathBuf::from(dir);
+        dirs.push(PathBuf::from(dir));
     }
-    home_dir()
-        .map(|h| h.join(".operant"))
-        .unwrap_or_else(|| PathBuf::from(".operant"))
+    dirs
 }
 
 #[cfg(test)]

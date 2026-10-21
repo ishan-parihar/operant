@@ -99,8 +99,7 @@ impl UsageStore {
 }
 
 pub fn usage_path() -> Option<PathBuf> {
-    let home = dirs::home_dir()?;
-    Some(home.join(".operant").join("slash-usage.json"))
+    Some(operant_core::platform::operant_home().join("slash-usage.json"))
 }
 
 /// Rank a list of `(name, description)` slash commands by smart ordering:

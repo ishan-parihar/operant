@@ -365,7 +365,7 @@ impl Default for AgentsMenuState {
 pub fn load_agent_definitions(project_root: &std::path::Path) -> Vec<AgentDefinition> {
     let mut defs = Vec::new();
     let dirs = [
-        dirs::home_dir().map(|h| h.join(".operant").join("agents")),
+        Some(operant_core::platform::operant_home().join("agents")),
         Some(project_root.join(".operant").join("agents")),
     ];
 

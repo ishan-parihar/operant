@@ -141,8 +141,14 @@ impl Settings {
         let settings: Self = serde_json::from_str(&json)?;
         Ok(settings)
     }
+    /// The directory the TUI's own stores live in: `settings.json`,
+    /// `auth.json` and the user-level `AGENTS.md` selector.
+    ///
+    /// The ONE home resolver (`operant_core::platform::operant_home`), so a
+    /// PROFILE gets its own visual settings and its own credentials
+    /// instead of sharing the default profile's.
     pub fn config_dir() -> std::path::PathBuf {
-        dirs::home_dir().unwrap_or_default().join(".operant")
+        operant_core::platform::operant_home()
     }
 }
 

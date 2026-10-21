@@ -64,10 +64,7 @@ const NETWORK_RETRY_BACKOFF_SECS: u64 = 300;
 static LAST_NETWORK_FAILURE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 fn cache_path() -> PathBuf {
-    let mut path = dirs::home_dir().unwrap_or_default();
-    path.push(".operant");
-    path.push("models_dev_cache.json");
-    path
+    crate::platform::operant_home().join("models_dev_cache.json")
 }
 
 fn now_secs() -> f64 {

@@ -28,11 +28,9 @@ pub struct HistoryEntry {
     pub text: String,
 }
 
-/// Resolve `~/.operant/history.jsonl`. Falls back to the OS cache dir if
-/// `$HOME` is unset (rare; matches the behaviour of `dirs::home_dir`).
+/// Resolve `<operant home>/history.jsonl`.
 pub fn history_path() -> Option<PathBuf> {
-    let home = dirs::home_dir()?;
-    Some(home.join(".operant").join("history.jsonl"))
+    Some(operant_core::platform::operant_home().join("history.jsonl"))
 }
 
 /// Load the history file, returning entries oldest → newest. Missing file

@@ -1068,7 +1068,7 @@ pub(crate) fn agent_config(
     // later sessions honor them too.
     agent.approval_allowlist = config.command_allowlist.clone();
     agent.approval_allowlist_path =
-        dirs::home_dir().map(|h| h.join(".operant").join("approval_allowlist.json"));
+        Some(operant_core::platform::operant_home().join("approval_allowlist.json"));
     // Progressive tool disclosure (hermes parity): thread the CLI's
     // `tools.tool_search` block into the agent loop so MCP tool schemas
     // can be deferred behind the tool_search bridge. `mcp.deferred_loading
@@ -1746,9 +1746,7 @@ async fn build_harness_host(
         // Try default file locations before giving up.
         let candidates = [
             std::path::PathBuf::from("architecture.toml"),
-            dirs::home_dir()
-                .map(|h| h.join(".operant").join("architecture.toml"))
-                .unwrap_or_else(|| std::path::PathBuf::from(".operant/architecture.toml")),
+            operant_core::platform::operant_home().join("architecture.toml"),
             std::path::PathBuf::from("operant/architecture.toml"),
         ];
         let mut resolved: Option<operant_harness::Architecture> = None;
@@ -2365,11 +2363,10 @@ fn spawn_lcm_maintenance_if_configured(
 /// user's git repositories are never modified.
 fn configure_checkpoints(config: &AppConfig) {
     let settings = &config.checkpoints;
-    let base_dir = settings.base_dir.clone().unwrap_or_else(|| {
-        dirs::home_dir()
-            .map(|h| h.join(".operant").join("checkpoints"))
-            .unwrap_or_else(|| std::path::PathBuf::from("/tmp/operant-checkpoints"))
-    });
+    let base_dir = settings
+        .base_dir
+        .clone()
+        .unwrap_or_else(|| operant_core::platform::operant_home().join("checkpoints"));
     operant_core::tools::get_checkpoint_manager().configure(
         operant_core::tools::CheckpointConfig {
             base_dir,

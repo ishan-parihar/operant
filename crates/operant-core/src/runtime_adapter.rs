@@ -97,13 +97,10 @@ impl NativeRuntime {
 
     /// Create a native runtime using the default operant home directory.
     ///
-    /// Uses `~/.operant` as the storage path, falling back to `/tmp/.operant`
-    /// if the home directory cannot be determined.
+    /// Uses the ONE home resolver (`crate::platform::operant_home`), so the
+    /// runtime's storage follows `HERMES_HOME` and the active profile.
     pub fn default_home() -> Self {
-        let home = dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("/tmp"))
-            .join(".operant");
-        Self::new(home)
+        Self::new(crate::platform::operant_home())
     }
 }
 

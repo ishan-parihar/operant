@@ -15,8 +15,34 @@ use serde::{Deserialize, Serialize};
 use crate::error::{Error, Result};
 use crate::platform;
 
-/// Profile identifier regex: lowercase alphanumeric, hyphens, underscores.
-const PROFILE_ID_RE: &str = r"^[a-z0-9][a-z0-9_-]{0,63}$";
+/// The profile identifier pattern, as a regex: lowercase alphanumeric,
+/// hyphens, underscores.
+///
+/// Test-only: it is the reference the hand-written [`is_profile_id`] is
+/// pinned against, so the two can never drift.
+#[cfg(test)]
+pub(crate) const PROFILE_ID_RE: &str = r"^[a-z0-9][a-z0-9_-]{0,63}$";
+
+/// True when `name` is a plain profile identifier: 1–64 characters, the
+/// first a lowercase alphanumeric, the rest lowercase alphanumerics, `-`
+/// or `_`.
+///
+/// This is the pattern `[a-z0-9][a-z0-9_-]{0,63}` without the regex: it is
+/// checked on every `operant_home()` call, and a profile name steers a
+/// PATH, so the check has to be cheap as well as exact.
+pub(crate) fn is_profile_id(name: &str) -> bool {
+    let bytes = name.as_bytes();
+    if bytes.is_empty() || bytes.len() > 64 {
+        return false;
+    }
+    let first = bytes[0];
+    if !(first.is_ascii_lowercase() || first.is_ascii_digit()) {
+        return false;
+    }
+    bytes[1..]
+        .iter()
+        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || *b == b'-' || *b == b'_')
+}
 
 /// Reserved profile names that cannot be used.
 const RESERVED_NAMES: &[&str] = &["operant", "default", "test", "tmp", "root", "sudo"];
@@ -39,46 +65,17 @@ pub fn get_operant_home() -> PathBuf {
     platform::operant_home()
 }
 
-#[expect(
-    clippy::expect_used,
-    reason = "env_path ends in `profiles` (checked above), so it has two parents"
-)]
 /// Get the default operant root (before profile resolution).
 ///
 /// In standard deployments this is `~/.operant`.
 /// In Docker/custom deployments where HERMES_HOME points outside `~/.operant`,
 /// returns HERMES_HOME directly.
+///
+/// This is the root that holds `profiles/` and the sticky `active_profile`
+/// file, so it must NOT follow the active profile: switching profiles must
+/// not move the switch itself.
 pub fn get_default_operant_root() -> PathBuf {
-    let native_home = platform::operant_home();
-    let env_home = std::env::var("HERMES_HOME").unwrap_or_default();
-    if env_home.is_empty() {
-        return native_home;
-    }
-
-    let env_path = PathBuf::from(&env_home);
-    // Check if HERMES_HOME is under ~/.operant (normal or profile mode)
-    if let (Ok(env_resolved), Ok(native_resolved)) =
-        (env_path.canonicalize(), native_home.canonicalize())
-        && env_resolved.starts_with(&native_resolved)
-    {
-        return native_home;
-    }
-
-    // Docker / custom deployment: check if this is a profile path
-    if env_path
-        .parent()
-        .map(|p| p.ends_with("profiles"))
-        .unwrap_or(false)
-    {
-        return env_path
-            .parent()
-            .and_then(|p| p.parent())
-            .expect("env_path has grandparents (ends_with('profiles') checked above)")
-            .to_path_buf();
-    }
-
-    // Not a profile path — HERMES_HOME itself is the root
-    env_path
+    platform::default_operant_root()
 }
 
 /// Get the profiles root directory.
@@ -130,16 +127,13 @@ pub fn normalize_profile_name(name: &str) -> Result<String> {
     Ok(trimmed.to_lowercase())
 }
 
-#[expect(clippy::expect_used, reason = "infallible once-init / static init")]
 /// Validate a profile name.
 pub fn validate_profile_name(name: &str) -> Result<()> {
     if name == "default" {
         return Ok(());
     }
 
-    let re = regex::Regex::new(PROFILE_ID_RE)
-        .expect("PROFILE_ID_RE is a static literal — authoring bug if invalid");
-    if !re.is_match(name) {
+    if !is_profile_id(name) {
         return Err(Error::Config(format!(
             "Invalid profile name '{}'. Must match [a-z0-9][a-z0-9_-]{{0,63}}",
             name
@@ -514,6 +508,36 @@ mod tests {
         ));
         fs::create_dir_all(&path).unwrap();
         path
+    }
+
+    #[test]
+    fn the_profile_id_check_matches_the_documented_pattern() {
+        // `is_profile_id` is the hand-written twin of `PROFILE_ID_RE`. The
+        // sticky `active_profile` file is checked with the function (it runs
+        // on every `operant_home()` call), so the two must agree exactly.
+        let re = regex::Regex::new(PROFILE_ID_RE).expect("PROFILE_ID_RE is a static literal");
+        for name in [
+            "a",
+            "z9",
+            "coder",
+            "my-profile",
+            "my_profile",
+            "123profile",
+            &"x".repeat(64),
+            "",
+            "-invalid",
+            "INVALID",
+            "has space",
+            "dot.name",
+            "sla/sh",
+            &"x".repeat(65),
+        ] {
+            assert_eq!(
+                is_profile_id(name),
+                re.is_match(name),
+                "the pattern and the check disagree on {name:?}"
+            );
+        }
     }
 
     #[test]

@@ -34,7 +34,7 @@ asks = "docs/kb/ASKS.md"
 
 [core]
 dated_pattern = "^(plan-\\d{4}-\\d{2}-\\d{2}|\\d{4}-\\d{2}-\\d{2}-)"
-pointer_ignore = "SKILL.md autonomous-status.toml"
+pointer_ignore = "SKILL.md autonomous-status.toml settings.json auth.json"
 # the gate the repo's own iteration loop names: fast checks, then the workspace suite
 gate = "./scripts/check.sh check --workspace && cargo test --workspace"
 # the judgement the iteration loop makes mandatory, in its own order

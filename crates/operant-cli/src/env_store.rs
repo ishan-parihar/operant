@@ -35,17 +35,19 @@ fn create_secret_temp(path: &Path) -> io::Result<fs::File> {
     fs::File::create(path)
 }
 
-/// Path to the user's `.env` secrets file (`~/.operant/.env`).
+/// Path to the user's `.env` secrets file (`<operant home>/.env`).
+///
+/// The ONE home resolver, so a PROFILE's pins land in the profile's own
+/// `.env` — which is the file the runtime reads back. It used to resolve
+/// `~/.operant/.env` from the OS home, so under `HERMES_HOME` or an active
+/// profile `/connect` wrote pins the runtime never read.
 ///
 /// During tests, override with `HERMES_TEST_ENV_PATH` to use a temp path.
 pub fn operant_env_path() -> PathBuf {
     if let Ok(test_path) = std::env::var("HERMES_TEST_ENV_PATH") {
         return PathBuf::from(test_path);
     }
-    dirs::home_dir()
-        .unwrap_or_default()
-        .join(".operant")
-        .join(".env")
+    operant_core::platform::operant_home().join(".env")
 }
 
 /// Read the entire `.env` file as a `HashMap<key, value>`.

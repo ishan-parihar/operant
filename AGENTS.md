@@ -451,6 +451,27 @@ These are the user's intentional design choices. Do not replace, remove, or
   TAIL as a `<turn_context>` prefix on the latest user message (iter-911), so
   everything before the latest user message is byte-stable between turns
 
+### The operant home has ONE resolver (iter-1137)
+- `operant_core::platform::operant_home()` is THE resolver: `HERMES_HOME`
+  (explicit — it wins) → the sticky active profile → `~/.operant`.
+  `platform::default_operant_root()` is the root that holds `profiles/` and
+  the sticky `active_profile` file, so switching profiles does not move the
+  switch.
+- EVERY store under the operant home resolves through it: the database, the
+  config, `settings.json`, `auth.json`, the `.env` pins, the logs, the
+  caches, the approval allowlist, the agents directory. A store that builds
+  its own path from the OS home (`dirs::home_dir().join(".operant")`) lands in
+  the DEFAULT profile's tree even when `HERMES_HOME` or a profile points
+  elsewhere — that was nine resolvers and one false promise
+  (`operant profile use` wrote a sticky file nothing read).
+- The guard `crates/operant-core/tests/one_home_resolver.rs` scans every
+  non-test file in the workspace and fails when one builds an operant-home
+  path from the OS home. If a site genuinely needs the OS home (browser
+  cookie dirs, `~` expansion, a PROJECT-level `.operant/`), add it to that
+  test's `ALLOWED` list WITH the reason — in the same commit.
+- `HERMES_HOME` still wins over the sticky profile, so a deployment that
+  exports it has one home and no profiles.
+
 ---
 
 ## Architecture Overview

@@ -1275,9 +1275,7 @@ fn persist_config(old: &AppConfig, config: &AppConfig) -> Result<()> {
             // No config file was loaded (fresh install): fall back to the
             // full write into the default global path, 0600 — the wizard
             // has to create the file somewhere.
-            let config_path = dirs::home_dir()
-                .map(|h| h.join(".operant").join("operant.toml"))
-                .unwrap_or_else(|| PathBuf::from("operant.toml"));
+            let config_path = operant_core::platform::operant_home().join("operant.toml");
             if let Some(parent) = config_path.parent() {
                 std::fs::create_dir_all(parent).context("Failed to create config directory")?;
             }

@@ -91,6 +91,18 @@ fn cmd_show(name: Option<String>) -> Result<()> {
         println!("  Status:        (active)");
     }
     println!("  Path:          {}", dir.display());
+    println!(
+        "  Config:        {}",
+        if dir.join("operant.toml").exists() {
+            dir.join("operant.toml").display().to_string()
+        } else {
+            "(none — this profile uses the built-in defaults)".to_string()
+        }
+    );
+    println!(
+        "  Effective home: {}",
+        operant_core::platform::operant_home().display()
+    );
     println!("───────────────────────────────────────────");
 
     Ok(())
@@ -106,6 +118,20 @@ fn cmd_create(name: String, clone_from: Option<String>) -> Result<()> {
 fn cmd_use(name: String) -> Result<()> {
     let dir = use_profile(&name).map_err(|e| anyhow::anyhow!(e.to_string()))?;
     println!("Switched to profile '{}' ({})", name, dir.display());
+    // The switch is a STICKY file the next run reads — say so, and say when
+    // it cannot take effect (an explicit HERMES_HOME wins over it).
+    if std::env::var("HERMES_HOME").is_ok_and(|v| !v.is_empty()) {
+        println!(
+            "Note: HERMES_HOME is set, so it wins over the profile switch — \
+             this run (and every run) uses {}.",
+            operant_core::platform::operant_home().display()
+        );
+    } else {
+        println!(
+            "The next operant command uses this profile's home ({}).",
+            dir.display()
+        );
+    }
     Ok(())
 }
 

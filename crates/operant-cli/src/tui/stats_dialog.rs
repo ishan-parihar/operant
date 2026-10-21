@@ -65,11 +65,9 @@ pub struct ModelBreakdown {
 // Data loading
 // ---------------------------------------------------------------------------
 
-/// Load and aggregate stats from ~/.operant/stats.jsonl
+/// Load and aggregate stats from `<operant home>/stats.jsonl`
 pub fn load_stats() -> AggregatedStats {
-    let path = dirs::home_dir()
-        .map(|h| h.join(".operant").join("stats.jsonl"))
-        .unwrap_or_default();
+    let path = operant_core::platform::operant_home().join("stats.jsonl");
 
     let content = match std::fs::read_to_string(&path) {
         Ok(c) => c,

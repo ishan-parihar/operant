@@ -2619,6 +2619,11 @@ fn test_dialog_open_close_scenarios() {
 
     for (cmd, overlay) in scenarios {
         let mut app = make_app();
+        // The `/model` picker is gated on live credentials; the test owns
+        // that precondition rather than inheriting the ambient auth state
+        // (the operator's key file, the shell's API key, or a parallel
+        // test's cleared environment).
+        app.has_credentials = true;
         app.is_simulating = true;
         let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
 
@@ -5286,6 +5291,13 @@ fn removed_commands_are_absent() {
 #[test]
 fn model_command_opens_the_inline_picker_on_the_configured_rows() {
     let mut app = make_app();
+    // The picker is gated on live credentials, so the test establishes that
+    // precondition itself. It used to inherit it from the AMBIENT state —
+    // the operator's `~/.operant/auth.json` and the shell's API key — which
+    // made the result depend on a store whose path follows `HERMES_HOME`:
+    // a parallel test that moved the home (or cleared the auth env) could
+    // turn this into a different test.
+    app.has_credentials = true;
     assert!(app.inline_interactive.is_none());
     assert!(app.handle_tui_command("model", ""));
     let picker = app
@@ -5455,6 +5467,9 @@ fn connect_endpoint_prefers_custom_url_and_skips_virtual_providers() {
 fn inline_picker_enter_applies_and_esc_closes() {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     let mut app = make_app();
+    // The picker is gated on live credentials — the test owns that
+    // precondition instead of inheriting the ambient auth state.
+    app.has_credentials = true;
     app.config.agent.fallback_models = vec!["other-model".to_string()];
     assert!(app.handle_tui_command("model", ""));
     let key = |code: KeyCode| KeyEvent {

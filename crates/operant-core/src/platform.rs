@@ -4,7 +4,7 @@
 //! interpreter detection, and platform information using only the standard library.
 
 use std::env;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// A CRATE-WIDE lock for tests that mutate the process environment.
@@ -132,18 +132,71 @@ fn detect_shell_unix() -> ShellInfo {
 // 2. Config directory helpers
 // ---------------------------------------------------------------------------
 
-/// Returns the root Operant home directory.
+/// The operant home ROOT — the directory that holds `profiles/` and the
+/// sticky `active_profile` file.
+///
+/// `HERMES_HOME` wins when it is set (an explicit operator choice);
+/// `~/.operant` is the fallback. This is the root REGARDLESS of which
+/// profile is active, so the profile list and the sticky file stay in one
+/// place when a profile is switched on.
+///
+/// A `HERMES_HOME` that points INTO a profile directory
+/// (`…/profiles/<name>`) resolves its root to the grandparent, so
+/// `profiles/` and `active_profile` stay BESIDE the profile instead of
+/// inside it.
+pub fn default_operant_root() -> PathBuf {
+    if let Some(explicit) = explicit_home() {
+        if explicit.parent().is_some_and(|p| p.ends_with("profiles"))
+            && let Some(root) = explicit.parent().and_then(Path::parent)
+        {
+            return root.to_path_buf();
+        }
+        return explicit;
+    }
+    os_default_home()
+}
+
+/// The effective operant home for this process.
 ///
 /// Resolution order:
-/// 1. `$HERMES_HOME` environment variable (if set and non-empty).
-/// 2. `~/.operant` on Unix, `%APPDATA%\operant` on Windows.
+/// 1. `$HERMES_HOME` — an explicit operator choice. It wins over the
+///    sticky profile: a deployment that sets it means it.
+/// 2. The sticky active profile — `<root>/profiles/<name>`, when
+///    `<root>/active_profile` names a profile that exists.
+/// 3. The default root (`~/.operant`).
+///
+/// This is THE resolver: every store under the operant home resolves
+/// through it, so a profile is isolated from the default one and the
+/// operator's `HERMES_HOME` still overrides everything.
 pub fn operant_home() -> PathBuf {
-    if let Ok(val) = env::var("HERMES_HOME")
-        && !val.is_empty()
-    {
-        return PathBuf::from(val);
+    if let Some(explicit) = explicit_home() {
+        return explicit;
     }
+    let root = os_default_home();
+    match active_profile_name(&root) {
+        Some(name) => {
+            let dir = root.join("profiles").join(name);
+            if dir.is_dir() { dir } else { root }
+        }
+        None => root,
+    }
+}
 
+/// `$HERMES_HOME`, when it is set and non-empty.
+fn explicit_home() -> Option<PathBuf> {
+    env::var("HERMES_HOME")
+        .ok()
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+}
+
+/// The OS default home — `~/.operant` on Unix, `%APPDATA%\operant` on
+/// Windows. The home BEFORE `HERMES_HOME` and before any profile.
+///
+/// It stays a credential root even when `HERMES_HOME` points elsewhere: the
+/// operator's canonical stores live there, and a path that is a credential
+/// store in one deployment must stay one in another.
+pub fn os_default_home() -> PathBuf {
     #[cfg(target_os = "windows")]
     {
         let base = env::var("APPDATA").unwrap_or_else(|_| {
@@ -158,6 +211,21 @@ pub fn operant_home() -> PathBuf {
         let home = env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
         PathBuf::from(home).join(".operant")
     }
+}
+
+/// The profile named by the sticky `<root>/active_profile` file.
+///
+/// The name must be a plain profile token: the file steers a PATH, so a
+/// tampered or malformed value must not escape the profiles directory.
+/// A name that does not parse is ignored (the default profile stays
+/// active) rather than trusted.
+fn active_profile_name(root: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(root.join("active_profile")).ok()?;
+    let name = text.trim();
+    if name.is_empty() || !crate::profile::is_profile_id(name) {
+        return None;
+    }
+    Some(name.to_string())
 }
 
 /// The Holon run-environment contract, read once (audit O-01/O-02).
@@ -400,6 +468,10 @@ mod tests {
     #[test]
     #[serial_test::serial]
     fn test_operant_home_respects_env() {
+        // The crate-wide env lock: every test that mutates HOME or
+        // HERMES_HOME must hold it, or it races the profile tests (which
+        // create and delete real directories under the resolved root).
+        let _guard = test_env_lock_blocking();
         let key = "HERMES_HOME";
         let original = env::var(key).ok();
 
@@ -417,6 +489,7 @@ mod tests {
     #[test]
     #[serial_test::serial]
     fn test_operant_home_default_not_empty() {
+        let _guard = test_env_lock_blocking();
         let key = "HERMES_HOME";
         let original = env::var(key).ok();
 
@@ -449,6 +522,160 @@ mod tests {
         assert!(operant_memories_dir().ends_with("memories"));
         assert!(operant_skills_dir().ends_with("skills"));
         assert!(operant_sessions_dir().ends_with("sessions"));
+    }
+
+    // -- The active profile -------------------------------------------------
+
+    /// Build a fake operant root with one profile in it, and point `HOME`
+    /// at it. Returns the root and the profile directory.
+    fn root_with_profile(name: &str) -> (tempfile::TempDir, PathBuf) {
+        let temp = tempfile::tempdir().expect("the temp home");
+        let root = temp.path().join(".operant");
+        let profile = root.join("profiles").join(name);
+        fs::create_dir_all(&profile).expect("the profile directory");
+        (temp, profile)
+    }
+
+    fn restore(key: &str, original: Option<String>) {
+        match original {
+            Some(val) => unsafe { env::set_var(key, val) },
+            None => unsafe { env::remove_var(key) },
+        }
+    }
+
+    /// The sticky `active_profile` file selects the profile's home.
+    ///
+    /// This is the behaviour `operant profile use <name>` promises: the
+    /// switch it writes is READ by the next run. Before this, the file was
+    /// written and never read, so the profile never took effect.
+    #[test]
+    #[serial_test::serial]
+    fn the_sticky_active_profile_selects_the_home() {
+        let _guard = test_env_lock_blocking();
+        let home_key = "HOME";
+        let hermes_key = "HERMES_HOME";
+        let original_home = env::var(home_key).ok();
+        let original_hermes = env::var(hermes_key).ok();
+
+        let (temp, profile) = root_with_profile("work");
+        // SAFETY: test-only env mutation under #[serial_test::serial]
+        unsafe {
+            env::set_var(home_key, temp.path());
+            env::remove_var(hermes_key);
+        }
+        fs::write(
+            temp.path().join(".operant").join("active_profile"),
+            "work\n",
+        )
+        .expect("the sticky file");
+
+        assert_eq!(
+            operant_home(),
+            profile,
+            "the active profile's directory is the effective home"
+        );
+        assert_eq!(
+            default_operant_root(),
+            temp.path().join(".operant"),
+            "the root that holds profiles/ does not follow the active profile"
+        );
+
+        restore(home_key, original_home);
+        restore(hermes_key, original_hermes);
+    }
+
+    /// An explicit `HERMES_HOME` wins over the sticky profile: a deployment
+    /// that sets it means it.
+    #[test]
+    #[serial_test::serial]
+    fn an_explicit_hermes_home_wins_over_the_active_profile() {
+        let _guard = test_env_lock_blocking();
+        let home_key = "HOME";
+        let hermes_key = "HERMES_HOME";
+        let original_home = env::var(home_key).ok();
+        let original_hermes = env::var(hermes_key).ok();
+
+        let (temp, _profile) = root_with_profile("work");
+        let explicit = temp.path().join("elsewhere");
+        // SAFETY: test-only env mutation under #[serial_test::serial]
+        unsafe {
+            env::set_var(home_key, temp.path());
+            env::set_var(hermes_key, &explicit);
+        }
+        fs::write(
+            temp.path().join(".operant").join("active_profile"),
+            "work\n",
+        )
+        .expect("the sticky file");
+
+        assert_eq!(operant_home(), explicit);
+
+        restore(home_key, original_home);
+        restore(hermes_key, original_hermes);
+    }
+
+    /// A sticky file that names something that is not a profile is IGNORED,
+    /// not obeyed: the file steers a path, so a tampered value must not be
+    /// able to point the home anywhere.
+    #[test]
+    #[serial_test::serial]
+    fn a_tampered_active_profile_is_ignored() {
+        let _guard = test_env_lock_blocking();
+        let home_key = "HOME";
+        let hermes_key = "HERMES_HOME";
+        let original_home = env::var(home_key).ok();
+        let original_hermes = env::var(hermes_key).ok();
+
+        let (temp, _profile) = root_with_profile("work");
+        // SAFETY: test-only env mutation under #[serial_test::serial]
+        unsafe {
+            env::set_var(home_key, temp.path());
+            env::remove_var(hermes_key);
+        }
+        fs::write(
+            temp.path().join(".operant").join("active_profile"),
+            "../../etc\n",
+        )
+        .expect("the sticky file");
+
+        assert_eq!(
+            operant_home(),
+            temp.path().join(".operant"),
+            "a name that is not a profile token must not steer the home"
+        );
+
+        restore(home_key, original_home);
+        restore(hermes_key, original_hermes);
+    }
+
+    /// A sticky file that names a profile that does not exist is ignored —
+    /// the default profile stays active rather than a missing directory
+    /// becoming the home.
+    #[test]
+    #[serial_test::serial]
+    fn an_active_profile_that_does_not_exist_is_ignored() {
+        let _guard = test_env_lock_blocking();
+        let home_key = "HOME";
+        let hermes_key = "HERMES_HOME";
+        let original_home = env::var(home_key).ok();
+        let original_hermes = env::var(hermes_key).ok();
+
+        let (temp, _profile) = root_with_profile("work");
+        // SAFETY: test-only env mutation under #[serial_test::serial]
+        unsafe {
+            env::set_var(home_key, temp.path());
+            env::remove_var(hermes_key);
+        }
+        fs::write(
+            temp.path().join(".operant").join("active_profile"),
+            "gone\n",
+        )
+        .expect("the sticky file");
+
+        assert_eq!(operant_home(), temp.path().join(".operant"));
+
+        restore(home_key, original_home);
+        restore(hermes_key, original_hermes);
     }
 
     // -- File permissions ---------------------------------------------------

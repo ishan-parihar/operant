@@ -133,10 +133,7 @@ impl OAuthRefresher {
             .build()
             .map_err(|e| Error::Config(format!("Failed to build HTTP client: {e}")))?;
 
-        let mut auth_store_path = dirs::home_dir()
-            .ok_or_else(|| Error::Config("Cannot determine home directory".to_string()))?;
-        auth_store_path.push(".operant");
-        auth_store_path.push("auth.json");
+        let auth_store_path = crate::platform::operant_home().join("auth.json");
 
         Ok(Self {
             client,
@@ -764,10 +761,7 @@ impl OAuthRefresher {
 // ── Auth Store I/O ────────────────────────────────────────────────────────
 
 pub fn auth_store_path() -> PathBuf {
-    let mut path = dirs::home_dir().unwrap_or_default();
-    path.push(".operant");
-    path.push("auth.json");
-    path
+    crate::platform::operant_home().join("auth.json")
 }
 
 pub fn load_auth_store(path: &Path) -> Result<AuthStore> {

@@ -105,9 +105,12 @@ pub struct AppConfig {
 
 impl Default for AppConfig {
     fn default() -> Self {
-        let database_path = dirs::home_dir()
-            .map(|h| h.join(".operant").join("database.db"))
-            .unwrap_or_else(|| PathBuf::from("database.db"));
+        // The database lives under the operant home, so a PROFILE gets its
+        // own sessions, cron jobs, budgets and tool state. It used to be
+        // `~/.operant/database.db` — resolved from the OS home, ignoring
+        // `HERMES_HOME` and the active profile — so every profile shared
+        // the default profile's database.
+        let database_path = platform::operant_home().join("database.db");
 
         Self {
             version: Some(2),
@@ -2470,9 +2473,11 @@ pub fn default_config_paths() -> Vec<PathBuf> {
         paths.push(config_dir.join("operant").join("config.toml"));
     }
 
-    if let Some(home_dir) = dirs::home_dir() {
-        paths.push(home_dir.join(".operant").join("operant.toml"));
-    }
+    // The home candidate is the EFFECTIVE home (`platform::operant_home`):
+    // the active profile's own `operant.toml`, or `HERMES_HOME`'s. The
+    // default root's `operant.toml` is deliberately NOT a candidate when a
+    // profile is active — a profile is independent, not an overlay.
+    paths.push(platform::operant_home().join("operant.toml"));
 
     paths
 }
@@ -3216,6 +3221,31 @@ wonderful_unknown_key = 42
         } else {
             // SAFETY: test-only env mutation under exclusive lock
             unsafe { std::env::remove_var(name) };
+        }
+    }
+
+    /// The database path follows the operant home.
+    ///
+    /// It used to be `~/.operant/database.db`, resolved from the OS home:
+    /// every PROFILE shared the default profile's database, so a profile's
+    /// sessions, cron jobs, budgets and tool state were the default
+    /// profile's.
+    #[test]
+    #[serial_test::serial]
+    fn the_database_path_follows_the_operant_home() {
+        let _guard = crate::platform::test_env_lock_blocking();
+        let key = "HERMES_HOME";
+        let original = std::env::var(key).ok();
+        let temp = tempfile::tempdir().expect("the temp home");
+        // SAFETY: test-only env mutation under #[serial_test::serial]
+        unsafe { std::env::set_var(key, temp.path()) };
+
+        let config = AppConfig::default();
+        assert_eq!(config.database_path, temp.path().join("database.db"));
+
+        match original {
+            Some(val) => unsafe { std::env::set_var(key, val) },
+            None => unsafe { std::env::remove_var(key) },
         }
     }
 

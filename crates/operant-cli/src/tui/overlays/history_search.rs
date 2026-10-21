@@ -39,10 +39,7 @@ impl HistoryEntry {
 // ---------------------------------------------------------------------------
 
 fn pins_path() -> std::path::PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join(".operant")
-        .join("history_pins.json")
+    operant_core::platform::operant_home().join("history_pins.json")
 }
 
 /// Load the set of pinned entry texts from `~/.operant/history_pins.json`.
