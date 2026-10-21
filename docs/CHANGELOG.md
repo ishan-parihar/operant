@@ -21,6 +21,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-1125 — `operant hooks` is a real surface now.** The family read `~/.operant/data/hooks/*.hook`
+  files that nothing wrote and nothing loaded, and the hook registry existed only when
+  `[harness].enabled` was on — so in a normal install no hook could fire at all, while
+  `operant hooks doctor` reported "All hooks are registered and ready". The store now lives in
+  core (`operant-core/src/shell_hooks.rs`), the agent loads it when it starts, and the CLI can
+  write it: `operant hooks add --event agent_end -- <command>`, `operant hooks test <name>` runs the
+  command and reports its exit code, `operant hooks doctor` names the files it cannot use, and
+  `operant hooks revoke <name>` removes one. Only the four events the agent actually emits are
+  accepted (`agent_start`, `agent_end`, `turn_start`, `turn_end`) — a hook on an event that never
+  fires is refused at write time and skipped at load time. The README's hook-parity line was
+  corrected: there are no before/after-tool or memory-level hooks.
 - **iter-1124 — `operant tools disable` now actually disables.** The CLI wrote `tool_state.json` next to
   the database and nothing read it: the runtime's disabled set came only from the TOML
   `[tools] disabled_tools`, so a tool the operator turned off kept reaching the agent while the

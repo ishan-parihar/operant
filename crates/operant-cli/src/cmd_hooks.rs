@@ -1,20 +1,39 @@
-//! CLI subcommand for managing shell hooks.
+//! CLI subcommand for managing shell hooks (`operant hooks`).
 //!
-//! Provides `operant hooks <subcommand>` for listing, testing, revoking, and
-//! diagnosing hooks.  Hooks are event-driven shell commands registered by
-//! the agent during a session.
-
-use std::fs;
+//! A shell hook is the operator's own command, run when the agent emits a
+//! lifecycle event (`agent_start`, `agent_end`, `turn_start`, `turn_end`).
+//! The hooks live in `~/.operant/data/hooks/<name>.hook`; the agent loads
+//! them when it starts, so a hook written here fires on the next run.
+//!
+//! Before iter-1125 this family read files that nothing wrote and nothing
+//! loaded. Now the same store is the one the runtime reads.
 
 use anyhow::Result;
 use clap::Subcommand;
 use operant_core::config::AppConfig;
+use operant_core::gateway_pipeline::HookContext;
+use operant_core::shell_hooks::{
+    HOOK_EVENT_NAMES, hooks_dir, load_shell_hooks, remove_shell_hook, run_hook_command,
+    write_shell_hook,
+};
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum HooksSubcommand {
-    /// List all configured hooks
+    /// List the configured hooks
     List,
-    /// Test a specific hook by name
+    /// Add a hook: a command to run when an event fires
+    Add {
+        /// The event that fires the hook (agent_start, agent_end, turn_start, turn_end)
+        #[arg(long)]
+        event: String,
+        /// The hook name (defaults to the command's first word)
+        #[arg(long)]
+        name: Option<String>,
+        /// The command to run (quote it)
+        #[arg(trailing_var_arg = true, required = true)]
+        command: Vec<String>,
+    },
+    /// Run a hook's command now, without waiting for its event
     Test {
         /// Hook name to test
         name: String,
@@ -23,6 +42,8 @@ pub enum HooksSubcommand {
     Revoke {
         /// Hook name to revoke
         name: String,
+        #[arg(long, hide = true)]
+        remove: bool,
     },
     /// Run hook diagnostics
     Doctor,
@@ -31,120 +52,123 @@ pub enum HooksSubcommand {
 pub async fn handle_hooks_command(_config: &AppConfig, cmd: HooksSubcommand) -> Result<()> {
     match cmd {
         HooksSubcommand::List => cmd_list(),
-        HooksSubcommand::Test { name } => cmd_test(&name),
-        HooksSubcommand::Revoke { name } => cmd_revoke(&name),
+        HooksSubcommand::Add {
+            event,
+            name,
+            command,
+        } => cmd_add(event, name, command),
+        HooksSubcommand::Test { name } => cmd_test(&name).await,
+        HooksSubcommand::Revoke { name, .. } => cmd_revoke(&name),
         HooksSubcommand::Doctor => cmd_doctor(),
     }
 }
 
-/// Stored hooks directory — hooks are persisted per-agent-session.
-fn hooks_dir() -> std::path::PathBuf {
-    operant_core::platform::operant_data_dir().join("hooks")
-}
-
-/// List all configured hooks from the hooks directory.
+/// List the hooks and what fires them.
 fn cmd_list() -> Result<()> {
     let dir = hooks_dir();
-    if !dir.exists() {
+    let (hooks, problems) = load_shell_hooks(&dir);
+    if hooks.is_empty() && problems.is_empty() {
         println!("No hooks configured.");
+        println!("Add one with: operant hooks add --event agent_end -- <command>");
         return Ok(());
     }
 
     println!("Configured Hooks");
     println!("───────────────");
     println!();
-    for entry in fs::read_dir(&dir)? {
-        let entry = entry?;
-        let name = entry.file_name().to_string_lossy().to_string();
-        if name.ends_with(".hook") {
-            let meta = std::fs::metadata(entry.path())?;
-            let modified = meta
-                .modified()
-                .ok()
-                .map(|t| {
-                    let secs = t
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_secs();
-                    chrono_or_epoch(secs)
-                })
-                .unwrap_or_else(|| "unknown".to_string());
-            println!(
-                "  {:<30}  last modified: {}",
-                name.trim_end_matches(".hook"),
-                modified
-            );
+    for (name, hook) in &hooks {
+        println!("  {name}");
+        println!("    event:   {}", hook.event);
+        println!("    command: {}", hook.command);
+    }
+    if !problems.is_empty() {
+        println!();
+        println!("Unusable hook files:");
+        for problem in &problems {
+            println!("  {} — {}", problem.file, problem.reason);
         }
     }
     Ok(())
 }
 
-/// Test a hook by reading its definition (stub — real execution requires a running agent).
-fn cmd_test(name: &str) -> Result<()> {
-    let path = hooks_dir().join(format!("{}.hook", name));
-    if path.exists() {
-        let content = std::fs::read_to_string(&path)?;
-        println!("Hook: {name}");
-        println!("────{}", "─".repeat(name.len()));
-        println!("{content}");
+/// Write a new hook file.
+fn cmd_add(event: String, name: Option<String>, command: Vec<String>) -> Result<()> {
+    let command = command.join(" ");
+    let name = name.unwrap_or_else(|| {
+        command
+            .split_whitespace()
+            .next()
+            .unwrap_or("hook")
+            .to_string()
+    });
+    let dir = hooks_dir();
+    write_shell_hook(&dir, &name, &event, &command).map_err(anyhow::Error::msg)?;
+    println!("Hook '{name}' added — fires on {event}.");
+    println!("  {}", dir.join(format!("{name}.hook")).display());
+    Ok(())
+}
+
+/// Run a hook's command now and report what happened.
+async fn cmd_test(name: &str) -> Result<()> {
+    let dir = hooks_dir();
+    let (hooks, problems) = load_shell_hooks(&dir);
+    let Some((_, hook)) = hooks.iter().find(|(hook_name, _)| hook_name == name) else {
+        println!("Hook '{name}' not found.");
+        if let Some(problem) = problems.iter().find(|p| p.file == name) {
+            println!("  {} — {}", problem.file, problem.reason);
+        }
+        println!("Use `operant hooks list` to see the configured hooks.");
+        return Ok(());
+    };
+    println!("Running hook '{name}' (event {}):", hook.event);
+    println!("  {}", hook.command);
+    let (status, output) = run_hook_command(&hook.command, &HookContext::new()).await;
+    if !output.trim().is_empty() {
         println!();
-        println!("To execute this hook, run the agent and trigger the matching event.");
-    } else {
-        println!("Hook '{}' not found.", name);
-        println!("Use `operant hooks list` to see available hooks.");
+        println!("{}", output.trim_end());
+    }
+    match status {
+        Some(0) => println!("Hook '{name}' exited 0."),
+        Some(code) => println!("Hook '{name}' exited {code}."),
+        None => println!("Hook '{name}' did not run."),
     }
     Ok(())
 }
 
-/// Revoke (delete) a hook by name.
+/// Remove a hook file.
 fn cmd_revoke(name: &str) -> Result<()> {
-    let path = hooks_dir().join(format!("{}.hook", name));
-    if path.exists() {
-        std::fs::remove_file(&path)?;
-        println!("Hook '{}' revoked.", name);
-    } else {
-        println!("Hook '{}' not found.", name);
+    let dir = hooks_dir();
+    match remove_shell_hook(&dir, name) {
+        Ok(true) => println!("Hook '{name}' revoked."),
+        Ok(false) => println!("Hook '{name}' not found."),
+        Err(err) => println!("Could not revoke hook '{name}': {err}"),
     }
     Ok(())
 }
 
-/// Perform a health check on the hooks system.
+/// Report the health of the hook store.
 fn cmd_doctor() -> Result<()> {
     let dir = hooks_dir();
-    if !dir.exists() {
-        println!("Hook system:  no hooks directory — no hooks registered.");
-        return Ok(());
-    }
-
-    let count = std::fs::read_dir(&dir)?.count();
+    let (hooks, problems) = load_shell_hooks(&dir);
     println!("Hook System Health");
     println!("──────────────────");
     println!();
     println!("Hooks directory: {}", dir.display());
-    println!("Hook files:      {count}");
+    println!("Hooks loaded:    {}", hooks.len());
+    println!("Events:          {}", HOOK_EVENT_NAMES.join(", "));
     println!();
-    if count > 0 {
-        println!("All hooks are registered and ready.");
-        println!("Hooks execute during agent sessions when matching events fire.");
-    } else {
-        println!("No hook files found.");
+    if hooks.is_empty() && problems.is_empty() {
+        println!("No hooks configured.");
+        return Ok(());
     }
+    for (name, hook) in &hooks {
+        println!("  ok    {name} — fires on {}", hook.event);
+    }
+    for problem in &problems {
+        println!("  BROKEN {} — {}", problem.file, problem.reason);
+    }
+    println!();
+    println!("Hooks run when the agent emits their event — the agent must be");
+    println!("started after a hook is added for it to fire.");
     Ok(())
-}
-
-/// Fallback formatting for timestamps without chrono.
-fn chrono_or_epoch(secs: u64) -> String {
-    // Simple epoch-based display
-    let minutes = secs / 60;
-    let hours = minutes / 60;
-    let days = hours / 24;
-    if days > 0 {
-        format!("{days}d ago")
-    } else if hours > 0 {
-        format!("{hours}h ago")
-    } else if minutes > 0 {
-        format!("{minutes}m ago")
-    } else {
-        "just now".to_string()
-    }
 }

@@ -105,7 +105,7 @@ operant
 | **Channels** | Telegram · Discord · Slack · WhatsApp · email · SMS · webhooks via the gateway (7 platforms) |
 | **Autonomy** | `operant autonomous` — a self-directed dev loop over `TODO.md` with test-command guardrails |
 | **Org governance** | Per-employee permission scoping — seat policies (`yolo`/`standard`/`scoped`/`lockdown`) with deny/allow globs, a TTL'd grant ledger, durable escalation queue (unattended cron runs ask-and-deny; a senior's `/approve` mints a grant), reporting lines, and one attributable worklog row per scheduled run |
-| **Plugins** | WASM plugin tools + hermes-agent hook parity (before/after tool, turn, memory hooks) |
+| **Plugins** | WASM plugin tools · **Hooks** — a lifecycle hook registry (`agent_start`, `agent_end`, `turn_start`, `turn_end`) plus the operator's own shell commands (`operant hooks add --event agent_end -- <cmd>`) |
 | **Interface** | ratatui TUI · interactive chat · scriptable `run` · one-shot `test` |
 
 ---

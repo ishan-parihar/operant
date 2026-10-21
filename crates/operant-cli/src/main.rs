@@ -1604,21 +1604,22 @@ async fn build_agent_core_with_memory(
     let harness_prompt_slot = harness
         .as_ref()
         .map(|(_, slot, _)| std::sync::Arc::clone(slot));
-    let hook_registry = match harness.as_ref() {
-        Some((_, _, hook_slot)) => {
-            let registry = Arc::new(operant_core::gateway_pipeline::HookRegistry::new());
-            operant_core::gateway_pipeline::HookRegistry::register(
-                &registry,
-                operant_core::gateway_pipeline::HookEvent::Hooks("*".to_string()),
-                operant_core::harness_slots::HookSlot::bridge_handler(std::sync::Arc::clone(
-                    hook_slot,
-                )),
-            )
-            .await;
-            Some(registry)
-        }
-        None => None,
-    };
+    // iter-1125: the hook registry is ALWAYS created. It used to exist only
+    // when the harness was enabled, so in a normal install NO hook could
+    // fire at all — and the operator's own shell hooks (`operant hooks
+    // add`) had nowhere to be registered.
+    let hook_registry = Arc::new(operant_core::gateway_pipeline::HookRegistry::new());
+    if let Some((_, _, hook_slot)) = harness.as_ref() {
+        operant_core::gateway_pipeline::HookRegistry::register(
+            &hook_registry,
+            operant_core::gateway_pipeline::HookEvent::Hooks("*".to_string()),
+            operant_core::harness_slots::HookSlot::bridge_handler(std::sync::Arc::clone(hook_slot)),
+        )
+        .await;
+    }
+    // The operator's shell hooks: one file per hook in the hooks directory,
+    // run when the agent emits their event.
+    operant_core::shell_hooks::install_shell_hooks(&hook_registry).await;
     let harness = harness.map(|(h, _, _)| h);
     // S2 — make harness_dump/mount/unmount visible to the model. The
     // tools themselves gate mount/unmount on approval (ToolContext.metadata["approval"]).
@@ -1638,7 +1639,7 @@ async fn build_agent_core_with_memory(
         skill_manager,
         harness,
         harness_prompt_slot,
-        hook_registry,
+        hook_registry: Some(hook_registry),
     })
 }
 
