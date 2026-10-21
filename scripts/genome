@@ -112,7 +112,7 @@ TOMBSTONE = re.compile(r"<!--\s*kb: tombstone target=\"([^\"]+)\"")
 ZONE_RE = re.compile(r"<!-- genome:zone (\S+) sha=([0-9a-f]+) -->\n(.*?)<!-- genome:end \1 -->", re.S)
 ERR = 2
 MIN_CHUNK = 5  # lines; `ask` hits narrower than this point at a lead line without its content
-VERSION = "2026.10.21-1"
+VERSION = "2026.10.21-2"
 # every key genome reads: an unknown key is a typo that would silently switch a check off (E017)
 CONFIG_KEYS = {
     "genome": {"modules", "schema_version"},
@@ -1676,6 +1676,19 @@ def running_edits(cfg: Cfg) -> list[str]:
             "do not change a running job's code" for rel, (how, pids) in sorted(hits.items())]
 
 
+def _changed_since(root: Path, named: str, head: str) -> list[str] | None:
+    """The paths changed between `named` and `head`, or None when the range
+    cannot be read (a rewritten history, a shallow clone)."""
+    try:
+        r = subprocess.run(["git", "diff", "--name-only", f"{named}..{head}"],
+                           cwd=root, capture_output=True, text=True, timeout=30)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    if r.returncode != 0:
+        return None
+    return [ln for ln in r.stdout.splitlines() if ln]
+
+
 def doctor_findings(cfg: Cfg) -> tuple[list[str], list[str]]:
     finds, info = [], []
     head = sh(cfg.root, "git", "rev-parse", "HEAD").strip()
@@ -1684,7 +1697,29 @@ def doctor_findings(cfg: Cfg) -> tuple[list[str], list[str]]:
     if cfg.has("state") and head:
         heads = re.findall(r"\b[0-9a-f]{40}\b", read(cfg.path("state")))
         if heads and heads[0] != head:
-            finds.append(f"stale state: {cfg.paths['state']} names {heads[0][:8]}, HEAD is {head[:8]}")
+            named = heads[0]
+            # A snapshot names the commit it was generated at, so it names
+            # the commit BEFORE the one that carried it — the literal
+            # comparison could never converge, and the close-out pattern
+            # ("write the snapshot, commit it with the worklog") always
+            # left the check red. A snapshot still describes the tree when
+            # every commit SINCE it touched only documentation (or a
+            # configured role path): a code commit invalidates it, a
+            # docs-only close-out does not.
+            touched = _changed_since(cfg.root, named, head)
+            if touched is None:
+                finds.append(f"stale state: {cfg.paths['state']} names {named[:8]}, HEAD is {head[:8]} "
+                             f"(the named commit is not in this history — the snapshot cannot be compared)")
+            else:
+                role_paths = {cfg.rel(cfg.path(r)) for r in cfg.paths if cfg.has(r)}
+                code_touched = [f for f in touched
+                                if not f.startswith("docs/")
+                                and not any(f == rp or f.startswith(rp.rstrip("/") + "/") for rp in role_paths)]
+                if code_touched:
+                    finds.append(f"stale state: {cfg.paths['state']} names {named[:8]}, HEAD is {head[:8]} "
+                                 f"({len(code_touched)} non-documentation path(s) changed since)")
+                else:
+                    info.append(f"state snapshot {named[:8]} is current: only documentation changed since it")
     # append-only roles: no line removed over the last core.append_window commits, nor in the working tree.
     # A numbered worklog is a directory: its entries are append-only (renames allowed), its index is generated.
     window = int(cfg.get("core", "append_window", 10))
