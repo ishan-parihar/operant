@@ -177,10 +177,10 @@ record touched by more than one commit was amended in place.
 |---|---|
 <!-- genome:end status -->
 
-<!-- genome:zone handoff sha=1da57705ab5c -->
+<!-- genome:zone handoff sha=4b10edd2def3 -->
 ## Handoff — 2026-10-21
 
-Repo branch `main`, HEAD `0f507f4cc064855889d3f3ca9a9fdb572c35db73`. Working tree dirty (3 paths).
+Repo branch `main`, HEAD `b39eb602a5f7605e2e9565e86901ea743bfed860`. Working tree dirty (3 paths).
 
 ## Open register rows
   (none)

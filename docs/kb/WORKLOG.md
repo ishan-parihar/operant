@@ -117,3 +117,8 @@ Append-only: `kb log "<entry>"` — one entry per unit of work.
 - **2026-10-21T00:05** · `jcode` — docs: the doc-claims check became a real gate, and it caught a tree entry for a file archived in iter-900 (RG-011)
 - **2026-10-21T00:16** · `jcode` — docs: extending the doc-claims gate found AGENTS.md stating the AFT tool count three different ways (the code has 20) and a TUI count as an uncheckable lower bound
 - **2026-10-21T00:21** · `jcode` — docs: AGENTS.md contradicted itself about the error taxonomy (12 classes vs 24) — the gate now checks AGREEMENT, not just the count
+- **2026-10-21T02:30** · `omp` — iter-1124: `operant tools disable` removes the tool from the agent's toolset (RT-137) — the CLI wrote `tool_state.json` and nothing read it, so the command reported success and changed nothing
+- **2026-10-21T02:30** · `omp` — iter-1125: the `operant hooks` family is real (RT-138) — the store moved into core, the hook registry is created unconditionally, and the operator's own commands run on the agent's four lifecycle events
+- **2026-10-21T02:30** · `omp` — iter-1126: the agent can read the operator's SOP playbooks (RT-139) — the store moved into core and a `sop` tool was registered with the builtins
+- **2026-10-21T02:30** · `omp` — iter-1127: `operant webhook test` really posts a signed ping (RT-140, partly) — the store moved into core, the signing scheme matches the inbound adapter, and the dispatch remains an open, recorded decision
+- **2026-10-21T02:30** · `omp` — iter-1128: the parallel config schema is labelled, guarded and planned for retirement (RT-141) — 123 of its 145 structs have no production reader, and a static guard fails if the surface starts being loaded by accident
