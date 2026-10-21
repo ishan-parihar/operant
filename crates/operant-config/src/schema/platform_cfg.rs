@@ -396,15 +396,6 @@ impl Default for WebhookAuditConfig {
     }
 }
 
-pub(crate) fn is_valid_env_var_name(name: &str) -> bool {
-    let mut chars = name.chars();
-    match chars.next() {
-        Some(first) if first.is_ascii_alphabetic() || first == '_' => {}
-        _ => return false,
-    }
-    chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
-}
-
 // ── Runtime ──────────────────────────────────────────────────────
 
 /// Runtime adapter configuration (`[runtime]` section).

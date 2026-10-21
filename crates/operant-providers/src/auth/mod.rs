@@ -9,9 +9,8 @@ use crate::auth::profiles::{
     AuthProfile, AuthProfileKind, AuthProfilesData, AuthProfilesStore, TokenSet, profile_id,
 };
 use anyhow::Result;
-use operant_config::schema::Config;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -32,11 +31,6 @@ pub struct AuthService {
 }
 
 impl AuthService {
-    pub fn from_config(config: &Config) -> Self {
-        let state_dir = state_dir_from_config(config);
-        Self::new(&state_dir, config.secrets.encrypt)
-    }
-
     pub fn new(state_dir: &Path, encrypt_secrets: bool) -> Self {
         Self {
             store: AuthProfilesStore::new(state_dir, encrypt_secrets),
@@ -356,13 +350,6 @@ pub fn normalize_provider(provider: &str) -> Result<String> {
         other if !other.is_empty() => Ok(other.to_string()),
         _ => anyhow::bail!("Provider name cannot be empty"),
     }
-}
-
-pub fn state_dir_from_config(config: &Config) -> PathBuf {
-    config
-        .config_path
-        .parent()
-        .map_or_else(|| PathBuf::from("."), PathBuf::from)
 }
 
 pub fn default_profile_id(provider: &str) -> String {

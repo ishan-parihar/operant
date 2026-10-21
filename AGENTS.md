@@ -916,10 +916,17 @@ it — see RG-010 for the check.
   (iter-1126)
 - `operant webhook test` really POSTs a signed ping; the runtime still does
   not dispatch events to a subscription (RT-140, open)
-- The parallel config surface (`operant_config::schema::Config`) is a SPEC,
-  never loaded in production; the live config is
-  `operant_core::config::AppConfig` (RT-141, open — labelled, guarded by a
-  test, retirement planned)
+- The parallel config AGGREGATE is GONE (iter-1138): `operant_config::schema::Config`,
+  its loader, its migration and its 7K-line test file were deleted — it was
+  never loaded in production. The live config is
+  `operant_core::config::AppConfig`. What remains in `operant-config/src/schema/`
+  are the TYPES the live config composes; the dormant SECTION structs are
+  still there and are the rest of RT-141 (open — guarded by a test, plan
+  attached)
+- The `operant-providers` crate is a SECOND provider surface that production
+  never calls: outside its own crate the workspace names only `models_dev`
+  and the doctor's `create_provider` probe. The live provider path is
+  `operant-core/src/client.rs` (RT-153, open — recorded, not fixed)
 
 ### Gateway (7 platform adapters — all have real code, platform registry)
 - Telegram: fully implemented (long-poll + Bot API)

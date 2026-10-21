@@ -21,14 +21,6 @@ pub enum SkillsPromptInjectionMode {
     Compact,
 }
 
-pub(crate) fn parse_skills_prompt_injection_mode(raw: &str) -> Option<SkillsPromptInjectionMode> {
-    match raw.trim().to_ascii_lowercase().as_str() {
-        "full" => Some(SkillsPromptInjectionMode::Full),
-        "compact" => Some(SkillsPromptInjectionMode::Compact),
-        _ => None,
-    }
-}
-
 /// Skills loading configuration (`[skills]` section).
 #[derive(Debug, Clone, Serialize, Deserialize, Default, Configurable)]
 #[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]

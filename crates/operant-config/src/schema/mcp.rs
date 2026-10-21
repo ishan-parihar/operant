@@ -2,8 +2,7 @@
 //! former schema.rs monolith (dedup pass). Placement is navigational;
 //! every item is re-exported from `schema::`.
 
-use crate::validation_bail;
-use anyhow::{Context, Result};
+use anyhow::Result;
 use operant_macros::Configurable;
 #[cfg(feature = "schema-export")]
 use serde::{Deserialize, Serialize};
@@ -93,71 +92,4 @@ impl Default for McpConfig {
             servers: Vec::new(),
         }
     }
-}
-
-pub(crate) const MCP_MAX_TOOL_TIMEOUT_SECS: u64 = 600;
-
-pub(crate) fn validate_mcp_config(config: &McpConfig) -> Result<()> {
-    let mut seen_names = std::collections::HashSet::new();
-    for (i, server) in config.servers.iter().enumerate() {
-        let name = server.name.trim();
-        if name.is_empty() {
-            validation_bail!(
-                RequiredFieldEmpty,
-                format!("mcp.servers[{i}].name"),
-                "mcp.servers[{i}].name must not be empty"
-            );
-        }
-        if !seen_names.insert(name.to_ascii_lowercase()) {
-            anyhow::bail!("mcp.servers contains duplicate name: {name}");
-        }
-
-        if let Some(timeout) = server.tool_timeout_secs {
-            if timeout == 0 {
-                validation_bail!(
-                    InvalidNumericRange,
-                    format!("mcp.servers[{i}].tool_timeout_secs"),
-                    "mcp.servers[{i}].tool_timeout_secs must be greater than 0"
-                );
-            }
-            if timeout > MCP_MAX_TOOL_TIMEOUT_SECS {
-                anyhow::bail!(
-                    "mcp.servers[{i}].tool_timeout_secs exceeds max {MCP_MAX_TOOL_TIMEOUT_SECS}"
-                );
-            }
-        }
-
-        match server.transport {
-            McpTransport::Stdio => {
-                if server.command.trim().is_empty() {
-                    anyhow::bail!(
-                        "mcp.servers[{i}] with transport=stdio requires non-empty command"
-                    );
-                }
-            }
-            McpTransport::Http | McpTransport::Sse => {
-                let url = server
-                    .url
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "mcp.servers[{i}] with transport={} requires url",
-                            match server.transport {
-                                McpTransport::Http => "http",
-                                McpTransport::Sse => "sse",
-                                McpTransport::Stdio => "stdio",
-                            }
-                        )
-                    })?;
-                let parsed = reqwest::Url::parse(url)
-                    .with_context(|| format!("mcp.servers[{i}].url is not a valid URL"))?;
-                if !matches!(parsed.scheme(), "http" | "https") {
-                    anyhow::bail!("mcp.servers[{i}].url must use http/https");
-                }
-            }
-        }
-    }
-    Ok(())
 }

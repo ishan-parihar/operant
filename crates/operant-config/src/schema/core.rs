@@ -159,12 +159,6 @@ pub struct ModelProviderConfig {
 /// Valid temperature range for all paths (config, CLI, env override).
 pub const TEMPERATURE_RANGE: std::ops::RangeInclusive<f64> = 0.0..=2.0;
 
-/// Defaults to 0 so configs without an explicit `schema_version` are recognized
-/// as pre-versioning and get migrated.
-pub(crate) fn default_schema_version() -> u32 {
-    0
-}
-
 /// Verifiable Intent (VI) credential verification and issuance (`[verifiable_intent]` section).
 #[derive(Debug, Clone, Serialize, Deserialize, Configurable)]
 #[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
@@ -1434,5 +1428,3 @@ pub(crate) fn normalize_service_list(values: Vec<String>) -> Vec<String> {
     normalized.dedup();
     normalized
 }
-#[cfg(test)]
-mod core_tests;

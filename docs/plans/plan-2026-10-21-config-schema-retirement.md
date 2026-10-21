@@ -32,6 +32,38 @@ surfaces in one binary is a divergence waiting to happen.
    in the same commit.
 3. `scripts/audit-parallel-config.py` re-derives the counts.
 
+## Phase B0 — the AGGREGATE is gone (shipped in iter-1138)
+
+The owner's decision (delegated: "choose recommended best decisions on your
+own") was Option 1, retire. Step 1 of it shipped in iter-1138:
+
+- The aggregate `Config` (~30 sections, `crates/operant-config/src/schema/proxy.rs`),
+  its loader and its whole impl (`schema/config_impl.rs`, 1.9K lines), the
+  v0→v1 migration of that shape (`migration.rs`'s `V1Compat`), and its
+  7.1K-line test file (`schema/core/core_tests.rs`) are DELETED — about
+  9.7K lines, and with them the second loader, the second `config.toml`
+  resolution and the second migration.
+- The two production-typed consumers of the aggregate
+  (`operant-providers::provider_runtime_options_from_config`,
+  `operant-providers::auth::{from_config, state_dir_from_config}`) were
+  called only from their own tests; they are deleted with it.
+- The guard test is now stronger: it fails if `schema::Config` is USED
+  anywhere in production code, and a second test fails if the type is
+  DEFINED again.
+- What remains in `schema/` are the TYPES the live config composes. The
+  production surface that uses them, measured rather than assumed, is
+  exactly 12 types and 5 functions:
+  `ProxyConfig`, `ProxyScope`, `ObservabilityConfig`, `ModelProviderConfig`,
+  `FallbackProviderConfig`, `ModelRouteConfig`, `EmbeddingRouteConfig`,
+  `ReliabilityConfig`, `MultimodalConfig`, `ModelPricing`,
+  `MemoryPolicyConfig`, `SearchMode`; plus
+  `build_runtime_proxy_client_with_timeouts`, `apply_runtime_proxy_to_builder`,
+  `build_runtime_proxy_client`, `client_config` and
+  `set_runtime_proxy_config`.
+
+Step 2 (the dormant SECTION structs — 123 of them, 645 fields) is the rest
+of Option 1 and is NOT yet done.
+
 ## Phase B — the owner's choice
 
 ### Option 1: retire the schema surface

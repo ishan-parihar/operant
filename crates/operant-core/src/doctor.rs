@@ -1,7 +1,7 @@
 //! ONE doctor engine — `docs/ORGANISM-ARCHITECTURE.md` §6 F2.
 //!
 //! History: two divergent engines existed. `operant-runtime::doctor` ran on
-//! `operant_config::schema::Config` and served only the gateway's
+//! the retired config aggregate and served only the gateway's
 //! `GET /api/doctor`; `operant-cli::cmd_doctor` ran on [`AppConfig`] and
 //! served `operant doctor`. Same intent, duplicated logic, drifting check
 //! lists. This module is the surviving engine: the checks run on
@@ -10,8 +10,8 @@
 //! install-level sections, and the gateway serializes the same
 //! [`diagnose`] results at its boundary.
 //!
-//! Runtime-doctor checks that read fields only `schema::Config` carries are
-//! named gaps, not fakes: channels, delegate agents, `gateway.port`,
+//! Runtime-doctor checks that read fields only the retired aggregate carried
+//! are named gaps, not fakes: channels, delegate agents, `gateway.port`,
 //! `memory.embedding_model`, `config_path` (config-file presence), the
 //! runtime `workspace_dir` (SOUL.md/AGENTS.md presence there), and daemon
 //! heartbeat state (the `operant-runtime` daemon supervisor has no callers,
@@ -339,7 +339,7 @@ fn embedding_provider_validation_error(name: &str) -> Option<String> {
 
 // ── Data root integrity ────────────────────────────────────────────
 
-/// The runtime engine checked `schema::Config.workspace_dir`
+/// The runtime engine checked the retired aggregate's `workspace_dir`
 /// (`~/.operant/workspace`, bootstrapped only by schema-config loads).
 /// The AppConfig world has no workspace concept; its data root —
 /// `operant_home()`, which holds state.db, skills, cron — is where the

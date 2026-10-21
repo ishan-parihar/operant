@@ -4,13 +4,40 @@
 
 use anyhow::{Context, Result};
 use directories::UserDirs;
-#[cfg(feature = "schema-export")]
 use std::path::PathBuf;
 
 use super::*;
 
-pub(crate) fn default_workspaces_dir() -> String {
-    default_path_under_config_dir("workspaces")
+/// Expand tilde in paths, falling back to `UserDirs` when HOME is unset.
+///
+/// In non-TTY environments (e.g. cron), HOME may not be set, causing
+/// `shellexpand::tilde` to return the literal `~` unexpanded. This helper
+/// detects that case and uses `directories::UserDirs` as a fallback.
+///
+/// (It moved here from `schema/workspace_cfg.rs`, which was deleted with
+/// the config aggregate it belonged to — RT-141.)
+pub(crate) fn expand_tilde_path(path: &str) -> PathBuf {
+    let expanded = shellexpand::tilde(path);
+    let expanded_str = expanded.as_ref();
+
+    // If the path still starts with '~', tilde expansion failed (HOME unset)
+    if expanded_str.starts_with('~') {
+        if let Some(user_dirs) = UserDirs::new() {
+            let home = user_dirs.home_dir();
+            // Replace leading ~ with home directory
+            if let Some(rest) = expanded_str.strip_prefix('~') {
+                return home.join(rest.trim_start_matches(['/', '\\']));
+            }
+        }
+        // If UserDirs also fails, log a warning and use the literal path
+        tracing::warn!(
+            path = path,
+            "Failed to expand tilde: HOME environment variable is not set and UserDirs failed. \
+             In cron/non-TTY environments, use absolute paths or set HOME explicitly."
+        );
+    }
+
+    PathBuf::from(expanded_str)
 }
 
 /// Used by `#[serde(skip_serializing_if)]` on plain `bool` fields to omit
@@ -1005,11 +1032,6 @@ pub(crate) fn default_max_auto_severity() -> String {
 
 pub(crate) fn default_report_output_dir() -> String {
     default_path_under_config_dir("security-reports")
-}
-
-pub(crate) fn default_config_and_workspace_dirs() -> Result<(PathBuf, PathBuf)> {
-    let config_dir = default_config_dir()?;
-    Ok((config_dir.clone(), config_dir.join("workspace")))
 }
 
 pub(crate) fn default_config_dir() -> Result<PathBuf> {

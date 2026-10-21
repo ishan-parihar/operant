@@ -777,59 +777,6 @@ impl Default for ProviderRuntimeOptions {
     }
 }
 
-pub fn provider_runtime_options_from_config(
-    config: &operant_config::schema::Config,
-) -> ProviderRuntimeOptions {
-    let fallback = config.providers.fallback_provider();
-    // Prefer the active fallback profile, and keep the URL-match fallback for
-    // compatibility with older loaded configs that only preserved the base URL.
-    let merge_system_into_user = fallback.is_some_and(|entry| entry.merge_system_into_user)
-        || fallback
-            .and_then(|e| e.base_url.as_deref())
-            .map(str::trim)
-            .filter(|u| !u.is_empty())
-            .and_then(|active_url| {
-                config.providers.models.values().find(|p| {
-                    p.base_url
-                        .as_deref()
-                        .map(str::trim)
-                        .filter(|u| !u.is_empty())
-                        .map(|u| u.trim_end_matches('/'))
-                        == Some(active_url.trim_end_matches('/'))
-                })
-            })
-            .map(|p| p.merge_system_into_user)
-            .unwrap_or(false);
-
-    ProviderRuntimeOptions {
-        auth_profile_override: None,
-        provider_api_url: fallback
-            .and_then(|e| e.base_url.as_deref())
-            .map(str::trim)
-            .filter(|url| !url.is_empty())
-            .map(ToString::to_string),
-        operant_dir: config.config_path.parent().map(PathBuf::from),
-        secrets_encrypt: config.secrets.encrypt,
-        reasoning_enabled: config.runtime.reasoning_enabled,
-        reasoning_effort: config.runtime.reasoning_effort.clone(),
-        provider_timeout_secs: Some(fallback.and_then(|e| e.timeout_secs).unwrap_or(120)),
-        extra_headers: fallback
-            .map(|e| e.extra_headers.clone())
-            .unwrap_or_default(),
-        api_path: fallback.and_then(|e| e.api_path.clone()),
-        provider_max_tokens: fallback.and_then(|e| e.max_tokens),
-        merge_system_into_user,
-        provider_extra: fallback.and_then(|e| e.provider_extra.clone()),
-        native_tools: fallback.and_then(|e| e.native_tools),
-        wire_api: fallback.and_then(|e| e.wire_api.clone()),
-        think: fallback.and_then(|e| e.think),
-        chat_template_kwargs: fallback.and_then(|e| e.chat_template_kwargs.clone()),
-        ollama_num_ctx: fallback.and_then(|e| e.ollama_num_ctx),
-        ollama_num_predict: fallback.and_then(|e| e.ollama_num_predict),
-        ollama_temperature_override: fallback.and_then(|e| e.ollama_temperature_override),
-    }
-}
-
 fn is_secret_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | ':')
 }
@@ -3609,47 +3556,6 @@ mod tests {
         assert!(
             !provider.supports_native_tools(),
             "Groq with explicit `native_tools = false` must remain text-fallback"
-        );
-    }
-
-    #[test]
-    fn provider_runtime_options_from_config_propagates_native_tools() {
-        // The end-to-end path the operator uses: setting `native_tools` on
-        // the active provider profile must reach `ProviderRuntimeOptions`
-        // so the Groq factory branch sees it (#5932).
-        let mut config = operant_config::schema::Config::default();
-        let mut groq = operant_config::schema::ModelProviderConfig {
-            native_tools: Some(true),
-            ..Default::default()
-        };
-        groq.base_url = Some("https://api.groq.com/openai/v1".to_string());
-        config.providers.models.insert("groq".to_string(), groq);
-        config.providers.fallback = Some("groq".to_string());
-
-        let options = provider_runtime_options_from_config(&config);
-        assert_eq!(
-            options.native_tools,
-            Some(true),
-            "native_tools must propagate from the active provider profile to runtime options"
-        );
-    }
-
-    #[test]
-    fn provider_runtime_options_from_config_propagates_lmstudio_system_merge_without_base_url() {
-        let mut config = operant_config::schema::Config::default();
-        config.providers.models.insert(
-            "lmstudio".to_string(),
-            operant_config::schema::ModelProviderConfig {
-                merge_system_into_user: true,
-                ..Default::default()
-            },
-        );
-        config.providers.fallback = Some("lmstudio".to_string());
-
-        let options = provider_runtime_options_from_config(&config);
-        assert!(
-            options.merge_system_into_user,
-            "merge_system_into_user must propagate even when LM Studio uses its default base URL"
         );
     }
 

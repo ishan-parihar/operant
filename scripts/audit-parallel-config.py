@@ -1,18 +1,17 @@
 #!/usr/bin/env python3
-"""Report the config surface that is never loaded in production.
+"""Report the config surface that no live config reads.
 
 `operant-core/src/config.rs` holds the LIVE config (`AppConfig`): the
-struct the CLI parses the operator's `config.toml` into and every runtime
+struct the CLI parses the operator's `operant.toml` into and every runtime
 path reads.
 
-`operant-config/src/schema/` holds a SECOND, much larger config surface
-(`operant_config::schema::Config` plus ~25 section structs). Its loader,
-`Config::load_or_init`, has no production caller — only its own tests use
-it — and the one production-typed consumer
-(`operant-providers::provider_runtime_options_from_config`) is likewise
-called only from tests.
+`operant-config/src/schema/` holds the TYPES the live config composes
+(the section structs `AppConfig` embeds) plus a set of section structs no
+live config carries. The AGGREGATE that used to sit on top of them
+(`operant_config::schema::Config`, with its own loader and migration) was
+retired in iter-1138 — it was never loaded in production (RT-141).
 
-This script re-derives that claim: for every settings struct in the
+This script re-derives what is left: for every settings struct in the
 schema directory, it counts production references OUTSIDE the
 `operant-config` crate (test code stripped by brace matching, never by
 truncation). A struct with zero outside readers is dormant surface.
