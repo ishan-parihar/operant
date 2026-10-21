@@ -177,20 +177,20 @@ record touched by more than one commit was amended in place.
 |---|---|
 <!-- genome:end status -->
 
-<!-- genome:zone handoff sha=cc36a27379a4 -->
+<!-- genome:zone handoff sha=e7172884ee70 -->
 ## Handoff — 2026-10-21
 
-Repo branch `main`, HEAD `f5d618cc82ed2cae50ba31a0154f81e904b2ae67`. Working tree dirty (5 paths).
+Repo branch `main`, HEAD `e1f08a59b76fe76a620e013de30aa509abefb434`. Working tree dirty (2 paths).
 
 ## Open register rows
   (none)
 
 ## Recent worklog
-- **2026-10-21T02:30** · `omp` — iter-1128: the parallel config schema is labelled, guarded and planned for retirement (RT-141) — 123 of its 145 structs have no production reader, and a static guard fails if the surface starts being loaded by accident
 - **2026-10-21T08:15** · `omp` — iter-1129/1130/1131: the operator-facing status surfaces stopped lying (RT-142, RT-143, RT-144) — the doctor named a fix it could not perform (the skills hub has no producer), it named neither of two `operant` copies as the stale one, and `operant gateway status` called a systemd-run gateway "not running" and deleted the pid file that would have told it otherwise
 - **2026-10-21T09:15** · `omp` — iter-1132: the webhook subscription family DISPATCHES (RT-140, AD-042) — the model is R1 (inbound): the subscription claims a route under /webhook/, the external service posts to it, the agent handles the event, and the answer is delivered to the operator's target. The route is the last path segment of the subscribed URL (--route names one); a subscription with its own secret is verified against that secret; the admin gate no longer refuses a signature-verified machine event (it made the route dead in every deployment with admins configured); and the agent's answer to an event is no longer dropped by the inbound-only adapter. Also fixed RT-145: the BACKGROUND auto-update check reached GitHub from the test suite and broke the proxy guard in the full suite (reproducible on a clean origin/main); it no longer runs in a test build, and OPERANT_NO_AUTO_UPDATE=1 turns it off anywhere.
 - **2026-10-21T09:48** · `omp` — iter-1134: the CLI test suite no longer overwrites the operator's real ~/.operant/gateway.pid (RT-147) — the gateway start/stop test isolated its home with a THREAD-LOCAL override that the stores never consulted, so start_gateway wrote the pid file into the operator's real home and the stop deleted it. The test now isolates through the ENVIRONMENT (process-global, so every thread sees it) and PROVES the isolation before writing (the RT-99 pattern). The broken seam is gone with it: set_operant_home_override/reset_operant_home_override/OperantHomeToken and the thread-local are deleted, and profile::get_operant_home() is now platform::operant_home() — ONE resolver. Also recorded RT-148 (the TUI settings.json and the auth store ignore HERMES_HOME, so a profile is not isolated from the default one) and RT-149 (the accent_role_reaches_the_frame palette flake, with the measurements and the two hazards a fix has to clear).
 - **2026-10-21T09:51** · `omp` — iter-1133: `operant tui keybindings` stops writing a file nothing reads (RT-146) — the command created ~/.operant/keybindings.json and opened it in $EDITOR, but the loaders were deleted in the 2026-10-14 batch (plan 10) as no-op stubs, so editing the file changed nothing. It now prints the bindings that are IN EFFECT (the catalogue /keys and /hotkeys read) and says plainly that custom overrides are not implemented, because the binding registry is the catalogue and not the dispatcher — tui/app/key_handling.rs still runs the if-chain.
+- **2026-10-21T10:02** · `omp` — iter-1135: the `operant tui keybindings` action column lines up (RT-150) — a Debug format spec applied straight to the enum pads the tuple FIELD, not the variant, so Custom(1) rendered as Custom( + a 34-wide number + ) and a unit variant ignored the width. Found by the live probe of the deployed binary, not by the tests.
 
 Regenerate with `genome handoff --write`.
 <!-- genome:end handoff -->
