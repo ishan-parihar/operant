@@ -103,6 +103,13 @@ run_test "Check formatting" "./scripts/check.sh fmt --all 2>&1"
 # nobody runs is a comment, so it is a step of the gate now.
 run_test "Doc claims (scripts/check-doc-claims.sh)" "bash scripts/check-doc-claims.sh 2>&1"
 
+# 4c. The config settings that nothing reads. The script's `--check` used to
+# exit non-zero whenever ANY candidate existed — i.e. always, for the 27
+# settings RT-136 accounted for — so it could never be a gate. It now
+# compares against a baseline and fails only on a setting that became unread
+# without anyone deciding what to do about it (RT-159).
+run_test "Config surface (scripts/audit-config-surface.py --check)" "python3 scripts/audit-config-surface.py --check 2>&1"
+
 # 3d. The TUI visual-regression corpus. This gate was RED for nine days
 # and nobody noticed, because the corpus was not in ANY automated gate:
 # `scripts/check.sh` forwards to cargo, and the corpus is a Python script.
