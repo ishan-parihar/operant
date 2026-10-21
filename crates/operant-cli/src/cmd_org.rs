@@ -1,73 +1,65 @@
-//! `operant org` — the org surface, and the `--reason` mandate (Wave 1).
+//! `operant org` — the org surface: per-seat budgets and the Holon views.
 //!
-//! Spec: `docs/WAVE1-DECISIONS.md` §3.5. Every mutating subcommand in this
-//! module carries a **required, long-only** `--reason` declared on the clap
+//! Two subcommand families live here, and nothing else:
+//!
+//! - `org budget set|list|clear` — the operator write surface for the
+//!   per-seat budget overrides (`seat_budgets`). Fields left unset inherit
+//!   `[bylaws].budget`; a cap of `0` is the documented release valve.
+//! - `org holon …` — the views over a Holon organization through the kernel's
+//!   published `api_*` views (docs/agentic-os/ phase B), plus the phase-E
+//!   supervision loop, the kernel's heartbeat tick, the phase-G one-time
+//!   org-store archive, and the `notify` delivery seam. Off unless
+//!   `[holon] enabled` (invariant 5): the personal agent is byte-identical.
+//!
+//! ## What this module used to be
+//!
+//! The org surface once carried `employee`, `notice`, `worklog`, `sync`,
+//! `import` and `grant` subcommands over stores operant owned —
+//! `EmployeeDb`, `NoticeBoard`, `WorklogDb`, the grant ledger, the
+//! escalation queue, the employee registry, the hierarchy edges and the
+//! cast. Those retired to Holon under the owner order of 2026-10-15 (G+1,
+//! docs/agentic-os/ORG-LAYER-DISPOSITION.md): Holon is the only writer of
+//! org data and operant reads it through the published views. What operant
+//! keeps is the enforcement surface — the seat policies, the seat budgets,
+//! and the interactive approval that resolves an in-flight ask (there is no
+//! grant to mint and no durable row to record).
+//!
+//! An earlier revision of this documentation still described that retired
+//! family command by command, with intra-doc links to types that no longer
+//! exist. The command list was the false part; what follows is the truth.
+//!
+//! ## The `--reason` mandate (Wave 1)
+//!
+//! Spec: `docs/WAVE1-DECISIONS.md` §3.5. Every mutating command that
+//! remains carries a **required, long-only** `--reason` declared on the clap
 //! variant, so clap rejects a missing one before any I/O happens. The second
 //! half of the mandate — a reason that is present but empty or whitespace is
-//! also not a reason — is [`require_reason`], called at the top of every
-//! mutating handler before the database is opened.
+//! also not a reason — is [`require_reason`], called at the top of the
+//! mutating handler before anything is written.
 //!
-//! ## Why parsed-and-discarded is the failure mode
+//! ### Why parsed-and-discarded is the failure mode
 //!
 //! The organism's post-mortem (AD-032) is that 1,311 logged decisions were
 //! read by nobody. A `--reason` flag that clap accepts and the handler then
 //! throws away is *worse* than no flag: it makes the command look auditable
-//! while writing nothing. So every write here persists the value into the
-//! same row and the same transaction as its effect — §3.1's
-//! `reason TEXT NOT NULL`, §3.5's "the reason and the effect are one
-//! transaction".
+//! while writing nothing. So where there IS a store, the reason is persisted
+//! with the effect, in the same transaction.
 //!
-//! ## Where the reason is persisted
+//! ### Where the reason goes today
 //!
-//! | Command | Persisted in the same transaction as the effect |
+//! | Command | The reason |
 //! |---|---|
-//! | `org employee create` | `employees.reason` (§3.1, NOT NULL) |
-//! | `org employee update` | `employees.reason` + `updated_at` |
-//! | `org employee retire` | `employees.reason` + `status` + `updated_at` |
-//! | `org notice post` | `notices.reason` (§3.3, NOT NULL) |
-//! | `org notice ack` | an `ack`-tagged `notices` row, same `correlation_id`, **plus** the parent row's `acked_by`/`acked_at` (§3.3) |
-//! | `org notice pin` / `unpin` | a `pin`/`unpin`-tagged `notices` row, plus the parent row's `pinned` |
-//! | `org worklog append` | the `artifacts` JSON of the appended row — §3.4's 20 fields have no `reason` column, so inventing a 21st was rejected; see [`operator_entry`] |
-//! | `org grant give` / `org grant revoke` | `authority_grants.reason` / `revocation_reason` — written only through the `SeatApprover` (F1, ORGANISM-ARCHITECTURE §6: one authority-write path) |
-//! | `org sync` | `employees.reason` + `employee_cron_jobs`, one row per backfilled job (§3.1) |
-//! | `org check` / `org list` / `org worklog list` | read-only — no reason |
+//! | `kanban block` / `kanban unblock` | persisted in the task event, in the same transaction as the block |
+//! | `org holon notify` | validated, then echoed in the command's own output — operant keeps no store for it; the kernel records the notify event |
 //!
-//! `org import` parses and validates a reason and then writes **nothing**, by
-//! design and loudly: §4.3 of the decision document records importing a
-//! foreign organism tree as an open *product* decision the owner has not
-//! made. See [`cmd_import`]. (`org sync`, which once sat here too, is now
-//! wired to the real `EmployeeDb::backfill_from_cron_jobs`.)
-//!
-//! ## Storage — one schema, owned by operant-core
-//!
-//! `operant-core/src/org/` owns the DDL for all four tables
-//! (`EmployeeDb`/`NoticeBoard`/`WorklogDb`), and this module calls those
-//! stores. It does **not** carry its own copy of the schema.
-//!
-//! That is not a style preference. An earlier revision of this file
-//! transcribed the DDL locally, on the grounds that `operant-core` did not
-//! compile yet. By the time it did, the two copies had already diverged on
-//! the `worklog` table: the local copy had `created_at`/`epoch`/
-//! `result_summary`/`sender`/`tags`/`reason`, while core's had the
-//! 20-column §3.4 shape (`ts`/`ts_iso`/`employee`/`what_done`/`outcome`/
-//! `next_intent`/`improvement_proposal`/…). Because every statement was
-//! `CREATE TABLE IF NOT EXISTS`, whichever side ran first would define the
-//! table and the other would fail at insert time with "no such column" — a
-//! latent failure whose only symptom was a working CLI and a dead
-//! `WorklogDb`, or the reverse, depending on boot order. One schema, in one
-//! place, removes that class of bug entirely.
+//! The `org budget` mutations carry no `--reason`: a budget cap is a
+//! declarative setting, not a decision that needs an audit trail.
 //!
 //! ## Known limits
 //!
-//! 1. `org employee update` cannot clear a field back to NULL, because the
-//!    update path cannot distinguish "not passed" from "passed as null" over
-//!    the CLI. Documented on [`OrgEmployeeAction::Update`]. The workaround
-//!    (a `--clear-*` flag per column) is scope this packet was not asked for.
-//! 2. `org worklog append` goes through `WorklogDb::append` and the sealed
-//!    `TurnObservation::into_entry` constructor rather than raw SQL, so an
-//!    operator's row is shaped exactly like a framework row. See
-//!    [`operator_entry`].
-//! 3. `org import` writes nothing, by design — see the note at the top.
+//! 1. `org holon` is a VIEW over another system's data. Every panel is
+//!    read-only, and writes to the org go through Holon itself (boundary
+//!    law S1) — `operant org holon …` cannot edit what it shows.
 
 use anyhow::Result;
 use clap::{Args, Subcommand};
