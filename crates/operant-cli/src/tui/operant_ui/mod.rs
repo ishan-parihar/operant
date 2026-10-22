@@ -873,8 +873,9 @@ pub(crate) struct VisibleCopyTarget {
     // `kind_label` and `copied_notice` were written at construction from
     // `target.kind` and read by nothing — the badge renders the key and the
     // UI reads the content, so the label pair was dead weight built per
-    // target per frame. The kind's own accessors stay in copy_targets.rs
-    // where a consumer that wants them can call them directly.
+    // target per frame. The kind's own accessors live on `CopyTargetKind`
+    // itself (`label()` / `copied_notice()` in operant_markdown), so a consumer
+    // that wants them calls them directly rather than carrying a per-frame copy.
     #[cfg_attr(
         test,
         allow(

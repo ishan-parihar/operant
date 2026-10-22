@@ -14,9 +14,11 @@
 // module tree calls them, and porting them would add dead code. jcode
 // issue-tracker references were stripped from two doc comments.
 //
-// `CopyTargetKind` was NOT pulled: operant already ports it as
-// `crate::tui::copy_targets::CopyTargetKind` (iter-566), and `prepared.rs`
-// only stores the kind, never constructs or matches one.
+// `CopyTargetKind` was NOT pulled here: the one the production render path
+// imports is `crate::tui::operant_markdown::CopyTargetKind`, which this module's
+// `prepared.rs` stores. RT-168's SECOND spelling (`tui/copy_targets.rs`) was
+// deleted in iter-1184, so there is exactly one enum and this cross-reference
+// stays accurate by pointing at the live one.
 
 use serde::{Deserialize, Serialize};
 

@@ -1,3 +1,53 @@
+# Archived: `crates/operant-cli/src/tui/copy_targets.rs` (RT-168, iter-1184)
+
+**Date:** 2026-10-22 · **Superseded by:**
+`crates/operant-cli/src/tui/operant_markdown/markdown_render_support.rs::extract_copy_targets_from_rendered_lines`
+plus its contract in `markdown_tests/cases/copy_target_contract.rs`.
+
+**Reason for archiving, not deletion:**
+
+The pre-W2 interim copy-target detector. It had **zero production callers** — the
+only qualified reference to the module anywhere in the tree was a comment in
+`operant_model/vendor_types.rs` — and its declaration carried
+`#[cfg_attr(not(test), expect(dead_code, reason = "copy-target detection lands
+before its badge consumer"))]`, which was exactly true.
+
+It was **not nevertheless deleted first**, because its ~27 tests were the only
+thing asserting the shape contract the live twin never had: an unterminated
+frame running to end-of-buffer, an empty language label falling back to `None`,
+a nested blockquote stripping every gutter level, a bare gutter line being a
+paragraph break, a failure run stopping at a frame header and at a gutter line,
+an empty buffer yielding nothing, a blockquote bridging a blank gutter line, the
+badge keys staying collision-free and off the vi motion keys, and a table row's
+mid-line separator never reading as a quote gutter. Deleting the module would
+have deleted the **coverage**, not the duplicate.
+
+**What the port found, which is the reason this iteration ran at all:**
+
+1. The live detector had **no failure-prefix branch at all**.
+   `CopyTargetKind::Error` and `::ToolOutput` existed in the live enum and
+   `ui_memory_estimates.rs:48-53` matched them, but
+   `markdown_render_support.rs` never constructed either — so a rendered failing
+   test run produced **no copy target**: an operator could not copy a failed test
+   run. (iter-1182)
+2. The first ported version of the branch then started each run at the failure
+   line, dropping the `running 3 checks / ok lint` that says what was being run.
+   The run now walks back over the contiguous unframed output. (iter-1182)
+3. The branch's run boundary stopped only at blank lines and frame headers, so a
+   failure **swallowed the blockquote that followed it** — one target with
+   content `"Failed: step 2\n│ quoted"` where the interim detector produced two.
+   A gutter line is now a run boundary too. (iter-1183)
+4. The interim module's `Math` variant exclusion reason is now **stale and
+   measured as such**: its comment said the `math` label + `[image` placeholder
+   pair "can never appear in rendered lines" because `markdown_latex_image.rs`
+   was removed, but the live renderers DO emit `[image: alt](url)`
+   (`markdown_render_lazy.rs:232`, `markdown_render_full.rs:261`). What actually
+   happens today: a `math` frame renders with a `math` label and the detector
+   reports it as `CodeBlock { language: Some("math") }`, so the region is
+   copyable — asserted in
+   `test_a_math_block_is_a_copy_target_and_its_label_is_preserved`.
+
+**Content preserved below, verbatim from the last commit that carried it.**
 //! Copy-target detection over RENDERED lines.
 //!
 //! Ported from jcode `crates/operant-tui-markdown/src/markdown_render_support.rs:10-129`

@@ -37,19 +37,22 @@ pub enum LatexRenderingMode {
     Image,
 }
 
-/// Which kind of region a copy target is. RT-168 records that a second,
-/// near-identical `CopyTargetKind` lives in `copy_targets.rs` (pre-W2 interim
-/// spelling, referenced only by its own tests); this is the one the production
-/// render path imports.
+/// Which kind of region a copy target is. This is the only spelling:
+/// RT-168's second one (`tui/copy_targets.rs`, the pre-W2 interim) was deleted
+/// in iter-1184 after its behaviour contract was ported onto the live detector
+/// in `markdown_tests/cases/copy_target_contract.rs`.
 ///
-/// `Math` carries the display/inline distinction the copy_targets.rs spelling
-/// lacks, which is why it survives there; nothing constructs THIS variant yet
-/// (RT-168 records the split).
+/// `Math` carries the display/inline distinction. Nothing constructs THIS
+/// variant yet — a `math` frame renders with a `math` label and the detector
+/// reports it as `CodeBlock { language: Some("math") }` (measured in
+/// `markdown_tests/cases/copy_target_contract.rs::test_a_math_block_is_a_copy_target_and_its_label_is_preserved`).
+/// RT-168's duplication is collapsed: the interim spelling is gone and this is
+/// the only enum, so promoting math to this variant is now a one-site change.
 #[cfg_attr(
     test,
     allow(
         dead_code,
-        reason = "RT-168: the display/inline math distinction survives in copy_targets.rs's tests, not in a live construction of this spelling"
+        reason = "RT-168 collapsed: no live construction of this spelling; a `math` frame reports as CodeBlock today"
     )
 )]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -62,15 +65,16 @@ pub enum CopyTargetKind {
 }
 
 impl CopyTargetKind {
-    /// The region's badge label. No PRODUCTION caller reads it — RT-168's
-    /// duplication means the surviving callers of this behaviour are the
-    /// `copy_targets.rs` tests. The method stays with its explicit match so the
-    /// first live construction is a visible decision point.
+    /// The region's badge label. No PRODUCTION caller reads it yet — the badge
+    /// renders a key, not a label. RT-168's duplication is collapsed, so this is
+    /// the only spelling and the copy path reads it directly rather than through
+    /// a per-frame cached copy. The explicit match stays so the first live
+    /// caller is a visible decision point.
     #[cfg_attr(
         test,
         allow(
             dead_code,
-            reason = "RT-168: the surviving callers of this behaviour are copy_targets.rs's tests, until the duplication is collapsed"
+            reason = "RT-168 collapsed: the badge renders a key today, not this label"
         )
     )]
     pub fn label(&self) -> String {

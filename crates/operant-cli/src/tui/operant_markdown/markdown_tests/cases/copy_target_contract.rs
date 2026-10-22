@@ -303,3 +303,59 @@ fn test_the_badge_mnemonics_avoid_vi_motion_keys() {
         );
     }
 }
+
+
+#[test]
+fn test_a_math_block_is_a_copy_target_and_its_label_is_preserved() {
+    // The `Math` variant's `[image-placeholder` exclusion is now STALE: the live
+    // renderers DO emit `[image: alt](url)` (markdown_render_lazy.rs:232,
+    // markdown_render_full.rs:261), so the label+placeholder pair the excision
+    // comment said "can never appear" can appear. What actually happens today is
+    // measured here rather than assumed: a `math` frame renders with a `math`
+    // label, and the detector catches it as a CodeBlock carrying that language —
+    // so the region is copyable, which is the part that matters.
+    let found = rendered("```math\n\\frac{1}{2}\n```");
+    assert_eq!(found.len(), 1, "a math frame is a copy target");
+    assert_eq!(
+        found[0].0,
+        CopyTargetKind::CodeBlock {
+            language: Some("math".to_string())
+        },
+        "today the label rides the CodeBlock kind, not `CopyTargetKind::Math`"
+    );
+    assert!(
+        !found[0].1.trim().is_empty(),
+        "and it carries a body: {:?}",
+        found[0].1
+    );
+}
+
+#[test]
+fn test_a_table_row_with_a_mid_line_separator_is_not_a_blockquote() {
+    // The exclusion that keeps tables out: a table pads its first cell, so its
+    // ` │ ` separator is never flush-left and never looks like a quote gutter.
+    let found = bare(&[
+        " name │ age",
+        "  alice  │  30",
+        "────────┼─────",
+        "  bob    │  41",
+    ]);
+    assert!(
+        found.is_empty(),
+        "a table must not become a blockquote, got {found:?}"
+    );
+}
+
+#[test]
+fn test_the_word_math_in_prose_does_not_open_a_target() {
+    // The shape rule is a flush-left `math` LABEL, not the word anywhere.
+    // Prose mentioning math must not become a copy target.
+    let found = bare(&[
+        "The math in that rendering is done by the terminal.",
+        "No label here.",
+    ]);
+    assert!(
+        found.iter().all(|(kind, _)| !matches!(kind, CopyTargetKind::Math { .. })),
+        "a math word in prose is not a math target: {found:?}"
+    );
+}
