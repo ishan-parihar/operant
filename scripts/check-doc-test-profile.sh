@@ -220,7 +220,17 @@ for line in "${CRATE_LINES[@]}"; do
     # (b) A diagnostic naming a path in THIS crate is ours: a broken
     # cfg(test) doc link, an unresolved item, a doc comment rustdoc rejects.
     # This is the class RG-013 records, and it is what the gate is for.
-    ours=$(printf '%s\n' "$out" | grep -E "crates/$crate/" | head -30)
+    #
+    # Two things are printed, because the first version printed only paths and
+    # the probe test then could not find the defect's NAME: a run with a planted
+    # broken link in `operant-core` printed 30 `--> crates/...` lines of other
+    # diagnostics and cut the probe's own line out through `head -30`. An
+    # operator reading that output cannot tell what broke. So the `error:` /
+    # `warning:` headline lines come first (they carry the words), then the
+    # paths of the diagnostics under this crate.
+    ours=$(printf '%s\n' "$out" \
+        | grep -E '^(error|warning)(\[[^]]*\])?:|^crates/' \
+        | head -40)
     if [ -n "$ours" ]; then
         say "FAIL  $crate (rc=$rc) — THIS crate's cfg(test) profile is broken:"
         printf '%s\n' "$ours" | sed 's/^/      /'
