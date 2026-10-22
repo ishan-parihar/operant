@@ -270,3 +270,71 @@ fn the_template_gate_catches_an_unknown_key_and_an_unknown_table() {
         "the gate did not catch the deleted `[channels.telegram]` table: {findings:?}"
     );
 }
+
+// ── RT-154: the template must not promise encryption it does not do ──────────
+
+/// Phrases that claim config-file secrets are protected at rest. RT-154 is
+/// exactly this promise made twice by `ModelProviderConfig`'s own doc comments
+/// ("Stored via the OS keyring when possible", "each element is encrypted on
+/// save"), and the only code that honoured the marker never ran. The live write
+/// path writes the value as given and the loader never decrypts.
+///
+/// The template is the layer this test can actually check: an operator reads
+/// the commented examples, so a promise here is a promise to the person most
+/// likely to rely on it.
+const ENCRYPTION_PROMISES: &[&str] = &[
+    "stored via the os keyring",
+    "stored in the os keyring",
+    "encrypted on save",
+    "encrypted at rest",
+    "stored encrypted",
+    "never write",
+];
+
+#[test]
+fn the_template_does_not_promise_encryption_for_secret_config_values() {
+    let template = repo_root().join("operant.example.toml");
+    let raw = std::fs::read_to_string(&template).expect("the template is readable");
+
+    let mut promises = Vec::new();
+    for (index, line) in raw.lines().enumerate() {
+        let lower = line.to_lowercase();
+        for phrase in ENCRYPTION_PROMISES {
+            if lower.contains(phrase) {
+                promises.push(format!(
+                    "line {}: promises `{phrase}` — the config file stores secrets in \
+                     PLAINTEXT in a 0600 file. State that instead (see RT-154).",
+                    index + 1
+                ));
+            }
+        }
+    }
+    assert!(
+        promises.is_empty(),
+        "operant.example.toml makes an encryption promise the loader cannot keep:\n  {}",
+        promises.join("\n  ")
+    );
+}
+
+#[test]
+fn the_plaintext_gate_catches_a_promise_the_template_must_not_make() {
+    // The gate must have teeth: an encryption promise is injected into a copy
+    // of the template and the test above must report it. Without this, a
+    // template that regains the RT-154 wording passes silently.
+    let template = repo_root().join("operant.example.toml");
+    let raw = std::fs::read_to_string(&template).expect("the template is readable");
+    let planted =
+        format!("{raw}\n# api_key = \"...\"  # Stored via the OS keyring when possible\n");
+
+    let mut hits = Vec::new();
+    for line in planted.lines() {
+        let lower = line.to_lowercase();
+        if ENCRYPTION_PROMISES.iter().any(|p| lower.contains(p)) {
+            hits.push(line.trim().to_string());
+        }
+    }
+    assert!(
+        hits.iter().any(|h| h.contains("keyring")),
+        "the gate did not catch an injected keyring promise: {hits:?}"
+    );
+}

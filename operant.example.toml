@@ -25,6 +25,11 @@ terminal_backend = "local"
 [client]
 base_url = "https://api.openai.com/v1"
 # api_key = "set me or use OPENAI_API_KEY"
+# PLAINTEXT: this value is written to ~/.operant/operant.toml as given (the
+# file is 0600). Nothing encrypts it and the loader never decrypts it — the
+# `#[secret]` marker that once implied otherwise went with the retired config
+# aggregate. Prefer the environment variable, and use the provider auth-profile
+# file for long-lived OAuth tokens. Keep operant.toml out of a shared repo.
 timeout_secs = 60
 max_context_length = 128000
 # TTL for provider prompt-cache breakpoints: "5m" (default) or "1h".
