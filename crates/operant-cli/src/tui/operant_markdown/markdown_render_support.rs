@@ -100,10 +100,88 @@ pub fn extract_copy_targets_from_rendered_lines(lines: &[Line<'static>]) -> Vec<
             });
             continue;
         }
+        // A failure run: a line (or a block) that opens with a failure prefix is
+        // the error itself, and the same prefix appearing LATER in a run of
+        // tool output is part of that output. Ported from the interim spelling
+        // in `crate::tui::copy_targets` (RT-168), whose detector had this branch
+        // and whose tests were the only thing asserting it — the live detector
+        // never produced `Error`/`ToolOutput` at all, so a rendered failing test
+        // run had NO copy target even though `ui_memory_estimates` matches both
+        // variants. Placed AFTER the framed-block branches so a code block or
+        // quote is never swallowed by an adjacent error message.
+        if let Some((kind, content, start, end)) = failure_run(lines, idx) {
+            targets.push(RawCopyTarget {
+                kind,
+                content,
+                start_raw_line: start,
+                end_raw_line: end,
+                badge_raw_line: idx,
+            });
+            idx = end;
+            continue;
+        }
         idx += 1;
     }
 
     targets
+}
+
+/// The failure prefixes a rendered line can open with. A run opening with one
+/// of these is the error itself; the same prefix later in a run of tool output
+/// is part of that output.
+const FAILURE_PREFIXES: [&str; 3] = ["Error:", "error:", "Failed:"];
+
+/// A failure run starting at `idx`: the error kind when the line OPENS with
+/// a prefix, `ToolOutput` when the prefix appears after other output. The run
+/// starts where the OUTPUT started, not at the failure line, so the context a
+/// failure needs to be readable is in the copy.
+///
+/// Returns the kind, the content, the first line of the run, and the line after
+/// it (exclusive).
+fn failure_run(
+    lines: &[Line<'static>],
+    idx: usize,
+) -> Option<(CopyTargetKind, String, usize, usize)> {
+    let text = line_plain_text(&lines[idx]);
+    let trimmed = text.trim_start();
+    let opens = FAILURE_PREFIXES
+        .iter()
+        .any(|prefix| trimmed.starts_with(prefix));
+    if !opens {
+        return None;
+    }
+    // Walk BACK over the contiguous run of non-blank, unframed output this
+    // failure belongs to. A tool transcript is one run; the failure in the
+    // middle of it is the interesting part, and copying only the prefix line
+    // loses the `running 3 checks / ok  lint` that says what was being run.
+    let mut start = idx;
+    let mut opens_run = true;
+    while start > 0 && !failure_run_breaks_at(lines, start - 1) {
+        start -= 1;
+        opens_run = false;
+    }
+    let kind = if opens_run {
+        CopyTargetKind::Error
+    } else {
+        CopyTargetKind::ToolOutput
+    };
+    let mut end = idx + 1;
+    while end < lines.len() && !failure_run_breaks_at(lines, end) {
+        end += 1;
+    }
+    let content = lines[start..end]
+        .iter()
+        .map(line_plain_text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    Some((kind, content, start, end))
+}
+
+/// Whether the line at `idx` breaks a failure run — the blank line or framed
+/// header that separates two runs of output.
+fn failure_run_breaks_at(lines: &[Line<'static>], idx: usize) -> bool {
+    let text = line_plain_text(&lines[idx]);
+    text.trim().is_empty() || text.trim_start().starts_with("┌─ ")
 }
 
 /// A rendered blockquote line starts (without indentation) with the `│ `
