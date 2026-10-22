@@ -105,7 +105,6 @@ impl App {
             turn_cache_write_tokens: 0,
             streaming_text: String::new(),
             streaming_thinking: String::new(),
-            show_reasoning: false,
             status_message: None,
             status_message_set_at: None,
             spinner_verb: None,

@@ -134,10 +134,6 @@ pub struct App {
     pub turn_cache_write_tokens: u64,
     pub streaming_text: String,
     pub streaming_thinking: String,
-    /// Whether reasoning/thinking blocks are expanded by default in the
-    /// transcript. Toggled by /reasoning. (Bug #18 from iter-82 audit —
-    /// /reasoning previously just printed a status message without toggling.)
-    pub show_reasoning: bool,
     pub status_message: Option<String>,
     /// When `status_message` was set. The status-notice contract (jcode
     /// `status_notice`/P4-2): the accessor hides notices older than 3s so

@@ -81,7 +81,12 @@ impl App {
             "is_simulating": self.is_simulating,
             "plan_mode": self.plan_mode,
             "show_help": self.show_help,
-            "show_reasoning": self.show_reasoning,
+            // The thinking rows are gated on the LIVE display mode, so this
+            // key reports the mode's effect (`thinking_display_on`) rather than
+            // a separate bool nothing rendered. Kept under the historical key
+            // name so headless scenarios and operator muscle memory still
+            // address it.
+            "show_reasoning": self.thinking_display_on,
             "messages": self.messages.len(),
             "status_message": self.status_message,
             "model": self.model_name,
@@ -1109,23 +1114,11 @@ impl App {
             // adding a new state field; busy = compact aggressively).
             // /verbose — cycle output-style between auto/stream/verbose.
 
-            // /reasoning — toggle whether thinking/reasoning blocks are
-            // expanded by default in the transcript. (Bug #18 from iter-82
-            // audit — previously just printed a status message without
-            // toggling anything.)
-            "reasoning" => {
-                self.show_reasoning = !self.show_reasoning;
-                self.invalidate_transcript();
-                self.set_status_notice(format!(
-                    "Reasoning blocks {} by default.",
-                    if self.show_reasoning {
-                        "expanded"
-                    } else {
-                        "collapsed"
-                    }
-                ));
-                true
-            }
+            // /reasoning is NOT a separate toggle: it is an alias handled by the
+            // `thinking-display` arm below. It used to flip `App.show_reasoning`,
+            // a bool no renderer reads, so the command changed the debug dump
+            // and nothing on screen (jcode routes all three names through one
+            // handler: `handle_reasoning_display_command`).
 
             // /personality — set agent personality from args.
             // The actual personality string is consumed by the agent loop on
@@ -1410,52 +1403,38 @@ impl App {
             // prompt; full = every trace; off = none.
             // "thinking" alias: the registered surface name is /thinking
             // (command registry); the muscle-memory ports cover it.
-            "thinking-display" | "thinking" => {
-                let mode = args.trim();
-                match mode {
-                    "off" => {
-                        self.thinking_display_on = false;
-                        // Live flip: committed reasoning stops rendering
-                        // immediately (the shim resolver reads this cell).
-                        crate::tui::operant_app::config_shim::replace_reasoning_display_override(
-                            Some(crate::tui::operant_app::config_shim::ReasoningDisplayMode::Off),
-                        );
-                    }
-                    "current" => {
-                        self.thinking_display_on = true;
-                        crate::tui::operant_app::config_shim::replace_reasoning_display_override(
-                            Some(
-                                crate::tui::operant_app::config_shim::ReasoningDisplayMode::Current,
-                            ),
-                        );
-                    }
-                    "full" | "on" => {
-                        self.thinking_display_on = true;
-                        crate::tui::operant_app::config_shim::replace_reasoning_display_override(
-                            Some(crate::tui::operant_app::config_shim::ReasoningDisplayMode::Full),
-                        );
-                    }
-                    "" => {}
-                    other => {
-                        self.set_status_notice(format!(
-                            "Unknown thinking-display mode '{other}' — use off|full|current"
-                        ));
-                        return true;
-                    }
+            "thinking-display" | "thinking" | "reasoning" => {
+                use crate::tui::operant_app::config_shim::{self, ReasoningDisplayMode};
+                let requested = args.trim();
+                // No argument (or an explicit show/status word) reports the
+                // live mode and the legend — jcode's
+                // `handle_reasoning_display_command` prints exactly this and
+                // its three bullets, so an operator who has used both sees the
+                // same answer. Operant previously did nothing at all here.
+                if requested.is_empty() || matches!(requested, "show" | "status") {
+                    let current = config_shim::config().display.reasoning_display();
+                    let notice = format!(
+                        "Thinking display is currently {}. off = never show thinking; \
+                         full = keep every trace; current = show this turn's trace \
+                         live, then collapse it. Use /thinking-display <off|full|current>.",
+                        current.label()
+                    );
+                    self.set_status_notice(notice);
+                    return true;
                 }
-                let summary = format!(
-                    "Thinking display: {}",
-                    format!(
-                        "{:?}",
-                        crate::tui::operant_app::config_shim::config()
-                            .display
-                            .reasoning_display()
-                    )
-                    .to_lowercase()
-                );
+                let Some(mode) = ReasoningDisplayMode::parse(requested) else {
+                    self.set_status_notice(format!(
+                        "Unknown thinking-display mode '{requested}' — use off|full|current"
+                    ));
+                    return true;
+                };
+                self.thinking_display_on = mode != ReasoningDisplayMode::Off;
+                // Live flip: committed reasoning starts/stops rendering
+                // immediately (the renderer reads this override cell).
+                config_shim::replace_reasoning_display_override(Some(mode));
                 // (plan 08) transient notice only — the transcript echo
                 // duplicated the status bar line.
-                self.set_status_notice(summary);
+                self.set_status_notice(format!("Thinking display: {}", mode.label()));
                 self.invalidate_transcript();
                 true
             }

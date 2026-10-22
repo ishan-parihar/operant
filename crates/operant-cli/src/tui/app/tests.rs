@@ -2219,6 +2219,110 @@ fn thinking_display_defaults_on_and_the_command_toggles_it() {
     crate::tui::operant_app::config_shim::set_reasoning_display_override(None);
 }
 
+/// 2026-10-22 parity gap (iter-1191): /reasoning was NOT an alias. It hit an
+/// earlier arm that flipped `App.show_reasoning`, a bool no renderer reads, so
+/// the command changed a debug-snapshot key and nothing on screen. jcode routes
+/// all three names (/reasoning, /thinking, /thinking-display) through one
+/// handler (`handle_reasoning_display_command`). Prove the alias now moves the
+/// live display mode the renderer actually reads.
+#[test]
+fn reasoning_alias_sets_the_live_thinking_mode() {
+    let _guard = crate::tui::operant_app::config_shim::reasoning_override_test_guard();
+    use crate::tui::operant_app::config_shim;
+    config_shim::set_reasoning_display_override(None);
+
+    let mut app = make_app();
+    assert!(
+        app.handle_tui_command("reasoning", "off"),
+        "/reasoning off must be handled"
+    );
+    assert!(
+        !app.thinking_display_on,
+        "/reasoning off must hide traces, not just a debug flag"
+    );
+    assert_eq!(
+        config_shim::config().display.reasoning_display(),
+        config_shim::ReasoningDisplayMode::Off,
+        "the alias flips the same override cell the renderer reads"
+    );
+
+    assert!(app.handle_tui_command("reasoning", "full"));
+    assert!(app.thinking_display_on, "/reasoning full must show traces");
+    assert_eq!(
+        config_shim::config().display.reasoning_display(),
+        config_shim::ReasoningDisplayMode::Full
+    );
+
+    // jcode's lenient spellings ride the same path.
+    assert!(app.handle_tui_command("reasoning", "collapse"));
+    assert_eq!(
+        config_shim::config().display.reasoning_display(),
+        config_shim::ReasoningDisplayMode::Current,
+        "'collapse' is jcode's spelling for current"
+    );
+
+    config_shim::set_reasoning_display_override(None);
+}
+
+/// Bare /thinking-display (and `show`/`status`) reports the live mode and the
+/// legend instead of doing nothing (jcode parity).
+#[test]
+fn a_bare_thinking_display_reports_the_mode_and_the_legend() {
+    let _guard = crate::tui::operant_app::config_shim::reasoning_override_test_guard();
+    use crate::tui::operant_app::config_shim;
+    config_shim::set_reasoning_display_override(None);
+
+    let mut app = make_app();
+    for args in ["", "show", "status"] {
+        app.status_message = None;
+        assert!(app.handle_tui_command("thinking-display", args));
+        let notice = app
+            .status_message
+            .clone()
+            .expect("a bare thinking-display reports the current mode");
+        assert!(
+            notice.starts_with("Thinking display is currently "),
+            "args {args:?} must report the mode: {notice}"
+        );
+        assert!(
+            notice.contains("off") && notice.contains("full") && notice.contains("current"),
+            "the legend names all three modes: {notice}"
+        );
+        assert!(
+            notice.contains("/thinking-display <off|full|current>"),
+            "the legend tells the operator how to change it: {notice}"
+        );
+    }
+
+    // An unknown word still errors, and errors without touching the mode.
+    let before = app.thinking_display_on;
+    assert!(app.handle_tui_command("thinking-display", "shouty"));
+    assert_eq!(app.thinking_display_on, before);
+    let notice = app.status_message.clone().expect("an unknown mode reports");
+    assert!(
+        notice.contains("Unknown thinking-display mode 'shouty'"),
+        "{notice}"
+    );
+
+    config_shim::set_reasoning_display_override(None);
+}
+
+/// The notice a mode change prints is jcode's label spelling (`Full`), not
+/// operant's old lowercase `{:?}` debug rendering.
+#[test]
+fn a_thinking_display_change_prints_the_mode_label() {
+    let _guard = crate::tui::operant_app::config_shim::reasoning_override_test_guard();
+    use crate::tui::operant_app::config_shim;
+    config_shim::set_reasoning_display_override(None);
+
+    let mut app = make_app();
+    assert!(app.handle_tui_command("thinking-display", "full"));
+    let notice = app.status_message.clone().expect("the change reports");
+    assert_eq!(notice, "Thinking display: Full");
+
+    config_shim::set_reasoning_display_override(None);
+}
+
 #[test]
 fn cls_clears_the_view_only_and_the_alias_tier_routes() {
     // 2026-10-10 command sweep: /cls is jcode's clear-rendered-view (the

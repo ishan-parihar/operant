@@ -105,7 +105,7 @@ impl Default for KeybindingsConfig {
 
 /// Whether file diffs from edit/write tools render. Verbatim from
 /// crates/operant-config-types/src/lib.rs:242-:251.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum ReasoningDisplayMode {
     /// Never display reasoning content.
     #[default]
@@ -115,6 +115,50 @@ pub enum ReasoningDisplayMode {
     /// Show the current turn's reasoning, anchored where it streamed; drop it
     /// once the next user prompt lands (jcode `clear_turn_reasoning_traces`).
     Current,
+}
+
+impl ReasoningDisplayMode {
+    /// The operator-facing name. jcode labels its status and its
+    /// `/thinking-display` output through this, so a user who has used both
+    /// sees the same three words.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Off => "Off",
+            Self::Full => "Full",
+            Self::Current => "Current",
+        }
+    }
+
+    /// Cycle off -> current -> full -> off (jcode `ReasoningDisplayMode::cycle`).
+    #[expect(
+        dead_code,
+        reason = "jcode parity: the /thinking-display cycle path uses it"
+    )]
+    pub fn cycle(self) -> Self {
+        match self {
+            Self::Off => Self::Current,
+            Self::Current => Self::Full,
+            Self::Full => Self::Off,
+        }
+    }
+
+    /// Lenient parse of an operator-typed mode word: the accepted spellings
+    /// are what a user writes, not what the enum is named (jcode
+    /// `ReasoningDisplayMode::parse`).
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "off" | "none" | "false" | "0" | "no" => Some(Self::Off),
+            "full" | "all" | "true" | "1" | "yes" | "on" => Some(Self::Full),
+            "current" | "live" | "ephemeral" | "collapse" => Some(Self::Current),
+            _ => None,
+        }
+    }
+}
+
+impl std::fmt::Display for ReasoningDisplayMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.label())
+    }
 }
 
 /// How to display mermaid diagrams.
