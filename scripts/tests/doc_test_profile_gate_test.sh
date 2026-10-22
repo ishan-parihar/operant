@@ -142,7 +142,14 @@ if printf '%s\n' "$out2" | grep -q 'DEP'; then
     fail "the gate reports a DEPENDENCY failure with the probe removed — reported for information, but it must not appear in a clean run of this workspace"
 fi
 say "PASS  the gate is clean again (no FAIL/BROKEN/DEP lines)"
-say "PASS  all 11 crates carried a real target — `--bin` with a value for operant-cli, `--lib` for the rest:"
+# The prose names the target flags each crate was documented with. In DOUBLE
+# quotes bash performs command substitution on backticks, so `--bin` and
+# `--lib` there were executed as commands and printed
+# `line 145: --bin: command not found` before the summary — cosmetic, but it
+# made a PASSING run look like it had errored, and this is a test whose whole
+# job is to distinguish a real failure from a confusing one. Single quotes
+# disable the substitution.
+say 'PASS  all 11 crates carried a real target — `--bins` for operant-cli, `--lib` for the rest:'
 printf '%s\n' "$out2" | grep -E '^(operant-[a-z]+)' | sed 's/^/      /'
 say ""
 say "BOTH PROBES PASSED: the cfg(test) doc gate sees the class it exists for and only that class"
