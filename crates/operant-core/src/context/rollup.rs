@@ -684,9 +684,19 @@ mod tests {
             1,
             summarizer,
         );
-        // Immediate first pass + a tick or two.
-        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
-        let rollups = engine.list_rollups("sess_sched").unwrap();
+        // POLL, do not sleep: a fixed 250ms wall-clock wait assumes the
+        // scheduler gets real time to run, and on a loaded 24-core box under
+        // the full lib suite it does not — the test failed there while passing
+        // in isolation. The condition is what the test is about, so wait for
+        // the condition with a bounded deadline (the sibling test's shape).
+        let mut rollups = engine.list_rollups("sess_sched").unwrap();
+        for _ in 0..300 {
+            if rollups.iter().any(|r| r.summary.starts_with("SUMMARY[")) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            rollups = engine.list_rollups("sess_sched").unwrap();
+        }
         assert!(
             !rollups.is_empty(),
             "scheduler must build day rollups automatically, got: {rollups:?}"
