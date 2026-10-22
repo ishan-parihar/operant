@@ -214,6 +214,17 @@ pub struct ToolUseBlock {
     pub output_preview: Option<String>,
     /// JSON-serialised input for the tool call (populated from the API stream).
     pub input_json: String,
+    /// The model's one-line description of why it is making this call
+    /// (`ToolCall::intent_from_input`), so the tool row can show WHAT each
+    /// call is doing rather than only its technical arguments. Kept as a
+    /// string, not the parsed `Option<String>`, because the block is built
+    /// while the arguments are still a partial JSON fragment — parsing it
+    /// per frame would fail on every in-flight call.
+    ///
+    /// It rides the block rather than being re-derived from `input_json` on
+    /// read because the intent is available the moment the arguments parse
+    /// and is what the row shows for the rest of the session.
+    pub intent: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]

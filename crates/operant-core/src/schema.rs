@@ -35,6 +35,83 @@ pub fn sanitize_tool_name(name: &str) -> String {
     result
 }
 
+/// Description of the shared `intent` parameter, injected into every tool schema.
+///
+/// Deliberately terse and name-free: this string rides on EVERY tool schema on
+/// EVERY request, so each word is paid for as tokens forever. The full
+/// explanation lives in the renderer that consumes it.
+///
+/// Ported verbatim from jcode's `TOOL_INTENT_DESCRIPTION`
+/// (`jcode-tool-core/src/lib.rs:17-19`) — upstream uses the identical wording.
+pub const TOOL_INTENT_DESCRIPTION: &str =
+    "Required short label shown in the UI: why this call is being made.";
+
+/// The parameter name the model writes its intent into. Display-only in this
+/// tree (the TUI and the gateway read it); the tool itself ignores it.
+pub const TOOL_INTENT_KEY: &str = "intent";
+
+/// JSON Schema fragment for the `intent` property.
+pub fn intent_schema_property() -> Value {
+    json!({
+        "type": "string",
+        "description": TOOL_INTENT_DESCRIPTION,
+    })
+}
+
+/// Ensure a tool parameter schema declares the shared `intent` property and
+/// marks it required.
+///
+/// Applied centrally at the registry boundary rather than per tool, so every
+/// tool — including MCP proxies whose schemas arrive from a foreign server —
+/// asks the model for an intent without each tool wiring it manually. The
+/// MCP proxy strips the parameter before forwarding (see
+/// `tools/mcp_tool.rs`), so an undeclared parameter never reaches a server.
+///
+/// Ported from jcode's `ensure_intent_in_schema`
+/// (`jcode-tool-core/src/lib.rs:48-90`).
+pub fn ensure_intent_in_schema(mut schema: Value) -> Value {
+    let Some(object) = schema.as_object_mut() else {
+        return schema;
+    };
+    // Only touch object-shaped parameter schemas. A schema with no `type` and
+    // no `properties` is not a parameter schema we can usefully extend.
+    let is_object_schema = object
+        .get("type")
+        .and_then(|t| t.as_str())
+        .is_some_and(|t| t == "object")
+        || object.contains_key("properties");
+    if !is_object_schema {
+        return schema;
+    }
+
+    let Some(properties) = object
+        .entry("properties")
+        .or_insert_with(|| Value::Object(serde_json::Map::new()))
+        .as_object_mut()
+    else {
+        return schema;
+    };
+    properties
+        .entry(TOOL_INTENT_KEY)
+        .or_insert_with(intent_schema_property);
+
+    match object.get_mut("required") {
+        Some(Value::Array(required)) => {
+            if !required.iter().any(|v| v.as_str() == Some(TOOL_INTENT_KEY)) {
+                required.push(Value::String(TOOL_INTENT_KEY.to_string()));
+            }
+        }
+        _ => {
+            object.insert(
+                "required".to_string(),
+                Value::Array(vec![Value::String(TOOL_INTENT_KEY.to_string())]),
+            );
+        }
+    }
+
+    schema
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ToolSchema {
     pub name: String,
@@ -69,6 +146,15 @@ impl ToolSchema {
             description: description.into(),
             parameters: parameters_value,
         }
+    }
+
+    /// Attach the shared `intent` property to this schema's parameters and mark
+    /// it required, so every model call is asked for a display label.
+    ///
+    /// Idempotent: calling it on an already-augmented schema is a no-op.
+    pub fn with_intent(mut self) -> Self {
+        self.parameters = ensure_intent_in_schema(self.parameters);
+        self
     }
 
     #[expect(
@@ -386,5 +472,94 @@ mod tests {
         num_schema.sanitize_args(&mut args3);
         assert_eq!(args3["threshold"], json!(1.5));
         assert!(args3["threshold"].is_number());
+    }
+
+    // ── the shared `intent` parameter ───────────────────────────────────
+
+    #[test]
+    fn ensure_intent_injects_property_and_marks_it_required() {
+        let schema = json!({
+            "type": "object",
+            "properties": { "command": { "type": "string" } },
+            "required": ["command"]
+        });
+        let out = ensure_intent_in_schema(schema);
+        assert_eq!(
+            out["properties"]["intent"],
+            intent_schema_property(),
+            "the intent property is injected"
+        );
+        assert_eq!(out["properties"]["intent"]["type"], json!("string"));
+        assert_eq!(
+            out["required"],
+            json!(["command", "intent"]),
+            "required keeps its existing entries and gains intent"
+        );
+    }
+
+    #[test]
+    fn ensure_intent_creates_a_required_list_when_the_schema_has_none() {
+        let schema = json!({
+            "type": "object",
+            "properties": { "command": { "type": "string" } }
+        });
+        let out = ensure_intent_in_schema(schema);
+        assert_eq!(out["required"], json!(["intent"]));
+    }
+
+    #[test]
+    fn ensure_intent_is_idempotent() {
+        let once = ensure_intent_in_schema(json!({
+            "type": "object",
+            "properties": {},
+            "required": ["command"]
+        }));
+        let twice = ensure_intent_in_schema(once.clone());
+        assert_eq!(once, twice, "a second pass must be a no-op");
+        assert_eq!(
+            twice["required"],
+            json!(["command", "intent"]),
+            "and intent must not be duplicated into required"
+        );
+    }
+
+    /// A tool whose own schema ALREADY declares `intent` keeps its description:
+    /// the injector fills in what a tool left out, it never overwrites it.
+    #[test]
+    fn ensure_intent_never_overwrites_an_existing_property() {
+        let schema = json!({
+            "type": "object",
+            "properties": { "intent": {"type": "string", "description": "the tool's own"} }
+        });
+        let out = ensure_intent_in_schema(schema);
+        assert_eq!(
+            out["properties"]["intent"]["description"],
+            json!("the tool's own")
+        );
+    }
+
+    #[test]
+    fn ensure_intent_leaves_a_non_object_schema_alone() {
+        // A schema with neither an object type nor any properties is not a
+        // parameter schema this can usefully extend.
+        assert_eq!(ensure_intent_in_schema(json!("string")), json!("string"));
+        assert_eq!(ensure_intent_in_schema(json!(null)), json!(null));
+        // No `type` at all, but it has properties — still a parameter schema.
+        let schemaless = ensure_intent_in_schema(json!({
+            "properties": { "command": { "type": "string" } }
+        }));
+        assert_eq!(schemaless["required"], json!(["intent"]));
+    }
+
+    #[test]
+    fn tool_schema_with_intent_augments_the_generated_parameters() {
+        let schema = ToolSchema::from_type::<TestParams>("test_tool", "A test tool").with_intent();
+        assert_eq!(
+            schema.parameters["properties"]["intent"]["description"],
+            json!(TOOL_INTENT_DESCRIPTION),
+            "a generated schema exposes the intent property"
+        );
+        let required = schema.parameters["required"].as_array().expect("required");
+        assert!(required.iter().any(|v| v.as_str() == Some("intent")));
     }
 }

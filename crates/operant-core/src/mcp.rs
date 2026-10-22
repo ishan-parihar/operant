@@ -1869,11 +1869,40 @@ impl OperantTool for McpTool {
     async fn execute(&self, args: Value, _context: ToolContext) -> ToolResult {
         let name = self.definition.name.clone();
 
+        // `intent` is operant's own display-only parameter (see
+        // `crate::schema::ensure_intent_in_schema`): the TUI and the gateway
+        // read it, the tool never does. Strip it before forwarding unless the
+        // server's own schema declares it — an undeclared parameter can be
+        // rejected outright by a strict MCP server.
+        //
+        // Ported from jcode's MCP proxy (`jcode-base/src/mcp/tool.rs:53-70`).
+        let server_declares_intent = self
+            .definition
+            .input_schema
+            .get("properties")
+            .and_then(|p| p.as_object())
+            .is_some_and(|p| p.contains_key(crate::schema::TOOL_INTENT_KEY));
+        let args = if server_declares_intent {
+            args
+        } else {
+            strip_intent(args)
+        };
+
         match self.transport.call_tool(&name, args).await {
             Ok(result) => ToolResult::success(name, result),
             Err(e) => ToolResult::error(name, e.to_string()),
         }
     }
+}
+
+/// Remove the display-only `intent` key from tool-call arguments before they
+/// reach a tool that never declared it. Any other shape rides through
+/// untouched.
+pub(crate) fn strip_intent(mut args: Value) -> Value {
+    if let Some(object) = args.as_object_mut() {
+        object.remove(crate::schema::TOOL_INTENT_KEY);
+    }
+    args
 }
 
 /// A namespaced wrapper around McpTool for registration in ToolRegistry.

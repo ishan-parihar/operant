@@ -120,6 +120,237 @@ fn unattended_no_channel_verdict(posture_raw: &str) -> Option<String> {
     }
 }
 
+// Tool preview helpers (module-scope so the preview line is testable alone)
+
+fn tool_emoji(name: &str) -> &'static str {
+    match name {
+        // ── Terminal / Code ──
+        "terminal" | "bash" | "shell" | "aft_bash" | "process" | "docker" => "\u{1F4BB}",
+        "code_execution" | "echo" | "local" | "slow" | "fast" => "\u{1F4BB}",
+        // ── Web / Search ──
+        "web_search" | "web_search_" | "tavily" | "tavily_search" | "sourcehound" => "\u{1F50D}",
+        "web_fetch" | "web_scrape" | "tavily_extract" | "tavily_crawl" | "web_extract"
+        | "web_crawl" => "\u{1F310}",
+        "search" | "find" | "file_search" => "\u{1F50E}",
+        // ── File I/O ──
+        "read" | "glob" | "grep" | "ast_grep" | "look_at" => "\u{1F4D6}",
+        "file_read"
+        | "file_list"
+        | "aft_read"
+        | "aft_outline"
+        | "aft_grep"
+        | "aft_glob"
+        | "aft_search"
+        | "aft_inspect"
+        | "aft_status"
+        | "aft_callers"
+        | "aft_zoom"
+        | "aft_ast_search"
+        | "aft_checkpoint_paths"
+        | "aft_list_checkpoints" => "\u{1F4D6}",
+        "write" | "edit" | "create" | "patch" => "\u{270F}\u{FE0F}",
+        "file_write" | "aft_write" | "aft_edit" | "aft_apply_patch" | "aft_ast_replace" => {
+            "\u{270F}\u{FE0F}"
+        }
+        // ── Memory ──
+        "memory" | "memory_search" | "memory_store" | "memory_recall" => "\u{1F9E0}",
+        // ── LCM (Lossless Context Memory) ──
+        "lcm_recall" | "lcm_stats" | "lcm_load_session" | "lcm_recent" | "lcm_vector_recall"
+        | "lcm_recall_round" | "lcm_assert" | "lcm_doctor" => "\u{1F9E0}",
+        // ── Skills ──
+        "skills_list" | "skill_view" | "skill_manage" | "learning_manage" => "\u{1F4DA}",
+        // ── Session ──
+        "session_search" | "session_insights" => "\u{1F4CB}",
+        // ── Config ──
+        "config_manage" => "\u{2699}\u{FE0F}",
+        // ── Cron / Scheduling ──
+        "cron" | "todo" | "kanban" => "\u{23F0}",
+        // ── Browser ──
+        "browser" | "browser_dialog" | "browser_cdp" => "\u{1F5A5}\u{FE0F}",
+        // ── Approval / Clarify ──
+        "approval_request" | "clarify" | "verify_task" => "\u{2753}",
+        // ── Communication ──
+        "chat" | "send_message" | "message" | "notify" | "react_to_message" => "\u{1F4AC}",
+        "discord" | "discord_admin" | "homeassistant" => "\u{1F4AC}",
+        // ── HTTP / API ──
+        "http_request" | "xai_http_request" | "openrouter_query" => "\u{1F310}",
+        // ── Image / Media ──
+        "image" | "screenshot" | "draw" | "image_generate" | "vision_analyze" | "video_analyze" => {
+            "\u{1F5BC}\u{FE0F}"
+        }
+        "transcribe_audio" | "text_to_speech" | "neutts_synthesize" => "\u{1F3A4}",
+        // ── Spotify ──
+        "spotify_playback" | "spotify_search" | "spotify_devices" | "spotify_albums"
+        | "spotify_playlists" | "spotify_library" | "spotify_queue" => "\u{1F3B5}",
+        // ── SSH / Remote ──
+        "ssh" => "\u{1F510}",
+        // ── Checkpoint / Git ──
+        "checkpoint" | "aft_checkpoint" | "aft_restore_checkpoint" | "aft_undo" => "\u{1F4BE}",
+        "github" | "gh" | "git" => "\u{1F5A5}\u{FE0F}",
+        // ── Thinking ──
+        "think" | "reason" | "sequentialthinking" => "\u{1F4AD}",
+        "plan" | "strategy" => "\u{1F9F0}",
+        // ── Debug / Env ──
+        "debug_env" | "debug_system" | "env_probe" | "osv_check" | "tool_backend" => "\u{1F527}",
+        // ── Feishu / Notes ──
+        "feishu_doc_read" | "feishu_drive" => "\u{1F4DD}",
+        // ── Errors / Done ──
+        "error" | "fail" => "\u{274C}",
+        "done" | "complete" | "finish" => "\u{2705}",
+        _ => "\u{2699}\u{FE0F}",
+    }
+}
+
+fn extract_tool_arg(name: &str, args: &str) -> Option<String> {
+    if let Ok(json) = serde_json::from_str::<serde_json::Value>(args) {
+        let keys: &[&str] = match name {
+            // Terminal / Code
+            "terminal" | "bash" | "shell" | "aft_bash" | "code_execution" | "process" | "echo"
+            | "docker" => &["command"],
+            // Web / Search
+            "web_search" | "web_search_" | "tavily" | "tavily_search" | "sourcehound" => &["query"],
+            "web_fetch" | "web_scrape" | "tavily_extract" | "tavily_crawl" | "web_extract"
+            | "web_crawl" | "http_request" | "xai_http_request" => &["url"],
+            // File read
+            "read" | "look_at" | "file_read" | "aft_read" | "aft_outline" | "aft_inspect"
+            | "aft_status" => &["file_path", "path", "pattern"],
+            "glob" | "file_list" | "aft_glob" | "aft_list_checkpoints" | "aft_checkpoint_paths" => {
+                &["pattern", "file_path"]
+            }
+            // File search
+            "grep" | "search" | "ast_grep" | "file_search" | "aft_grep" | "aft_search"
+            | "aft_callers" | "aft_zoom" | "aft_ast_search" => &["pattern", "query", "file_path"],
+            // File write
+            "write" | "create" | "file_write" | "aft_write" | "patch" | "aft_apply_patch"
+            | "aft_ast_replace" => &["file_path", "path", "content"],
+            "edit" | "aft_edit" => &["file_path", "path", "old_string"],
+            // Memory
+            "memory" | "memory_search" | "memory_recall" | "lcm_recall" | "lcm_vector_recall"
+            | "lcm_recall_round" => &["query", "text"],
+            "memory_store" | "lcm_assert" => &["content", "text"],
+            // LCM
+            "lcm_stats" | "lcm_load_session" | "lcm_recent" | "lcm_doctor" => {
+                &["session_id", "action"]
+            }
+            // Session
+            "session_search" | "session_insights" => &["query", "session_id"],
+            // Skills
+            "skills_list" | "skill_view" | "skill_manage" | "learning_manage" => {
+                &["action", "skill_name", "name"]
+            }
+            // Config
+            "config_manage" => &["action", "key", "path"],
+            // Cron / Tasks
+            "cron" => &["action", "schedule", "command"],
+            "todo" | "kanban" => &["action", "task_id", "title"],
+            // Browser
+            "browser" => &["action", "url", "command"],
+            "browser_dialog" | "browser_cdp" => &["action", "command"],
+            // Approval / Clarify
+            "approval_request" | "verify_task" => &["tool_name", "description"],
+            "clarify" => &["question", "choices"],
+            // Communication
+            "chat" | "send_message" | "notify" | "react_to_message" => {
+                &["message", "content", "text"]
+            }
+            // Image / Media
+            "image" | "screenshot" | "image_generate" | "vision_analyze" => {
+                &["path", "url", "prompt"]
+            }
+            "video_analyze" | "transcribe_audio" | "text_to_speech" | "neutts_synthesize" => {
+                &["path", "url", "text"]
+            }
+            // Spotify
+            "spotify_playback" | "spotify_search" | "spotify_devices" | "spotify_albums"
+            | "spotify_playlists" | "spotify_library" | "spotify_queue" => &["query", "action"],
+            // Checkpoint / Git
+            "checkpoint" | "aft_checkpoint" | "aft_restore_checkpoint" | "aft_undo" => {
+                &["action", "path"]
+            }
+            "github" | "gh" => &["query", "command", "repo"],
+            // Thinking
+            "think" | "sequentialthinking" | "reason" => &["thought"],
+            // Debug
+            "debug_env" | "debug_system" | "env_probe" | "osv_check" | "tool_backend" => {
+                &["variable", "key"]
+            }
+            // SSH
+            "ssh" => &["command", "host"],
+            _ => &[
+                "query",
+                "command",
+                "text",
+                "url",
+                "path",
+                "file_path",
+                "input",
+                "content",
+                "message",
+            ],
+        };
+        for key in keys {
+            if let Some(val) = json.get(*key).and_then(|v| v.as_str()) {
+                let truncated = if val.len() > 100 {
+                    format!("{}...", &val[..100])
+                } else {
+                    val.to_string()
+                };
+                return Some(truncated.replace('\n', "\\n"));
+            }
+        }
+        // Fallback: show first string value from any key
+        if let Some(obj) = json.as_object() {
+            for (_key, val) in obj.iter() {
+                if let Some(s) = val.as_str() {
+                    let truncated = if s.len() > 100 {
+                        format!("{}...", &s[..100])
+                    } else {
+                        s.to_string()
+                    };
+                    return Some(truncated.replace('\n', "\\n"));
+                }
+            }
+        }
+    }
+    None
+}
+
+fn tool_preview_line(name: &str, args: &str) -> String {
+    let emoji = tool_emoji(name);
+    let parsed = serde_json::from_str::<serde_json::Value>(args).ok();
+    // The model's display label (see `operant_core::schema::TOOL_INTENT_KEY`)
+    // is WHAT this call is doing, so it leads the line; the technical
+    // argument follows. A call that carries no intent falls back to the
+    // technical argument alone — what this printed before.
+    let intent = parsed.as_ref().and_then(|json| {
+        json.get(operant_core::schema::TOOL_INTENT_KEY)
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .filter(|intent| !intent.is_empty())
+            .map(|intent| truncate_preview_value(intent, 120))
+    });
+    let technical = extract_tool_arg(name, args).map(|arg| truncate_preview_value(&arg, 120));
+    match (intent, technical) {
+        (Some(intent), Some(arg)) if arg != intent => {
+            format!("{} {} · {}: {}", emoji, name, intent, arg)
+        }
+        (Some(intent), _) => format!("{} {} · {}", emoji, name, intent),
+        (None, Some(arg)) => format!("{} {}: {}", emoji, name, arg),
+        (None, None) => format!("{} {}...", emoji, name),
+    }
+}
+
+/// Cap a tool preview's segment so a long command, path or intent cannot
+/// overflow a channel's message limit. Byte-truncation on a char boundary
+/// is fine: this is a preview, and the fallback is an ellipsis.
+fn truncate_preview_value(value: &str, max: usize) -> String {
+    if value.chars().count() <= max {
+        return value.to_string();
+    }
+    let head: String = value.chars().take(max).collect();
+    format!("{}...", head)
+}
+
 #[cfg(test)]
 mod unattended_posture_tests {
     use super::unattended_no_channel_verdict;
@@ -2754,218 +2985,6 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
             if attempt < MAX_ATTEMPTS {
                 tokio::time::sleep(Duration::from_secs(u64::from(attempt) * 5)).await;
             }
-        }
-    }
-
-    // Tool preview helpers
-
-    fn tool_emoji(name: &str) -> &'static str {
-        match name {
-            // ── Terminal / Code ──
-            "terminal" | "bash" | "shell" | "aft_bash" | "process" | "docker" => "\u{1F4BB}",
-            "code_execution" | "echo" | "local" | "slow" | "fast" => "\u{1F4BB}",
-            // ── Web / Search ──
-            "web_search" | "web_search_" | "tavily" | "tavily_search" | "sourcehound" => {
-                "\u{1F50D}"
-            }
-            "web_fetch" | "web_scrape" | "tavily_extract" | "tavily_crawl" | "web_extract"
-            | "web_crawl" => "\u{1F310}",
-            "search" | "find" | "file_search" => "\u{1F50E}",
-            // ── File I/O ──
-            "read" | "glob" | "grep" | "ast_grep" | "look_at" => "\u{1F4D6}",
-            "file_read"
-            | "file_list"
-            | "aft_read"
-            | "aft_outline"
-            | "aft_grep"
-            | "aft_glob"
-            | "aft_search"
-            | "aft_inspect"
-            | "aft_status"
-            | "aft_callers"
-            | "aft_zoom"
-            | "aft_ast_search"
-            | "aft_checkpoint_paths"
-            | "aft_list_checkpoints" => "\u{1F4D6}",
-            "write" | "edit" | "create" | "patch" => "\u{270F}\u{FE0F}",
-            "file_write" | "aft_write" | "aft_edit" | "aft_apply_patch" | "aft_ast_replace" => {
-                "\u{270F}\u{FE0F}"
-            }
-            // ── Memory ──
-            "memory" | "memory_search" | "memory_store" | "memory_recall" => "\u{1F9E0}",
-            // ── LCM (Lossless Context Memory) ──
-            "lcm_recall" | "lcm_stats" | "lcm_load_session" | "lcm_recent"
-            | "lcm_vector_recall" | "lcm_recall_round" | "lcm_assert" | "lcm_doctor" => "\u{1F9E0}",
-            // ── Skills ──
-            "skills_list" | "skill_view" | "skill_manage" | "learning_manage" => "\u{1F4DA}",
-            // ── Session ──
-            "session_search" | "session_insights" => "\u{1F4CB}",
-            // ── Config ──
-            "config_manage" => "\u{2699}\u{FE0F}",
-            // ── Cron / Scheduling ──
-            "cron" | "todo" | "kanban" => "\u{23F0}",
-            // ── Browser ──
-            "browser" | "browser_dialog" | "browser_cdp" => "\u{1F5A5}\u{FE0F}",
-            // ── Approval / Clarify ──
-            "approval_request" | "clarify" | "verify_task" => "\u{2753}",
-            // ── Communication ──
-            "chat" | "send_message" | "message" | "notify" | "react_to_message" => "\u{1F4AC}",
-            "discord" | "discord_admin" | "homeassistant" => "\u{1F4AC}",
-            // ── HTTP / API ──
-            "http_request" | "xai_http_request" | "openrouter_query" => "\u{1F310}",
-            // ── Image / Media ──
-            "image" | "screenshot" | "draw" | "image_generate" | "vision_analyze"
-            | "video_analyze" => "\u{1F5BC}\u{FE0F}",
-            "transcribe_audio" | "text_to_speech" | "neutts_synthesize" => "\u{1F3A4}",
-            // ── Spotify ──
-            "spotify_playback" | "spotify_search" | "spotify_devices" | "spotify_albums"
-            | "spotify_playlists" | "spotify_library" | "spotify_queue" => "\u{1F3B5}",
-            // ── SSH / Remote ──
-            "ssh" => "\u{1F510}",
-            // ── Checkpoint / Git ──
-            "checkpoint" | "aft_checkpoint" | "aft_restore_checkpoint" | "aft_undo" => "\u{1F4BE}",
-            "github" | "gh" | "git" => "\u{1F5A5}\u{FE0F}",
-            // ── Thinking ──
-            "think" | "reason" | "sequentialthinking" => "\u{1F4AD}",
-            "plan" | "strategy" => "\u{1F9F0}",
-            // ── Debug / Env ──
-            "debug_env" | "debug_system" | "env_probe" | "osv_check" | "tool_backend" => {
-                "\u{1F527}"
-            }
-            // ── Feishu / Notes ──
-            "feishu_doc_read" | "feishu_drive" => "\u{1F4DD}",
-            // ── Errors / Done ──
-            "error" | "fail" => "\u{274C}",
-            "done" | "complete" | "finish" => "\u{2705}",
-            _ => "\u{2699}\u{FE0F}",
-        }
-    }
-
-    fn extract_tool_arg(name: &str, args: &str) -> Option<String> {
-        if let Ok(json) = serde_json::from_str::<serde_json::Value>(args) {
-            let keys: &[&str] = match name {
-                // Terminal / Code
-                "terminal" | "bash" | "shell" | "aft_bash" | "code_execution" | "process"
-                | "echo" | "docker" => &["command"],
-                // Web / Search
-                "web_search" | "web_search_" | "tavily" | "tavily_search" | "sourcehound" => {
-                    &["query"]
-                }
-                "web_fetch" | "web_scrape" | "tavily_extract" | "tavily_crawl" | "web_extract"
-                | "web_crawl" | "http_request" | "xai_http_request" => &["url"],
-                // File read
-                "read" | "look_at" | "file_read" | "aft_read" | "aft_outline" | "aft_inspect"
-                | "aft_status" => &["file_path", "path", "pattern"],
-                "glob"
-                | "file_list"
-                | "aft_glob"
-                | "aft_list_checkpoints"
-                | "aft_checkpoint_paths" => &["pattern", "file_path"],
-                // File search
-                "grep" | "search" | "ast_grep" | "file_search" | "aft_grep" | "aft_search"
-                | "aft_callers" | "aft_zoom" | "aft_ast_search" => {
-                    &["pattern", "query", "file_path"]
-                }
-                // File write
-                "write" | "create" | "file_write" | "aft_write" | "patch" | "aft_apply_patch"
-                | "aft_ast_replace" => &["file_path", "path", "content"],
-                "edit" | "aft_edit" => &["file_path", "path", "old_string"],
-                // Memory
-                "memory" | "memory_search" | "memory_recall" | "lcm_recall"
-                | "lcm_vector_recall" | "lcm_recall_round" => &["query", "text"],
-                "memory_store" | "lcm_assert" => &["content", "text"],
-                // LCM
-                "lcm_stats" | "lcm_load_session" | "lcm_recent" | "lcm_doctor" => {
-                    &["session_id", "action"]
-                }
-                // Session
-                "session_search" | "session_insights" => &["query", "session_id"],
-                // Skills
-                "skills_list" | "skill_view" | "skill_manage" | "learning_manage" => {
-                    &["action", "skill_name", "name"]
-                }
-                // Config
-                "config_manage" => &["action", "key", "path"],
-                // Cron / Tasks
-                "cron" => &["action", "schedule", "command"],
-                "todo" | "kanban" => &["action", "task_id", "title"],
-                // Browser
-                "browser" => &["action", "url", "command"],
-                "browser_dialog" | "browser_cdp" => &["action", "command"],
-                // Approval / Clarify
-                "approval_request" | "verify_task" => &["tool_name", "description"],
-                "clarify" => &["question", "choices"],
-                // Communication
-                "chat" | "send_message" | "notify" | "react_to_message" => {
-                    &["message", "content", "text"]
-                }
-                // Image / Media
-                "image" | "screenshot" | "image_generate" | "vision_analyze" => {
-                    &["path", "url", "prompt"]
-                }
-                "video_analyze" | "transcribe_audio" | "text_to_speech" | "neutts_synthesize" => {
-                    &["path", "url", "text"]
-                }
-                // Spotify
-                "spotify_playback" | "spotify_search" | "spotify_devices" | "spotify_albums"
-                | "spotify_playlists" | "spotify_library" | "spotify_queue" => &["query", "action"],
-                // Checkpoint / Git
-                "checkpoint" | "aft_checkpoint" | "aft_restore_checkpoint" | "aft_undo" => {
-                    &["action", "path"]
-                }
-                "github" | "gh" => &["query", "command", "repo"],
-                // Thinking
-                "think" | "sequentialthinking" | "reason" => &["thought"],
-                // Debug
-                "debug_env" | "debug_system" | "env_probe" | "osv_check" | "tool_backend" => {
-                    &["variable", "key"]
-                }
-                // SSH
-                "ssh" => &["command", "host"],
-                _ => &[
-                    "query",
-                    "command",
-                    "text",
-                    "url",
-                    "path",
-                    "file_path",
-                    "input",
-                    "content",
-                    "message",
-                ],
-            };
-            for key in keys {
-                if let Some(val) = json.get(*key).and_then(|v| v.as_str()) {
-                    let truncated = if val.len() > 100 {
-                        format!("{}...", &val[..100])
-                    } else {
-                        val.to_string()
-                    };
-                    return Some(truncated.replace('\n', "\\n"));
-                }
-            }
-            // Fallback: show first string value from any key
-            if let Some(obj) = json.as_object() {
-                for (_key, val) in obj.iter() {
-                    if let Some(s) = val.as_str() {
-                        let truncated = if s.len() > 100 {
-                            format!("{}...", &s[..100])
-                        } else {
-                            s.to_string()
-                        };
-                        return Some(truncated.replace('\n', "\\n"));
-                    }
-                }
-            }
-        }
-        None
-    }
-
-    fn tool_preview_line(name: &str, args: &str) -> String {
-        let emoji = tool_emoji(name);
-        match extract_tool_arg(name, args) {
-            Some(arg) => format!("{} {}: {}", emoji, name, arg),
-            None => format!("{} {}...", emoji, name),
         }
     }
 
@@ -6761,6 +6780,76 @@ mod tool_progress_tests {
                 msg_id: "m2".into(),
                 body: "⚙️ b\n⚙️ c".into(),
             }
+        );
+    }
+
+    // ── the gateway shows WHAT each tool call is doing ────────────────────
+    //
+    // A channel's progress line used to carry only the technical argument
+    // (`⚙️ read: src/main.rs`), so a recipient following the run had no idea
+    // why the call was made. The model's `intent` (see
+    // `operant_core::schema::TOOL_INTENT_KEY`) is the description, and it
+    // leads the line.
+
+    #[test]
+    fn the_preview_line_leads_with_the_models_intent() {
+        let args = r#"{"file_path":"src/parser.rs","intent":"Locate the entry point"}"#;
+        let line = tool_preview_line("read", args);
+        assert!(
+            line.contains("read · Locate the entry point"),
+            "the intent leads the line: {line}"
+        );
+        assert!(
+            line.contains("src/parser.rs"),
+            "the technical argument still rides along: {line}"
+        );
+        assert!(line.starts_with("📖"), "the tool's emoji stays: {line}");
+    }
+
+    /// A call that carries no intent prints exactly what it did before: the
+    /// tool name plus its technical argument.
+    #[test]
+    fn the_preview_line_without_an_intent_is_unchanged() {
+        let line = tool_preview_line("read", r#"{"file_path":"src/main.rs"}"#);
+        assert!(line.starts_with("\u{1F4D6}"), "{line}");
+        assert!(line.contains("read: src/main.rs"), "{line}");
+        assert!(!line.contains(" · "), "no separator when no intent: {line}");
+    }
+
+    /// An empty or whitespace intent is not an intent: it must not produce a
+    /// dangling separator.
+    #[test]
+    fn a_blank_intent_is_treated_as_no_intent() {
+        let line = tool_preview_line("read", r#"{"file_path":"a.rs","intent":"   "}"#);
+        assert!(line.contains("read: a.rs"), "{line}");
+        assert!(!line.contains(" · "), "{line}");
+    }
+
+    /// A long intent or argument is capped, so one verbose call cannot push a
+    /// channel message over its limit.
+    #[test]
+    fn a_long_intent_or_argument_is_capped() {
+        let long = "x".repeat(400);
+        let args = format!(r#"{{"file_path":"{}","intent":"{}"}}"#, long, long);
+        let line = tool_preview_line("read", &args);
+        assert!(
+            line.chars().count() < 300,
+            "line is capped: {} chars",
+            line.chars().count()
+        );
+        assert!(line.contains("..."), "an ellipsis marks the cut: {line}");
+    }
+
+    /// An intent identical to the technical argument is not repeated: the
+    /// line must not read `bash · cargo test: cargo test`.
+    #[test]
+    fn an_intent_equal_to_the_argument_is_not_repeated() {
+        let args = r#"{"command":"cargo test","intent":"cargo test"}"#;
+        let line = tool_preview_line("bash", args);
+        assert_eq!(
+            line.matches("cargo test").count(),
+            1,
+            "the value appears once: {line}"
         );
     }
 }

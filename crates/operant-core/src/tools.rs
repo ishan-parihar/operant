@@ -536,15 +536,23 @@ impl ToolRegistry {
     /// `operant tools list` shows the full surface with a status marker —
     /// filtering the disabled tools out would hide the very tool the
     /// operator just disabled.
+    ///
+    /// Every schema leaves here carrying the shared `intent` parameter
+    /// (`crate::schema::ensure_intent_in_schema`): the one place it can be
+    /// added centrally, so a model is always asked for a display label and
+    /// neither native tools nor MCP proxies opt in by hand.
     pub async fn get_schemas_all(&self) -> Vec<ToolSchema> {
         let tools = self.tools.read().await;
         tools
             .values()
             .filter(|t| t.is_available())
-            .map(|t| t.schema())
+            .map(|t| t.schema().with_intent())
             .collect()
     }
 
+    /// The model-visible tool list for a default turn: registered ∩ available ∩
+    /// not-disabled. Every schema carries the shared `intent` parameter — see
+    /// [`ToolRegistry::get_schemas_all`].
     pub async fn get_schemas(&self) -> Vec<ToolSchema> {
         let tools = self.tools.read().await;
         let disabled_names = self.disabled_names.read().await;
@@ -558,7 +566,7 @@ impl ToolRegistry {
                     false
                 }
             })
-            .map(|t| t.schema())
+            .map(|t| t.schema().with_intent())
             .collect()
     }
 
@@ -597,7 +605,7 @@ impl ToolRegistry {
                 }
                 true
             })
-            .map(|t| t.schema())
+            .map(|t| t.schema().with_intent())
             .collect()
     }
 
@@ -683,6 +691,7 @@ impl ToolRegistry {
 mod tests {
     use super::*;
     use schemars::JsonSchema;
+    use serde_json::json;
 
     #[derive(JsonSchema, Deserialize)]
     #[serde(rename_all = "camelCase")]
@@ -899,6 +908,74 @@ mod tests {
                 .error
                 .as_deref()
                 .is_some_and(|e| e.contains("not serializable"))
+        );
+    }
+
+    // ── the registry supplies `intent` to the model, and does not break
+    //    validation when the model uses it ─────────────────────────────
+
+    /// The choke-point contract: every schema the registry publishes carries
+    /// the `intent` property and requires it. Without this the TUI and the
+    /// gateway record `intent: None` forever and tool rows have no
+    /// description, which is exactly the user-visible gap this closes.
+    #[tokio::test]
+    async fn every_published_schema_asks_the_model_for_an_intent() {
+        let registry = ToolRegistry::new(std::time::Duration::from_secs(5));
+        registry.register(TestTool).await.expect("registered");
+
+        for schema in registry.get_schemas().await {
+            assert_eq!(schema.name, "test_tool");
+            assert_eq!(
+                schema.parameters["properties"]["intent"],
+                crate::schema::intent_schema_property(),
+            );
+            let required = schema.parameters["required"]
+                .as_array()
+                .expect("required array");
+            assert!(
+                required.iter().any(|v| v.as_str() == Some("intent")),
+                "the model must be asked for an intent: {required:?}"
+            );
+        }
+
+        // The disabled-filter and unfiltered publishes carry it too.
+        let all = registry.get_schemas_all().await;
+        assert_eq!(all.len(), 1);
+        assert!(all[0].parameters["properties"].get("intent").is_some());
+        let filtered = registry
+            .get_available_schemas_filtered(&["test_tool".to_string()])
+            .await;
+        assert_eq!(filtered.len(), 1);
+        assert!(filtered[0].parameters["properties"].get("intent").is_some());
+    }
+
+    /// The agent validates arguments against the tool's OWN schema (not the
+    /// published one) at `agent/stream.rs:995-996`, so a model that sends the
+    /// intent alongside real arguments must still validate. Prove that: a
+    /// call with an `intent` key is not rejected as "missing required".
+    #[tokio::test]
+    async fn a_call_carrying_an_intent_still_validates_against_the_tool_schema() {
+        let registry = ToolRegistry::new(std::time::Duration::from_secs(5));
+        registry.register(TestTool).await.expect("registered");
+        let tool = registry.get("test_tool").await.expect("registered");
+        let schema = tool.schema();
+
+        let mut args = serde_json::json!({
+            "query": "find the parser",
+            "intent": "Locate the entry point before editing"
+        });
+        schema.sanitize_args(&mut args);
+        schema
+            .validate_args(&args)
+            .expect("intent must not fail validation");
+        assert_eq!(
+            args["intent"],
+            json!("Locate the entry point before editing")
+        );
+        assert_eq!(
+            args["query"],
+            json!("find the parser"),
+            "the real arguments ride alongside the label"
         );
     }
 }

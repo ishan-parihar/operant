@@ -357,7 +357,15 @@ impl TuiState for App {
                 id: block.id.clone(),
                 name: block.name.clone(),
                 input: serde_json::from_str(&block.input_json).unwrap_or(serde_json::Value::Null),
-                intent: None,
+                // Fall back to the parsed input when the block never captured
+                // one: the live status line reads this, and an unparseable
+                // fragment simply carries no intent.
+                intent: block.intent.clone().or_else(|| {
+                    ToolCall::intent_from_input(
+                        &serde_json::from_str::<serde_json::Value>(&block.input_json)
+                            .unwrap_or(serde_json::Value::Null),
+                    )
+                }),
                 thought_signature: None,
             })
             .collect()

@@ -353,7 +353,7 @@ fn display_message_from_tool_block(app: &App, block: &ToolUseBlock) -> DisplayMe
             id: block.id.clone(),
             name: block.name.clone(),
             input: parse_tool_input(&block.input_json),
-            intent: None,
+            intent: block.intent.clone(),
             thought_signature: None,
         },
     )
@@ -424,7 +424,7 @@ fn expand_message_with_mode(
                                         id: id.clone(),
                                         name: name.clone(),
                                         input: input.clone(),
-                                        intent: None,
+                                        intent: ToolCall::intent_from_input(input),
                                         thought_signature: None,
                                     },
                                 ));
@@ -505,6 +505,7 @@ mod tests {
             status: ToolStatus::Done,
             output_preview: Some("done".to_string()),
             input_json: r#"{"file_path":"a.rs"}"#.to_string(),
+            intent: None,
         }
     }
 
@@ -522,6 +523,65 @@ mod tests {
         };
         let row = display_message_from_tool_block(&app, &block);
         assert!(row.content.starts_with('⊘'), "got {:?}", row.content);
+    }
+
+    /// The block's captured intent must reach the render-facing `ToolCall`:
+    /// this is the field `render_tool_message` prints as the tool row's
+    /// description. Before the intent was threaded through, every row showed
+    /// only its technical summary, so an operator could not tell WHAT a call
+    /// was for.
+    #[test]
+    fn a_block_intent_reaches_the_render_tool_call() {
+        let app = make_app();
+        let block = ToolUseBlock {
+            intent: Some("Locate the parser entry point".to_string()),
+            ..tool_block("c1", "read_file", 0)
+        };
+        let row = display_message_from_tool_block(&app, &block);
+        let data = row.tool_data.expect("a tool row carries its call");
+        assert_eq!(
+            data.intent.as_deref(),
+            Some("Locate the parser entry point"),
+            "the row must carry the model's intent for the renderer"
+        );
+        assert_eq!(
+            data.input.get("intent"),
+            None,
+            "the intent is the block's own field, not a doubled copy in the input"
+        );
+    }
+
+    /// The technical summary still renders for a call that carries no intent:
+    /// falling back is the behaviour the old code always had.
+    #[test]
+    fn a_block_without_an_intent_carries_none() {
+        let app = make_app();
+        let row = display_message_from_tool_block(&app, &tool_block("c2", "read_file", 0));
+        assert_eq!(
+            row.tool_data.expect("a tool row carries its call").intent,
+            None
+        );
+    }
+
+    /// A restored-history `ToolUse` block derives its intent from the parsed
+    /// input, the same derivation every live construction uses — a resumed
+    /// session must render the same descriptions as the live one.
+    #[test]
+    fn a_restored_tool_use_block_derives_its_intent_from_the_input() {
+        let mut app = make_app();
+        app.messages
+            .push(Message::assistant_blocks(vec![ContentBlock::ToolUse {
+                id: "t9".to_string(),
+                name: "bash".to_string(),
+                input: json!({"command": "cargo test", "intent": "Run the test suite"}),
+            }]));
+        let rows = display_messages(&app);
+        let tool_row = rows
+            .iter()
+            .find(|row| row.tool_data.is_some())
+            .expect("a ToolUse block renders a tool row");
+        let data = tool_row.tool_data.as_ref().expect("checked above");
+        assert_eq!(data.intent.as_deref(), Some("Run the test suite"));
     }
 
     #[test]

@@ -637,6 +637,7 @@ fn cancel_keeps_earlier_turn_rows_and_marks_pending_cancelled() {
         status: ToolStatus::Done,
         output_preview: None,
         input_json: "{}".to_string(),
+        intent: None,
     });
     // Turn 2 (streaming): one done, one running.
     app.tool_use_blocks.push(ToolUseBlock {
@@ -646,6 +647,7 @@ fn cancel_keeps_earlier_turn_rows_and_marks_pending_cancelled() {
         status: ToolStatus::Done,
         output_preview: None,
         input_json: "{}".to_string(),
+        intent: None,
     });
     app.tool_use_blocks.push(ToolUseBlock {
         id: "t2b".to_string(),
@@ -654,6 +656,7 @@ fn cancel_keeps_earlier_turn_rows_and_marks_pending_cancelled() {
         status: ToolStatus::Running,
         output_preview: None,
         input_json: "{}".to_string(),
+        intent: None,
     });
     app.is_streaming = true;
 
@@ -890,6 +893,7 @@ fn alt_o_and_ctrl_shift_o_toggle_tool_visibility() {
             status: crate::tui::app::enums::ToolStatus::Done,
             output_preview: None,
             input_json: "{}".to_string(),
+            intent: None,
         });
     app.handle_key_event(press_key(KeyCode::Char('o'), KeyModifiers::ALT));
     assert!(!app.show_tool_calls, "Alt+O hides tool rows");
@@ -952,6 +956,7 @@ fn hidden_tool_runs_collapse_to_one_summary_row() {
                 status: ToolStatus::Done,
                 output_preview: None,
                 input_json: "{}".to_string(),
+                intent: None,
             });
     }
     let visible = crate::tui::operant_model::display_messages(&app);
@@ -1046,6 +1051,7 @@ fn tool_output_budget_evicts_oldest_first() {
             status: crate::tui::app::enums::ToolStatus::Done,
             output_preview: None,
             input_json: String::new(),
+            intent: None,
         });
         app.remember_tool_output(&format!("call-{i}"), &blob);
     }
@@ -2813,6 +2819,64 @@ fn test_bundle_slash_command_handled_without_registry_fallback() {
 }
 
 // ---- Queued vs Running tool status ----
+
+/// The model's `intent` is the description every tool row and every gateway
+/// progress line shows. It arrives inside the streamed arguments JSON, so it
+/// must be lifted onto the block the moment the arguments parse — otherwise
+/// the row renders a bare tool name plus a technical path and the operator
+/// has no idea WHY the call was made.
+#[test]
+fn tool_start_captures_the_model_intent_for_the_tool_row() {
+    let mut app = make_app();
+    app.handle_agent_event(AgentEvent::ToolStart {
+        tool_call_id: "call_intent".to_string(),
+        name: "read".to_string(),
+        arguments: r#"{"file_path":"src/parser.rs","intent":"Locate the entry point"}"#.to_string(),
+    });
+    assert_eq!(app.tool_use_blocks.len(), 1);
+    assert_eq!(
+        app.tool_use_blocks[0].intent.as_deref(),
+        Some("Locate the entry point"),
+        "the intent must be lifted onto the block for the row to render"
+    );
+}
+
+/// A re-announcement with an unparseable (short) fragment must not CLEAR an
+/// intent already captured: the fragment is the same call mid-stream, and the
+/// description must survive it.
+#[test]
+fn a_shorter_re_announcement_never_clears_a_captured_intent() {
+    let mut app = make_app();
+    app.handle_agent_event(AgentEvent::ToolStart {
+        tool_call_id: "call_intent_2".to_string(),
+        name: "read".to_string(),
+        arguments: r#"{"file_path":"a.rs","intent":"Check the header"}"#.to_string(),
+    });
+    // The pool's re-announcement carries a partial fragment that does not parse.
+    app.handle_agent_event(AgentEvent::ToolStart {
+        tool_call_id: "call_intent_2".to_string(),
+        name: "read".to_string(),
+        arguments: r#"{"file_path"#.to_string(),
+    });
+    assert_eq!(
+        app.tool_use_blocks[0].intent.as_deref(),
+        Some("Check the header"),
+        "an unparseable fragment must not wipe a captured intent"
+    );
+}
+
+/// A call whose arguments carry no intent simply has none: the row then shows
+/// its technical summary, which is the behaviour that predates this field.
+#[test]
+fn tool_start_without_an_intent_leaves_the_block_without_one() {
+    let mut app = make_app();
+    app.handle_agent_event(AgentEvent::ToolStart {
+        tool_call_id: "call_no_intent".to_string(),
+        name: "read".to_string(),
+        arguments: r#"{"file_path":"a.rs"}"#.to_string(),
+    });
+    assert_eq!(app.tool_use_blocks[0].intent, None);
+}
 
 #[test]
 fn tool_should_transition_queued_to_running_on_permit_acquire() {
@@ -4657,6 +4721,7 @@ fn empty_flush_releases_the_tool_slot_reservation() {
         status: ToolStatus::Done,
         output_preview: None,
         input_json: "{}".to_string(),
+        intent: None,
     });
     // Off: no Text, no persisted Thinking — the "0 blocks" arm.
     app.streaming_thinking = "x".to_string();
@@ -4772,6 +4837,7 @@ fn copy_drops_tool_rows_unless_only_tool_rows_are_selected() {
         status: ToolStatus::Done,
         output_preview: Some("TOOLOUT".to_string()),
         input_json: r#"{"command":"echo TOOLCMD"}"#.to_string(),
+        intent: None,
     });
     app.messages
         .push(Message::assistant("AFTER text".to_string()));
@@ -4919,6 +4985,7 @@ fn tool_rows_show_failure_and_pending_from_app_status() {
         status,
         output_preview: preview.map(str::to_string),
         input_json: "{}".to_string(),
+        intent: None,
     };
     app.tool_use_blocks
         .push(block("t1", ToolStatus::Error, Some("process exited")));
@@ -4963,6 +5030,7 @@ fn highlight_covers_only_the_text_a_copy_carries() {
         status: ToolStatus::Done,
         output_preview: Some("done".to_string()),
         input_json: r#"{"command":"echo TOOLROW"}"#.to_string(),
+        intent: None,
     });
     app.messages
         .push(Message::assistant("ANSWERTEXT body".to_string()));

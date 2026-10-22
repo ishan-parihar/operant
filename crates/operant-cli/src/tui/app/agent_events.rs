@@ -127,6 +127,16 @@ impl App {
                 let tool_id = tool_call_id.clone();
                 let tool_name = name.clone();
                 let input_json = arguments;
+                // The model's display label for this call. Parsed once here
+                // rather than on every read of `input_json`, because the
+                // arguments are still a partial JSON fragment for most of the
+                // stream and a per-frame parse would fail on every in-flight
+                // call. A fragment that does not parse carries no intent yet —
+                // the next ToolStart (with the complete arguments) fills it.
+                let intent = crate::tui::operant_model::vendor_types::ToolCall::intent_from_input(
+                    &serde_json::from_str::<serde_json::Value>(&input_json)
+                        .unwrap_or(serde_json::Value::Null),
+                );
                 // The first ToolStart for an id only means "parsed"; the agent
                 // re-announces it once it holds a worker permit. So: a new
                 // block is Queued, an existing one transitions to Running.
@@ -139,6 +149,12 @@ impl App {
                     existing.status = ToolStatus::Running;
                     existing.output_preview = None;
                     existing.input_json = input_json;
+                    // Never CLEAR an intent once captured: the re-announcement
+                    // carries the same arguments, but refusing to clear guards
+                    // against a shorter fragment arriving second.
+                    if intent.is_some() {
+                        existing.intent = intent;
+                    }
                     true
                 } else {
                     // First ToolStart for this id — the call is parsed but
@@ -151,6 +167,7 @@ impl App {
                         status: ToolStatus::Queued,
                         output_preview: None,
                         input_json,
+                        intent,
                     });
                     false
                 };
