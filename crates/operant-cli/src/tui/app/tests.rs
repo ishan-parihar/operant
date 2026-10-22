@@ -4825,7 +4825,7 @@ fn copy_joins_soft_wraps_and_drops_gutters_like_jcode() {
 }
 
 #[test]
-fn copy_drops_tool_rows_unless_only_tool_rows_are_selected() {
+fn copy_carries_tool_rows_alongside_prose() {
     let mut app = make_app();
     app.messages.push(Message::user("go".to_string()));
     app.messages
@@ -4848,7 +4848,21 @@ fn copy_drops_tool_rows_unless_only_tool_rows_are_selected() {
         frame_line_of("AFTER"),
     );
     assert!(b < t && t < a);
-    assert_eq!(select_lines(&mut app, b, a), "BEFORE text\n\nAFTER text");
+    // jcode copies tool rows: its `ui_prepare` pushes them through the same
+    // `push_auto` path as prose, so a drag across prose and a call keeps BOTH.
+    let across = select_lines(&mut app, b, a);
+    assert!(
+        across.contains("BEFORE text"),
+        "prose before the call survives: {across:?}"
+    );
+    assert!(
+        across.contains("TOOLCMD"),
+        "the tool call survives the mixed selection: {across:?}"
+    );
+    assert!(
+        across.contains("AFTER text"),
+        "prose after the call survives: {across:?}"
+    );
     let only_tool = select_lines(&mut app, t, t);
     assert!(only_tool.contains("TOOLCMD"), "{only_tool:?}");
 }
@@ -5019,7 +5033,7 @@ fn render_buffer(app: &App) -> ratatui::buffer::Buffer {
 #[test]
 fn highlight_covers_only_the_text_a_copy_carries() {
     // 2026-10-13: the selection painted every row edge to edge — the `1›`
-    // gutter, padding and tool rows lit up although copy drops them.
+    // gutter, padding lit up although copy drops them.
     let mut app = make_app();
     app.messages
         .push(Message::user("PROMPTTEXT here".to_string()));
@@ -5062,10 +5076,12 @@ fn highlight_covers_only_the_text_a_copy_carries() {
         !prompt_lit.contains('›'),
         "the prompt gutter is not text: {prompt_lit:?}"
     );
-    assert_eq!(
-        highlighted(row_of("TOOLROW")),
-        "",
-        "tool rows are not selectable"
+    // A tool row highlights exactly as it copies: highlight and copy share one
+    // predicate, so what paints is what lands on the clipboard (iter-1190).
+    assert!(
+        highlighted(row_of("TOOLROW")).contains("TOOLROW"),
+        "tool rows are selectable and copyable: {:?}",
+        highlighted(row_of("TOOLROW"))
     );
     assert!(highlighted(row_of("ANSWERTEXT")).contains("ANSWERTEXT"));
 }

@@ -56,8 +56,14 @@ pub(crate) fn apply_selection_highlight(_frame: &mut Frame, app: &App) {
 
 /// Display messages whose rows are interface chrome, not conversation text:
 /// a selection that also covers conversation text never copies them.
+///
+/// `tool` is deliberately ABSENT: a tool call is conversation content the user
+/// may need (the command, the path, the intent line), and jcode copies it —
+/// its `ui_prepare` pushes tool rows through the same `push_auto` path as
+/// prose, so every rendered line carries a raw plain line. Dropping them here
+/// (iter-801) was the parity gap: a drag across prose and a tool call copied
+/// the prose and silently lost the call.
 const UI_ROLES: &[&str] = &[
-    "tool",
     "meta",
     "usage",
     "swarm",
@@ -67,7 +73,7 @@ const UI_ROLES: &[&str] = &[
 ];
 
 /// Whether wrapped line `line` is interface chrome: a row with no line map
-/// (header, padding) or one owned by a UI-role message (tool/status rows,
+/// (header, padding) or one owned by a UI-role message (status rows,
 /// system notices, error cards).
 fn is_ui_row(
     frame: &crate::tui::operant_model::PreparedChatFrame,
@@ -110,9 +116,10 @@ pub(crate) fn selection_line_selectable(app: &App, line: usize) -> bool {
 /// column), and whole LOGICAL lines are copied, so soft wraps never become
 /// line breaks and gutter prefixes (`1›`, hanging indents) never copy.
 ///
-/// Rows that are interface chrome — tool/status rows, and the header, which
+/// Rows that are interface chrome — status rows and the header, which
 /// carries no line map — are dropped when the selection also covers
 /// conversation text; a selection entirely inside them copies them as shown.
+/// Tool rows are NOT chrome: they copy like prose (see `UI_ROLES`).
 /// Extracted synchronously from the last drawn frame, so release, Ctrl+C and
 /// copy mode always see the current selection, including off-screen parts.
 pub(crate) fn selection_copy_text(app: &App) -> String {
