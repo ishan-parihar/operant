@@ -3329,7 +3329,24 @@ Connection: close
                     tokio::time::timeout(std::time::Duration::from_secs(5), capture.accept()).await;
                 match accepted {
                     Ok(Ok((mut sock, _))) => {
-                        proxied_task.fetch_add(1, Ordering::SeqCst);
+                        // RT-145's residual, closed: count ONLY the request
+                        // this client would have made. The capture listener is
+                        // a process-wide door — any peer that resolves through
+                        // the proxy variables reaches it, and a subprocess
+                        // spawned by another test (`gh api`, which honours the
+                        // process's proxy env by design) landed here while the
+                        // guard had them set globally, so `proxied == 0` failed
+                        // with a connection that was never provider traffic.
+                        // The provider request carries the client's own bearer
+                        // token; a foreign CONNECT does not, so the marker is
+                        // what makes the assertion attributable.
+                        let mut head = [0u8; 1024];
+                        let seen = sock.peek(&mut head).await.unwrap_or(0);
+                        let is_provider_request =
+                            String::from_utf8_lossy(&head[..seen]).contains("test-key");
+                        if is_provider_request {
+                            proxied_task.fetch_add(1, Ordering::SeqCst);
+                        }
                         let _ = sock
                             .write_all(b"HTTP/1.1 502 Bad Gateway\r\ncontent-length: 0\r\n\r\n")
                             .await;
