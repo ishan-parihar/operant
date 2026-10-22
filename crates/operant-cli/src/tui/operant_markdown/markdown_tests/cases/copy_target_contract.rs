@@ -238,3 +238,68 @@ fn test_badge_mnemonics_avoid_the_copy_cancellation_key() {
     assert!(!keys.contains(&"n"), "the cancellation key must not be a badge");
 }
 
+
+#[test]
+fn test_a_failure_run_stops_before_the_next_framed_block() {
+    // The error must not swallow the code block that follows it: the blank line
+    // and the frame header end the run, and each block badges separately.
+    let found = bare(&["Error: boom", "┌─ rust", "│ let x = 1;", "└─"]);
+    assert_eq!(found.len(), 2, "error and code block stay separate: {found:?}");
+    assert_eq!(found[0].0, CopyTargetKind::Error);
+    assert_eq!(found[0].1, "Error: boom", "the error stops at the frame");
+    assert_eq!(found[1].1, "let x = 1;", "the frame's body is its own target");
+}
+
+#[test]
+fn test_a_failure_run_stops_before_the_next_blockquote() {
+    // A gutter line ends the run the same way a frame does — the detector must
+    // not fold a quote into the failure above it.
+    let found = bare(&["Failed: step 2", "│ quoted"]);
+    assert_eq!(found.len(), 2, "error and quote stay separate: {found:?}");
+    assert_eq!(found[0].1, "Failed: step 2", "the failure stops at the gutter");
+    assert_eq!(found[1].0, CopyTargetKind::Blockquote);
+    assert_eq!(found[1].1, "quoted");
+}
+
+#[test]
+fn test_an_empty_buffer_yields_no_targets() {
+    assert!(bare(&[]).is_empty(), "nothing to copy in an empty buffer");
+    assert!(bare(&[""]).is_empty(), "a single blank line is not a target");
+    assert!(
+        rendered("").is_empty(),
+        "no markdown is no markdown, not a target"
+    );
+}
+
+#[test]
+fn test_a_blockquote_bridges_a_blank_line_between_gutter_runs() {
+    // A paragraph break inside one quote is not the end of the quote: bridging
+    // the blank gutter lines is what makes the whole quote one badge.
+    let found = bare(&["│ first para", "", "│ second para"]);
+    assert_eq!(found.len(), 1, "one quote, one badge");
+    assert_eq!(found[0].1, "first para\n\nsecond para");
+}
+
+#[test]
+fn test_a_blockquote_ends_at_a_blank_line_the_run_does_not_resume_after() {
+    // The converse of the bridge rule, and the reason it needs a lookahead:
+    // a blank gutter run that RESUMES is bridged, a blank line followed by
+    // prose ends the quote.
+    let found = bare(&["│ quoted", "", "prose"]);
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].1, "quoted", "trailing blanks are not bridged");
+}
+
+#[test]
+fn test_the_badge_mnemonics_avoid_vi_motion_keys() {
+    // `h`/`j`/`k`/`l` are movement; binding a copy badge to one would make
+    // selection movement ambiguous. The badge set stays in the vowels/`y`
+    // corner, and this names the exclusion so widening it is a decision.
+    for motion in ["h", "j", "k", "l"] {
+        let badges = ["y", "Y", "v", "u", "p"];
+        assert!(
+            !badges.contains(&motion),
+            "badge key {motion} is a vi motion key — one key, two meanings"
+        );
+    }
+}

@@ -177,11 +177,14 @@ fn failure_run(
     Some((kind, content, start, end))
 }
 
-/// Whether the line at `idx` breaks a failure run — the blank line or framed
-/// header that separates two runs of output.
+/// Whether the line at `idx` breaks a failure run — the boundaries the
+/// renderer puts between blocks. A failure must not swallow what follows it:
+/// a blank line, a code-frame header, or a blockquote gutter each end the run
+/// so the next block badges separately.
 fn failure_run_breaks_at(lines: &[Line<'static>], idx: usize) -> bool {
     let text = line_plain_text(&lines[idx]);
-    text.trim().is_empty() || text.trim_start().starts_with("┌─ ")
+    let trimmed = text.trim();
+    trimmed.is_empty() || trimmed.starts_with("┌─ ") || is_blockquote_gutter_line(&text)
 }
 
 /// A rendered blockquote line starts (without indentation) with the `│ `
