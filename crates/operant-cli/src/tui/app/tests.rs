@@ -4,6 +4,7 @@
 // Extracted from the app/mod.rs monolith.
 
 use super::*;
+use crate::tui::adapter_types::types::MessageContent;
 use crate::tui::operant_app::auth::AuthState;
 use crate::tui::operant_app::tui_state::TuiState as _;
 use crossterm::event::{
@@ -5273,6 +5274,63 @@ fn copy_carries_tool_rows_alongside_prose() {
     );
     let only_tool = select_lines(&mut app, t, t);
     assert!(only_tool.contains("TOOLCMD"), "{only_tool:?}");
+}
+
+// The regression risk in iter-1190's direction: dropping "tool" from
+// UI_ROLES must not make everything copyable. Real chrome (a system notice)
+// still gets skipped when the selection also covers conversation text, while a
+// tool row does not — the exception is specific to tools, not a general
+// "copy spans everything now".
+#[test]
+fn copy_still_skips_chrome_when_the_selection_mixes_prose_and_a_tool_call() {
+    let mut app = make_app();
+    app.messages.push(Message::user("go".to_string()));
+    app.messages.push(Message {
+        role: Role::System,
+        content: MessageContent::Text("SYSNOTICE background check finished".to_string()),
+    });
+    app.messages
+        .push(Message::assistant("BEFORE text".to_string()));
+    app.tool_use_blocks.push(ToolUseBlock {
+        id: "t1".to_string(),
+        name: "bash".to_string(),
+        after_index: 3,
+        status: ToolStatus::Done,
+        output_preview: Some("TOOLOUT".to_string()),
+        input_json: r#"{"command":"echo TOOLCMD"}"#.to_string(),
+        intent: None,
+    });
+    app.messages
+        .push(Message::assistant("AFTER text".to_string()));
+    let _ = screen_rows(&app);
+
+    let sys = frame_line_of("SYSNOTICE");
+    let tool = frame_line_of("TOOLCMD");
+    let before = frame_line_of("BEFORE");
+    assert!(
+        before < tool,
+        "tool must render after the prose it belongs to"
+    );
+
+    // System row + tool row + prose: the chrome drops, the call survives.
+    let mixed = select_lines(&mut app, sys, tool);
+    assert!(
+        mixed.contains("TOOLCMD"),
+        "the tool call must survive even in a selection that starts on chrome: {mixed:?}"
+    );
+    assert!(
+        !mixed.contains("SYSNOTICE"),
+        "the system notice is still chrome and must not copy: {mixed:?}"
+    );
+
+    // Selecting ONLY chrome is the documented escape hatch: the user explicitly
+    // grabbed those rows, so they copy. Removing "tool" must not remove this
+    // exception either — it is what makes an all-chrome drag useful.
+    let only_chrome = select_lines(&mut app, sys, sys);
+    assert!(
+        only_chrome.contains("SYSNOTICE"),
+        "an all-chrome selection still copies, by design: {only_chrome:?}"
+    );
 }
 
 #[test]
