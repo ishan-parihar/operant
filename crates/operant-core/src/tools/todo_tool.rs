@@ -69,6 +69,28 @@ pub struct TodoItem {
     /// one phase and render as one group on the card.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lane: Option<String>,
+    /// Model-facing summary shown on the card. Upstream calls this `priority`
+    /// and always writes it; operant's tool result never did, which left the
+    /// TUI parsing a default for a field no caller could set.
+    #[serde(default = "default_priority", skip_serializing_if = "Option::is_none")]
+    pub priority: Option<String>,
+    /// Optional longer brief: file paths, acceptance criteria, context. Never
+    /// drawn on the card (which shows only the short `content` title), but
+    /// carried through the write/read round trip so a swarm worker's
+    /// assignment is not starved of context by a short title.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub details: Option<String>,
+    /// Ids of todos that must finish before this one starts (upstream
+    /// `blocked_by`). The TUI renders a blocked item as blocked.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blocked_by: Vec<String>,
+    /// Optional owner label, surfaced on the card (upstream `assigned_to`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assigned_to: Option<String>,
+}
+
+fn default_priority() -> Option<String> {
+    Some("medium".to_string())
 }
 
 impl TodoItem {
@@ -126,6 +148,15 @@ fn todo_summary(t: &TodoItem) -> Value {
         "status": t.status,
         "phase": t.phase,
         "lane": t.lane,
+        // Every extra field the upstream model contract exposes, so a plan
+        // written with them survives the write/read round trip. These were
+        // dropped before iter-1201: the TUI already rendered `blocked_by` and
+        // carried `assigned_to`, but the tool's struct discarded both, meaning
+        // the model could never set them and the two halves disagreed.
+        "priority": t.priority,
+        "details": t.details,
+        "blocked_by": t.blocked_by,
+        "assigned_to": t.assigned_to,
     })
 }
 
@@ -618,6 +649,69 @@ mod tests {
             assert_ne!(key.as_str(), Some("phase"), "{required:?}");
             assert_ne!(key.as_str(), Some("lane"), "{required:?}");
         }
+    }
+
+    #[test]
+    fn schema_offers_the_fields_the_tui_already_renders() {
+        // iter-1201: a field diff against upstream found the tool's TodoItem
+        // missing eight of upstream's twelve fields. The TUI already rendered
+        // `blocked_by` (as a blocked marker) and carried `assigned_to`, so the
+        // two halves disagreed and the model had no way to set either. This
+        // pins the schema so the fields stay askable, not just readable.
+        //
+        // Scope, deliberately: `confidence`, `completion_confidence` and
+        // `confidence_history` are NOT asserted here. Upstream maintains those
+        // from tool-side bookkeeping ("maintained by the todo tool, not the
+        // model"), so the port is not obliged to expose them as askable, and
+        // the TUI already defaults them. Adding the model-facing fields is the
+        // parity gap this closes.
+        let schema = serde_json::to_value(schemars::schema_for!(TodoArgs))
+            .expect("todo args schema serializes");
+        let item_props = &schema["$defs"]["TodoItem"]["properties"];
+        // The schema spells these the way the model must WRITE them, which is
+        // the tool's camelCase serde rename (`blockedBy` / `assignedTo`) — the
+        // round-trip test above feeds exactly those names.
+        for key in ["priority", "details", "blockedBy", "assignedTo"] {
+            assert!(
+                item_props.get(key).is_some(),
+                "{key} is in the upstream model contract and must stay askable"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn writes_and_reads_back_the_metadata_fields_of_the_plan() {
+        // The fields the tool used to drop. The TUI parses `blockedBy` /
+        // `assignedTo` off this very result, so a round trip that loses them
+        // renders a card with no blocked marker and no owner.
+        let session = "metadata-roundtrip";
+        let (ok, parsed, _) = execute_tool(serde_json::json!({
+            "sessionId": session,
+            "todos": [
+                {
+                    "id": "a",
+                    "content": "Prep",
+                    "status": "completed",
+                    "priority": "high",
+                    "blockedBy": ["gate"],
+                    "assignedTo": "operator",
+                    "details": "check ./scripts/check.sh first"
+                },
+                {"id": "gate", "content": "Gate", "status": "pending"}
+            ]
+        }))
+        .await;
+        assert!(ok);
+        let items = parsed["todos"].as_array().expect("todos array");
+        let first = &items[0];
+        assert_eq!(first["priority"], json!("high"));
+        assert_eq!(
+            first["blocked_by"],
+            json!(["gate"]),
+            "the dependency must reach the TUI's summary or it renders unblocked"
+        );
+        assert_eq!(first["assigned_to"], json!("operator"));
+        assert_eq!(first["details"], json!("check ./scripts/check.sh first"));
     }
 
     #[tokio::test]
