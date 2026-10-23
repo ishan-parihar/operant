@@ -22,6 +22,7 @@ use crate::tui::operant_app::info_widget::{
 fn todo(id: &str, status: &str) -> crate::tui::operant_app::todo::TodoItem {
     crate::tui::operant_app::todo::TodoItem {
         group: None,
+        phase: None,
         content: format!("task {id}"),
         status: status.to_string(),
         priority: "high".to_string(),

@@ -282,8 +282,22 @@ pub struct TodoItem {
     /// Optional group label. Todos that share a group are displayed together
     /// under a single header. Use one group per coherent goal; when work is
     /// steered into a new area, start a new group instead of renaming.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ///
+    /// [`port-adaptation`] upstream jcode names the wire field `lane` and the
+    /// card field `group`; both spellings are accepted here so a list written
+    /// by either name renders the same.
+    #[serde(default, alias = "lane", skip_serializing_if = "Option::is_none")]
     pub group: Option<String>,
+    /// Optional phase number. Todos that share a stage run as one batch; the
+    /// next phase waits for the previous one. Paired with [`TodoItem::group`]
+    /// it forms the lane a todo travels: stages run in sequence, the groups
+    /// inside one stage run in parallel.
+    ///
+    /// [`port-adaptation`] the todo tool models this as `phase` and records it
+    /// under that name; the `stage` spelling is also accepted so a list
+    /// written by either name renders the same.
+    #[serde(default, alias = "stage", skip_serializing_if = "Option::is_none")]
+    pub phase: Option<u32>,
     /// Forward-looking evidence state that this todo can be completed
     /// correctly. Legacy sessions stored a 0-100 score; numbers map onto the
     /// closest state on load.
@@ -548,10 +562,134 @@ pub fn feedback_loop_traceability_passes(goal: &TodoGoal) -> bool {
 /// the assessment category without disclosing the score or threshold.
 pub const TODO_CLOSED_FEEDBACK_LOOP_CONTINUATION_MESSAGE: &str = "[auto] Your feedback loop isn't good enough. Think about what feedback loops you need. Make sure the todo is up to date.";
 
-/// Model-facing continuation for the private end-to-end ownership check. It
+/// Model-facing continuation for the end-to-end ownership check. It
 /// asks for more work without revealing that an evaluator triggered it.
 pub const TODO_OWNERSHIP_CONTINUATION_MESSAGE: &str =
     "[auto] Continue the work below. Keep the todo up to date; do not reply or wait for the user.";
+
+/// One group of todos inside a stage: the lanes that run in parallel form
+/// one row on the todo card.
+///
+/// [port-jcode] `jcode-tui/src/todo/stages.rs::TodoLane`, with
+/// `item_indices` naming the render only.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TodoLane {
+    /// Group label, or `None` for the ungrouped lane.
+    pub group: Option<String>,
+    /// Indices into the todo slice the lane was laid out from, in order.
+    pub item_indices: Vec<usize>,
+}
+
+/// One batch of work: its phase number and the lanes inside it.
+///
+/// [port-jcode] `jcode-tui/src/todo/stages.rs::TodoStage`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TodoStage {
+    /// Phase number, or `None` for a stage whose todos declare none.
+    pub number: Option<u32>,
+    /// Lanes inside the stage, in first-seen order.
+    pub lanes: Vec<TodoLane>,
+}
+
+impl TodoStage {
+    /// Indices of every todo in this stage, across all lanes.
+    pub fn item_indices(&self) -> impl Iterator<Item = usize> + '_ {
+        self.lanes
+            .iter()
+            .flat_map(|lane| lane.item_indices.iter().copied())
+    }
+}
+
+/// True when any todo declares a phase.
+///
+/// A list without phases renders as the plain checklist it always was, which
+/// is what keeps the stage pips opt-in at the data level.
+///
+/// [port-jcode] `jcode-tui/src/todo/stages.rs::has_stages`.
+pub fn todo_has_stages<'a>(todos: impl IntoIterator<Item = &'a TodoItem>) -> bool {
+    todos.into_iter().any(|todo| todo.phase.is_some())
+}
+
+/// Lay `todos` out into stages and lanes. Every index appears exactly once.
+///
+/// Todos declaring the same phase share a stage; inside a stage the same
+/// group shares a lane. A todo with no phase gets a stage of its own in
+/// first-seen position, so it keeps its place in the list.
+///
+/// [port-jcode] `jcode-tui/src/todo/stages.rs::stage_layout`.
+pub fn todo_stage_layout<'a>(todos: impl IntoIterator<Item = &'a TodoItem>) -> Vec<TodoStage> {
+    let todos: Vec<&TodoItem> = todos.into_iter().collect();
+    let mut stages: Vec<TodoStage> = Vec::new();
+    for (index, todo) in todos.iter().enumerate() {
+        let stage_index = match todo.phase {
+            Some(number) => match stages.iter().position(|s| s.number == Some(number)) {
+                Some(found) => found,
+                None => {
+                    stages.push(TodoStage {
+                        number: Some(number),
+                        lanes: Vec::new(),
+                    });
+                    stages.len() - 1
+                }
+            },
+            None => {
+                stages.push(TodoStage {
+                    number: None,
+                    lanes: Vec::new(),
+                });
+                stages.len() - 1
+            }
+        };
+        let stage = &mut stages[stage_index];
+        let group = todo
+            .group
+            .as_deref()
+            .map(str::trim)
+            .filter(|g| !g.is_empty())
+            .map(str::to_string);
+        let existing = group.as_ref().and_then(|group| {
+            stage
+                .lanes
+                .iter()
+                .position(|lane| lane.group.as_ref() == Some(group))
+        });
+        match existing {
+            Some(lane) => stage.lanes[lane].item_indices.push(index),
+            None => stage.lanes.push(TodoLane {
+                group,
+                item_indices: vec![index],
+            }),
+        }
+    }
+    stages
+}
+
+/// Index of the stage the reader is working in.
+///
+/// A stage holding an in-progress todo is current; otherwise the first stage
+/// that still has an open (neither completed nor cancelled) todo. A list with
+/// nothing open returns `None`.
+///
+/// [port-jcode] `jcode-tui/src/todo/stages.rs::current_stage`.
+pub fn todo_current_stage_index<'a>(
+    stages: &[TodoStage],
+    todos: impl IntoIterator<Item = &'a TodoItem>,
+) -> Option<usize> {
+    let todos: Vec<&TodoItem> = todos.into_iter().collect();
+    let is_open = |index: usize| !matches!(todos[index].status.as_str(), "completed" | "cancelled");
+    stages
+        .iter()
+        .position(|stage| {
+            stage
+                .item_indices()
+                .any(|index| todos[index].status == "in_progress")
+        })
+        .or_else(|| {
+            stages
+                .iter()
+                .position(|stage| stage.item_indices().any(is_open))
+        })
+}
 
 // [port-source] batch-4 extension of this leaf (upstream operant-base/src/todo.rs):
 // the auto-poke continuation family the session renderer now classifies with —

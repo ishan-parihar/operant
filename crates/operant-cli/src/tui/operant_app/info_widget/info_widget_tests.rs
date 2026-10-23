@@ -109,6 +109,7 @@ fn todos_widgets_show_item_and_aggregate_confidence() {
         todos: vec![
             crate::tui::operant_app::todo::TodoItem {
                 group: None,
+                phase: None,
                 id: "todo-1".to_string(),
                 content: "Validate confidence UI".to_string(),
                 status: "in_progress".to_string(),
@@ -123,6 +124,7 @@ fn todos_widgets_show_item_and_aggregate_confidence() {
             },
             crate::tui::operant_app::todo::TodoItem {
                 group: None,
+                phase: None,
                 id: "todo-2".to_string(),
                 content: "Ship completed item".to_string(),
                 status: "completed".to_string(),
@@ -160,6 +162,7 @@ fn todos_widgets_render_group_headers_when_groups_present() {
     let mk =
         |group: Option<&str>, id: &str, status: &str| crate::tui::operant_app::todo::TodoItem {
             group: group.map(|g| g.to_string()),
+            phase: None,
             id: id.to_string(),
             content: format!("task {id}"),
             status: status.to_string(),
@@ -203,6 +206,7 @@ fn task_group_headers_render_their_own_weighted_confidence() {
     let mk = |group: &str, id: &str, priority: &str, confidence: u8| {
         crate::tui::operant_app::todo::TodoItem {
             group: Some(group.to_string()),
+            phase: None,
             id: id.to_string(),
             content: format!("task {id}"),
             status: "pending".to_string(),
@@ -244,6 +248,7 @@ fn task_group_headers_render_their_own_weighted_confidence() {
 fn todos_widgets_stay_flat_without_groups() {
     let mk = |id: &str, status: &str| crate::tui::operant_app::todo::TodoItem {
         group: None,
+        phase: None,
         id: id.to_string(),
         content: format!("task {id}"),
         status: status.to_string(),
@@ -266,6 +271,7 @@ fn todos_widgets_stay_flat_without_groups() {
 fn todos_widget_renders_exact_pips_for_small_lists() {
     let mk = |status: &str| crate::tui::operant_app::todo::TodoItem {
         group: None,
+        phase: None,
         id: status.to_string(),
         content: format!("item {status}"),
         status: status.to_string(),
@@ -458,6 +464,7 @@ fn todo_item(
         priority: "medium".to_string(),
         id: id.to_string(),
         group: group.map(|g| g.to_string()),
+        phase: None,
         blocked_by: Vec::new(),
         assigned_to: None,
         confidence: Some(crate::tui::operant_app::todo::ConfidenceState::from_legacy_score(80)),
@@ -1687,6 +1694,7 @@ fn placements_never_include_border_only_widgets() {
         }),
         todos: vec![crate::tui::operant_app::todo::TodoItem {
             group: None,
+            phase: None,
             content: "ship patch".to_string(),
             status: "in_progress".to_string(),
             priority: "high".to_string(),

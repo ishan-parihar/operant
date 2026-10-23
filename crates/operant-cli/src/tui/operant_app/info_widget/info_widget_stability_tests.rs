@@ -23,6 +23,7 @@ fn rich_data() -> InfoWidgetData {
         todos: vec![
             crate::tui::operant_app::todo::TodoItem {
                 group: None,
+                phase: None,
                 content: "first task".to_string(),
                 status: "in_progress".to_string(),
                 priority: "high".to_string(),
@@ -35,6 +36,7 @@ fn rich_data() -> InfoWidgetData {
             },
             crate::tui::operant_app::todo::TodoItem {
                 group: None,
+                phase: None,
                 content: "second task".to_string(),
                 status: "pending".to_string(),
                 priority: "medium".to_string(),

@@ -314,6 +314,7 @@ mod tests {
             status: status.to_string(),
             priority: "medium".to_string(),
             group: None,
+            phase: None,
             confidence: None,
             completion_confidence: None,
             confidence_history: Vec::new(),

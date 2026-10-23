@@ -573,6 +573,7 @@ fn render_todos_message_shows_grouped_card_with_status_glyphs() {
             status: status.to_string(),
             priority: "high".to_string(),
             group: group.map(str::to_string),
+            phase: None,
             confidence: Some(crate::tui::operant_app::todo::ConfidenceState::from_legacy_score(80)),
             completion_confidence: (status == "completed")
                 .then_some(crate::tui::operant_app::todo::ConfidenceState::from_legacy_score(95)),
@@ -634,6 +635,172 @@ fn render_todos_message_shows_grouped_card_with_status_glyphs() {
     );
 }
 
+/// Test-only todo builder carrying the phase/lane grouping the todo tool
+/// records, so the grouped-card tests can exercise the stage render path.
+fn staged_todo(
+    id: &str,
+    content: &str,
+    status: &str,
+    phase: Option<u32>,
+    lane: Option<&str>,
+) -> crate::tui::operant_app::todo::TodoItem {
+    crate::tui::operant_app::todo::TodoItem {
+        id: id.to_string(),
+        content: content.to_string(),
+        status: status.to_string(),
+        priority: "high".to_string(),
+        group: lane.map(str::to_string),
+        phase,
+        confidence: None,
+        completion_confidence: None,
+        confidence_history: Vec::new(),
+        blocked_by: Vec::new(),
+        assigned_to: None,
+    }
+}
+
+#[test]
+fn staged_todo_header_labelled_pips_name_the_phase() {
+    let todos = [
+        staged_todo("1", "Read the brief", "completed", Some(1), Some("plan")),
+        staged_todo("2", "Write the code", "in_progress", Some(1), Some("plan")),
+        staged_todo("3", "Review the code", "pending", Some(2), Some("plan")),
+    ];
+    let mut spans = Vec::new();
+    push_todo_stage_pips(&mut spans, todos.iter(), 200);
+    let rendered: String = spans.iter().map(|span| span.content.as_ref()).collect();
+
+    // The full `phase N` label arrives first because there is room for it, and
+    // phase 1 is the current stage: its in-flight todo makes it so.
+    assert_eq!(rendered, "phase 1 ✓●  phase 2 ○", "{rendered}");
+}
+
+#[test]
+fn staged_todo_pips_fall_back_to_a_counting_variant_as_width_shrinks() {
+    // Six items per phase: the per-item glyph ladder is long enough that
+    // the counting variant is the one that fits in the middle, which is the
+    // case it exists for.
+    let mut wide: Vec<crate::tui::operant_app::todo::TodoItem> = Vec::new();
+    for n in 0..6u32 {
+        let status = if n == 0 { "completed" } else { "pending" };
+        wide.push(staged_todo(
+            &format!("a{n}"),
+            "Task",
+            status,
+            Some(1),
+            Some("plan"),
+        ));
+        wide.push(staged_todo(
+            &format!("b{n}"),
+            "Task",
+            status,
+            Some(2),
+            Some("plan"),
+        ));
+    }
+    let pips = |max_width: usize| {
+        let mut spans = Vec::new();
+        push_todo_stage_pips(&mut spans, wide.iter(), max_width);
+        spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>()
+    };
+    assert_eq!(pips(200), "phase 1 ✓○○○○○  phase 2 ✓○○○○○");
+    // Bare phase numbers with per-item glyphs (18 wide) still fit here.
+    assert_eq!(pips(18), "1 ✓○○○○○  2 ✓○○○○○");
+    // The counting variant (12 wide) takes over where the glyph ladder cannot.
+    // Each phase holds six items, one done, so the count reads 1/6.
+    assert_eq!(pips(12), "1 1/6  2 1/6");
+    // Narrower still: no room for stages, plain status pips.
+    assert_eq!(pips(8), "●●○○○○○○○○○○");
+}
+
+#[test]
+fn a_list_without_phases_renders_the_status_pips_it_always_did() {
+    let todos = [
+        staged_todo("1", "Read the brief", "completed", None, None),
+        staged_todo("2", "Write the code", "in_progress", None, None),
+        staged_todo("3", "Review the code", "pending", None, None),
+    ];
+    let mut stage = Vec::new();
+    push_todo_stage_pips(&mut stage, todos.iter(), 200);
+    let mut plain = Vec::new();
+    push_todo_status_pips(&mut plain, todos.iter(), 200);
+    assert_eq!(
+        stage
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>(),
+        plain
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>(),
+    );
+}
+
+#[test]
+fn stage_layout_puts_lanes_of_one_phase_together_and_reads_the_current_stage() {
+    let todos = [
+        staged_todo("1", "Prep", "completed", Some(1), Some("a")),
+        staged_todo("2", "Build", "in_progress", Some(2), Some("a")),
+        staged_todo("3", "Shade", "pending", Some(2), Some("b")),
+        staged_todo("4", "Later", "pending", Some(3), None),
+    ];
+    let stages = crate::tui::operant_app::todo::todo_stage_layout(todos.iter());
+    assert_eq!(stages.len(), 3, "{stages:?}");
+    assert_eq!(stages[0].number, Some(1));
+    assert_eq!(stages[0].lanes.len(), 1);
+    assert_eq!(stages[1].lanes.len(), 2, "{stages:?}");
+    assert_eq!(stages[1].lanes[0].group.as_deref(), Some("a"));
+    assert_eq!(stages[1].lanes[1].group.as_deref(), Some("b"));
+    // Every index appears exactly once.
+    let mut seen = stages
+        .iter()
+        .flat_map(crate::tui::operant_app::todo::TodoStage::item_indices)
+        .collect::<Vec<_>>();
+    seen.sort_unstable();
+    assert_eq!(seen, vec![0, 1, 2, 3], "{seen:?}");
+    assert_eq!(
+        crate::tui::operant_app::todo::todo_current_stage_index(&stages, todos.iter()),
+        Some(1),
+    );
+    // With the in-flight item finished, the current stage is the first open one.
+    let done = todos
+        .iter()
+        .map(|todo| {
+            staged_todo(
+                &todo.id,
+                &todo.content,
+                "completed",
+                todo.phase,
+                todo.group.as_deref(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let stages = crate::tui::operant_app::todo::todo_stage_layout(done.iter());
+    assert_eq!(
+        crate::tui::operant_app::todo::todo_current_stage_index(&stages, done.iter()),
+        None,
+    );
+}
+
+#[test]
+fn a_todo_list_reads_phase_and_lane_as_stage_and_group() {
+    // The tool records the model-facing spellings; the card reads the operator
+    // ones. Both directions have to round-trip.
+    let payload = serde_json::json!([
+        {"id": "1", "content": "One", "status": "pending", "phase": 1, "lane": "alpha"},
+        {"id": "2", "content": "Two", "status": "pending", "stage": 2, "group": "beta"}
+    ]);
+    let todos: Vec<crate::tui::operant_app::todo::TodoItem> =
+        serde_json::from_value(payload).expect("todos parse");
+    assert_eq!(todos[0].phase, Some(1));
+    assert_eq!(todos[0].group.as_deref(), Some("alpha"));
+    assert_eq!(todos[1].phase, Some(2));
+    assert_eq!(todos[1].group.as_deref(), Some("beta"));
+}
+
 #[test]
 fn render_todos_message_shows_goal_scores_without_verbose_feedback() {
     let todos = vec![crate::tui::operant_app::todo::TodoItem {
@@ -642,6 +809,7 @@ fn render_todos_message_shows_goal_scores_without_verbose_feedback() {
         status: "in_progress".to_string(),
         priority: "high".to_string(),
         group: Some("todo rendering".to_string()),
+        phase: None,
         confidence: Some(crate::tui::operant_app::todo::ConfidenceState::from_legacy_score(85)),
         completion_confidence: None,
         confidence_history: vec![
@@ -712,6 +880,7 @@ fn render_todos_message_shows_user_intention_when_understanding_is_unclear() {
         status: "in_progress".to_string(),
         priority: "high".to_string(),
         group: Some("responsive card".to_string()),
+        phase: None,
         confidence: None,
         completion_confidence: None,
         confidence_history: Vec::new(),
@@ -801,6 +970,7 @@ fn render_todos_message_uses_readable_semantic_colors() {
         status: "in_progress".to_string(),
         priority: "high".to_string(),
         group: Some("todo rendering".to_string()),
+        phase: None,
         confidence: Some(crate::tui::operant_app::todo::ConfidenceState::from_legacy_score(85)),
         completion_confidence: None,
         confidence_history: Vec::new(),
@@ -910,6 +1080,7 @@ fn render_todos_message_collapses_passing_quality_gates() {
         status: "completed".to_string(),
         priority: "high".to_string(),
         group: Some("quality".to_string()),
+        phase: None,
         confidence: None,
         completion_confidence: Some(crate::tui::operant_app::todo::ConfidenceState::Validated),
         confidence_history: Vec::new(),
@@ -968,6 +1139,7 @@ fn render_todos_message_wraps_goal_scores_at_narrow_widths() {
         status: "in_progress".to_string(),
         priority: "high".to_string(),
         group: Some("todo rendering".to_string()),
+        phase: None,
         confidence: Some(crate::tui::operant_app::todo::ConfidenceState::from_legacy_score(85)),
         completion_confidence: None,
         confidence_history: Vec::new(),
@@ -1040,6 +1212,7 @@ fn render_todo_tool_result_uses_borderless_card_with_goal_scores() {
         status: "in_progress".to_string(),
         priority: "high".to_string(),
         group: Some("todo rendering".to_string()),
+        phase: None,
         confidence: Some(crate::tui::operant_app::todo::ConfidenceState::from_legacy_score(92)),
         completion_confidence: None,
         confidence_history: vec![
@@ -1118,6 +1291,7 @@ fn render_todo_quality_gate_retry_shows_only_changed_goal_fields() {
         status: "in_progress".to_string(),
         priority: "high".to_string(),
         group: Some("todo rendering".to_string()),
+        phase: None,
         confidence: Some(crate::tui::operant_app::todo::ConfidenceState::from_legacy_score(92)),
         ..Default::default()
     }];
@@ -1377,6 +1551,7 @@ fn unbiased_visual_prompt_retry_renders_complete_feedback_change() {
         status: "in_progress".to_string(),
         priority: "high".to_string(),
         group: Some("pelican-bike-animation".to_string()),
+        phase: None,
         confidence: Some(crate::tui::operant_app::todo::ConfidenceState::from_legacy_score(90)),
         ..Default::default()
     }];
@@ -1491,6 +1666,7 @@ fn visually_appealing_prompt_batched_retry_renders_complete_todo_card() {
         status: "in_progress".to_string(),
         priority: "high".to_string(),
         group: Some("pelican-bike".to_string()),
+        phase: None,
         confidence: Some(crate::tui::operant_app::todo::ConfidenceState::from_legacy_score(95)),
         ..Default::default()
     }];
@@ -1600,6 +1776,7 @@ fn render_ownership_gated_todo_result_keeps_the_full_card() {
         status: "in_progress".to_string(),
         priority: "high".to_string(),
         group: Some("ship outcome".to_string()),
+        phase: None,
         confidence: Some(crate::tui::operant_app::todo::ConfidenceState::from_legacy_score(95)),
         ..Default::default()
     }];

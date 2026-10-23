@@ -42,6 +42,16 @@ static TODO_STORE: LazyLock<Mutex<HashMap<String, Vec<TodoItem>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// A single todo item
+///
+/// The model writes `phase` and `lane` — the card's words for stage and
+/// group. Both are carried through to the TUI so a staged plan renders as
+/// one; before this they were silently dropped here, which made the todo
+/// card's group headers unreachable in practice (the model had no way to
+/// name a group).
+///
+/// [port-jcode] upstream's todo item advertises `phase`/`lane` rather than
+/// `stage`/`group` for exactly this reason: the schema words are the ones the
+/// model reaches for.
 #[derive(Debug, Clone, JsonSchema, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TodoItem {
@@ -51,6 +61,14 @@ pub struct TodoItem {
     pub content: String,
     /// Status: "pending", "in_progress", "completed", or "cancelled"
     pub status: String,
+    /// Phase this todo belongs to. Todos that share a phase run as one batch;
+    /// the next phase waits for this one. Omit for an unphased list.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phase: Option<u32>,
+    /// Lane this todo travels: todos sharing a lane run in parallel inside
+    /// one phase and render as one group on the card.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lane: Option<String>,
 }
 
 impl TodoItem {
@@ -85,8 +103,30 @@ impl TodoItem {
         } else {
             "pending".to_string()
         };
+        // An empty lane name groups nothing — the trim keeps a stray
+        // whitespace label from splitting a lane in two.
+        self.lane = self
+            .lane
+            .take()
+            .map(|lane| lane.trim().to_string())
+            .filter(|lane| !lane.is_empty());
         self
     }
+}
+
+/// Stable summary of one todo for a tool result.
+///
+/// `phase` and `lane` are the model-facing spellings; the TUI reads them as
+/// the card's stage and group, so a written plan survives the round trip
+/// instead of arriving with its grouping stripped.
+fn todo_summary(t: &TodoItem) -> Value {
+    json!({
+        "id": t.id,
+        "content": t.content,
+        "status": t.status,
+        "phase": t.phase,
+        "lane": t.lane,
+    })
 }
 
 /// Truncate oversized todo content, keeping the head (the actionable part of
@@ -169,16 +209,7 @@ impl OperantTool for TodoTool {
                 .lock()
                 .expect("TODO_STORE mutex poisoned — programmer error");
             let current = store.get(&session_id).cloned().unwrap_or_default();
-            let summary: Vec<Value> = current
-                .iter()
-                .map(|t| {
-                    json!({
-                        "id": t.id,
-                        "content": t.content,
-                        "status": t.status,
-                    })
-                })
-                .collect();
+            let summary: Vec<Value> = current.iter().map(todo_summary).collect();
             return ToolResult::success(
                 "todo",
                 json!({
@@ -216,6 +247,15 @@ impl OperantTool for TodoTool {
                     if let Some(&i) = index.get(item.id.as_str()) {
                         merged[i].content = item.content;
                         merged[i].status = item.status;
+                        // The grouping travels with the item: an update that
+                        // omits phase/lane leaves them as they were rather
+                        // than dropping the row out of its lane.
+                        if item.phase.is_some() {
+                            merged[i].phase = item.phase;
+                        }
+                        if item.lane.is_some() {
+                            merged[i].lane = item.lane;
+                        }
                     } else {
                         index.insert(item.id.clone(), merged.len());
                         merged.push(item);
@@ -230,16 +270,7 @@ impl OperantTool for TodoTool {
             next
         };
 
-        let summary: Vec<Value> = next
-            .iter()
-            .map(|t| {
-                json!({
-                    "id": t.id,
-                    "content": t.content,
-                    "status": t.status,
-                })
-            })
-            .collect();
+        let summary: Vec<Value> = next.iter().map(todo_summary).collect();
 
         ToolResult::success(
             "todo",
@@ -565,5 +596,64 @@ mod tests {
         let (head, tail) = capped.split_at(capped.len() - TRUNCATION_MARKER.len());
         assert!(head.chars().all(|c| c == 'é'));
         assert!(tail.starts_with(TRUNCATION_MARKER));
+    }
+
+    #[test]
+    fn schema_offers_phase_and_lane_so_a_can_phase_its_plan() {
+        // The todo card has rendered group headers for as long as they have
+        // existed, but the tool schema never asked the model for a group name,
+        // so the headers could not be populated. The schema now models the
+        // grouping with the words a plan is written in: `phase` (which batch)
+        // and `lane` (which parallel strand).
+        let schema = serde_json::to_value(schemars::schema_for!(TodoArgs))
+            .expect("todo args schema serializes");
+        let item = &schema["$defs"]["TodoItem"];
+        let item_props = &item["properties"];
+        assert!(item_props.get("phase").is_some(), "{item_props}");
+        assert!(item_props.get("lane").is_some(), "{item_props}");
+        // Required stays minimal: a phase-stamped item still needs only its
+        // id, content and status, so an unphased list keeps working.
+        let required = item["required"].as_array().expect("required is a list");
+        for key in required {
+            assert_ne!(key.as_str(), Some("phase"), "{required:?}");
+            assert_ne!(key.as_str(), Some("lane"), "{required:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn writes_and_reads_back_the_phase_and_lane_of_the_plan() {
+        let session = "phase-lane-roundtrip";
+        let (ok, parsed, _) = execute_tool(serde_json::json!({
+            "sessionId": session,
+            "todos": [
+                {"id": "a", "content": "Prep", "status": "completed", "phase": 1, "lane": "one"},
+                {"id": "b", "content": "Build", "status": "in_progress", "phase": 2, "lane": "one"},
+                {"id": "c", "content": "Shade", "status": "pending", "phase": 2, "lane": "two"}
+            ]
+        }))
+        .await;
+        assert!(ok, "{parsed}");
+        let todos = parsed["todos"].as_array().expect("todos array");
+        assert_eq!(todos[0]["phase"], serde_json::json!(1));
+        assert_eq!(todos[0]["lane"], serde_json::json!("one"));
+        assert_eq!(todos[2]["phase"], serde_json::json!(2));
+        assert_eq!(todos[2]["lane"], serde_json::json!("two"));
+
+        // A merge that names a new phase rewrites the phase, and one that says
+        // nothing about it keeps the row in its lane.
+        let (ok, parsed, _) = execute_tool(serde_json::json!({
+            "sessionId": session,
+            "merge": true,
+            "todos": [
+                {"id": "a", "content": "Prep done", "status": "completed", "phase": 3},
+                {"id": "b", "content": "Build nom", "status": "pending"}
+            ]
+        }))
+        .await;
+        assert!(ok, "{parsed}");
+        let todos = parsed["todos"].as_array().expect("todos array");
+        assert_eq!(todos[0]["phase"], serde_json::json!(3), "{todos:?}");
+        assert_eq!(todos[0]["lane"], serde_json::json!("one"), "{todos:?}");
+        assert_eq!(todos[1]["phase"], serde_json::json!(2), "{todos:?}");
     }
 }

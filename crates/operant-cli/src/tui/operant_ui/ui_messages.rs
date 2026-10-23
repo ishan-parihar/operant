@@ -1389,13 +1389,111 @@ fn push_todo_status_pips<'a>(
     }
 }
 
+/// Status glyph and its color: the same pair an item line's leading glyph
+/// uses, so a pip strip and the item it stands for read identically.
+fn todo_pip_glyph(todo: &crate::tui::operant_app::todo::TodoItem) -> (&'static str, Color) {
+    match todo.status.as_str() {
+        "completed" => ("✓", rgb(105, 190, 125)),
+        "in_progress" => ("●", asap_color()),
+        "cancelled" => ("✗", rgb(190, 105, 115)),
+        _ => ("○", rgb(135, 145, 160)),
+    }
+}
+
+/// Pips labelled per phase: `phase 1 ●●●  phase 2 ●○  phase 3 ○○`.
+///
+/// The width of the label costs room, so three progressively cheaper variants
+/// are tried before falling back to the plain status pips: the full
+/// `phase N` label with per-item glyphs, the bare `N` label with glyphs, then
+/// the bare `N` label with a done/total count. A list without phases renders
+/// exactly the status pips it always did.
+///
+/// [port-jcode] `jcode-tui/src/todo/stages.rs::push_stage_pips`.
+fn push_todo_stage_pips<'a>(
+    spans: &mut Vec<Span<'static>>,
+    todos: impl IntoIterator<Item = &'a crate::tui::operant_app::todo::TodoItem>,
+    max_width: usize,
+) {
+    let todos: Vec<&crate::tui::operant_app::todo::TodoItem> = todos.into_iter().collect();
+    if !crate::tui::operant_app::todo::todo_has_stages(todos.iter().copied()) {
+        push_todo_status_pips(spans, todos.iter().copied(), max_width);
+        return;
+    }
+    let stages = crate::tui::operant_app::todo::todo_stage_layout(todos.iter().copied());
+    let current =
+        crate::tui::operant_app::todo::todo_current_stage_index(&stages, todos.iter().copied());
+    let phase_style = |index: usize| {
+        if Some(index) == current {
+            Style::default().fg(asap_color()).bold()
+        } else {
+            Style::default().fg(rgb(120, 120, 135))
+        }
+    };
+    let variant = |prefix: &str, counts: bool| -> Vec<Span<'static>> {
+        let mut out = Vec::new();
+        for (index, stage) in stages.iter().enumerate() {
+            if index > 0 {
+                out.push(Span::raw("  "));
+            }
+            let label = match stage.number {
+                Some(n) => format!("{prefix}{n} "),
+                None => String::new(),
+            };
+            if !label.is_empty() {
+                out.push(Span::styled(label, phase_style(index)));
+            }
+            if counts {
+                let total = stage.item_indices().count();
+                let done = stage
+                    .item_indices()
+                    .filter(|&i| todos[i].status == "completed")
+                    .count();
+                if done == total {
+                    out.push(Span::styled("✓", Style::default().fg(rgb(100, 180, 100))));
+                } else {
+                    let color = if Some(index) == current {
+                        asap_color()
+                    } else {
+                        rgb(120, 120, 135)
+                    };
+                    out.push(Span::styled(
+                        format!("{done}/{total}"),
+                        Style::default().fg(color),
+                    ));
+                }
+            } else {
+                for index in stage.item_indices() {
+                    let (glyph, color) = todo_pip_glyph(todos[index]);
+                    out.push(Span::styled(glyph.to_string(), Style::default().fg(color)));
+                }
+            }
+        }
+        out
+    };
+    for spans_variant in [
+        variant("phase ", false),
+        variant("", false),
+        variant("", true),
+    ] {
+        let width = spans_variant
+            .iter()
+            .map(|span| span.content.width())
+            .sum::<usize>();
+        if width <= max_width {
+            spans.extend(spans_variant);
+            return;
+        }
+    }
+    push_todo_status_pips(spans, todos.iter().copied(), max_width);
+}
+
 fn render_todo_status_header<'a>(
     todos: impl IntoIterator<Item = &'a crate::tui::operant_app::todo::TodoItem>,
     base_indent: &str,
     inner_width: usize,
 ) -> Line<'static> {
     let mut spans = Vec::new();
-    push_todo_status_pips(&mut spans, todos, inner_width);
+    push_todo_stage_pips(&mut spans, todos, inner_width);
     todo_card_line(spans, base_indent, inner_width)
 }
 
@@ -1411,7 +1509,7 @@ fn render_todo_goal_header(
         Style::default().fg(todo_group_color()).bold(),
     )];
     spans.push(Span::raw("  "));
-    push_todo_status_pips(
+    push_todo_stage_pips(
         &mut spans,
         todos.iter().copied(),
         inner_width.saturating_sub(label_width + 2),
@@ -2021,12 +2119,7 @@ fn render_todo_card_item_line(
     let (glyph, glyph_color) = if blocked {
         ("⊳", rgb(225, 165, 90))
     } else {
-        match todo.status.as_str() {
-            "completed" => ("✓", rgb(105, 190, 125)),
-            "in_progress" => ("●", asap_color()),
-            "cancelled" => ("✗", rgb(190, 105, 115)),
-            _ => ("○", rgb(135, 145, 160)),
-        }
+        todo_pip_glyph(todo)
     };
     let text_color = match todo.status.as_str() {
         "completed" => rgb(135, 150, 145),
