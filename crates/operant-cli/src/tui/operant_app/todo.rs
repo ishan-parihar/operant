@@ -273,9 +273,13 @@ fn default_todo_priority() -> String {
 pub struct TodoItem {
     pub content: String,
     pub status: String,
-    // [port-adaptation] upstream's tool output always carries a priority;
-    // operant's todo tool result only names id/content/status, so the TUI
-    // parse needs a default rather than failing the whole list.
+    // iter-1201: operant's todo tool now emits `priority` like upstream's
+    // does, but the default stays because a list parsed from other sources
+    // (restored history, a hand-written session) may still omit it, and serde
+    // would fail the WHOLE list on one missing field. The original comment
+    // here said the tool result "only names id/content/status" and the default
+    // was the only option; that stopped being true when the tool's model-facing
+    // fields were completed.
     #[serde(default = "default_todo_priority")]
     pub priority: String,
     pub id: String,

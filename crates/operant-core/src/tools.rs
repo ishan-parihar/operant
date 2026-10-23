@@ -929,6 +929,16 @@ mod tests {
                 schema.parameters["properties"]["intent"],
                 crate::schema::intent_schema_property(),
             );
+            // iter-1202: upstream publishes the cost hatch in the same pass as
+            // the intent, so a REAL registered tool must carry both. The
+            // schema-level test pins the helper, and `mcp.rs`'s strip pins the
+            // forwarding rule, but only a publish through the registry proves
+            // the model is actually offered the hatch on every tool.
+            assert_eq!(
+                schema.parameters["properties"]["accept_large_output"],
+                crate::schema::accept_large_output_schema_property(),
+                "the cost escape hatch must ride the published schema too"
+            );
             let required = schema.parameters["required"]
                 .as_array()
                 .expect("required array");
@@ -936,12 +946,26 @@ mod tests {
                 required.iter().any(|v| v.as_str() == Some("intent")),
                 "the model must be asked for an intent: {required:?}"
             );
+            // And the hatch stays OPTIONAL: requiring it would make every tool
+            // call pay attention to a case that only arises when a result was
+            // withheld. Upstream is explicit that it is optional.
+            assert!(
+                !required
+                    .iter()
+                    .any(|v| v.as_str() == Some(crate::schema::ACCEPT_LARGE_OUTPUT_KEY)),
+                "the cost hatch is optional and must not be required: {required:?}"
+            );
         }
 
-        // The disabled-filter and unfiltered publishes carry it too.
+        // The disabled-filter and unfiltered publishes carry both too.
         let all = registry.get_schemas_all().await;
         assert_eq!(all.len(), 1);
         assert!(all[0].parameters["properties"].get("intent").is_some());
+        assert!(
+            all[0].parameters["properties"]
+                .get(crate::schema::ACCEPT_LARGE_OUTPUT_KEY)
+                .is_some(),
+        );
         let filtered = registry
             .get_available_schemas_filtered(&["test_tool".to_string()])
             .await;
