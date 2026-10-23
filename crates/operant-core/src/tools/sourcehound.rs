@@ -73,11 +73,32 @@ pub const TOOL_CRAWL: &str = "web.crawl";
 /// Installation hint surfaced when the sourcehound binary is missing.
 pub const SOURCEHOUND_INSTALL_HINT: &str = "sourcehound binary not found. Install it with:\n  cargo install --git https://github.com/ishan-parihar/sourcehound sourcehound\n(or point SOURCEHOUND_BINARY at an existing binary).";
 
-/// sourcehound only advertises the tool groups its settings allow-list names
-/// (`tools.groups` in `~/.config/sourcehound-mcp/settings.yml`). A default
-/// install that allow-lists only `cloakctl` therefore has no `web.*` tools at
-/// all, and every web call fails with a bare "unknown tool" from the server.
-pub const SOURCEHOUND_GROUP_HINT: &str = "sourcehound is running but the `web` tool group is not enabled. Add \"web\" to `tools.groups` in ~/.config/sourcehound-mcp/settings.yml (or drop the `groups` allow-list) and restart the sourcehound process.";
+/// sourcehound supports two MCP `tools/list` surfaces and only lists the
+/// tool groups its settings allow-list names (`tools.groups` in
+/// `~/.config/sourcehound-mcp/settings.yml`). The **v1** surface lists every
+/// granular name; the **v2** surface (sourcehound 1.8.0's default) lists only
+/// the 23 per-intent composites (`search`, `read`, `crawl`, ...) plus
+/// `cloakctl.call`. A group allow-list that omits `web` means the server has
+/// no web tool at all and answers every call with a bare "unknown tool".
+pub const SOURCEHOUND_GROUP_HINT: &str = "sourcehound is running but does not offer this tool. Enable its tool group: add \"web\" to `tools.groups` in ~/.config/sourcehound-mcp/settings.yml (or drop the `groups` allow-list) and restart the sourcehound process.";
+
+/// Whether a tool result is sourcehound's own "this name does not exist".
+///
+/// The server answers an unknown tool with a bare `unknown tool: <name>`
+/// (`tools/call` succeeds with `isError: true`). That - not the advertised
+/// set - is the only authoritative signal that a name is genuinely absent,
+/// because it is the server's own verdict rather than operant's inference.
+/// Recognized in both the structured and the text-block shape.
+fn is_unknown_tool_error(payload: &Value) -> bool {
+    let text = payload
+        .get("error")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or_else(|| first_text_block(payload))
+        .unwrap_or_default();
+    let lower = text.to_ascii_lowercase();
+    lower.contains("unknown tool") || lower.contains("tool not found")
+}
 
 /// Resolve the sourcehound binary: `SOURCEHOUND_BINARY` override, then PATH.
 ///
@@ -166,23 +187,44 @@ impl Sourcehound {
         // current call always uses the installed binary, update or not.
         crate::tools::sourcehound_update::kick_update_check();
         let client = self.client().await?;
-        // A sourcehound started with a `tools.groups` allow-list that omits
-        // `web` answers every web call with a bare "unknown tool". Catch it
-        // here so the caller gets the one-line settings fix instead.
-        let missing_group = match self.advertised.lock().await.as_ref() {
-            Some(advertised) => !advertised.is_empty() && !advertised.contains(tool),
-            None => false,
-        };
-        if missing_group {
-            return Err(Error::Agent(format!(
-                "sourcehound does not advertise `{tool}`.\n{SOURCEHOUND_GROUP_HINT}"
-            )));
-        }
+        // Dispatch, then judge. The advertised set cannot decide availability:
+        // sourcehound 1.8.0's default (v2) surface lists 23 composite names
+        // and none of the granular v1 names operant calls, yet answers them.
+        // A local refusal on that basis failed every web and browser tool on
+        // a stock install. So dispatch first, and let the server's own
+        // "unknown tool" verdict be the only thing that adds the hint - a
+        // call that would have worked is never pre-empted.
         let raw = client
             .call_tool(tool, arguments)
             .await
             .map_err(|e| Error::Agent(format!("sourcehound `{tool}` call failed: {e}")))?;
+        if raw.get("isError").and_then(Value::as_bool).unwrap_or(false)
+            && is_unknown_tool_error(&raw)
+        {
+            return Err(Error::Agent(format!(
+                "sourcehound does not serve `{tool}`.\n{SOURCEHOUND_GROUP_HINT}"
+            )));
+        }
         unwrap_tool_result(tool, &raw)
+    }
+
+    /// The name to send a crawl call under on the wire.
+    ///
+    /// `web.crawl` on the v1 surface, `crawl` on v2 (which folded the four v1
+    /// web tools into composites). Resolved per handle from the server's own
+    /// advertised set, so a v2 install crawls and a v1 one is unchanged.
+    async fn crawl_wire_name(&self) -> &'static str {
+        let advertised = self.advertised.lock().await.clone();
+        match advertised.as_ref() {
+            // The server has not told us what it lists (no spawn yet, or an
+            // empty tools/list): try the v1 name, which is what the rest of
+            // this module assumes, and let the server correct us.
+            None => TOOL_CRAWL,
+            // v2: the v1 name is absent and the composite is present.
+            Some(names) if !names.contains(TOOL_CRAWL) && names.contains("crawl") => "crawl",
+            // v1, or a server listing neither (the gate will say why).
+            Some(_) => TOOL_CRAWL,
+        }
     }
 
     /// Spawn (once) and return the connected stdio client.
@@ -556,7 +598,8 @@ impl OperantTool for WebCrawlTool {
             "max_depth": args.max_depth,
             "max_pages": args.max_pages,
         });
-        match self.0.call(TOOL_CRAWL, arguments).await {
+        let wire_name = self.0.crawl_wire_name().await;
+        match self.0.call(wire_name, arguments).await {
             Ok(payload) => ToolResult::success("web_crawl", payload),
             Err(e) => ToolResult::error("web_crawl", e.to_string()),
         }
@@ -755,9 +798,11 @@ for line in sys.stdin:
     }
 
     #[tokio::test]
-    async fn tool_absent_from_advertised_set_reports_the_settings_fix() {
-        // A sourcehound whose `tools.groups` allow-list omits `web` must
-        // produce the actionable settings hint, not a bare "unknown tool".
+    async fn a_disabled_group_reports_the_settings_fix() {
+        // A sourcehound whose `tools.groups` allow-list omits `web` answers
+        // every web call with a bare "unknown tool". That verdict - the
+        // server's own, not an inference from its tools/list - must reach the
+        // operator as the actionable settings hint rather than a dead end.
         let dir = std::env::temp_dir().join(format!(
             "operant_sourcehound_narrow_{}_{}",
             std::process::id(),
@@ -794,9 +839,9 @@ for line in sys.stdin:
         let err = sh
             .call(TOOL_SCRAPE, json!({"url": "https://example.com"}))
             .await
-            .expect_err("an unadvertised tool must not be called");
+            .expect_err("an unknown tool must not look like a success");
         let msg = err.to_string();
-        assert!(msg.contains("does not advertise"), "unexpected: {msg}");
+        assert!(msg.contains("does not serve"), "unexpected: {msg}");
         assert!(msg.contains("tools.groups"), "unexpected: {msg}");
     }
 
@@ -863,6 +908,238 @@ for line in sys.stdin:
             parse_search_results(&json!({ "data": [{"title": "x", "url": "y"}] }), 5).len(),
             1
         );
+    }
+
+    // ---- v2 tool surface (sourcehound 1.8.0) -----------------------------
+
+    /// The advertised set a stock sourcehound 1.8.0 returns: 23 v2 composites
+    /// and not one granular `web.*` name.
+    fn v2_advertised() -> HashSet<String> {
+        [
+            "archive",
+            "catalog.list",
+            "cloakctl.call",
+            "company.lookup",
+            "crawl",
+            "data.catalog",
+            "data.query",
+            "gov.search",
+            "index.query",
+            "news.fetch",
+            "news.search",
+            "papers.get",
+            "papers.search",
+            "patents.search",
+            "read",
+            "recon.target",
+            "results.get",
+            "search",
+            "security.vuln",
+            "social.feed",
+            "social.search",
+            "video.transcript",
+            "workflow.run",
+        ]
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect()
+    }
+
+    /// A mock MCP server that answers every call, advertising the v2 surface.
+    /// Proves the gate no longer pre-empts a call the server would serve.
+    const V2_ECHO_MCP_SERVER: &str = r#"import sys, json
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        req = json.loads(line)
+    except Exception:
+        continue
+    rid = req.get('id')
+    if rid is None:
+        continue
+    method = req.get('method')
+    if method == 'initialize':
+        result = {'protocolVersion': '2025-06-18', 'capabilities': {'tools': {}}, 'serverInfo': {'name': 'v2', 'version': '1.8.0'}}
+    elif method == 'tools/list':
+        result = {'tools': [{'name': n, 'description': 'x', 'inputSchema': {'type': 'object'}} for n in ['search', 'read', 'crawl', 'cloakctl.call']]}
+    else:
+        params = req.get('params') or {}
+        payload = {'echoed_tool': params.get('name'), 'echoed_args': params.get('arguments') or {}}
+        result = {'content': [{'type': 'text', 'text': json.dumps(payload)}], 'structuredContent': payload}
+    sys.stdout.write(json.dumps({'jsonrpc': '2.0', 'id': rid, 'result': result}) + chr(10))
+    sys.stdout.flush()
+    "#;
+
+    fn v2_echo_sourcehound() -> (Sourcehound, PathBuf) {
+        let dir = std::env::temp_dir().join(format!(
+            "operant_sourcehound_v2_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        let script = dir.join("v2_server.py");
+        std::fs::write(&script, V2_ECHO_MCP_SERVER).expect("write v2 echo server");
+        (
+            Sourcehound::new("python3", vec![script.to_string_lossy().to_string()]),
+            dir,
+        )
+    }
+
+    #[tokio::test]
+    async fn a_v2_server_answers_the_v1_web_tools() {
+        // RED without the fix: the old gate read the advertised set, found
+        // none of operant's names among the 4 listed, and refused locally.
+        let (sh, _dir) = v2_echo_sourcehound();
+        for (tool, args) in [
+            (TOOL_SEARCH, json!({ "query": "rust" })),
+            (TOOL_SCRAPE, json!({ "url": "https://example.com" })),
+            (TOOL_EXTRACT, json!({ "url": "https://example.com" })),
+            (TOOL_CRAWL, json!({ "url": "https://example.com" })),
+        ] {
+            let echoed = sh
+                .call(tool, args)
+                .await
+                .unwrap_or_else(|e| panic!("a v2 server must still answer {tool}: {e}"));
+            assert_eq!(echoed["echoed_tool"], tool);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_v2_server_answers_the_browser_verbs() {
+        // The browser verbs are unlisted on v2 too. The provider already
+        // injects the `profile` 1.8.0 now requires, so they must go through.
+        let (sh, _dir) = v2_echo_sourcehound();
+        for tool in [
+            "cloakctl.open",
+            "cloakctl.navigate",
+            "cloakctl.read",
+            "cloakctl.act",
+            "cloakctl.cdp",
+        ] {
+            let echoed = sh
+                .call(
+                    tool,
+                    json!({ "profile": "operant", "url": "https://example.com" }),
+                )
+                .await
+                .unwrap_or_else(|e| panic!("a v2 server must still answer {tool}: {e}"));
+            assert_eq!(echoed["echoed_tool"], tool);
+        }
+    }
+
+    #[test]
+    fn an_unlisted_name_does_not_prove_unavailability() {
+        // The invariant the outage inverted: a non-empty advertised set that
+        // omits the name says nothing about whether the server answers it.
+        let advertised = v2_advertised();
+        for tool in [TOOL_SEARCH, TOOL_SCRAPE, TOOL_EXTRACT, TOOL_CRAWL] {
+            assert!(
+                !advertised.contains(tool),
+                "sanity: {tool} really is unlisted on v2"
+            );
+        }
+    }
+
+    #[test]
+    fn the_servers_own_unknown_tool_verdict_is_recognized() {
+        // sourcehound answers an unknown tool with isError + "unknown tool".
+        // That verdict - not the advertised set - is what carries the hint,
+        // and it has to be read off the RAW result because unwrap_tool_result
+        // turns any isError into an Err before this predicate would see it.
+        for raw in [
+            json!({ "error": "unknown tool: web.crawl", "kind": "not_found", "isError": true }),
+            json!({
+                "content": [{ "type": "text", "text": "unknown tool: web.scrape" }],
+                "isError": true,
+            }),
+        ] {
+            assert!(is_unknown_tool_error(&raw), "must recognize: {raw}");
+        }
+    }
+
+    #[test]
+    fn a_real_error_is_not_an_unknown_tool() {
+        // The inverse: a genuine server failure must not read as "unknown
+        // tool", or a network or parse error would tell the operator to edit
+        // their sourcehound groups. Only the name-absence verdict does that.
+        for raw in [
+            json!({ "content": [{ "type": "text", "text": "engine timeout" }], "isError": true }),
+            json!({ "content": [{ "type": "text", "text": "{\"error\":\"DNS failure\"}" }], "isError": true }),
+        ] {
+            assert!(
+                !is_unknown_tool_error(&raw),
+                "a real error must not be mistaken for an absent name: {raw}"
+            );
+        }
+        // And a successful payload never reads as one, whatever it holds.
+        let ok = json!({
+            "structuredContent": { "success": true, "markdown": "# Example Domain" }
+        });
+        assert!(!is_unknown_tool_error(&ok));
+    }
+
+    #[tokio::test]
+    async fn a_v2_server_crawl_reroutes_to_the_composite() {
+        // `web.crawl` is the one v1 name that genuinely moved: v2 folds it
+        // into `crawl`. The tool must send `crawl` (what the server lists),
+        // still report as `web_crawl`, and still forward operant's bounds.
+        let (sh, _dir) = v2_echo_sourcehound();
+        // Force the handshake so the advertised set is read.
+        let _ = sh
+            .call(TOOL_SEARCH, json!({ "query": "probe" }))
+            .await
+            .expect("probe call");
+        assert_eq!(sh.crawl_wire_name().await, "crawl");
+        let result = WebCrawlTool(sh)
+            .execute(
+                json!({ "url": "https://example.com", "maxDepth": 3, "maxPages": 7 }),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(result.success, "crawl failed: {:?}", result.error);
+        let content = result.content.to_string();
+        assert!(
+            content.contains("\"echoed_tool\":\"crawl\""),
+            "crawl must be re-routed to the v2 composite: {content}"
+        );
+        assert!(content.contains("\"max_depth\":3"), "{content}");
+        assert!(content.contains("\"max_pages\":7"), "{content}");
+    }
+
+    #[tokio::test]
+    async fn a_v1_server_crawls_under_the_original_name() {
+        // The re-route must not fire on a v1 server, or a stock v1
+        // sourcehound would start failing every crawl.
+        let (sh, _dir) = echo_sourcehound();
+        let _ = sh
+            .call(TOOL_SEARCH, json!({ "query": "probe" }))
+            .await
+            .expect("probe call");
+        assert_eq!(sh.crawl_wire_name().await, TOOL_CRAWL);
+        let result = WebCrawlTool(sh)
+            .execute(
+                json!({ "url": "https://example.com", "maxDepth": 2, "maxPages": 5 }),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(result.success, "crawl failed: {:?}", result.error);
+        assert!(
+            result.content.to_string().contains("web.crawl"),
+            "{}",
+            result.content
+        );
+    }
+
+    #[tokio::test]
+    async fn crawl_wire_name_before_spawn_is_the_v1_name() {
+        // Unresolved advertised set: keep the v1 name rather than guessing.
+        let (sh, _dir) = v2_echo_sourcehound();
+        assert_eq!(sh.crawl_wire_name().await, TOOL_CRAWL);
     }
 
     #[test]
