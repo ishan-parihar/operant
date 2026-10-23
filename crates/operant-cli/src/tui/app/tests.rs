@@ -2191,6 +2191,53 @@ fn todo_tool_result_populates_the_live_store_and_todos_command_toggles_the_band(
     );
 }
 
+/// The staged plan must survive the whole trip, not just the data layer.
+///
+/// Before iter-1193 the todo tool could not even name a group, so the
+/// card's group headers were unreachable. Now the tool models `phase` and
+/// `lane` (the words a plan is written in) and the card renders them as
+/// stages; this asserts they arrive at the TUI through the SAME
+/// `ToolComplete(todo)` event every real turn delivers, rather than only
+/// through a hand-built `TodoItem`.
+#[test]
+fn a_staged_todo_result_lands_on_app_with_its_phase_and_lane() {
+    let mut app = make_app();
+    let content = serde_json::json!({
+        "todos": [
+            { "id": "1", "content": "Prep the tree", "status": "completed",
+              "phase": 1, "lane": "parser" },
+            { "id": "2", "content": "Wire the lexer", "status": "in_progress",
+              "phase": 2, "lane": "parser" },
+            { "id": "3", "content": "Shade the demo", "status": "pending",
+              "phase": 2, "lane": "art" }
+        ]
+    })
+    .to_string();
+    app.handle_agent_event(AgentEvent::ToolComplete {
+        result: operant_core::tools::ToolResult {
+            tool_call_id: "call_todo_staged".to_string(),
+            name: "todo".to_string(),
+            success: true,
+            content,
+            error: None,
+            timed_out: false,
+        },
+    });
+    assert_eq!(app.todos.len(), 3, "the whole list must land on App");
+    assert_eq!(app.todos[0].phase, Some(1), "{todos:?}", todos = app.todos);
+    assert_eq!(app.todos[1].phase, Some(2));
+    assert_eq!(
+        app.todos[0].group.as_deref(),
+        Some("parser"),
+        "the tool's `lane` is the card's group"
+    );
+    assert_eq!(
+        app.todos[2].group.as_deref(),
+        Some("art"),
+        "a second lane inside the same phase stays its own lane"
+    );
+}
+
 #[test]
 fn thinking_display_defaults_on_and_the_command_toggles_it() {
     let _guard = crate::tui::operant_app::config_shim::reasoning_override_test_guard();
