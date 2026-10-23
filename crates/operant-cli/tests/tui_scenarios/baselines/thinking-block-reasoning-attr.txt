@@ -24,7 +24,7 @@
 
  Here is the answer.
 
-Reasoning blocks expanded by default.
+Thinking display is currently Current. off = never show thinking; full = keep every trace; current = show this turn's tr
 1>
                                                                           ~ 4/200k ▱▱▱▱▱▱▱▱▱▱ 0% API key Offline Capture
 

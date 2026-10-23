@@ -154,20 +154,32 @@ impl App {
     /// Pin the current position as the reader's deliberate choice, so later
     /// reflow keeps it still.
     ///
-    /// `prev_offset` is the value from before the key handler moved it. The row
-    /// about to be painted is `painted_row + prev_offset - new_offset`, derived
-    /// from the row the last frame painted — no need for the transcript's total
-    /// height, which is only measurable at render time.
+    /// Called after a key handler moved the offset. `prev_offset` is the value
+    /// from before it moved; it is kept in the signature because every caller
+    /// has it in hand and it names the moment the pin is taken, but the pin is
+    /// the row the NEXT frame paints (see the body).
     pub(crate) fn note_user_scroll(&mut self, prev_offset: usize) {
         if self.auto_scroll {
             // Pinned to the tail: auto-follow already owns the position, so
             // there is nothing to hold still.
             return;
         }
-        let painted = self.last_render_scroll_offset.get() as usize;
-        let top_row = painted
-            .saturating_add(prev_offset)
-            .saturating_sub(self.scroll_offset);
+        // Pin the row the reader is parked on: while paused the render path
+        // publishes the reader's OWN offset as that row (`ui_viewport`:
+        // `scroll = user_scroll` when `auto_scroll_paused()`), so it is the
+        // offset the key handler has just set.
+        //
+        // The arithmetic this replaced (`painted + prev_offset -
+        // scroll_offset`) is what the 2026-10-22 scroll-ladder follow-up
+        // measured failing: with `painted` and the offset in step it collapsed
+        // toward 0 as the offset grew, and the growth correction in
+        // `reconcile_scroll_anchor` read that whole distance as content that
+        // had appeared above the reader. The reader's third PageUp landed them
+        // on the tail and every press after that was clamped away — measured on
+        // the headless simulator: 1 PageUp L001-L083, 2 L014-L126, 3 L101-L200
+        // and no further motion however many presses followed.
+        let _ = prev_offset; // retained for the callers that have it in hand
+        let top_row = self.scroll_offset;
         let applied_offset = self.scroll_offset;
         self.scroll_memory.anchor = Some(ScrollAnchor {
             top_row,
@@ -307,7 +319,26 @@ impl App {
         if growth == 0 {
             return;
         }
-        let corrected = scrolled.saturating_add(growth);
+        // ---- The correction may not overshoot the transcript -------------
+        //
+        // The pin can name a row above the whole transcript when the reader's
+        // first PageUp follows a tail-following frame (that frame published
+        // `max_scroll`, which `resolve_tail_follow_scroll` returns). Uncapped,
+        // the correction reads that distance as content that appeared above
+        // the reader and lands the offset on max_scroll: the view jumps to the
+        // tail on the reader's OWN key press, and every PageUp after that is
+        // clamped away, so the ladder looks dead (2026-10-22 scroll-ladder
+        // follow-up, measured before the cap: 1 PageUp L001-L083, 2 L014-L126,
+        // 3 L101-L200 and unchanged for every press after).
+        //
+        // `last_max_scroll()` is what the frame just measured, so it is the true
+        // ceiling for this frame. A pin inside the transcript is never touched:
+        // growth that keeps the pinned row in view never reaches it.
+        let mut corrected = scrolled.saturating_add(growth);
+        let live_max = crate::tui::operant_ui::last_max_scroll();
+        if live_max > 0 {
+            corrected = corrected.min(live_max);
+        }
         self.scroll_offset = corrected;
         mem.anchor = Some(ScrollAnchor {
             top_row: anchor.top_row,
