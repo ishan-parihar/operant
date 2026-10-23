@@ -64,8 +64,12 @@ pub fn intent_schema_property() -> Value {
 /// Applied centrally at the registry boundary rather than per tool, so every
 /// tool — including MCP proxies whose schemas arrive from a foreign server —
 /// asks the model for an intent without each tool wiring it manually. The
-/// MCP proxy strips the parameter before forwarding (see
-/// `tools/mcp_tool.rs`), so an undeclared parameter never reaches a server.
+/// MCP proxy strips the parameter before forwarding (see the `McpTool`
+/// adapter's `execute` in `crate::mcp`, which consults the server's own
+/// `input_schema`), so an undeclared parameter never reaches a server.
+///
+/// The file `crate::tools::mcp_tool` is the agent-facing `mcp_management`
+/// tool, a different surface; it neither forwards arguments nor strips.
 ///
 /// Ported from jcode's `ensure_intent_in_schema`
 /// (`jcode-tool-core/src/lib.rs:48-90`).
