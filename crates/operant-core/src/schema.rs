@@ -50,11 +50,32 @@ pub const TOOL_INTENT_DESCRIPTION: &str =
 /// tree (the TUI and the gateway read it); the tool itself ignores it.
 pub const TOOL_INTENT_KEY: &str = "intent";
 
+/// The escape hatch for a result withheld for cost. Deliberately terse: it
+/// rides on every tool schema on every request, so each word is paid forever.
+/// The full explanation belongs in the refusal message, which is shown only
+/// when the withheld result actually appears.
+pub const ACCEPT_LARGE_OUTPUT_DESCRIPTION: &str =
+    "Re-run accepting the stated token cost of a withheld result.";
+
+/// The parameter name that turns "refused for cost" into "re-run and pay".
+pub const ACCEPT_LARGE_OUTPUT_KEY: &str = "accept_large_output";
+
 /// JSON Schema fragment for the `intent` property.
 pub fn intent_schema_property() -> Value {
     json!({
         "type": "string",
         "description": TOOL_INTENT_DESCRIPTION,
+    })
+}
+
+/// JSON Schema fragment for the `accept_large_output` property. Optional, so
+/// `ensure_intent_in_schema` adds it to `properties` and deliberately NOT to
+/// `required`: a tool that would never withhold a result still documents the
+/// hatch, and a model that never needs it simply never sets it.
+pub fn accept_large_output_schema_property() -> Value {
+    json!({
+        "type": "boolean",
+        "description": ACCEPT_LARGE_OUTPUT_DESCRIPTION,
     })
 }
 
@@ -98,6 +119,19 @@ pub fn ensure_intent_in_schema(mut schema: Value) -> Value {
     properties
         .entry(TOOL_INTENT_KEY)
         .or_insert_with(intent_schema_property);
+    // Upstream adds this in the SAME pass as the intent: "Any tool can produce
+    // a result too large to return, so documenting it per tool would mean
+    // editing dozens of schemas and missing MCP proxies entirely"
+    // (`jcode-tool-core/src/lib.rs`). operant had no such machinery before
+    // iter-1202, so the intent contract was ported and the cost hatch beside it
+    // was left behind — a schema that asked for a label but never offered the
+    // escape hatch upstream documents on every tool.
+    //
+    // Optional by design: added to `properties` and deliberately left out of
+    // `required`, so an unphased call keeps working exactly as before.
+    properties
+        .entry(ACCEPT_LARGE_OUTPUT_KEY)
+        .or_insert_with(accept_large_output_schema_property);
 
     match object.get_mut("required") {
         Some(Value::Array(required)) => {
@@ -340,6 +374,21 @@ impl ToolSchema {
                                     *val = parsed;
                                 }
                             }
+                            // Try to coerce string to boolean if expected type is
+                            // boolean. Gateways routinely stringify every scalar
+                            // ("true"/"false"), and a boolean flag read with
+                            // `as_bool()` on a string returns None — which reads as
+                            // "absent", so the flag silently does nothing. The
+                            // shared `accept_large_output` property added by
+                            // `ensure_intent_in_schema` is boolean, so every tool
+                            // now carries a field that can be written this way.
+                            else if expected_types.contains(&"boolean") {
+                                match s.trim().to_ascii_lowercase().as_str() {
+                                    "true" | "yes" | "1" => *val = json!(true),
+                                    "false" | "no" | "0" | "" => *val = json!(false),
+                                    _ => {}
+                                }
+                            }
                         }
                     }
                 }
@@ -556,6 +605,47 @@ mod tests {
     }
 
     #[test]
+    fn ensure_intent_also_documents_the_cost_escape_hatch_upstream_carries() {
+        // iter-1202: a parity diff against upstream `ensure_intent_in_schema`
+        // found operant had ported the intent half and left the
+        // `accept_large_output` half behind. Upstream adds it in the SAME pass —
+        // "Any tool can produce a result too large to return, so documenting it
+        // per tool would mean editing dozens of schemas and missing MCP proxies
+        // entirely" (`jcode-tool-core/src/lib.rs`). This pins both halves.
+        let augmented = ensure_intent_in_schema(json!({
+            "type": "object",
+            "properties": { "command": { "type": "string" } },
+            "required": ["command"]
+        }));
+        assert_eq!(
+            augmented["properties"]["accept_large_output"]["description"],
+            json!(ACCEPT_LARGE_OUTPUT_DESCRIPTION),
+            "the hatch must be documented on every tool, as upstream does"
+        );
+        assert_eq!(
+            augmented["properties"]["accept_large_output"]["type"],
+            json!("boolean")
+        );
+        // The other half of upstream's semantics: the hatch is OPTIONAL, so it
+        // must never be pushed into `required`. A model that never meets a
+        // withheld result never sets it, and a schema that demanded it would
+        // force every call to pay attention to a case that does not arise.
+        let required = augmented["required"]
+            .as_array()
+            .expect("required is a list") as &Vec<Value>;
+        assert!(
+            !required
+                .iter()
+                .any(|v| v.as_str() == Some(ACCEPT_LARGE_OUTPUT_KEY)),
+            "accept_large_output is optional and must stay out of required: {required:?}"
+        );
+        assert!(
+            required.iter().any(|v| v.as_str() == Some(TOOL_INTENT_KEY)),
+            "the intent itself is still required, as before: {required:?}"
+        );
+    }
+
+    #[test]
     fn tool_schema_with_intent_augments_the_generated_parameters() {
         let schema = ToolSchema::from_type::<TestParams>("test_tool", "A test tool").with_intent();
         assert_eq!(
@@ -662,6 +752,30 @@ mod tests {
         assert!(
             freq_body.contains("get_schemas().await"),
             "get_schemas_for_request must build on get_schemas, which augments"
+        );
+    }
+
+    #[test]
+    fn a_stringified_boolean_reaches_the_tool_as_a_boolean() {
+        // Gateways stringify scalars, so `accept_large_output: "true"` arrives
+        // as a string. Read with `as_bool()` a string yields None, which reads
+        // as "absent" — the flag silently does nothing. The coercion at the
+        // validation seam is what makes the shared boolean property usable.
+        let published = ToolSchema::from_type::<TestParams>("test_tool", "T").with_intent();
+        assert_eq!(
+            published.parameters["properties"]["accept_large_output"]["type"],
+            json!("boolean")
+        );
+        let mut args = json!({
+            "query": "q",
+            "intent": "why",
+            "accept_large_output": "TRUE",
+        });
+        published.sanitize_args(&mut args);
+        assert_eq!(
+            args["accept_large_output"],
+            json!(true),
+            "a stringified true must become a real boolean"
         );
     }
 }

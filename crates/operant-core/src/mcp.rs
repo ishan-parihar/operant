@@ -1895,12 +1895,21 @@ impl OperantTool for McpTool {
     }
 }
 
-/// Remove the display-only `intent` key from tool-call arguments before they
-/// reach a tool that never declared it. Any other shape rides through
+/// Remove the operant-injected display keys from tool-call arguments before
+/// they reach a tool that never declared them. Any other shape rides through
 /// untouched.
+///
+/// `intent` is the model's display label; `accept_large_output` is the local
+/// cost escape hatch. Both are injected centrally by `crate::schema`, so both
+/// must be stripped locally: a strict MCP server rejects a parameter its own
+/// schema never declared, and forwarding the hatch would tell a foreign server
+/// to spend tokens on operant's behalf — a side effect it has no way to know
+/// about. Ported from jcode's `take_accept_large_output`
+/// (`jcode-base/src/mcp/tool.rs`), which strips the pair in the same way.
 pub(crate) fn strip_intent(mut args: Value) -> Value {
     if let Some(object) = args.as_object_mut() {
         object.remove(crate::schema::TOOL_INTENT_KEY);
+        object.remove(crate::schema::ACCEPT_LARGE_OUTPUT_KEY);
     }
     args
 }
@@ -3230,5 +3239,48 @@ while True:
             "watchdog must reconnect the dead server exactly once"
         );
         handle.abort();
+    }
+
+    #[test]
+    fn the_mcp_strip_removes_every_locally_injected_key() {
+        // iter-1202 added `accept_large_output` to the central schema pass, so
+        // an MCP proxy would otherwise forward it to a foreign server — the
+        // exact outcome the strip comment forbids. Both injected keys must go
+        // unless the server declares them itself.
+        let args = serde_json::json!({
+            "query": "hello",
+            "intent": "why this call",
+            "accept_large_output": true,
+            "belongs_to_the_server": 1,
+        });
+        let stripped = strip_intent(args);
+        let object = stripped.as_object().expect("stays an object");
+        assert!(!object.contains_key("intent"), "{object:?}");
+        assert!(
+            !object.contains_key(crate::schema::ACCEPT_LARGE_OUTPUT_KEY),
+            "the cost hatch is operant's own and must never reach a foreign server: {object:?}"
+        );
+        assert_eq!(object.get("query"), Some(&serde_json::json!("hello")));
+        assert_eq!(
+            object.get("belongs_to_the_server"),
+            Some(&serde_json::json!(1)),
+            "the server's own arguments ride through untouched"
+        );
+    }
+
+    #[test]
+    fn the_mcp_strip_is_a_no_op_on_an_empty_calls_argument_set() {
+        // Some servers take no arguments at all; the strip must not invent an
+        // object on its way through.
+        assert_eq!(
+            strip_intent(serde_json::Value::Null),
+            serde_json::Value::Null
+        );
+        let arr = strip_intent(serde_json::json!([1, 2]));
+        assert_eq!(
+            arr,
+            serde_json::json!([1, 2]),
+            "non-object shapes ride through"
+        );
     }
 }
