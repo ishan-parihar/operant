@@ -125,7 +125,6 @@ impl App {
             has_credentials,
             effort_level: initial_effort,
             agent_mode: None,
-            agent_mode_changed: false,
             agent_status: Vec::new(),
             cursor_pos: 0,
             auto_scroll: true,

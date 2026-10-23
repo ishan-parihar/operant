@@ -566,4 +566,102 @@ mod tests {
         let required = schema.parameters["required"].as_array().expect("required");
         assert!(required.iter().any(|v| v.as_str() == Some("intent")));
     }
+
+    #[test]
+    fn the_models_intent_survives_the_validation_seam_that_uses_a_bare_schema() {
+        // The registry publishes schemas through `with_intent()` (the central
+        // choke point), but the agent loop validates arguments against the
+        // tool's OWN schema at `agent/stream.rs` (`tool.schema()`), which
+        // carries no intent property. That is the seam iter-1189 depends on
+        // most: the model must be able to send `intent` and have it reach the
+        // tool call. If sanitize_args ever grew a rule that stripped keys the
+        // schema does not declare, every tool row would silently lose its
+        // label and nothing else would fail.
+        let published =
+            ToolSchema::from_type::<TestParams>("test_tool", "A test tool").with_intent();
+        let bare = ToolSchema::from_type::<TestParams>("test_tool", "A test tool");
+
+        let mut args = json!({
+            "query": "token estimation",
+            "intent": "How does token estimation work?",
+        });
+
+        // The bare schema (the one validation actually uses) does not declare
+        // `intent` — so this also pins that the key is NOT rejected.
+        assert!(
+            bare.parameters["properties"].get("intent").is_none(),
+            "the validation schema is the tool's own, unprefixed schema"
+        );
+        let validated = bare.validate_args(&args);
+        assert!(
+            validated.is_ok(),
+            "an undeclared key must not fail validation"
+        );
+        bare.sanitize_args(&mut args);
+        assert_eq!(
+            args["intent"],
+            json!("How does token estimation work?"),
+            "the intent must survive sanitize_args unchanged"
+        );
+        assert_eq!(
+            args["query"],
+            json!("token estimation"),
+            "the real arg is untouched"
+        );
+
+        // Sanity that the published form is the one that carried the property,
+        // so this test is not passing vacuously against a bare schema.
+        assert_eq!(
+            published.parameters["properties"]["intent"]["description"],
+            json!(TOOL_INTENT_DESCRIPTION)
+        );
+    }
+
+    #[test]
+    fn every_registry_publish_variant_attaches_the_intent() {
+        // iter-1189 claimed four schema-publishing variants were routed
+        // through the choke point. This pins the claim structurally: each
+        // variant's name appears beside a `.with_intent()` in the source, so
+        // a new publish path added without the augmentation fails here
+        // instead of silently shipping tool rows with no description.
+        let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/tools.rs"))
+            .expect("tools.rs is readable");
+
+        for variant in [
+            "get_schemas_all",
+            "get_schemas",
+            "get_available_schemas_filtered",
+        ] {
+            let start = src
+                .find(&format!("pub async fn {variant}"))
+                .unwrap_or_else(|| panic!("{variant} not found in tools.rs"));
+            // Find the body up to the next `pub async fn` so we only inspect
+            // this variant's implementation, not a neighbour's.
+            let end = src[start + 1..]
+                .find("pub async fn")
+                .map(|i| start + 1 + i)
+                .unwrap_or(src.len());
+            let body = &src[start..end];
+            assert!(
+                body.contains(".with_intent()"),
+                "{variant} publishes schemas without the shared intent augmentation"
+            );
+        }
+
+        // `get_schemas_for_request` inherits it transitively through
+        // `get_schemas` plus the tool_search assembly, so assert that wiring
+        // explicitly rather than looking for a direct call.
+        let freq_start = src
+            .find("pub async fn get_schemas_for_request")
+            .expect("get_schemas_for_request not found");
+        let freq_body = &src[freq_start
+            ..src[freq_start + 1..]
+                .find("pub async fn")
+                .map(|i| freq_start + 1 + i)
+                .unwrap_or(src.len())];
+        assert!(
+            freq_body.contains("get_schemas().await"),
+            "get_schemas_for_request must build on get_schemas, which augments"
+        );
+    }
 }

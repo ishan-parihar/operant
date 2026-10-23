@@ -273,9 +273,6 @@ pub struct App {
     /// Speech mode intensity: "lite", "full", "ultra".
     /// Current agent mode name: "build", "plan", "explore", etc.
     pub agent_mode: Option<String>,
-    /// Set when the agent mode changes (e.g. via `/personality`) so the main
-    /// loop can update the query config and tool list to match.
-    pub agent_mode_changed: bool,
     pub agent_status: Vec<(String, String)>,
 
     // Cursor position within input (byte offset)

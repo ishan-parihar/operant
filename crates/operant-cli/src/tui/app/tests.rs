@@ -213,6 +213,95 @@ fn test_normalize_char_shift_with_other_modifiers() {
     );
 }
 
+// /personality sets `App.agent_mode`, which is DISPLAY metadata for the
+// turn (the footer/header snapshot). It carries no live signal: an
+// `agent_mode_changed` bool once existed to tell "the run loop" to update the
+// query config, but no consumer was ever written, and the comment above the
+// arm asserted one. Both the bool and the claim are gone. This test pins the
+// behaviour that remains and guards against resurrecting dead state.
+#[test]
+fn personality_sets_the_display_mode_and_declares_no_live_signal() {
+    let mut app = make_app();
+
+    assert!(app.handle_tui_command("personality", ""));
+    assert!(
+        app.agent_mode.is_none(),
+        "bare /personality reports the current value and must not set one"
+    );
+    assert!(
+        app.status_message
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Current personality"),
+        "bare args must report the current value, got {:?}",
+        app.status_message
+    );
+
+    assert!(app.handle_tui_command("personality", "concise"));
+    assert_eq!(
+        app.agent_mode.as_deref(),
+        Some("concise"),
+        "the personality string must land on App so the turn snapshot can read it"
+    );
+    assert!(
+        app.status_message
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Personality set to: concise"),
+        "the operator must get feedback the value changed"
+    );
+
+    // The value is display metadata, so it must reach the turn snapshot —
+    // that is the one consumer that actually exists.
+    assert_eq!(
+        app.current_agent_mode_snapshot(),
+        "concise",
+        "the turn snapshot reads agent_mode, so the change is observable there"
+    );
+}
+
+// Structural guard for the iter-1191 defect class on this field: a slash
+// command writing a bool no consumer reads. If next turn adds
+// `agent_mode_changed` back without a reader, this fails.
+//
+// It scans the non-test TUI sources only: a test that named the field to
+// guard against it would otherwise flag itself.
+#[test]
+fn no_app_field_is_written_by_a_command_and_read_by_nothing() {
+    fn read_all(dir: &std::path::Path, out: &mut String) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let is_test_dir = path.file_name().is_some_and(|n| n == "tests");
+            let is_test_file = path.file_name().is_some_and(|n| n == "tests.rs");
+            if path.is_dir() && !is_test_dir {
+                read_all(&path, out);
+            } else if path.extension().is_some_and(|x| x == "rs")
+                && !is_test_file
+                && let Ok(text) = std::fs::read_to_string(&path)
+            {
+                out.push_str(&text);
+                out.push('\n');
+            }
+        }
+    }
+
+    let mut sources = String::new();
+    let tui_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/tui");
+    read_all(&tui_root, &mut sources);
+
+    assert!(
+        !sources.contains("agent_mode_changed"),
+        "agent_mode_changed was removed as a signal with no consumer — do not re-add it"
+    );
+    assert!(
+        !sources.contains("the run loop to update the query config"),
+        "the false claim that /personality updates the query config must not return"
+    );
+}
+
 // (plan 04) rewritten: /mcp with args now runs the REAL subcommand through
 // the shell-out pattern (the old body returned false so `operant mcp auth`
 // typed as /mcp auth went to the MODEL). The panel opens only for bare /mcp.

@@ -1121,8 +1121,22 @@ impl App {
             // handler: `handle_reasoning_display_command`).
 
             // /personality — set agent personality from args.
-            // The actual personality string is consumed by the agent loop on
-            // the next turn (it reads app.agent_mode).
+            //
+            // What this actually does (corrected 2026-10-23): it sets
+            // `App.agent_mode`, which `turn_state::current_agent_mode_snapshot`
+            // reads for the turn's DISPLAY metadata (the per-turn footer / turn
+            // header). It does NOT reach the query config or the tool list —
+            // nothing bridges this field into the agent runtime, and
+            // `config.personality` is itself unread outside the doctor's
+            // advisory checks.
+            //
+            // The version that lived here before claimed the agent loop picked
+            // the value up on the following turn and updated its config, and it
+            // set a companion bool as the signal. No consumer was ever written
+            // for either, so the command changed a label on screen and nothing
+            // else; both the signal and the inaccurate claim were removed. A
+            // real bridge starts by giving the agent loop a consumer of
+            // `agent_mode` — not by adding another flag.
             "personality" => {
                 let trimmed = args.trim();
                 if trimmed.is_empty() {
@@ -1136,10 +1150,7 @@ impl App {
                         cur
                     ));
                 } else {
-                    // Set the new personality. agent_mode_changed=true signals
-                    // the run loop to update the query config on the next turn.
                     self.agent_mode = Some(trimmed.to_string());
-                    self.agent_mode_changed = true;
                     self.set_status_notice(format!("Personality set to: {}.", trimmed));
                 }
                 true
