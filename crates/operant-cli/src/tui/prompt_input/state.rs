@@ -42,6 +42,7 @@ impl PromptInputState {
             burst_undo: Vec::new(),
             burst_anchor: (String::new(), 0),
             burst_edits: 0,
+            pending_file_query: None,
         }
     }
 

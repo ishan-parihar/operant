@@ -228,8 +228,71 @@ impl App {
                 file_autocomplete_limit,
                 file_autocomplete_show_hidden,
             );
+            // Fuzzy tier (plan 2026-10-24 M3): the synchronous pass above
+            // produced the immediate directory listing; hand the recursive
+            // walk request to the blocking pool. Off in the headless sim —
+            // sim frames must stay deterministic.
+            self.maybe_spawn_file_suggest();
         }
         self.sync_legacy_prompt_fields();
+    }
+
+    /// Spawn the recursive fuzzy walk for the freshest `@` query, if any
+    /// (M3). The interim listing is already on screen from the synchronous
+    /// pass; this is the tier that finds NESTED matches.
+    pub(super) fn maybe_spawn_file_suggest(&mut self) {
+        if self.is_simulating {
+            return;
+        }
+        let Some(pending) = self.prompt_input.take_pending_file_query() else {
+            return;
+        };
+        let Ok(root) = std::env::current_dir() else {
+            return;
+        };
+        let include_hidden = self.settings.config.file_autocomplete_show_hidden_files;
+        self.spawn_file_suggest(crate::tui::prompt_input::FileSuggestJob {
+            token: pending.token,
+            query: pending.query,
+            root,
+            include_hidden,
+        });
+    }
+
+    /// Single-flight + newest-queued (OMP `#schedule` semantics): one walk
+    /// on the blocking pool at a time; a request arriving mid-flight
+    /// REPLACES the parked one instead of stacking behind it.
+    pub(super) fn spawn_file_suggest(&mut self, job: crate::tui::prompt_input::FileSuggestJob) {
+        if self.file_suggest_inflight {
+            self.file_suggest_queued = Some(job);
+            return;
+        }
+        self.file_suggest_inflight = true;
+        self.file_suggest_gen = self.file_suggest_gen.wrapping_add(1);
+        let generation = self.file_suggest_gen;
+        let (tx, rx) = tokio::sync::mpsc::channel(1);
+        self.file_suggest_rx = Some(rx);
+        tokio::task::spawn_blocking(move || {
+            let deadline = std::time::Instant::now()
+                + std::time::Duration::from_millis(crate::tui::file_discovery::FUZZY_DEADLINE_MS);
+            let entries = crate::tui::file_discovery::fuzzy_top(
+                &job.root,
+                &job.query,
+                crate::tui::file_discovery::FUZZY_RESULT_LIMIT,
+                crate::tui::file_discovery::WalkOptions {
+                    include_hidden: job.include_hidden,
+                },
+                deadline,
+            );
+            let suggestions = crate::tui::prompt_input::fuzzy_file_suggestions(&entries);
+            // The receiver may be gone (App dropped): a send failure just
+            // abandons the answer.
+            let _ = tx.blocking_send(crate::tui::prompt_input::FileSuggestResult {
+                generation,
+                token: job.token,
+                suggestions,
+            });
+        });
     }
 
     pub fn set_prompt_text(&mut self, text: String) {

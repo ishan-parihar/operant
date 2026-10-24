@@ -37,6 +37,12 @@ impl PromptInputState {
             file_autocomplete_show_hidden,
         );
 
+        // Fuzzy tier request (plan 2026-10-24 M3): the synchronous pass
+        // above is the IMMEDIATE listing; while an `@` token with a rankable
+        // tail is live, also describe the recursive walk for the App to
+        // spawn. Pure data — this layer spawns nothing.
+        self.pending_file_query = active_file_query(text_before_cursor);
+
         if self.suggestions.is_empty() {
             self.suggestion_index = None;
         } else {
@@ -46,6 +52,27 @@ impl PromptInputState {
                 .min(self.suggestions.len() - 1);
             self.suggestion_index = Some(idx);
         }
+    }
+
+    /// Take the fuzzy-tier request (M3): the App calls this right after
+    /// `update_suggestions` and spawns the walk it describes.
+    pub fn take_pending_file_query(&mut self) -> Option<PendingFileQuery> {
+        self.pending_file_query.take()
+    }
+
+    /// Replace the interim FileRef listing with the async fuzzy tier
+    /// (M3). An empty result keeps the interim listing — a walk that found
+    /// nothing new must not blank the popup the user is navigating.
+    pub fn replace_file_suggestions(&mut self, suggestions: Vec<TypeaheadSuggestion>) {
+        if suggestions.is_empty() {
+            return;
+        }
+        self.suggestions = suggestions;
+        let idx = self
+            .suggestion_index
+            .unwrap_or(0)
+            .min(self.suggestions.len() - 1);
+        self.suggestion_index = Some(idx);
     }
 
     /// Select the next suggestion.
@@ -153,6 +180,7 @@ impl PromptInputState {
             self.cursor = new_cursor;
             self.suggestions.clear();
             self.suggestion_index = None;
+            self.pending_file_query = None;
             self.update_token_estimate();
         }
     }
@@ -163,6 +191,7 @@ impl PromptInputState {
         self.cursor = self.text.len();
         self.history_pos = None;
         self.suggestion_index = None;
+        self.pending_file_query = None;
         self.update_token_estimate();
     }
 }

@@ -577,6 +577,19 @@ pub struct App {
     pub branch_list_rx: Option<
         tokio::sync::mpsc::Receiver<Result<Vec<crate::tui::session_branching::BranchInfo>, String>>,
     >,
+    /// Fuzzy file-suggestion tier (plan 2026-10-24 M3). Receiver for the
+    /// walk running on the blocking pool; `drain_file_suggest` applies the
+    /// result on the next frame when the `@` token it answered is still
+    /// live. One flight at a time, newest queued (OMP single-flight).
+    pub file_suggest_rx:
+        Option<tokio::sync::mpsc::Receiver<crate::tui::prompt_input::FileSuggestResult>>,
+    /// Generation of the in-flight/last file-suggest job; bumps per spawn.
+    pub file_suggest_gen: u64,
+    /// Whether a file-suggest job is currently on the blocking pool.
+    pub file_suggest_inflight: bool,
+    /// The newest request parked while another is in flight (single-flight
+    /// + newest-queued: older queued requests are REPLACED, not stacked).
+    pub file_suggest_queued: Option<crate::tui::prompt_input::FileSuggestJob>,
     /// Credential store for provider API keys and OAuth tokens.
     pub auth_store: crate::tui::adapter_types::AuthStore,
     /// Connect-a-provider dialog (/connect command).
@@ -1131,6 +1144,10 @@ impl App {
 
             // Drain background session-list results.
             self.drain_session_list();
+
+            // Fuzzy file-suggestion tier (plan 2026-10-24 M3): apply the
+            // finished walk when its token is still live.
+            self.drain_file_suggest();
 
             // Drain the fork tree for the Ctrl+B branch browser.
             self.drain_branch_list();

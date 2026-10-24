@@ -2,7 +2,7 @@
 
 use crate::tui::slash_usage::{UsageStore, rank_commands};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TypeaheadSource {
     SlashCommand,
     FileRef,
@@ -22,11 +22,91 @@ pub enum AcceptForSubmitOutcome {
 }
 
 /// A single typeahead suggestion.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeaheadSuggestion {
     pub text: String,
     pub description: String,
     pub source: TypeaheadSource,
+}
+
+/// A fuzzy-tier request the pure prompt-input layer hands to the App
+/// (plan 2026-10-24 M3). The state layer cannot spawn tasks; it only
+/// describes what to rank. The App's answer is applied only while the
+/// `@` token is still exactly [`PendingFileQuery::token`].
+#[derive(Debug, Clone)]
+pub struct PendingFileQuery {
+    /// The full live `@` token (including the `@`) the answer must still
+    /// match on arrival, else the result is dropped.
+    pub token: String,
+    /// The fuzzy query: the token's tail after the last `/` (the leading
+    /// directory part rides the result paths; the tail is what ranks).
+    pub query: String,
+}
+
+/// One fuzzy walk job for the blocking pool (App-side, M3).
+#[derive(Debug, Clone)]
+pub struct FileSuggestJob {
+    pub token: String,
+    pub query: String,
+    pub root: std::path::PathBuf,
+    pub include_hidden: bool,
+}
+
+/// The walk's answer, tagged with its generation and source token (M3).
+pub struct FileSuggestResult {
+    pub generation: u64,
+    pub token: String,
+    pub suggestions: Vec<TypeaheadSuggestion>,
+}
+
+/// Map ranked walk entries to popup suggestions (M3). Directories render
+/// with a trailing `/` (the popup's chain-on-accept convention).
+pub fn fuzzy_file_suggestions(
+    entries: &[crate::tui::file_discovery::ScoredEntry],
+) -> Vec<TypeaheadSuggestion> {
+    entries
+        .iter()
+        .map(|e| TypeaheadSuggestion {
+            text: format!("@{}{}", e.rel_path, if e.is_dir { "/" } else { "" }),
+            description: if e.is_dir { "directory" } else { "file" }.to_string(),
+            source: TypeaheadSource::FileRef,
+        })
+        .collect()
+}
+
+/// The live `@` token at a word boundary ending at the end of `input`
+/// (`@src/ma` → the full `@src/ma`), or `None` (M3; mirrors the boundary
+/// rule of `compute_file_suggestions`).
+pub fn active_file_token(input: &str) -> Option<&str> {
+    let at_idx = input.rfind('@')?;
+    let at_word_boundary = at_idx == 0
+        || input[..at_idx]
+            .chars()
+            .last()
+            .is_some_and(char::is_whitespace);
+    if !at_word_boundary {
+        return None;
+    }
+    Some(&input[at_idx..])
+}
+
+/// The fuzzy-tier request for the current input, or `None` when the popup
+/// is not in an `@` file token or the tail after the last `/` is empty
+/// (pure listing mode — the synchronous immediate listing suffices).
+pub fn active_file_query(input: &str) -> Option<PendingFileQuery> {
+    if input.trim_start().starts_with('/') {
+        return None; // slash-command input: no file tier
+    }
+    let token = active_file_token(input)?;
+    let raw = &token[1..];
+    let query = raw.rsplit('/').next().unwrap_or(raw);
+    if query.is_empty() {
+        return None;
+    }
+    Some(PendingFileQuery {
+        token: token.to_string(),
+        query: query.to_string(),
+    })
 }
 
 /// Compute typeahead suggestions for the current input.
@@ -209,14 +289,14 @@ pub(super) fn compute_file_suggestions(
 /// - `"~"` → suggest "~/" if it exists
 /// - `"~/"` → files in home with names only
 ///
-/// Note: calls `fs::read_dir` synchronously on every invocation; may stall on slow/network
-/// filesystems. Consider debouncing at the call site if this becomes a problem.
+/// The immediate tier is a single `read_dir` of one directory (fast); the
+/// recursive fuzzy tier is requested separately via [`active_file_query`]
+/// and arrives asynchronously (plan 2026-10-24 M3).
 fn suggest_files(
     prefix: &str,
     max_suggestions: usize,
     show_hidden: bool,
 ) -> Vec<TypeaheadSuggestion> {
-    use std::fs;
     use std::path::PathBuf;
 
     let mut suggestions = Vec::new();
@@ -275,99 +355,60 @@ fn suggest_files(
         }
     };
 
-    // List files in the directory
-    if let Ok(entries) = fs::read_dir(&search_dir) {
-        let mut files: Vec<_> = entries
-            .filter_map(|e| {
-                e.ok().and_then(|entry| {
-                    let path = entry.path();
-                    let name = path
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .map(|s| s.to_string())?;
-
-                    // Filter by partial name (case-insensitive)
-                    if !partial_name.is_empty()
-                        && !name
-                            .to_lowercase()
-                            .starts_with(&partial_name.to_lowercase())
-                    {
-                        return None;
-                    }
-
-                    // Filter hidden files unless user explicitly types a dot or show_hidden_files is enabled
-                    if !show_hidden
-                        && name.starts_with('.')
-                        && !partial_name.to_lowercase().starts_with('.')
-                    {
-                        return None;
-                    }
-
-                    // Detect if this is a symlink or junction link
-                    let is_symlink = entry
-                        .file_type()
-                        .ok()
-                        .map(|ft| ft.is_symlink())
-                        .unwrap_or(false);
-                    let is_dir = path.is_dir();
-
-                    Some((name, is_dir, is_symlink, path))
-                })
-            })
-            .collect();
-
-        files.sort_by(|a, b| {
-            // Directories first, then alphabetically
-            match (b.1, a.1) {
-                (true, false) => std::cmp::Ordering::Greater,
-                (false, true) => std::cmp::Ordering::Less,
-                _ => a.0.cmp(&b.0),
-            }
-        });
-
-        for (name, is_dir, is_symlink, full_path) in files {
-            if suggestions.len() >= max_suggestions {
-                break;
-            }
-
-            if is_dir && !dir_has_visible_contents(&full_path, show_hidden) {
-                continue;
-            }
-
-            let is_listing_mode = prefix.ends_with('/');
-            let suggestion_text = if show_full_paths {
-                let full = search_dir.join(&name);
-                full.to_string_lossy().to_string() + if is_dir { "/" } else { "" }
-            } else if is_listing_mode {
-                // When listing a directory's contents, prepend the full prefix path
-                format!("{}{}{}", prefix, name, if is_dir { "/" } else { "" })
-            } else if !partial_name.is_empty() && prefix.ends_with(&partial_name) {
-                // When filtering in a subdirectory, prepend the parent path
-                let parent_path = &prefix[..prefix.len() - partial_name.len()];
-                format!("{}{}{}", parent_path, name, if is_dir { "/" } else { "" })
-            } else {
-                // Fallback: just use the matched filename
-                name.clone() + if is_dir { "/" } else { "" }
-            };
-
-            let description = if is_symlink {
-                if is_dir {
-                    "directory link".to_string()
-                } else {
-                    "file link".to_string()
-                }
-            } else if is_dir {
-                "directory".to_string()
-            } else {
-                "file".to_string()
-            };
-
-            suggestions.push(TypeaheadSuggestion {
-                text: format!("@{}", suggestion_text),
-                description,
-                source: TypeaheadSource::FileRef,
-            });
+    // List files in the directory — via the shared discovery listing
+    // (plan 2026-10-24 M2): prefix filter, hidden policy (dot-prefix
+    // unlock), `.git` skip, symlink stat, dirs-first order all live there
+    // now, one implementation for the interim tier and the M4 drill-down.
+    for listed in crate::tui::file_discovery::list_dir(
+        &search_dir,
+        &partial_name,
+        show_hidden,
+        max_suggestions,
+    ) {
+        if suggestions.len() >= max_suggestions {
+            break;
         }
+        let name = listed.name;
+        let is_dir = listed.is_dir;
+        let full_path = search_dir.join(&name);
+
+        if is_dir && !dir_has_visible_contents(&full_path, show_hidden) {
+            continue;
+        }
+
+        let is_listing_mode = prefix.ends_with('/');
+        let suggestion_text = if show_full_paths {
+            let full = search_dir.join(&name);
+            full.to_string_lossy().to_string() + if is_dir { "/" } else { "" }
+        } else if is_listing_mode {
+            // When listing a directory's contents, prepend the full prefix path
+            format!("{}{}{}", prefix, name, if is_dir { "/" } else { "" })
+        } else if !partial_name.is_empty() && prefix.ends_with(&partial_name) {
+            // When filtering in a subdirectory, prepend the parent path
+            let parent_path = &prefix[..prefix.len() - partial_name.len()];
+            format!("{}{}{}", parent_path, name, if is_dir { "/" } else { "" })
+        } else {
+            // Fallback: just use the matched filename
+            name.clone() + if is_dir { "/" } else { "" }
+        };
+
+        let description = if listed.is_symlink {
+            if is_dir {
+                "directory link".to_string()
+            } else {
+                "file link".to_string()
+            }
+        } else if is_dir {
+            "directory".to_string()
+        } else {
+            "file".to_string()
+        };
+
+        suggestions.push(TypeaheadSuggestion {
+            text: format!("@{}", suggestion_text),
+            description,
+            source: TypeaheadSource::FileRef,
+        });
     }
 
     suggestions

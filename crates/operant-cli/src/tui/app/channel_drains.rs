@@ -71,6 +71,38 @@ impl App {
         true
     }
 
+    /// Fuzzy file-suggestion results (plan 2026-10-24 M3): apply when the
+    /// generation is current AND the live `@` token still equals the token
+    /// the walk answered — anything else is stale (a keystroke already
+    /// refreshed the interim listing synchronously). Then launch the newest
+    /// parked job (single-flight handoff).
+    pub(super) fn drain_file_suggest(&mut self) -> bool {
+        let Some(mut rx) = self.file_suggest_rx.take() else {
+            return false;
+        };
+        let Ok(result) = rx.try_recv() else {
+            // Still in flight: put the receiver back for a later frame.
+            self.file_suggest_rx = Some(rx);
+            return false;
+        };
+        self.file_suggest_inflight = false;
+        let live_token = crate::tui::prompt_input::active_file_token(
+            &self.prompt_input.text[..self.prompt_input.cursor],
+        )
+        .map(str::to_string);
+        let applied = result.generation == self.file_suggest_gen
+            && live_token.as_deref() == Some(result.token.as_str())
+            && self.prompt_input.has_active_file_ref();
+        if applied {
+            self.prompt_input
+                .replace_file_suggestions(result.suggestions);
+        }
+        if let Some(job) = self.file_suggest_queued.take() {
+            self.spawn_file_suggest(job);
+        }
+        applied
+    }
+
     pub(super) fn drain_mcp_reconnect_status(&mut self) -> bool {
         let Some(ref mut rx) = self.mcp_reconnect_rx else {
             return false;

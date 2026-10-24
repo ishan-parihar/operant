@@ -27,8 +27,9 @@ mod tests;
 
 pub use kill_ring::KillRing;
 pub use typeahead::{
-    AcceptForSubmitOutcome, TypeaheadSource, TypeaheadSuggestion, compute_typeahead,
-    register_typeahead_names,
+    AcceptForSubmitOutcome, FileSuggestJob, FileSuggestResult, PendingFileQuery, TypeaheadSource,
+    TypeaheadSuggestion, active_file_query, active_file_token, compute_typeahead,
+    fuzzy_file_suggestions, register_typeahead_names,
 };
 pub use vim::{DotRepeatAction, VimFindKind, VimMode, VimPendingState, apply_vim_key};
 
@@ -207,6 +208,10 @@ pub struct PromptInputState {
     pub burst_anchor: (String, usize),
     /// Edits recorded since the last snapshot, via `record_edit`.
     pub burst_edits: usize,
+    /// Fuzzy file-suggestion request for the App to spawn (plan
+    /// 2026-10-24 M3). Set by `update_suggestions` while an `@` token is
+    /// live; taken by the App's `refresh_prompt_input`.
+    pub pending_file_query: Option<typeahead::PendingFileQuery>,
 }
 
 /// Snapshots retained by the burst undo. 64 bursts is ~500 keystrokes of

@@ -219,6 +219,10 @@ impl App {
             pending_title_save: None,
             session_list_rx: None,
             branch_list_rx: None,
+            file_suggest_rx: None,
+            file_suggest_gen: 0,
+            file_suggest_inflight: false,
+            file_suggest_queued: None,
             auth_store,
             connect_dialog: DialogSelectState::new("Connect a provider", provider_picker_items()),
             import_config_picker: DialogSelectState::new(

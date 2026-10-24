@@ -1767,3 +1767,86 @@ fn end_moves_to_line_end_not_buffer_end() {
         "End is line-scoped on multi-line drafts"
     );
 }
+
+// ---- async fuzzy tier (plan 2026-10-24 M3) ----------------------------
+
+#[test]
+fn active_file_query_extracts_token_and_tail() {
+    let q = active_file_query("check @src/ma").expect("query");
+    assert_eq!(q.token, "@src/ma");
+    assert_eq!(q.query, "ma", "the directory part rides the result paths");
+    let flat = active_file_query("see @main").expect("flat");
+    assert_eq!(flat.query, "main");
+}
+
+#[test]
+fn active_file_query_listing_modes_return_none() {
+    assert!(
+        active_file_query("@").is_none(),
+        "bare @: interim listing only"
+    );
+    assert!(
+        active_file_query("@src/").is_none(),
+        "trailing slash: listing"
+    );
+}
+
+#[test]
+fn active_file_query_boundary_and_slash_rules() {
+    assert!(active_file_query("email@example").is_none(), "mid-word @");
+    assert!(
+        active_file_query("/help @x").is_none(),
+        "slash-command input owns the popup"
+    );
+    assert!(active_file_query("one @two").is_some(), "space-separated @");
+    assert!(active_file_query("@x").is_some(), "buffer-start @");
+}
+
+#[test]
+fn update_suggestions_stages_the_fuzzy_request() {
+    let mut s = nav_state("open @crates/ope", "open @crates/ope".len());
+    let usage = UsageStore::default();
+    s.update_suggestions(&[("help", "h")], &usage, 20, false);
+    let pending = s.take_pending_file_query().expect("staged");
+    assert_eq!(pending.token, "@crates/ope");
+    assert_eq!(pending.query, "ope");
+    assert!(s.take_pending_file_query().is_none(), "take is one-shot");
+}
+
+#[test]
+fn replace_file_suggestions_keeps_interim_on_empty() {
+    let mut s = nav_state("@src", 4);
+    let usage = UsageStore::default();
+    s.update_suggestions(&[], &usage, 20, false);
+    let before = s.suggestions.clone();
+    s.replace_file_suggestions(Vec::new());
+    assert_eq!(
+        s.suggestions, before,
+        "empty fuzzy result must not blank the popup"
+    );
+}
+
+#[test]
+fn replace_file_suggestions_swaps_and_clamps_index() {
+    let mut s = nav_state("@src", 4);
+    s.suggestions = vec![
+        TypeaheadSuggestion {
+            text: "@a".into(),
+            description: String::new(),
+            source: TypeaheadSource::FileRef,
+        },
+        TypeaheadSuggestion {
+            text: "@b".into(),
+            description: String::new(),
+            source: TypeaheadSource::FileRef,
+        },
+    ];
+    s.suggestion_index = Some(1);
+    s.replace_file_suggestions(vec![TypeaheadSuggestion {
+        text: "@nested/deep/one.rs".into(),
+        description: "file".into(),
+        source: TypeaheadSource::FileRef,
+    }]);
+    assert_eq!(s.suggestions.len(), 1);
+    assert_eq!(s.suggestion_index, Some(0), "index clamped to the new list");
+}
