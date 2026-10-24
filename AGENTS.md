@@ -512,7 +512,7 @@ operant/
 │   ├── check.sh               # Wrapper that applies dev-env + cargo
 │   ├── self-test.sh           # Build + test + clippy + fmt sweep
 │   └── provision-build-deps.sh # One-time dependency provisioning
-├── Cargo.toml                 # Workspace members (11 crates, self-contained)
+├── Cargo.toml                 # Workspace members (9 crates, self-contained)
 ├── operant.example.toml       # Config template (7 gateway platforms)
 ├── TODO.md                    # Autonomous-mode task ledger
 ├── docs/audit/2026-06-19-BUGS.md # Open issues tracker (the live ledger; the 2026-08-03 snapshot is in docs/archive/BUGS.md)
@@ -707,22 +707,19 @@ monolith into focused sub-modules (`kill_ring`, `typeahead`, `vim`; commits
 dfcefae8 + ea70322c) and compiles clean with zero warnings. Treat it as normal
 shipped code.
 
-### Memory error handling (typed, anyhow-free)
+### Memory error handling (typed, anyhow-free — historical; crate removed 2026-10-24)
 
-`operant-memory` uses a **typed `Error`** (`crates/operant-memory/src/error.rs`,
-`thiserror`-style) with `Result<T>` = `Result<T, Error>` and a `MemoryContextExt`
-extension that mirrors `anyhow::Context`. `anyhow` was fully removed from the
-crate (including dev-deps). The cross-crate contract lives in `operant-api`:
-
-- `MemoryResult<T> = Result<T, MemoryError>` — the `Memory` trait seam
-  (re-exported from `operant-memory` root).
-- Backends (sqlite/qdrant/postgres/lucid/markdown/...) return the crate-local
-  typed `Result`; trait impls convert into `MemoryResult` via `From`.
-- Consumers keep `?` into `anyhow`-typed functions via `anyhow::Error::from`
-  blanket conversions (the typed error is concrete, so `?` just works).
-
-When touching memory code: return the typed `Error`, not `anyhow`; never add
-`anyhow` back as a dependency of `operant-memory`.
+The `operant-memory` crate this section described was DELETED in the
+iter-1214 dead-crate sweep: no crate declared it as a dependency and zero
+source files imported it (verified by grep across every manifest and
+`operant_memory::` across every source file) — the live memory path has
+been `operant-core`'s in-process `memory_wire` provider
+(`memory_wire.rs` + `memory_provider.rs`, the cargo git-dependency) since
+the legacy providers were removed. The typed-error doctrine itself
+stands for any future memory code: `thiserror`-style typed errors, no
+`anyhow` in library crates, and degrade-don't-die at the provider seam
+(`catch_unwind` boundary; a memory failure is a logged miss, never a
+dead turn).
 
 ---
 

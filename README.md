@@ -78,15 +78,15 @@ operant
 │   ├── operant-cli          TUI (ratatui) · commands · app adapter
 │   ├── operant-tools        built-in tool implementations
 │   ├── operant-providers    LLM provider adapters
-│   ├── operant-memory       memory backends (memory-wire — the one engine)
 │   ├── operant-plugins      WASM plugin bridge
 │   ├── operant-config       config schema · validation · defaults
 │   ├── operant-harness      unified harness (persistence seam + config)
-│   └── …                    api · infra (11 crates total —
-│                           the 6 crates the binary never called were
-│                           deleted in the 2026-10-17 purge, and
-│                           `operant-macros` with the retired config
-│                           derive in the 2026-10-21 retirement)
+│   └── …                    api · os (9 crates total —
+│                           dead crates were deleted in the
+│                           2026-10-17 purge, the 2026-10-21 config
+│                           retirement, and the 2026-10-24 sweep that
+│                           removed `operant-memory` + `operant-infra`,
+│                           which nothing linked)
 ```
 
 ---

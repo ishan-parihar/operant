@@ -7,9 +7,7 @@ members = [
     "crates/operant-core",
     "crates/operant-cli",
     "crates/operant-providers",
-    "crates/operant-memory",
     "crates/operant-plugins",
-    "crates/operant-infra",
     "crates/operant-tools",
     "crates/operant-harness",
 ]
@@ -27,9 +25,7 @@ rust-version = "1.89"
 operant-api = { path = "crates/operant-api" }
 operant-config = { path = "crates/operant-config" }
 operant-providers = { path = "crates/operant-providers" }
-operant-memory = { path = "crates/operant-memory" }
 operant-plugins = { path = "crates/operant-plugins" }
-operant-infra = { path = "crates/operant-infra" }
 operant-tools = { path = "crates/operant-tools" }
 operant-harness = { path = "crates/operant-harness" }
 operant-os = { path = "crates/operant-os" }
@@ -89,8 +85,6 @@ regex = "1.10"
 
 # HTTP server
 axum = { version = "0.8", default-features = false, features = ["json", "ws", "macros", "tokio", "query", "http1"] }
-tower = { version = "0.4", features = ["make"] }
-tower-http = { version = "0.5", features = ["cors", "fs"] }
 
 # Terminal UI
 ratatui = "0.30"

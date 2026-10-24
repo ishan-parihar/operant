@@ -285,7 +285,6 @@ BASELINE = {
     "operant-core/src/tools/tool_backend_helpers.rs::dead_code::ToolBackendArgs": ("yes", "serde-argument struct: fields deserialized from tool-call JSON; optional fields kept for schema parity"),
     "operant-core/src/tools/verification_tool.rs::dead_code::VerifyArgs": ("yes", "serde-argument struct: fields deserialized from tool-call JSON; optional fields kept for schema parity"),
     "operant-core/tests/cron_session_isolation.rs::dead_code::cron": ("yes", "keeps the cron agent alive for the scheduler's lifetime"),
-    "operant-memory/src/knowledge_graph.rs::dead_code::db_path": ("yes", "db path retained for diagnostics/reindex alongside the live conn"),
     "operant-providers/src/anthropic.rs::dead_code::cache_creation_input_tokens": ("yes", "deserialized usage field for cache-accounting parity"),
     "operant-providers/src/bedrock.rs::dead_code::stop_reason": ("yes", "deserialized stop reason for response metadata parity"),
     # ------------------------------------------------------------------
@@ -388,7 +387,6 @@ BASELINE = {
     "operant-core/src/tools/verification_tool.rs::dead_code::VerifyArgs": ("no", "serde-argument struct: fields deserialized from tool-call JSON; optional fields kept for schema parity"),
     "operant-core/tests/cron_session_isolation.rs::dead_code::cron": ("no", "keeps the cron agent alive for the scheduler's lifetime"),
     "operant-core/tests/seat_policy_run_path.rs::dead_code::prompt": ("no", "schema-only: the stub never reads the prompt"),
-    "operant-memory/src/knowledge_graph.rs::dead_code::db_path": ("no", "db path retained for diagnostics/reindex alongside the live conn"),
     "operant-providers/src/anthropic.rs::dead_code::cache_creation_input_tokens": ("no", "deserialized usage field for cache-accounting parity"),
     "operant-providers/src/bedrock.rs::dead_code::stop_reason": ("no", "deserialized stop reason for response metadata parity"),
     "operant-providers/src/bedrock.rs::dead_code::role": ("no", "deserialized message role for payload parity"),
@@ -401,9 +399,6 @@ BASELINE = {
 MENTION_ONLY = {
     "crates/operant-cli/src/tui/banner.rs",
     "crates/operant-cli/src/tui/rustle.rs",
-    # `session_sqlite.rs` documents why its `db_path` field was deleted by
-    # naming the attribute that used to cover it (iter-1163).
-    "crates/operant-infra/src/session_sqlite.rs",
     # `redraw_reason.rs`'s test asserts the absence of an allow.
     "crates/operant-cli/src/tui/app/redraw_reason.rs",
     # `operant_model/adapter.rs` and `tui/copy_targets.rs` each carry MODULE
