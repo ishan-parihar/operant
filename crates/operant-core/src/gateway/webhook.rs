@@ -53,6 +53,112 @@ pub struct HolonHook {
 /// otherwise spawns an unbounded `python3`, a cheap denial of service.
 static NOTION_SEMAPHORE: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
 
+/// Verify a webhook request's signature against `sec`.
+///
+/// Slack's non-standard shape when its headers are present
+/// (`X-Slack-Signature` = HMAC-SHA256 hex of `"v0:<ts>:<body>"` plus
+/// `X-Slack-Request-Timestamp`, replay-protected within 5 minutes); the
+/// standard `HMAC-SHA256(secret, body)` compared against
+/// `x-webhook-signature` (custom), `x-hub-signature-256` (GitHub) or
+/// `stripe-signature` (Stripe) otherwise. All comparisons are
+/// constant-time. `Ok(())` means verified; the `Err` pair is the status
+/// and message the route must answer with.
+///
+/// Shared by the event path and the Slack `url_verification` handshake:
+/// Slack signs the handshake like every other request, so echoing a
+/// challenge before this check answered unauthenticated strangers (the
+/// challenge itself is attacker-supplied and leaks nothing, but the
+/// endpoint must not verify nothing).
+fn verify_request_signature(
+    sec: &str,
+    headers: &axum::http::HeaderMap,
+    body: &[u8],
+) -> std::result::Result<(), (axum::http::StatusCode, &'static str)> {
+    let slack_sig = headers
+        .get("x-slack-signature")
+        .and_then(|v| v.to_str().ok());
+    let slack_ts = headers
+        .get("x-slack-request-timestamp")
+        .and_then(|v| v.to_str().ok());
+
+    if let (Some(sig), Some(ts)) = (slack_sig, slack_ts) {
+        // Replay protection: reject requests older than 5 minutes
+        // (Slack's own recommendation).
+        if let Ok(ts_secs) = ts.parse::<i64>() {
+            let now_secs = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            if (now_secs - ts_secs).abs() > 300 {
+                return Err((
+                    axum::http::StatusCode::UNAUTHORIZED,
+                    "Stale Slack request (replay-protected)",
+                ));
+            }
+        }
+        // Compute HMAC-SHA256(signing_secret, "v0:<ts>:<body>").
+        use hmac::{Hmac, Mac};
+        use sha2::Sha256;
+        type HmacSha256 = Hmac<Sha256>;
+        let mut mac = match HmacSha256::new_from_slice(sec.as_bytes()) {
+            Ok(m) => m,
+            Err(_) => {
+                return Err((
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    "HMAC key error",
+                ));
+            }
+        };
+        let basestring = format!("v0:{ts}:");
+        mac.update(basestring.as_bytes());
+        mac.update(body);
+        let expected = mac.finalize().into_bytes();
+        let expected_hex = format!("v0={}", hex::encode(expected));
+        if !constant_time_eq::constant_time_eq(sig.as_bytes(), expected_hex.as_bytes()) {
+            return Err((
+                axum::http::StatusCode::UNAUTHORIZED,
+                "Invalid Slack signature",
+            ));
+        }
+        Ok(())
+    } else {
+        // Standard HMAC verification (GitHub / Stripe / generic webhooks).
+        let sig = headers
+            .get("x-webhook-signature")
+            .or_else(|| headers.get("x-hub-signature-256"))
+            .or_else(|| headers.get("stripe-signature"))
+            .and_then(|v| v.to_str().ok());
+
+        let Some(sig) = sig else {
+            return Err((
+                axum::http::StatusCode::UNAUTHORIZED,
+                "Missing signature header (x-slack-signature / x-webhook-signature / x-hub-signature-256 / stripe-signature)",
+            ));
+        };
+        // Strip "sha256=" prefix if present (GitHub/Stripe format).
+        let sig_hex = sig.strip_prefix("sha256=").unwrap_or(sig);
+        use hmac::{Hmac, Mac};
+        use sha2::Sha256;
+        type HmacSha256 = Hmac<Sha256>;
+        let mut mac = match HmacSha256::new_from_slice(sec.as_bytes()) {
+            Ok(m) => m,
+            Err(_) => {
+                return Err((
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    "HMAC key error",
+                ));
+            }
+        };
+        mac.update(body);
+        let expected = mac.finalize().into_bytes();
+        let expected_hex = hex::encode(expected);
+        if !constant_time_eq::constant_time_eq(sig_hex.as_bytes(), expected_hex.as_bytes()) {
+            return Err((axum::http::StatusCode::UNAUTHORIZED, "Invalid signature"));
+        }
+        Ok(())
+    }
+}
+
 impl WebhookAdapter {
     pub fn new(enabled: bool) -> Self {
         Self {
@@ -249,6 +355,21 @@ impl PlatformAdapter for WebhookAdapter {
                             )
                                 .into_response();
                         }
+                        // (iter-1132) The route may be claimed by a webhook
+                        // subscription. A subscription with its own secret is
+                        // verified against THAT secret, so two routes can use
+                        // different ones; without one, the adapter's global
+                        // `[gateway] webhooks_secret` applies. Resolved BEFORE
+                        // the handshakes below: the Slack url_verification
+                        // echo is authenticated with the same secret the
+                        // events on this route use.
+                        let subscription =
+                            super::webhook_subscriptions::subscription_for_route(&route);
+                        let effective_secret: Option<String> = subscription
+                            .as_ref()
+                            .and_then(|s| s.secret.clone())
+                            .or_else(|| secret.clone());
+
                         // ────────────────────────────────────────────────────────
                         // URL Verification Handshakes (iter-131)
                         // ────────────────────────────────────────────────────────
@@ -269,7 +390,11 @@ impl PlatformAdapter for WebhookAdapter {
                         //
                         // These handshakes have NO HMAC signature (they happen
                         // before the platform starts signing events), so they
-                        // must be handled BEFORE the signature check below.
+                        // must be handled BEFORE the signature check below —
+                        // EXCEPT Slack's: Slack signs url_verification like every
+                        // other request, so under a configured secret the
+                        // challenge echo is refused without a valid signature
+                        // (answering it unauthenticated verified nothing).
                         // ────────────────────────────────────────────────────────
 
                         // Try parsing the body as JSON first (Slack url_verification
@@ -278,6 +403,12 @@ impl PlatformAdapter for WebhookAdapter {
                             // Slack url_verification
                             if v.get("type").and_then(|t| t.as_str()) == Some("url_verification")
                                 && let Some(challenge) = v.get("challenge").and_then(|c| c.as_str()) {
+                                    if let Some(ref sec) = effective_secret
+                                        && let Err((code, msg)) =
+                                            verify_request_signature(sec, &headers, &body)
+                                    {
+                                        return (code, msg).into_response();
+                                    }
                                     debug!("Slack url_verification challenge — responding with challenge token");
                                     return (
                                         axum::http::StatusCode::OK,
@@ -368,17 +499,6 @@ impl PlatformAdapter for WebhookAdapter {
                             }
                         }
 
-                        // (iter-1132) The route may be claimed by a webhook
-                        // subscription. A subscription with its own secret is
-                        // verified against THAT secret, so two routes can use
-                        // different ones; without one, the adapter's global
-                        // `[gateway] webhooks_secret` applies.
-                        let subscription =
-                            super::webhook_subscriptions::subscription_for_route(&route);
-                        let effective_secret: Option<String> = subscription
-                            .as_ref()
-                            .and_then(|s| s.secret.clone())
-                            .or_else(|| secret.clone());
                         // A signature that verified is what makes the event a
                         // machine event rather than an anonymous request.
                         let mut authenticated = false;
@@ -388,117 +508,21 @@ impl PlatformAdapter for WebhookAdapter {
                         // old non-standard SHA256(route+secret). Supports
                         // multiple signature header names for interop:
                         // x-webhook-signature (custom), x-hub-signature-256
-                        // (GitHub), Stripe-Signature (Stripe).
-                        // (iter-101 — closes Bug #9 from iter-98 audit.)
+                        // (GitHub), Stripe-Signature (Stripe), plus Slack's
+                        // non-standard v0 shape.
+                        // (iter-101 closes Bug #9 from iter-98 audit; iter-125
+                        // closed the ponytail-audit security bug "Slack
+                        // signing_secret collected but HMAC verification never
+                        // performed"; the checks live in
+                        // [`verify_request_signature`] above, shared with the
+                        // url_verification handshake.)
                         if let Some(ref sec) = effective_secret {
-                            // Slack-specific signature verification: Slack uses
-                            // `X-Slack-Signature` (HMAC-SHA256 hex of
-                            // "v0:<X-Slack-Request-Timestamp>:<body>") +
-                            // `X-Slack-Request-Timestamp`. We special-case
-                            // this because Slack's format is non-standard.
-                            // (iter-125 — closes the ponytail-audit security
-                            // bug "Slack signing_secret collected but HMAC
-                            // verification never performed".)
-                            let slack_sig = headers
-                                .get("x-slack-signature")
-                                .and_then(|v| v.to_str().ok());
-                            let slack_ts = headers
-                                .get("x-slack-request-timestamp")
-                                .and_then(|v| v.to_str().ok());
-
-                            if let (Some(sig), Some(ts)) = (slack_sig, slack_ts) {
-                                // Replay protection: reject requests older
-                                // than 5 minutes (Slack's own recommendation).
-                                if let Ok(ts_secs) = ts.parse::<i64>() {
-                                    let now_secs = std::time::SystemTime::now()
-                                        .duration_since(std::time::UNIX_EPOCH)
-                                        .map(|d| d.as_secs() as i64)
-                                        .unwrap_or(0);
-                                    if (now_secs - ts_secs).abs() > 300 {
-                                        return (
-                                            axum::http::StatusCode::UNAUTHORIZED,
-                                            "Stale Slack request (replay-protected)",
-                                        )
-                                            .into_response();
-                                    }
-                                }
-                                // Compute HMAC-SHA256(signing_secret, "v0:<ts>:<body>").
-                                use hmac::{Hmac, Mac};
-                                use sha2::Sha256;
-                                type HmacSha256 = Hmac<Sha256>;
-                                let mut mac = match HmacSha256::new_from_slice(sec.as_bytes()) {
-                                    Ok(m) => m,
-                                    Err(_) => {
-                                        return (
-                                            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                                            "HMAC key error",
-                                        )
-                                            .into_response();
-                                    }
-                                };
-                                let basestring = format!("v0:{}:", ts);
-                                mac.update(basestring.as_bytes());
-                                mac.update(&body);
-                                let expected = mac.finalize().into_bytes();
-                                let expected_hex = format!("v0={}", hex::encode(expected));
-                                if !constant_time_eq::constant_time_eq(
-                                    sig.as_bytes(),
-                                    expected_hex.as_bytes(),
-                                ) {
-                                    return (
-                                        axum::http::StatusCode::UNAUTHORIZED,
-                                        "Invalid Slack signature",
-                                    )
-                                        .into_response();
-                                }
-                            } else {
-                                // Fall back to the standard HMAC verification
-                                // used by GitHub / Stripe / generic webhooks.
-                                let sig = headers
-                                    .get("x-webhook-signature")
-                                    .or_else(|| headers.get("x-hub-signature-256"))
-                                    .or_else(|| headers.get("stripe-signature"))
-                                    .and_then(|v| v.to_str().ok());
-
-                                if let Some(sig) = sig {
-                                    // Strip "sha256=" prefix if present (GitHub/Stripe format).
-                                    let sig_hex = sig.strip_prefix("sha256=").unwrap_or(sig);
-                                    // Compute HMAC-SHA256(secret, body).
-                                    use hmac::{Hmac, Mac};
-                                    use sha2::Sha256;
-                                    type HmacSha256 = Hmac<Sha256>;
-                                    let mut mac = match HmacSha256::new_from_slice(sec.as_bytes()) {
-                                        Ok(m) => m,
-                                        Err(_) => {
-                                            return (
-                                                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                                                "HMAC key error",
-                                            )
-                                                .into_response();
-                                        }
-                                    };
-                                    mac.update(&body);
-                                    let expected = mac.finalize().into_bytes();
-                                    let expected_hex = hex::encode(expected);
-                                    // Constant-time comparison via the
-                                    // constant_time_eq crate.
-                                    if !constant_time_eq::constant_time_eq(sig_hex.as_bytes(), expected_hex.as_bytes()) {
-                                        return (
-                                            axum::http::StatusCode::UNAUTHORIZED,
-                                            "Invalid signature",
-                                        )
-                                            .into_response();
-                                    }
-                                } else {
-                                    return (
-                                        axum::http::StatusCode::UNAUTHORIZED,
-                                        "Missing signature header (x-slack-signature / x-webhook-signature / x-hub-signature-256 / stripe-signature)",
-                                    )
-                                    .into_response();
-                                }
+                            if let Err((code, msg)) = verify_request_signature(sec, &headers, &body)
+                            {
+                                return (code, msg).into_response();
                             }
-                            // The signature matched (both branches above
-                            // return on a mismatch).
+                            // The signature matched (the helper returns on a
+                            // mismatch).
                             authenticated = true;
                         }
 
@@ -550,10 +574,24 @@ impl PlatformAdapter for WebhookAdapter {
                                                     deliver_only: false,
                                                     authenticated,
                                                 };
-                                                let _ = tx.send(slack_msg);
+                                                // A closed channel means the
+                                                // gateway is gone: answer 5xx
+                                                // so Slack retries instead of
+                                                // trusting an "ok" that lost
+                                                // the event.
+                                                if tx.send(slack_msg).is_err() {
+                                                    return (
+                                                        axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                                                        "Channel closed",
+                                                    )
+                                                        .into_response();
+                                                }
                                             }
                                         }
-                                        // Always 200 OK to Slack — otherwise it retries.
+                                        // 200 on the paths above — a non-2xx
+                                        // makes Slack retry, which is exactly
+                                        // what we want only when the event was
+                                        // NOT delivered.
                                         return (axum::http::StatusCode::OK, "ok").into_response();
                                     }
 
@@ -582,7 +620,17 @@ impl PlatformAdapter for WebhookAdapter {
                                                     authenticated,
                                                     raw: msg.clone(),
                                                 };
-                                                let _ = tx.send(wa_msg);
+                                                // Same contract as the Slack
+                                                // arm above: a closed channel
+                                                // must NOT be acked, or Meta
+                                                // drops the event on a 200.
+                                                if tx.send(wa_msg).is_err() {
+                                                    return (
+                                                        axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                                                        "Channel closed",
+                                                    )
+                                                        .into_response();
+                                                }
                                             }
                                         }
                                         return (axum::http::StatusCode::OK, "ok").into_response();
@@ -920,5 +968,139 @@ mod tests {
 
         unsafe { std::env::remove_var("HERMES_HOME") };
         let _ = std::fs::remove_dir_all(&home);
+    }
+
+    /// Sign a body the Slack way: `v0=<hex HMAC-SHA256(secret, "v0:<ts>:<body>")>`.
+    fn slack_sign(secret: &str, ts: i64, body: &str) -> String {
+        use hmac::{Hmac, Mac};
+        use sha2::Sha256;
+        let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).expect("hmac key");
+        mac.update(format!("v0:{ts}:").as_bytes());
+        mac.update(body.as_bytes());
+        format!("v0={}", hex::encode(mac.finalize().into_bytes()))
+    }
+
+    /// POST a body and return the status AND body of the response.
+    async fn post_body_response(
+        port: u16,
+        path: &str,
+        headers: &[(&str, &str)],
+        body: &str,
+    ) -> (u16, String) {
+        let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .expect("connect");
+        let mut request = format!(
+            "POST {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Length: {}\r\nConnection: close\r\n",
+            body.len()
+        );
+        for (name, value) in headers {
+            request.push_str(&format!("{name}: {value}\r\n"));
+        }
+        request.push_str("\r\n");
+        request.push_str(body);
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        stream.write_all(request.as_bytes()).await.expect("write");
+        let mut response = String::new();
+        stream.read_to_string(&mut response).await.expect("read");
+        let status = response
+            .lines()
+            .next()
+            .and_then(|line| line.split_whitespace().nth(1))
+            .and_then(|code| code.parse().ok())
+            .unwrap_or(0);
+        // The body starts after the first blank line.
+        let body = response
+            .split_once("\r\n\r\n")
+            .map(|(_, b)| b.to_string())
+            .unwrap_or_default();
+        (status, body)
+    }
+
+    /// A Slack `url_verification` challenge is REFUSED unsigned when a
+    /// secret is configured. The handshake used to run before the
+    /// signature check and echoed any challenge to any caller — Slack
+    /// signs url_verification like every other request, so refusing the
+    /// unsigned shape closes an unauthenticated reflector while keeping
+    /// real registration working (next test).
+    #[tokio::test]
+    async fn a_url_verification_challenge_is_refused_unsigned_under_a_secret() {
+        let (port, _rx) = start_on_ephemeral(Some("shared-secret")).await;
+        let status = post_body(
+            port,
+            "/webhook/slack",
+            &[],
+            r#"{"type":"url_verification","challenge":"echo-me"}"#,
+        )
+        .await;
+        assert_eq!(
+            status, 401,
+            "an unsigned url_verification must be refused when a secret is configured"
+        );
+    }
+
+    /// The SAME handshake with a valid Slack signature is answered — the
+    /// challenge comes back and the registration still works.
+    #[tokio::test]
+    async fn a_url_verification_challenge_is_answered_with_a_slack_signature() {
+        let (port, _rx) = start_on_ephemeral(Some("shared-secret")).await;
+        let body = r#"{"type":"url_verification","challenge":"echo-me"}"#;
+        let ts = chrono::Utc::now().timestamp();
+        let sig = slack_sign("shared-secret", ts, body);
+        let (status, response_body) = post_body_response(
+            port,
+            "/webhook/slack",
+            &[
+                ("x-slack-signature", sig.as_str()),
+                ("x-slack-request-timestamp", &ts.to_string()),
+            ],
+            body,
+        )
+        .await;
+        assert_eq!(status, 200, "a signed handshake is answered");
+        assert!(
+            response_body.contains("echo-me"),
+            "the challenge is echoed back: {response_body}"
+        );
+    }
+
+    /// A Slack `event_callback` on a gateway whose channel is gone must
+    /// NOT be acked. The arm used `let _ = tx.send(..)` and returned 200 —
+    /// Slack trusted the ok, never retried, and the event was silently
+    /// lost. The generic arm already answered 500; the Slack arm now
+    /// matches it.
+    #[tokio::test]
+    async fn a_slack_event_on_a_closed_channel_is_not_acked() {
+        let (port, rx) = start_on_ephemeral(None).await;
+        drop(rx); // the gateway is gone
+        let status = post_body(
+            port,
+            "/webhook/slack",
+            &[],
+            r#"{"type":"event_callback","event":{"type":"message","text":"hello","user":"u1","channel":"c1"}}"#,
+        )
+        .await;
+        assert_eq!(
+            status, 500,
+            "a dropped event must not be acked — Slack retries on 5xx"
+        );
+    }
+
+    /// Same contract for the WhatsApp/Meta event arm.
+    #[tokio::test]
+    async fn a_whatsapp_event_on_a_closed_channel_is_not_acked() {
+        let (port, rx) = start_on_ephemeral(None).await;
+        drop(rx);
+        let status = post_body(
+            port,
+            "/webhook/whatsapp",
+            &[],
+            r#"{"entry":[{"changes":[{"value":{"messages":[{"from":"15550001111","text":{"body":"hi"},"timestamp":"1700000000"}]}}]}]}"#,
+        )
+        .await;
+        assert_eq!(
+            status, 500,
+            "a dropped WhatsApp event must not be acked — Meta retries on 5xx"
+        );
     }
 }
