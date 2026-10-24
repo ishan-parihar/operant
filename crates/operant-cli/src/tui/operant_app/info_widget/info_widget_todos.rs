@@ -640,13 +640,17 @@ pub(super) fn render_todos_expanded(data: &InfoWidgetData, inner: Rect) -> Vec<L
         .iter()
         .filter(|t| t.status == "completed")
         .count();
-    let _in_progress: usize = data
+    let in_progress: usize = data
         .todos
         .iter()
         .filter(|t| t.status == "in_progress")
         .count();
 
-    // Header with progress + inline pip meter
+    // Header with progress + inline pip meter. The `doing` count is part of
+    // the header (iter-1234): it used to be computed here and discarded, so
+    // the operator saw "1/3" and had to scan the list to learn that one of
+    // the two open items was running. jcode's card shows the same shape
+    // ("{done}/{total} (percent) · {doing} doing · {pending} pending").
     let mut header = vec![
         Span::styled(
             format!("{} ", todos_widget_label(data)),
@@ -657,6 +661,12 @@ pub(super) fn render_todos_expanded(data: &InfoWidgetData, inner: Rect) -> Vec<L
             Style::default().fg(rgb(140, 140, 150)),
         ),
     ];
+    if in_progress > 0 {
+        header.push(Span::styled(
+            format!(" \u{00b7} {} doing", in_progress),
+            Style::default().fg(rgb(255, 200, 100)),
+        ));
+    }
     let pip_budget = (inner.width.saturating_sub(12) / 2).clamp(0, 14) as usize;
     push_todo_pips(&mut header, data, pip_budget);
     push_aggregate_confidence_suffix(&mut header, aggregate_todo_confidence(&data.todos));

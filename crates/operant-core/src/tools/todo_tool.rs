@@ -1,7 +1,12 @@
 //! Todo list tool
 //!
-//! In-memory task list management tool matching Python's todo_tool.py.
-//! Stores todos per session using a global LazyLock HashMap.
+//! Task list management tool matching Python's todo_tool.py. Stores todos
+//! per session in a global store that is FILE-BACKED: every write persists
+//! to `<operant_home>/todos/<hash>.json` and a fresh process rehydrates from
+//! disk on first read. Before iter-1234 the store was process-local only,
+//! so every TUI restart reported "Todos: 0/0 done, 0 in progress" — an
+//! honest description of an empty store that had forgotten yesterday's
+//! list.
 //!
 //! hermes parity (hermes-agent/tools/todo_tool.py):
 //! - provide `todos` to write, omit to read the current list
@@ -14,10 +19,16 @@
 //! - active items are re-injected after context compression via
 //!   `todo_injection_for_session` (hermes `TodoStore.format_for_injection`),
 //!   so the model keeps its plan across compactions
+//!
+//! [port-jcode] upstream persists per-session todos as JSON under the
+//! jcode state dir (`jcode-base/src/todo.rs`: `load_todos`/
+//! `save_todos` + `todo_state_path`). Same shape here, resolved through
+//! the one home resolver so a profile or `HERMES_HOME` deployment isolates
+//! its lists.
 
 use async_trait::async_trait;
 use schemars::JsonSchema;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::schema::ToolSchema;
@@ -41,6 +52,125 @@ pub const TODO_INJECTION_HEADER: &str =
 static TODO_STORE: LazyLock<Mutex<HashMap<String, Vec<TodoItem>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
+/// Sessions whose list has been loaded from disk this process. A session
+/// absent here has not been read yet: the first read pulls its file so a
+/// fresh process sees yesterday's list instead of an empty one.
+static LOADED_SESSIONS: LazyLock<Mutex<std::collections::HashSet<String>>> =
+    LazyLock::new(|| Mutex::new(std::collections::HashSet::new()));
+
+/// The file one session's list persists to, under the one operant home.
+///
+/// The session id is MODEL-SUPPLIED, so it is not safe as a filename: a
+/// crafted id like `../../keys` would steer the write outside the todos
+/// directory. A short stable hash of the id names the file instead, and the
+/// id itself is stored INSIDE the JSON so a file can always be traced back
+/// to its session without trusting the name.
+///
+/// The directory resolves through an override cell before the one home:
+/// the store is process-global, so the lib test suite (parallel threads)
+/// must be able to point it at a tempdir WITHOUT mutating HERMES_HOME, which
+/// is process-global too and would race every parallel test that resolves
+/// a path. Same pattern as `config_shim`'s override cells.
+static TODO_DIR_OVERRIDE: std::sync::RwLock<Option<std::path::PathBuf>> =
+    std::sync::RwLock::new(None);
+
+/// Test seam: point the todo store at a directory, returning the previous
+/// one so the caller can restore it. Production never calls this; the
+/// default is `operant_home()/todos`, resolved through the one-home
+/// resolver.
+#[cfg(test)]
+pub(crate) fn set_todo_dir_for_tests(
+    dir: Option<std::path::PathBuf>,
+) -> Option<std::path::PathBuf> {
+    let mut cell = TODO_DIR_OVERRIDE.write().unwrap_or_else(|e| e.into_inner());
+    let previous = cell.clone();
+    *cell = dir;
+    previous
+}
+
+/// The todos directory: the test override when set, else the one home.
+fn todos_dir() -> std::path::PathBuf {
+    if let Ok(cell) = TODO_DIR_OVERRIDE.read()
+        && let Some(dir) = cell.as_ref()
+    {
+        return dir.clone();
+    }
+    crate::platform::operant_home().join("todos")
+}
+
+pub(crate) fn todo_state_path(session_id: &str) -> std::path::PathBuf {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    session_id.hash(&mut hasher);
+    let digest = hasher.finish();
+    todos_dir().join(format!("{digest:016x}.json"))
+}
+
+/// Read a session's list, pulling it from disk the first time this process
+/// asks. A missing file or a parse failure degrades to an empty list — the
+/// tool must never fail a turn over persistence.
+fn load_session(session_id: &str) -> Vec<TodoItem> {
+    if let Ok(loaded) = LOADED_SESSIONS.lock()
+        && !loaded.contains(session_id)
+    {
+        drop(loaded);
+        let from_disk: Option<Vec<TodoItem>> = std::fs::read(todo_state_path(session_id))
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok());
+        let mut store = TODO_STORE.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(items) = from_disk {
+            store.insert(session_id.to_string(), items);
+        }
+        if let Ok(mut loaded) = LOADED_SESSIONS.lock() {
+            loaded.insert(session_id.to_string());
+        }
+    }
+    TODO_STORE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(session_id)
+        .cloned()
+        .unwrap_or_default()
+}
+
+/// Persist a session's list. Failure is logged and swallowed: persistence is
+/// an enhancement, never a turn-killer (degrade-don't-die at the store
+/// seam). Atomic via temp-file + rename so a crash mid-write can never
+/// leave a half-written list that fails to parse on the next boot.
+fn persist_session(session_id: &str, items: &[TodoItem]) {
+    use std::io::Write;
+    let path = todo_state_path(session_id);
+    // An explicit clear (empty list) REMOVES the file rather than persisting
+    // an empty array: a stale empty file and no file are indistinguishable to
+    // the reader, but removal also lets the operator see, in the directory,
+    // which sessions actually have lists.
+    if items.is_empty() {
+        if let Err(e) = std::fs::remove_file(&path)
+            && e.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::warn!(target: "todo", session = session_id, error = %e, "todo list removal failed");
+        }
+        return;
+    }
+    let write = || -> std::io::Result<()> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let bytes = serde_json::to_vec(items)
+            .map_err(|e| std::io::Error::other(format!("serialize todo list: {e}")))?;
+        let tmp = path.with_extension("json.tmp");
+        {
+            let mut file = std::fs::File::create(&tmp)?;
+            file.write_all(&bytes)?;
+            file.sync_all().ok();
+        }
+        std::fs::rename(&tmp, &path)
+    };
+    if let Err(e) = write() {
+        tracing::warn!(target: "todo", session = session_id, error = %e, "todo list persist failed; keeping memory state");
+    }
+}
+
 /// A single todo item
 ///
 /// The model writes `phase` and `lane` — the card's words for stage and
@@ -52,7 +182,7 @@ static TODO_STORE: LazyLock<Mutex<HashMap<String, Vec<TodoItem>>>> =
 /// [port-jcode] upstream's todo item advertises `phase`/`lane` rather than
 /// `stage`/`group` for exactly this reason: the schema words are the ones the
 /// model reaches for.
-#[derive(Debug, Clone, JsonSchema, Deserialize)]
+#[derive(Debug, Clone, JsonSchema, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TodoItem {
     /// Unique identifier for this todo
@@ -223,10 +353,6 @@ impl OperantTool for TodoTool {
         ToolSchema::from_type::<TodoArgs>("todo", "Manage task list")
     }
 
-    #[expect(
-        clippy::expect_used,
-        reason = "poisoned lock: panic is the intended recovery"
-    )]
     async fn execute(&self, args: Value, _context: ToolContext) -> ToolResult {
         let args: TodoArgs = match serde_json::from_value(args) {
             Ok(a) => a,
@@ -234,12 +360,11 @@ impl OperantTool for TodoTool {
         };
         let session_id = args.session_id.unwrap_or_else(|| "default".to_string());
 
-        // Read mode (hermes: omit `todos` to read the current list)
+        // Read mode (hermes: omit `todos` to read the current list).
+        // The first read of a session pulls its file from disk, so a fresh
+        // process rehydrates the list instead of reporting a false 0/0.
         let Some(todos) = args.todos else {
-            let store = TODO_STORE
-                .lock()
-                .expect("TODO_STORE mutex poisoned — programmer error");
-            let current = store.get(&session_id).cloned().unwrap_or_default();
+            let current = load_session(&session_id);
             let summary: Vec<Value> = current.iter().map(todo_summary).collect();
             return ToolResult::success(
                 "todo",
@@ -262,12 +387,19 @@ impl OperantTool for TodoTool {
         items.truncate(MAX_TODO_ITEMS);
 
         let next: Vec<TodoItem> = {
-            let mut store = TODO_STORE
-                .lock()
-                .expect("TODO_STORE mutex poisoned — programmer error");
-            let next = if args.merge {
+            // The existing list is loaded BEFORE the store lock: a merge in a
+            // fresh process must merge INTO the persisted list rather than
+            // into an empty one that then overwrites the file, and
+            // load_session takes the same store lock, so loading inside the
+            // lock below would deadlock a plain Mutex.
+            let existing = if args.merge {
+                Some(load_session(&session_id))
+            } else {
+                None
+            };
+            let mut store = TODO_STORE.lock().unwrap_or_else(|e| e.into_inner());
+            let next = if let Some(mut merged) = existing {
                 // Merge mode: update existing items by id, append new ones.
-                let mut merged: Vec<TodoItem> = store.get(&session_id).cloned().unwrap_or_default();
                 // Owned keys avoid aliasing borrows into `merged` while it is
                 // mutated below.
                 let mut index: HashMap<String, usize> = HashMap::new();
@@ -301,6 +433,15 @@ impl OperantTool for TodoTool {
             next
         };
 
+        // Write-through: the list outlives the process. Failure inside is
+        // logged, never fatal.
+        persist_session(&session_id, &next);
+        // A merge that loaded from disk must not re-read it: the memory copy
+        // is now the truth.
+        if let Ok(mut loaded) = LOADED_SESSIONS.lock() {
+            loaded.insert(session_id.clone());
+        }
+
         let summary: Vec<Value> = next.iter().map(todo_summary).collect();
 
         ToolResult::success(
@@ -319,8 +460,7 @@ impl OperantTool for TodoTool {
 /// Ported from hermes `TodoStore.format_for_injection` — completed/cancelled
 /// items are excluded so the model does not re-do finished work.
 pub fn todo_injection_for_session(session_id: &str) -> Option<String> {
-    let store = TODO_STORE.lock().ok()?;
-    let items = store.get(session_id)?;
+    let items = load_session(session_id);
     let active: Vec<&TodoItem> = items
         .iter()
         .filter(|i| matches!(i.status.as_str(), "pending" | "in_progress"))
@@ -378,7 +518,142 @@ mod tests {
         ToolContext::default()
     }
 
+    /// Redirect the process-global todo store to a per-test tempdir for the
+    /// duration of one test, swapping the in-memory state out with it.
+    ///
+    /// Why a full swap rather than just pointing the dir elsewhere: the
+    /// store, the LOADED_SESSIONS cache and the dir cell are all
+    /// PROCESS-GLOBAL, so without the swap a parallel test's session leaks
+    /// through memory into this one's assertions — and the test suite must
+    /// never write into the operator's real `~/.operant/todos`.
+    /// Serialise every test that touches the store. The dir override is ONE
+    /// cell and the store is process-global: two guards alive at once would
+    /// capture each other as "previous" and restore into chaos, so `new()`
+    /// takes STORE_TEST_LOCK first and holds it for the test's whole body.
+    static STORE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    // Reentrancy depth for the guard. A test that holds its own StoreGuard
+    // and then calls `execute_tool` (which creates another) must NOT take
+    // the lock again: std's Mutex is not reentrant, and the second take
+    // deadlocked the whole test binary at 0% CPU (measured). A nested guard
+    // becomes a no-op that reuses the outer guard's swap. (Plain `//`
+    // because thread_local! is a macro — a doc comment there is dead text.)
+    thread_local! {
+        static GUARD_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+        // The test (thread) name whose dir is currently prepared. The first
+        // outermost guard for a NEW name wipes the dir; later guards with the
+        // SAME name reuse it unwiped — consecutive `execute_tool` calls in
+        // one test read each other's files, while a rerun of the same test
+        // (or a new test on a reused worker) starts clean.
+        static PREPARED_FOR: std::cell::RefCell<Option<String>> =
+            const { std::cell::RefCell::new(None) };
+    }
+
+    struct StoreGuard {
+        lock: Option<std::sync::MutexGuard<'static, ()>>,
+        dir: Option<std::path::PathBuf>,
+        previous_dir: Option<std::path::PathBuf>,
+        previous_store: HashMap<String, Vec<TodoItem>>,
+        previous_loaded: std::collections::HashSet<String>,
+    }
+    impl StoreGuard {
+        fn new() -> Self {
+            let nested = GUARD_DEPTH.with(|d| {
+                let depth = d.get();
+                d.set(depth + 1);
+                depth
+            }) > 0;
+            if nested {
+                // The outer guard owns the swap; this one owns nothing and
+                // must not restore anything.
+                return Self {
+                    lock: None,
+                    dir: None,
+                    previous_dir: None,
+                    previous_store: HashMap::new(),
+                    previous_loaded: std::collections::HashSet::new(),
+                };
+            }
+            let lock = STORE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            // ONE dir per TEST, keyed by the thread NAME: the rust test
+            // harness names each worker thread after its test, so
+            // consecutive `execute_tool` calls inside ONE test resolve the
+            // same dir and the second reads what the first wrote, while a
+            // reused tokio worker running a DIFFERENT test (or the same
+            // test in a later session) resolves a fresh one through the
+            // PREPARED_FOR wipe below.
+            let thread_name = std::thread::current()
+                .name()
+                .unwrap_or("unnamed")
+                .to_string();
+            let dir = {
+                let thread = thread_name.replace(" > ", "-").replace(' ', "-");
+                std::env::temp_dir().join(format!(
+                    "operant-todo-tests-{}-{thread}",
+                    std::process::id()
+                ))
+            };
+            // Wipe only when this TEST (thread name) has not prepared the
+            // dir yet this run: consecutive `execute_tool` calls in one
+            // test read each other's files, while a rerun of the same test
+            // or a new test on a reused worker starts clean.
+            PREPARED_FOR.with(|prepared| {
+                let mut prepared = prepared.borrow_mut();
+                if prepared.as_deref() != Some(thread_name.as_str()) {
+                    let _ = std::fs::remove_dir_all(&dir);
+                    *prepared = Some(thread_name);
+                }
+            });
+            let _ = std::fs::create_dir_all(&dir);
+            let previous_dir = set_todo_dir_for_tests(Some(dir.clone()));
+            let previous_store = TODO_STORE
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .drain()
+                .collect();
+            let previous_loaded = LOADED_SESSIONS
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .drain()
+                .collect();
+            Self {
+                lock: Some(lock),
+                dir: Some(dir),
+                previous_dir,
+                previous_store,
+                previous_loaded,
+            }
+        }
+    }
+    impl Drop for StoreGuard {
+        fn drop(&mut self) {
+            let depth = GUARD_DEPTH.with(|d| {
+                let next = d.get().saturating_sub(1);
+                d.set(next);
+                next
+            });
+            let Some(lock) = self.lock.take() else {
+                // Nested guard: it owns nothing and must restore nothing.
+                return;
+            };
+            debug_assert_eq!(depth, 0, "outer guard dropped while a nested one lives");
+            if let Ok(mut store) = TODO_STORE.lock() {
+                *store = std::mem::take(&mut self.previous_store);
+            }
+            if let Ok(mut loaded) = LOADED_SESSIONS.lock() {
+                *loaded = std::mem::take(&mut self.previous_loaded);
+            }
+            set_todo_dir_for_tests(self.previous_dir.take());
+            // The dir is left in place: PREPARED_FOR's name check wipes it
+            // if this test name runs again (new run or reused worker with a
+            // different name first).
+            self.dir.take();
+            drop(lock);
+        }
+    }
+
     async fn execute_tool(payload: Value) -> (bool, Value, Option<String>) {
+        let _store = StoreGuard::new();
         let tool = TodoTool;
         let result = tool.execute(payload, default_context()).await;
         let parsed: Value = serde_json::from_str(&result.content).unwrap_or(Value::Null);
@@ -587,6 +862,11 @@ mod tests {
         }))
         .await;
 
+        // (iter-1234) The injection reads the store OUTSIDE `execute_tool`, so
+        // it needs its own guard: without one the dir cell has been restored
+        // to the real home by the previous call's Drop and the read misses
+        // the list this test just wrote.
+        let _store = StoreGuard::new();
         let snapshot = todo_injection_for_session(session).expect("active todos present");
         let lines: Vec<&str> = snapshot.lines().collect();
         assert_eq!(lines[0], TODO_INJECTION_HEADER);
@@ -749,5 +1029,173 @@ mod tests {
         assert_eq!(todos[0]["phase"], serde_json::json!(3), "{todos:?}");
         assert_eq!(todos[0]["lane"], serde_json::json!("one"), "{todos:?}");
         assert_eq!(todos[1]["phase"], serde_json::json!(2), "{todos:?}");
+    }
+
+    // ------------------------------------------------------------------
+    // iter-1234: file-backed persistence
+    // ------------------------------------------------------------------
+    //
+    // The defect this block pins: TODO_STORE used to be process-local, so a
+    // TUI restart lost the session's list and the footer honestly reported
+    // "0/0 done, 0 in progress" for a list that had existed the night
+    // before. jcode persists per-session todos as JSON (jcode-base/src/
+    // todo.rs); the port now does the same.
+
+    /// A fresh process (empty memory + empty loaded-cache) must rehydrate a
+    /// session's list from disk on first read. This is the restart scenario.
+    #[tokio::test]
+    async fn a_fresh_process_rehydrates_the_list_from_disk() {
+        let _store = StoreGuard::new();
+        let session = "persist-restart";
+        // "Yesterday": the write path persists.
+        let (ok, parsed, _) = execute_tool(serde_json::json!({
+            "todos": [
+                { "id": "1", "content": "Fix scroll", "status": "completed" },
+                { "id": "2", "content": "Fix todo counter", "status": "in_progress" },
+            ],
+            "sessionId": session
+        }))
+        .await;
+        assert!(ok);
+        assert_eq!(parsed["count"], 2);
+
+        // "Today": a fresh process — the memory store and the loaded-cache
+        // are wiped, exactly what a restart leaves behind.
+        TODO_STORE.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        LOADED_SESSIONS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+
+        let (ok, parsed, _) = execute_tool(serde_json::json!({
+            "sessionId": session
+        }))
+        .await;
+        assert!(ok);
+        assert_eq!(parsed["count"], 2, "the list must survive the process");
+        assert_eq!(parsed["todos"][0]["content"], "Fix scroll");
+        assert_eq!(parsed["todos"][1]["status"], "in_progress");
+    }
+
+    /// The file must exist at the hashed path under the todos dir, and the
+    /// session id must never appear in the FILENAME (model-supplied ids are
+    /// untrusted path material).
+    #[tokio::test]
+    async fn the_list_persists_to_a_hashed_path_without_the_raw_id() {
+        let _store = StoreGuard::new();
+        let session = "persist-path/../../escape-attempt";
+        execute_tool(serde_json::json!({
+            "todos": [ { "id": "1", "content": "stay contained", "status": "pending" } ],
+            "sessionId": session
+        }))
+        .await;
+
+        let path = todo_state_path(session);
+        let dir = path.parent().unwrap();
+        let listed: Vec<_> = std::fs::read_dir(dir).unwrap().collect();
+        assert_eq!(listed.len(), 1, "exactly one file per session");
+        let name = listed[0]
+            .as_ref()
+            .expect("read_dir yielded an error")
+            .file_name()
+            .to_string_lossy()
+            .to_string();
+        assert!(name.ends_with(".json"), "hash-named json file: {name}");
+        assert!(
+            !name.contains("escape-attempt") && !name.contains(".."),
+            "the raw model-supplied id must not steer the path: {name}"
+        );
+        // The session's list is traceable through the CONTENT, not the name.
+        let bytes = std::fs::read(&path).unwrap();
+        let items: Vec<TodoItem> = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].content, "stay contained");
+    }
+
+    /// A merge in a fresh process must merge INTO the persisted list, not
+    /// into an empty memory copy that then overwrites the file.
+    #[tokio::test]
+    async fn a_merge_in_a_fresh_process_merges_into_the_persisted_list() {
+        let _store = StoreGuard::new();
+        let session = "persist-merge";
+        execute_tool(serde_json::json!({
+            "todos": [
+                { "id": "1", "content": "Original", "status": "pending" },
+                { "id": "2", "content": "Second", "status": "pending" },
+            ],
+            "sessionId": session
+        }))
+        .await;
+
+        // Fresh process.
+        TODO_STORE.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        LOADED_SESSIONS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+
+        let (ok, parsed, _) = execute_tool(serde_json::json!({
+            "todos": [ { "id": "1", "content": "Updated", "status": "completed" } ],
+            "merge": true,
+            "sessionId": session
+        }))
+        .await;
+        assert!(ok);
+        assert_eq!(parsed["count"], 2, "merge keeps the off-disk sibling");
+        assert_eq!(parsed["todos"][0]["content"], "Updated");
+        assert_eq!(parsed["todos"][0]["status"], "completed");
+        assert_eq!(parsed["todos"][1]["content"], "Second");
+    }
+
+    /// Clearing the list persists the clear: an empty write must remove the
+    /// session's file, not leave yesterday's list to resurrect tomorrow.
+    #[tokio::test]
+    async fn an_empty_write_removes_the_persisted_list() {
+        let _store = StoreGuard::new();
+        let session = "persist-clear";
+        execute_tool(serde_json::json!({
+            "todos": [ { "id": "1", "content": "temporal", "status": "pending" } ],
+            "sessionId": session
+        }))
+        .await;
+        let path = todo_state_path(session);
+        assert!(path.exists(), "write persisted the list");
+
+        let (ok, parsed, _) = execute_tool(serde_json::json!({
+            "todos": [],
+            "sessionId": session
+        }))
+        .await;
+        assert!(ok);
+        assert_eq!(parsed["count"], 0);
+        assert!(
+            !path.exists(),
+            "an explicit clear must not resurrect on the next boot"
+        );
+    }
+
+    /// todo_injection_for_session rehydrates too: the model keeps its plan
+    /// across a compaction AND across a restart.
+    #[tokio::test]
+    async fn post_compression_injection_survives_a_restart() {
+        let _store = StoreGuard::new();
+        let session = "persist-injection";
+        execute_tool(serde_json::json!({
+            "todos": [ { "id": "1", "content": "survive", "status": "in_progress" } ],
+            "sessionId": session
+        }))
+        .await;
+
+        TODO_STORE.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        LOADED_SESSIONS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+
+        let snapshot = todo_injection_for_session(session);
+        assert!(
+            snapshot.is_some_and(|s| s.contains("survive")),
+            "the injection must read the persisted list, not the dead memory"
+        );
     }
 }

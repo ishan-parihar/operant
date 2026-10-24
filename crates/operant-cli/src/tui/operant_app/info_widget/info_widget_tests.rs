@@ -2152,3 +2152,84 @@ fn widget_gallery() {
         println!();
     }
 }
+
+/// (iter-1234) The expanded header must show how many items are RUNNING, not
+/// just done/total.
+///
+/// The old header computed `in_progress` and discarded it (`let _in_progress`),
+/// so the operator saw "1/3" and had to scan the list to learn that one of the
+/// two open items was actively being worked. jcode's card shows the same shape
+/// ("{doing} doing"); the header now carries it, amber, only when nonzero.
+#[test]
+fn todos_expanded_header_names_the_running_count() {
+    let data = InfoWidgetData {
+        todos: vec![
+            crate::tui::operant_app::todo::TodoItem {
+                group: None,
+                phase: None,
+                id: "t1".to_string(),
+                content: "Done already".to_string(),
+                status: "completed".to_string(),
+                priority: "medium".to_string(),
+                confidence: None,
+                completion_confidence: None,
+                confidence_history: Vec::new(),
+                blocked_by: Vec::new(),
+                assigned_to: None,
+            },
+            crate::tui::operant_app::todo::TodoItem {
+                group: None,
+                phase: None,
+                id: "t2".to_string(),
+                content: "Being worked".to_string(),
+                status: "in_progress".to_string(),
+                priority: "high".to_string(),
+                confidence: None,
+                completion_confidence: None,
+                confidence_history: Vec::new(),
+                blocked_by: Vec::new(),
+                assigned_to: None,
+            },
+        ],
+        ..Default::default()
+    };
+
+    // lines_text_concat, NOT lines_text: the header is one line of several
+    // spans, and lines_text joins SPANS with newlines — the header reads as
+    // "Todos " alone and the counts vanish from every assertion.
+    let expanded_text = lines_text_concat(&render_todos_expanded(&data, Rect::new(0, 0, 80, 8)));
+    let header = expanded_text.lines().next().unwrap_or_default();
+    assert!(
+        header.contains("1/2"),
+        "done/total is still first: {header}"
+    );
+    assert!(
+        header.contains("1 doing"),
+        "the running count reaches the header: {header}"
+    );
+
+    // No in_progress items → no "doing" suffix (the zero case must not read
+    // as a list with one phantom worker).
+    let all_done = InfoWidgetData {
+        todos: vec![crate::tui::operant_app::todo::TodoItem {
+            group: None,
+            phase: None,
+            id: "t1".to_string(),
+            content: "Done already".to_string(),
+            status: "completed".to_string(),
+            priority: "medium".to_string(),
+            confidence: None,
+            completion_confidence: None,
+            confidence_history: Vec::new(),
+            blocked_by: Vec::new(),
+            assigned_to: None,
+        }],
+        ..Default::default()
+    };
+    let done_text = lines_text_concat(&render_todos_expanded(&all_done, Rect::new(0, 0, 80, 8)));
+    let done_header = done_text.lines().next().unwrap_or_default();
+    assert!(
+        !done_header.contains("doing"),
+        "zero running items shows no doing count: {done_header}"
+    );
+}
