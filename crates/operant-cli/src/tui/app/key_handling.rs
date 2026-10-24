@@ -1601,11 +1601,17 @@ impl App {
                 self.sync_legacy_prompt_fields();
             }
             KeyCode::Home => {
-                self.prompt_input.cursor = 0;
+                // (plan 2026-10-24 M1) Line-scoped Home (OMP): on a
+                // multi-line draft the caret goes to the start of the line
+                // being edited, not the start of the buffer. Super+Left
+                // remains the buffer-start jump.
+                self.prompt_input.move_to_start();
                 self.sync_legacy_prompt_fields();
             }
             KeyCode::End => {
-                self.prompt_input.cursor = self.prompt_input.text.len();
+                // (plan 2026-10-24 M1) Line-scoped End, matching Ctrl+E and
+                // Super+Right's role as the buffer-end jump.
+                self.prompt_input.move_to_end();
                 self.sync_legacy_prompt_fields();
             }
             KeyCode::Tab => {

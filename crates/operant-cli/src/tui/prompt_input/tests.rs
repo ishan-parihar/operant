@@ -1625,3 +1625,145 @@ fn accept_suggestion_file_ref_preserves_tail() {
     assert_eq!(s.text, "@src/main.rs more text");
     assert_eq!(s.cursor, "@src/main.rs".len());
 }
+
+// ---- word_nav (plan 2026-10-24 M1: OMP word classes) ------------------
+
+/// Helper: set text + cursor in one call.
+fn nav_state(text: &str, cursor: usize) -> PromptInputState {
+    let mut s = PromptInputState::new();
+    s.text = text.to_string();
+    s.cursor = cursor;
+    s
+}
+
+#[test]
+fn word_left_joins_apostrophes_and_hyphens() {
+    // `don't stop` — Ctrl+Left from after `stop` stops before `stop`,
+    // again before `don't` as ONE word (joiner binds), not before `don`.
+    let mut s = nav_state("don't stop", 10);
+    s.move_word_backward();
+    assert_eq!(s.cursor, 6);
+    s.move_word_backward();
+    assert_eq!(s.cursor, 0, "apostrophe must keep don't one word");
+}
+
+#[test]
+fn word_right_joins_hyphenated_words() {
+    // well-known is one stop: Ctrl+Right from 0 consumes the joined word
+    // AND the following space (readline-style), landing on `code`.
+    let mut s = nav_state("well-known code", 0);
+    s.move_word_forward();
+    assert_eq!(s.cursor, 11, "well-known must move as one word");
+    s.move_word_forward();
+    assert_eq!(s.cursor, 15);
+}
+
+#[test]
+fn word_left_treats_punctuation_runs_as_one_stop() {
+    // `a -> b`: from after `b` the stops are before `b`, then before the
+    // whole `->` run (one stop), then before `a`.
+    let mut s = nav_state("a -> b", 6);
+    s.move_word_backward();
+    assert_eq!(s.cursor, 5);
+    s.move_word_backward();
+    assert_eq!(s.cursor, 2, "delimiter run -> is one stop");
+    s.move_word_backward();
+    assert_eq!(s.cursor, 0);
+}
+
+#[test]
+fn word_left_over_cjk_run_is_one_stop() {
+    // A run of Han characters is a single stop (OMP treats a same-script
+    // run as one unit).
+    let mut s = nav_state("fix 你好世界 now", "fix 你好世界 ".len());
+    s.move_word_backward();
+    assert_eq!(s.cursor, 4, "the whole Han run is one stop");
+}
+
+#[test]
+fn word_left_skips_leading_joiner_without_left_word() {
+    // A hyphen with no word char to its LEFT does not bind: `-x` from
+    // after `x` stops before `x`, and the delimiter run `-` is its own
+    // stop before that.
+    let mut s = nav_state("-x", 2);
+    s.move_word_backward();
+    assert_eq!(s.cursor, 1);
+    s.move_word_backward();
+    assert_eq!(s.cursor, 0);
+}
+
+#[test]
+fn word_left_skips_whitespace_before_stopping() {
+    let mut s = nav_state("one two  ", 9);
+    s.move_word_backward();
+    assert_eq!(s.cursor, 4, "trailing spaces are skipped, stop before two");
+}
+
+#[test]
+fn kill_word_backward_takes_joined_word_whole() {
+    let mut s = nav_state("keep well-known", 15);
+    s.kill_word_backward();
+    assert_eq!(s.text, "keep ");
+    assert_eq!(s.cursor, 5);
+    assert_eq!(s.kill_ring.get_current(), Some("well-known"));
+}
+
+#[test]
+fn delete_word_forward_stops_at_word_end_no_trailing_space() {
+    let mut s = nav_state("one two", 0);
+    s.delete_word_at_cursor();
+    assert_eq!(s.text, " two", "word deleted, the following space stays");
+}
+
+#[test]
+fn delete_word_forward_consumes_delimiter_run() {
+    let mut s = nav_state("a :: b", 1);
+    s.delete_word_at_cursor();
+    assert_eq!(s.text, "a b", ":: and one space eaten as run + skip");
+}
+
+#[test]
+fn move_word_forward_lands_on_next_word_start() {
+    let mut s = nav_state("one  two", 0);
+    s.move_word_forward();
+    assert_eq!(
+        s.cursor, 5,
+        "readline-style: whitespace after word consumed"
+    );
+}
+
+// ---- line-scoped Home/End (plan 2026-10-24 M1) ------------------------
+
+#[test]
+fn home_moves_to_line_start_not_buffer_start() {
+    // Cursor mid-third-line: Home goes to the start of THAT line, not of
+    // the buffer.
+    let mut s = nav_state(
+        "first line\nsecond line\nthird",
+        "first line\nsecond line\nth".len(),
+    );
+    s.move_to_start();
+    assert_eq!(
+        s.cursor,
+        "first line\nsecond line\n".len(),
+        "Home is line-scoped on multi-line drafts"
+    );
+}
+
+#[test]
+fn home_on_first_line_goes_to_zero() {
+    let mut s = nav_state("first line\nsecond", 4);
+    s.move_to_start();
+    assert_eq!(s.cursor, 0);
+}
+
+#[test]
+fn end_moves_to_line_end_not_buffer_end() {
+    let mut s = nav_state("first\nsecond line\nthird", "first\n".len() + 3);
+    s.move_to_end();
+    assert_eq!(
+        s.cursor,
+        "first\nsecond line".len(),
+        "End is line-scoped on multi-line drafts"
+    );
+}

@@ -2,7 +2,8 @@
 //
 // Extracted from the prompt_input/mod.rs monolith.
 
-use super::vim::{char_idx_to_byte, is_word_char};
+use super::vim::char_idx_to_byte;
+use super::word_nav::{stop_backward, stop_forward};
 use super::*;
 
 impl PromptInputState {
@@ -90,15 +91,12 @@ impl PromptInputState {
         }
     }
 
-    /// Ctrl+E: Move to the end of the current line.
+    /// Ctrl+E / End: move to the end of the current line.
     ///
     /// End of LINE, not end of text — the prompt is multi-line capable
     /// (Shift+Enter, and vim's `o`/`O` insert newlines), and readline's Ctrl+E
     /// is line-scoped, so collapsing the whole buffer onto one line would make
-    /// a multi-line draft unnavigable. The counterpart `move_to_start` is NOT
-    /// added here: the catalogue advertises Ctrl+A as "Move to start", but
-    /// Ctrl+A already opens the model picker in the dispatch block above, and
-    /// which of the two should win is a UX decision, not an oversight.
+    /// a multi-line draft unnavigable.
     pub fn move_to_end(&mut self) {
         let line_end = self.text[self.cursor..]
             .find('\n')
@@ -107,29 +105,30 @@ impl PromptInputState {
         self.cursor = line_end;
     }
 
+    /// Home: move to the start of the current line (plan 2026-10-24 M1 —
+    /// OMP line-scoped Home; it used to jump to the start of the whole
+    /// buffer, which on a multi-line draft abandons the line being edited).
+    /// Ctrl+A stays the model picker, so this has no chord of its own —
+    /// the Home key dispatches it directly.
+    pub fn move_to_start(&mut self) {
+        let line_start = self.text[..self.cursor]
+            .rfind('\n')
+            .map(|p| p + 1)
+            .unwrap_or(0);
+        self.cursor = line_start;
+    }
+
     /// Ctrl+W: Cut previous word and save to kill ring.
+    ///
+    /// Word boundaries are the OMP classes (`word_nav`): punctuation runs
+    /// are one kill, and joiners stay inside words (`don't` kills whole).
     pub fn kill_word_backward(&mut self) {
         if self.mode == InputMode::Readonly || self.cursor == 0 {
             return;
         }
         let before = &self.text[..self.cursor];
         let chars: Vec<char> = before.chars().collect();
-        let mut idx = chars.len();
-        while idx > 0 && chars[idx - 1].is_whitespace() {
-            idx -= 1;
-        }
-        if idx == 0 {
-            return;
-        }
-        if is_word_char(chars[idx - 1]) {
-            while idx > 0 && is_word_char(chars[idx - 1]) {
-                idx -= 1;
-            }
-        } else {
-            while idx > 0 && !is_word_char(chars[idx - 1]) && !chars[idx - 1].is_whitespace() {
-                idx -= 1;
-            }
-        }
+        let idx = stop_backward(&chars, chars.len());
         let kill_start = char_idx_to_byte(before, idx);
         if kill_start < self.cursor {
             let killed = self.text.drain(kill_start..self.cursor).collect::<String>();
@@ -146,22 +145,7 @@ impl PromptInputState {
         }
         let before = &self.text[..self.cursor];
         let chars: Vec<char> = before.chars().collect();
-        let mut idx = chars.len();
-        while idx > 0 && chars[idx - 1].is_whitespace() {
-            idx -= 1;
-        }
-        if idx == 0 {
-            return;
-        }
-        if is_word_char(chars[idx - 1]) {
-            while idx > 0 && is_word_char(chars[idx - 1]) {
-                idx -= 1;
-            }
-        } else {
-            while idx > 0 && !is_word_char(chars[idx - 1]) && !chars[idx - 1].is_whitespace() {
-                idx -= 1;
-            }
-        }
+        let idx = stop_backward(&chars, chars.len());
         let delete_start = char_idx_to_byte(before, idx);
         if delete_start < self.cursor {
             self.text.drain(delete_start..self.cursor);
@@ -178,22 +162,7 @@ impl PromptInputState {
         }
         let rest = &self.text[self.cursor..];
         let chars: Vec<char> = rest.chars().collect();
-        let mut idx = 0;
-        while idx < chars.len() && chars[idx].is_whitespace() {
-            idx += 1;
-        }
-        if idx >= chars.len() {
-            return;
-        }
-        if is_word_char(chars[idx]) {
-            while idx < chars.len() && is_word_char(chars[idx]) {
-                idx += 1;
-            }
-        } else {
-            while idx < chars.len() && !is_word_char(chars[idx]) && !chars[idx].is_whitespace() {
-                idx += 1;
-            }
-        }
+        let idx = stop_forward(&chars, 0);
         let delete_end = self.cursor + char_idx_to_byte(rest, idx);
         if delete_end > self.cursor {
             self.text.drain(self.cursor..delete_end);
@@ -202,52 +171,27 @@ impl PromptInputState {
         }
     }
 
-    /// Alt+B: Jump to previous word.
+    /// Alt+B / Ctrl+Left: Jump to previous word.
     pub fn move_word_backward(&mut self) {
         if self.cursor == 0 {
             return;
         }
         let before = &self.text[..self.cursor];
         let chars: Vec<char> = before.chars().collect();
-        let mut idx = chars.len();
-        while idx > 0 && chars[idx - 1].is_whitespace() {
-            idx -= 1;
-        }
-        if idx == 0 {
-            return;
-        }
-        if is_word_char(chars[idx - 1]) {
-            while idx > 0 && is_word_char(chars[idx - 1]) {
-                idx -= 1;
-            }
-        } else {
-            while idx > 0 && !is_word_char(chars[idx - 1]) && !chars[idx - 1].is_whitespace() {
-                idx -= 1;
-            }
-        }
+        let idx = stop_backward(&chars, chars.len());
         self.cursor = char_idx_to_byte(before, idx);
     }
 
-    /// Alt+F: Jump to next word.
+    /// Alt+F / Ctrl+Right: Jump to next word start (readline-style: the
+    /// word run AND the whitespace after it are consumed, so the cursor
+    /// lands on the first character of the next word).
     pub fn move_word_forward(&mut self) {
         if self.cursor >= self.text.len() {
             return;
         }
         let rest = &self.text[self.cursor..];
         let chars: Vec<char> = rest.chars().collect();
-        let mut idx = 0;
-        if idx < chars.len() {
-            if is_word_char(chars[idx]) {
-                while idx < chars.len() && is_word_char(chars[idx]) {
-                    idx += 1;
-                }
-            } else if !chars[idx].is_whitespace() {
-                while idx < chars.len() && !is_word_char(chars[idx]) && !chars[idx].is_whitespace()
-                {
-                    idx += 1;
-                }
-            }
-        }
+        let mut idx = stop_forward(&chars, 0);
         while idx < chars.len() && chars[idx].is_whitespace() {
             idx += 1;
         }
@@ -261,22 +205,7 @@ impl PromptInputState {
         }
         let rest = &self.text[self.cursor..];
         let chars: Vec<char> = rest.chars().collect();
-        let mut idx = 0;
-        while idx < chars.len() && chars[idx].is_whitespace() {
-            idx += 1;
-        }
-        if idx >= chars.len() {
-            return;
-        }
-        if is_word_char(chars[idx]) {
-            while idx < chars.len() && is_word_char(chars[idx]) {
-                idx += 1;
-            }
-        } else {
-            while idx < chars.len() && !is_word_char(chars[idx]) && !chars[idx].is_whitespace() {
-                idx += 1;
-            }
-        }
+        let idx = stop_forward(&chars, 0);
         let delete_end = self.cursor + char_idx_to_byte(rest, idx);
         if delete_end > self.cursor {
             self.text.drain(self.cursor..delete_end);

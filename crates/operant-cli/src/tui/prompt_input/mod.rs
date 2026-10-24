@@ -20,6 +20,7 @@ mod vim;
 mod vim_command;
 mod vim_ops;
 mod visual;
+mod word_nav;
 
 #[cfg(test)]
 mod tests;
