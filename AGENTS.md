@@ -957,8 +957,11 @@ it — see RG-010 for the check.
 - The agent reads the operator's SOP playbooks (`~/.operant/sops/*.toml`)
   through the `sop` tool — the same files `operant sop list` shows
   (iter-1126)
-- `operant webhook test` really POSTs a signed ping; the runtime still does
-  not dispatch events to a subscription (RT-140, open)
+- `operant webhook test` really POSTs a signed ping, and subscription
+  routes DISPATCH: a subscription with its own secret is verified against
+  that secret, shapes the event through its prompt/skills, and names the
+  answer's delivery target (`deliver_only` is consumed at
+  `crates/operant-cli/src/gateway_runner.rs` — RT-140, CLOSED iter-1132)
 - The parallel config surface is RETIRED (iters 1138-1141): the aggregate
   `operant_config::schema::Config` with its loader, migration and 7K-line
   test file, 17 dormant section files, 11 dead crate modules, and the
