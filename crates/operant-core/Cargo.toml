@@ -51,7 +51,6 @@ operant-config = { path = "../operant-config" }
 operant-harness = { workspace = true }
 # Doctor engine (§6 F2): provider-name validation + CLI tool discovery.
 # Neither depends on operant-core, so no cycle.
-operant-providers = { workspace = true }
 operant-tools = { workspace = true }
 
 # Error handling

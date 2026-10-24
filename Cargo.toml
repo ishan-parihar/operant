@@ -6,7 +6,6 @@ members = [
     "crates/operant-config",
     "crates/operant-core",
     "crates/operant-cli",
-    "crates/operant-providers",
     "crates/operant-plugins",
     "crates/operant-tools",
     "crates/operant-harness",
@@ -24,7 +23,6 @@ rust-version = "1.89"
 # Internal workspace crates
 operant-api = { path = "crates/operant-api" }
 operant-config = { path = "crates/operant-config" }
-operant-providers = { path = "crates/operant-providers" }
 operant-plugins = { path = "crates/operant-plugins" }
 operant-tools = { path = "crates/operant-tools" }
 operant-harness = { path = "crates/operant-harness" }

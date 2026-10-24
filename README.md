@@ -77,16 +77,16 @@ operant
 │   ├── operant-core         agent loop · tool registry · memory provider · config
 │   ├── operant-cli          TUI (ratatui) · commands · app adapter
 │   ├── operant-tools        built-in tool implementations
-│   ├── operant-providers    LLM provider adapters
 │   ├── operant-plugins      WASM plugin bridge
 │   ├── operant-config       config schema · validation · defaults
 │   ├── operant-harness      unified harness (persistence seam + config)
-│   └── …                    api · os (9 crates total —
+│   └── …                    api · os (8 crates total —
 │                           dead crates were deleted in the
 │                           2026-10-17 purge, the 2026-10-21 config
 │                           retirement, and the 2026-10-24 sweep that
-│                           removed `operant-memory` + `operant-infra`,
-│                           which nothing linked)
+│                           removed `operant-memory`, `operant-infra`
+                           and `operant-providers`, which nothing
+                           linked but one doctor probe)
 ```
 
 ---

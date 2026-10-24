@@ -272,16 +272,9 @@ fn check_config_semantics(config: &AppConfig, items: &mut Vec<CheckResult>) {
 }
 
 fn provider_validation_error(name: &str) -> Option<String> {
-    match operant_providers::create_provider(name, None) {
-        Ok(_) => None,
-        Err(err) => Some(
-            err.to_string()
-                .lines()
-                .next()
-                .unwrap_or("invalid provider")
-                .into(),
-        ),
-    }
+    crate::provider_catalog::known_provider_wire_api(name)
+        .is_none()
+        .then(|| crate::provider_catalog::unknown_provider_error(name))
 }
 
 /// The wire APIs the RUNTIME can actually speak.
@@ -289,7 +282,7 @@ fn provider_validation_error(name: &str) -> Option<String> {
 /// The runtime has exactly two model clients: `AnthropicModelClient`
 /// (Anthropic's Messages API) and `OpenAIModelClient` (the chat-
 /// completions shape). Every other provider the factory knows is
-/// implemented in `operant-providers` but is NOT reachable from the run
+/// implemented in the provider catalog but is NOT reachable from the run
 /// path — the runtime's provider routing sends every non-anthropic
 /// provider to the OpenAI-compatible client.
 ///
@@ -302,11 +295,11 @@ const RUNTIME_WIRE_APIS: &[&str] = &["chat_completions", "messages"];
 ///
 /// `None` means the runtime can serve it.
 fn provider_unreachable_error(name: &str) -> Option<String> {
-    let Ok(handle) = operant_providers::create_provider(name, None) else {
-        // An unknown name is the validation error's job, not this one's.
-        return None;
-    };
-    let wire_api = handle.default_wire_api();
+    // (iter-1215) The wire API comes from the static provider catalog —
+    // the `operant-providers` factory this used to construct answered
+    // exactly this metadata question with 37K lines of provider
+    // implementations the runtime never called (RT-153).
+    let wire_api = crate::provider_catalog::known_provider_wire_api(name)?;
     if RUNTIME_WIRE_APIS.contains(&wire_api) {
         return None;
     }

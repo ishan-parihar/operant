@@ -120,18 +120,7 @@ BASELINE = {
         "converted to `#[expect]` in iter-1163 — a SECURITY VERDICT written and "
         "never read; the escape hatch expires when it is finally surfaced",
     ),
-    "operant-providers/src/bedrock.rs::dead_code::role": (
-        "yes",
-        "the response field is an #[expect(dead_code)] carrying a role for "
-        "payload parity with the wire shape",
-    ),
     # ---- #[allow(dead_code)] that must stay ---------------------------------
-    "operant-providers/src/gemini.rs::dead_code::InternalGenerateContentResponse": (
-        "no",
-        "feature-conflicting: used by the default-feature response path and "
-        "unused under `--all-features`, so `#[expect]` is unfulfilled under "
-        "one of the two feature sets. Its own comment says so and it is true.",
-    ),
     "operant-core/src/agent/background_review.rs::dead_code::summarize_review_actions": (
         "no",
         "`#[cfg_attr(not(test), ...)]`: exercised only by unit tests today, so "
@@ -156,11 +145,6 @@ BASELINE = {
         "`SidecarHandle::bridge_rx` — bridged tool-call requests awaiting host "
         "execution; the drain loop is the phase 2.5 wiring. A concrete field, "
         "so `#[expect]` is available.",
-    ),
-    "operant-providers/src/bedrock.rs::dead_code::Other": (
-        "yes",
-        "an enum variant carrying a parsed payload for a response shape only "
-        "some calls produce",
     ),
     "operant-harness/src/row.rs::dead_code::config": (
         "yes",
@@ -285,8 +269,6 @@ BASELINE = {
     "operant-core/src/tools/tool_backend_helpers.rs::dead_code::ToolBackendArgs": ("yes", "serde-argument struct: fields deserialized from tool-call JSON; optional fields kept for schema parity"),
     "operant-core/src/tools/verification_tool.rs::dead_code::VerifyArgs": ("yes", "serde-argument struct: fields deserialized from tool-call JSON; optional fields kept for schema parity"),
     "operant-core/tests/cron_session_isolation.rs::dead_code::cron": ("yes", "keeps the cron agent alive for the scheduler's lifetime"),
-    "operant-providers/src/anthropic.rs::dead_code::cache_creation_input_tokens": ("yes", "deserialized usage field for cache-accounting parity"),
-    "operant-providers/src/bedrock.rs::dead_code::stop_reason": ("yes", "deserialized stop reason for response metadata parity"),
     # ------------------------------------------------------------------
     # iter-1169. The 39 suppressions the dead-code annotation sweep added while
     # clearing operant-cli's test-profile warnings. Each carries the reason its
@@ -387,9 +369,6 @@ BASELINE = {
     "operant-core/src/tools/verification_tool.rs::dead_code::VerifyArgs": ("no", "serde-argument struct: fields deserialized from tool-call JSON; optional fields kept for schema parity"),
     "operant-core/tests/cron_session_isolation.rs::dead_code::cron": ("no", "keeps the cron agent alive for the scheduler's lifetime"),
     "operant-core/tests/seat_policy_run_path.rs::dead_code::prompt": ("no", "schema-only: the stub never reads the prompt"),
-    "operant-providers/src/anthropic.rs::dead_code::cache_creation_input_tokens": ("no", "deserialized usage field for cache-accounting parity"),
-    "operant-providers/src/bedrock.rs::dead_code::stop_reason": ("no", "deserialized stop reason for response metadata parity"),
-    "operant-providers/src/bedrock.rs::dead_code::role": ("no", "deserialized message role for payload parity"),
 
 }
 

@@ -512,7 +512,7 @@ operant/
 │   ├── check.sh               # Wrapper that applies dev-env + cargo
 │   ├── self-test.sh           # Build + test + clippy + fmt sweep
 │   └── provision-build-deps.sh # One-time dependency provisioning
-├── Cargo.toml                 # Workspace members (9 crates, self-contained)
+├── Cargo.toml                 # Workspace members (8 crates, self-contained)
 ├── operant.example.toml       # Config template (7 gateway platforms)
 ├── TODO.md                    # Autonomous-mode task ledger
 ├── docs/audit/2026-06-19-BUGS.md # Open issues tracker (the live ledger; the 2026-08-03 snapshot is in docs/archive/BUGS.md)
@@ -927,10 +927,13 @@ it — see RG-010 for the check.
   it ever loaded in production. `operant-config` is ~5K lines and holds
   only the types the live config composes. ONE config system now:
   `operant_core::config::AppConfig` (RT-141, closed)
-- The `operant-providers` crate is a SECOND provider surface that production
-  never calls: outside its own crate the workspace names only `models_dev`
-  and the doctor's `create_provider` probe. The live provider path is
-  `operant-core/src/client.rs` (RT-153, open — recorded, not fixed)
+- The `operant-providers` crate is GONE (RT-153, closed iter-1215): it was
+  a SECOND provider surface production never called — outside its own crate
+  the workspace named only the doctor's `create_provider` probe. The doctor's
+  name-known and wire-API checks now read the static
+  `operant-core/src/provider_catalog.rs` (the factory's full 157-name
+  recognition surface). The live provider path remains
+  `operant-core/src/client.rs`
 
 ### Gateway (7 platform adapters — all have real code, platform registry)
 - Telegram: fully implemented (long-poll + Bot API)
