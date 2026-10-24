@@ -55,14 +55,17 @@ static NOTION_SEMAPHORE: tokio::sync::Semaphore = tokio::sync::Semaphore::const_
 
 /// Verify a webhook request's signature against `sec`.
 ///
-/// Slack's non-standard shape when its headers are present
-/// (`X-Slack-Signature` = HMAC-SHA256 hex of `"v0:<ts>:<body>"` plus
-/// `X-Slack-Request-Timestamp`, replay-protected within 5 minutes); the
-/// standard `HMAC-SHA256(secret, body)` compared against
-/// `x-webhook-signature` (custom), `x-hub-signature-256` (GitHub) or
-/// `stripe-signature` (Stripe) otherwise. All comparisons are
-/// constant-time. `Ok(())` means verified; the `Err` pair is the status
-/// and message the route must answer with.
+/// Three shapes, in order:
+/// - Slack (`X-Slack-Signature` = HMAC-SHA256 hex of `"v0:<ts>:<body>"`
+///   plus `X-Slack-Request-Timestamp`, replay-protected within 5 minutes);
+/// - Stripe (`Stripe-Signature: t=<ts>,v1=<hex>` where the HMAC covers
+///   `"<ts>.<body>"`, same 5-minute replay window, multiple `v1=` entries
+///   accepted as Stripe sends them during signing-secret rotation);
+/// - the standard `HMAC-SHA256(secret, body)` compared against
+///   `x-webhook-signature` (custom) or `x-hub-signature-256` (GitHub).
+///
+/// All comparisons are constant-time. `Ok(())` means verified; the `Err`
+/// pair is the status and message the route must answer with.
 ///
 /// Shared by the event path and the Slack `url_verification` handshake:
 /// Slack signs the handshake like every other request, so echoing a
@@ -74,6 +77,8 @@ fn verify_request_signature(
     headers: &axum::http::HeaderMap,
     body: &[u8],
 ) -> std::result::Result<(), (axum::http::StatusCode, &'static str)> {
+    let now_secs = unix_now_secs();
+
     let slack_sig = headers
         .get("x-slack-signature")
         .and_then(|v| v.to_str().ok());
@@ -84,17 +89,13 @@ fn verify_request_signature(
     if let (Some(sig), Some(ts)) = (slack_sig, slack_ts) {
         // Replay protection: reject requests older than 5 minutes
         // (Slack's own recommendation).
-        if let Ok(ts_secs) = ts.parse::<i64>() {
-            let now_secs = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs() as i64)
-                .unwrap_or(0);
-            if (now_secs - ts_secs).abs() > 300 {
-                return Err((
-                    axum::http::StatusCode::UNAUTHORIZED,
-                    "Stale Slack request (replay-protected)",
-                ));
-            }
+        if let Ok(ts_secs) = ts.parse::<i64>()
+            && (now_secs - ts_secs).abs() > 300
+        {
+            return Err((
+                axum::http::StatusCode::UNAUTHORIZED,
+                "Stale Slack request (replay-protected)",
+            ));
         }
         // Compute HMAC-SHA256(signing_secret, "v0:<ts>:<body>").
         use hmac::{Hmac, Mac};
@@ -121,12 +122,62 @@ fn verify_request_signature(
             ));
         }
         Ok(())
+    } else if let Some(stripe) = headers
+        .get("stripe-signature")
+        .and_then(|v| v.to_str().ok())
+    {
+        // Stripe signs `HMAC-SHA256(secret, "{t}.{body}")` and ships it as
+        // `t=<ts>,v1=<hex>`. (ponytail audit 2026-10-24: this used to fall
+        // into the generic branch, comparing the WHOLE `t=...,v1=...`
+        // header against a plain HMAC of the body — a comparison no
+        // genuine Stripe event can ever pass, so every real event was
+        // 401'd and Stripe retried, then disabled the endpoint.)
+        let Some((ts, sigs)) = parse_stripe_signature(stripe) else {
+            return Err((
+                axum::http::StatusCode::UNAUTHORIZED,
+                "Malformed Stripe signature header (expected t=<ts>,v1=<hex>)",
+            ));
+        };
+        if (now_secs - ts).abs() > 300 {
+            return Err((
+                axum::http::StatusCode::UNAUTHORIZED,
+                "Stale Stripe request (replay-protected)",
+            ));
+        }
+        use hmac::{Hmac, Mac};
+        use sha2::Sha256;
+        type HmacSha256 = Hmac<Sha256>;
+        let mut mac = match HmacSha256::new_from_slice(sec.as_bytes()) {
+            Ok(m) => m,
+            Err(_) => {
+                return Err((
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    "HMAC key error",
+                ));
+            }
+        };
+        let basestring = format!("{ts}.");
+        mac.update(basestring.as_bytes());
+        mac.update(body);
+        let expected_hex = hex::encode(mac.finalize().into_bytes());
+        // Any match verifies (Stripe sends several v1 during secret
+        // rotation); every comparison stays constant-time.
+        if sigs
+            .iter()
+            .any(|sig| constant_time_eq::constant_time_eq(sig.as_bytes(), expected_hex.as_bytes()))
+        {
+            Ok(())
+        } else {
+            Err((
+                axum::http::StatusCode::UNAUTHORIZED,
+                "Invalid Stripe signature",
+            ))
+        }
     } else {
-        // Standard HMAC verification (GitHub / Stripe / generic webhooks).
+        // Standard HMAC verification (GitHub / generic webhooks).
         let sig = headers
             .get("x-webhook-signature")
             .or_else(|| headers.get("x-hub-signature-256"))
-            .or_else(|| headers.get("stripe-signature"))
             .and_then(|v| v.to_str().ok());
 
         let Some(sig) = sig else {
@@ -135,7 +186,7 @@ fn verify_request_signature(
                 "Missing signature header (x-slack-signature / x-webhook-signature / x-hub-signature-256 / stripe-signature)",
             ));
         };
-        // Strip "sha256=" prefix if present (GitHub/Stripe format).
+        // Strip "sha256=" prefix if present (GitHub format).
         let sig_hex = sig.strip_prefix("sha256=").unwrap_or(sig);
         use hmac::{Hmac, Mac};
         use sha2::Sha256;
@@ -156,6 +207,36 @@ fn verify_request_signature(
             return Err((axum::http::StatusCode::UNAUTHORIZED, "Invalid signature"));
         }
         Ok(())
+    }
+}
+
+/// Seconds since the Unix epoch; 0 if the clock is before the epoch.
+fn unix_now_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// Parse a Stripe `Stripe-Signature` header (`t=<ts>,v1=<hex>[,v1=<hex>…]`)
+/// into its timestamp and its `v1` signatures. `None` when the header lacks
+/// a parseable `t=` or has no `v1=` at all — such a header is not a Stripe
+/// signature and must not be verified against anything.
+fn parse_stripe_signature(header: &str) -> Option<(i64, Vec<&str>)> {
+    let mut ts: Option<i64> = None;
+    let mut sigs: Vec<&str> = Vec::new();
+    for part in header.split(',') {
+        let part = part.trim();
+        if let Some(v) = part.strip_prefix("t=") {
+            ts = v.parse::<i64>().ok();
+        } else if let Some(v) = part.strip_prefix("v1=") {
+            sigs.push(v);
+        }
+    }
+    if sigs.is_empty() {
+        None
+    } else {
+        Some((ts?, sigs))
     }
 }
 
@@ -1122,5 +1203,99 @@ mod tests {
     fn default_listen_addr_is_loopback() {
         assert_eq!(WebhookAdapter::DEFAULT_LISTEN_ADDR, "127.0.0.1:8080");
         assert_eq!(WebhookAdapter::new(true).listen_addr, "127.0.0.1:8080");
+    }
+
+    /// Stripe signs `HMAC-SHA256(secret, "{t}.{body}")` and ships it as
+    /// `t=<ts>,v1=<hex>` — with every `v1=` repeated during signing-secret
+    /// rotation. The audit found the whole header compared against a plain
+    /// body HMAC, which no genuine Stripe event can ever match; these pin
+    /// the real contract.
+    fn stripe_v1(secret: &str, ts: i64, body: &[u8]) -> String {
+        use hmac::{Hmac, Mac};
+        use sha2::Sha256;
+        type HmacSha256 = Hmac<Sha256>;
+        let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).expect("hmac key");
+        mac.update(format!("{ts}.").as_bytes());
+        mac.update(body);
+        hex::encode(mac.finalize().into_bytes())
+    }
+
+    fn stripe_headers(
+        secret: &str,
+        ts: i64,
+        body: &[u8],
+        extra_v1: &[&str],
+    ) -> axum::http::HeaderMap {
+        let mut headers = axum::http::HeaderMap::new();
+        let mut value = format!("t={ts},v1={}", stripe_v1(secret, ts, body));
+        for v in extra_v1 {
+            value.push_str(&format!(",v1={v}"));
+        }
+        headers.insert(
+            axum::http::HeaderName::from_static("stripe-signature"),
+            axum::http::HeaderValue::from_str(&value).expect("header value"),
+        );
+        headers
+    }
+
+    fn unix_now() -> i64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock after epoch")
+            .as_secs() as i64
+    }
+
+    #[test]
+    fn a_genuine_stripe_signature_verifies() {
+        let body = br#"{"type":"payment_intent.succeeded"}"#;
+        let headers = stripe_headers("whsec_test", unix_now(), body, &[]);
+        assert!(verify_request_signature("whsec_test", &headers, body).is_ok());
+    }
+
+    #[test]
+    fn a_rotating_stripe_secret_verifies_via_any_v1() {
+        let body = br#"{"id":"evt_1"}"#;
+        // The current secret's v1 plus a rotation-era v1 that no longer
+        // matches — Stripe's own rotation shape.
+        let rotation_era = "deadbeef".repeat(32);
+        let headers = stripe_headers("whsec_test", unix_now(), body, &[&rotation_era]);
+        assert!(verify_request_signature("whsec_test", &headers, body).is_ok());
+    }
+
+    #[test]
+    fn a_wrong_stripe_signature_is_refused() {
+        let body = br#"{"id":"evt_2"}"#;
+        let headers = stripe_headers("whsec_test", unix_now(), body, &[]);
+        let err =
+            verify_request_signature("whsec_other", &headers, body).expect_err("must not verify");
+        assert_eq!(err.0, axum::http::StatusCode::UNAUTHORIZED);
+        assert_eq!(err.1, "Invalid Stripe signature");
+    }
+
+    #[test]
+    fn a_stale_stripe_timestamp_is_refused() {
+        let body = br#"{"id":"evt_3"}"#;
+        let stale = unix_now() - 3600;
+        let headers = stripe_headers("whsec_test", stale, body, &[]);
+        let err = verify_request_signature("whsec_test", &headers, body)
+            .expect_err("replay window is 5 minutes");
+        assert_eq!(err.0, axum::http::StatusCode::UNAUTHORIZED);
+        assert_eq!(err.1, "Stale Stripe request (replay-protected)");
+    }
+
+    #[test]
+    fn a_malformed_stripe_header_is_refused() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            axum::http::HeaderName::from_static("stripe-signature"),
+            axum::http::HeaderValue::from_static("t=1234567890"),
+        );
+        let err = verify_request_signature("whsec_test", &headers, b"{}")
+            .expect_err("no v1 means nothing to verify");
+        assert_eq!(err.0, axum::http::StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            err.1,
+            "Malformed Stripe signature header (expected t=<ts>,v1=<hex>)"
+        );
     }
 }
