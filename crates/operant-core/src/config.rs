@@ -917,6 +917,19 @@ pub struct TuiSettings {
     /// default), "none" leaves Esc with its single-press meanings only.
     #[serde(default = "default_double_escape_action")]
     pub double_escape_action: String,
+    /// (plan 2026-10-24 M5) Ghost-text word completion engine for the
+    /// composer: "off" (landing default) or "ngram" — the personal-history
+    /// interpolated trigram engine (OMP pi-predict architecture, in-process).
+    #[serde(default = "default_word_completion")]
+    pub word_completion: String,
+    /// (plan 2026-10-24 M5) Override of the engine's show threshold τ
+    /// (default 0.15). Lower shows more ghosts, higher fewer.
+    #[serde(default)]
+    pub word_completion_threshold: Option<f64>,
+}
+
+fn default_word_completion() -> String {
+    "off".to_string()
 }
 
 fn default_double_escape_action() -> String {
@@ -938,6 +951,8 @@ impl Default for TuiSettings {
             medium_width: 120,
             external_editor: String::new(),
             double_escape_action: default_double_escape_action(),
+            word_completion: default_word_completion(),
+            word_completion_threshold: None,
         }
     }
 }

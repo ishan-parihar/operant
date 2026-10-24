@@ -13,6 +13,7 @@
 mod editing;
 mod history;
 mod kill_ring;
+mod prediction;
 mod state;
 mod suggestions;
 mod typeahead;
@@ -26,6 +27,7 @@ mod word_nav;
 mod tests;
 
 pub use kill_ring::KillRing;
+pub use prediction::{EngineHandle, spawn as spawn_word_predictor};
 pub use typeahead::{
     AcceptForSubmitOutcome, FileSuggestJob, FileSuggestResult, PendingFileQuery, TypeaheadSource,
     TypeaheadSuggestion, active_file_query, active_file_token, compute_typeahead,

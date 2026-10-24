@@ -590,6 +590,10 @@ pub struct App {
     /// The newest request parked while another is in flight (single-flight
     /// + newest-queued: older queued requests are REPLACED, not stacked).
     pub file_suggest_queued: Option<crate::tui::prompt_input::FileSuggestJob>,
+    /// (plan 2026-10-24 M5) The personal-history word-prediction engine
+    /// (`[tui] word_completion = "ngram"`). `None` when disabled or the
+    /// thread could not start — ghost text simply never appears.
+    pub word_predictor: Option<crate::tui::prompt_input::EngineHandle>,
     /// Credential store for provider API keys and OAuth tokens.
     pub auth_store: crate::tui::adapter_types::AuthStore,
     /// Connect-a-provider dialog (/connect command).
@@ -1090,6 +1094,11 @@ impl App {
     /// Both exit paths funnel through here, so this cannot be added to one and
     /// forgotten on the other.
     fn run_exit_teardown(&mut self) {
+        // Flush the word predictor's learned model to its snapshot before
+        // the process goes away (M5: persist on clean exit).
+        if let Some(engine) = &self.word_predictor {
+            engine.persist();
+        }
         self.debug_hub.dump_on_exit();
         self.background_tasks
             .release_all(crate::tui::background_tasks::now_unix_secs());

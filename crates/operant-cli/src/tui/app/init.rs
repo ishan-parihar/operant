@@ -10,6 +10,16 @@ impl App {
         command_registry: crate::commands::CommandRegistry,
     ) -> Self {
         let auth_store = crate::tui::adapter_types::AuthStore::load();
+        // (plan 2026-10-24 M5) Start the personal-history word predictor
+        // when enabled. The history load here is the same file up-arrow
+        // cycling reads; the engine bootstraps from it when no snapshot
+        // exists yet, and learns live via observe() on every submit.
+        let word_predictor = if config.tui.word_completion == "ngram" {
+            let history = crate::tui::input_history::load();
+            crate::tui::prompt_input::spawn_word_predictor(&history)
+        } else {
+            None
+        };
         let has_credentials = auth_store.has_any_key()
             || crate::tui::adapter_types::config::resolve_api_key().is_some();
 
@@ -223,6 +233,7 @@ impl App {
             file_suggest_gen: 0,
             file_suggest_inflight: false,
             file_suggest_queued: None,
+            word_predictor,
             auth_store,
             connect_dialog: DialogSelectState::new("Connect a provider", provider_picker_items()),
             import_config_picker: DialogSelectState::new(

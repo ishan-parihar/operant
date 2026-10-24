@@ -201,6 +201,12 @@ backend = "none"
 # runtime_trace_max_entries = 5000
 
 [tui]
+# Word completion engine for the composer's ghost text (plan 2026-10-24):
+# "off" (default) or "ngram" — an interpolated trigram over your own
+# submitted prompts, learned live. TAB accepts a shown ghost.
+#word_completion = "ngram"
+# Override the engine's show threshold (default 0.15; lower shows more).
+#word_completion_threshold = 0.15
 theme = "opencode"
 rich_output = true
 show_tool_calls = true

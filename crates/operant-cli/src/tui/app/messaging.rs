@@ -348,6 +348,11 @@ impl App {
             // Persist the new entry to ~/.operant/history.jsonl so it
             // survives restarts. (iter-125 — persistent input history.)
             crate::tui::input_history::append(&input);
+            // (plan 2026-10-24 M5) The word predictor learns from every
+            // submitted prompt — same data, one submission, one lesson.
+            if let Some(engine) = &self.word_predictor {
+                engine.observe(&input);
+            }
         }
         self.refresh_prompt_input();
         input
