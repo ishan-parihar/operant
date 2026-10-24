@@ -712,6 +712,14 @@ impl OperantAgent {
         // batches don't double-mutate.
         let mut seen_tool_calls: std::collections::HashSet<(String, String)> =
             std::collections::HashSet::new();
+        // Pre-flight failure-streak gate bookkeeping: parse-refusals from
+        // EARLIER calls in this same batch, per tool. The post-result
+        // ladder observes results only after the batch drains, so without
+        // this counter a 64-call parallel batch would answer every call
+        // with a refusal before the gate could say stop (RC3, plan
+        // 2026-10-25 tooling-surface).
+        let mut batch_parse_fails: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
 
         for (idx, mut tool_call) in tool_calls.into_iter().enumerate() {
             // Check interrupt flag
@@ -787,6 +795,59 @@ impl OperantAgent {
                 continue;
             }
 
+            // ── Pre-flight failure-streak gate ─────────────────────────
+            // The post-result ladder only informs the NEXT iteration: the
+            // 2026-10-24 storm dispatched 64 parallel `process` calls and
+            // executed 32 of them before the ladder halted at 12 (plan
+            // 2026-10-25 tooling-surface, RC3). Gate the batch itself:
+            // once this tool has failed the warn threshold's worth of
+            // times — from earlier turns (the live streak) or from
+            // parse-refusals earlier in THIS batch — later same-tool
+            // calls in the batch are answered without executing. The
+            // skip text carries the guardrail prefix, so the post-batch
+            // observation excludes it (no double count).
+            {
+                let global_streak = self
+                    .tool_guardrails
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .failure_streak(&tool_call.function.name);
+                let batch_fails = batch_parse_fails
+                    .get(&tool_call.function.name)
+                    .copied()
+                    .unwrap_or(0);
+                let prior_fails = global_streak + batch_fails;
+                if prior_fails >= crate::tool_guardrails::FAILURE_WARN_THRESHOLD {
+                    warn!(
+                        tool = %tool_call.function.name,
+                        prior_fails,
+                        "Batch streak gate — refusing call without executing"
+                    );
+                    early_results[idx] = Some(ToolResult {
+                        tool_call_id: tool_call.id.clone(),
+                        name: tool_call.function.name.clone(),
+                        // A deliberate guardrail skip is guidance, not a
+                        // tool failure: success-shaped like the
+                        // GuardrailDecision::Skip arm below, with the
+                        // prefix in `content` so the post-batch observation
+                        // excludes it. The skip text in `error` (the
+                        // error_with_name shape) would be observed as a
+                        // failure and the ladder would halt on skips.
+                        success: true,
+                        content: format!(
+                            "{}tool '{}' has already failed {prior_fails} times in a row this \
+                             turn and the rest of this batch's calls to it are skipped. Take \
+                             a different approach or report back instead of retrying.",
+                            crate::tool_guardrails::SKIP_MESSAGE_PREFIX,
+                            tool_call.function.name
+                        ),
+                        error: None,
+                        timed_out: false,
+                    });
+                    continue;
+                }
+            }
+
             let mut name = tool_call.function.name.clone();
             let raw_args = tool_call.function.arguments.clone();
             let trimmed = raw_args.trim();
@@ -828,7 +889,7 @@ impl OperantAgent {
             // caused by streaming tool-call argument fragmentation.)
             let mut args: serde_json::Value = match serde_json::from_str(&args_str) {
                 Ok(a) => a,
-                Err(_) => {
+                Err(orig_parse_err) => {
                     // Try to repair common truncation issues:
                     // 1. Missing closing brace — append }
                     // 2. Missing closing bracket — append ]
@@ -841,8 +902,12 @@ impl OperantAgent {
                     // 1,938-substitution cascade in the measured window.
                     // Answer the call with a named not-executed error the
                     // model can correct from in one round trip; it never
-                    // reaches phase 2. Log lengths only — raw model
-                    // output does not go into logs.
+                    // reaches phase 2. The log carries the parse error and
+                    // lengths only — raw model output does not go into
+                    // logs, but the RESULT quotes a truncated preview (the
+                    // model already owns its own args, and the 2026-10-24
+                    // storm proved a content-free refusal cannot break a
+                    // retry loop: 12 identical dumps, zero corrections).
                     let repaired = message_safety::repair_tool_call_arguments(&args_str, &name);
                     let repaired_value = match &repaired {
                         // Fixed is parseable by construction (the repair
@@ -863,13 +928,20 @@ impl OperantAgent {
                             warn!(
                                 tool = %name,
                                 args_len = args_str.len(),
+                                error = %orig_parse_err,
                                 "Unrepairable tool arguments — call not executed, error returned to the model"
                             );
+                            // Feed the batch gate: later same-tool calls
+                            // in THIS batch must see this refusal before
+                            // the post-batch ladder ever runs.
+                            *batch_parse_fails.entry(name.clone()).or_insert(0) += 1;
                             early_results[idx] = Some(ToolResult::error_with_name(
                                 &name,
                                 &tool_call.id,
-                                "Arguments could not be parsed and were NOT executed. \
-                                 Reply with corrected arguments on the next turn if the user still wants this.",
+                                message_safety::unrepairable_args_message(
+                                    &orig_parse_err,
+                                    &args_str,
+                                ),
                             ));
                             continue;
                         }

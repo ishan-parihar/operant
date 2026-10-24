@@ -576,6 +576,16 @@ impl ToolGuardrailTracker {
         self.progress_token_streak = 0;
         self.last_pattern = None;
     }
+
+    /// Current consecutive-failure count for a tool this turn. Read-only
+    /// peek for the pre-flight batch gate: the post-result ladder cannot
+    /// inform a parallel batch that was dispatched wholesale (the
+    /// 2026-10-24 storm executed 32 doomed calls in one batch before the
+    /// ladder saw a single result), so the batch consults this streak
+    /// per call before executing.
+    pub fn failure_streak(&self, tool_name: &str) -> usize {
+        self.failure_streaks.get(tool_name).copied().unwrap_or(0)
+    }
 }
 
 /// Count complete alternation cycles at the tail of the name window:

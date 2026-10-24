@@ -3613,10 +3613,17 @@ mod tests {
         // user" ×2). hermes `_append_guardrail_observation` parity: guidance
         // rides the tool result; the operator gets a Notice; a halt is
         // recorded for a controlled turn end.
+        //
+        // Since the iter-1253 batch streak gate, a hot failure streak also
+        // refuses FURTHER executions before they run — so this test pins
+        // three contracts: the warning still rides the 8th failure, the
+        // next call after the warn threshold is gate-skipped (guidance,
+        // not a failure), and the halt wiring itself still works when a
+        // full batch of failing calls drains in one turn (fresh agent, so
+        // the gate has no prior streak to consult).
         let (agent, mut rx) = agent_with_event_rx();
-        let mut last = Vec::new();
-        for i in 0..crate::tool_guardrails::FAILURE_HALT_THRESHOLD {
-            last = agent
+        for i in 0..crate::tool_guardrails::FAILURE_WARN_THRESHOLD {
+            let last = agent
                 .execute_tools(vec![call(i, "zz_no_such_tool")])
                 .await
                 .unwrap();
@@ -3632,18 +3639,64 @@ mod tests {
                 );
             }
         }
-        let error = last[0].error.clone().unwrap_or_default();
-        assert!(error.contains("[Tool loop hard stop:"), "{error}");
+
+        // Batch gate (iter-1253): with the streak at the warn threshold,
+        // the next invocation is answered without executing — a
+        // success-shaped skip carrying the guardrail prefix, not another
+        // failure feeding the ladder.
+        let gated = agent
+            .execute_tools(vec![call(99, "zz_no_such_tool")])
+            .await
+            .unwrap();
         assert!(
-            !agent.interrupt_flag.is_triggered(),
+            gated[0].success,
+            "a gate skip is guidance, not a failure: {:?}",
+            gated[0]
+        );
+        assert!(
+            gated[0]
+                .content
+                .starts_with(crate::tool_guardrails::SKIP_MESSAGE_PREFIX),
+            "skip text carries the guardrail prefix: {:?}",
+            gated[0].content
+        );
+
+        // Halt wiring: one batch of 12 failing calls on a fresh agent —
+        // all pass pre-flight (no prior streak), all refuse as unknown
+        // tools, and the post-batch ladder halts at the threshold.
+        let (agent2, mut rx2) = agent_with_event_rx();
+        let batch: Vec<ToolCall> = (0..crate::tool_guardrails::FAILURE_HALT_THRESHOLD)
+            .map(|i| call(i, "zz_no_such_tool"))
+            .collect();
+        let results = agent2.execute_tools(batch).await.unwrap();
+        assert_eq!(
+            results.len(),
+            crate::tool_guardrails::FAILURE_HALT_THRESHOLD
+        );
+        let halt_error = results[results.len() - 1].error.clone().unwrap_or_default();
+        assert!(
+            halt_error.contains("[Tool loop hard stop:"),
+            "halt guidance rides the last result: {halt_error}"
+        );
+        assert!(
+            !agent2.interrupt_flag.is_triggered(),
             "a halt is not a user interrupt"
         );
         assert!(
-            agent.take_guardrail_halt().is_some(),
+            agent2.take_guardrail_halt().is_some(),
             "halt recorded for the run loop"
         );
         let mut notices = 0;
         while let Ok(event) = rx.try_recv() {
+            match event {
+                AgentEvent::Content { text } => {
+                    panic!("guardrail text leaked as answer content: {text}")
+                }
+                AgentEvent::Notice { .. } => notices += 1,
+                _ => {}
+            }
+        }
+        while let Ok(event) = rx2.try_recv() {
             match event {
                 AgentEvent::Content { text } => {
                     panic!("guardrail text leaked as answer content: {text}")

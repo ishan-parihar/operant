@@ -14,8 +14,8 @@
 //!   `Fixed`.
 //! - On `Unrepairable`, `execute_tools` does NOT execute: the call is
 //!   answered with ONE named `ToolResult::error_with_name` — "Arguments
-//!   could not be parsed and were NOT executed. Reply with corrected
-//!   arguments on the next turn…" — and never reaches phase 2.
+//!   could not be parsed and were NOT executed", carrying the parse
+//!   error and an args preview — and never reaches phase 2.
 //! - The refusal is per-CALL, not per-tool: the tool stays visible in
 //!   every later request's schema list, so a corrected retry executes
 //!   normally on the next iteration.
@@ -45,8 +45,10 @@ use operant_core::schema::ToolSchema;
 use operant_core::tools::{OperantTool, ToolContext, ToolRegistry, ToolResult};
 
 /// The two halves of the B2 refusal text — both must reach the model.
+/// (iter-1252 added the parse-error + preview diagnostic and rewrote the
+/// corrective half; the marks track the current message.)
 const REFUSAL_MARK: &str = "could not be parsed and were NOT executed";
-const REPLY_MARK: &str = "Reply with corrected arguments on the next turn";
+const REPLY_MARK: &str = "re-send the call with corrected JSON arguments";
 /// The pre-B2 cascade signature: `"{}"` executed → schema validation noise.
 const MISSING_MARK: &str = "Missing required field";
 const PROBE: &str = "unrepairable_probe";
@@ -203,6 +205,46 @@ fn tool_call_response(call_id: &str, arguments: &str) -> ChatResponse {
                         arguments: arguments.to_string(),
                     }),
                 }]),
+            },
+            finish_reason: Some("tool_calls".to_string()),
+        }],
+        usage: Usage {
+            prompt_tokens: 1,
+            completion_tokens: 1,
+            total_tokens: 2,
+        },
+    }
+}
+
+/// A batch of `count` parallel calls to one tool, each with DISTINCT
+/// unparseable args (distinct, or the T6 within-batch dedupe would skip
+/// them before the streak gate could — the real 2026-10-24 storm's calls
+/// were distinct slices of the model's answer text for exactly this
+/// reason).
+fn storm_response(count: usize) -> ChatResponse {
+    let calls: Vec<ToolCallDelta> = (0..count)
+        .map(|i| ToolCallDelta {
+            index: i,
+            id: Some(format!("call_storm_{i}")),
+            call_type: Some("function".to_string()),
+            function: Some(ToolCallFunction {
+                name: PROBE.to_string(),
+                arguments: format!("answer slice {i}\nwith a raw newline"),
+            }),
+        })
+        .collect();
+    ChatResponse {
+        id: "resp".to_string(),
+        object: "chat.completion".to_string(),
+        created: 0,
+        model: "demo".to_string(),
+        choices: vec![Choice {
+            index: 0,
+            message: MessageDelta {
+                role: Some(Role::Assistant),
+                content: Some(String::new()),
+                reasoning_content: None,
+                tool_calls: Some(calls),
             },
             finish_reason: Some("tool_calls".to_string()),
         }],
@@ -503,4 +545,77 @@ async fn corrected_retry_after_refusal_executes() {
     assert_eq!(second.len(), 2, "refusal, then the corrected result");
     assert!(second[0].content.contains(REFUSAL_MARK));
     assert!(second[1].content.contains("ran_action:pwd"));
+}
+
+/// The 2026-10-24 storm shape (plan 2026-10-25 tooling-surface, RC3):
+/// ONE assistant turn carries 64 parallel calls to the same tool, all
+/// with unparseable args. The post-result ladder only informs the NEXT
+/// iteration, so the batch gates ITSELF: exactly FAILURE_WARN_THRESHOLD
+/// calls are answered with the parse refusal, the rest are batch-skipped
+/// with the guardrail prefix, and the probe never executes.
+#[tokio::test]
+async fn a_parallel_batch_of_failing_calls_gates_at_the_warn_threshold() {
+    let temp = tempfile::tempdir().unwrap();
+    let client = Arc::new(ScriptedClient::new(vec![
+        storm_response(64),
+        text_response("storm survived"),
+    ]));
+    let probe = Arc::new(ProbeTool {
+        entered: Arc::new(AtomicUsize::new(0)),
+    });
+    let registry = ToolRegistry::new(Duration::from_secs(30));
+    registry.register_dyn(probe.clone()).await.unwrap();
+    let agent = build_agent(
+        Arc::clone(&client),
+        6,
+        temp.path().join("storm_batch.sqlite"),
+        registry,
+    )
+    .await;
+
+    let result = agent
+        .run("do some work".to_string())
+        .await
+        .expect("the gated batch must end the turn normally");
+    assert_eq!(result.content, "storm survived");
+
+    // Every call is answered (the provider protocol requires one result
+    // per tool_call_id), but only the warn threshold's worth were
+    // parse-refused; the rest carry the batch-skip text.
+    let requests = client.requests();
+    assert_eq!(requests.len(), 2);
+    let tool_msgs = tool_messages(&requests[1]);
+    assert_eq!(tool_msgs.len(), 64, "every call gets exactly one result");
+
+    let refusals: Vec<&&Message> = tool_msgs
+        .iter()
+        .filter(|m| m.content.contains(REFUSAL_MARK))
+        .collect();
+    let skips = tool_msgs
+        .iter()
+        .filter(|m| {
+            m.content
+                .contains("rest of this batch's calls to it are skipped")
+        })
+        .count();
+    assert_eq!(
+        refusals.len(),
+        operant_core::tool_guardrails::FAILURE_WARN_THRESHOLD,
+        "the batch executes exactly up to the warn threshold"
+    );
+    assert_eq!(refusals.len() + skips, 64, "nothing is left unanswered");
+
+    // And the iter-1252 diagnostic rides every refusal.
+    assert!(
+        refusals
+            .iter()
+            .all(|m| m.content.contains("Parse error:") && m.content.contains(REPLY_MARK)),
+        "refusals must carry the parse reason and the corrective text"
+    );
+
+    assert_eq!(
+        probe.entered.load(Ordering::SeqCst),
+        0,
+        "unrepairable args never reach the tool impl"
+    );
 }

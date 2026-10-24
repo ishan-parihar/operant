@@ -201,19 +201,6 @@ pub fn repair_tool_call_arguments(raw_args: &str, tool_name: &str) -> RepairOutc
     RepairOutcome::Unrepairable
 }
 
-// ---------------------------------------------------------------------------
-// Message sequence repair
-// ---------------------------------------------------------------------------
-
-/// Repair role-alternation violations in a message list.
-///
-/// Ported from hermes-agent's `repair_message_sequence`.
-/// Fixes:
-/// - `tool -> user` violations (insert synthetic assistant)
-/// - `user -> user` violations (merge content)
-/// - `assistant -> assistant` violations (merge tool_calls, keep newer content)
-///
-/// Returns the number of repairs made.
 /// Escape raw control characters (< 0x20) inside JSON string literals.
 ///
 /// Strict JSON forbids unescaped control characters inside strings, but
@@ -270,6 +257,42 @@ fn escape_control_chars_in_strings(input: &str) -> String {
     out
 }
 
+/// The refusal message for a tool call whose arguments no repair pass
+/// could turn into valid JSON.
+///
+/// Carries the parse error and a short preview of the raw args so the
+/// model can actually correct the call: the 2026-10-24 storm retried an
+/// answer-dump into `process` twelve times against a content-free
+/// refusal ("Arguments could not be parsed…") and never learned the args
+/// were prose (plan 2026-10-25 tooling-surface, RC2). The preview folds
+/// control characters to spaces so the refusal stays one readable line.
+pub fn unrepairable_args_message(error: &serde_json::Error, raw_args: &str) -> String {
+    let preview: String = raw_args
+        .chars()
+        .take(160)
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
+    format!(
+        "Arguments could not be parsed and were NOT executed. Parse error: {error}. \
+         Arguments began with: \"{preview}\". If you meant to reply to the user, \
+         answer in plain text instead of a tool call; otherwise re-send the call \
+         with corrected JSON arguments."
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Message sequence repair
+// ---------------------------------------------------------------------------
+
+/// Repair role-alternation violations in a message list.
+///
+/// Ported from hermes-agent's `repair_message_sequence`.
+/// Fixes:
+/// - `tool -> user` violations (insert synthetic assistant)
+/// - `user -> user` violations (merge content)
+/// - `assistant -> assistant` violations (merge tool_calls, keep newer content)
+///
+/// Returns the number of repairs made.
 pub fn repair_message_sequence(messages: &mut Vec<Message>) -> usize {
     if messages.len() < 2 {
         return 0;
@@ -719,6 +742,35 @@ mod tests {
         };
         let parsed: serde_json::Value = serde_json::from_str(&fixed).expect("parses");
         assert_eq!(parsed["command"], "echo hi");
+    }
+
+    #[test]
+    fn unrepairable_refusal_names_the_parse_error_and_a_preview() {
+        // RC2 (plan 2026-10-25 tooling-surface): the storm retried twelve
+        // times against a content-free refusal. The refusal must carry
+        // the serde reason, a truncated args preview, and the plain-text
+        // escape hatch.
+        // A raw newline INSIDE a string value is the invalid shape.
+        let bad = "{\"a\": \"line one\nline two\"}";
+        let err = serde_json::from_str::<serde_json::Value>(bad).unwrap_err();
+        let msg = unrepairable_args_message(&err, bad);
+        assert!(msg.contains("Parse error:"), "names the reason: {msg}");
+        assert!(msg.contains("Arguments began with:"), "previews the args");
+        assert!(
+            msg.contains("answer in plain text instead of a tool call"),
+            "offers the plain-text escape hatch: {msg}"
+        );
+        assert!(!msg.contains('\n'), "preview folds newlines: {msg}");
+    }
+
+    #[test]
+    fn unrepairable_refusal_preview_is_bounded() {
+        let err = serde_json::from_str::<serde_json::Value>("x").unwrap_err();
+        // A character the surrounding prose never uses, so counting its
+        // occurrences counts the preview exactly.
+        let long_args = "z".repeat(4_000);
+        let msg = unrepairable_args_message(&err, &long_args);
+        assert_eq!(msg.matches('z').count(), 160, "preview capped at 160");
     }
 
     #[test]
