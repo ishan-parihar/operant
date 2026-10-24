@@ -149,6 +149,28 @@ pub fn concise_tool_error_summary(content: &str) -> Option<String> {
             continue;
         }
 
+        // The parse-refusal shape (unrepairable_args_message; the adapter's
+        // ✗ coercion prefixes it when the status is Error but the raw text
+        // does not read as a failure). Surface the parse reason only — the
+        // args preview after "Arguments began with:" is model-owned text
+        // the header has no room for. The 2026-10-24 storm rendered 32 of
+        // these with an EMPTY header summary because no prefix matched.
+        let stripped = line.strip_prefix('✗').map(str::trim).unwrap_or(line);
+        if let Some(rest) = stripped.strip_prefix("Arguments could not be parsed") {
+            let reason = rest
+                .split("Parse error: ")
+                .nth(1)
+                .and_then(|tail| tail.split(". Arguments began with:").next())
+                .map(str::trim)
+                .filter(|s| !s.is_empty());
+            return Some(match reason {
+                Some(reason) => {
+                    format!("invalid arguments: {}", truncate_middle_display(reason, 80))
+                }
+                None => "invalid arguments: could not be parsed".to_string(),
+            });
+        }
+
         let detail = line
             .strip_prefix("Error:")
             .or_else(|| line.strip_prefix("error:"))
@@ -242,6 +264,35 @@ mod tests {
         assert_eq!(
             concise_tool_error_summary("--- Command finished with exit code: 2 ---").as_deref(),
             Some("exit 2")
+        );
+    }
+
+    #[test]
+    fn summarizes_the_parse_refusal_with_its_reason() {
+        // The 2026-10-24 storm rows: the refusal carries the reason after
+        // "Parse error: " and the model-owned preview after "Arguments
+        // began with:" — the header shows the reason, never the preview.
+        let refusal = "✗ Arguments could not be parsed and were NOT executed. \
+Parse error: invalid value at line 1 column 3. \
+Arguments began with: \"answer slice 0 with a raw newline\". If you meant \
+to reply to the user, answer in plain text instead of a tool call.";
+        assert_eq!(
+            concise_tool_error_summary(refusal).as_deref(),
+            Some("invalid arguments: invalid value at line 1 column 3")
+        );
+        // The adapter does not always prefix the ✗ — the raw result text
+        // must summarize identically.
+        let raw = refusal.strip_prefix('✗').unwrap().trim_start();
+        assert_eq!(
+            concise_tool_error_summary(raw).as_deref(),
+            Some("invalid arguments: invalid value at line 1 column 3")
+        );
+        // No parse reason (an older or hand-written variant) still gets a
+        // summary instead of an empty header.
+        assert_eq!(
+            concise_tool_error_summary("Arguments could not be parsed and were NOT executed.")
+                .as_deref(),
+            Some("invalid arguments: could not be parsed")
         );
     }
 

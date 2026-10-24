@@ -111,6 +111,15 @@ pub fn display_messages(app: &App) -> Vec<DisplayMessage> {
             collapse_tool_runs(rows);
         }
         collapse_tool_runs(&mut trailing_tool_rows);
+    } else {
+        // Visible mode still folds runs of IDENTICAL failures into one
+        // ×N row — the collapse summary above covers hidden mode; this
+        // covers the wall-of-failures shape in visible mode.
+        fold_identical_failed_tool_rows(&mut tool_rows_before);
+        for rows in tool_rows_after.values_mut() {
+            fold_identical_failed_tool_rows(rows);
+        }
+        fold_identical_failed_tool_rows(&mut trailing_tool_rows);
     }
 
     let mut annotations_after: HashMap<usize, Vec<&SystemAnnotation>> = HashMap::new();
@@ -213,9 +222,13 @@ pub fn live_tool_rows(app: &App) -> Vec<DisplayMessage> {
         .map(|b| display_message_from_tool_block(app, b))
         .collect();
     // (plan 08) hidden tool activity collapses in the Streaming section
-    // too — the same summary row shape as the Body.
+    // too — the same summary row shape as the Body. Visible mode still
+    // folds identical-failure runs (the storm wall rendered here while
+    // the tails streamed).
     if !app.show_tool_calls {
         collapse_tool_runs(&mut rows);
+    } else {
+        fold_identical_failed_tool_rows(&mut rows);
     }
     rows
 }
@@ -282,6 +295,72 @@ fn collapse_tool_runs(rows: &mut Vec<DisplayMessage>) {
 /// Content of a tool row whose call has not produced output yet; the
 /// renderer shows a pending icon for it instead of `✓`.
 pub const TOOL_PENDING_PREVIEW: &str = "\u{2026}";
+
+/// How many leading content characters two failed rows must share (plus
+/// the tool name) to count as the SAME failure shape for the fold. The
+/// 2026-10-24 storm rows differed only in the args preview deep inside
+/// the refusal text, so exact-content equality would never fold them.
+const FAILURE_FOLD_PREFIX_CHARS: usize = 80;
+
+/// Fold each contiguous run of IDENTICAL failed tool rows into one row
+/// carrying a ×N marker (plan 2026-10-25 tooling-surface, RC4).
+///
+/// Runs fold only when the failure SHAPE matches — same tool, failed
+/// output, same [`FAILURE_FOLD_PREFIX_CHARS`] content prefix — so
+/// genuinely different failures (a read failing on five different files)
+/// stay distinct and successes are never touched. The folded row keeps
+/// the first call's `tool_data` (its output is the expanded view) and
+/// names the count in `intent`, which the card header renders between
+/// the tool name and the summary. Runs of length 1 pass through.
+fn fold_identical_failed_tool_rows(rows: &mut Vec<DisplayMessage>) {
+    fn failure_key(row: &DisplayMessage) -> Option<String> {
+        if row.role != "tool" {
+            return None;
+        }
+        if !crate::tui::operant_model::tool_display::tool_output_looks_failed(&row.content) {
+            return None;
+        }
+        let name = row.tool_data.as_ref()?.name.clone();
+        let prefix: String = row
+            .content
+            .chars()
+            .take(FAILURE_FOLD_PREFIX_CHARS)
+            .collect();
+        Some(format!("{name}\u{0}{prefix}"))
+    }
+
+    let mut folded: Vec<DisplayMessage> = Vec::with_capacity(rows.len());
+    let mut run: Vec<DisplayMessage> = Vec::new();
+    let mut run_key: Option<String> = None;
+    let flush = |run: &mut Vec<DisplayMessage>, out: &mut Vec<DisplayMessage>| {
+        if let Some(first) = run.first() {
+            let mut row = first.clone();
+            let rest = run.len() - 1;
+            if rest > 0 {
+                if let Some(tc) = row.tool_data.as_mut() {
+                    tc.intent = Some(format!("×{} identical", run.len()));
+                }
+                row.content
+                    .push_str(&format!("\n× {rest} more identical failures folded"));
+            }
+            out.push(row);
+        }
+        run.clear();
+    };
+    for row in rows.drain(..) {
+        let key = failure_key(&row);
+        match (&run_key, &key) {
+            (Some(prev), Some(k)) if *prev == *k => run.push(row),
+            _ => {
+                flush(&mut run, &mut folded);
+                run_key = key;
+                run.push(row);
+            }
+        }
+    }
+    flush(&mut run, &mut folded);
+    *rows = folded;
+}
 
 /// Lines an expanded (Ctrl+O) tool row shows before eliding the rest.
 const EXPANDED_TOOL_MAX_LINES: usize = 400;
@@ -995,5 +1074,95 @@ mod tests {
         // block beside it still maps.
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].content, "visible");
+    }
+
+    // ── identical-failure fold (plan 2026-10-25 tooling-surface, RC4) ──
+
+    fn failed_tool_row(name: &str, content: &str) -> DisplayMessage {
+        DisplayMessage::tool(
+            content.to_string(),
+            ToolCall {
+                id: format!("call_{name}_{}", content.len()),
+                name: name.to_string(),
+                input: serde_json::json!({}),
+                intent: None,
+                thought_signature: None,
+            },
+        )
+    }
+
+    #[test]
+    fn identical_failed_tool_rows_fold_into_one_marked_row() {
+        // The storm shape: rows share the failure's leading text and
+        // differ only in the args preview deep inside it.
+        let shared = "✗ Arguments could not be parsed and were NOT executed. Parse error: boom.";
+        let mut rows = vec![
+            failed_tool_row("process", &format!("{shared} preview=\"slice one\"")),
+            failed_tool_row("process", &format!("{shared} preview=\"slice two\"")),
+        ];
+        fold_identical_failed_tool_rows(&mut rows);
+        assert_eq!(rows.len(), 1, "one row for one failure shape");
+        assert_eq!(
+            rows[0].tool_data.as_ref().unwrap().intent.as_deref(),
+            Some("×2 identical"),
+            "the header marker names the count"
+        );
+        assert!(
+            rows[0]
+                .content
+                .contains("× 1 more identical failures folded"),
+            "the body notes the fold: {:?}",
+            rows[0].content
+        );
+    }
+
+    #[test]
+    fn different_failures_stay_distinct() {
+        let mut rows = vec![
+            failed_tool_row("read", "✗ file not found: alpha.rs"),
+            failed_tool_row("read", "✗ permission denied: beta.rs"),
+        ];
+        fold_identical_failed_tool_rows(&mut rows);
+        assert_eq!(rows.len(), 2, "different failures do not fold");
+        assert!(
+            rows.iter()
+                .all(|r| r.tool_data.as_ref().unwrap().intent.is_none())
+        );
+    }
+
+    #[test]
+    fn successful_rows_are_never_folded() {
+        let mut rows = vec![
+            failed_tool_row("grep", "3 matches in 2 files"),
+            failed_tool_row("grep", "3 matches in 2 files"),
+        ];
+        fold_identical_failed_tool_rows(&mut rows);
+        assert_eq!(rows.len(), 2, "identical successes stay individual");
+    }
+
+    #[test]
+    fn a_non_tool_row_breaks_the_fold_run() {
+        let shared = "✗ same failure shape";
+        let success = DisplayMessage::tool(
+            "completed successfully".to_string(),
+            ToolCall {
+                id: "call_ok".to_string(),
+                name: "grep".to_string(),
+                input: serde_json::json!({}),
+                intent: None,
+                thought_signature: None,
+            },
+        );
+        let mut rows = vec![
+            failed_tool_row("process", shared),
+            success,
+            failed_tool_row("process", shared),
+        ];
+        fold_identical_failed_tool_rows(&mut rows);
+        assert_eq!(rows.len(), 3, "the interleaved row breaks the run");
+        assert!(
+            rows.iter()
+                .all(|r| r.tool_data.as_ref().unwrap().intent.is_none())
+        );
     }
 }
