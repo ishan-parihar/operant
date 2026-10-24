@@ -126,31 +126,6 @@ fn resolve_file_path(url: &str) -> Option<PathBuf> {
     }
 }
 
-/// Check if the main model supports native vision (multimodal tool results).
-///
-/// Mirrors the Python `_supports_media_in_tool_results` check: known
-/// vision-capable providers return true, unknown ones return false so the
-/// caller falls back to the auxiliary vision LLM path.
-fn main_model_supports_vision() -> bool {
-    let cfg = runtime_config();
-    let base_url = cfg.client.base_url.to_lowercase();
-
-    // Known vision-capable provider patterns
-    let vision_providers = [
-        "anthropic",
-        "claude",
-        "openai",
-        "gemini",
-        "openrouter",
-        "nous",
-        "vertex",
-        "bedrock",
-        "azure",
-    ];
-
-    vision_providers.iter().any(|p| base_url.contains(p))
-}
-
 /// Resize image bytes to fit within dimension and byte limits.
 ///
 /// Progressive strategy matching the Python implementation:
@@ -307,39 +282,6 @@ async fn download_image(url: &str) -> Result<Vec<u8>, String> {
     Ok(bytes.to_vec())
 }
 
-/// Build the multimodal tool-result envelope for native vision fast-path
-fn build_native_vision_envelope(
-    image_url: &str,
-    question: &str,
-    image_data_url: &str,
-    image_size_bytes: usize,
-) -> serde_json::Value {
-    let text_part = format!(
-        "Image loaded into your context \u{2014} you can see it natively now. \
-         Use your built-in vision to answer the user.\n\nQuestion: {}",
-        question
-    );
-
-    let summary = format!(
-        "Image attached natively for the main model ({:.1} KB). Answer using built-in vision.",
-        image_size_bytes as f64 / 1024.0
-    );
-
-    serde_json::json!({
-        "_multimodal": true,
-        "content": [
-            {"type": "text", "text": text_part},
-            {"type": "image_url", "image_url": {"url": image_data_url}}
-        ],
-        "text_summary": summary,
-        "meta": {
-            "image_url": &image_url[..std::cmp::min(image_url.len(), 200)],
-            "size_bytes": image_size_bytes,
-            "native_vision": true
-        }
-    })
-}
-
 /// Call auxiliary vision LLM to describe the image
 async fn call_auxiliary_vision_llm(image_data_url: &str, question: &str) -> Result<String, String> {
     let cfg = runtime_config();
@@ -463,9 +405,6 @@ impl OperantTool for VisionTool {
             return ToolResult::error("vision_analyze", "question is required");
         }
 
-        // Determine native vision support
-        let use_native_path = main_model_supports_vision();
-
         // Try to resolve as local file first
         if let Some(path) = resolve_file_path(image_url) {
             match std::fs::read(&path) {
@@ -518,20 +457,17 @@ impl OperantTool for VisionTool {
                         );
                     }
 
-                    // Native fast-path: return multimodal envelope
-                    if use_native_path {
-                        return ToolResult::success(
-                            "vision_analyze",
-                            build_native_vision_envelope(
-                                image_url,
-                                question,
-                                &data_url,
-                                processed_bytes.len(),
-                            ),
-                        );
-                    }
-
-                    // Auxiliary LLM fallback
+                    // (iter-1249) The fake "native fast-path" is gone: it emitted a
+                    // `_multimodal` envelope claiming "you can see it natively
+                    // now" that NOTHING in production delivered — the tool
+                    // result reached the model as a base64 STRING (the
+                    // envelope's consumer lived in the operant-providers
+                    // crate, deleted at iter-1215). Its gate was a substring
+                    // match on base_url ("openai" matched any OpenAI-
+                    // compatible endpoint, visionless ones included — the
+                    // exact defect oh-my-pi's vision-guard exists to
+                    // prevent). The real, verified path is the auxiliary
+                    // vision LLM below, which actually sends the image.
                     return match call_auxiliary_vision_llm(&data_url, question).await {
                         Ok(analysis) => ToolResult::success(
                             "vision_analyze",
@@ -573,15 +509,8 @@ impl OperantTool for VisionTool {
                 );
             }
 
-            // Native fast-path: return multimodal envelope
-            if use_native_path {
-                return ToolResult::success(
-                    "vision_analyze",
-                    build_native_vision_envelope(image_url, question, image_url, image_url.len()),
-                );
-            }
-
-            // Auxiliary LLM fallback for data URLs
+            // (iter-1249) No fake native path for data URLs either — see the
+            // local-file branch above for why the envelope went away.
             return match call_auxiliary_vision_llm(image_url, question).await {
                 Ok(analysis) => ToolResult::success(
                     "vision_analyze",
@@ -649,20 +578,7 @@ impl OperantTool for VisionTool {
                     );
                 }
 
-                // Native fast-path: return multimodal envelope
-                if use_native_path {
-                    return ToolResult::success(
-                        "vision_analyze",
-                        build_native_vision_envelope(
-                            image_url,
-                            question,
-                            &data_url,
-                            processed_bytes.len(),
-                        ),
-                    );
-                }
-
-                // Auxiliary LLM fallback
+                // (iter-1249) Same honest routing as the other branches.
                 match call_auxiliary_vision_llm(&data_url, question).await {
                     Ok(analysis) => ToolResult::success(
                         "vision_analyze",
@@ -699,6 +615,28 @@ fn needs_resize(bytes: &[u8], _mime_type: &str, max_dimension: u32) -> bool {
         }
     }
     false
+}
+
+/// Minimal base64 decoder for the 1x1 PNG fixture (test-only; keeps the
+/// vision tool's dependency surface unchanged).
+#[cfg(test)]
+fn base64_decode_or_panic(s: &str) -> Vec<u8> {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = Vec::new();
+    let mut buf: u32 = 0;
+    let mut bits = 0u32;
+    for ch in s.bytes().filter(|b| *b != b'=') {
+        let Some(pos) = TABLE.iter().position(|t| *t == ch) else {
+            continue;
+        };
+        buf = (buf << 6) | pos as u32;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((buf >> bits) as u8);
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -808,5 +746,106 @@ mod tests {
             .await;
         assert!(!result.success);
         assert!(result.error.unwrap().contains("Invalid"));
+    }
+
+    // ------------------------------------------------------------------
+    // iter-1249: the fake "native vision" fast-path is gone
+    // ------------------------------------------------------------------
+    //
+    // The old gate was a substring match on the client's base_url
+    // ("openai" matched ANY OpenAI-compatible endpoint, visionless ones
+    // included), and the fast-path it unlocked returned an envelope claiming
+    // "you can see it natively now" while NOTHING delivered the image: the
+    // tool result reached the model as a base64 STRING (the envelope's
+    // consumer lived in the operant-providers crate, deleted at iter-1215).
+    // That fake success was WORSE than an honest error: it skipped the real
+    // auxiliary vision LLM, so the operator got a confident "analysis" the
+    // model invented from a text blob. Restoring the substring gate must
+    // turn this test red, because the gate's "success" is exactly the lie.
+
+    /// Serialises the process-global runtime config for the vision tests:
+    /// install_runtime_config is process-wide, so a parallel test could read
+    /// the crafted config mid-test. The lock is HELD AS A FIELD and released
+    /// in Drop — the first draft forgot the guard instead, which deadlocked
+    /// every test after the first (same trap the todo tests hit).
+    static VISION_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    struct ConfigGuard {
+        _lock: std::sync::MutexGuard<'static, ()>,
+        previous: crate::config::AppConfig,
+    }
+    impl ConfigGuard {
+        fn install(base_url: &str) -> Self {
+            let lock = VISION_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            let previous = crate::config::runtime_config();
+            let mut crafted = crate::config::AppConfig::default();
+            crafted.client.base_url = base_url.to_string();
+            crate::config::install_runtime_config(crafted);
+            Self {
+                _lock: lock,
+                previous,
+            }
+        }
+    }
+    impl Drop for ConfigGuard {
+        fn drop(&mut self) {
+            crate::config::install_runtime_config(self.previous.clone());
+            // The _lock field releases when the guard drops, after the
+            // restore — the serialiser is held through it.
+        }
+    }
+
+    /// A substring-matching base_url must NOT unlock a fake success. With no
+    /// vision API key configured, the tool must fail HONESTLY — the old gate
+    /// returned the `_multimodal` envelope (success, "you can see it
+    /// natively now") on exactly this setup, skipping the real vision model.
+    #[tokio::test]
+    async fn a_substring_matching_base_url_does_not_fake_native_vision() {
+        let _cfg = ConfigGuard::install("https://api.openai.com/v1");
+
+        let tool = VisionTool;
+        // A real local image exercises the full read path — no network.
+        let dir = std::env::temp_dir().join("operant-vision-tests");
+        std::fs::create_dir_all(&dir).unwrap();
+        let img = dir.join("probe.png");
+        // 1x1 transparent PNG.
+        std::fs::write(
+            &img,
+            base64_decode_or_panic(
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
+            ),
+        )
+        .unwrap();
+
+        let result = tool
+            .execute(
+                serde_json::json!({
+                    "imageUrl": img.to_str().unwrap(),
+                    "question": "what is in this image?"
+                }),
+                ToolContext::default(),
+            )
+            .await;
+
+        assert!(
+            !result.success,
+            "the old substring gate returned a fake success here"
+        );
+        let err = result.error.unwrap_or_default();
+        assert!(
+            err.contains("No vision model configured"),
+            "the failure must be the honest no-vision-model error: {err}"
+        );
+        // The lie itself must not appear in either field.
+        assert!(
+            !result.content.contains("you can see it natively now"),
+            "the fake native-vision claim must never appear: {}",
+            result.content
+        );
+        assert!(
+            !result.content.contains("_multimodal"),
+            "the dead envelope key must not appear: {}",
+            result.content
+        );
     }
 }
