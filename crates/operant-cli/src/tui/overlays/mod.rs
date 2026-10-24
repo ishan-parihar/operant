@@ -3,7 +3,6 @@
 //   - HistorySearchOverlay (Ctrl+R)
 //   - GlobalSearchState (ripgrep search dialog)
 
-mod fold;
 mod global_search;
 pub mod help;
 mod history_search;

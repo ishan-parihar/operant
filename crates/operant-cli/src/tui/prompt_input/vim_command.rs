@@ -19,20 +19,19 @@ impl PromptInputState {
             if self.vim_mode == VimMode::Insert
                 && let Some(before) = self.vim_insert_text_before.take()
             {
-                // Compute inserted text as the new characters added since mode entry
-                let inserted = if self.text.len() >= before.len() {
-                    // Simple case: text only grew (cursor at end of inserted span)
-                    let from = before.len().min(self.cursor);
-                    let _ = from; // use cursor-based diff below
-                    // Find the diff between before/after texts at current cursor
-                    // Inserted = text[insert_start..cursor] but we don't track start.
-                    // Approximate: whole text minus before, substring at cursor.
-                    // Better: store cursor-at-entry and extract.
-                    self.text[before.len().min(self.text.len())..self.cursor.min(self.text.len())]
-                        .to_string()
-                } else {
-                    String::new()
-                };
+                // Compute inserted text as the new characters added since mode entry.
+                // The text is NOT guaranteed to still start with `before` (in-insert
+                // edits and arrow moves move the cursor and rewrite the buffer), so
+                // the slice needs an order AND boundary guard — start > end or a
+                // multi-byte char under either offset panicked here (R48-5).
+                let s = before.len().min(self.text.len());
+                let e = self.cursor.min(self.text.len());
+                let inserted =
+                    if e >= s && self.text.is_char_boundary(s) && self.text.is_char_boundary(e) {
+                        self.text[s..e].to_string()
+                    } else {
+                        String::new()
+                    };
                 if !inserted.is_empty() {
                     self.vim_dot_action = Some(DotRepeatAction::Insert { text: inserted });
                 }

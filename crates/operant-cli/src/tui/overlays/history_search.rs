@@ -96,7 +96,7 @@ pub fn subsequence_score(query: &str, target: &str) -> Option<(f32, Vec<usize>)>
     // Positions come from `folded_find` in ORIGINAL-target coordinates —
     // offsets found in the lowercased copy are not byte-aligned in the
     // original when a char's fold changes its length (R48-3).
-    if let Some((m_start, m_end)) = super::fold::folded_find(target, query) {
+    if let Some((m_start, m_end)) = crate::tui::fold_search::folded_find(target, query) {
         let position_bonus = 1.0 / (1.0 + m_start as f32);
         let score = 1.0 + position_bonus;
         // Matched positions are the contiguous byte range [m_start, m_end)

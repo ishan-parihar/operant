@@ -107,16 +107,19 @@ impl PromptInputState {
         } else {
             self.cursor
         };
-        // Search from `start` forward, then wrap around
-        let text_lc = self.text.to_lowercase();
-        let pat_lc = pattern.to_lowercase();
-        if let Some(pos) = text_lc[start..].find(&pat_lc) {
-            self.cursor = start + pos;
+        // Search from `start` forward, then wrap around. Offsets come from
+        // `folded_find` in ORIGINAL-text coordinates: the previous version
+        // searched a `to_lowercase()` copy and wrote its byte offsets into
+        // `self.cursor` (an offset in the original), so a fold that changes
+        // byte length corrupted the cursor and the next keypress's slice
+        // panicked (R48-4).
+        if let Some((s, _e)) = crate::tui::fold_search::folded_find(&self.text[start..], pattern) {
+            self.cursor = start + s;
             return;
         }
         // Wrap: search from beginning
-        if let Some(pos) = text_lc.find(&pat_lc) {
-            self.cursor = pos;
+        if let Some((s, _e)) = crate::tui::fold_search::folded_find(&self.text, pattern) {
+            self.cursor = s;
         }
     }
 
@@ -125,17 +128,16 @@ impl PromptInputState {
         if pattern.is_empty() {
             return;
         }
-        let text_lc = self.text.to_lowercase();
-        let pat_lc = pattern.to_lowercase();
-        // Find all occurrences, pick the last one before cursor
-        let before = &text_lc[..self.cursor];
-        if let Some(pos) = before.rfind(&pat_lc) {
-            self.cursor = pos;
+        // Find all occurrences, pick the last one before cursor — in
+        // original-text coordinates (R48-4, see vim_search_forward).
+        let before = &self.text[..self.cursor];
+        if let Some((s, _e)) = crate::tui::fold_search::folded_find_last(before, pattern) {
+            self.cursor = s;
             return;
         }
         // Wrap: find last occurrence in whole text
-        if let Some(pos) = text_lc.rfind(&pat_lc) {
-            self.cursor = pos;
+        if let Some((s, _e)) = crate::tui::fold_search::folded_find_last(&self.text, pattern) {
+            self.cursor = s;
         }
     }
 }

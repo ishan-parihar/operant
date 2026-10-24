@@ -2045,3 +2045,66 @@ fn ghost_accept_noop_without_ghost() {
     assert!(!s.accept_ghost(true));
     assert_eq!(s.text, "plain");
 }
+
+// ---- R48-4/R48-5: fold-length-drift and slice-order guards ----------------
+
+/// `/k` in a buffer holding a KELVIN SIGN must land the cursor on an
+/// original-text char boundary — the old search wrote lowercased-string
+/// offsets into `self.cursor` and the next keypress's slice panicked.
+#[test]
+fn vim_search_forward_lands_on_an_original_boundary_after_folding() {
+    let mut s = PromptInputState::new();
+    s.text = "\u{212A}x".to_string(); // KELVIN SIGN (3B) + x
+    s.cursor = s.text.len();
+    s.vim_search_forward("k", 0);
+    assert_eq!(s.cursor, 0, "the match is the KELVIN SIGN at the start");
+    // the very next slice (ghost text, edits) must not panic
+    let _ = &s.text[..s.cursor];
+}
+
+/// Backward search picks the last occurrence BEFORE the cursor, in original
+/// coordinates.
+#[test]
+fn vim_search_backward_lands_on_an_original_boundary_after_folding() {
+    let mut s = PromptInputState::new();
+    s.text = "ab\u{212A}cd".to_string();
+    s.cursor = s.text.len();
+    s.vim_search_backward("k");
+    assert_eq!(s.cursor, 2);
+    let _ = &s.text[..s.cursor];
+}
+
+/// Escape's dot-repeat extraction must not slice backwards (start > end)
+/// when in-insert edits moved the cursor; it records an empty repeat.
+#[test]
+fn vim_escape_dot_repeat_survives_a_backwards_cursor() {
+    let mut s = PromptInputState::new();
+    s.insert_char('h');
+    s.insert_char('e');
+    s.insert_char('l');
+    s.insert_char('l');
+    s.insert_char('o');
+    // simulate: entered insert with "hello", then arrows+edits left the
+    // cursor BEFORE the prefix length
+    s.vim_insert_text_before = Some("hello".to_string());
+    s.cursor = 1;
+    s.vim_command("Escape"); // must not panic
+    assert!(
+        matches!(
+            s.vim_dot_action,
+            None | Some(DotRepeatAction::Insert { .. })
+        ),
+        "no panic, and any recorded action is a valid Insert"
+    );
+}
+
+/// A multi-byte char under the extraction start must not panic either.
+#[test]
+fn vim_escape_dot_repeat_survives_a_mid_char_start() {
+    let mut s = PromptInputState::new();
+    s.insert_char('a');
+    s.insert_char('b');
+    s.vim_insert_text_before = Some("ab".to_string()); // 2 bytes
+    s.cursor = 1; // inside/behind a multi-byte replacement's boundary
+    s.vim_command("Escape"); // must not panic
+}

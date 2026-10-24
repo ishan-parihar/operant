@@ -30,6 +30,7 @@ pub mod dialogs;
 pub mod diff_viewer;
 pub mod export_dialog;
 pub mod figures;
+pub mod fold_search;
 pub mod image_paste;
 pub mod image_render;
 pub mod input;

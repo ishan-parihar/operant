@@ -323,7 +323,7 @@ pub fn render_global_search(
                 let query_lc = state.query.to_lowercase();
                 let text_spans: Vec<Span<'static>> = if !query_lc.is_empty() {
                     if let Some((m_start, m_end)) =
-                        super::fold::folded_find(text_trimmed, &state.query)
+                        crate::tui::fold_search::folded_find(text_trimmed, &state.query)
                     {
                         let before: String = text_trimmed[..m_start].to_string();
                         let matched: String = text_trimmed[m_start..m_end].to_string();

@@ -45,15 +45,37 @@ pub(crate) fn folded_find(haystack: &str, needle: &str) -> Option<(usize, usize)
     }
     let (folded, spans) = folded_spans(haystack);
     let pos = folded.find(&needle_lc)?;
-    let end = pos + needle_lc.len();
-    let start_byte = span_orig_byte(&spans, pos).unwrap_or(0);
-    // The end offset sits inside (or at the close of) the last matched
-    // original char's span; that char's start plus its UTF-8 length is the
-    // match's end boundary in the original.
-    let end_byte = span_orig_byte(&spans, end - 1)
+    Some(map_folded_range(haystack, &spans, pos, needle_lc.len()))
+}
+
+/// Find the LAST occurrence of `needle` in `haystack` case-insensitively,
+/// with the same original-coordinate contract as [`folded_find`].
+pub(crate) fn folded_find_last(haystack: &str, needle: &str) -> Option<(usize, usize)> {
+    let needle_lc = needle.to_lowercase();
+    if needle_lc.is_empty() {
+        return None;
+    }
+    let (folded, spans) = folded_spans(haystack);
+    let pos = folded.rfind(&needle_lc)?;
+    Some(map_folded_range(haystack, &spans, pos, needle_lc.len()))
+}
+
+/// Map a matched byte range in the FOLDED text back to original-char
+/// boundaries: the start is the original byte of the char whose folded span
+/// contains `pos`; the end closes the char whose folded span contains the
+/// match's last byte.
+fn map_folded_range(
+    haystack: &str,
+    spans: &[(usize, usize, usize)],
+    pos: usize,
+    folded_len: usize,
+) -> (usize, usize) {
+    let end = pos + folded_len;
+    let start_byte = span_orig_byte(spans, pos).unwrap_or(0);
+    let end_byte = span_orig_byte(spans, end - 1)
         .and_then(|b| haystack[b..].chars().next().map(|c| b + c.len_utf8()))
         .unwrap_or(haystack.len());
-    Some((start_byte, end_byte))
+    (start_byte, end_byte)
 }
 
 #[cfg(test)]
