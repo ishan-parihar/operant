@@ -2286,9 +2286,58 @@ fn todo_tool_result_populates_the_live_store_and_todos_command_toggles_the_band(
 /// Before iter-1193 the todo tool could not even name a group, so the
 /// card's group headers were unreachable. Now the tool models `phase` and
 /// `lane` (the words a plan is written in) and the card renders them as
-/// stages; this asserts they arrive at the TUI through the SAME
-/// `ToolComplete(todo)` event every real turn delivers, rather than only
-/// through a hand-built `TodoItem`.
+#[test]
+fn alt_x_toggles_the_pinned_todo_band() {
+    // (iter-1211) jcode binds `todo_card_toggle` to `X` in its ToggleKeys
+    // layer (keybind.rs), which operant never ported. The state and the
+    // /todos slash command existed, but there was no chord, so dismissing a
+    // band the operator sees on every frame meant typing a command.
+    let mut app = make_app();
+    assert!(!app.todos_band_hidden, "the band starts visible");
+    press_alt_x(&mut app);
+    assert!(
+        app.todos_band_hidden,
+        "Alt+X must hide the band \u{2014} jcode's todo_card_toggle chord"
+    );
+    assert!(
+        app.status_message
+            .as_deref()
+            .is_some_and(|m| m.contains("hidden")),
+        "the operator needs feedback that the band moved: {:?}",
+        app.status_message
+    );
+    press_alt_x(&mut app);
+    assert!(!app.todos_band_hidden, "Alt+X must toggle back");
+}
+
+/// Alt+X through the real key path (not the slash command), so the test
+/// proves the chord is wired the way jcode binds `todo_card_toggle`.
+fn press_alt_x(app: &mut App) {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    app.handle_key_event(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::ALT));
+}
+
+#[test]
+fn the_pinned_band_expansion_flag_reaches_the_viewport() {
+    // (iter-1211) The flag was declared on the TuiState trait and CONSUMED by
+    // `pinned_todo_band_lines` to decide whether to print
+    // `\u{2026} +N more (todo)`, but the App impl returned a hardcoded `false`
+    // under a [port-decision] claiming no todo band existed to expand. A
+    // reader of the trait therefore saw a permanent no-op, and the
+    // truncation line could never be dismissed. This asserts the accessor
+    // reflects the field.
+    let mut app = make_app();
+    assert!(
+        !app.pinned_todos_expanded(),
+        "collapsed by default: a short card shows everything anyway"
+    );
+    app.pinned_todos_expanded = true;
+    assert!(
+        app.pinned_todos_expanded(),
+        "the viewport must see the expanded state it is asked to honour"
+    );
+}
+
 #[test]
 fn a_staged_todo_result_lands_on_app_with_its_phase_and_lane() {
     let mut app = make_app();

@@ -1029,6 +1029,26 @@ impl App {
                     return;
                 }
 
+                // (iter-1211) Click on the pinned band's `… +N more (todo)`
+                // row expands the card to show every row. The rect is
+                // published each frame by the viewport; without this branch
+                // the row looked clickable and did nothing.
+                if let Some(more) = crate::tui::operant_ui::pinned_todo_more_area()
+                    && mouse_event.row >= more.y
+                    && mouse_event.row < more.y.saturating_add(more.height)
+                    && mouse_event.column >= more.x
+                    && mouse_event.column < more.x.saturating_add(more.width)
+                {
+                    self.pinned_todos_expanded = !self.pinned_todos_expanded;
+                    self.set_status_notice(if self.pinned_todos_expanded {
+                        "Todo card: expanded.".to_string()
+                    } else {
+                        "Todo card: collapsed.".to_string()
+                    });
+                    self.invalidate_transcript();
+                    return;
+                }
+
                 if in_input {
                     self.focus = FocusTarget::Input;
                     self.clear_selection();

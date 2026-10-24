@@ -190,9 +190,14 @@ impl TuiState for App {
     }
 
     fn pinned_todos_expanded(&self) -> bool {
-        // [port-decision] pinned_todos_expanded: no operant todo band exists to
-        // expand; returns false — wire with pinned_todos_payload.
-        false
+        // (iter-1211) This used to return a hardcoded `false` under a
+        // [port-decision] claiming "no operant todo band exists to expand"
+        // — and the SAME feature's band is drawn a few hundred lines below
+        // in ui_viewport.rs, which reads THIS accessor to decide whether to
+        // print `… +N more (todo)`. The comment described an absent feature
+        // while the file it lived in had the reader. The truncation line
+        // therefore could never be dismissed.
+        self.pinned_todos_expanded
     }
 
     fn background_task_rows(&self) -> &[BackgroundTaskRow] {

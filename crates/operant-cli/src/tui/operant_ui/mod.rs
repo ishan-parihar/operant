@@ -138,6 +138,7 @@ pub(crate) use messages::{
 pub(crate) use pinned_ui::clear_side_panel_debug_snapshot;
 use pinned_ui::draw_side_panel_markdown;
 use viewport::draw_messages;
+pub(crate) use viewport::pinned_todo_more_area;
 
 use crate::tui::operant_app::color_support;
 use crate::tui::operant_app::color_support::rgb;

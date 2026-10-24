@@ -1525,6 +1525,29 @@ impl App {
                 self.prompt_input.delete_word_at_cursor();
                 self.refresh_prompt_input();
             }
+            // (iter-1211) Alt+X: show / hide the pinned todo card band.
+            // jcode binds `todo_card_toggle` to `X` inside its own
+            // `ToggleKeys` layer (keybind.rs), which operant never ported —
+            // the registry it DOES have is catalogue-only and is not the
+            // dispatcher (keybindings.rs's own header says so). The underlying
+            // state and its slash command landed with /todos, but without a
+            // chord the operator had to reach for the command line to dismiss
+            // a band they had already accepted as always-on, and jcode's
+            // behaviour had no key at all.
+            //
+            // X is chosen over a differently-bound operant letter because
+            // `Alt+x` was unbound here, and because it is the key jcode uses
+            // for this exact action — the port's chord should match even when
+            // the mechanism behind it differs.
+            KeyCode::Char('x') if key.modifiers.contains(KeyModifiers::ALT) => {
+                self.todos_band_hidden = !self.todos_band_hidden;
+                self.set_status_notice(if self.todos_band_hidden {
+                    "Todo card: hidden.".to_string()
+                } else {
+                    "Todo card: shown.".to_string()
+                });
+                self.invalidate_transcript();
+            }
 
             // ---- Text entry (allowed while streaming so users can queue
             // the next message; submission queues via Enter at the CLI layer).

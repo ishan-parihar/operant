@@ -132,6 +132,7 @@ impl App {
             todos: Vec::new(),
             todos_card_payload: String::new(),
             todos_band_hidden: false,
+            pinned_todos_expanded: false,
             thinking_display_on: crate::tui::operant_app::config_shim::config()
                 .display
                 .show_thinking,

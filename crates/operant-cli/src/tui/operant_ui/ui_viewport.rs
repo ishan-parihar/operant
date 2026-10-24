@@ -1607,6 +1607,16 @@ fn set_pinned_todo_more_area(area: Option<Rect>) {
     }
 }
 
+/// Hit-test the `… +N more (todo)` row the band drew on the last frame.
+///
+/// (iter-1211) The rect was written every frame and read by nothing, so the
+/// band advertised a truncation affordance a click could not dismiss. The
+/// click handler now asks this before it starts a text selection, the same
+/// way the thinking-block header is dispatched through `thinking_row_map`.
+pub(crate) fn pinned_todo_more_area() -> Option<Rect> {
+    PINNED_TODO_MORE_AREA.lock().ok().and_then(|area| *area)
+}
+
 fn compute_prompt_preview_line_count(
     wrapped_user_prompt_starts: &[usize],
     user_prompt_texts: &[String],

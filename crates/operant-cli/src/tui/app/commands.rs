@@ -925,7 +925,14 @@ impl App {
                 if selected.is_empty() {
                     self.push_notice(
                         NotificationKind::Warning,
-                        "No assistant message to copy.".to_string(),
+                        // (iter-1206 follow-up) The notice said "No assistant
+                        // message" from when /copy only ever copied an
+                        // assistant message. It takes the last N
+                        // non-empty messages of any role now, so the
+                        // accurate statement is that the transcript is
+                        // empty. A misleading "assistant" here sends an
+                        // operator hunting for a reply that does not exist.
+                        "No messages to copy — the transcript is empty.".to_string(),
                     );
                     return true;
                 }

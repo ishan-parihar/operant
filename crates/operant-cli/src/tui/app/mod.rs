@@ -297,6 +297,16 @@ pub struct App {
     pub todos_card_payload: String,
     /// /todos toggle: hide the pinned todo card band.
     pub todos_band_hidden: bool,
+    /// (iter-1211) Set while the pinned todo card is showing its WHOLE
+    /// list rather than the band-budgeted prefix. The band renders
+    /// `… +N more (todo)` when the card is taller than its budget
+    /// (`pinned_todo_band_lines`), and this flag is what dismisses that
+    /// line — the flag was declared on the trait and read by the viewport,
+    /// but returned a hardcoded `false` with no writer, so the line could
+    /// never be dismissed and a card over budget stayed truncated with a
+    /// clickable-looking affordance that did nothing. Alt+X and a click on
+    /// the line both set it.
+    pub pinned_todos_expanded: bool,
     /// Runtime thinking-trace display flag (default from the shim's
     /// display.show_thinking; /thinking-display toggles). Hidden traces
     /// still exist as display messages — history is not rewritten, the
