@@ -21,7 +21,9 @@ pub enum CronSubcommand {
     Create {
         /// Name of the cron job
         name: String,
-        /// Cron schedule expression (e.g. "every 6h", "0 9 * * *")
+        /// Cron schedule expression: cron forms ("0 9 * * *") evaluate in
+        /// UTC (09:00 UTC in the example); "every N<s|m|h|d|w>" forms are
+        /// fixed durations ("every 6h" = every 6 hours exactly)
         schedule: String,
         /// Command or prompt to execute when triggered
         command: String,
@@ -94,7 +96,8 @@ pub enum CronSubcommand {
     Blueprint {
         /// Blueprint name: morning-brief | weekly-digest | reflection
         name: String,
-        /// Override the default schedule (e.g. "0 9 * * *" for 9am daily)
+        /// Override the default schedule (e.g. "0 9 * * *" for 09:00 UTC
+        /// daily; cron expressions evaluate in UTC)
         #[arg(long)]
         schedule: Option<String>,
     },

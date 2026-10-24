@@ -2,6 +2,10 @@
 //!
 //! Provides an interface for creating, listing, and managing scheduled jobs.
 //! Integration with the CronScheduler for execution.
+//!
+//! Schedule semantics (shared with `cronjobs::schedule`): cron expressions
+//! are calendar rules evaluated in **UTC** — `0 9 * * *` fires at 09:00 UTC
+//! — while `every N<unit>` phrases are fixed durations.
 
 use async_trait::async_trait;
 use schemars::JsonSchema;
