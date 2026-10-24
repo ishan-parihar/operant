@@ -198,3 +198,48 @@ Append-only: `kb log "<entry>"` — one entry per unit of work.
 - **2026-10-24T03:47** · `jcode` — iter-1211 (fix, closing the survey's "todo list not displaying" row): the survey's own report was internally inconsistent — it said the renderer was faithful AND that data never arrives, which can only both be true if the join between them is broken. Tracing the join found TWO half-finished surfaces, one of them an artifact of this repo's own port. (1) The pinned band could not be dismissed from the keyboard at all: `todos_band_hidden` and `/todos` were fully wired, but jcode binds this action to `X` inside its own `ToggleKeys` layer (`keybind.rs`), which operant never ported — and operant's registry says so itself in its header, "deliberately NOT yet the dispatcher". So a band that shows on every frame needed a typed command to hide. `Alt+X` now toggles it, chosen because it was UNBOUND in operant and because X is the key jcode uses for this exact action, so the port's chord matches even though the mechanism behind it does not. (2) `pinned_todos_expanded` was inverted from how a dead flag usually looks: it was declared on the `TuiState` trait and READ by `pinned_todo_band_lines` to decide whether to print `… +N more (todo)`, yet the App impl returned a hardcoded `false` under a `[port-decision]` claiming "no operant todo band exists to expand" — and the band is drawn a few hundred lines below in the same feature's own module. The comment described an absent feature while the file it lived in held the reader, so the truncation line was permanent. The flag now reflects a real field, and `PINNED_TODO_MORE_AREA` — a static written EVERY FRAME and read by nothing — finally has a consumer, so a click on the `… +N more` row expands the card, dispatched exactly the way the thinking-block header is. Third fix on the same path: the `/copy` notice left lying by iter-1206 said "No assistant message to copy" from when /copy only copied assistant messages, which sends an operator hunting for a reply that does not exist. **Scope recorded rather than silently skipped:** the survey's other claim here — that plan/goal/agent data never renders — is ACCURATE but is not a render bug and could not be fixed in this iteration, because the PRODUCER is missing rather than broken. `TodoCardPayload` carries `todos`/`plan`/`goals` and the renderer draws all three, but operant's todo tool answers `{sessionId, count, todos}` and has no assessment mode at all, where jcode's has one (`has("goals") || has("plan")` with its own `save_goals`/`save_plan` persistence). That is a feature to add with its own iteration, and the commit body says so. **Also measured, not assumed, for the ALT+SHIFT row of the survey (which is the largest remaining gap and is recorded as a feature, not a bug):** jcode's 11 toggle keys are ALL plain Alt+letter — `ToggleBinding::load(cfg, 's'/'i'/'x'/'m'/'t'/'g'/'y')` — and the ONLY `ALT|SHIFT` chord in the whole file is `diagram_pane_visibility` = `M`. So there are no Alt+Shift+S/D/F bindings in jcode to port, and the operator's expectation of them has no upstream source. operant already wires `Alt+y` (copy mode), `Alt+g` (bookmark), `Alt+p` (model cycle), `Alt+o`, `Alt+l` and the `Alt+b/f/d` word edits; the genuinely missing chords are `Alt+s` (typing scroll lock), `Alt+i` (info widget), `Alt+t` (diagram pane) and `Alt+m` (side panel), and porting those means porting the FEATURES, not just the keys. Gates: cli 1676/0/7, clippy 0 new, both new tests RED-proven then restored byte-identical.
 - **2026-10-24T20:02** · `operator-agent` — 2026-10-24 audit-followup session: iter-1213 (webhook url_verification signature gate + Slack/WhatsApp closed-channel 5xx, 4 regression tests), iter-1214 (deleted operant-memory 11.4K + operant-infra 2.4K + macros tombstone + tower/tower-http deps; nothing linked them), iter-1215 (retired operant-providers 37.5K behind operant-core/src/provider_catalog.rs, RT-153 closed). Workspace 12->8 crates, -52K lines, clippy gate green with EMPTY allowlist, core lib 2501/2501, released + deployed + gateway restarted on the new inode.
 - **2026-10-24T21:30** — -
+- **2026-10-24T22:02** · `jcode` — iter-1226 (the fix previously logged late): the keyboard scroll
+  ladder was gated on a focus only a mouse can set. PgUp/PgDn and Home/End were bound on
+  `self.focus == FocusTarget::Transcript`, a state reachable only by clicking the transcript
+  (mouse.rs:1058) with no keyboard way in, so an operator who only types got no scroll at all
+  while the code read as done. PgUp/PgDn are unconditional now (jcode has no such focus state
+  machine either); Home/End keep their real job as the composer caret moves; the transcript
+  jumps to top/tail on Shift+Home / Shift+End, reached through the modifier a single-line
+  caret cannot use. The page step is the last frame's published transcript height minus two
+  rows instead of a hardcoded 10. Five tests, four mutations each proven RED on exactly one,
+  plus a corrected scenario note: the golden had blamed the plain `--dump-screen` harness for
+  swallowing the pageups when the key gate was the cause.
+- **2026-10-24T22:20** · `jcode` — iter-1226 deployed: release f994c0d4 (37.8 MB) installed to
+  ~/.local/bin/operant, gateway restarted and confirmed on the new inode by md5 of
+  /proc/<pid>/exe. /usr/local/bin NOT updated: no sudo password on this box (same constraint
+  as iter-1210). Peer iter-1218 landed on top of this commit, so tree HEAD is ahead of the
+  iteration and the artifact carries both; the fix was confirmed an ancestor of the build
+  before deploying rather than trusting the tree's label.
+  keyboard scroll ladder was gated on a focus only a mouse can set. PgUp/PgDn and
+  Home/End were bound on `self.focus == FocusTarget::Transcript`, a state reachable
+  only by clicking the transcript (mouse.rs:1058) with no keyboard way in, so an
+  operator who only types got no scroll at all while the code read as done. PgUp/PgDn
+  are unconditional now (jcode has no such focus state machine either); Home/End keep
+  their real job as the composer caret moves; the transcript jumps to top/tail on
+  Shift+Home / Shift+End, reached through the modifier a single-line caret cannot use.
+  The page step is the last frame's published transcript height minus two rows instead
+  of a hardcoded 10. Five tests, four mutations each proven RED on exactly one, plus a
+  corrected scenario note: the golden file had blamed the plain `--dump-screen` harness
+  for swallowing the pageups when the key gate was the cause. the keyboard scroll
+  ladder was gated on a focus only a mouse can set. PgUp/PgDn and Home/End were
+  bound on `self.focus == FocusTarget::Transcript`, reachable only by clicking the
+  transcript (mouse.rs:1058) with no keyboard way in, so an operator who only
+  types got no scroll at all while the code read as done. PgUp/PgDn are unconditional
+  now (jcode has no such focus state machine either); Home/End keep their real job
+  as the composer caret moves; the transcript jumps to top/tail on Shift+Home /
+  Shift+End, reached through the modifier a single-line caret cannot use. The page
+  step is the last frame's published transcript height minus two rows instead of a
+  hardcoded 10. Five tests, four mutations each proven RED on exactly one.
+- **2026-10-24T22:02** · `jcode` — iter-1226 deployed: release built at f994c0d4 (37.8 MB)
+  and installed to ~/.local/bin/operant. Gateway restarted on the new inode, verified
+  by md5 of /proc/<pid>/exe matching the deployed path. /usr/local/bin NOT updated:
+  no sudo password on this box (same constraint as iter-1210). A transient release
+  build failure appeared mid-round (TypeaheadSource E0277 from untracked peer WIP)
+  and cleared on the next attempt; peer iter-1218 then landed on top of this commit,
+  so tree HEAD is ahead of the iteration and the artifact carries both. The fix was
+  confirmed an ancestor of the build before deploying rather than trusting the label.
