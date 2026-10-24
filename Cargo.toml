@@ -7,7 +7,6 @@ members = [
     "crates/operant-core",
     "crates/operant-cli",
     "crates/operant-plugins",
-    "crates/operant-tools",
     "crates/operant-harness",
 ]
 exclude = ["vendor/ndarray-npy", "vendor/kokoro-tiny"]
@@ -24,7 +23,6 @@ rust-version = "1.89"
 operant-api = { path = "crates/operant-api" }
 operant-config = { path = "crates/operant-config" }
 operant-plugins = { path = "crates/operant-plugins" }
-operant-tools = { path = "crates/operant-tools" }
 operant-harness = { path = "crates/operant-harness" }
 operant-os = { path = "crates/operant-os" }
 

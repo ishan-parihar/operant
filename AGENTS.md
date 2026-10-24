@@ -512,7 +512,7 @@ operant/
 │   ├── check.sh               # Wrapper that applies dev-env + cargo
 │   ├── self-test.sh           # Build + test + clippy + fmt sweep
 │   └── provision-build-deps.sh # One-time dependency provisioning
-├── Cargo.toml                 # Workspace members (8 crates, self-contained)
+├── Cargo.toml                 # Workspace members (7 crates, self-contained)
 ├── operant.example.toml       # Config template (7 gateway platforms)
 ├── TODO.md                    # Autonomous-mode task ledger
 ├── docs/audit/2026-06-19-BUGS.md # Open issues tracker (the live ledger; the 2026-08-03 snapshot is in docs/archive/BUGS.md)
@@ -678,7 +678,7 @@ bash scripts/clippy-warning-gate.sh --update           # refresh allowlist if yo
 All previously-broken feature combinations are fixed (2026-08-03). **Three of
 the five crates in that table were DELETED** (the 2026-10-17 purge removed
 `operant-gateway`, `operant-runtime` and `operant-hardware`; the workspace has
-11 crates now), so their rows are the record of what was fixed and not
+7 crates now), so their rows are the record of what was fixed and not
 instructions:
 
 | Crate | Broken feature | Fix |

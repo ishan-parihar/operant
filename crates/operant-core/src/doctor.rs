@@ -465,7 +465,7 @@ fn check_environment(items: &mut Vec<CheckResult>) {
 fn check_cli_tools(items: &mut Vec<CheckResult>) {
     let cat = "cli-tools";
 
-    let discovered = operant_tools::cli_discovery::discover_cli_tools(&[], &[]);
+    let discovered = crate::tools::cli_discovery::discover_cli_tools(&[], &[]);
 
     if discovered.is_empty() {
         items.push(CheckResult::warn(cat, "No CLI tools found in PATH"));
