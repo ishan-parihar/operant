@@ -26,6 +26,36 @@ pub const MAX_ENTRIES: usize = 5_000;
 pub struct HistoryEntry {
     pub ts: u64,
     pub text: String,
+    /// (plan 2026-10-24 M7) Project working directory of the submission —
+    /// the corpus-quality signal OMP's history.db carries. Absent in files
+    /// written before M7; readers treat it as unknown.
+    #[serde(default)]
+    pub cwd: Option<String>,
+    /// (plan 2026-10-24 M7) How many times this DISTINCT prompt has been
+    /// submitted. Resubmission bumps the count on the existing row instead
+    /// of appending a duplicate (OMP `use_count`).
+    #[serde(default = "default_use_count")]
+    pub use_count: u32,
+}
+
+fn default_use_count() -> u32 {
+    1
+}
+
+/// Canonical stored form of a prompt (OMP `normalizePrompt`): CRLF/CR
+/// folded to LF, trailing whitespace stripped per line, outer trim.
+/// Without it a terminal-padded copy of an existing prompt lands as a
+/// byte-distinct duplicate row.
+fn normalize_prompt(prompt: &str) -> String {
+    prompt
+        .replace("\r\n", "\n")
+        .replace('\r', "\n")
+        .lines()
+        .map(|l| l.trim_end())
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_string()
 }
 
 /// Resolve `<operant home>/history.jsonl`.
@@ -83,63 +113,78 @@ pub fn append(text: &str) {
         let _ = std::fs::create_dir_all(parent);
     }
 
-    // Read existing entries so we can (a) skip if the new entry duplicates
-    // the last one and (b) trim the head when we exceed MAX_ENTRIES.
-    let existing = load();
-    if existing.last().is_some_and(|last| last == trimmed) {
-        return;
-    }
-
-    // Build the new list (existing + new entry), trimmed to MAX_ENTRIES.
-    let mut entries: Vec<HistoryEntry> = existing
-        .into_iter()
-        .map(|text| HistoryEntry { ts: 0, text })
-        .collect();
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0);
-    entries.push(HistoryEntry {
-        ts: now,
-        text: trimmed.to_string(),
-    });
-    if entries.len() > MAX_ENTRIES {
-        entries.drain(0..entries.len() - MAX_ENTRIES);
-    }
+    append_entry(
+        &path,
+        HistoryEntry {
+            ts: now,
+            text: trimmed.to_string(),
+            cwd: std::env::current_dir()
+                .ok()
+                .map(|p| p.to_string_lossy().into_owned()),
+            use_count: 1,
+        },
+    );
+}
 
-    // Atomic write: tmp file + rename. Avoids corrupting the file if the
-    // process is killed mid-write (Ctrl+C during shutdown).
+/// Shared append path (both the live `append` and the tests, which pass a
+/// temp path). OMP semantics (M7): normalize, then DEDUPE BY CONTENT — a
+/// resubmission bumps `use_count` and refreshes `ts`/`cwd` on the existing
+/// row instead of appending a duplicate. The head-trim keeps the file
+/// bounded.
+fn append_entry(path: &std::path::Path, entry: HistoryEntry) {
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let mut entries = load_entries(path);
+    if let Some(existing) = entries
+        .iter_mut()
+        .find(|e| normalize_prompt(&e.text) == normalize_prompt(&entry.text))
+    {
+        existing.use_count = existing.use_count.saturating_add(1);
+        existing.ts = entry.ts;
+        existing.cwd = entry.cwd;
+    } else {
+        entries.push(entry);
+    }
+    if entries.len() > MAX_ENTRIES {
+        let excess = entries.len() - MAX_ENTRIES;
+        entries.drain(0..excess);
+    }
+    // Atomic write: tmp file + rename (a kill mid-write must not corrupt).
     let tmp_path = path.with_extension("jsonl.tmp");
-    match OpenOptions::new()
+    if let Ok(mut file) = OpenOptions::new()
         .create(true)
         .write(true)
         .truncate(true)
         .open(&tmp_path)
     {
-        Ok(mut file) => {
-            for entry in &entries {
-                if let Ok(json) = serde_json::to_string(entry) {
-                    let _ = writeln!(file, "{}", json);
-                }
-            }
-            let _ = file.flush();
-            drop(file);
-            let _ = std::fs::rename(&tmp_path, &path);
-        }
-        Err(_) => {
-            // Fall back to append-only mode if atomic write fails (e.g.
-            // permission issue creating the tmp file). Still better than
-            // losing the entry.
-            if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&path)
-                && let Ok(json) = serde_json::to_string(&HistoryEntry {
-                    ts: now,
-                    text: trimmed.to_string(),
-                })
-            {
+        for entry in &entries {
+            if let Ok(json) = serde_json::to_string(entry) {
                 let _ = writeln!(file, "{}", json);
             }
         }
+        let _ = file.flush();
+        drop(file);
+        let _ = std::fs::rename(&tmp_path, path);
     }
+}
+
+/// Load raw entries (with cwd/use_count) from a path.
+fn load_entries(path: &std::path::Path) -> Vec<HistoryEntry> {
+    let Ok(file) = File::open(path) else {
+        return Vec::new();
+    };
+    BufReader::new(file)
+        .lines()
+        .map_while(Result::ok)
+        .filter(|l| !l.trim().is_empty())
+        .filter_map(|l| serde_json::from_str::<HistoryEntry>(&l).ok())
+        .filter(|e| !e.text.is_empty())
+        .collect()
 }
 
 #[cfg(test)]
@@ -201,7 +246,7 @@ mod tests {
 
     // Test helpers that bypass history_path() — we write directly to the
     // temp file.
-    fn load_from_path(path: &PathBuf) -> Vec<String> {
+    fn load_from_path(path: &std::path::Path) -> Vec<String> {
         let Ok(file) = File::open(path) else {
             return Vec::new();
         };
@@ -223,45 +268,62 @@ mod tests {
         out
     }
 
-    fn append_to_path(path: &PathBuf, text: &str) {
+    fn append_to_path(path: &std::path::Path, text: &str) {
         let trimmed = text.trim();
         if trimmed.is_empty() {
             return;
         }
-        let existing = load_from_path(path);
-        if existing.last().is_some_and(|last| last == trimmed) {
-            return;
-        }
-        let mut entries: Vec<HistoryEntry> = existing
-            .into_iter()
-            .map(|text| HistoryEntry { ts: 0, text })
-            .collect();
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or(0);
-        entries.push(HistoryEntry {
-            ts: now,
-            text: trimmed.to_string(),
+        append_entry(
+            path,
+            HistoryEntry {
+                ts: 0,
+                text: trimmed.to_string(),
+                cwd: None,
+                use_count: 1,
+            },
+        );
+    }
+
+    fn load_entries_from(path: &std::path::Path) -> Vec<HistoryEntry> {
+        load_entries(path)
+    }
+
+    #[test]
+    fn resubmission_bumps_use_count_instead_of_appending() {
+        with_temp_history(|path| {
+            append_to_path(path, "deploy the fleet");
+            append_to_path(path, "different prompt");
+            append_to_path(path, "deploy the fleet  "); // normalized equal
+            let entries = load_entries_from(path);
+            assert_eq!(entries.len(), 2, "no duplicate row");
+            let bumped = entries
+                .iter()
+                .find(|e| e.text == "deploy the fleet")
+                .expect("row");
+            assert_eq!(bumped.use_count, 2, "resubmission counted");
         });
-        if entries.len() > MAX_ENTRIES {
-            entries.drain(0..entries.len() - MAX_ENTRIES);
-        }
-        let tmp_path = path.with_extension("jsonl.tmp");
-        if let Ok(mut file) = OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .open(&tmp_path)
-        {
-            for entry in &entries {
-                if let Ok(json) = serde_json::to_string(entry) {
-                    let _ = writeln!(file, "{}", json);
-                }
-            }
-            let _ = file.flush();
-            drop(file);
-            let _ = std::fs::rename(&tmp_path, path);
-        }
+    }
+
+    #[test]
+    fn back_compat_reads_old_two_field_lines() {
+        with_temp_history(|path| {
+            std::fs::write(path, "{\"ts\": 123, \"text\": \"old shape\"}\n").unwrap();
+            let texts = load_from_path(path);
+            assert_eq!(texts, vec!["old shape"]);
+            let entries = load_entries_from(path);
+            assert_eq!(entries[0].use_count, 1, "default count for legacy rows");
+            assert!(entries[0].cwd.is_none());
+        });
+    }
+
+    #[test]
+    fn normalize_folds_line_trailing_whitespace() {
+        with_temp_history(|path| {
+            append_to_path(path, "one\ntwo");
+            append_to_path(path, "one   \ntwo"); // same after per-line trim
+            let entries = load_entries_from(path);
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0].use_count, 2);
+        });
     }
 }
