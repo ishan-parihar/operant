@@ -11,6 +11,7 @@
 //! - Character count + token estimate
 
 mod editing;
+mod ghost;
 mod history;
 mod kill_ring;
 mod prediction;
@@ -26,8 +27,9 @@ mod word_nav;
 #[cfg(test)]
 mod tests;
 
+pub use ghost::GhostText;
 pub use kill_ring::KillRing;
-pub use prediction::{EngineHandle, spawn as spawn_word_predictor};
+pub use prediction::{EngineHandle, EngineReply, spawn as spawn_word_predictor};
 pub use typeahead::{
     AcceptForSubmitOutcome, FileSuggestJob, FileSuggestResult, PendingFileQuery, TypeaheadSource,
     TypeaheadSuggestion, active_file_query, active_file_token, compute_typeahead,
@@ -214,6 +216,8 @@ pub struct PromptInputState {
     /// 2026-10-24 M3). Set by `update_suggestions` while an `@` token is
     /// live; taken by the App's `refresh_prompt_input`.
     pub pending_file_query: Option<typeahead::PendingFileQuery>,
+    /// Ghost-text word completion shown at the caret (plan 2026-10-24 M6).
+    pub ghost: Option<GhostText>,
 }
 
 /// Snapshots retained by the burst undo. 64 bursts is ~500 keystrokes of

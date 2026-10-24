@@ -153,6 +153,11 @@ pub trait TuiState {
     // ---- Input ----
     fn input(&self) -> &str;
     fn cursor_pos(&self) -> usize;
+    /// [operant extension] Ghost-text suffix shown after the caret (word
+    /// completion, plan 2026-10-24 M6). Default: none.
+    fn ghost_suffix(&self) -> Option<String> {
+        None
+    }
     /// [operant extension] Active composer shift-selection as normalized
     /// byte offsets, if any (jcode textarea selection). Default: none.
     fn input_selection(&self) -> Option<(usize, usize)> {

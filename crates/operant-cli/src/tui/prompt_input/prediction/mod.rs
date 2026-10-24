@@ -33,13 +33,6 @@ const SESSION_RING: usize = 64;
 /// Messages the engine thread accepts.
 enum EngineMsg {
     Observe(String),
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "M6 ghost-text request path consumes this (plan 2026-10-24)"
-        )
-    )]
     Complete {
         generation: u64,
         before: String,
@@ -52,13 +45,6 @@ enum EngineMsg {
 
 /// A completion answer back to the App (generation-tagged; stale answers
 /// are dropped by the drainer).
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "M6 ghost-text drain consumes this (plan 2026-10-24)"
-    )
-)]
 pub struct EngineReply {
     pub generation: u64,
     pub suggestion: Option<Suggestion>,
@@ -79,13 +65,6 @@ impl EngineHandle {
 
     /// Ask for the ghost suffix of `prefix` (fire-and-forget; the answer
     /// arrives on `reply`).
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "M6 ghost-text request path consumes this (plan 2026-10-24)"
-        )
-    )]
     pub fn complete(
         &self,
         generation: u64,

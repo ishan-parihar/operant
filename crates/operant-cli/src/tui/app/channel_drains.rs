@@ -103,6 +103,35 @@ impl App {
         applied
     }
 
+    /// Ghost-text replies (plan 2026-10-24 M6): apply when the generation
+    /// is current AND the live query still equals the (before, prefix) the
+    /// engine answered; otherwise drop. Then launch the newest parked ask.
+    pub(super) fn drain_word_predict(&mut self) -> bool {
+        let Some(mut rx) = self.word_predict_rx.take() else {
+            return false;
+        };
+        let Ok(reply) = rx.try_recv() else {
+            self.word_predict_rx = Some(rx);
+            return false;
+        };
+        self.word_predict_inflight = false;
+        let applied = reply.generation == self.word_predict_gen
+            && self
+                .prompt_input
+                .ghost_query()
+                .is_some_and(|q| Some(q) == self.word_predict_last_ask);
+        if applied
+            && let Some(s) = reply.suggestion
+            && let Some((_, prefix)) = self.word_predict_last_ask.clone()
+        {
+            self.prompt_input.show_ghost(prefix, s.suffix);
+        }
+        if let Some((before, prefix)) = self.word_predict_queued.take() {
+            self.launch_word_predict(before, prefix);
+        }
+        applied
+    }
+
     pub(super) fn drain_mcp_reconnect_status(&mut self) -> bool {
         let Some(ref mut rx) = self.mcp_reconnect_rx else {
             return false;

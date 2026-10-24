@@ -240,6 +240,10 @@ impl App {
             // walk request to the blocking pool. Off in the headless sim —
             // sim frames must stay deterministic.
             self.maybe_spawn_file_suggest();
+            // Ghost tier (plan 2026-10-24 M6): ask the word predictor for
+            // the suffix of the prose word at the caret (or project the
+            // ghost already shown). Also off in the sim.
+            self.maybe_request_word_prediction();
         }
         self.sync_legacy_prompt_fields();
     }
@@ -401,5 +405,58 @@ impl App {
         let pending = self.pending_mcp_reconnect;
         self.pending_mcp_reconnect = false;
         pending
+    }
+
+    /// (plan 2026-10-24 M6) Ask the engine for a ghost, project the shown
+    /// one, or drop it — single-flight, newest queued, exactly the file
+    /// suggest tier's discipline.
+    pub(super) fn maybe_request_word_prediction(&mut self) {
+        let Some(engine) = self.word_predictor.clone() else {
+            return;
+        };
+        if self.is_simulating {
+            return;
+        }
+        match self.prompt_input.ghost_query() {
+            None => {
+                // No ghost applies here: popup open, @ reference, code
+                // span, mid-word — whatever the gate rejected. A ghost
+                // from the previous keystroke is now diverged.
+                self.prompt_input.clear_ghost();
+                self.word_predict_queued = None;
+            }
+            Some((before, prefix)) => {
+                if self.prompt_input.project_ghost(&prefix) {
+                    return; // typing through: the shown ghost extends
+                }
+                if self.word_predict_inflight {
+                    self.word_predict_queued = Some((before, prefix));
+                    return;
+                }
+                self.word_predict_inflight = true;
+                self.word_predict_gen = self.word_predict_gen.wrapping_add(1);
+                let generation = self.word_predict_gen;
+                self.word_predict_last_ask = Some((before.clone(), prefix.clone()));
+                let (tx, rx) = tokio::sync::mpsc::channel(1);
+                self.word_predict_rx = Some(rx);
+                let threshold = self.config.tui.word_completion_threshold;
+                engine.complete(generation, before, prefix, threshold, tx);
+            }
+        }
+    }
+
+    /// Launch the newest parked ghost request (single-flight handoff).
+    pub(super) fn launch_word_predict(&mut self, before: String, prefix: String) {
+        let Some(engine) = self.word_predictor.clone() else {
+            return;
+        };
+        self.word_predict_inflight = true;
+        self.word_predict_gen = self.word_predict_gen.wrapping_add(1);
+        let generation = self.word_predict_gen;
+        self.word_predict_last_ask = Some((before.clone(), prefix.clone()));
+        let (tx, rx) = tokio::sync::mpsc::channel(1);
+        self.word_predict_rx = Some(rx);
+        let threshold = self.config.tui.word_completion_threshold;
+        engine.complete(generation, before, prefix, threshold, tx);
     }
 }

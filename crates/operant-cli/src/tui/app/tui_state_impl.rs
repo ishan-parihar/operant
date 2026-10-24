@@ -219,6 +219,10 @@ impl TuiState for App {
         self.prompt_input.cursor
     }
 
+    fn ghost_suffix(&self) -> Option<String> {
+        self.prompt_input.ghost.as_ref().map(|g| g.suffix.clone())
+    }
+
     fn input_selection(&self) -> Option<(usize, usize)> {
         self.prompt_input.selection_range()
     }

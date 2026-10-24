@@ -234,6 +234,11 @@ impl App {
             file_suggest_inflight: false,
             file_suggest_queued: None,
             word_predictor,
+            word_predict_rx: None,
+            word_predict_gen: 0,
+            word_predict_inflight: false,
+            word_predict_queued: None,
+            word_predict_last_ask: None,
             auth_store,
             connect_dialog: DialogSelectState::new("Connect a provider", provider_picker_items()),
             import_config_picker: DialogSelectState::new(

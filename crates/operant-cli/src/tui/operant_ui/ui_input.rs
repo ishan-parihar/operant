@@ -2651,6 +2651,19 @@ pub(super) fn draw_input(
         }
     }
 
+    // (plan 2026-10-24 M6) Ghost text: the word-completion suffix painted
+    // DIM after the caret, only when the caret sits at the end of the
+    // buffer (the ghost extends the last wrapped line; a mid-buffer caret
+    // has no line to hang it on) and no suggestion popup competes.
+    if !has_suggestions
+        && cursor_pos == input_text.len()
+        && let Some(ghost) = app.ghost_suffix()
+        && let Some(last) = lines.last_mut()
+    {
+        last.spans
+            .push(Span::styled(ghost, Style::default().fg(dim_color())));
+    }
+
     let paragraph = if centered {
         Paragraph::new(
             lines

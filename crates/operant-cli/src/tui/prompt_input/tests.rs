@@ -1970,3 +1970,78 @@ async fn accepted_file_ref_token_injects_via_context_references() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// ---- ghost text (plan 2026-10-24 M6) -----------------------------------
+
+#[test]
+fn ghost_query_gates() {
+    let s = nav_state("read the par", 12);
+    let q = s.ghost_query().expect("prose word at caret");
+    assert_eq!(q, ("read the ".to_string(), "par".to_string()));
+
+    // Mid-word: no ghost.
+    let mid = nav_state("read the parser", 14);
+    assert!(mid.ghost_query().is_none(), "caret mid-word");
+
+    // Popup open: no ghost.
+    let mut popup = nav_state("read the par", 12);
+    popup.suggestions = vec![TypeaheadSuggestion {
+        text: "@file:x".into(),
+        description: String::new(),
+        source: TypeaheadSource::FileRef,
+    }];
+    assert!(popup.ghost_query().is_none(), "popup owns attention");
+
+    // Inside an @ reference: no ghost.
+    let atref = nav_state("read @file:src/ma", 16);
+    assert!(atref.ghost_query().is_none(), "@ reference");
+
+    // Slash command: no ghost.
+    let slash = nav_state("/he", 3);
+    assert!(slash.ghost_query().is_none(), "slash input");
+
+    // Backtick span: no ghost.
+    let code = nav_state("see `let x = par", 16);
+    assert!(code.ghost_query().is_none(), "code span");
+
+    // Path-ish token (non-alphabetic head): no ghost.
+    let path = nav_state("open src/ma", 11);
+    // 'ma' is alphabetic and preceded by '/'; v1 gate allows it only when
+    // the run starts at a boundary — the leading '/' means the word is
+    // 'ma' preceded by '/', which the @/slash gates above do not catch;
+    // the engine's own prefix scoring handles it. This asserts the word
+    // IS asked (documented v1 behavior).
+    assert!(path.ghost_query().is_some());
+}
+
+#[test]
+fn ghost_projection_keeps_the_word() {
+    let mut s = nav_state("read the par", 12);
+    s.show_ghost("par".into(), "ser".into());
+    assert!(s.project_ghost("pars"), "still extends");
+    let g = s.ghost.as_ref().expect("projected");
+    assert_eq!((g.prefix.as_str(), g.suffix.as_str()), ("pars", "er"));
+    assert!(!s.project_ghost("parx"), "divergence breaks it");
+    assert!(s.ghost.is_none(), "divergent ghost dropped");
+}
+
+#[test]
+fn ghost_accept_with_and_without_space() {
+    let mut with = nav_state("read the par", 12);
+    with.show_ghost("par".into(), "ser".into());
+    assert!(with.accept_ghost(true));
+    assert_eq!(with.text, "read the parser ");
+    assert_eq!(with.cursor, with.text.len());
+
+    let mut without = nav_state("read the par", 12);
+    without.show_ghost("par".into(), "ser".into());
+    assert!(without.accept_ghost(false));
+    assert_eq!(without.text, "read the parser");
+}
+
+#[test]
+fn ghost_accept_noop_without_ghost() {
+    let mut s = nav_state("plain", 5);
+    assert!(!s.accept_ghost(true));
+    assert_eq!(s.text, "plain");
+}

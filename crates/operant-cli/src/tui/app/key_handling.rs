@@ -1586,6 +1586,14 @@ impl App {
                 }
                 self.sync_legacy_prompt_fields();
             }
+            KeyCode::Right if key.modifiers == KeyModifiers::NONE => {
+                // (plan 2026-10-24 M6) Right walks over a shown ghost as if
+                // it were typed — no trailing space (OMP's accept-verbatim).
+                if !self.prompt_input.accept_ghost(false) {
+                    self.prompt_input.move_right();
+                }
+                self.sync_legacy_prompt_fields();
+            }
             KeyCode::Right => {
                 if key.modifiers.contains(KeyModifiers::SHIFT) {
                     // jcode textarea selection: anchor + extend right.
@@ -1646,6 +1654,10 @@ impl App {
                         self.prompt_input.suggestion_index = Some(0);
                     }
                     self.prompt_input.accept_suggestion();
+                    self.refresh_prompt_input();
+                } else if self.prompt_input.accept_ghost(true) {
+                    // (plan 2026-10-24 M6) No popup open: TAB accepts the
+                    // ghost word with a trailing space (OMP's accept).
                     self.refresh_prompt_input();
                 }
             }

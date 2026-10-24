@@ -594,6 +594,17 @@ pub struct App {
     /// (`[tui] word_completion = "ngram"`). `None` when disabled or the
     /// thread could not start — ghost text simply never appears.
     pub word_predictor: Option<crate::tui::prompt_input::EngineHandle>,
+    /// (plan 2026-10-24 M6) Reply channel for the in-flight ghost request.
+    pub word_predict_rx: Option<tokio::sync::mpsc::Receiver<crate::tui::prompt_input::EngineReply>>,
+    /// Generation of the in-flight/last ghost request.
+    pub word_predict_gen: u64,
+    /// Whether a ghost request is on the engine thread.
+    pub word_predict_inflight: bool,
+    /// Newest ghost request parked while one is in flight (single-flight).
+    pub word_predict_queued: Option<(String, String)>,
+    /// The (before, prefix) the in-flight request answered — the drain
+    /// applies a reply only while the live query still equals it.
+    pub word_predict_last_ask: Option<(String, String)>,
     /// Credential store for provider API keys and OAuth tokens.
     pub auth_store: crate::tui::adapter_types::AuthStore,
     /// Connect-a-provider dialog (/connect command).
@@ -1157,6 +1168,10 @@ impl App {
             // Fuzzy file-suggestion tier (plan 2026-10-24 M3): apply the
             // finished walk when its token is still live.
             self.drain_file_suggest();
+
+            // Ghost-text replies (plan 2026-10-24 M6): apply the engine's
+            // answer when the query it answered is still at the caret.
+            self.drain_word_predict();
 
             // Drain the fork tree for the Ctrl+B branch browser.
             self.drain_branch_list();
