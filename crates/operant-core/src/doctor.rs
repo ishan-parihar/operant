@@ -82,10 +82,57 @@ impl CheckResult {
 pub fn diagnose(config: &AppConfig) -> Vec<CheckResult> {
     let mut items = Vec::new();
     check_config_semantics(config, &mut items);
+    check_memory_provider(config, &mut items);
     check_data_root(&mut items);
     check_environment(&mut items);
     check_cli_tools(&mut items);
     items
+}
+
+// ── memory provider pins that leave the memory_* tools dead ─────────
+
+/// `builtin` and `disabled` are the two provider names the loader treats
+/// as the legacy no-op (`load_memory_manager`: no MemoryProvider
+/// attaches), so memory_store/recall/search answer "No memory backend
+/// attached" all turn. Doctor names the pin: the 2026-10-25 tooling
+/// audit found an operator running with `provider = "builtin"` for weeks
+/// with every memory tool dead and nothing anywhere saying why.
+fn check_memory_provider(config: &AppConfig, items: &mut Vec<CheckResult>) {
+    let cat = "config";
+    if !config.memory.enabled {
+        items.push(CheckResult::warn(
+            cat,
+            "[memory] enabled = false — long-term memory is off; memory_store/recall/search \
+             are dead. Set enabled = true to use memory-wire",
+        ));
+        return;
+    }
+    match config.memory.provider.as_str() {
+        "memory-wire" | "" => items.push(CheckResult::ok(
+            cat,
+            "memory provider memory-wire (in-process engine) is active",
+        )),
+        "builtin" => items.push(CheckResult::warn(
+            cat,
+            "[memory] provider = \"builtin\" pins the legacy file-backed no-op: no memory \
+             backend attaches, so memory_store/recall/search answer \"No memory backend \
+             attached\". Delete the `[memory] provider` line — memory-wire is the default",
+        )),
+        "disabled" => items.push(CheckResult::warn(
+            cat,
+            "[memory] provider = \"disabled\" — no memory backend attaches, so \
+             memory_store/recall/search are dead. Delete the `[memory] provider` line \
+             to enable memory-wire",
+        )),
+        other => items.push(CheckResult::warn(
+            cat,
+            format!(
+                "[memory] provider \"{other}\" is not a known engine (memory-wire is the \
+                 only one): the runtime downgrades it to the builtin no-op and the \
+                 memory_* tools stay dead"
+            ),
+        )),
+    }
 }
 
 // ── Bylaws / organism health (Wave 5, ORGANISM-ARCHITECTURE §4) ─────
@@ -569,6 +616,62 @@ mod tests {
     use super::*;
     use operant_config::schema::{EmbeddingRouteConfig, FallbackProviderConfig, ModelRouteConfig};
     use serial_test::serial;
+
+    #[test]
+    fn the_builtin_memory_pin_is_named_by_the_doctor() {
+        // The 2026-10-25 tooling audit: an operator ran with
+        // provider = "builtin" for weeks, every memory_* tool dead, and
+        // no surface said why.
+        let mut config = AppConfig::default();
+        config.memory.provider = "builtin".to_string();
+        config.memory.enabled = true;
+        let results = diagnose(&config);
+        let hit = results
+            .iter()
+            .find(|r| r.message.contains("provider = \"builtin\""))
+            .expect("the builtin pin must be flagged");
+        assert_eq!(hit.severity, Severity::Warn);
+        assert!(
+            hit.message.contains("Delete the `[memory] provider` line"),
+            "the row must carry the fix: {}",
+            hit.message
+        );
+    }
+
+    #[test]
+    fn the_disabled_memory_pin_and_unknown_names_are_flagged() {
+        let mut config = AppConfig::default();
+        config.memory.provider = "disabled".to_string();
+        assert!(
+            diagnose(&config)
+                .iter()
+                .any(|r| r.severity == Severity::Warn && r.message.contains("\"disabled\""))
+        );
+
+        let mut config = AppConfig::default();
+        config.memory.provider = "tdg".to_string();
+        assert!(diagnose(&config).iter().any(|r| r.message.contains("tdg")));
+
+        let mut config = AppConfig::default();
+        config.memory.enabled = false;
+        assert!(
+            diagnose(&config)
+                .iter()
+                .any(|r| r.message.contains("enabled = false"))
+        );
+    }
+
+    #[test]
+    fn the_memory_wire_default_is_reported_ok() {
+        let config = AppConfig::default();
+        let results = diagnose(&config);
+        assert!(
+            results.iter().any(|r| r.severity == Severity::Ok
+                && r.message
+                    .contains("memory-wire (in-process engine) is active")),
+            "the default must be an OK row: {results:?}"
+        );
+    }
 
     fn fixture_config() -> AppConfig {
         // A config with real `[providers]` content so the config category
