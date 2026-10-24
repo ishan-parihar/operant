@@ -9,7 +9,6 @@
 
 use std::path::Path;
 use std::sync::OnceLock;
-use std::time::Duration;
 
 use regex::Regex;
 use tracing::debug;
@@ -110,45 +109,92 @@ pub fn substitute_template_vars(
 /// Execute a single inline-shell snippet and return its stdout (trimmed).
 ///
 /// Failures return a short `[inline-shell error: ...]` marker instead of
-/// raising, so one bad snippet can't wreck the whole skill message.
+/// raising, so one bad snippet can't wreck the whole skill message. A
+/// snippet that outlives `timeout_secs` is killed and reports
+/// `[inline-shell timeout ...]` (BUGS.md R47-3: the timeout used to be
+/// computed and discarded — `let _timeout = ...` around a blocking
+/// `cmd.output()` — so `!`sleep 9999`` hung the whole agent turn, parking a
+/// tokio worker thread with it).
 pub fn run_inline_shell(command: &str, cwd: Option<&Path>, timeout_secs: u64) -> String {
-    use std::process::Command;
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    let timeout = Duration::from_secs(timeout_secs.max(1));
 
     let mut cmd = Command::new("bash");
     cmd.arg("-c").arg(command);
     if let Some(dir) = cwd {
         cmd.current_dir(dir);
     }
-    cmd.stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
 
-    let _timeout = Duration::from_secs(timeout_secs.max(1));
-
-    match cmd.output() {
-        Ok(output) => {
-            let mut stdout = String::from_utf8_lossy(&output.stdout)
-                .trim_end()
-                .to_string();
-            if stdout.is_empty() {
-                stdout = String::from_utf8_lossy(&output.stderr)
-                    .trim_end()
-                    .to_string();
-            }
-            if stdout.len() > INLINE_SHELL_MAX_OUTPUT {
-                stdout.truncate(INLINE_SHELL_MAX_OUTPUT);
-                stdout.push_str("...[truncated]");
-            }
-            stdout
-        }
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
         Err(e) => {
-            if e.kind() == std::io::ErrorKind::NotFound {
+            return if e.kind() == std::io::ErrorKind::NotFound {
                 "[inline-shell error: bash not found]".to_string()
             } else {
-                format!("[inline-shell error: {}]", e)
-            }
+                format!("[inline-shell error: {e}]")
+            };
         }
+    };
+
+    // Drain both pipes on reader threads while polling: a snippet writing
+    // more than the pipe buffer would otherwise block on write, never exit,
+    // and be killed as a "timeout" it did not have.
+    let mut stdout_pipe = child.stdout.take();
+    let mut stderr_pipe = child.stderr.take();
+    let out_handle = std::thread::spawn(move || {
+        let mut buf = String::new();
+        if let Some(pipe) = stdout_pipe.as_mut() {
+            let _ = pipe.read_to_string(&mut buf);
+        }
+        buf
+    });
+    let err_handle = std::thread::spawn(move || {
+        let mut buf = String::new();
+        if let Some(pipe) = stderr_pipe.as_mut() {
+            let _ = pipe.read_to_string(&mut buf);
+        }
+        buf
+    });
+
+    let deadline = Instant::now() + timeout;
+    let completed = loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break true,
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    // Reap so the reader threads see EOF and join.
+                    let _ = child.wait();
+                    break false;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Err(e) => return format!("[inline-shell error: {e}]"),
+        }
+    };
+
+    let stdout = out_handle.join().unwrap_or_default();
+    let stderr = err_handle.join().unwrap_or_default();
+
+    if !completed {
+        return format!("[inline-shell timeout after {timeout_secs}s: {command}]");
     }
+
+    let mut out = stdout.trim_end().to_string();
+    if out.is_empty() {
+        out = stderr.trim_end().to_string();
+    }
+    if out.len() > INLINE_SHELL_MAX_OUTPUT {
+        out.truncate(INLINE_SHELL_MAX_OUTPUT);
+        out.push_str("...[truncated]");
+    }
+    out
 }
 
 /// Replace every `` !`cmd` `` snippet in `content` with its stdout.
@@ -410,6 +456,44 @@ mod tests {
         // stderr fallback: when stdout is empty, use stderr
         let output = run_inline_shell("echo error_msg >&2", None, 5);
         assert_eq!(output, "error_msg");
+    }
+
+    /// BUGS.md R47-3: `timeout_secs` used to be computed and discarded, so a
+    /// snippet that never exits hung the whole agent turn. Without the kill
+    /// this test takes 30s (and fails the elapsed bound); with it, the
+    /// snippet dies at the deadline and reports the timeout marker.
+    #[test]
+    fn run_inline_shell_timeout_kills_a_hung_snippet() {
+        let started = std::time::Instant::now();
+        let output = run_inline_shell("sleep 30", None, 1);
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(10),
+            "the timeout must bound the wait (took {:?})",
+            started.elapsed()
+        );
+        assert!(
+            output.contains("[inline-shell timeout"),
+            "a killed snippet reports the timeout marker: {output}"
+        );
+    }
+
+    /// A snippet that writes more than the pipe buffer must still finish and
+    /// be truncated, not be killed as a false timeout (the reader threads
+    /// exist for exactly this).
+    #[test]
+    fn run_inline_shell_survives_output_larger_than_the_pipe_buffer() {
+        // 1 MiB of output against a 64 KiB pipe buffer.
+        let output = run_inline_shell("head -c 1048576 /dev/zero | tr '\\0' 'x'", None, 10);
+        assert!(
+            output.len() <= INLINE_SHELL_MAX_OUTPUT + "...[truncated]".len(),
+            "oversized output is truncated (got {} bytes)",
+            output.len()
+        );
+        assert!(output.ends_with("...[truncated]"));
+        assert!(
+            output.starts_with('x'),
+            "the payload is the snippet's stdout"
+        );
     }
 
     #[test]
