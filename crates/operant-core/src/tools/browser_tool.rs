@@ -164,20 +164,83 @@ impl BrowserTool {
     }
 
     async fn handle_accessibility_tree(&self, args: &BrowserArgs) -> ToolResult {
+        // (iter-1245) Three ways to reach the tree, in priority order:
+        // 1. the caller's explicit cdp_url parameter;
+        // 2. BROWSER_CDP_URL / the legacy OBS_CDP_URL (an endpoint the
+        //    operator attached to — a fresh per-command connection is fine
+        //    there because targets live process-wide);
+        // 3. the MANAGED shared session — `cloakctl.cdp` starts or attaches
+        //    to the engine, and the fetch must ride the persistent socket
+        //    WITH a page session because `Accessibility.getFullAXTree` is
+        //    page-scoped and the engine keeps pages per connection.
+        // Before this, case 3 was a hard error telling the operator to set
+        // an env var — an instruction they cannot act on mid-run.
+        let full = args.full.unwrap_or(false);
+        if args.cdp_url.is_none() && crate::sourcehound_cdp::browser_cdp_url_from_env().is_none() {
+            return match crate::sourcehound_cdp::ensure_shared_page_session_id().await {
+                Ok(session_id) => {
+                    match crate::sourcehound_cdp::send_shared_session_cmd(
+                        "Accessibility.getFullAXTree",
+                        serde_json::json!({}),
+                        Some(&session_id),
+                    )
+                    .await
+                    {
+                        Ok(response) => {
+                            let nodes = response
+                                .get("result")
+                                .and_then(|r| r.get("nodes"))
+                                .and_then(|n| n.as_array())
+                                .cloned();
+                            match nodes {
+                                Some(nodes) => {
+                                    match crate::accessibility::AccessibilityTree::from_cdp_nodes(
+                                        &nodes,
+                                    ) {
+                                        Ok(tree) => {
+                                            let text = if full {
+                                                tree.render_full()
+                                            } else {
+                                                tree.render_compact()
+                                            };
+                                            ToolResult::success(
+                                                self.name(),
+                                                serde_json::json!({
+                                                    "snapshot": text,
+                                                    "element_count": tree.element_count,
+                                                    "refs": tree.refs,
+                                                }),
+                                            )
+                                        }
+                                        Err(e) => ToolResult::error(self.name(), e),
+                                    }
+                                }
+                                None => ToolResult::error(
+                                    self.name(),
+                                    "CDP response missing result.nodes",
+                                ),
+                            }
+                        }
+                        Err(e) => ToolResult::error(self.name(), format!("CDP error: {e}")),
+                    }
+                }
+                Err(e) => ToolResult::error(
+                    self.name(),
+                    format!(
+                        "No CDP endpoint: pass cdp_url, set BROWSER_CDP_URL, or ensure the sourcehound binary is available to start a managed browser session: {e}"
+                    ),
+                ),
+            };
+        }
+
+        // Reachable only when one of the two explicit sources is set (the
+        // no-source case returned above), so the unwrap is an invariant, not
+        // a guess: `""` as a URL would produce a confusing ws error.
         let cdp_url = args
             .cdp_url
             .clone()
-            .or_else(crate::sourcehound_cdp::browser_cdp_url_from_env);
-
-        let cdp_url = match cdp_url {
-            Some(url) => url,
-            None => {
-                return ToolResult::error(
-                    self.name(),
-                    "No CDP URL available. Set BROWSER_CDP_URL (the legacy OBS_CDP_URL is also accepted) or pass cdp_url parameter.",
-                );
-            }
-        };
+            .or_else(crate::sourcehound_cdp::browser_cdp_url_from_env)
+            .unwrap_or_else(|| unreachable!("the no-source case returned before this point"));
 
         let tree = match accessibility::fetch_accessibility_tree(&cdp_url).await {
             Ok(t) => t,
@@ -481,13 +544,14 @@ mod tests {
         }
     }
 
+    #[serial_test::serial]
     #[tokio::test]
-    async fn test_browser_accessibility_tree_missing_cdp_url() {
+    async fn test_browser_accessibility_tree_without_cdp_url_does_not_demand_the_env_var() {
         // The environment lock is CRATE-WIDE — see
         // `crate::platform::test_env_lock`. `BROWSER_CDP_URL` is process
         // global, and three modules mutate it; without one shared lock a
         // module's test could see another module's value mid-test. The
-        // symptom was this test's "No CDP URL" assertion failing because
+        // symptom was this test's old "No CDP URL" assertion failing because
         // a sibling module had the variable SET.
         let _env_lock = crate::platform::test_env_lock().await;
         let saved = std::env::var("BROWSER_CDP_URL").ok();
@@ -504,8 +568,23 @@ mod tests {
         if let Some(url) = saved {
             unsafe { std::env::set_var("BROWSER_CDP_URL", url) };
         }
-        assert!(!result.success);
-        assert!(result.error.unwrap_or_default().contains("No CDP URL"));
+        // (iter-1245) The no-env case must ATTEMPT the managed shared session
+        // (sourcehound cloakctl.cdp starts or attaches to the engine), not
+        // refuse with an env-var instruction. With sourcehound installed the
+        // tree fetch can even succeed against a real page; without it the
+        // failure names the fallback. The OLD "No CDP URL ... Set
+        // BROWSER_CDP_URL" refusal is the removed defect.
+        let err = result.error.unwrap_or_default();
+        assert!(
+            !err.contains("No CDP URL"),
+            "the no-env path must not demand the env var (error was: {err})"
+        );
+        if !result.success {
+            assert!(
+                err.contains("No CDP endpoint") || err.contains("CDP error"),
+                "the failure must be an endpoint/CDP failure naming the managed fallback: {err}"
+            );
+        }
     }
 
     #[tokio::test]
