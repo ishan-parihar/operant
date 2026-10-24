@@ -205,7 +205,13 @@ impl PlatformAdapter for EmailAdapter {
             // failed" and must NOT be reported as a successful send.
             check_smtp_code(&resp, &[235], "AUTH password")?;
 
-            // MAIL FROM
+            // MAIL FROM. Both addresses are validated: SMTP commands are
+            // line-oriented, so an address carrying CRLF, spaces or stray
+            // angle brackets injects commands into the conversation
+            // (extra `RCPT TO` lines = mail sent as this account to
+            // arbitrary recipients) — R48-6.
+            validate_email_address(&user, "MAIL FROM")?;
+            validate_email_address(&to, "RCPT TO")?;
             write!(tls_stream, "MAIL FROM:<{}>\r\n", user).map_err(|e| format!("SMTP write (TLS): {e}"))?;
             let resp = read_tls_response(&mut tls_stream, &mut buf)?;
             check_smtp_code(&resp, &[250], "MAIL FROM")?;
@@ -220,11 +226,16 @@ impl PlatformAdapter for EmailAdapter {
             let resp = read_tls_response(&mut tls_stream, &mut buf)?;
             check_smtp_code(&resp, &[354], "DATA")?;
 
-            // Email body
+            // Email body. DATA terminates at a line holding a single `.`,
+            // so every body line starting with one is dot-stuffed (leading
+            // `.` becomes `..`); without this, a body containing a bare `.`
+            // line ends the message early and the rest executes as SMTP
+            // commands from this account (R48-6).
+            let stuffed_body = dot_stuff(&body);
             write!(
                 tls_stream,
                 "From: <{}>\r\nTo: <{}>\r\nSubject: Operant Reply\r\n\r\n{}\r\n.\r\n",
-                user, to, body
+                user, to, stuffed_body
             )
             .map_err(|e| format!("SMTP write (TLS): {e}"))?;
             let resp = read_tls_response(&mut tls_stream, &mut buf)?;
@@ -314,6 +325,41 @@ impl PlatformAdapter for EmailAdapter {
         self.send_message(msg).await?;
         Ok(String::new())
     }
+}
+
+/// Reject an address that could inject SMTP commands (R48-6): must be
+/// non-empty, contain `@`, and hold only printable ASCII except `<`, `>`
+/// and the space character — anything else in `RCPT TO:<{addr}>` or the
+/// `To:` header is command or header injection, not an address.
+fn validate_email_address(addr: &str, step: &str) -> std::result::Result<(), String> {
+    let ok = !addr.is_empty()
+        && addr.contains('@')
+        && addr
+            .bytes()
+            .all(|b| b.is_ascii_graphic() && b != b'<' && b != b'>');
+    if ok {
+        Ok(())
+    } else {
+        Err(format!(
+            "SMTP {step}: refusing address {addr:?} — it is empty, or carries a \
+             character that would inject SMTP commands (control, space, or angle bracket)"
+        ))
+    }
+}
+
+/// SMTP dot-stuffing: every body line starting with `.` gains a second one,
+/// so a bare `.` line inside the body cannot terminate DATA early.
+fn dot_stuff(body: &str) -> String {
+    body.lines()
+        .map(|line| {
+            if line.starts_with('.') {
+                format!(".{line}")
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\r\n")
 }
 
 /// Check that an SMTP reply carries one of the expected status codes.
@@ -415,5 +461,56 @@ mod tests {
     fn an_unparseable_reply_fails() {
         assert!(check_smtp_code("garbage", &[250], "EHLO").is_err());
         assert!(check_smtp_code("", &[250], "EHLO").is_err());
+    }
+}
+
+#[cfg(test)]
+mod r48_tests {
+    use super::{dot_stuff, validate_email_address};
+
+    /// R48-6: a bare `.` line inside the body must not terminate DATA early.
+    #[test]
+    fn a_bare_dot_line_is_stuffed() {
+        let body = "line one\r\n.\r\nRCPT TO:<victim@example.com>\r\nDATA";
+        let stuffed = dot_stuff(body);
+        // THE property: no transmitted line is a bare `.` (the DATA
+        // terminator), and any line starting with `.` starts with `..` —
+        // the injected command travels as message data, not a command.
+        for line in stuffed.split("\r\n") {
+            assert!(
+                !line.starts_with('.') || line.starts_with(".."),
+                "no unstuffed dot line survives: {line:?}"
+            );
+        }
+        assert!(
+            stuffed.contains("\r\n..\r\n"),
+            "the bare dot line was stuffed: {stuffed:?}"
+        );
+    }
+
+    #[test]
+    fn a_body_without_dot_lines_is_unchanged() {
+        assert_eq!(dot_stuff("hello\r\nworld"), "hello\r\nworld");
+        assert_eq!(dot_stuff(""), "");
+    }
+
+    /// Addresses that would inject commands or headers are refused before
+    /// the conversation starts.
+    #[test]
+    fn injection_addresses_are_refused() {
+        assert!(validate_email_address("a@b.com", "RCPT TO").is_ok());
+        for bad in [
+            "a@b.com>\r\nRCPT TO:<c@d.com", // command injection
+            "a b@c.com",                    // space
+            "<a@b.com>",                    // angle brackets (double-wrap)
+            "a@b.com\r\nBcc: x@y.com",      // header injection via To:
+            "",                             // empty
+            "no-at-sign",                   // malformed
+        ] {
+            assert!(
+                validate_email_address(bad, "RCPT TO").is_err(),
+                "{bad:?} must be refused"
+            );
+        }
     }
 }
