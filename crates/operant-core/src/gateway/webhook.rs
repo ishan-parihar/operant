@@ -399,9 +399,16 @@ impl PlatformAdapter for WebhookAdapter {
                         let challenge = params.get("hub.challenge").cloned().unwrap_or_default();
 
                         if mode == "subscribe" {
-                            // Verify the token matches our secret (if one is configured).
+                            // Verify the token matches our secret (if one is
+                            // configured). Constant-time, like every HMAC
+                            // comparison in this file — an ordinary `==`
+                            // short-circuits on the first differing byte and
+                            // leaks the token's prefix length over the wire.
                             let token_ok = match &secret {
-                                Some(expected) => verify_token == expected.as_str(),
+                                Some(expected) => constant_time_eq::constant_time_eq(
+                                    verify_token.as_bytes(),
+                                    expected.as_bytes(),
+                                ),
                                 None => true,
                             };
                             if token_ok {
@@ -1112,6 +1119,61 @@ mod tests {
     /// signs url_verification like every other request, so refusing the
     /// unsigned shape closes an unauthenticated reflector while keeping
     /// real registration working (next test).
+    /// GET a path and return the status code and body — the handshake twin
+    /// of `post_body_response`. The GET arm had no test at all until now.
+    async fn get_body_response(port: u16, path: &str) -> (u16, String) {
+        let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .expect("connect");
+        let request =
+            format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n");
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        stream.write_all(request.as_bytes()).await.expect("write");
+        let mut response = String::new();
+        stream.read_to_string(&mut response).await.expect("read");
+        let status = response
+            .lines()
+            .next()
+            .and_then(|line| line.split_whitespace().nth(1))
+            .and_then(|code| code.parse().ok())
+            .unwrap_or(0);
+        let body = response
+            .split_once("\r\n\r\n")
+            .map(|(_, b)| b.to_string())
+            .unwrap_or_default();
+        (status, body)
+    }
+
+    /// The Meta/WhatsApp GET handshake echoes the challenge only for the
+    /// matching verify token, and the comparison is constant-time like every
+    /// other secret comparison in this adapter (an `==` short-circuits on
+    /// the first differing byte; the timing property itself is not
+    /// unit-testable, so this pins the behavior around it).
+    #[tokio::test]
+    async fn the_meta_handshake_echoes_the_challenge_only_for_the_right_token() {
+        let (port, _rx) = start_on_ephemeral(Some("shared-secret")).await;
+        let (status, body) = get_body_response(
+            port,
+            "/webhook/whatsapp?hub.mode=subscribe&hub.verify_token=shared-secret&hub.challenge=12391",
+        )
+        .await;
+        assert_eq!(status, 200, "the matching token is accepted");
+        assert_eq!(body, "12391", "the challenge is echoed back verbatim");
+
+        let (status, _) = get_body_response(
+            port,
+            "/webhook/whatsapp?hub.mode=subscribe&hub.verify_token=wrong-token&hub.challenge=12391",
+        )
+        .await;
+        assert_eq!(status, 403, "a wrong token is refused");
+
+        let (status, _) = get_body_response(port, "/webhook/whatsapp?hub.challenge=12391").await;
+        assert_eq!(
+            status, 400,
+            "a GET without hub.mode=subscribe is a bad request"
+        );
+    }
+
     #[tokio::test]
     async fn a_url_verification_challenge_is_refused_unsigned_under_a_secret() {
         let (port, _rx) = start_on_ephemeral(Some("shared-secret")).await;
