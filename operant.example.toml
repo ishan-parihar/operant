@@ -308,6 +308,9 @@ email_enabled = false
 # email_smtp_pass = ""
 sms_twilio_enabled = false
 webhooks_enabled = false
+# Listen address defaults to 127.0.0.1:8080 (loopback only). Use
+# "0.0.0.0:8080" to accept webhooks from other machines — pair that with
+# webhooks_secret below so the endpoint is not an open command channel.
 # webhooks_addr = "127.0.0.1:8080"
 admins = []
 # Cap on concurrent gateway sessions (hermes max_concurrent_sessions parity).

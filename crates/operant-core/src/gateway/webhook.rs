@@ -160,10 +160,16 @@ fn verify_request_signature(
 }
 
 impl WebhookAdapter {
+    /// The loopback default: a webhook receiver that accepts unsigned POSTs
+    /// must not sit on every interface out of the box. Binding beyond the
+    /// machine (`0.0.0.0`, a LAN IP) is an explicit `[gateway] webhooks_addr`
+    /// decision, made together with `webhooks_secret`.
+    pub const DEFAULT_LISTEN_ADDR: &'static str = "127.0.0.1:8080";
+
     pub fn new(enabled: bool) -> Self {
         Self {
             enabled,
-            listen_addr: "0.0.0.0:8080".to_string(),
+            listen_addr: Self::DEFAULT_LISTEN_ADDR.to_string(),
             secret: None,
             holon: None,
         }
@@ -259,10 +265,12 @@ impl PlatformAdapter for WebhookAdapter {
         // into the agent as a message. That is a legitimate configuration
         // for a receiver on a private network, so it is NOT refused — but
         // it is the difference between "a webhook endpoint" and "an
-        // unauthenticated command channel pointed at the agent", and the
-        // default listen address is 0.0.0.0, which is the public
-        // internet. Say so, loudly, at startup: the operator cannot
-        // otherwise tell an unauthenticated receiver from a verified one.
+        // unauthenticated command channel pointed at the agent". The
+        // default listen address is loopback for exactly this reason
+        // (ponytail audit 2026-10-24); an operator who sets a wider
+        // `webhooks_addr` without a secret has reopened the exposure, so
+        // say so, loudly, at startup: the operator cannot otherwise tell
+        // an unauthenticated receiver from a verified one.
         //
         // (iter-1009 — the HMAC check is `if let Some(ref sec) = secret`,
         // so with no secret the whole verification block is skipped and the
@@ -1102,5 +1110,17 @@ mod tests {
             status, 500,
             "a dropped WhatsApp event must not be acked — Meta retries on 5xx"
         );
+    }
+
+    /// Ponytail audit 2026-10-24: the out-of-the-box listener must be
+    /// loopback. A default of 0.0.0.0 combined with the optional secret
+    /// made "enable webhooks" mean "unauthenticated command channel on
+    /// every interface" — the adapter default and the gateway factory
+    /// fallback (gateway_runner.rs) both read this constant, so pinning it
+    /// here pins both.
+    #[test]
+    fn default_listen_addr_is_loopback() {
+        assert_eq!(WebhookAdapter::DEFAULT_LISTEN_ADDR, "127.0.0.1:8080");
+        assert_eq!(WebhookAdapter::new(true).listen_addr, "127.0.0.1:8080");
     }
 }

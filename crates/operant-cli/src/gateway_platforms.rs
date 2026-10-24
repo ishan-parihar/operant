@@ -232,7 +232,7 @@ fn setup_webhooks(config: &mut AppConfig) -> Result<()> {
         match choice.trim().to_lowercase().chars().next() {
             Some('r') => {
                 let a: String = dialoguer::Input::new()
-                    .with_prompt("Webhook listen address (e.g. 0.0.0.0:8080)")
+                    .with_prompt("Webhook listen address (default 127.0.0.1:8080; 0.0.0.0 reaches every interface)")
                     .allow_empty(true)
                     .interact_text()
                     .unwrap_or_default();
@@ -247,7 +247,9 @@ fn setup_webhooks(config: &mut AppConfig) -> Result<()> {
         }
     } else {
         let a: String = dialoguer::Input::new()
-            .with_prompt("Webhook listen address (e.g. 0.0.0.0:8080)")
+            .with_prompt(
+                "Webhook listen address (default 127.0.0.1:8080; 0.0.0.0 reaches every interface)",
+            )
             .allow_empty(true)
             .interact_text()
             .unwrap_or_default();

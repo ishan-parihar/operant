@@ -2185,7 +2185,7 @@ fn platform_registry() -> Vec<PlatformEntry> {
                     let addr = config
                         .webhooks_addr
                         .clone()
-                        .unwrap_or_else(|| "0.0.0.0:8080".to_string());
+                        .unwrap_or_else(|| WebhookAdapter::DEFAULT_LISTEN_ADDR.to_string());
                     Some(Arc::new(
                         WebhookAdapter::new(config.webhooks_enabled)
                             .with_addr(addr)
