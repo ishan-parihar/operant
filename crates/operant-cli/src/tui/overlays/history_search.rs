@@ -93,11 +93,14 @@ pub fn subsequence_score(query: &str, target: &str) -> Option<(f32, Vec<usize>)>
     let t_lc = target.to_lowercase();
 
     // --- Fast path: substring match (always wins over subsequence) ----------
-    if let Some(pos) = t_lc.find(q_lc.as_str()) {
-        let position_bonus = 1.0 / (1.0 + pos as f32);
+    // Positions come from `folded_find` in ORIGINAL-target coordinates —
+    // offsets found in the lowercased copy are not byte-aligned in the
+    // original when a char's fold changes its length (R48-3).
+    if let Some((m_start, m_end)) = super::fold::folded_find(target, query) {
+        let position_bonus = 1.0 / (1.0 + m_start as f32);
         let score = 1.0 + position_bonus;
-        // Matched positions are the contiguous byte range [pos, pos+q_lc.len())
-        let positions: Vec<usize> = (pos..pos + q_lc.len()).collect();
+        // Matched positions are the contiguous byte range [m_start, m_end)
+        let positions: Vec<usize> = (m_start..m_end).collect();
         return Some((score, positions));
     }
 
@@ -106,17 +109,18 @@ pub fn subsequence_score(query: &str, target: &str) -> Option<(f32, Vec<usize>)>
     let t_chars: Vec<char> = t_lc.chars().collect();
 
     let mut q_pos = 0usize;
-    // Map: char index in t_chars -> byte offset in original target
+    // Map: folded-char index -> byte offset in the ORIGINAL target. The
+    // folded text can hold MORE chars than the target (İ folds to two), so
+    // each folded char records the byte offset of the original char that
+    // produced it — every entry is a real original char boundary (R48-3).
     let t_byte_offsets: Vec<usize> = {
-        let mut off = 0usize;
-        t_chars
-            .iter()
-            .map(|c| {
-                let o = off;
-                off += c.len_utf8();
-                o
-            })
-            .collect()
+        let mut out = Vec::with_capacity(t_chars.len());
+        for (b, ch) in target.char_indices() {
+            for _ in ch.to_lowercase() {
+                out.push(b);
+            }
+        }
+        out
     };
 
     let mut matched_char_indices: Vec<usize> = Vec::with_capacity(q_chars.len());

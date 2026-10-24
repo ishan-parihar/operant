@@ -314,21 +314,20 @@ pub fn render_global_search(
                     Style::default().fg(theme::dim_color())
                 };
 
-                // Highlight query match in text
+                // Highlight query match in text. The offsets come from
+                // `folded_find` in ORIGINAL-text coordinates — the previous
+                // version found the match in a `to_lowercase()` copy and
+                // sliced the original with those byte offsets, which panics
+                // whenever a char's fold changes its byte length (R48-3).
                 let text_trimmed = result.text.trim();
                 let query_lc = state.query.to_lowercase();
                 let text_spans: Vec<Span<'static>> = if !query_lc.is_empty() {
-                    let text_lc = text_trimmed.to_lowercase();
-                    if let Some(pos) = text_lc.find(query_lc.as_str()) {
-                        let before: String = text_trimmed
-                            .chars()
-                            .take(text_trimmed[..pos].chars().count())
-                            .collect();
-                        let matched: String = text_trimmed[pos..pos + query_lc.len()].to_string();
-                        let after: String = text_trimmed[pos + query_lc.len()..]
-                            .chars()
-                            .take(30)
-                            .collect();
+                    if let Some((m_start, m_end)) =
+                        super::fold::folded_find(text_trimmed, &state.query)
+                    {
+                        let before: String = text_trimmed[..m_start].to_string();
+                        let matched: String = text_trimmed[m_start..m_end].to_string();
+                        let after: String = text_trimmed[m_end..].chars().take(30).collect();
                         vec![
                             Span::styled(before, style),
                             Span::styled(
