@@ -147,7 +147,18 @@ impl App {
     /// Screen row inside the selectable area → scroll-stable content line.
     /// Returns the input row as-is when the area is empty (unselectable state).
     pub(super) fn content_line_of_screen_row(&self, screen_row: u16) -> usize {
-        let area = self.last_selectable_area.get();
+        // Resolve against the rect the transcript TEXT was drawn into, not the
+        // wider messages band: the band's first rows are the prompt preview
+        // and the pinned-todo strip, so using it mapped every drag to a line
+        // ABOVE the text the pointer was on (2026-10-23: the selection carried
+        // text from a different message than the highlight). Fall back to the
+        // band only before the first frame has painted a chat content rect.
+        let area = crate::tui::operant_ui::chat_content_area();
+        let area = if area.width == 0 || area.height == 0 {
+            self.last_selectable_area.get()
+        } else {
+            area
+        };
         if area.width == 0 || area.height == 0 || screen_row < area.y {
             return screen_row as usize;
         }

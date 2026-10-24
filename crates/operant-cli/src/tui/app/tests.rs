@@ -6184,6 +6184,52 @@ mod approval_gate_tests {
             "the browser did not take the key"
         );
     }
+
+    // ---- drag hit-test geometry ------------------------------------------
+
+    /// A drag's screen row must resolve against the rect the transcript TEXT
+    /// was drawn into, not the wider messages band.
+    ///
+    /// The band's first `top_band_lines` rows are the previous-prompt preview
+    /// and the pinned-todo strip; resolving against it selected a line ABOVE
+    /// the text under the pointer (2026-10-23), so the copy carried a
+    /// different message than the highlight painted. Publishing the content
+    /// rect is what makes the two agree.
+    #[test]
+    fn a_drag_row_resolves_against_the_chat_content_area_not_the_band() {
+        let app = make_app();
+        // The band: rows 3..13 of a 120x40 frame.
+        app.last_selectable_area
+            .set(ratatui::layout::Rect::new(0, 3, 120, 10));
+        // The text inside it starts 2 rows lower (prompt preview + todos).
+        crate::tui::operant_ui::publish_chat_content_area(ratatui::layout::Rect::new(0, 5, 120, 8));
+        app.last_render_scroll_offset.set(0);
+
+        // Row 7 is the 3rd text row (7 - 5), NOT the 5th band row (7 - 3).
+        assert_eq!(app.content_line_of_screen_row(7), 2);
+        // The first text row resolves to the content origin, so a drag that
+        // starts at the top of the text does not read as a negative line.
+        assert_eq!(app.content_line_of_screen_row(5), 0);
+
+        // Scrolled: the offset still applies to a row inside the text rect,
+        // never to a row inside the chrome strip.
+        app.last_render_scroll_offset.set(40);
+        assert_eq!(app.content_line_of_screen_row(7), 42);
+    }
+
+    /// Before the first frame paints a content rect (startup, or a narrow
+    /// frame that skipped the layout), the band is the only geometry there is
+    /// - and an unknown offset must not shift selections by a guess.
+    #[test]
+    fn an_unpublished_content_area_falls_back_to_the_band() {
+        let app = make_app();
+        app.last_selectable_area
+            .set(ratatui::layout::Rect::new(0, 4, 120, 10));
+        app.last_render_scroll_offset.set(3);
+        crate::tui::operant_ui::publish_chat_content_area(ratatui::layout::Rect::new(0, 0, 0, 0));
+
+        assert_eq!(app.content_line_of_screen_row(9), 8);
+    }
 }
 
 #[cfg(test)]

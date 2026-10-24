@@ -723,6 +723,32 @@ thread_local! {
     /// and classified every click as "not the input".
     static LAST_INPUT_AREA: std::cell::Cell<Rect> =
         const { std::cell::Cell::new(Rect::new(0, 0, 0, 0)) };
+
+    /// The rect the transcript text is actually drawn into, from the last
+    /// `draw`.
+    ///
+    /// This is NOT [`message_area`]: the messages band's first
+    /// `top_band_lines` rows carry the previous-prompt preview and the pinned
+    /// todo band, so the text starts lower. Mapping a mouse row against the
+    /// message band (as the drag hit-test did) resolved every selection to a
+    /// line N rows ABOVE the text the pointer was on.
+    static LAST_CHAT_CONTENT_AREA: std::cell::Cell<Rect> =
+        const { std::cell::Cell::new(Rect::new(0, 0, 0, 0)) };
+}
+
+/// The transcript text rect from the last drawn frame (zero-sized before the
+/// first draw, or on a frame that skipped the transcript layout).
+pub(crate) fn chat_content_area() -> Rect {
+    LAST_CHAT_CONTENT_AREA.with(|area| area.get())
+}
+
+/// Record the rect the transcript text was drawn into this frame.
+///
+/// Called by `ui_viewport` once it has resolved `content_area`, so callers
+/// see the same rectangle the paint used rather than the wider messages
+/// band the top strips (prompt preview, pinned todos) sit above.
+pub(crate) fn publish_chat_content_area(area: Rect) {
+    LAST_CHAT_CONTENT_AREA.with(|slot| slot.set(area));
 }
 
 /// The input band from the last drawn frame (zero-sized before the first draw).
@@ -2159,6 +2185,7 @@ pub fn draw(frame: &mut Frame, app: &dyn TuiState) {
     // motion against the previous frame's geometry.
     LAST_MESSAGE_AREA.with(|area| area.set(Rect::new(0, 0, 0, 0)));
     LAST_INPUT_AREA.with(|area| area.set(Rect::new(0, 0, 0, 0)));
+    LAST_CHAT_CONTENT_AREA.with(|area| area.set(Rect::new(0, 0, 0, 0)));
     record_idle_animation_area(None);
     // Suggestions are read many times while composing one frame. Bump the
     // epoch here so the memo is scoped to exactly this frame.

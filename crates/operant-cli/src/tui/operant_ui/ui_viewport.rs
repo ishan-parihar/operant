@@ -487,6 +487,11 @@ pub(super) fn draw_messages(
         width: text_render_area.width,
         height: render_area.height.saturating_sub(top_band_lines),
     };
+    // Publish the rect the text actually occupies so the mouse hit-test
+    // resolves against the same geometry the paint used. Without this the
+    // selection read the messages band, which starts `top_band_lines` rows
+    // higher, and every drag selected a line above the pointer.
+    super::publish_chat_content_area(content_area);
     let visible_height = content_area.height as usize;
     let copy_badge_ui = app.copy_badge_ui();
     let copy_badge_now = std::time::Instant::now();
