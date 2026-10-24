@@ -918,8 +918,9 @@ pub struct TuiSettings {
     #[serde(default = "default_double_escape_action")]
     pub double_escape_action: String,
     /// (plan 2026-10-24 M5) Ghost-text word completion engine for the
-    /// composer: "off" (landing default) or "ngram" — the personal-history
-    /// interpolated trigram engine (OMP pi-predict architecture, in-process).
+    /// composer: "ngram" (the default — the personal-history interpolated
+    /// trigram engine, OMP pi-predict architecture, in-process) or "off"
+    /// to disable ghost text.
     #[serde(default = "default_word_completion")]
     pub word_completion: String,
     /// (plan 2026-10-24 M5) Override of the engine's show threshold τ
@@ -929,7 +930,11 @@ pub struct TuiSettings {
 }
 
 fn default_word_completion() -> String {
-    "off".to_string()
+    // On by default (owner request 2026-10-25): a cold-start install gets
+    // the full composer surface. The engine degrades to silence on a thin
+    // history (the τ gate shows nothing rather than junk), so defaulting
+    // on costs nothing on a fresh install.
+    "ngram".to_string()
 }
 
 fn default_double_escape_action() -> String {
@@ -2784,6 +2789,22 @@ fn apply_path_override(name: &str, target: &mut PathBuf) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    /// Word completion is ON by default (iter-1234): a config that omits
+    /// `[tui] word_completion` entirely must deserialize to `"ngram"`, and
+    /// an explicit `"off"` must still be honored — the opt-out is the
+    /// operator's, never a silent downgrade.
+    #[test]
+    fn word_completion_defaults_to_ngram_and_off_still_honored() {
+        let config: AppConfig = toml::from_str("").expect("empty config loads");
+        assert_eq!(config.tui.word_completion, "ngram", "cold-start default");
+
+        let config: AppConfig =
+            toml::from_str("[tui]\nword_completion = \"off\"").expect("explicit off loads");
+        assert_eq!(config.tui.word_completion, "off", "the opt-out is honored");
+
+        assert_eq!(TuiSettings::default().word_completion, "ngram");
+    }
+
     /// A top-level `[[model_routes]]` is REJECTED by the config.
     ///
     /// The routes live under `[providers]`, and the config's

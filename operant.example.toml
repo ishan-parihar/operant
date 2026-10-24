@@ -202,9 +202,9 @@ backend = "none"
 
 [tui]
 # Word completion engine for the composer's ghost text (plan 2026-10-24):
-# "off" (default) or "ngram" — an interpolated trigram over your own
-# submitted prompts, learned live. TAB accepts a shown ghost.
-#word_completion = "ngram"
+# "ngram" is the DEFAULT (an interpolated trigram over your own submitted
+# prompts, learned live; TAB accepts a shown ghost). Set "off" to disable.
+#word_completion = "off"
 # Override the engine's show threshold (default 0.15; lower shows more).
 #word_completion_threshold = 0.15
 theme = "opencode"

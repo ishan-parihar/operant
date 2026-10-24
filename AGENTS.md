@@ -731,10 +731,10 @@ The prompt composer runs three OMP-derived surfaces (plan
   checked; an EMPTY fuzzy result keeps the interim listing).
 - **Ghost text** (`prompt_input/ghost.rs` + `prediction/`): the word at
   the caret completes from a personal-history trigram engine
-  (`[tui] word_completion = "off" | "ngram"`, threshold override
-  `word_completion_threshold`, engine thread + std mpsc, snapshot at
-  `<home>/predict/ngram.snapshot`). TAB accepts + space, → accepts
-  verbatim, divergence drops. The ghost NEVER shows while the popup is
+  (`[tui] word_completion`, default `"ngram"`, `"off"` disables;
+  threshold override `word_completion_threshold`, engine thread + std
+  mpsc, snapshot at `<home>/predict/ngram.snapshot`). TAB accepts +
+  space, → accepts verbatim, divergence drops. The ghost NEVER shows while the popup is
   open, inside @-references/slash input/code spans, or mid-word. The
   predictor learns from every submission (observe next to
   `input_history::append`) and persists at teardown.
