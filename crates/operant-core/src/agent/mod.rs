@@ -859,6 +859,19 @@ fn is_permission_gated_tool(name: &str) -> bool {
             | "memory_store"
             | "skill_manage"
             | "learning_manage"
+            // R48-1/R48-2 (2026-10-25 ponytail round 2): the AFT family is
+            // the DEFAULT shell/file surface (aft_enabled defaults on, and
+            // the bridge replaces the native tools), and verify_task /
+            // cron / delegate_task all reach a shell or spawn agents —
+            // none of them prompted before, so a flagged call executed
+            // silently even in an attended session.
+            | "aft_bash"
+            | "aft_write"
+            | "aft_edit"
+            | "aft_apply_patch"
+            | "verify_task"
+            | "cron"
+            | "delegate_task"
     )
 }
 
@@ -1319,6 +1332,32 @@ pub use run::{SEAT_BUDGET_ENVELOPE, SeatBudgetEnvelope, TURN_RETENTION, turn_ret
 mod tests {
     use super::*;
     use crate::agent::clients::openai::OpenAIModelClient;
+
+    /// R48-1/R48-2: the tools that reach a shell or spawn agents must be in
+    /// the permission-prompt list — the AFT family (the DEFAULT surface),
+    /// and verify_task/cron/delegate_task, which all executed flagged calls
+    /// silently before.
+    #[test]
+    fn shell_and_agent_spawning_tools_are_permission_gated() {
+        for name in [
+            "terminal",
+            "code_execution",
+            "aft_bash",
+            "aft_write",
+            "aft_edit",
+            "aft_apply_patch",
+            "verify_task",
+            "cron",
+            "delegate_task",
+        ] {
+            assert!(is_permission_gated_tool(name), "{name} must prompt");
+        }
+        // And the list must not swallow everything — read-only info tools
+        // stay ungated so attended sessions are not one giant prompt wall.
+        for name in ["datetime", "web_search", "memory_recall"] {
+            assert!(!is_permission_gated_tool(name), "{name} must stay ungated");
+        }
+    }
     use crate::agent::model_client::ChatRequest;
     use crate::client::ChatResponse;
     use crate::client::OpenAIClient;

@@ -1005,12 +1005,18 @@ impl OperantAgent {
 
             // Smart approval gate
             let mut guardian_approved = false;
+            // R48-2: `approval_result` is scoped to the gate block; hoist the
+            // verdict the headless deny below needs.
+            let mut gate_flagged = false;
             if self.config.approval_mode != "off" {
                 let approval_result = crate::approval::check_tool_approval(
                     &name,
                     &args,
                     Some(&self.config.approval_mode),
                 );
+                if approval_result.verdict == "requires_approval" {
+                    gate_flagged = true;
+                }
                 match approval_result.verdict.as_str() {
                     "blocked" => {
                         warn!(tool = %name, "Tool call blocked by approval guard");
@@ -1237,6 +1243,39 @@ impl OperantAgent {
                          attempt is denied; the ask {reference} and the next \
                          run consults the grant the approver mints"
                     ),
+                ));
+                continue;
+            }
+
+            // ── R48-2 (2026-10-25 ponytail round 2): headless flagged-call deny ──
+            // A call the smart gate FLAGGED (verdict `requires_approval`) with
+            // NO interactive approver attached must deny, never fall through
+            // to execution — the governed Escalate path already denies above;
+            // this is its ungoverned twin. The flag used to log "will prompt
+            // user" and then execute silently in every headless run (`operant
+            // run`, sub-agent children) and for every tool outside the prompt
+            // list in attended ones. Scope is deliberately narrow: benign
+            // calls (verdict "allowed") keep invariant 5's headless behavior
+            // byte-for-byte, allowlisted calls run (the operator already
+            // approved them), a guardian approval runs, and a seat `Run`
+            // decision runs — only the flagged-and-nobody-to-ask case denies.
+            if !guardian_approved
+                && gate_flagged
+                && seat.is_none()
+                && self.permission_tx.is_none()
+                && !self.tool_allowed_by_allowlist(&name)
+            {
+                warn!(
+                    tool = %name,
+                    "Smart gate flagged the call — no interactive approver attached: deny"
+                );
+                early_results[idx] = Some(ToolResult::error_with_name(
+                    &name,
+                    &tool_call.id,
+                    "Refused: this call was flagged for approval and no interactive \
+                     approver is attached to this run (headless). Run interactively \
+                     to approve it once, or add it to your approval allowlist."
+                        .to_string(),
                 ));
                 continue;
             }

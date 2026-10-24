@@ -746,6 +746,12 @@ pub(crate) const SHELL_CARRYING_TOOLS: &[&str] = &[
     "kernel_exec",
     "verify_task",
     "cron",
+    // The AFT family replaces the native terminal/file tools when its bridge
+    // is live — and `aft_enabled` defaults ON, so this is the DEFAULT shell
+    // surface. Without an arm the gate was handed the literal "aft_bash" and
+    // the hardline blocklist, the 47 dangerous patterns and the blast-radius
+    // screen all matched nothing (BUGS.md R48-1).
+    "aft_bash",
 ];
 
 /// Extract a command string from tool arguments.
@@ -875,6 +881,16 @@ pub fn extract_command_from_args(tool_name: &str, args: &Value) -> String {
                 parts.join("; ")
             }
         }
+        // `aft_bash` runs the command via the aft subprocess bridge; its arg
+        // is `command`, same as terminal. Before this arm the DEFAULT shell
+        // surface (AFT replaces the native terminal when its bridge is live,
+        // and aft_enabled defaults on) was handed the tool's own name and
+        // every layer of the gate matched nothing (BUGS.md R48-1).
+        "aft_bash" => args
+            .get("command")
+            .and_then(|v| v.as_str())
+            .unwrap_or(tool_name)
+            .to_string(),
         _ => tool_name.to_string(),
     }
 }
@@ -1778,7 +1794,7 @@ fn guardian_env_parse_is_pure_and_opt_in() {
 #[cfg(test)]
 fn shell_tool_sample_args(tool: &str) -> Value {
     match tool {
-        "terminal" | "process" => serde_json::json!({"command": "echo sample"}),
+        "terminal" | "process" | "aft_bash" => serde_json::json!({"command": "echo sample"}),
         "code_execution" | "kernel_exec" => serde_json::json!({"code": "print('x')"}),
         "verify_task" => {
             serde_json::json!({"action": "ad_hoc", "checks": [{"cmd": "echo sample"}]})
@@ -1795,9 +1811,10 @@ fn shell_tool_sample_args(tool: &str) -> Value {
 /// or a name that stops being registered) fails here, not in production.
 #[test]
 fn shell_carrying_tools_have_extractor_arms() {
-    // kernel_exec registers with the kernel sidecar, not the builtin list —
-    // its ARM is still required below.
-    const CONDITIONALLY_REGISTERED: &[&str] = &["kernel_exec"];
+    // kernel_exec registers with the kernel sidecar, aft_bash with the aft
+    // bridge pool — neither is in the builtin list; their ARMS are still
+    // required below.
+    const CONDITIONALLY_REGISTERED: &[&str] = &["kernel_exec", "aft_bash"];
     let registered = crate::tools::builtin::builtin_tool_names();
     for tool in SHELL_CARRYING_TOOLS {
         assert!(
@@ -1914,4 +1931,21 @@ fn cron_scripts_match_the_terminals_treatment_at_store_time() {
         result.verdict, "allowed",
         "prompt-only cron jobs stay ungated"
     );
+}
+
+/// `aft_bash` is the DEFAULT shell surface (AFT replaces the native terminal
+/// when its bridge is live). The same command must get the same verdict
+/// through it as through `terminal` (BUGS.md R48-1) — before the arm,
+/// `rm -rf /` came back "allowed" here.
+#[test]
+fn aft_bash_matches_the_terminals_treatment() {
+    for cmd in ["rm -rf /", "dd if=/dev/zero of=/dev/sda", "npm test"] {
+        let via_terminal =
+            check_tool_approval("terminal", &serde_json::json!({"command": cmd}), None);
+        let via_aft = check_tool_approval("aft_bash", &serde_json::json!({"command": cmd}), None);
+        assert_eq!(
+            via_terminal.verdict, via_aft.verdict,
+            "{cmd}: aft_bash must be gated exactly like terminal"
+        );
+    }
 }
