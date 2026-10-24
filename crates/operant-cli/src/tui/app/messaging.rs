@@ -189,11 +189,34 @@ impl App {
     /// Check current token usage and push token warning notifications as
     /// appropriate.  Call this after updating `token_count`.
     pub fn check_token_warnings(&mut self) {
-        let window = crate::tui::adapter_types::context_window_for_model(&self.model_name) as u32;
+        // (iter-1207) Use the SAME window the footer's context bar divides
+        // by: the per-model value `refresh_context_window_size` resolved
+        // from models_dev (200k for Anthropic, 1M for Gemini). This
+        // function used to call the flat
+        // `context_window_for_model(model)`, which ignores the model name
+        // and always returns 128000 — so on Anthropic a context at 160k
+        // tokens fired the "95% full" notice while the bar in the footer
+        // read 80%. Two surfaces, two denominators, one lie about how
+        // close the window is to full, and the warning that decides
+        // whether auto-compact triggers is the one that was wrong.
+        // Fall back to the model resolver only before the first refresh
+        // has run (`context_window_size == 0`).
+        let window = if self.context_window_size > 0 {
+            self.context_window_size as u32
+        } else {
+            crate::tui::adapter_types::context_window_for_model(&self.model_name) as u32
+        };
         if window == 0 {
             return;
         }
-        let pct = (self.token_count as f64 / window as f64 * 100.0) as u8;
+        // Compare like with like: the provider-metered prompt size when
+        // there is one, else the turn total. The footer renders the prompt
+        // size, so the percentage must be measured against that same
+        // figure or the notice and the bar disagree.
+        let used = self
+            .last_observed_prompt_tokens
+            .unwrap_or(u64::from(self.token_count));
+        let pct = (used as f64 / window as f64 * 100.0) as u8;
 
         // Usage dropped back below the last-shown threshold (e.g. /clear or
         // /compact shrank the context) — reset so warnings can re-fire on

@@ -443,6 +443,17 @@ impl App {
                 }
                 self.cost_usd = self.cost_tracker.total_cost;
                 self.token_count = turn_tokens;
+                // (iter-1207) `input_tokens` is the size of the prompt the
+                // provider just billed — the only context figure that
+                // includes the system prompt and the tool schemas. The
+                // footer prefers it over the char estimate (which sees
+                // neither), so capture it here rather than letting it die
+                // with the event. Clear when the provider reports no
+                // usage at all: a real 0 is still a measurement, and the
+                // estimate is the better guide than a stale number.
+                self.last_observed_prompt_tokens =
+                    (total_tokens > 0 || input_tokens > 0 || output_tokens > 0)
+                        .then_some(u64::from(input_tokens));
                 self.check_token_warnings();
             }
 

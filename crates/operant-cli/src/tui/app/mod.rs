@@ -258,6 +258,13 @@ pub struct App {
     /// `Event::FocusGained`/`Event::FocusLost` (Phase 2.3).
     pub client_focused: bool,
     pub token_count: u32,
+    /// (iter-1207) The last provider-metered prompt size, straight from
+    /// `AgentEvent::Usage::input_tokens`. The footer context bar reads this
+    /// because it is the only number that actually counts the system prompt,
+    /// the tool definitions and every serialised tool row — the char estimate
+    /// in `context_info()` sees none of those. `None` until the first Usage
+    /// event arrives, which is when the estimate correctly stays in charge.
+    pub last_observed_prompt_tokens: Option<u64>,
     pub cost_usd: f64,
     pub model_name: String,
     /// Active provider for the current session (e.g. "anthropic", "openai").

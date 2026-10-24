@@ -116,6 +116,15 @@ impl App {
     fn since(anchor: Instant) -> Option<Duration> {
         Some(anchor.elapsed())
     }
+
+    /// (iter-1207) The provider-metered prompt size from the last Usage
+    /// event, or `None` before the first one. `info_widget_data` copies this
+    /// onto the widget data so the footer renders the provider's own number
+    /// instead of a character estimate that cannot see the system prompt.
+    fn last_prompt_tokens(&self) -> Option<u64> {
+        self.last_observed_prompt_tokens
+            .filter(|&tokens| tokens > 0)
+    }
 }
 
 /// The process-wide empty side-panel snapshot: operant has no `side_panel`
@@ -701,6 +710,13 @@ impl TuiState for App {
         InfoWidgetData {
             context_info: Some(self.context_info()),
             context_limit: self.context_limit(),
+            // (iter-1207) The provider-metered prompt size from the last
+            // `AgentEvent::Usage`, which is authoritative: it counts the
+            // system prompt, the tool definitions and every serialised tool
+            // row, none of which the char estimate below can see. The
+            // estimate stays as the pre-first-turn fallback — before the
+            // first Usage event there is no observed figure yet.
+            observed_context_tokens: self.last_prompt_tokens(),
             queue_mode: Some(self.plan_mode),
             model: Some(self.model_name.clone()),
             // (plan 03) the effort shown next to the model in the status

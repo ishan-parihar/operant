@@ -2567,13 +2567,21 @@ fn footer_metrics_should_reset_each_turn() {
 fn test_usage_event_pushes_token_warning_notification() {
     // iter-255: check_token_warnings() was never called from the Usage
     // handler despite its doc comment saying to call it after updating
-    // token_count — the whole warning subsystem was dead. context_window_for_model
-    // is a fixed 128000 stub, so 110_000 tokens crosses the 80% threshold.
+    // token_count — the whole warning subsystem was dead.
+    //
+    // iter-1207: the percentage is now measured against the prompt size the
+    // provider metered (`input_tokens`), not the turn total
+    // (input+output+cached). That is the figure which actually fills the
+    // window, so it is what must be compared against it; the turn total is
+    // bigger than the prompt by the completion the provider just generated
+    // and warned early. `context_window_size` is 0 on a fresh App (no
+    // provider refresh has run), so the flat 128000 resolver is still the
+    // denominator here — the point being tested is the threshold crossing.
     let mut app = make_app();
     app.handle_agent_event(AgentEvent::Usage {
-        input_tokens: 60_000,
-        output_tokens: 50_000,
-        total_tokens: 110_000,
+        input_tokens: 106_000, // 83% of 128_000 -> the 80% notice
+        output_tokens: 2_000,
+        total_tokens: 108_000,
     });
     assert_eq!(app.token_warning_threshold_shown, 80);
     assert!(
@@ -2585,14 +2593,116 @@ fn test_usage_event_pushes_token_warning_notification() {
 }
 
 #[test]
-fn test_token_warning_threshold_resets_when_usage_drops() {
+fn token_warning_uses_the_prompt_size_not_the_turn_total() {
+    // iter-1207: a turn whose PROMPT is small but whose OUTPUT is large
+    // must not trip the warning. The prompt is what occupies the window;
+    // the completion is what the provider already generated and handed
+    // back. Reading the turn total made a single verbose answer look like
+    // an overflowing context.
+    //
+    // The numbers are chosen with a wide margin on BOTH sides so the test
+    // fails decisively under a `used = token_count` mutant instead of
+    // slipping through on a rounding boundary: the prompt is 12% of the
+    // window (a mutant reading the turn total sees 404% and fires), and
+    // the prompt used for the crossing is 86% (a mutant still sees the
+    // same 86% and also fires, so the margin lives in the first case).
+    let mut app = make_app();
+    app.handle_agent_event(AgentEvent::Usage {
+        input_tokens: 15_000, // 12% of the 128_000 window
+        output_tokens: 500_000,
+        total_tokens: 515_000, // 402% of the window as a raw turn total
+    });
+    assert_eq!(
+        app.token_warning_threshold_shown, 0,
+        "a large completion must not be read as a large context"
+    );
+    // The reverse: the measured prompt size carries it across.
+    app.handle_agent_event(AgentEvent::Usage {
+        input_tokens: 110_000, // 86% of the 128_000 window
+        output_tokens: 100,
+        total_tokens: 110_100,
+    });
+    assert_eq!(app.token_warning_threshold_shown, 80);
+}
+
+#[test]
+fn token_warning_uses_the_resolved_context_window_not_the_flat_stub() {
+    // iter-1207: the warning used to divide by
+    // `context_window_for_model(model)` — a flat 128000 that ignores the
+    // model name — while the footer's bar divided by the per-model window
+    // `refresh_context_window_size` resolved (200_000 for Anthropic). One
+    // prompt therefore read 80% in the footer and 95% here, and the
+    // notice that decides whether auto-compact runs was the wrong one.
+    let mut app = make_app();
+    app.context_window_size = 200_000;
+    app.model_name = "anthropic/claude-sonnet-4".to_string();
+    // 160_000 of a 200_000 window is 80% — it must fire now, and must NOT
+    // have fired when the flat 128000 denominator was used (125%).
+    app.handle_agent_event(AgentEvent::Usage {
+        input_tokens: 160_000,
+        output_tokens: 10,
+        total_tokens: 160_010,
+    });
+    assert_eq!(
+        app.token_warning_threshold_shown, 80,
+        "160k of a 200k window is 80%: the notice must agree with the footer bar"
+    );
+}
+
+#[test]
+fn observed_prompt_tokens_reach_the_footer_context_bar() {
+    // iter-1207: `observed_context_tokens` was declared on InfoWidgetData
+    // and read by the footer bar, but no producer ever wrote it — every
+    // frame fell through to `ContextInfo::estimated_tokens()`, a
+    // characters/4 guess that can see neither the system prompt nor the
+    // tool schemas (both are the bulk of a real prompt). One line closes
+    // it: the Usage event's input_tokens is provider-metered context.
+    let mut app = make_app();
+    assert_eq!(
+        app.info_widget_data().observed_context_tokens,
+        None,
+        "before the first turn there is no metered figure — the estimate rules"
+    );
+    app.handle_agent_event(AgentEvent::Usage {
+        input_tokens: 42_321,
+        output_tokens: 512,
+        total_tokens: 42_833,
+    });
+    assert_eq!(
+        app.info_widget_data().observed_context_tokens,
+        Some(42_321),
+        "the footer must show the prompt size the provider metered, not an estimate"
+    );
+}
+
+#[test]
+fn a_zero_usage_event_clears_the_observed_prompt_tokens() {
+    // A provider that reports no usage at all must not leave the previous
+    // turn's figure on screen: the estimate is a better guide than a stale
+    // measurement of a context that no longer exists.
+    let mut app = make_app();
+    app.handle_agent_event(AgentEvent::Usage {
+        input_tokens: 42_321,
+        output_tokens: 512,
+        total_tokens: 42_833,
+    });
+    app.handle_agent_event(AgentEvent::Usage {
+        input_tokens: 0,
+        output_tokens: 0,
+        total_tokens: 0,
+    });
+    assert_eq!(app.info_widget_data().observed_context_tokens, None);
+}
+
+#[test]
+fn token_warning_threshold_resets_when_usage_drops() {
     // Without a reset, an escalate-only gate would permanently suppress
     // warnings after /clear or /compact shrinks the context back down.
     let mut app = make_app();
     app.handle_agent_event(AgentEvent::Usage {
-        input_tokens: 100_000,
-        output_tokens: 21_600,
-        total_tokens: 121_600, // 95% of the 128_000 stub window
+        input_tokens: 123_000,
+        output_tokens: 0,
+        total_tokens: 123_000, // 96% of the 128_000 stub window
     });
     assert_eq!(app.token_warning_threshold_shown, 95);
 

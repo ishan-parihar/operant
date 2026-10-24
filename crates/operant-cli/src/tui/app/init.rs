@@ -119,6 +119,7 @@ impl App {
             last_activity: std::time::Instant::now(),
             client_focused: true,
             token_count: 0,
+            last_observed_prompt_tokens: None,
             cost_usd: 0.0,
             model_name,
             active_provider: initial_active_provider,
