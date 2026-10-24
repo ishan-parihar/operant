@@ -1,0 +1,12 @@
+{
+  "name": "at-file-ref-grammar",
+  "surface": "crates/operant-cli/src/tui/operant_ui/ui_input.rs::draw_command_suggestions_overlay",
+  "opens_with": "typing '@' at a word boundary in the composer",
+  "keys": "<text>@cr<enter>",
+  "size": "120x40",
+  "assert": [
+    "prompt_input.suggestions_source_file_ref == true"
+  ],
+  "assert_screen": [],
+  "notes": "Plan 2026-10-24 M4: the @ popup shares the slash-command palette. The grammar shape (values are @file:/@folder: tokens) is pinned by unit tests in prompt_input/tests.rs (file_ref_value_grammar_shapes, accept_file_ref_appends_space_and_uses_grammar, accepted_file_ref_token_injects_via_context_references) \u2014 the async fuzzy tier is sim-deterministic-disabled (maybe_spawn_file_suggest gates on is_simulating), so the live popup contents depend on the working directory; the unit layer is the honest oracle for the grammar."
+}

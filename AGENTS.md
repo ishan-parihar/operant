@@ -700,6 +700,45 @@ transport, probe-rs introspect, Aardvark I2C/SPI, RPi GPIO) were never wired
 and stayed gated behind the *undeclared* `hardware-vendor` cfg so
 `--all-features` stayed green. Kept for the record; there is no crate to wire.
 
+### Composer typing system — OMP word classes, @ grammar, ghost text (2026-10-24 plan)
+
+The prompt composer runs three OMP-derived surfaces (plan
+`docs/plans/2026-10-24-omp-style-prompt-composer-upgrade-typing-system-mention-file.md`):
+
+- **Word classes** (`prompt_input/word_nav.rs`): word-wise move/kill/delete
+  ops (Ctrl+W, Alt+B/F/D, Alt/Ctrl+Backspace, Alt/Ctrl+Delete,
+  Ctrl+Left/Right) share one boundary model — word / delimiter-run / CJK
+  classes, joiners (`'` `’` `-` `‐` `‑`) keep `don't` and `well-known` one
+  stop. `vim.rs`'s `w`/`b`/`e` motions intentionally keep VIM semantics.
+  Home/End are LINE-scoped (Super+arrows jump the buffer).
+- **@ mention grammar** (`prompt_input/typeahead.rs::file_ref_value`,
+  `parse_file_ref_token`): the popup triggers on `@`, `@file:`,
+  `@folder:`; accepted FILES insert `@file:<path>` + a trailing space,
+  accepted DIRECTORIES insert `@folder:<path>/` and CHAIN (popup stays
+  open in the drilled directory). Whitespace paths quote; a directory
+  quote stays open until the file inside closes it. Do not insert bare
+  `@path` — `operant_core::context_references::REFERENCE_PATTERN` only
+  expands the `@kind:` grammar, and the end-to-end test
+  `accepted_file_ref_token_injects_via_context_references` pins that.
+- **File discovery** (`tui/file_discovery/`): OMP's cached-walk indexing —
+  gitignore-aware walk (the `ignore` crate) behind a shared scan cache
+  (TTL 1 s, `FS_SCAN_CACHE_TTL_MS`; 200 ms empty-recheck; 16-root cap),
+  OMP scoring tiers with the +10 directory bonus and shallower-path
+  tiebreak, 1.5 s deadline with partial results. NO index database — the
+  cache is the index; `invalidate_path` fires at external-editor return.
+  The popup is TWO-tier: immediate directory listing synchronous, fuzzy
+  walk on the blocking pool (single-flight, newest-queued, generation-
+  checked; an EMPTY fuzzy result keeps the interim listing).
+- **Ghost text** (`prompt_input/ghost.rs` + `prediction/`): the word at
+  the caret completes from a personal-history trigram engine
+  (`[tui] word_completion = "off" | "ngram"`, threshold override
+  `word_completion_threshold`, engine thread + std mpsc, snapshot at
+  `<home>/predict/ngram.snapshot`). TAB accepts + space, → accepts
+  verbatim, divergence drops. The ghost NEVER shows while the popup is
+  open, inside @-references/slash input/code spans, or mid-word. The
+  predictor learns from every submission (observe next to
+  `input_history::append`) and persists at teardown.
+
 ### The prompt_input/ decomposition (LANDED)
 
 `crates/operant-cli/src/tui/prompt_input/` was decomposed from a 5,305-line
