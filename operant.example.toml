@@ -178,6 +178,11 @@ max_failures_per_state = 3
 [logging]
 level = "info"
 format = "pretty"
+# Where tracing writes. Unset, the interactive TUI defaults to
+# <home>/logs/operant.log (rotation-capped at 32 MB x 3) so agent-loop
+# warnings and guardrail decisions are always recoverable; non-TUI
+# commands log to stderr. Set an explicit path to override the default.
+log_file = ""
 with_target = false
 with_thread_ids = false
 with_file = false

@@ -682,7 +682,48 @@ fn init_logging(
     // When --verbose is passed, force logs to stderr so they are visible
     // even when tui.rich_output is true (which normally routes logs to sink).
     let effective_rich_output = rich_output && !verbose;
-    match select_log_target(logging, effective_rich_output) {
+    // An empty `log_file` string is "unset" — the example template ships
+    // `log_file = ""` as its documented default, and Some("") would
+    // otherwise route to the File target and fail to open.
+    let logging = if logging.log_file.as_deref().is_some_and(str::is_empty) {
+        let mut resolved = logging.clone();
+        resolved.log_file = None;
+        resolved
+    } else {
+        logging.clone()
+    };
+    let logging = &logging;
+    // (plan 2026-10-25 tooling-surface, RC6) A rich TUI with no configured
+    // log file used to route tracing to a discard sink: a default-config
+    // TUI run logged NOTHING to disk, so agent-loop warnings and guardrail
+    // decisions were unrecoverable after the fact (the 2026-10-24 storm
+    // was only diagnosable because the operator had configured one).
+    // Default the interactive TUI to <home>/logs/operant.log — the
+    // rotation cap bounds it; an explicit `[logging] log_file` still wins.
+    // If the DEFAULT path cannot be opened, degrade to the sink rather
+    // than failing startup: the user never asked for this file. The probe
+    // handle is dropped immediately; the File arm below reopens for real.
+    let logging = if tui_wants_default_log_file(logging, effective_rich_output) {
+        let default_path = default_tui_log_file();
+        if let Some(dir) = default_path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        match std::fs::OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(&default_path)
+        {
+            Ok(_) => {
+                let mut resolved = logging.clone();
+                resolved.log_file = Some(default_path.to_string_lossy().into_owned());
+                resolved
+            }
+            Err(_) => logging.clone(),
+        }
+    } else {
+        logging.clone()
+    };
+    match select_log_target(&logging, effective_rich_output) {
         LogTarget::File => {
             let path = logging
                 .log_file
@@ -737,6 +778,22 @@ fn select_log_target(logging: &LoggingSettings, rich_output: bool) -> LogTarget 
     } else {
         LogTarget::Stderr
     }
+}
+
+/// The interactive TUI adopts the home log when the user configured
+/// nothing: `[logging] log_file` unset and logs not forced to stderr by
+/// `--verbose` (which stays visible by design). Testable seam for the
+/// RC6 default.
+fn tui_wants_default_log_file(logging: &LoggingSettings, effective_rich_output: bool) -> bool {
+    effective_rich_output && logging.log_file.is_none()
+}
+
+/// Where the default TUI log lives: the canonical home log, next to the
+/// gateway's, under the one resolver.
+fn default_tui_log_file() -> std::path::PathBuf {
+    operant_core::platform::operant_home()
+        .join("logs")
+        .join("operant.log")
 }
 
 fn apply_cli_overrides(cli: &Cli, config: &mut AppConfig) {
@@ -3545,10 +3602,68 @@ mod tests {
         );
     }
 
+    /// RC6 (plan 2026-10-25 tooling-surface): the interactive TUI with no
+    /// configured log file defaults to the home log instead of the old
+    /// discard sink. The pure seam is pinned here; the end-to-end
+    /// "a fresh HERMES_HOME run writes the file" contract is verified
+    /// out-of-process (the binary run) because `operant_home()` reads
+    /// `HERMES_HOME` process-wide and test threads race on it.
     #[test]
-    fn rich_tui_without_log_file_uses_sink() {
+    fn a_rich_tui_without_a_log_file_adopts_the_home_log() {
         let logging = LoggingSettings::default();
+        assert!(
+            tui_wants_default_log_file(&logging, true),
+            "the default applies to a rich TUI with no log_file"
+        );
+        assert!(
+            !tui_wants_default_log_file(&logging, false),
+            "non-TUI paths keep stderr"
+        );
+        let explicit = LoggingSettings {
+            log_file: Some("my.log".to_string()),
+            ..Default::default()
+        };
+        assert!(
+            !tui_wants_default_log_file(&explicit, true),
+            "an explicit log_file always wins"
+        );
+        assert!(
+            default_tui_log_file()
+                .to_string_lossy()
+                .ends_with("logs/operant.log"),
+            "the default lives under the home's logs dir: {:?}",
+            default_tui_log_file()
+        );
+        // The raw selector is unchanged: it still routes a None+rich
+        // request to the sink — the DEFAULT above rewrites log_file
+        // before this selector runs, which is the whole point.
         assert_eq!(select_log_target(&logging, true), LogTarget::Sink);
+    }
+
+    /// The example template ships `log_file = ""`; an empty string is
+    /// unset, not a file named "".
+    #[test]
+    fn an_empty_log_file_string_is_unsettled() {
+        let logging = LoggingSettings {
+            log_file: Some(String::new()),
+            ..Default::default()
+        };
+        assert!(
+            !tui_wants_default_log_file(&logging, false),
+            "sanity: the seam reads the normalized flag, not the raw string"
+        );
+        // The normalization itself lives in init_logging; exercise it via
+        // the same predicate the call site uses after normalizing.
+        let normalized = if logging.log_file.as_deref().is_some_and(str::is_empty) {
+            LoggingSettings {
+                log_file: None,
+                ..logging.clone()
+            }
+        } else {
+            logging.clone()
+        };
+        assert!(normalized.log_file.is_none());
+        assert!(tui_wants_default_log_file(&normalized, true));
     }
 
     #[test]
