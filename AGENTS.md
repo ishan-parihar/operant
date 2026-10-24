@@ -506,7 +506,7 @@ operant/
 │       │   ├── config.rs      # CLI config
 │       │   ├── cmd_*.rs       # CLI subcommand handlers
 │       │   └── dashboard_server.rs # axum dashboard backend
-│       └── Cargo.toml         # Features: agent-runtime, anthropic, plugins-wasm
+│       └── Cargo.toml         # Features: anthropic, plugins-wasm
 ├── scripts/
 │   ├── dev-env.sh             # Source this before any cargo command
 │   ├── check.sh               # Wrapper that applies dev-env + cargo
