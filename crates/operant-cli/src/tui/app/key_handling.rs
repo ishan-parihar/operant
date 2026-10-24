@@ -1509,6 +1509,16 @@ impl App {
                 self.prompt_input.delete_word_backward();
                 self.refresh_prompt_input();
             }
+            // Ctrl+Backspace reaches the app as Ctrl+H on most terminals: the
+            // key sends byte 0x08 and crossterm maps that to Char('h')+CONTROL
+            // (parse.rs takes 0x01..=0x1A to Ctrl+letter). A real
+            // Backspace+CONTROL only arrives from kitty-protocol terminals, so
+            // without this arm the chord the operator actually presses is a
+            // silent no-op (measured on the headless sim, 2026-10-24).
+            KeyCode::Char('h') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.prompt_input.delete_word_backward();
+                self.refresh_prompt_input();
+            }
             KeyCode::Delete if key.modifiers.contains(KeyModifiers::ALT) => {
                 self.prompt_input.delete_word_forward();
                 self.refresh_prompt_input();
@@ -1745,21 +1755,11 @@ impl App {
             // ---- Message boundary navigation (Alt+Up/Alt+Down) ----------
             KeyCode::Up if key.modifiers.contains(KeyModifiers::ALT) => {
                 // Jump up by ~20 lines (approximate message boundary).
-                let prev = self.scroll_offset;
-                self.scroll_offset = self.scroll_offset.saturating_add(20);
-                self.auto_scroll = false;
-                self.note_user_scroll(prev);
+                self.scroll_up_rows(20);
             }
             KeyCode::Down if key.modifiers.contains(KeyModifiers::ALT) => {
                 // Jump down by ~20 lines (approximate message boundary).
-                let prev = self.scroll_offset;
-                let new_off = self.scroll_offset.saturating_sub(20);
-                self.scroll_offset = new_off;
-                if new_off == 0 {
-                    self.auto_scroll = true;
-                    self.new_messages_while_scrolled = 0;
-                }
-                self.note_user_scroll(prev);
+                self.scroll_down_rows(20);
             }
 
             // ---- Fine transcript scroll (Ctrl+Up/Ctrl+Down, jcode parity) -----
@@ -1769,20 +1769,10 @@ impl App {
             // 10-line quanta only — the "chat window is pinned" complaint
             // (2026-10-09 visual audit) from users without wheel events.
             KeyCode::Up if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                let prev = self.scroll_offset;
-                self.scroll_offset = self.scroll_offset.saturating_add(3);
-                self.auto_scroll = false;
-                self.note_user_scroll(prev);
+                self.scroll_up_rows(3);
             }
             KeyCode::Down if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                let prev = self.scroll_offset;
-                let new_off = self.scroll_offset.saturating_sub(3);
-                self.scroll_offset = new_off;
-                if new_off == 0 {
-                    self.auto_scroll = true;
-                    self.new_messages_while_scrolled = 0;
-                }
-                self.note_user_scroll(prev);
+                self.scroll_down_rows(3);
             }
 
             // ---- Input history navigation ------------------------------
@@ -1875,103 +1865,35 @@ impl App {
             }
 
             // ---- Scroll ------------------------------------------------
-            // (iter-1213) Three defects, one block.
+            // (2026-10-24 red-team) ONE convention, measured from the renderer:
+            // `scroll_offset` is the viewport's TOP ROW (`materialize_line_slice(
+            // scroll, …)`) — 0 is the oldest line, `last_max_scroll()` the tail,
+            // and a tail-following frame paints exactly that max. The helpers in
+            // scroll_anchor.rs implement the directions; `scroll_up_rows` starts
+            // from the tail when following so the first scroll from a live view
+            // moves relative to what the reader is looking at.
             //
-            // 1. HOME and END were unreachable. Both are bound at 1603/1607 as
-            //    composer CURSOR moves — `cursor = 0` and `cursor = len()` —
-            //    at the same match depth as this arm, so they matched first and
-            //    PgUp/PgDown were the only keys that ever touched the scroll
-            //    offset. An operator pressing Home or End to reach the top of
-            //    a long transcript got the composer's caret at its start or end
-            //    instead, and the view never moved: measured, 3xPageUp leaves
-            //    the offset at 30, then Home leaves it at 30 and End leaves it
-            //    at 30. The four keys an operator has for this job were three.
-            //
-            //    The keys are NOT stolen from the composer. The arms below fire
-            //    only when the transcript pane has focus (`FocusTarget::
-            //    Transcript`), which is the state a click on the transcript puts
-            //    the app in; with the composer focused, Home/End keep their
-            //    cursor meaning at 1603/1607. jcode never binds Home/End to
-            //    transcript scroll at all (its Home/End are cursor moves and
-            //    overlay jumps, and Up/Down/PageUp/PageDown carry scrolling),
-            //    so this is an operant addition over the port, not a port
-            //    divergence — and it is additive: it gives the modifier-free
-            //    reach-to-top/bottom the operator asked for on a surface that
-            //    already scrolls.
-            //
-            // 2. The step was a hardcoded 10 regardless of the viewport, so a
-            //    page on a tall terminal moved a third of a screen and on a
-            //    short one nearly two screens — a "page" that is only a page
-            //    by accident.
-            //
-            // 3. PageUp had no upper bound. `scroll_offset` is a TOP ROW (the
-            //    render path uses it directly as `scroll = user_scroll.min(
-            //    max_scroll)` — ui_viewport.rs:404 — and the tail-follow frame
-            //    publishes `max_scroll`; 0 is the tail), so unbounded addition
-            //    let it drift far past the transcript, and every later press
-            //    was clamped away by `reconcile_scroll_anchor`'s ghost-offset
-            //    guard. The ladder then looks dead: the operator presses
-            //    PageUp and nothing moves. The stale comments claiming the
-            //    reverse convention (scroll_anchor.rs:137/142/148, "jumped
-            //    back up N line(s)", "0 = tail") are the residue of an older
-            //    arithmetic and contradict the live renderer.
+            // (iter-1213) These arms fire regardless of composer focus — the
+            // transcript has no keyboard-reachable focus state (mouse only), so
+            // gating on `FocusTarget::Transcript` made every key here look
+            // implemented and dead for a keyboard-only operator. Home/End keep
+            // their composer-caret meanings unshifted; the transcript jumps ride
+            // Shift+Home / Shift+End.
             KeyCode::PageUp => {
-                let prev = self.scroll_offset;
-                self.scroll_offset = self.scroll_offset.saturating_add(self.scroll_page_step());
-                // Scrolling up disables auto-follow.
-                self.auto_scroll = false;
-                self.note_user_scroll(prev);
+                self.scroll_up_rows(self.scroll_page_step());
             }
             KeyCode::PageDown => {
-                let prev = self.scroll_offset;
-                let new_off = self.scroll_offset.saturating_sub(self.scroll_page_step());
-                self.scroll_offset = new_off;
-                if new_off == 0 {
-                    // Scrolled all the way back to bottom — re-enable auto-follow.
-                    self.auto_scroll = true;
-                    self.new_messages_while_scrolled = 0;
-                }
-                self.note_user_scroll(prev);
+                self.scroll_down_rows(self.scroll_page_step());
             }
             // Shift+Home = top of the transcript, Shift+End = back to the tail.
             // Both are two-key answers to "how much is above me", so they take
-            // the whole distance at once and report where they landed.
-            //
-            // (iter-1213) They are SHIFT-modified on purpose, and the
-            // modifier is the whole design: the plain keys belong to the
-            // composer's caret (cursor 0 / text.len() two arms above), and
-            // those arms are unconditional because typing is the transcript's
-            // default state. Gating the scroll arms on `FocusTarget::Transcript`
-            // instead was the first attempt and it is a trap: that state is
-            // reachable ONLY by a mouse click on the transcript (mouse.rs:1058)
-            // with no keyboard way in, so every gated key looks implemented and
-            // is dead for a keyboard-only operator. Take the modifier the
-            // composer cannot use, never the focus the keyboard cannot reach.
-            //
-            // Status notices rather than a silent jump: the offset is a TOP
-            // ROW (see PageUp above), so a jump landing on 0 (bottom) and one
-            // landing on `max` (top) are indistinguishable on screen when the
-            // transcript is long.
+            // the whole distance at once.
             KeyCode::Home if key.modifiers.contains(KeyModifiers::SHIFT) => {
-                let max = crate::tui::operant_ui::last_max_scroll();
-                let prev = self.scroll_offset;
-                self.scroll_offset = max;
-                self.auto_scroll = false;
-                self.note_user_scroll(prev);
-                self.set_status_notice(if max == 0 {
-                    "Transcript is empty.".to_string()
-                } else {
-                    format!("Top of transcript — {max} line(s) above.")
-                });
+                self.scroll_to_top();
+                self.set_status_notice("Top of transcript.".to_string());
             }
             KeyCode::End if key.modifiers.contains(KeyModifiers::SHIFT) => {
-                let prev = self.scroll_offset;
-                if prev != 0 {
-                    self.scroll_offset = 0;
-                    self.note_user_scroll(prev);
-                }
-                self.auto_scroll = true;
-                self.new_messages_while_scrolled = 0;
+                self.scroll_to_tail();
                 self.set_status_notice("Latest — following new messages.".to_string());
             }
 

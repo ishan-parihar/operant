@@ -173,12 +173,14 @@ impl App {
     /// Called whenever a new message is appended to `messages`.
     /// Manages the auto-scroll / new-message-counter state.
     pub(super) fn on_new_message(&mut self) {
-        if self.auto_scroll {
-            // Auto-scroll: keep offset at 0 so render shows the bottom.
-            self.scroll_offset = 0;
-        } else {
+        if !self.auto_scroll {
             self.new_messages_while_scrolled = self.new_messages_while_scrolled.saturating_add(1);
         }
+        // While following, `scroll_offset` is left alone here: the render path
+        // paints the tail whatever it holds, and `reconcile_scroll_anchor`
+        // syncs the state to that row after the frame. Writing 0 here (the old
+        // "0 = bottom" reading) made the next user scroll start from a stale
+        // top row instead of the tail.
     }
 
     pub fn invalidate_transcript(&self) {

@@ -228,19 +228,15 @@ impl App {
         let last_row = area.y.saturating_add(area.height).saturating_sub(1);
         let step = self.scroll_step();
         if raw_row < area.y {
-            let off = self.scroll_offset.saturating_add(step);
-            self.auto_scroll = false;
-            if off != self.scroll_offset {
-                self.scroll_offset = off;
+            let before = self.scroll_offset;
+            self.scroll_up_rows(step);
+            if self.scroll_offset != before {
                 return true;
             }
         } else if raw_row > last_row {
-            let off = self.scroll_offset.saturating_sub(step);
-            if off != self.scroll_offset {
-                self.scroll_offset = off;
-                if off == 0 {
-                    self.auto_scroll = true;
-                }
+            let before = self.scroll_offset;
+            self.scroll_down_rows(step);
+            if self.scroll_offset != before {
                 return true;
             }
         }
@@ -900,19 +896,13 @@ impl App {
                 // Don't consume Ctrl+Scroll — let the terminal handle zoom.
                 if !mouse_event.modifiers.contains(KeyModifiers::CONTROL) {
                     let step = self.scroll_step();
-                    self.scroll_offset = self.scroll_offset.saturating_add(step);
-                    self.auto_scroll = false;
+                    self.scroll_up_rows(step);
                 }
             }
             MouseEventKind::ScrollDown => {
                 if !mouse_event.modifiers.contains(KeyModifiers::CONTROL) {
                     let step = self.scroll_step();
-                    let new_off = self.scroll_offset.saturating_sub(step);
-                    self.scroll_offset = new_off;
-                    if new_off == 0 {
-                        self.auto_scroll = true;
-                        self.new_messages_while_scrolled = 0;
-                    }
+                    self.scroll_down_rows(step);
                 }
             }
             // ---- Right-click context menu ----------------------------------

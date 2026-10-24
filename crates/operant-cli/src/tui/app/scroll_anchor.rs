@@ -1,63 +1,36 @@
-// app/scroll_anchor.rs — Transcript scroll bookmark and reflow anchor.
+// app/scroll_anchor.rs — Transcript scroll state.
 //
-// Two related pieces of reading-position state, both answering the same
-// complaint: a transcript that is still growing keeps taking the reader's spot
-// away.
+// ONE convention, measured from the renderer (ui_viewport.rs):
+// `scroll_offset` is the viewport's TOP ROW. `0` is the first (oldest) line,
+// `last_max_scroll()` — content height minus viewport — is the tail, and a
+// tail-following frame paints exactly that max. The handlers below and the
+// reconcile all speak this language; the 2026-10-24 red-team pass replaced an
+// older "0 = tail, += = up" reading (iter-1213's block) that contradicted the
+// paint and made the first user scroll from the tail teleport the view to row
+// 0 — the top of the transcript.
 //
 //   * Bookmark (Ctrl+G) — an explicit spot they choose and can come back to.
-//   * Anchor — implicit. While the reader is parked above the tail, hold the
-//     line they are looking at still when new output reflows the content above
-//     it (jcode #1412). Without it the view jumps on every append, because a
-//     growing transcript pushes every row's index up.
-//
-//     (iter-1213) The header above used to claim `scroll_offset` counts rows
-//     FROM THE BOTTOM with `top_row = max_scroll - scroll_offset`. That is
-//     stale and it is what made the scroll keys look broken: the live renderer
-//     uses the offset as the top row DIRECTLY (`scroll = user_scroll.min(
-//     max_scroll)`, ui_viewport.rs:404) and a tail-follow frame publishes
-//     `max_scroll`, so 0 IS the tail and `max_scroll` IS the top. Stale
-//     comments downstream of this one repeated the same inversion
-//     ("jumped back up N line(s)", "0 = tail"), and the key handler followed
-//     the stale text rather than the renderer. Measure the renderer, not the
-//     comment: `note_user_scroll` already stores `top_row = self.scroll_offset`
-//     unmodified, which only type-checks against the renderer's reading.
-//   * Resize anchor — the same promise across a terminal resize, which
-//     rewraps every line. A row index cannot survive that (row 12 at width
-//     120 is not row 12 at width 60), so this one names CONTENT instead, and
+//   * Resize anchor — a resize rewraps every line, so a row index cannot
+//     survive it (row 12 at width 120 is not row 12 at width 60). The capture
+//     names CONTENT (`operant_model::ContentPos`, hash-anchored) instead, and
 //     the render path resolves it against the next frame's geometry.
+//   * Tail sync — while auto-follow paints the tail, the reconcile writes that
+//     same row back into `scroll_offset`, so the next user scroll starts from
+//     where the reader actually is, not from wherever the stale state points.
 //
-// The state lives on `App` as `scroll_memory`. It used to be a `thread_local!`
-// because `App::new` (tui/app/init.rs) was locked by a parallel lane at the
-// time; that is the wrong shape for what is one-App-per-thread data, and it
-// meant two `App`s on one thread shared one reading position. The sibling
-// per-frame transcript caches in tui/render/cache.rs are genuinely frame-local
-// and stay thread-local.
+// The state lives on `App` as `scroll_memory` (one-App-per-thread data; see
+// the git history for why the old thread_local shape was dropped).
 
 use super::*;
-
-/// The row the view is pinned to, plus the offset the last reconcile wrote.
-///
-/// `applied_offset` is what tells our own reflow corrections apart from a real
-/// user scroll: when `scroll_offset` no longer matches it, something else moved
-/// the view and the pin is void.
-#[derive(Clone, Copy)]
-struct ScrollAnchor {
-    top_row: usize,
-    applied_offset: usize,
-}
 
 /// A resize the run loop has not reconciled yet.
 ///
 /// `captured_offset` is what tells our own adopt apart from a reader who moved
 /// after the resize: comparing against it catches every path that writes
-/// `scroll_offset` — keyboard and mouse wheel alike — in one place, the same
-/// trick [`ScrollAnchor::applied_offset`] plays for the reflow anchor.
+/// `scroll_offset` — keyboard and mouse wheel alike — in one place.
 ///
 /// The target is the ported `operant_model::ContentPos` (hash-anchored),
-/// captured per-frame by the run loop from the chrome reader anchor. The old
-/// index-based `ContentPos{message, line}` died with the dispatch-table
-/// cutover; keeping both shapes around is what wedged the resize seam (see
-/// tui_state_impl::pending_resize_anchor).
+/// captured per-frame by the run loop from the chrome reader anchor.
 #[derive(Clone, Copy)]
 pub(crate) struct PendingResize {
     /// The reader's content address at the moment of the resize.
@@ -69,25 +42,20 @@ pub(crate) struct PendingResize {
 
 #[derive(Clone, Copy, Default)]
 pub(crate) struct ScrollMemory {
-    /// Ctrl+G target — the `scroll_offset` to jump back to, when one is armed.
+    /// Ctrl+G target — the `scroll_offset` (top row) to jump back to, when one
+    /// is armed.
     bookmark: Option<usize>,
-    /// Pinned row, when the reader is parked above the tail.
-    anchor: Option<ScrollAnchor>,
-    /// Largest valid `scroll_offset` as of the last rendered frame
-    /// (`content_height - viewport_height`). Only the render path can measure
-    /// it, so the run loop hands it back here; it is what a bookmark restore
-    /// clamps against.
+    /// Largest valid `scroll_offset` (top row) as of the last rendered frame.
+    /// Only the render path can measure it, so the reconcile hands it back
+    /// here; it is what a bookmark restore clamps against.
     max_scroll: usize,
-    /// A terminal resize rewrapped the transcript, so `anchor.top_row` now names
-    /// a different row than it did. This holds the reader's CONTENT address
+    /// A terminal resize rewrapped the transcript, so the parked top row now
+    /// names different content. This holds the reader's CONTENT address
     /// instead, captured at the resize and resolved by the next paint.
     ///
     /// `None` whenever the reader is following the tail, which is what keeps a
     /// resize from unpinning them: auto-follow owns the position and the render
     /// path paints the tail whatever the geometry.
-    /// `pub(crate)` because `render_messages` reads it: resolving a content address
-    /// against a freshly-wrapped transcript is only possible where the wrapping
-    /// is built. Nothing outside `scroll_anchor.rs` writes it.
     pub(crate) pending_resize: Option<PendingResize>,
 }
 
@@ -136,55 +104,41 @@ impl App {
         match armed {
             Some(offset) => {
                 // The transcript can shrink under the bookmark (`/clear`,
-                // `/rewind`, a compacted turn), so the stored offset may now
-                // point past the end. Clamp rather than restore blind — the
-                // render path saturates too, but only as far as the viewport
-                // and without reporting it.
+                // `/rewind`, a compacted turn), so the stored top row may now
+                // name rows past the tail. Clamp rather than restore blind —
+                // the render path saturates too, but only as far as the
+                // viewport and without reporting it.
                 let target = offset.min(max_scroll);
                 self.scroll_offset = target;
-                if target == 0 {
-                    // Landed on the tail: hand the view back to auto-follow,
-                    // the same way PageDown does when it reaches the bottom.
+                if max_scroll > 0 && target == max_scroll {
+                    // Landed on the tail: hand the view back to auto-follow.
                     self.auto_scroll = true;
                     self.new_messages_while_scrolled = 0;
                 }
-                self.status_message =
-                    Some(format!("Bookmark off — jumped back up {target} line(s)."));
+                self.status_message = Some(format!("Bookmark off — jumped to row {target}."));
             }
             None => {
                 let at = self.scroll_offset;
                 self.scroll_memory.bookmark = Some(at);
-                self.status_message = Some(format!(
-                    "Bookmark on at {at} line(s) up — Ctrl+G returns here."
-                ));
+                self.status_message =
+                    Some(format!("Bookmark on at row {at} — Ctrl+G returns here."));
             }
         }
     }
 
-    /// Pin the current position as the reader's deliberate choice, so later
-    /// reflow keeps it still.
-    ///
-    /// Called after a key handler moved the offset. `prev_offset` is the value
-    /// from before it moved; it is kept in the signature because every caller
-    /// has it in hand and it names the moment the pin is taken, but the pin is
-    /// the row the NEXT frame paints (see the body).
     /// (iter-1213) How many rows one PageUp/PageDown covers.
     ///
     /// The transcript viewport's own height minus a couple of rows of
     /// overlap, so a page jump keeps a line or two of context and the reader
-    /// can still see which way they were travelling. The step used to be a
-    /// hardcoded 10, which is a "page" only by accident on a 12-row terminal
-    /// and a third of a screen on a 40-row one.
+    /// can still see which way they were travelling.
     ///
     /// Reads the rect the LAST frame published rather than asking the
-    /// terminal: a key event arrives between frames, so the terminal's size
-    /// is current but the geometry that produced the transcript on screen is
-    /// the previous frame's. Scroll to the geometry being looked at, not the
-    /// geometry about to be drawn.
+    /// terminal: a key event arrives between frames, so the geometry that
+    /// produced the transcript on screen is the previous frame's. Scroll to
+    /// the geometry being looked at, not the geometry about to be drawn.
     ///
     /// Falls back to 10 when no frame has published a rect yet (a headless
-    /// App with no renderer), which is the behaviour the hardcoded constant
-    /// gave every case before.
+    /// App with no renderer).
     pub(crate) fn scroll_page_step(&self) -> usize {
         let area = crate::tui::operant_ui::chat_content_area();
         // A zero HEIGHT is "no frame has published yet" (the doc on
@@ -192,7 +146,7 @@ impl App {
         // that skipped the transcript layout lands here too. Judge the height
         // alone: a rect can be wide but empty (width 100, height 0), and
         // counting that as published yields a 1-row "page" that swallows the
-        // keypress whole — measured in this iteration's own test when a probe
+        // keypress whole — measured in that iteration's own test when a probe
         // published a 100x0 rect and got a step of 1.
         let published = area.height > 0;
         if published {
@@ -202,43 +156,65 @@ impl App {
         }
     }
 
-    pub(crate) fn note_user_scroll(&mut self, prev_offset: usize) {
+    /// The transcript's live top-row ceiling: `last_max_scroll()` when a frame
+    /// has measured it, else the row the last paint published (headless tests
+    /// publish no geometry).
+    fn live_max_scroll(&self) -> usize {
+        let live_max = crate::tui::operant_ui::last_max_scroll();
+        if live_max > 0 {
+            live_max
+        } else {
+            self.last_render_scroll_offset.get() as usize
+        }
+    }
+
+    /// Scroll toward the TOP of the transcript (older content) by `rows`.
+    ///
+    /// While auto-following, the reader is at the tail but the state may lag
+    /// the last painted frame (appends do not touch it), so the move starts
+    /// from the tail itself — otherwise the first scroll-up after following
+    /// teleport from a stale offset.
+    pub(crate) fn scroll_up_rows(&mut self, rows: usize) {
         if self.auto_scroll {
-            // Pinned to the tail: auto-follow already owns the position, so
-            // there is nothing to hold still.
+            self.scroll_offset = self.live_max_scroll();
+        }
+        self.scroll_offset = self.scroll_offset.saturating_sub(rows);
+        self.auto_scroll = false;
+    }
+
+    /// Scroll toward the TAIL (newer content) by `rows`, clamped to the live
+    /// ceiling. Landing on the tail hands the view back to auto-follow.
+    pub(crate) fn scroll_down_rows(&mut self, rows: usize) {
+        let max = self.live_max_scroll();
+        if self.auto_scroll {
+            // Already at the tail; nothing to do but stay there.
+            self.scroll_offset = max;
             return;
         }
-        // Pin the row the reader is parked on: while paused the render path
-        // publishes the reader's OWN offset as that row (`ui_viewport`:
-        // `scroll = user_scroll` when `auto_scroll_paused()`), so it is the
-        // offset the key handler has just set.
-        //
-        // The arithmetic this replaced (`painted + prev_offset -
-        // scroll_offset`) is what the 2026-10-22 scroll-ladder follow-up
-        // measured failing: with `painted` and the offset in step it collapsed
-        // toward 0 as the offset grew, and the growth correction in
-        // `reconcile_scroll_anchor` read that whole distance as content that
-        // had appeared above the reader. The reader's third PageUp landed them
-        // on the tail and every press after that was clamped away — measured on
-        // the headless simulator: 1 PageUp L001-L083, 2 L014-L126, 3 L101-L200
-        // and no further motion however many presses followed.
-        let _ = prev_offset; // retained for the callers that have it in hand
-        let top_row = self.scroll_offset;
-        let applied_offset = self.scroll_offset;
-        self.scroll_memory.anchor = Some(ScrollAnchor {
-            top_row,
-            applied_offset,
-        });
+        self.scroll_offset = (self.scroll_offset + rows).min(max);
+        if max > 0 && self.scroll_offset == max {
+            self.auto_scroll = true;
+            self.new_messages_while_scrolled = 0;
+        }
+    }
+
+    /// Jump to the top of the transcript (Shift+Home).
+    pub(crate) fn scroll_to_top(&mut self) {
+        self.scroll_offset = 0;
+        self.auto_scroll = false;
+    }
+
+    /// Jump to the tail and resume following (Shift+End).
+    pub(crate) fn scroll_to_tail(&mut self) {
+        self.scroll_offset = self.live_max_scroll();
+        self.auto_scroll = true;
+        self.new_messages_while_scrolled = 0;
     }
 
     /// A terminal resize is about to rewrap every transcript line. Capture
     /// where the reader is in content coordinates so the next paint can put
     /// them back on the same message, rather than at the new bottom of the
     /// transcript or at row 0.
-    ///
-    /// Needs no size argument on purpose: what matters is not the terminal's
-    /// dimensions but *that* a rewrap is coming, and `Event::Resize` is the only
-    /// thing that says so. The render path publishes the resolution.
     ///
     /// While `auto_scroll` is set the reader is following the tail, so there is
     /// nothing to preserve and any pending anchor is dropped — preserving an
@@ -265,128 +241,41 @@ impl App {
     /// Re-anchor the view after a rendered frame. Called from the run loop
     /// immediately after `terminal.draw`.
     ///
-    /// The render path is the only place that knows how many rows the
-    /// transcript now occupies, so it publishes the row it actually painted
-    /// into `last_render_scroll_offset`. A row *past* the pinned one means new
-    /// output was inserted above the reader, and `scroll_offset` has to grow by
-    /// the same amount for the pinned line to stay put on the next paint. The
-    /// correction therefore lands one frame after the growth: invisible at any
-    /// real frame rate, and it only ever corrects toward a row the reader
-    /// already chose, never invents motion.
+    /// Three jobs, in order:
+    /// 1. measure the frame — `max_scroll` is what the render path measured;
+    /// 2. tail sync — while following, write the tail row back into
+    ///    `scroll_offset` so the next user scroll is relative to reality;
+    /// 3. ghost clamp — drop rows the state still counts after a flush or
+    ///    compaction shrank the transcript;
+    /// 4. resize adopt — a pending content address resolves to the top row the
+    ///    reader should be parked on; adopt it when they have not scrolled
+    ///    since the capture.
     pub(crate) fn reconcile_scroll_anchor(&mut self) {
-        let painted = self.last_render_scroll_offset.get() as usize;
-        let scrolled = self.scroll_offset;
-        // The render path computes `top_row = max_scroll - scroll_offset`, so
-        // the row it painted plus the offset it painted with is the scrollable
-        // height. Under auto-follow it ignores the offset and paints the tail.
-        let max_scroll = if self.auto_scroll {
-            painted
-        } else {
-            painted.saturating_add(scrolled)
-        };
-        let mem = &mut self.scroll_memory;
-        mem.max_scroll = max_scroll;
-
-        // ---- Ghost-offset clamp -----------------------------------------
-        //
-        // A flush boundary (streaming bubble -> committed message) or a
-        // compaction can drop rows the reader's offset still counts: the
-        // growth correction above tracked the bubble's rows, but they
-        // collapse when the flush reflows them into one message, leaving
-        // e.g. offset 355 against a 15-row max (2026-10-09 live-audit P4-1
-        // follow-up: the view parked correctly — the render clamps its own
-        // paint — but PageDown needed dozens of presses to walk ghost rows
-        // home). Keep the STATE honest: clamp to the frame's true max and
-        // void the pin (the row it named is gone). 0 means no frame has
-        // rendered yet (unit tests without a renderer) — leave the offset
-        // alone then.
-        let live_max = crate::tui::operant_ui::last_max_scroll();
-        if live_max > 0 && self.scroll_offset > live_max {
-            self.scroll_offset = live_max;
-            mem.anchor = None;
-        }
-
-        // ---- Resize: adopt the row the anchored content now occupies -------
-        //
-        // A width change rewrapped every line, so `anchor.top_row` is stale by
-        // definition and the append-growth correction below would "fix" a drift
-        // that never happened. The render path resolved the captured content
-        // address against THIS frame's geometry (`last_resolved_scroll`), so
-        // adopting it here re-pins the reflow anchor at the row we asked for and
-        // the next append corrects from there instead of treating our own
-        // correction as a user scroll.
-        if let Some(pending) = mem.pending_resize.take() {
-            // Three ways to decline, and declining is always "leave the reader
-            // where they put themselves": following the tail, having scrolled
-            // again since the capture, or having no resolvable row.
-            if !self.auto_scroll
-                && scrolled == pending.captured_offset
-                && let Some(row) = self.last_resolved_scroll.get()
-            {
-                // `scroll_offset` counts rows up from the bottom and the render
-                // path inverts it (`scroll = max_scroll - scroll_offset`), so
-                // landing on `row` means setting the offset to the complement.
-                // `saturating_sub` covers a resolved row past the bottom.
-                let offset = mem.max_scroll.saturating_sub(row);
-                self.scroll_offset = offset;
-                mem.anchor = Some(ScrollAnchor {
-                    top_row: row,
-                    applied_offset: offset,
-                });
-            }
-            return;
-        }
-
-        let Some(anchor) = mem.anchor else { return };
+        let max = self.live_max_scroll();
+        self.scroll_memory.max_scroll = max;
 
         if self.auto_scroll {
-            // Auto-follow owns the view again — nothing to hold still.
-            mem.anchor = None;
-            return;
-        }
-        if scrolled != anchor.applied_offset {
-            // The view moved behind our back: a PageUp, a wheel tick,
-            // `/rewind`, `/clear`. A scroll the reader made is a new reading
-            // position, so the old pin is void. Comparing against the offset
-            // we last wrote catches every such path in one place instead of
-            // instrumenting each call site — the mouse wheel included.
-            mem.anchor = None;
+            self.scroll_offset = max;
+            self.scroll_memory.pending_resize = None;
             return;
         }
 
-        // Content above grew by however far the painted row drifted past
-        // the pin. `saturating_sub` covers the shrink case for free: a
-        // transcript that lost rows above the reader needs no correction,
-        // because the pinned line is already painted where the reader was
-        // looking.
-        let growth = painted.saturating_sub(anchor.top_row);
-        if growth == 0 {
-            return;
+        if max > 0 && self.scroll_offset > max {
+            // Ghost rows: a flush boundary or compaction collapsed rows the
+            // offset still counts (2026-10-09 live-audit P4-1). Clamp the state
+            // to the frame's true ceiling; the render already clamps its paint.
+            self.scroll_offset = max;
         }
-        // ---- The correction may not overshoot the transcript -------------
-        //
-        // The pin can name a row above the whole transcript when the reader's
-        // first PageUp follows a tail-following frame (that frame published
-        // `max_scroll`, which `resolve_tail_follow_scroll` returns). Uncapped,
-        // the correction reads that distance as content that appeared above
-        // the reader and lands the offset on max_scroll: the view jumps to the
-        // tail on the reader's OWN key press, and every PageUp after that is
-        // clamped away, so the ladder looks dead (2026-10-22 scroll-ladder
-        // follow-up, measured before the cap: 1 PageUp L001-L083, 2 L014-L126,
-        // 3 L101-L200 and unchanged for every press after).
-        //
-        // `last_max_scroll()` is what the frame just measured, so it is the true
-        // ceiling for this frame. A pin inside the transcript is never touched:
-        // growth that keeps the pinned row in view never reaches it.
-        let mut corrected = scrolled.saturating_add(growth);
-        let live_max = crate::tui::operant_ui::last_max_scroll();
-        if live_max > 0 {
-            corrected = corrected.min(live_max);
+
+        if let Some(pending) = self.scroll_memory.pending_resize.take() {
+            // Decline when the reader scrolled after the capture: their move is
+            // the newer position. Otherwise the resolved top row IS where they
+            // belong — the offset is a top row, so adopt it directly.
+            if self.scroll_offset == pending.captured_offset
+                && let Some(row) = self.last_resolved_scroll.get()
+            {
+                self.scroll_offset = row;
+            }
         }
-        self.scroll_offset = corrected;
-        mem.anchor = Some(ScrollAnchor {
-            top_row: anchor.top_row,
-            applied_offset: corrected,
-        });
     }
 }

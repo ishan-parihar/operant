@@ -40,6 +40,36 @@ fn press_key_with_control(code: KeyCode) -> KeyEvent {
     press_key(code, KeyModifiers::CONTROL)
 }
 
+// ---- Ctrl+Backspace arrives as Ctrl+H (2026-10-24 red-team) -------------
+//
+// Most terminals send byte 0x08 for Ctrl+Backspace and crossterm maps that to
+// Char('h')+CONTROL (parse.rs: 0x01..=0x1A → Ctrl+letter); a real
+// Backspace+CONTROL only arrives from kitty-protocol terminals. Without the
+// Char('h') arm the chord the operator actually presses was a silent no-op.
+
+#[test]
+fn ctrl_h_deletes_the_word_behind_the_caret_like_ctrl_backspace() {
+    let mut app = make_app();
+    app.prompt_input.replace_text("fix the par".to_string());
+    app.handle_key_event(press_key_with_control(KeyCode::Char('h')));
+    assert_eq!(
+        app.prompt_input.text, "fix the ",
+        "Ctrl+H — what terminals send for Ctrl+Backspace — deletes the word behind the caret"
+    );
+    assert_eq!(app.prompt_input.cursor, 8, "the caret rides the deletion");
+}
+
+#[test]
+fn ctrl_h_with_no_word_before_the_caret_deletes_nothing() {
+    let mut app = make_app();
+    app.prompt_input.replace_text(String::new());
+    app.handle_key_event(press_key_with_control(KeyCode::Char('h')));
+    assert!(
+        app.prompt_input.text.is_empty(),
+        "an empty composer must survive Ctrl+H unchanged"
+    );
+}
+
 // ---- P0-1: paste-burst Enter semantics (2026-10-09 live audit) ----
 //
 // tmux/SSH batch keystrokes into the same drain window; pre-fix, a batched
@@ -3484,11 +3514,13 @@ fn tool_error_boundary_must_flush_iteration_text() {
 // frame *would* paint, then calling `reconcile_scroll_anchor`, is exactly what
 // `App::run` does after `terminal.draw`.
 
-/// Stand in for a rendered frame: the viewport is at the top of a transcript
-/// with `scrollback` rows of scrollable height, then reconcile.
-fn paint_frame_at_top(app: &mut App, scrollback: usize) {
-    app.last_render_scroll_offset.set(0);
-    app.scroll_offset = scrollback;
+/// Stand in for a rendered frame: the reader is parked with the viewport's
+/// top row at `top_row`, then reconcile. `scroll_offset` is a TOP ROW (see
+/// scroll_anchor.rs): 0 is the oldest line, the frame's max the tail — and a
+/// paused frame paints the reader's own offset.
+fn paint_frame_at_top(app: &mut App, top_row: usize) {
+    app.scroll_offset = top_row;
+    app.last_render_scroll_offset.set(top_row as u16);
     app.reconcile_scroll_anchor();
 }
 
@@ -3544,8 +3576,9 @@ fn scroll_bookmark_should_clamp_when_transcript_shrank() {
     // `/clear`, `/rewind` or a compacted turn drops the scrollback to 40 rows.
     paint_frame_at_top(&mut app, 40);
 
-    // Restoring row 300 of a 40-row transcript must land in range, not past
-    // the end (which would render a blank or clamped view with no explanation).
+    // Restoring top row 300 of a 40-row transcript must land in range, not
+    // past the tail (which would render a blank or clamped view with no
+    // explanation).
     app.handle_key_event(press_key(KeyCode::Char('g'), KeyModifiers::CONTROL));
     assert_eq!(
         app.scroll_offset, 40,
@@ -3553,151 +3586,95 @@ fn scroll_bookmark_should_clamp_when_transcript_shrank() {
     );
 }
 
-#[test]
-fn anchor_should_hold_position_when_content_grows_above() {
-    let mut app = make_app();
-    paint_frame_at_top(&mut app, 0);
-
-    // Reader parks 10 rows up: PageUp drops auto-follow and pins the row that
-    // is on screen. The frame that paints it publishes that row, exactly as
-    // the render path does while paused (`scroll = user_scroll`).
-    app.handle_key_event(press_key(KeyCode::PageUp, KeyModifiers::NONE));
-    assert!(!app.auto_scroll);
-    app.last_render_scroll_offset.set(10);
-    app.reconcile_scroll_anchor();
-    assert_eq!(
-        app.scroll_offset, 10,
-        "no reflow yet, so nothing to correct"
-    );
-
-    // 20 rows of new output land above the viewport, so the row that was at the
-    // top is now 20 rows further down: the frame publishes 20 as the row it
-    // painted and the reader's pinned row (10) sits 20 - 10 = 10 rows below it.
-    app.last_render_scroll_offset.set(20);
-    app.reconcile_scroll_anchor();
-
-    // The offset grows by exactly the drift, which puts the pinned row back at
-    // the top: 10 + 10 = 20, and 20 - 20 = 0. Growing by the full 20 (the old
-    // behaviour) was the bug — it read the whole distance as drift and landed
-    // the reader at the tail on their own key press.
-    assert_eq!(
-        app.scroll_offset, 20,
-        "the offset grows by the drift, not by the whole distance"
-    );
-}
-
-/// 2026-10-22 scroll-ladder follow-up (P4-1 residual): repeated PageUps put the
-/// reader at the TAIL and every further key press did nothing.
+/// Repeated PageUps walk the reader UP the transcript from the tail, one page
+/// per press, and stop only at the real ceiling.
 ///
-/// Measured on the headless simulator before the fix, against a 200-line
-/// transcript at 100x30 (`max_scroll` 40): 1 PageUp L001-L083, 2 L014-L126, and
-/// 3 already back at L101-L200 — which is the tail, where it stayed for every
-/// press after. The reader's own key press parked them at the bottom.
-///
-/// The mechanism: the reader's FIRST PageUp follows a tail-following frame, so
-/// `painted` holds `max_scroll` (`resolve_tail_follow_scroll` publishes that).
-/// `note_user_scroll`'s pin arithmetic (`painted + prev_offset - new_offset`)
-/// then names a row above the whole transcript, and the growth correction reads
-/// that distance as "content appeared above the reader" and lands the offset on
-/// `max_scroll`. Every later PageUp was then clamped away.
-///
-/// The fix bounds the correction by what the frame actually measured, so a
-/// pin outside the transcript can no longer teleport the reader. This test
-/// drives that first press and every press after, and asserts the invariant the
-/// operator cares about: scrolling up is monotonic and stops only at the real
-/// ceiling.
+/// (2026-10-24 red-team) The handlers used to ADD to the offset — the
+/// distance-from-tail reading — while the renderer paints the offset as the
+/// TOP ROW. The state sat at 0 while the reader looked at the tail, so the
+/// FIRST press teleported the view to the top of the transcript and every
+/// later press walked back down: the operator's "scroll up jumps to the top,
+/// then scrolling up scrolls down" report. This drives the real handler in
+/// the run loop's order (key → paint → reconcile) against published geometry.
 #[test]
 fn repeated_page_up_climbs_monotonically_and_stops_at_the_real_ceiling() {
-    // 200 wrapped rows, a viewport that shows 26, so the reader may climb 174.
     const LIVE_MAX: usize = 174;
     let mut app = make_app();
     crate::tui::operant_ui::set_last_max_scroll(LIVE_MAX);
-    // The frame before the first key: tail-following, so the render path
-    // published `max_scroll` as the row it painted.
-    app.auto_scroll = false;
-    app.last_render_scroll_offset.set(LIVE_MAX as u16);
+    // The reader is following the tail; the reconcile after the last frame
+    // synced the state to the tail's top row.
+    app.auto_scroll = true;
+    app.reconcile_scroll_anchor();
+    assert_eq!(
+        app.scroll_offset, LIVE_MAX,
+        "tail-follow parks the state at the tail's top row"
+    );
 
-    let mut expected = 0usize;
+    let mut expected = LIVE_MAX;
     for step in 0..8 {
-        expected = (expected + 10).min(LIVE_MAX);
-        // One frame, in the order the run loop produces it: the key handler
-        // runs against the row the previous frame published, the frame paints
-        // (publishing the reader's own offset while paused), then the
-        // reconcile runs against it.
+        expected = expected.saturating_sub(10);
         app.handle_key_event(press_key(KeyCode::PageUp, KeyModifiers::NONE));
+        // One frame, in the order the run loop produces it: the frame paints
+        // the row the reader asked for, then the reconcile runs against it.
         app.last_render_scroll_offset.set(expected as u16);
         app.reconcile_scroll_anchor();
         assert_eq!(
             app.scroll_offset, expected,
-            "step {step}: the offset follows the ladder and is capped at the real ceiling"
+            "step {step}: each press climbs one page and the reconcile holds it"
         );
         assert!(
             app.scroll_offset <= LIVE_MAX,
-            "step {step}: the growth correction may never overshoot the transcript"
+            "step {step}: the offset may never overshoot the transcript"
         );
     }
-    // Eight presses of 10 rows would reach 80; the ceiling is 174, so the
-    // reader is still climbing — and that is the point: nothing threw them
-    // back to the tail on the way.
+    // Eight presses of 10 rows climb 80 rows from the tail; the ceiling
+    // (row 0) is still 94 rows away, so the reader is climbing — and that is
+    // the point: nothing threw them back to the tail on the way.
     assert_eq!(
-        app.scroll_offset, 80,
+        app.scroll_offset,
+        LIVE_MAX - 80,
         "eight PageUps climb 80 rows, unimpeded"
     );
     crate::tui::operant_ui::set_last_max_scroll(0);
 }
 
-/// The same invariant through the wheel and the fine keyboard rung, which write
-/// `scroll_offset` through their own handlers and rely on the same reconcile.
+/// The same invariant through the fine keyboard rung, which writes
+/// `scroll_offset` through its own handler and relies on the same reconcile.
 #[test]
 fn repeated_wheel_up_climbs_monotonically_and_stops_at_the_real_ceiling() {
     const LIVE_MAX: usize = 174;
     let mut app = make_app();
     crate::tui::operant_ui::set_last_max_scroll(LIVE_MAX);
-    app.auto_scroll = false;
-    app.last_render_scroll_offset.set(LIVE_MAX as u16);
+    app.auto_scroll = true;
+    app.reconcile_scroll_anchor();
 
-    let mut expected = 0usize;
+    let mut expected = LIVE_MAX;
     for step in 0..10 {
-        expected = (expected + 3).min(LIVE_MAX);
+        expected = expected.saturating_sub(3);
         app.handle_key_event(press_key_with_control(KeyCode::Up));
         app.last_render_scroll_offset.set(expected as u16);
         app.reconcile_scroll_anchor();
         assert_eq!(
             app.scroll_offset, expected,
-            "step {step}: Ctrl+Up adds 3 rows and is capped at the real ceiling"
+            "step {step}: Ctrl+Up subtracts 3 rows and the reconcile holds it"
         );
     }
     // Ten presses of 3 rows climb 30, again with nothing throwing the reader
     // back to the tail.
-    assert_eq!(app.scroll_offset, 30, "ten Ctrl+Up presses climb 30 rows");
+    assert_eq!(
+        app.scroll_offset,
+        LIVE_MAX - 30,
+        "ten Ctrl+Up presses climb 30 rows"
+    );
     crate::tui::operant_ui::set_last_max_scroll(0);
 }
 
 #[test]
-fn user_scroll_should_cancel_the_anchor() {
-    let mut app = make_app();
-    paint_frame_at_top(&mut app, 0);
-    app.handle_key_event(press_key(KeyCode::PageUp, KeyModifiers::NONE));
-    app.reconcile_scroll_anchor();
-    assert_eq!(app.scroll_offset, 10);
-
-    // A scroll the reader makes outside the keyboard arms — the mouse wheel
-    // writes `scroll_offset` directly — is a new reading position, so the old
-    // pin is void and later reflow must not drag the view back.
-    app.scroll_offset = 15;
-    app.last_render_scroll_offset.set(20);
-    app.reconcile_scroll_anchor();
-    assert_eq!(app.scroll_offset, 15, "a user scroll drops the anchor");
-}
-
-#[test]
 fn reconcile_clamps_ghost_offset_after_the_flush_shrinks_the_transcript() {
-    // The growth correction counts the streaming bubble's rows; the flush
-    // boundary collapses them into one committed message, so the offset can
-    // hold rows that no longer exist (live-audit P4-1 follow-up: offset 355
-    // against a 15-row max left PageDown walking ghost rows home). The
-    // reconcile must clamp the STATE to the frame's live max — the render
-    // already clamps its own paint — and void the pin.
+    // A flush boundary can collapse rows the offset still counts (live-audit
+    // P4-1 follow-up: offset 355 against a 15-row max left PageDown walking
+    // ghost rows home). The reconcile must clamp the STATE to the frame's live
+    // max — the render already clamps its own paint.
     let mut app = make_app();
     app.auto_scroll = false;
     app.scroll_offset = 355;
@@ -3762,10 +3739,9 @@ fn resize_preserves_the_row_a_scrolled_up_reader_was_looking_at() {
     let mut app = make_app();
     app.auto_scroll = false;
 
-    // 140 transcript rows in a 40-row viewport, so 100 rows of scrollback. The
-    // reader is parked 30 rows up: the top of the viewport is row 70, and that
-    // row is the second rendered line of message 3.
-    app.scroll_offset = 30;
+    // 140 transcript rows in a 40-row viewport. The reader's viewport top is
+    // row 70, the second rendered line of message 3.
+    app.scroll_offset = 70;
     paint_at(
         &mut app,
         ResizeFrame {
@@ -3774,29 +3750,27 @@ fn resize_preserves_the_row_a_scrolled_up_reader_was_looking_at() {
             resolved_row: 70,
         },
     );
-    assert_eq!(app.scroll_offset, 30, "precondition: parked 30 rows up");
+    assert_eq!(app.scroll_offset, 70, "precondition: parked at top row 70");
 
-    // The terminal narrows and every line rewraps: 260 transcript rows, so 220
-    // rows of scrollback. Leaving the offset alone would put the top of the
-    // viewport at 220 - 30 = 190 — a completely different part of the
-    // conversation. The anchored content is actually at row 25.
+    // The terminal narrows and every line rewraps: the anchored content now
+    // lives at row 25. The frame still painted the stale row (70) — the render
+    // path resolved the content address and published both.
     app.note_resize();
-    app.scroll_offset = 30;
     paint_at(
         &mut app,
         ResizeFrame {
             pos: pos(3, 1),
-            painted_row: 190,
+            painted_row: 70,
             resolved_row: 25,
         },
     );
 
     assert_eq!(
-        app.scroll_offset, 195,
-        "220 - 25: the reader is put back on the message they were reading"
+        app.scroll_offset, 25,
+        "the reader is put back on the message they were reading"
     );
     assert_ne!(
-        app.scroll_offset, 30,
+        app.scroll_offset, 70,
         "the whole point — leaving the offset alone is what this fixes"
     );
     assert!(
@@ -3811,8 +3785,7 @@ fn resize_leaves_a_follower_pinned_to_the_tail() {
     app.auto_scroll = true;
 
     // Auto-follow owns the position: the render path paints the tail whatever
-    // the geometry, so the top row is simply wherever the tail now is. 100 rows
-    // of scrollback, top row 90.
+    // the geometry, and the reconcile syncs the state to that row.
     app.scroll_offset = 0;
     paint_at(
         &mut app,
@@ -3822,6 +3795,10 @@ fn resize_leaves_a_follower_pinned_to_the_tail() {
             resolved_row: 90,
         },
     );
+    assert_eq!(
+        app.scroll_offset, 90,
+        "the state tracks the tail the frame painted"
+    );
 
     app.note_resize();
     assert!(
@@ -3829,15 +3806,13 @@ fn resize_leaves_a_follower_pinned_to_the_tail() {
         "a follower has no reading position to preserve"
     );
 
-    // Narrowed: 220 rows of scrollback, so the tail is row 220. The stale
-    // resolution (row 12, from before the capture) must not be adopted.
-    app.scroll_offset = 0;
+    // Narrowed: the tail is now row 220.
     paint_at(
         &mut app,
         ResizeFrame {
             pos: pos(7, 0),
             painted_row: 220,
-            resolved_row: 12,
+            resolved_row: 220,
         },
     );
 
@@ -3846,8 +3821,8 @@ fn resize_leaves_a_follower_pinned_to_the_tail() {
         "the resize must not unpin a reader who was following live output"
     );
     assert_eq!(
-        app.scroll_offset, 0,
-        "a follower stays at the tail — offset 0 — not at the old position"
+        app.scroll_offset, 220,
+        "a follower stays on the tail the frame painted"
     );
 }
 
@@ -3890,7 +3865,7 @@ fn a_resolve_that_finds_no_row_leaves_the_offset_alone() {
 }
 
 #[test]
-fn a_resize_is_not_itself_a_user_scroll_for_the_next_reflow() {
+fn a_resize_adopt_writes_the_resolved_top_row() {
     let mut app = make_app();
     app.auto_scroll = false;
     app.scroll_offset = 30;
@@ -3900,22 +3875,9 @@ fn a_resize_is_not_itself_a_user_scroll_for_the_next_reflow() {
     app.last_render_scroll_offset.set(190);
     app.last_resolved_scroll.set(Some(25));
     app.reconcile_scroll_anchor();
-    assert_eq!(app.scroll_offset, 195, "220 - 25");
-
-    // The adopt writes `scroll_offset` itself. If it did not also re-pin the
-    // reflow anchor at the row it asked for, the very next append would compare
-    // the offset against a stale `applied_offset`, read the difference as a user
-    // scroll and void the pin — so the position would survive the resize and be
-    // dropped by the next message.
-    //
-    // One frame later the transcript grew by 5 rows above the reader and painted
-    // row 30.
-    app.last_render_scroll_offset.set(30);
-    app.last_resolved_scroll.set(None);
-    app.reconcile_scroll_anchor();
     assert_eq!(
-        app.scroll_offset, 200,
-        "the reflow anchor survived the resize, so the append still corrects"
+        app.scroll_offset, 25,
+        "the offset is a top row: the resolved row is adopted as-is"
     );
 }
 
@@ -5001,25 +4963,20 @@ fn last_msg_area_defaults_zero_and_is_republished_from_draw() {
 
 #[test]
 fn ctrl_arrow_chords_scroll_transcript_in_fine_steps() {
+    crate::tui::operant_ui::set_last_max_scroll(100);
     let mut app = make_app();
     app.auto_scroll = true;
+    app.reconcile_scroll_anchor(); // tail-sync: the state tracks the tail
     app.handle_key_event(press_key(KeyCode::Up, KeyModifiers::CONTROL));
     assert_eq!(
-        app.scroll_offset, 3,
-        "Ctrl+Up must scroll the transcript 3 lines"
+        app.scroll_offset, 97,
+        "Ctrl+Up must scroll the transcript 3 rows up from the tail"
     );
     assert!(!app.auto_scroll, "Ctrl+Up must pause tail-follow");
-    app.scroll_offset = 10;
     app.handle_key_event(press_key(KeyCode::Down, KeyModifiers::CONTROL));
-    assert_eq!(app.scroll_offset, 7, "Ctrl+Down must scroll back 3 lines");
-    app.handle_key_event(press_key(KeyCode::Down, KeyModifiers::CONTROL));
-    app.handle_key_event(press_key(KeyCode::Down, KeyModifiers::CONTROL));
-    app.handle_key_event(press_key(KeyCode::Down, KeyModifiers::CONTROL));
-    assert_eq!(app.scroll_offset, 0);
-    assert!(
-        app.auto_scroll,
-        "reaching the bottom must resume tail-follow"
-    );
+    assert_eq!(app.scroll_offset, 100, "Ctrl+Down returns to the tail");
+    assert!(app.auto_scroll, "reaching the tail must resume tail-follow");
+    crate::tui::operant_ui::set_last_max_scroll(0);
 }
 
 // ── Composer shift-selection (jcode textarea selection, 2026-10-09 audit) ──
@@ -5144,17 +5101,15 @@ fn screen_rows(app: &App) -> Vec<String> {
         .collect()
 }
 
-/// The keyboard/wheel scroll ladder driven against a REAL render.
+/// The keyboard scroll ladder driven against a REAL render.
 ///
-/// 2026-10-22 (P4-1 follow-up): measured on the headless simulator, a single
-/// PageUp moved the view (tail L200 -> L083) but the SECOND produced a
-/// non-monotonic jump (L126) and the THIRD snapped straight back to the tail
-/// (L200). A scroll ladder that reverses direction and returns the reader to
-/// the tail is worse than no ladder: it looks like input is being eaten. This
-/// paints a real frame at each step so the render seam, not the harness's
-/// drain-before-content artifact, is what is under test: the offset the keys
-/// compute must be honoured monotonically by the paint and by the reconcile
-/// that follows it.
+/// 2026-10-24 red-team: the handlers used to write the offset in the
+/// distance-from-tail reading while the renderer paints it as the TOP ROW, so
+/// the first PageUp from a live view teleported to the top of the transcript
+/// and later presses walked back down. This drives the REAL handler (not a
+/// hand-rolled arithmetic stand-in), paints a real frame at each step, and
+/// runs the reconcile the run loop performs — the top visible line must walk
+/// UP the transcript monotonically and never reverse.
 #[test]
 fn repeated_page_up_walks_upward_monotonically() {
     let mut app = make_app();
@@ -5172,35 +5127,31 @@ fn repeated_page_up_walks_upward_monotonically() {
         "tail-follow shows the last line: {tail_flat}"
     );
 
-    // Each PageUp step: the key handler's arithmetic, then a paint and the
-    // reconcile the run loop runs after it. `offset` counts rows up from the
-    // bottom, so a growing offset is the reader walking UP the transcript.
-    let mut seen_offsets: Vec<usize> = Vec::new();
-    for _ in 0..6 {
-        app.scroll_offset = app.scroll_offset.saturating_add(10);
-        app.auto_scroll = false;
+    // Each PageUp step: the real handler, then the paint and the reconcile the
+    // run loop performs after it. The offset is a top row, so walking UP means
+    // the lowest visible `L###` marker DECREASES toward L001.
+    let mut seen_tops: Vec<usize> = Vec::new();
+    for step in 0..6 {
+        app.handle_key_event(press_key(KeyCode::PageUp, KeyModifiers::NONE));
         // Paint the frame the reader asked for.
         let rows = screen_rows(&app);
         let flat = rows.join("\n");
         let top_line = visible_top_line(&flat);
         // The reconcile a real run loop performs after every paint.
         app.reconcile_scroll_anchor();
-        seen_offsets.push(app.scroll_offset);
-        // The offset must never be pulled back DOWN by the reconcile: that is
-        // the ghost-offset clamp eating a legitimate reading position.
+        seen_tops.push(top_line.unwrap_or(1));
         assert!(
-            top_line.is_some_and(|l| l <= 190),
-            "a real paint must honour the offset (step {}): top={top_line:?}",
-            seen_offsets.len()
+            top_line.is_some_and(|l| l >= 1),
+            "a real paint must show transcript content (step {step}): top={top_line:?}"
         );
     }
     assert!(
-        seen_offsets.windows(2).all(|w| w[0] < w[1]),
-        "each PageUp must grow the offset, got {seen_offsets:?}"
+        seen_tops.windows(2).all(|w| w[0] > w[1]),
+        "each PageUp must walk the top line further up the transcript, got {seen_tops:?}"
     );
     assert!(
-        seen_offsets.last().copied().unwrap_or(0) >= 60,
-        "six PageUps must reach at least 60 rows up: {seen_offsets:?}"
+        seen_tops.last().copied().unwrap_or(200) <= 140,
+        "six PageUps must reach well above the tail: {seen_tops:?}"
     );
 }
 
@@ -6601,12 +6552,13 @@ mod keyboard_scroll_reachability_tests {
         publish_transcript_height(30);
         let mut app = make_app();
         app.auto_scroll = true;
+        app.reconcile_scroll_anchor(); // tail-sync: the state tracks the tail
 
         app.handle_key_event(press_key(KeyCode::PageUp, KeyModifiers::NONE));
 
         assert!(
-            app.scroll_offset > 0,
-            "PageUp must move the view while the input has focus; it read as dead by a keyboard-only operator"
+            app.scroll_offset < 200,
+            "PageUp must move the view up from the tail while the input has focus; it read as dead by a keyboard-only operator"
         );
         assert!(
             !app.auto_scroll,
@@ -6615,9 +6567,11 @@ mod keyboard_scroll_reachability_tests {
         let parked = app.scroll_offset;
         app.handle_key_event(press_key(KeyCode::PageDown, KeyModifiers::NONE));
         assert!(
-            app.scroll_offset < parked,
+            app.scroll_offset > parked,
             "PageDown brings the reader back down the same ladder"
         );
+        assert_eq!(app.scroll_offset, 200, "back at the tail's top row");
+        assert!(app.auto_scroll, "landing on the tail resumes following");
         crate::tui::operant_ui::set_last_max_scroll(0);
     }
 
@@ -6628,13 +6582,13 @@ mod keyboard_scroll_reachability_tests {
 
         app.handle_key_event(press_key(KeyCode::Home, KeyModifiers::SHIFT));
         assert_eq!(
-            app.scroll_offset, 174,
-            "Shift+Home takes the whole distance at once to the top of the transcript"
+            app.scroll_offset, 0,
+            "Shift+Home takes the whole distance to row 0 — the top of the transcript"
         );
         assert!(!app.auto_scroll, "reaching the top parks the view");
 
         app.handle_key_event(press_key(KeyCode::End, KeyModifiers::SHIFT));
-        assert_eq!(app.scroll_offset, 0, "Shift+End lands on the tail");
+        assert_eq!(app.scroll_offset, 174, "Shift+End lands on the tail");
         assert!(app.auto_scroll, "and re-enables following new messages");
 
         crate::tui::operant_ui::set_last_max_scroll(0);
@@ -6696,41 +6650,36 @@ mod keyboard_scroll_reachability_tests {
     }
 
     #[test]
-    fn paging_up_saturates_at_the_real_ceiling_instead_of_drifting_past_it() {
+    fn paging_up_parks_at_the_top_row_instead_of_drifting_past_it() {
         // `scroll_offset` is a TOP ROW (ui_viewport.rs resolves
-        // `scroll = user_scroll.min(max_scroll)`), so unbounded addition ran
-        // far past the transcript and every later press was clamped away by
-        // the reconcile: the ladder looked dead mid-climb.
+        // `scroll = user_scroll.min(max_scroll)`), so upward paging descends
+        // toward row 0 and must saturate there rather than wrap or drift.
         crate::tui::operant_ui::set_last_max_scroll(24);
         publish_transcript_height(30);
         let mut app = make_app();
         app.auto_scroll = false;
+        app.scroll_offset = 24; // parked at the tail's top row
 
         // One frame per press, in the order the run loop produces it: the key
         // runs, the frame paints the row the reader landed on, the reconcile
-        // clamps against the frame's true max. Driving the key in isolation
-        // measures nothing — the ceiling is the reconcile's job, not the
-        // handler's.
+        // holds it.
         let step = app.scroll_page_step();
-        let mut expected = 0usize;
+        let mut expected = 24usize;
         for press in 0..10 {
-            expected = (expected + step).min(24);
+            expected = expected.saturating_sub(step);
             app.handle_key_event(press_key(KeyCode::PageUp, KeyModifiers::NONE));
             app.last_render_scroll_offset.set(expected as u16);
             app.reconcile_scroll_anchor();
             assert_eq!(
                 app.scroll_offset, expected,
-                "press {press}: the offset follows the ladder and is capped at the real ceiling"
+                "press {press}: the offset follows the ladder"
             );
             assert!(
                 app.scroll_offset <= 24,
                 "press {press}: the offset may never overshoot the transcript"
             );
         }
-        assert_eq!(
-            app.scroll_offset, 24,
-            "the climb parks at the real ceiling rather than drifting past it"
-        );
+        assert_eq!(app.scroll_offset, 0, "upward paging parks at the top row");
         crate::tui::operant_ui::set_last_max_scroll(0);
     }
 }

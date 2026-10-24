@@ -226,7 +226,15 @@ impl App {
         self.prompt_input.record_edit();
         // Skip suggestion updates when a modal dialog is open (Phase 1.4).
         if !self.should_block_suggestions() {
-            let file_autocomplete_limit = self.settings.config.file_autocomplete_limit;
+            // 0 means "unset" — the serde-derived default and the value every
+            // settings.json written before this field existed carries. A
+            // 0-entry popup can never show a single @ candidate (the sync tier
+            // breaks on the limit before emitting), so coerce to the house
+            // default the settings screen itself displays.
+            let file_autocomplete_limit = match self.settings.config.file_autocomplete_limit {
+                0 => 15,
+                n => n,
+            };
             let file_autocomplete_show_hidden =
                 self.settings.config.file_autocomplete_show_hidden_files;
             self.prompt_input.update_suggestions(
