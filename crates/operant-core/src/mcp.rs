@@ -743,6 +743,14 @@ pub struct McpStdioClient {
     /// successful exchange; when it reaches 2, the next request first
     /// force-reconnects to clear the wedged child (hermes watchdog parity).
     timeouts: Arc<AtomicU64>,
+    /// (iter-1209) Non-JSON lines skipped on stdout while hunting for the
+    /// JSON-RPC response of the request in flight. A stdio server may print
+    /// a startup banner or an occasional status line on stdout (sourcehound
+    /// does, ~54 lines of tool-group inventory); those are not protocol
+    /// traffic and must not be parsed as JSON. Reset to 0 once the response
+    /// is found, and used as the bound (256) that stops a banner-only
+    /// server from spinning the read loop forever.
+    banner_lines: Arc<AtomicU64>,
     /// True once a session has ever been established (set at the end of a
     /// successful connect). Lets call-time recovery distinguish a genuine
     /// post-crash call (io is None because the child was killed) from the
@@ -774,6 +782,7 @@ impl McpStdioClient {
             request_id: Arc::new(AtomicU64::new(1)),
             restarts: Arc::new(AtomicU64::new(0)),
             timeouts: Arc::new(AtomicU64::new(0)),
+            banner_lines: Arc::new(AtomicU64::new(0)),
             had_session: Arc::new(AtomicBool::new(false)),
             reconnecting: Arc::new(AtomicBool::new(false)),
         }
@@ -1194,32 +1203,66 @@ impl McpStdioClient {
 
         // Read response from stdout — with a 60s timeout. Without this, a
         // hung MCP server would block the agent loop forever.
+        //
+        // (iter-1209) The read is BANNER-TOLERANT. Some stdio MCP servers
+        // print a human-oriented startup banner on STDOUT before the first
+        // JSON-RPC response: sourcehound's `mcp` subcommand writes ~54 lines
+        // of tool-group inventory there (`bin: ~/.local/bin/sourcehound`,
+        // `count: 25 tool groups (143 total tools)`, a per-group table, …), so
+        // the first `read_line` after `initialize` returned that text and
+        // `serde_json::from_str` failed the whole call. Every web and browser
+        // tool was therefore refused locally against a server that would have
+        // answered. A server may also log mid-session on stdout, so the skip
+        // applies to every response, not only the first. A JSON-RPC response is
+        // a JSON object, so a line that does not start with `{` cannot be one;
+        // dropping it and reading on is the correct behaviour.
         let mut response_line = String::new();
-        let read_result = tokio::time::timeout(
-            std::time::Duration::from_secs(60),
-            io.stdout.read_line(&mut response_line),
-        )
-        .await;
-        match read_result {
-            Ok(Ok(_)) => {}
-            Ok(Err(e)) => {
-                // EOF / read error — the child died mid-call.
-                return Err(ReqError::Transport(crate::error::Error::Agent(format!(
-                    "Failed to read from MCP stdout: {}",
-                    e
-                ))));
+        loop {
+            response_line.clear();
+            let read_result = tokio::time::timeout(
+                std::time::Duration::from_secs(60),
+                io.stdout.read_line(&mut response_line),
+            )
+            .await;
+            match read_result {
+                Ok(Ok(_)) => {}
+                Ok(Err(e)) => {
+                    // EOF / read error — the child died mid-call.
+                    return Err(ReqError::Transport(crate::error::Error::Agent(format!(
+                        "Failed to read from MCP stdout: {}",
+                        e
+                    ))));
+                }
+                Err(_) => {
+                    // Read timeout — the server may be hung. Never re-issue this
+                    // call (it may have executed the tool); count it so the next
+                    // request force-reconnects once consecutive timeouts reach 2.
+                    let n = self.timeouts.fetch_add(1, Ordering::SeqCst) + 1;
+                    return Err(ReqError::Protocol(crate::error::Error::Agent(format!(
+                        "MCP stdio server did not respond within 60s (possible hang; consecutive timeouts: {n})"
+                    ))));
+                }
             }
-            Err(_) => {
-                // Read timeout — the server may be hung. Never re-issue this
-                // call (it may have executed the tool); count it so the next
-                // request force-reconnects once consecutive timeouts reach 2.
-                let n = self.timeouts.fetch_add(1, Ordering::SeqCst) + 1;
-                return Err(ReqError::Protocol(crate::error::Error::Agent(format!(
-                    "MCP stdio server did not respond within 60s (possible hang; consecutive timeouts: {n})"
-                ))));
+            if response_line.trim_start().starts_with('{') {
+                break;
+            }
+            // A server that only ever prints a banner must not spin: the
+            // per-line timeout above does not bound the NUMBER of lines, and a
+            // server still delivering banner lines would loop forever. Bound
+            // the skip. 256 clears a verbose startup banner (sourcehound's is
+            // ~54) with generous headroom while still failing fast.
+            let skipped = self.banner_lines.fetch_add(1, Ordering::SeqCst) + 1;
+            if skipped >= 256 {
+                self.banner_lines.store(0, Ordering::SeqCst);
+                return Err(ReqError::Protocol(crate::error::Error::Agent(
+                    "MCP stdio server produced 256 non-JSON lines without a JSON-RPC response"
+                        .to_string(),
+                )));
             }
         }
-
+        // The response is served. Reset the budget so the next response gets
+        // its own allowance — a server may print one line between responses.
+        self.banner_lines.store(0, Ordering::SeqCst);
         let trimmed = response_line.trim();
         if trimmed.is_empty() {
             return Err(ReqError::Protocol(crate::error::Error::Agent(
@@ -1294,27 +1337,44 @@ impl McpStdioClient {
             }
 
             // Read the next line for our actual response
-            response_line.clear();
-            let read_result2 = tokio::time::timeout(
-                std::time::Duration::from_secs(60),
-                io.stdout.read_line(&mut response_line),
-            )
-            .await;
-            match read_result2 {
-                Ok(Ok(_)) => {}
-                Ok(Err(e)) => {
-                    return Err(ReqError::Transport(crate::error::Error::Agent(format!(
-                        "Failed to read MCP stdout after server request: {}",
-                        e
-                    ))));
+            // (iter-1209) Banner-tolerant for the same reason as the primary
+            // read: a server may interleave stdout status output with its
+            // protocol traffic. Loop until a JSON object arrives.
+            loop {
+                response_line.clear();
+                let read_result2 = tokio::time::timeout(
+                    std::time::Duration::from_secs(60),
+                    io.stdout.read_line(&mut response_line),
+                )
+                .await;
+                match read_result2 {
+                    Ok(Ok(_)) => {}
+                    Ok(Err(e)) => {
+                        return Err(ReqError::Transport(crate::error::Error::Agent(format!(
+                            "Failed to read MCP stdout after server request: {}",
+                            e
+                        ))));
+                    }
+                    Err(_) => {
+                        let n = self.timeouts.fetch_add(1, Ordering::SeqCst) + 1;
+                        return Err(ReqError::Protocol(crate::error::Error::Agent(format!(
+                            "MCP stdio server did not respond within 60s after server request (consecutive timeouts: {n})"
+                        ))));
+                    }
                 }
-                Err(_) => {
-                    let n = self.timeouts.fetch_add(1, Ordering::SeqCst) + 1;
-                    return Err(ReqError::Protocol(crate::error::Error::Agent(format!(
-                        "MCP stdio server did not respond within 60s after server request (consecutive timeouts: {n})"
-                    ))));
+                if response_line.trim_start().starts_with('{') {
+                    break;
+                }
+                let skipped = self.banner_lines.fetch_add(1, Ordering::SeqCst) + 1;
+                if skipped >= 256 {
+                    self.banner_lines.store(0, Ordering::SeqCst);
+                    return Err(ReqError::Protocol(crate::error::Error::Agent(
+                        "MCP stdio server produced 256 non-JSON lines without a JSON-RPC response"
+                            .to_string(),
+                    )));
                 }
             }
+            self.banner_lines.store(0, Ordering::SeqCst);
         }
 
         let trimmed = response_line.trim();
@@ -3071,6 +3131,146 @@ while True:
     ///
     /// The child is a `python3` running the fake server, so the test can
     /// observe its PID and check that the process is gone after the drop.
+    /// A stdio MCP server that prints a human-oriented startup banner on
+    /// STDOUT before any protocol traffic — the sourcehound shape.
+    ///
+    /// sourcehound 1.8.0's `sourcehound mcp` writes ~54 lines of tool-group
+    /// inventory to stdout (`bin: ~/.local/bin/sourcehound`, `count: 25 tool
+    /// groups (143 total tools)`, a per-group table, …) before the first
+    /// JSON-RPC response arrives. Its purpose here is to prove the transport
+    /// still completes a handshake: a JSON-RPC response is a JSON object, so a
+    /// line that does not begin with `{` cannot be one, and skipping it costs
+    /// nothing.
+    const BANNER_MCP_SERVER: &str = r#"import sys, json
+# The banner: printed once, on STDOUT, before anything else.
+BANNER = [
+    'bin: /fake/sourcehound',
+    'description: Intelligence Gathering System',
+    '',
+    'count: 25 tool groups (143 total tools)',
+    'tool_groups[25]{name,description,tool_count}:',
+    'web,Search the web, scrape pages, crawl sites,6',
+    'cloakctl,Persistent stealth profiles,59',
+    'news,Fetch news from RSS feeds,4',
+    'state:',
+    'pools: 22',
+    'help[6]:',
+    'Run `sourcehound mcp` to start the MCP server',
+]
+for line in BANNER:
+    sys.stdout.write(line + chr(10))
+sys.stdout.flush()
+while True:
+    line = sys.stdin.readline()
+    if not line:
+        break
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        req = json.loads(line)
+    except Exception:
+        continue
+    if req.get('id') is None:
+        continue
+    if req.get('method') == 'tools/list':
+        result = {'tools': [{'name': 'web.search', 'description': 'search the web', 'inputSchema': {'type': 'object', 'properties': {}}}]}
+    else:
+        result = {'protocolVersion': '2025-06-18', 'capabilities': {'tools': {}}, 'serverInfo': {'name': 'banner', 'version': '1.0'}}
+    sys.stdout.write(json.dumps({'jsonrpc': '2.0', 'id': req['id'], 'result': result}) + chr(10))
+    sys.stdout.flush()
+"#;
+
+    fn banner_stdio_client() -> (McpStdioClient, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!(
+            "operant_mcp_banner_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        let script = dir.join("banner_server.py");
+        std::fs::write(&script, BANNER_MCP_SERVER).expect("write the banner server");
+        let client = McpStdioClient::new(
+            "python3",
+            vec![script.to_string_lossy().to_string()],
+            HashMap::new(),
+        );
+        (client, dir)
+    }
+
+    /// A banner on stdout must not break the handshake or a tool call.
+    ///
+    /// (iter-1209) The transport read ONE line and parsed it as JSON, so a
+    /// server that prints a startup banner on stdout failed at the very first
+    /// request: `serde_json::from_str("bin: /fake/sourcehound\n")` is an error,
+    /// and every tool behind that server became unreachable. The reported shape
+    /// was sourcehound — all web_search / web_scrape / cloakctl.* calls refused
+    /// locally by a parse failure, never reaching the server that would have
+    /// answered them.
+    #[tokio::test]
+    async fn a_stdout_banner_does_not_break_the_handshake_or_a_tool_call() {
+        let (client, _dir) = banner_stdio_client();
+        client
+            .connect()
+            .await
+            .expect("the banner on stdout must not break the initialize handshake");
+        let tools = client
+            .list_tools()
+            .await
+            .expect("tools/list must be answered past the banner");
+        assert_eq!(
+            tools.len(),
+            1,
+            "the tool the server offers must survive the banner: {tools:?}"
+        );
+        assert_eq!(tools[0].name, "web.search");
+    }
+
+    /// A server that ONLY ever prints non-JSON must fail, not spin forever.
+    ///
+    /// The skip is bounded because the per-line read timeout does not bound the
+    /// NUMBER of lines: a banner-only server still delivers lines, so an
+    /// unbounded loop would turn a hard error into a hang. This test pins the
+    /// bound — and pins that it is a PROTOCOL error (surfaces to the operator),
+    /// not a timeout.
+    #[tokio::test]
+    async fn a_banner_only_stdio_server_fails_bounded_instead_of_hanging() {
+        let dir = std::env::temp_dir().join(format!(
+            "operant_mcp_nobanner_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        let script = dir.join("endless_banner.py");
+        // Answer NOTHING — just an endless stream of non-JSON lines.
+        std::fs::write(&script, "import sys, time\nwhile True:\n    sys.stdout.write('banner line\n')\n    sys.stdout.flush()\n    time.sleep(0.001)\n")
+            .expect("write the banner-only server");
+        let client = McpStdioClient::new(
+            "python3",
+            vec![script.to_string_lossy().to_string()],
+            HashMap::new(),
+        );
+        let outcome =
+            tokio::time::timeout(std::time::Duration::from_secs(30), client.connect()).await;
+        match outcome {
+            Err(_) => panic!("a banner-only server must fail bounded, not hang"),
+            Ok(result) => {
+                let err = result.expect_err("a banner-only server cannot complete a handshake");
+                let text = err.to_string();
+                assert!(
+                    text.contains("256 non-JSON lines"),
+                    "the failure must name the bound it hit, got: {text}"
+                );
+            }
+        }
+    }
+
     #[tokio::test]
     async fn dropping_the_transport_kills_the_mcp_server_process() {
         // The STUBBORN server: it ignores stdin EOF, so only a KILL can
