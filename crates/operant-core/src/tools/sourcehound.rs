@@ -337,7 +337,7 @@ pub fn parse_search_results(
         .or_else(|| value.get("data"))
         .and_then(Value::as_array)
         .cloned()
-        .unwrap_or_default();
+        .unwrap_or_else(|| toon_results(value, limit));
 
     let mut out = Vec::with_capacity(items.len().min(limit));
     for item in items.iter().take(limit) {
@@ -353,6 +353,134 @@ pub fn parse_search_results(
         }
     }
     out
+}
+
+/// Extract search results from a TOON `text` payload — the shape
+/// `unwrap_tool_result` falls back to when a sourcehound tool answers in
+/// its default TOON format rather than JSON.
+///
+/// (iter-1210) `format: "json"` now travels with every search call, but a
+/// server that ignores the field (or a build without it) still answers in
+/// TOON, and the JSON path then finds no `results` array and returns an
+/// EMPTY vec. An empty vec reads to the caller as "no results", so the
+/// search silently yields nothing while the server answered in full — the
+/// defect this fallback closes.
+///
+/// TOON's search shape is a header line (`results[10]:`) followed by
+/// indented entries:
+///
+/// ```text
+/// results[10]:
+///   - title: "rustls/tokio-rustls"
+///     url: "https://github.com/rustls/tokio-rustls"
+///     content: "\u{2b50} 238 stars | ..."
+/// ```
+///
+/// Parsing is deliberately tolerant: values read to end-of-line, quotes
+/// stripped, an entry with no recognisable title or url dropped later by
+/// `parse_search_results`. TOON truncates long values with a `\u{2026}`, so a
+/// recovered snippet is a preview rather than the whole field — better
+/// than nothing, and never worse than the empty vec it replaces.
+fn toon_results(value: &Value, limit: usize) -> Vec<Value> {
+    const MAX_TEXT_BYTES: usize = 4 * 1024 * 1024;
+
+    let Some(text) = value.get("text").and_then(Value::as_str) else {
+        return Vec::new();
+    };
+    // A pathological payload cannot be worth scanning in full; bound the
+    // work so one huge response cannot stall the turn.
+    if text.len() > MAX_TEXT_BYTES {
+        return Vec::new();
+    }
+    // Only parse when the payload actually declares a result list. Without
+    // this gate, any non-JSON text (an error message, a prose answer) would
+    // be fed through the parser and could yield rows that were never
+    // results.
+    if !text
+        .lines()
+        .any(|line| line.trim_start().starts_with("results["))
+    {
+        return Vec::new();
+    }
+
+    let mut entries: Vec<Value> = Vec::new();
+    let mut current: Option<serde_json::Map<String, Value>> = None;
+    let mut in_results = false;
+    let mut base_indent: Option<usize> = None;
+
+    for raw_line in text.lines() {
+        if raw_line.trim().is_empty() {
+            continue;
+        }
+        let indent = raw_line.len() - raw_line.trim_start().len();
+        let trimmed = raw_line.trim_start().trim_end();
+        if !in_results {
+            if trimmed.starts_with("results[") {
+                in_results = true;
+                base_indent = Some(indent);
+            }
+            continue;
+        }
+        // A sibling field at the header's own indentation (`meta:`,
+        // `total:`) ends the list.
+        if let Some(base) = base_indent
+            && indent == base
+            && !trimmed.starts_with("- ")
+        {
+            break;
+        }
+        if let Some(body) = trimmed.strip_prefix("- ") {
+            if let Some(map) = current.take()
+                && !map.is_empty()
+            {
+                entries.push(Value::Object(map));
+                if entries.len() >= limit {
+                    break;
+                }
+            }
+            let mut map = serde_json::Map::new();
+            // The first field may sit on the dash line itself.
+            if let Some((key, val)) = split_toon_field(body) {
+                map.insert(key, Value::String(val));
+            }
+            current = Some(map);
+            continue;
+        }
+        if let Some(map) = current.as_mut()
+            && let Some((key, val)) = split_toon_field(trimmed)
+        {
+            map.insert(key, Value::String(val));
+        }
+    }
+    if let Some(map) = current.take()
+        && !map.is_empty()
+    {
+        entries.push(Value::Object(map));
+    }
+    entries.truncate(limit);
+    entries
+}
+
+/// Split one TOON `key: value` field. Returns `None` for a line that is not
+/// a field (a nested block header, a bare list marker).
+///
+/// Values are read to end-of-line because TOON's search rows are one field
+/// per line. A leading and trailing quote pair is stripped; TOON emits
+/// `content: "\u{2705} 4 score | 5 answers"` exactly in that shape.
+fn split_toon_field(line: &str) -> Option<(String, String)> {
+    let (key, value) = line.split_once(':')?;
+    let key = key.trim();
+    if key.is_empty() || !key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return None;
+    }
+    let value = value.trim();
+    // A nested block opens with `key:` and nothing after it — not a field.
+    let value = value
+        .strip_prefix('"')
+        .and_then(|v| v.strip_suffix('"'))
+        .unwrap_or(value)
+        .to_string();
+    Some((key.to_string(), value))
 }
 
 /// Search the web through sourcehound's `web.search` MCP tool.
@@ -378,9 +506,25 @@ async fn web_search_via(
     query: &str,
     limit: usize,
 ) -> Result<Vec<crate::tools::web_providers::WebSearchResult>> {
+    // (iter-1210) Ask for JSON, not the server's default. sourcehound's
+    // default output format is TOON — a compact indented `results[10]:`
+    // list, not JSON — so the text block carries no `results` array and
+    // `parse_search_results` found none and returned an EMPTY vec. The
+    // caller reads an empty vec as "no results" and falls through to the
+    // next provider, so a live search silently returned nothing while the
+    // server had answered in full (verified against the real binary: the
+    // same query answers with 10 results in TOON and, with `format:
+    // "json"`, both a `structuredContent` and a JSON `results` array).
+    //
+    // `format` is an optional parameter on every sourcehound tool schema
+    // ("toon|json"), so a server that does not know it must ignore it
+    // rather than fail — and the TOON fallback in `parse_search_results`
+    // covers that case. Never pass a field the server rejects outright:
+    // it would turn every search into an `isError`.
     let arguments = serde_json::json!({
         "query": query,
         "max_results": limit,
+        "format": "json",
     });
     let payload = sh.call(TOOL_SEARCH, arguments).await?;
     Ok(parse_search_results(&payload, limit))
@@ -667,6 +811,255 @@ for line in sys.stdin:
             Sourcehound::new("python3", vec![script.to_string_lossy().to_string()]),
             dir,
         )
+    }
+
+    /// A sourcehound-shaped server that IGNORES `format` and answers in TOON.
+    ///
+    /// The real server's default format is TOON — `results[10]:` followed by
+    /// indented `- key: value` entries in a plain-text block, with no
+    /// `structuredContent`. This is the shape that made a live search return
+    /// nothing: `unwrap_tool_result` could not parse it as JSON, so the
+    /// payload became `{"text": "..."}` and `parse_search_results` found no
+    /// `results` array. The mock reproduces it exactly, including a value
+    /// holding a `|` and a `:` and a trailing `...` truncation.
+    const TOON_MCP_SERVER: &str = r#"import sys, json
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        req = json.loads(line)
+    except Exception:
+        continue
+    rid = req.get('id')
+    if rid is None:
+        continue
+    method = req.get('method')
+    if method == 'initialize':
+        result = {'protocolVersion': '2025-06-18', 'capabilities': {'tools': {}}, 'serverInfo': {'name': 'sourcehound-toon', 'version': '0'}}
+    elif method == 'tools/list':
+        result = {'tools': [{'name': 'web.search', 'description': 'toon', 'inputSchema': {'type': 'object'}}]}
+    else:
+        params = req.get('params') or {}
+        toon = ("results[2]:\n"
+                "  - title: \"tokio-rs/tokio\"\n"
+                "    url: \"https://github.com/tokio-rs/tokio\"\n"
+                "    content: \"33497 stars | Rust | A runtime for writing reliable...\"\n"
+                "    score: 0.95\n"
+                "  - title: \"Tokio docs\"\n"
+                "    url: \"https://tokio.rs\"\n"
+                "    content: \"An asynchronous runtime for Rust\"\n"
+                "meta:\n"
+                "  total: 2\n")
+        result = {'content': [{'type': 'text', 'text': toon}]}
+    sys.stdout.write(json.dumps({'jsonrpc': '2.0', 'id': rid, 'result': result}) + chr(10))
+    sys.stdout.flush()
+"#;
+
+    fn toon_sourcehound() -> (Sourcehound, PathBuf) {
+        let dir = std::env::temp_dir().join(format!(
+            "operant_sourcehound_toon_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        let script = dir.join("toon_server.py");
+        std::fs::write(&script, TOON_MCP_SERVER).expect("write the TOON server");
+        (
+            Sourcehound::new("python3", vec![script.to_string_lossy().to_string()]),
+            dir,
+        )
+    }
+
+    /// The live-regression test. A search must return results when the server
+    /// answers in its default TOON format, because that is what the real
+    /// sourcehound does — and an empty vec reads to the caller as "no
+    /// results", so the tool silently reported nothing while the server had
+    /// answered.
+    #[tokio::test]
+    async fn a_toon_search_reply_yields_results_not_an_empty_vec() {
+        let (sh, _dir) = toon_sourcehound();
+        let results = web_search_via(&sh, "rust tokio runtime", 5)
+            .await
+            .expect("the search must not fail on a TOON reply");
+        assert_eq!(
+            results.len(),
+            2,
+            "both TOON entries must be recovered, got: {results:?}"
+        );
+        assert_eq!(results[0].title, "tokio-rs/tokio");
+        assert_eq!(results[0].url, "https://github.com/tokio-rs/tokio");
+        assert!(
+            results[0].snippet.contains("33497 stars"),
+            "the snippet must carry the content field: {:?}",
+            results[0].snippet
+        );
+        assert_eq!(results[1].title, "Tokio docs");
+        assert_eq!(results[1].url, "https://tokio.rs");
+    }
+
+    /// A sourcehound-shaped server that RECORDS the arguments of every
+    /// `web.search` call it receives, so a test can assert on the argument
+    /// object the tool actually sent rather than on one the test built
+    /// itself. An assertion over a hand-made `sh.call(...)` would pass even
+    /// with the production flag removed, which makes it worthless as a
+    /// guard — the same trap iter-1207's first mutation check found.
+    const RECORDING_MCP_SERVER: &str = r#"import sys, json, os
+# The recording path arrives as the single CLI argument, so two tests (or a
+# rerun in the same process) can never write to the same file.
+SEEN = sys.argv[1] if len(sys.argv) > 1 else '/tmp/operant_seen.json'
+os.makedirs(os.path.dirname(SEEN), exist_ok=True)
+def record(payload):
+    try:
+        data = []
+        if os.path.exists(SEEN):
+            with open(SEEN) as fh:
+                data = json.load(fh)
+        data.append(payload)
+        with open(SEEN, 'w') as fh:
+            json.dump(data, fh)
+    except Exception:
+        pass
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        req = json.loads(line)
+    except Exception:
+        continue
+    rid = req.get('id')
+    if rid is None:
+        continue
+    method = req.get('method')
+    if method == 'initialize':
+        result = {'protocolVersion': '2025-06-18', 'capabilities': {'tools': {}}, 'serverInfo': {'name': 'sourcehound-record', 'version': '0'}}
+    elif method == 'tools/list':
+        result = {'tools': [{'name': 'web.search', 'description': 'record', 'inputSchema': {'type': 'object'}}]}
+    else:
+        params = req.get('params') or {}
+        name = params.get('name')
+        args = params.get('arguments') or {}
+        if name == 'web.search':
+            record({'tool': name, 'args': args})
+        payload = {'count': 1, 'results': [{'title': 'Tokio docs', 'url': 'https://tokio.rs', 'content': 'async runtime'}]}
+        result = {'content': [{'type': 'text', 'text': json.dumps(payload)}], 'structuredContent': payload}
+    sys.stdout.write(json.dumps({'jsonrpc': '2.0', 'id': rid, 'result': result}) + chr(10))
+    sys.stdout.flush()
+"#;
+
+    /// `format: "json"` must travel with the call the TOOL makes.
+    ///
+    /// The recording server writes every `web.search` argument object it
+    /// receives to a file, so this asserts on production traffic. Without
+    /// the flag the server answers in TOON and the search silently returns
+    /// nothing, so this is the guard on the primary half of the fix.
+    #[tokio::test]
+    async fn every_search_call_asks_the_server_for_json() {
+        let seen_path = std::env::temp_dir().join(format!(
+            "operant_sourcehound_seen_{}_{}.json",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let _ = std::fs::remove_file(&seen_path);
+        let dir = std::env::temp_dir().join(format!(
+            "operant_sourcehound_record_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        let script = dir.join("record_server.py");
+        std::fs::write(&script, RECORDING_MCP_SERVER).expect("write the recording server");
+        // The path is passed through the environment so the script is a
+        // constant (no format! interpolation inside the raw Python).
+        let sh = Sourcehound::new(
+            "python3",
+            vec![
+                script.to_string_lossy().to_string(),
+                seen_path.to_string_lossy().to_string(),
+            ],
+        );
+        // One call through the real search path.
+        let results = web_search_via(&sh, "rust tokio runtime", 3)
+            .await
+            .expect("search");
+        assert_eq!(results.len(), 1, "{results:?}");
+
+        let recorded: Value = serde_json::from_str(
+            &std::fs::read_to_string(&seen_path).expect("the server must have recorded the call"),
+        )
+        .expect("the recording is JSON");
+        let calls = recorded.as_array().expect("a list of calls");
+        assert_eq!(
+            calls.len(),
+            1,
+            "exactly one search call was made: {calls:?}"
+        );
+        assert_eq!(
+            calls[0]["args"]["format"], "json",
+            "the tool must ask for json — sourcehound's default TOON format is unreadable by the parser: {}",
+            calls[0]["args"]
+        );
+        assert_eq!(
+            calls[0]["args"]["query"], "rust tokio runtime",
+            "the query must reach the server"
+        );
+        let _ = std::fs::remove_file(&seen_path);
+    }
+
+    /// A reachable server that answers with results still parses them, so the
+    /// JSON path is pinned too (the guard against the TOON fallback eating a
+    /// case it should not own).
+    #[test]
+    fn parse_search_results_reads_a_json_results_array() {
+        let value = json!({
+            "results": [
+                {"title": "tokio-rs/tokio", "url": "https://github.com/tokio-rs/tokio", "content": "async runtime"},
+                {"title": "", "url": "", "content": "no title and no url — dropped"},
+                {"name": "Tokio docs", "link": "https://tokio.rs", "snippet": "async runtime for Rust"}
+            ],
+            "count": 3
+        });
+        let parsed = parse_search_results(&value, 10);
+        assert_eq!(
+            parsed.len(),
+            2,
+            "a row with neither title nor url is dropped"
+        );
+        assert_eq!(parsed[0].title, "tokio-rs/tokio");
+        assert_eq!(
+            parsed[1].title, "Tokio docs",
+            "the name spelling is accepted"
+        );
+        assert_eq!(parsed[1].url, "https://tokio.rs");
+    }
+
+    /// A `text` payload that is not a TOON result list must not yield rows.
+    ///
+    /// Without the `results[` gate in `toon_results`, an ordinary prose
+    /// answer ("Here are some links: ...") would be scanned and could produce
+    /// WebSearchResults from text that was never a result set.
+    #[test]
+    fn parse_search_results_does_not_invent_rows_from_plain_text() {
+        let value = json!({"text": "Here are some links: https://tokio.rs is one of them."});
+        assert!(
+            parse_search_results(&value, 10).is_empty(),
+            "a prose text payload must not become search results"
+        );
+        let errorish = json!({"text": "results could not be retrieved: upstream timeout"});
+        assert!(
+            parse_search_results(&errorish, 10).is_empty(),
+            "an error message mentioning the word must not become search results"
+        );
     }
 
     #[tokio::test]
