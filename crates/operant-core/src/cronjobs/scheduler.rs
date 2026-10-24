@@ -894,8 +894,17 @@ impl CronScheduler {
     }
 
     fn compute_next_run(&self, job: &CronJob) -> Option<String> {
-        // Normalize first so legacy jobs stored with 5-field expressions or
-        // "every Nh" intervals (which the cron crate rejects) self-heal: the
+        // Interval phrases ("every 48h") are DURATIONS: next = now + period,
+        // computed from the RAW stored phrase. Never rewrite them into cron
+        // expressions — the pre-audit code persisted `day-of-month */2` for
+        // "every 48h", a calendar step that fired Jan 31 then Feb 1 (ponytail
+        // audit 2026-10-24). `next_run_from_schedule` applies the same rule
+        // on the DB create/backfill paths, and `cron_tool` always had it.
+        if let Some(secs) = crate::cronjobs::schedule::interval_seconds(&job.schedule) {
+            return Some((chrono::Utc::now() + chrono::Duration::seconds(secs)).to_rfc3339());
+        }
+        // Cron path: normalize first so legacy jobs stored with 5-field
+        // expressions (which the cron crate rejects) self-heal: the
         // normalized form is persisted once, then used for scheduling.
         let schedule = crate::cronjobs::normalize_schedule(&job.schedule).ok()?;
         if schedule != job.schedule {

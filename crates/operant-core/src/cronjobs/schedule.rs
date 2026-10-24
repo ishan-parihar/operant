@@ -1,27 +1,37 @@
-//! Cron schedule normalization.
+//! Cron schedule validation and next-run computation.
 //!
-//! The scheduler parses schedules with `cron::Schedule::from_str`, which
-//! requires a 6-field expression (seconds minutes hours day-of-month month
-//! day-of-week). User-facing surfaces historically documented friendlier
-//! formats ("0 9 * * *", "every 6h") that the crate silently rejects — jobs
-//! created with those strings never computed a `next_run_at` and never
-//! fired. This module normalizes all accepted forms down to a parseable
-//! 6-field expression:
+//! Two schedule families, with different next-run semantics:
 //!
-//!   * 6-field cron expression   → passed through unchanged
-//!   * 5-field cron expression   → seconds `0` prepended ("0 9 * * *" → "0 0 9 * * *")
-//!   * "every N<s|m|h|d|w>"      → interval expansion (see `every_interval`)
+//!   * **Cron expressions** (5-field `"0 9 * * *"` or 6-field
+//!     `"0 0 9 * * *"`) are calendar rules evaluated in **UTC** — `0 9`
+//!     fires at 09:00 UTC. 5-field input is canonicalized to the 6-field
+//!     form the `cron` crate parses, and that canonical form is what gets
+//!     persisted.
+//!   * **Interval phrases** (`"every N<s|m|h|d|w>"`) are **durations**, not
+//!     calendar rules: next run is exactly `period` after the previous
+//!     computation. The phrase is persisted RAW — never rewritten into a
+//!     cron day-of-month step. (ponytail audit 2026-10-24: the old
+//!     expansion turned "every 48h" into `day-of-month */2`, a calendar
+//!     step that fired Jan 31 then Feb 1, and "every 2w" grew a 3-day gap
+//!     across February. The agent-side `cron_tool::compute_first_run`
+//!     always had the duration semantics; this module now agrees with it.)
 //!
-//! Callers: `cmd_cron create` and `suggestions accept` validate/normalize
-//! before persisting; the scheduler re-normalizes at compute time so
-//! previously-created jobs self-heal on their next tick.
+//! Callers: `cmd_cron create`, `cmd_cron blueprint` and `suggestions
+//! accept` validate/normalize before persisting; the scheduler and the DB
+//! self-heal paths recompute through [`next_run_from_schedule`], so every
+//! consumer applies the same rule.
 
 use crate::error::Error;
 use cron::Schedule;
 use std::str::FromStr;
 
-/// Normalize a user-supplied schedule string to a 6-field cron expression
-/// the `cron` crate can parse. Errors when nothing usable can be produced.
+/// Validate a user-supplied schedule string and canonicalize it for
+/// storage. Errors when nothing usable can be produced.
+///
+/// Returns the 6-field cron form for cron input, and the trimmed phrase
+/// unchanged for interval input — the phrase IS the canonical form, because
+/// rewriting it to a cron expression would change its meaning (see the
+/// module doc).
 pub fn normalize_schedule(input: &str) -> Result<String, Error> {
     let trimmed = input.trim();
     if trimmed.is_empty() {
@@ -37,11 +47,9 @@ pub fn normalize_schedule(input: &str) -> Result<String, Error> {
     {
         return Ok(normalized);
     }
-    // Natural language "every <n><unit>".
-    if let Some(normalized) = every_interval(trimmed)
-        && Schedule::from_str(&normalized).is_ok()
-    {
-        return Ok(normalized);
+    // Interval phrase — a duration; kept raw (see module doc).
+    if interval_seconds(trimmed).is_some() {
+        return Ok(trimmed.to_string());
     }
     Err(Error::Agent(format!(
         "invalid cron schedule '{input}' — expected a 5/6-field expression \
@@ -59,49 +67,49 @@ fn five_to_six(expr: &str) -> Result<String, Error> {
     }
 }
 
-/// Expand "every `N<unit>`" into a 6-field expression. `None` when the
-/// phrasing is not understood or the interval is out of range.
-fn every_interval(input: &str) -> Option<String> {
-    let lower = input.to_ascii_lowercase();
+/// The duration in seconds of an interval phrase (`every N<s|m|h|d|w>`,
+/// case-insensitive, unit names or abbreviations). `None` when the input is
+/// not an interval phrase or has a non-positive count.
+///
+/// Every accepted count is a valid duration — there are no calendar-shape
+/// restrictions (the old mapping rejected "every 25h" and bent "every 30d"
+/// into monthly-on-the-1st).
+pub fn interval_seconds(input: &str) -> Option<i64> {
+    let lower = input.trim().to_ascii_lowercase();
     let rest = lower.strip_prefix("every ")?.trim();
     let (num, unit) = split_num_unit(rest)?;
-    match unit {
-        "s" | "sec" | "secs" | "second" | "seconds" => Some(format!("*/{} * * * * *", num)),
-        "m" | "min" | "mins" | "minute" | "minutes" => Some(format!("0 */{} * * * *", num)),
-        "h" | "hr" | "hrs" | "hour" | "hours" => {
-            if num == 24 {
-                Some("0 0 0 * * *".to_string()) // daily at midnight
-            } else if num < 24 {
-                Some(format!("0 0 */{} * * *", num))
-            } else if num % 24 == 0 {
-                // e.g. every 48h → every 2 days
-                Some(format!("0 0 0 */{} * * *", num / 24))
-            } else {
-                None
-            }
-        }
-        "d" | "day" | "days" => match num {
-            1 => Some("0 0 0 * * *".to_string()),  // daily at midnight
-            7 => Some("0 0 0 * * 7".to_string()),  // weekly, Sunday (DOW 7)
-            30 => Some("0 0 0 1 * *".to_string()), // monthly, 1st
-            n if n < 31 => Some(format!("0 0 0 */{} * *", n)),
-            _ => None,
-        },
-        "w" | "wk" | "wks" | "week" | "weeks" => match num {
-            1 => Some("0 0 0 * * 7".to_string()), // weekly, Sunday (DOW 7)
-            n if n < 5 => Some(format!("0 0 0 */{} * *", n * 7)),
-            _ => None,
-        },
-        _ => None,
+    if num == 0 {
+        return None;
     }
+    let secs = match unit {
+        "s" | "sec" | "secs" | "second" | "seconds" => num as i64,
+        "m" | "min" | "mins" | "minute" | "minutes" => num as i64 * 60,
+        "h" | "hr" | "hrs" | "hour" | "hours" => num as i64 * 3600,
+        "d" | "day" | "days" => num as i64 * 86400,
+        "w" | "wk" | "wks" | "week" | "weeks" => num as i64 * 604800,
+        _ => return None,
+    };
+    Some(secs)
 }
 
-/// Compute the next fire time (RFC3339) for a schedule string, normalizing
-/// it first. `None` when the schedule cannot be normalized or parsed.
+/// Compute the next fire time (RFC3339, UTC) for a schedule string.
+/// `None` when the schedule cannot be parsed.
 pub fn next_run_from_schedule(schedule: &str) -> Option<String> {
+    next_run_from_schedule_at(schedule, chrono::Utc::now()).map(|t| t.to_rfc3339())
+}
+
+/// [`next_run_from_schedule`] with an injectable clock, so the boundary
+/// behaviour (month ends — the bug the 2026-10-24 audit fixed) is testable.
+fn next_run_from_schedule_at(
+    schedule: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Option<chrono::DateTime<chrono::Utc>> {
+    if let Some(secs) = interval_seconds(schedule) {
+        return Some(now + chrono::Duration::seconds(secs));
+    }
     let normalized = normalize_schedule(schedule).ok()?;
     let parsed = Schedule::from_str(&normalized).ok()?;
-    parsed.upcoming(chrono::Utc).next().map(|t| t.to_rfc3339())
+    parsed.after(&now).next()
 }
 
 /// Split "`<digits><unit>`" (e.g. "6h", "30d") into (6, "h").
@@ -137,45 +145,37 @@ mod tests {
     }
 
     #[test]
-    fn every_hours_interval() {
-        let out = normalize_schedule("every 6h").unwrap();
-        assert_eq!(out, "0 0 */6 * * *");
-        assert!(parses(&out));
-
-        let daily = normalize_schedule("every 24h").unwrap();
-        assert_eq!(daily, "0 0 0 * * *");
-        assert!(parses(&daily));
-
-        let weekly = normalize_schedule("every 168h").unwrap();
-        assert_eq!(weekly, "0 0 0 */7 * * *");
-        assert!(parses(&weekly));
+    fn every_phrases_stay_raw_they_are_durations() {
+        // The phrase is the canonical form: rewriting it to a cron
+        // day-of-month step is what made "every 48h" fire Jan 31 then
+        // Feb 1 (audit finding 4).
+        for input in ["every 6h", "every 24h", "every 168h", "every 30d"] {
+            let out = normalize_schedule(input).unwrap();
+            assert_eq!(out, input, "interval phrases must not be rewritten");
+        }
     }
 
     #[test]
-    fn every_days_interval() {
-        let daily = normalize_schedule("every 1d").unwrap();
-        assert_eq!(daily, "0 0 0 * * *");
-
-        let weekly = normalize_schedule("every 7d").unwrap();
-        assert_eq!(weekly, "0 0 0 * * 7");
-
-        let monthly = normalize_schedule("every 30d").unwrap();
-        assert_eq!(monthly, "0 0 0 1 * *");
-    }
-
-    #[test]
-    fn every_minutes_and_seconds() {
-        let m = normalize_schedule("every 5m").unwrap();
-        assert_eq!(m, "0 */5 * * * *");
-
-        let s = normalize_schedule("every 15s").unwrap();
-        assert_eq!(s, "*/15 * * * * *");
+    fn interval_seconds_is_the_true_duration() {
+        assert_eq!(interval_seconds("every 15s"), Some(15));
+        assert_eq!(interval_seconds("every 5m"), Some(300));
+        assert_eq!(interval_seconds("every 6h"), Some(21_600));
+        assert_eq!(interval_seconds("every 48h"), Some(172_800));
+        assert_eq!(interval_seconds("every 1d"), Some(86_400));
+        assert_eq!(interval_seconds("every 30d"), Some(2_592_000));
+        assert_eq!(interval_seconds("every 2w"), Some(1_209_600));
+        // Counts the old calendar mapping rejected are plain durations now.
+        assert_eq!(interval_seconds("every 25h"), Some(90_000));
+        // Not interval phrases at all.
+        assert_eq!(interval_seconds("0 9 * * *"), None);
+        assert_eq!(interval_seconds("banana"), None);
     }
 
     #[test]
     fn case_and_whitespace_insensitive() {
         let out = normalize_schedule("  Every 6H  ").unwrap();
-        assert_eq!(out, "0 0 */6 * * *");
+        assert_eq!(out, "Every 6H");
+        assert_eq!(interval_seconds(&out), Some(21_600));
     }
 
     #[test]
@@ -187,7 +187,7 @@ mod tests {
     }
 
     #[test]
-    fn every_normalized_output_always_parses() {
+    fn every_normalized_output_always_resolves() {
         for input in [
             "0 0 9 * * *",
             "0 9 * * *",
@@ -201,8 +201,47 @@ mod tests {
             "every 15s",
             "every 2w",
         ] {
-            let out = normalize_schedule(input).unwrap();
-            assert!(parses(&out), "normalized '{input}' -> '{out}' must parse");
+            let out = normalize_schedule(input)
+                .unwrap_or_else(|e| panic!("'{input}' must normalize: {e}"));
+            assert!(
+                parses(&out) || interval_seconds(&out).is_some(),
+                "normalized '{input}' -> '{out}' must resolve as cron or duration"
+            );
         }
+    }
+
+    /// The audit's concrete case: a fire at Jan 31 23:00 UTC under the old
+    /// day-of-month expansion (`0 0 0 */2 * * *`) scheduled the next run for
+    /// Feb 1 00:00 — ONE hour later, and the February cadence then bunched
+    /// against the month end. A duration schedules Feb 2 23:00.
+    #[test]
+    fn every_48h_crossing_a_month_end_is_48_hours() {
+        let now = chrono::DateTime::parse_from_rfc3339("2026-01-31T23:00:00Z")
+            .expect("fixed instant")
+            .with_timezone(&chrono::Utc);
+        let next = next_run_from_schedule_at("every 48h", now).expect("resolves");
+        assert_eq!(next.to_rfc3339(), "2026-02-02T23:00:00+00:00");
+    }
+
+    /// The sibling case: "every 2w" under `day-of-month */14` fired Jan 29
+    /// then Feb 1 — three days apart. A duration is fourteen days.
+    #[test]
+    fn every_2w_crossing_february_is_fourteen_days() {
+        let now = chrono::DateTime::parse_from_rfc3339("2026-01-29T08:00:00Z")
+            .expect("fixed instant")
+            .with_timezone(&chrono::Utc);
+        let next = next_run_from_schedule_at("every 2w", now).expect("resolves");
+        assert_eq!(next.to_rfc3339(), "2026-02-12T08:00:00+00:00");
+    }
+
+    /// Cron expressions keep their calendar semantics: 09:00 UTC daily
+    /// means the next 09:00 UTC after `now`, whatever the month boundary.
+    #[test]
+    fn cron_forms_stay_calendar_rules() {
+        let now = chrono::DateTime::parse_from_rfc3339("2026-01-31T23:30:00Z")
+            .expect("fixed instant")
+            .with_timezone(&chrono::Utc);
+        let next = next_run_from_schedule_at("0 9 * * *", now).expect("resolves");
+        assert_eq!(next.to_rfc3339(), "2026-02-01T09:00:00+00:00");
     }
 }
