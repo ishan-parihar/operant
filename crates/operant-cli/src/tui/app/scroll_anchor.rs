@@ -7,10 +7,20 @@
 //   * Bookmark (Ctrl+G) — an explicit spot they choose and can come back to.
 //   * Anchor — implicit. While the reader is parked above the tail, hold the
 //     line they are looking at still when new output reflows the content above
-//     it (jcode #1412). Without it the view jumps on every append, because
-//     `scroll_offset` counts rows *from the bottom*: `top_row =
-//     max_scroll - scroll_offset`, so a taller transcript slides the whole
-//     viewport down by the growth even though the offset never changed.
+//     it (jcode #1412). Without it the view jumps on every append, because a
+//     growing transcript pushes every row's index up.
+//
+//     (iter-1213) The header above used to claim `scroll_offset` counts rows
+//     FROM THE BOTTOM with `top_row = max_scroll - scroll_offset`. That is
+//     stale and it is what made the scroll keys look broken: the live renderer
+//     uses the offset as the top row DIRECTLY (`scroll = user_scroll.min(
+//     max_scroll)`, ui_viewport.rs:404) and a tail-follow frame publishes
+//     `max_scroll`, so 0 IS the tail and `max_scroll` IS the top. Stale
+//     comments downstream of this one repeated the same inversion
+//     ("jumped back up N line(s)", "0 = tail"), and the key handler followed
+//     the stale text rather than the renderer. Measure the renderer, not the
+//     comment: `note_user_scroll` already stores `top_row = self.scroll_offset`
+//     unmodified, which only type-checks against the renderer's reading.
 //   * Resize anchor — the same promise across a terminal resize, which
 //     rewraps every line. A row index cannot survive that (row 12 at width
 //     120 is not row 12 at width 60), so this one names CONTENT instead, and
@@ -158,6 +168,40 @@ impl App {
     /// from before it moved; it is kept in the signature because every caller
     /// has it in hand and it names the moment the pin is taken, but the pin is
     /// the row the NEXT frame paints (see the body).
+    /// (iter-1213) How many rows one PageUp/PageDown covers.
+    ///
+    /// The transcript viewport's own height minus a couple of rows of
+    /// overlap, so a page jump keeps a line or two of context and the reader
+    /// can still see which way they were travelling. The step used to be a
+    /// hardcoded 10, which is a "page" only by accident on a 12-row terminal
+    /// and a third of a screen on a 40-row one.
+    ///
+    /// Reads the rect the LAST frame published rather than asking the
+    /// terminal: a key event arrives between frames, so the terminal's size
+    /// is current but the geometry that produced the transcript on screen is
+    /// the previous frame's. Scroll to the geometry being looked at, not the
+    /// geometry about to be drawn.
+    ///
+    /// Falls back to 10 when no frame has published a rect yet (a headless
+    /// App with no renderer), which is the behaviour the hardcoded constant
+    /// gave every case before.
+    pub(crate) fn scroll_page_step(&self) -> usize {
+        let area = crate::tui::operant_ui::chat_content_area();
+        // A zero HEIGHT is "no frame has published yet" (the doc on
+        // `chat_content_area` calls the initial rect zero-sized), and a frame
+        // that skipped the transcript layout lands here too. Judge the height
+        // alone: a rect can be wide but empty (width 100, height 0), and
+        // counting that as published yields a 1-row "page" that swallows the
+        // keypress whole — measured in this iteration's own test when a probe
+        // published a 100x0 rect and got a step of 1.
+        let published = area.height > 0;
+        if published {
+            (area.height as usize).saturating_sub(2).max(1)
+        } else {
+            10
+        }
+    }
+
     pub(crate) fn note_user_scroll(&mut self, prev_offset: usize) {
         if self.auto_scroll {
             // Pinned to the tail: auto-follow already owns the position, so

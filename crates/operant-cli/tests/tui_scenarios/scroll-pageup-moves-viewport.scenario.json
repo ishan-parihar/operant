@@ -27,7 +27,8 @@
       "assert_screen": [
         "contains:L061",
         "not-contains:L199"
-      ]
+      ],
+      "notes": "**iter-1213 ROOT-CAUSE CORRECTION (2026-10-24): the long top-level note above blames the plain `--dump-screen` path for painting a stale frame and concludes that \"with the input still focused the PageUps are swallowed at all\" is a harness limitation. THE HARNESS WAS NEVER THE PROBLEM — the key gate was. PgUp/PgDn were bound on `self.focus == FocusTarget::Transcript`, a state reachable only by a mouse click on the transcript (mouse.rs:1058) with no keyboard way in, so an operator who only typed got no scroll at all. They are unconditional now (jcode has no such focus state machine either). The three plain pageups THIS variant sends are therefore the live path again, and the third press reaching L061 is the coverage this golden always claimed to have. The authoritative coverage remains `tui::app::tests::keyboard_scroll_reachability_tests`, all mutation-proven.**"
     }
   ]
 }

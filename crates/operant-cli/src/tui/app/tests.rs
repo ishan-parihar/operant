@@ -6558,3 +6558,179 @@ mod branch_list_tests {
         assert!(app.session_branching.visible);
     }
 }
+
+// ---------------------------------------------------------------------------
+// iter-1213: keyboard scroll ladder reachability (PgUp/PgDn/Shift+Home/Shift+End)
+// ---------------------------------------------------------------------------
+//
+// The 2026-10-24 operator report was blunt and correct: "none are working",
+// where the previous iteration had shipped PgUp/PgDn plus Home/End. The arms
+// existed and compiled; the gate they hung on (`self.focus ==
+// FocusTarget::Transcript`) is reachable ONLY by a mouse click on the
+// transcript (mouse.rs:1058) and has no keyboard way in, so every key was dead
+// for a keyboard-only operator while the code looked implemented. These tests
+// drive the real key handler from the DEFAULT focus (`FocusTarget::Input`)
+// because that is the state an operator is in when they type.
+#[cfg(test)]
+mod keyboard_scroll_reachability_tests {
+    use super::*;
+
+    /// The frame-published transcript height the renderer found the messages in.
+    fn publish_transcript_height(height: u16) {
+        crate::tui::operant_ui::publish_chat_content_area(ratatui::prelude::Rect::new(
+            0, 0, 100, height,
+        ));
+    }
+
+    /// A 30-row transcript with a 14-row content band, tail-following: the
+    /// reader is parked at the top row the tail resolved to (`max_scroll` = 16).
+    fn app_at_tail(max: usize) -> App {
+        let mut app = make_app();
+        crate::tui::operant_ui::set_last_max_scroll(max);
+        app.auto_scroll = false;
+        app.last_render_scroll_offset.set(max as u16);
+        app
+    }
+
+    #[test]
+    fn page_up_and_page_down_scroll_while_the_prompt_input_has_focus() {
+        // Focus is `Input` (init.rs:297) — the state the operator is in while
+        // typing, and the state that must not require a mouse detour.
+        assert_eq!(make_app().focus, crate::tui::app::enums::FocusTarget::Input);
+        crate::tui::operant_ui::set_last_max_scroll(200);
+        publish_transcript_height(30);
+        let mut app = make_app();
+        app.auto_scroll = true;
+
+        app.handle_key_event(press_key(KeyCode::PageUp, KeyModifiers::NONE));
+
+        assert!(
+            app.scroll_offset > 0,
+            "PageUp must move the view while the input has focus; it read as dead by a keyboard-only operator"
+        );
+        assert!(
+            !app.auto_scroll,
+            "paging up stops auto-follow so new messages do not yank the view back"
+        );
+        let parked = app.scroll_offset;
+        app.handle_key_event(press_key(KeyCode::PageDown, KeyModifiers::NONE));
+        assert!(
+            app.scroll_offset < parked,
+            "PageDown brings the reader back down the same ladder"
+        );
+        crate::tui::operant_ui::set_last_max_scroll(0);
+    }
+
+    #[test]
+    fn shift_home_and_shift_end_reach_the_top_and_back_to_the_tail() {
+        crate::tui::operant_ui::set_last_max_scroll(174);
+        let mut app = app_at_tail(174);
+
+        app.handle_key_event(press_key(KeyCode::Home, KeyModifiers::SHIFT));
+        assert_eq!(
+            app.scroll_offset, 174,
+            "Shift+Home takes the whole distance at once to the top of the transcript"
+        );
+        assert!(!app.auto_scroll, "reaching the top parks the view");
+
+        app.handle_key_event(press_key(KeyCode::End, KeyModifiers::SHIFT));
+        assert_eq!(app.scroll_offset, 0, "Shift+End lands on the tail");
+        assert!(app.auto_scroll, "and re-enables following new messages");
+
+        crate::tui::operant_ui::set_last_max_scroll(0);
+    }
+
+    #[test]
+    fn plain_home_and_end_still_edit_the_prompt_cursor() {
+        // The plain keys were never the transcript's to take: they are the
+        // composer's caret moves, and making them scroll too was the defect
+        // that got reverted in this same iteration. A Shift press is what now
+        // reaches the transcript, so typing must be untouched.
+        let mut app = make_app();
+        app.prompt_input.text = "hello".into();
+        app.prompt_input.cursor = 3;
+
+        app.handle_key_event(press_key(KeyCode::Home, KeyModifiers::NONE));
+        assert_eq!(app.prompt_input.cursor, 0, "Home is a cursor move");
+        app.handle_key_event(press_key(KeyCode::End, KeyModifiers::NONE));
+        assert_eq!(
+            app.prompt_input.cursor, 5,
+            "End is a cursor move, not a transcript jump"
+        );
+        assert_eq!(
+            app.scroll_offset, 0,
+            "plain Home/End never touch the scroll"
+        );
+    }
+
+    #[test]
+    fn the_page_step_measures_the_viewport_it_is_scrolling() {
+        // The step used to be a hardcoded 10, which is a "page" by accident on
+        // a 12-row terminal and a third of a screen on a 40-row one.
+        crate::tui::operant_ui::set_last_max_scroll(300);
+        publish_transcript_height(26);
+        let app = make_app();
+        assert_eq!(
+            app.scroll_page_step(),
+            24,
+            "a 26-row content band pages 24 rows (two rows of overlap)"
+        );
+
+        publish_transcript_height(12);
+        assert_eq!(app.scroll_page_step(), 10, "a small terminal pages less");
+
+        publish_transcript_height(1);
+        assert_eq!(
+            app.scroll_page_step(),
+            1,
+            "a one-row band never degenerates to a zero step, which would make PageUp a no-op"
+        );
+
+        publish_transcript_height(0);
+        assert_eq!(
+            app.scroll_page_step(),
+            10,
+            "no published frame falls back to the historic constant"
+        );
+        crate::tui::operant_ui::set_last_max_scroll(0);
+    }
+
+    #[test]
+    fn paging_up_saturates_at_the_real_ceiling_instead_of_drifting_past_it() {
+        // `scroll_offset` is a TOP ROW (ui_viewport.rs resolves
+        // `scroll = user_scroll.min(max_scroll)`), so unbounded addition ran
+        // far past the transcript and every later press was clamped away by
+        // the reconcile: the ladder looked dead mid-climb.
+        crate::tui::operant_ui::set_last_max_scroll(24);
+        publish_transcript_height(30);
+        let mut app = make_app();
+        app.auto_scroll = false;
+
+        // One frame per press, in the order the run loop produces it: the key
+        // runs, the frame paints the row the reader landed on, the reconcile
+        // clamps against the frame's true max. Driving the key in isolation
+        // measures nothing — the ceiling is the reconcile's job, not the
+        // handler's.
+        let step = app.scroll_page_step();
+        let mut expected = 0usize;
+        for press in 0..10 {
+            expected = (expected + step).min(24);
+            app.handle_key_event(press_key(KeyCode::PageUp, KeyModifiers::NONE));
+            app.last_render_scroll_offset.set(expected as u16);
+            app.reconcile_scroll_anchor();
+            assert_eq!(
+                app.scroll_offset, expected,
+                "press {press}: the offset follows the ladder and is capped at the real ceiling"
+            );
+            assert!(
+                app.scroll_offset <= 24,
+                "press {press}: the offset may never overshoot the transcript"
+            );
+        }
+        assert_eq!(
+            app.scroll_offset, 24,
+            "the climb parks at the real ceiling rather than drifting past it"
+        );
+        crate::tui::operant_ui::set_last_max_scroll(0);
+    }
+}
