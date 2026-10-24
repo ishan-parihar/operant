@@ -35,6 +35,18 @@ POOL_DIR="${OPERANT_BUNDLED_SKILLS_DIR:-$SCRIPT_DIR/../skills}"
 #   HERMES_HOME        → operant home (default `~/.operant`)
 SKILLS_DIR="${HERMES_SKILLS_DIR:-${HERMES_HOME:-$HOME/.operant}/skills}"
 
+# A literal `$` in the resolved path means an env var arrived unexpanded
+# (observed 2026-10-24: one run seeded 658 files into a literal `$HOME/`
+# directory inside the repo root). Refuse instead of writing a tree the
+# runtime will never read.
+if [[ "$SKILLS_DIR" == *'$'* || "$POOL_DIR" == *'$'* ]]; then
+  echo "install-skills: resolved path still contains an unexpanded '\$':" >&2
+  echo "  SKILLS_DIR=$SKILLS_DIR" >&2
+  echo "  POOL_DIR=$POOL_DIR" >&2
+  echo "  Check HERMES_SKILLS_DIR / HERMES_HOME / OPERANT_BUNDLED_SKILLS_DIR." >&2
+  exit 1
+fi
+
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 # Copy a single skill dir into the flat user skills dir (skip existing unless
 # forced). Mirrors cmd_skills::seed_bundled_skills semantics.
