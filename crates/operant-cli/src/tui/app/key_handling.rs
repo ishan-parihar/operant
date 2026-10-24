@@ -1151,13 +1151,28 @@ impl App {
             // (plan 05) y/n in the status line; any other key cancels it.
             KeyCode::Char('y') | KeyCode::Char('Y') if self.pending_rewind_confirm.is_some() => {
                 let n = self.pending_rewind_confirm.take();
-                // Turn n → mark index n-1 (marks are prompt-ordered).
                 if let Some(n) = n {
                     let marks_len = self.rewind_selector.entries.len();
+                    // `/rewind <n>` counts back from the NEWEST prompt, not
+                    // up from the oldest: "rewind to my last 3rd question"
+                    // is the question an operator actually asks, and the
+                    // absolute-index reading made every n>1 land on a turn
+                    // near the session's start. (jcode resolves the same
+                    // syntax as an absolute index; this is a deliberate
+                    // divergence, and the status notice names it.)
+                    //
+                    // The last-N arithmetic already exists for /undo
+                    // (tui_app.rs marks.iter().rev().nth(n - 1)); this is the
+                    // same rule applied to the selector's entries so both
+                    // surfaces agree.
                     if n == 0 || n > marks_len {
                         self.set_status_notice(format!("No prompt #{n} to rewind to."));
                     } else {
-                        let entry = self.rewind_selector.entries[n - 1].clone();
+                        // entries are prompt-ordered oldest-first, so the
+                        // Nth-last is at len-n. Both operands are bounded
+                        // above, and the borrow keeps `marks_len` intact.
+                        let index = marks_len - n;
+                        let entry = self.rewind_selector.entries[index].clone();
                         if entry.compacted {
                             self.set_status_notice(
                                 "That turn was folded by compaction — pick a later one."

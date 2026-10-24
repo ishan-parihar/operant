@@ -232,7 +232,7 @@ const REGISTERED_COMMANDS: &[RegisteredCommand] = &[
     RegisteredCommand::hidden("/clear-view", "Alias for /cls"),
     RegisteredCommand::public(
         "/rewind",
-        "Rewind to a previous prompt (forks the session; old path kept)",
+        "Rewind to the Nth-last prompt (forks the session; old path kept): /rewind [N]",
     ),
     RegisteredCommand::public("/plan", "Create a plan-only response as a plan card"),
     RegisteredCommand::public("/improve", "Autonomously improve the repository"),
@@ -290,7 +290,10 @@ const REGISTERED_COMMANDS: &[RegisteredCommand] = &[
     RegisteredCommand::public("/bundle", "Run a saved command bundle"),
     RegisteredCommand::public("/changes", "Show the current turn's diff"),
     RegisteredCommand::public("/connect", "Open the provider connect dialog"),
-    RegisteredCommand::public("/copy", "Copy the last response to the clipboard"),
+    RegisteredCommand::public(
+        "/copy",
+        "Copy the last N messages to the clipboard (default 1): /copy [N]",
+    ),
     RegisteredCommand::public("/cost", "Show cost and token usage for the session"),
     RegisteredCommand::public("/doctor", "Run the health checks"),
     RegisteredCommand::public("/exit", "Quit (alias of /quit)"),

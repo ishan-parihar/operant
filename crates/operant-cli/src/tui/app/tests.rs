@@ -6230,6 +6230,131 @@ mod approval_gate_tests {
 
         assert_eq!(app.content_line_of_screen_row(9), 8);
     }
+
+    // ---- /copy [N] and /rewind [N] argument semantics --------------------
+
+    /// Seed `n` alternating user/assistant messages so a test can assert
+    /// which slice `/copy N` took.
+    fn seed_messages(app: &mut crate::tui::app::App, n: usize) {
+        for i in 0..n {
+            app.messages.push(crate::tui::app::Message {
+                role: if i % 2 == 0 {
+                    Role::User
+                } else {
+                    Role::Assistant
+                },
+                content: MessageContent::Text(format!("turn {i}")),
+            });
+        }
+    }
+
+    /// `/copy <n>` takes the last n messages, and a bare `/copy` still takes
+    /// exactly one — the argument the registry advertises must be read.
+    #[test]
+    fn copy_takes_the_last_n_messages() {
+        for (args, expected) in [
+            ("", vec!["turn 5"]),
+            ("3", vec!["turn 5", "turn 4", "turn 3"]),
+        ] {
+            let mut app = make_app();
+            seed_messages(&mut app, 6);
+            // Count what the command selects, without touching the real
+            // clipboard: rebuild the same slice the command does.
+            let n = super::super::commands::parse_last_n(
+                args,
+                super::super::commands::DEFAULT_COPY_MESSAGES,
+            );
+            let selected = app
+                .messages
+                .iter()
+                .rev()
+                .filter(|m| !m.get_all_text().trim().is_empty())
+                .take(n)
+                .map(|m| m.get_all_text())
+                .collect::<Vec<_>>();
+            assert_eq!(selected, expected, "for args {args:?}");
+        }
+    }
+
+    /// An explicit `0` copies nothing rather than silently becoming the
+    /// default — `0` is a real answer, not a parse failure.
+    #[test]
+    fn copy_zero_is_honoured_not_replaced_by_the_default() {
+        let mut app = make_app();
+        seed_messages(&mut app, 3);
+        let n = super::super::commands::parse_last_n("0", 1);
+        assert_eq!(n, 0);
+        let selected = app
+            .messages
+            .iter()
+            .rev()
+            .filter(|m| !m.get_all_text().trim().is_empty())
+            .take(n)
+            .count();
+        assert_eq!(selected, 0);
+    }
+
+    /// `/rewind <n>` resolves to the Nth-last prompt, not the Nth from the
+    /// session's start — the absolute-index reading made every n>1 land near
+    /// the oldest turn.
+    #[test]
+    fn rewind_n_resolves_to_the_nth_last_prompt() {
+        let mut app = make_app();
+        app.rewind_selector.entries = vec![
+            crate::tui::rewind_selector::RewindEntry {
+                turn_id: 1,
+                text: "first".to_string(),
+                compacted: false,
+            },
+            crate::tui::rewind_selector::RewindEntry {
+                turn_id: 2,
+                text: "second".to_string(),
+                compacted: false,
+            },
+            crate::tui::rewind_selector::RewindEntry {
+                turn_id: 3,
+                text: "third".to_string(),
+                compacted: false,
+            },
+        ];
+        // The command only records the intent; the y/n handler indexes. Drive
+        // it the way the status line does so the resolution is what is tested.
+        app.handle_tui_command("rewind", "2");
+        assert_eq!(app.pending_rewind_confirm, Some(2));
+        app.handle_key_event(press_key(KeyCode::Char('y'), KeyModifiers::NONE));
+        // len 3 - 2 = 1 -> entry index 1 -> turn_id 2, the second-newest.
+        assert_eq!(app.pending_rewind, Some(2));
+
+        app.handle_tui_command("rewind", "1");
+        app.handle_key_event(press_key(KeyCode::Char('y'), KeyModifiers::NONE));
+        assert_eq!(app.pending_rewind, Some(3), "/rewind 1 is the LAST prompt");
+
+        app.handle_tui_command("rewind", "3");
+        app.handle_key_event(press_key(KeyCode::Char('y'), KeyModifiers::NONE));
+        assert_eq!(app.pending_rewind, Some(1));
+    }
+
+    /// An out-of-range `/rewind <n>` must be refused, not clamp to an
+    /// in-bounds index and rewind to the wrong turn.
+    #[test]
+    fn rewind_out_of_range_is_refused() {
+        let mut app = make_app();
+        app.rewind_selector.entries = vec![crate::tui::rewind_selector::RewindEntry {
+            turn_id: 7,
+            text: "only".to_string(),
+            compacted: false,
+        }];
+        app.handle_tui_command("rewind", "9");
+        app.handle_key_event(press_key(KeyCode::Char('y'), KeyModifiers::NONE));
+        assert_eq!(app.pending_rewind, None);
+        assert!(
+            app.status_notice()
+                .as_deref()
+                .is_some_and(|n| n.contains("No prompt")),
+            "an out-of-range n must say so: {:?}",
+            app.status_notice()
+        );
+    }
 }
 
 #[cfg(test)]

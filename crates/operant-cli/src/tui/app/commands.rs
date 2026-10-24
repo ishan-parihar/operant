@@ -2,6 +2,37 @@
 
 use super::*;
 
+/// How many messages `/copy` takes when given no argument. One, so the
+/// bare `/copy` an operator already relies on still copies the last
+/// response.
+pub(crate) const DEFAULT_COPY_MESSAGES: usize = 1;
+
+/// Parse a `[N]` slash-command argument as "the last N", counting back from
+/// the newest entry.
+///
+/// `default` is used when the argument is absent, blank, or unparseable —
+/// a quoted note or a stray word must not turn the command into an error,
+/// because the argument is advisory and the command's job is still useful
+/// without it. `0` means "nothing to copy", not "the default", so an
+/// explicit `0` is honoured rather than silently upgraded.
+pub(crate) fn parse_last_n(args: &str, default: usize) -> usize {
+    let trimmed = args.trim();
+    if trimmed.is_empty() {
+        return default;
+    }
+    trimmed.parse::<usize>().unwrap_or(default)
+}
+
+/// The role label a copied message carries, so a pasted multi-message
+/// selection still reads as a conversation rather than one run-on text.
+fn role_label(role: &Role) -> &'static str {
+    match role {
+        Role::User => "You",
+        Role::Assistant => "Assistant",
+        Role::System => "System",
+    }
+}
+
 impl App {
     pub fn handle_tui_command(&mut self, cmd: &str, args: &str) -> bool {
         self.intercept_slash_command_with_args_impl(cmd, args)
@@ -876,34 +907,57 @@ impl App {
                 true
             }
             "copy" => {
-                // Copy last assistant message to clipboard. Attempt arboard; fall back to notification.
-                let last = self
+                // `/copy [N]` copies the last N transcript messages to the
+                // clipboard, most recent first, each labelled by role. The
+                // registry advertises `[number]`, and an unread argument made
+                // that a lie: the command always copied exactly one assistant
+                // message. jcode has no `/copy` at all, so these semantics are
+                // operant's own — last-N-by-recency, matching how an operator
+                // reads the tail of a conversation.
+                let n = parse_last_n(args, DEFAULT_COPY_MESSAGES);
+                let selected = self
                     .messages
                     .iter()
                     .rev()
-                    .find(|m| m.role == Role::Assistant)
-                    .map(|m| m.get_all_text());
-                if let Some(text) = last {
-                    // One clipboard chain, one report: the outcome names the
-                    // mechanism that worked, or every mechanism that did not
-                    // and why.
-                    let outcome = crate::tui::clipboard::copy(&text);
-                    if outcome.is_copied() {
-                        self.push_notice(NotificationKind::Info, outcome.status_message());
-                    } else {
-                        self.push_notice(
-                            NotificationKind::Info,
-                            format!(
-                                "Last response: {} chars. {}",
-                                text.len(),
-                                outcome.status_message()
-                            ),
-                        );
-                    }
-                } else {
+                    .filter(|m| !m.get_all_text().trim().is_empty())
+                    .take(n)
+                    .collect::<Vec<_>>();
+                if selected.is_empty() {
                     self.push_notice(
                         NotificationKind::Warning,
                         "No assistant message to copy.".to_string(),
+                    );
+                    return true;
+                }
+                // Most recent first in the clipboard, so the newest turn is
+                // the first thing read when the text is pasted.
+                let text = selected
+                    .iter()
+                    .map(|m| format!("{}: {}", role_label(&m.role), m.get_all_text()))
+                    .collect::<Vec<_>>()
+                    .join("\n\n");
+                let outcome = crate::tui::clipboard::copy(&text);
+                let count = selected.len();
+                // One clipboard chain, one report: the outcome names the
+                // mechanism that worked, or every mechanism that did not and
+                // why.
+                if outcome.is_copied() {
+                    self.push_notice(
+                        NotificationKind::Info,
+                        if count == 1 {
+                            outcome.status_message()
+                        } else {
+                            format!("{count} messages. {}", outcome.status_message())
+                        },
+                    );
+                } else {
+                    self.push_notice(
+                        NotificationKind::Info,
+                        format!(
+                            "{count} message(s): {} chars. {}",
+                            text.len(),
+                            outcome.status_message()
+                        ),
                     );
                 }
                 true
@@ -966,14 +1020,17 @@ impl App {
                 true
             }
             "rewind" => {
-                // (plan 05) `/rewind` opens the selector; `/rewind <n>`
-                // targets prompt #n directly — confirm via y/n in the status
-                // line before the fork.
+                // (plan 05) `/rewind` opens the selector; `/rewind <n>` targets
+                // the Nth prompt counting back from the newest (so `/rewind 1`
+                // is the last prompt) — confirm via y/n in the status line
+                // before the fork.
                 if let Ok(n) = args.trim().parse::<usize>()
                     && n > 0
                 {
                     self.pending_rewind_confirm = Some(n);
-                    self.set_status_notice(format!("Rewind to before prompt #{n}? (y/n)"));
+                    self.set_status_notice(format!(
+                        "Rewind to {n} prompt(s) back (the Nth-last)? (y/n)"
+                    ));
                 } else {
                     self.open_rewind_selector();
                 }
