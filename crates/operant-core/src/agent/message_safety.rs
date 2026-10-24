@@ -64,21 +64,33 @@ pub fn repair_tool_call_arguments(raw_args: &str, tool_name: &str) -> RepairOutc
         return RepairOutcome::Fixed("{}".to_string());
     }
 
-    // Pass 0: try strict=False (accept control chars in strings)
-    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(raw_stripped) {
-        // If it parsed, re-serialize to clean it up
+    // Pass 0: lenient parse — models write RAW newlines/tabs inside JSON
+    // string values (multi-line shell commands in `process`, answer text
+    // dumped into args), which strict JSON forbids. That shape produced
+    // 130 "Unrepairable tool arguments" warnings in four days, all tool
+    // `process` (plan 2026-10-25 tooling-surface, RC1). The comment here
+    // used to promise Python json.loads(strict=False) semantics while the
+    // code called the strict parser, so the pass never did anything;
+    // escape the control characters inside string literals first, then
+    // parse. Whitespace OUTSIDE strings is legal JSON and is left alone.
+    let lenient = escape_control_chars_in_strings(raw_stripped);
+    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&lenient) {
+        // Re-serialize so the caller gets canonical JSON for whatever the
+        // escape pass rewrote.
         let reserialized = serde_json::to_string(&parsed).unwrap_or_default();
-        if reserialized != raw_stripped {
+        if lenient != raw_stripped {
             tracing::warn!(
-                "Repaired tool_call arguments for {}: control chars cleaned",
+                "Repaired tool_call arguments for {}: escaped raw control characters in strings",
                 tool_name
             );
         }
         return RepairOutcome::Fixed(reserialized);
     }
 
-    // Attempt common JSON repairs
-    let mut fixed = raw_stripped.to_string();
+    // Attempt common JSON repairs. Seeded from the escaped text: if the
+    // args are BOTH control-char-laden and truncated, the escape already
+    // brought them closer to parseable.
+    let mut fixed = lenient;
 
     // Combined pass: close unclosed strings and find trailing colon position
     // in a single O(n) traversal instead of two separate passes.
@@ -202,6 +214,62 @@ pub fn repair_tool_call_arguments(raw_args: &str, tool_name: &str) -> RepairOutc
 /// - `assistant -> assistant` violations (merge tool_calls, keep newer content)
 ///
 /// Returns the number of repairs made.
+/// Escape raw control characters (< 0x20) inside JSON string literals.
+///
+/// Strict JSON forbids unescaped control characters inside strings, but
+/// models emit them constantly — a multi-line shell command in a
+/// `process` `command` value, or a whole answer dumped into the
+/// arguments. The scan tracks in_string/escape_next state so quotes and
+/// backslashes inside strings are respected; whitespace BETWEEN tokens
+/// is legal JSON and passes through untouched. An escape pair whose
+/// second char is a control character (`\` + newline) still fails the
+/// strict parse downstream — that shape is not repaired here, it just
+/// stays on the honest Unrepairable path.
+fn escape_control_chars_in_strings(input: &str) -> String {
+    // Fast path: no control characters at all — the overwhelming case.
+    if !input.chars().any(char::is_control) {
+        return input.to_string();
+    }
+    let mut out = String::with_capacity(input.len() + 16);
+    let mut in_string = false;
+    let mut escape_next = false;
+    for ch in input.chars() {
+        if escape_next {
+            escape_next = false;
+            out.push(ch);
+            continue;
+        }
+        if ch == '\\' && in_string {
+            escape_next = true;
+            out.push(ch);
+            continue;
+        }
+        if ch == '"' {
+            in_string = !in_string;
+            out.push(ch);
+            continue;
+        }
+        if in_string && (ch as u32) < 0x20 {
+            match ch {
+                '\n' => out.push_str("\\n"),
+                '\r' => out.push_str("\\r"),
+                '\t' => out.push_str("\\t"),
+                '\u{08}' => out.push_str("\\b"),
+                '\u{0C}' => out.push_str("\\f"),
+                other => {
+                    let _ = std::fmt::Write::write_fmt(
+                        &mut out,
+                        format_args!("\\u{:04x}", other as u32),
+                    );
+                }
+            }
+            continue;
+        }
+        out.push(ch);
+    }
+    out
+}
+
 pub fn repair_message_sequence(messages: &mut Vec<Message>) -> usize {
     if messages.len() < 2 {
         return 0;
@@ -587,6 +655,70 @@ mod tests {
             repair_tool_call_arguments("  ", "test_tool"),
             RepairOutcome::Fixed("{}".to_string())
         );
+    }
+
+    #[test]
+    fn repair_escapes_raw_newlines_inside_string_values() {
+        // The storm specimen (plan 2026-10-25 tooling-surface, RC1): a
+        // multi-line value written with RAW newlines — strict JSON
+        // forbids them, and the old Pass 0 called the strict parser
+        // while its comment promised lenient acceptance.
+        let raw = "{\n  \"command\": \"line one\nline two\"\n}";
+        let RepairOutcome::Fixed(fixed) = repair_tool_call_arguments(raw, "process") else {
+            panic!("raw-newline args must repair, got Unrepairable");
+        };
+        let parsed: serde_json::Value =
+            serde_json::from_str(&fixed).expect("repaired args must parse");
+        assert_eq!(parsed["command"], "line one\nline two");
+    }
+
+    #[test]
+    fn repair_multi_line_shell_command_survives_to_the_tool() {
+        // The recurring Oct 20/23 shape: a shell command with newlines
+        // written raw. After repair the command value must be the exact
+        // multi-line string the model meant, newlines and all.
+        let raw = "{\"command\": \"cd /tmp\nls -la\"}";
+        let RepairOutcome::Fixed(fixed) = repair_tool_call_arguments(raw, "process") else {
+            panic!("multi-line command args must repair");
+        };
+        let parsed: serde_json::Value =
+            serde_json::from_str(&fixed).expect("repaired args must parse");
+        assert_eq!(parsed["command"], "cd /tmp\nls -la");
+    }
+
+    #[test]
+    fn repair_escapes_tabs_and_rare_control_chars_to_json_forms() {
+        let raw = "{\"command\": \"a\tb\u{1}c\"}";
+        let RepairOutcome::Fixed(fixed) = repair_tool_call_arguments(raw, "process") else {
+            panic!("tab-bearing args must repair");
+        };
+        let parsed: serde_json::Value =
+            serde_json::from_str(&fixed).expect("repaired args must parse");
+        assert_eq!(parsed["command"], "a\tb\u{1}c");
+        // And the wire form carries the escapes, not the raw bytes.
+        assert!(fixed.contains("\\t") && fixed.contains("\\u0001"));
+    }
+
+    #[test]
+    fn repair_leaves_control_char_free_args_semantically_untouched() {
+        let raw = r#"{"command": "echo hi"}"#;
+        let RepairOutcome::Fixed(fixed) = repair_tool_call_arguments(raw, "process") else {
+            panic!("valid args must stay Fixed");
+        };
+        let parsed: serde_json::Value = serde_json::from_str(&fixed).expect("parses");
+        assert_eq!(parsed["command"], "echo hi");
+    }
+
+    #[test]
+    fn repair_whitespace_between_tokens_is_not_touched() {
+        // Newlines between JSON tokens are legal; the escaper must not
+        // escape them (no string was open), and the parse must succeed.
+        let raw = "{\n  \"command\": \"echo hi\"\n}";
+        let RepairOutcome::Fixed(fixed) = repair_tool_call_arguments(raw, "process") else {
+            panic!("legal-whitespace args must parse");
+        };
+        let parsed: serde_json::Value = serde_json::from_str(&fixed).expect("parses");
+        assert_eq!(parsed["command"], "echo hi");
     }
 
     #[test]
