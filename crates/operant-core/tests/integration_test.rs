@@ -20,12 +20,11 @@ use operant_core::tools::builtin::{
     ApprovalTool, CheckpointTool, ClarifyTool, CodeExecutionTool, DateTimeTool, DiscordAdminTool,
     DiscordTool, EnvVarTool, FileListTool, FileReadTool, FileSearchTool, FileStateTool,
     FileWriteTool, HomeAssistantTool, HttpRequestTool, ImageGenerationTool, MemoryRecallTool,
-    MemorySearchTool, MemoryStoreTool, NeuttsSynthTool, NotificationTool, OpenRouterTool,
-    OsvCheckTool, PatchTool, SendMessageTool, SkillViewTool, SkillsTool, SpotifyAlbumsTool,
-    SpotifyDevicesTool, SpotifyLibraryTool, SpotifyPlaybackTool, SpotifyPlaylistsTool,
-    SpotifyQueueTool, SpotifySearchTool, SystemInfoTool, TerminalTool, TimestampTool, TodoTool,
-    ToolBackendTool, TranscriptionTool, TtsTool, VideoAnalysisTool, VisionTool, WebFetchTool,
-    WebSearchTool, XaiHttpTool,
+    MemorySearchTool, MemoryStoreTool, NotificationTool, OsvCheckTool, PatchTool, SendMessageTool,
+    SkillViewTool, SkillsTool, SpotifyAlbumsTool, SpotifyDevicesTool, SpotifyLibraryTool,
+    SpotifyPlaybackTool, SpotifyPlaylistsTool, SpotifyQueueTool, SpotifySearchTool, SystemInfoTool,
+    TerminalTool, TimestampTool, TodoTool, ToolBackendTool, TranscriptionTool, TtsTool,
+    VideoAnalysisTool, VisionTool, WebFetchTool, WebSearchTool,
 };
 use operant_core::tools::{OperantTool, ToolContext, ToolRegistry};
 
@@ -422,10 +421,7 @@ fn zero_dep_tools() -> Vec<(&'static str, Box<dyn OperantTool>)> {
         ("memory_search", Box::new(MemorySearchTool)),
         ("memory_recall", Box::new(MemoryRecallTool)),
         ("tool_backend", Box::new(ToolBackendTool)),
-        ("openrouter_query", Box::new(OpenRouterTool)),
-        ("xai_http_request", Box::new(XaiHttpTool)),
         ("osv_check", Box::new(OsvCheckTool)),
-        ("neutts_synthesize", Box::new(NeuttsSynthTool)),
         ("discord", Box::new(DiscordTool)),
         ("discord_admin", Box::new(DiscordAdminTool)),
         (

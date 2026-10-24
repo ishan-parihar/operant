@@ -173,12 +173,12 @@ fn tool_emoji(name: &str) -> &'static str {
         "chat" | "send_message" | "message" | "notify" | "react_to_message" => "\u{1F4AC}",
         "discord" | "discord_admin" | "homeassistant" => "\u{1F4AC}",
         // ── HTTP / API ──
-        "http_request" | "xai_http_request" | "openrouter_query" => "\u{1F310}",
+        "http_request" => "\u{1F310}",
         // ── Image / Media ──
         "image" | "screenshot" | "draw" | "image_generate" | "vision_analyze" | "video_analyze" => {
             "\u{1F5BC}\u{FE0F}"
         }
-        "transcribe_audio" | "text_to_speech" | "neutts_synthesize" => "\u{1F3A4}",
+        "transcribe_audio" | "text_to_speech" => "\u{1F3A4}",
         // ── Spotify ──
         "spotify_playback" | "spotify_search" | "spotify_devices" | "spotify_albums"
         | "spotify_playlists" | "spotify_library" | "spotify_queue" => "\u{1F3B5}",
@@ -192,8 +192,6 @@ fn tool_emoji(name: &str) -> &'static str {
         "plan" | "strategy" => "\u{1F9F0}",
         // ── Debug / Env ──
         "debug_env" | "debug_system" | "env_probe" | "osv_check" | "tool_backend" => "\u{1F527}",
-        // ── Feishu / Notes ──
-        "feishu_doc_read" | "feishu_drive" => "\u{1F4DD}",
         // ── Errors / Done ──
         "error" | "fail" => "\u{274C}",
         "done" | "complete" | "finish" => "\u{2705}",
@@ -210,7 +208,7 @@ fn extract_tool_arg(name: &str, args: &str) -> Option<String> {
             // Web / Search
             "web_search" | "web_search_" | "tavily" | "tavily_search" | "sourcehound" => &["query"],
             "web_fetch" | "web_scrape" | "tavily_extract" | "tavily_crawl" | "web_extract"
-            | "web_crawl" | "http_request" | "xai_http_request" => &["url"],
+            | "web_crawl" | "http_request" => &["url"],
             // File read
             "read" | "look_at" | "file_read" | "aft_read" | "aft_outline" | "aft_inspect"
             | "aft_status" => &["file_path", "path", "pattern"],
@@ -257,9 +255,7 @@ fn extract_tool_arg(name: &str, args: &str) -> Option<String> {
             "image" | "screenshot" | "image_generate" | "vision_analyze" => {
                 &["path", "url", "prompt"]
             }
-            "video_analyze" | "transcribe_audio" | "text_to_speech" | "neutts_synthesize" => {
-                &["path", "url", "text"]
-            }
+            "video_analyze" | "transcribe_audio" | "text_to_speech" => &["path", "url", "text"],
             // Spotify
             "spotify_playback" | "spotify_search" | "spotify_devices" | "spotify_albums"
             | "spotify_playlists" | "spotify_library" | "spotify_queue" => &["query", "action"],

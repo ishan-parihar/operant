@@ -38,9 +38,7 @@ pub mod lcm_tools;
 pub mod learning_mutation_tool;
 pub mod mcp_tool;
 pub mod memory_tools;
-pub mod neutts_synth;
 pub mod notification_tool;
-pub mod openrouter_client;
 pub mod osv_check;
 pub mod patch_tool;
 pub mod platform_bases;
@@ -71,11 +69,9 @@ pub mod vision_tool;
 pub mod web_providers;
 pub mod web_tools;
 pub mod working_diff_tool;
-pub mod xai_http;
 
 pub use web_providers::{SourcehoundSearchProvider, WebSearchProvider, WebSearchResult};
 pub mod discord_tool;
-pub mod feishu_tool;
 pub mod home_assistant_tool;
 
 // Re-export commonly used types
@@ -103,7 +99,6 @@ pub use delegation_output_schema::{
     extract_json_candidate, validate_output,
 };
 pub use discord_tool::{DiscordAdminTool, DiscordTool};
-pub use feishu_tool::{FeishuDocTool, FeishuDriveTool};
 pub use home_assistant_tool::HomeAssistantTool;
 pub use kanban_tool::KanbanTool;
 pub use lcm_tools::register_lcm_tools;

@@ -26,7 +26,6 @@ pub use super::datetime_tool::{DateTimeTool, TimestampTool};
 pub use super::debug_helpers::{EchoTool, EnvVarTool, SystemInfoTool};
 pub use super::discord_tool::{DiscordAdminTool, DiscordTool};
 pub use super::env_probe_tool::EnvProbeTool;
-pub use super::feishu_tool::{FeishuDocTool, FeishuDriveTool};
 pub use super::file_state::FileStateTool;
 pub use super::file_tools::{FileListTool, FileReadTool, FileSearchTool, FileWriteTool};
 pub use super::home_assistant_tool::HomeAssistantTool;
@@ -37,9 +36,7 @@ pub use super::kanban_tool::KanbanTool;
 pub use super::learning_mutation_tool::LearningMutationTool;
 pub use super::mcp_tool::McpManagementTool;
 pub use super::memory_tools::{MemoryRecallTool, MemorySearchTool, MemoryStoreTool};
-pub use super::neutts_synth::NeuttsSynthTool;
 pub use super::notification_tool::{ApprovalTool, NotificationTool};
-pub use super::openrouter_client::OpenRouterTool;
 pub use super::osv_check::OsvCheckTool;
 pub use super::patch_tool::PatchTool;
 pub use super::process_tool::ProcessTool;
@@ -63,7 +60,6 @@ pub use super::video_analysis_tool::VideoAnalysisTool;
 pub use super::vision_tool::VisionTool;
 pub use super::web_tools::{WebFetchTool, WebSearchTool};
 pub use super::working_diff_tool::WorkingDiffTool;
-pub use super::xai_http::XaiHttpTool;
 
 /// Register all built-in tools with a registry
 pub async fn register_builtin_tools(
@@ -90,7 +86,6 @@ pub async fn register_builtin_tools(
     registry.register(WebScrapeTool::global()).await?;
     registry.register(WebExtractTool::global()).await?;
     registry.register(WebCrawlTool::global()).await?;
-    registry.register(XaiHttpTool).await?;
     registry.register(CodeExecutionTool).await?;
     // Prime Kernel (plan 015): persistent stateful Python kernel + continual
     // harness. Registered only when [tools.kernel] enabled; kernel::register
@@ -139,11 +134,9 @@ pub async fn register_builtin_tools(
         .await?;
     registry.register(NotificationTool).await?;
     registry.register(ApprovalTool).await?;
-    registry.register(OpenRouterTool).await?;
     registry.register(OsvCheckTool).await?;
     registry.register(ImageGenerationTool::new()).await?;
     registry.register(TtsTool::new()).await?;
-    registry.register(NeuttsSynthTool).await?;
     registry.register(VideoAnalysisTool::new()).await?;
     // Register insights tool for session analytics (before SessionSearchTool takes ownership)
     registry
@@ -160,8 +153,6 @@ pub async fn register_builtin_tools(
     registry.register(ReactionTool).await?;
     registry.register(DiscordTool).await?;
     registry.register(DiscordAdminTool).await?;
-    registry.register(FeishuDocTool::new()).await?;
-    registry.register(FeishuDriveTool::new()).await?;
     registry.register(HomeAssistantTool::new()).await?;
     registry.register(BrowserDialogTool).await?;
     registry.register(BrowserCdpTool).await?;
@@ -279,9 +270,7 @@ pub fn builtin_tool_names() -> Vec<&'static str> {
         "memory_recall",
         "memory_search",
         "memory_store",
-        "neutts_synthesize",
         "notification",
-        "openrouter_query",
         "osv_check",
         "patch",
         "process",
@@ -305,14 +294,11 @@ pub fn builtin_tool_names() -> Vec<&'static str> {
         "web_extract",
         "working_diff",
         "web_crawl",
-        "xai_http_request",
         "send_message",
         "react_to_message",
         "verify_task",
         "discord",
         "discord_admin",
-        "feishu_doc_read",
-        "feishu_drive",
         "homeassistant",
         "delegate_task",
         "browser_dialog",
@@ -434,5 +420,77 @@ mod tests {
             registry.contains("sop").await,
             "the sop tool must be registered with the builtins"
         );
+    }
+
+    /// (iter-1231) The five purged tools stay purged.
+    ///
+    /// `feishu_doc_read`, `feishu_drive`, `openrouter_query`, `xai_http_request`
+    /// and `neutts_synthesize` were removed by operator order: each duplicated a
+    /// capability a live surface already serves better (`http_request` for xai,
+    /// the model-provider routes for openrouter, the `tts` tool's neutts/xai
+    /// provider paths for neutts, and no Feishu credentials anywhere in this
+    /// tree's config or .env pinning). A tool whose registration sneaks back
+    /// re-advertises a capability whose env vars nobody sets, which is worse
+    /// than the tool existing: the model calls it and gets a key error. This
+    /// pins BOTH the registration (the registry is what the agent sees) and
+    /// the advertised-name list (what the doctor/`operant tools` surface
+    /// reports) — a tool restored to only one of the two desynchronizes them.
+    #[test]
+    fn purged_tools_are_neither_registered_nor_advertised() {
+        const PURGED: &[&str] = &[
+            "feishu_doc_read",
+            "feishu_drive",
+            "openrouter_query",
+            "xai_http_request",
+            "neutts_synthesize",
+        ];
+        let names = builtin_tool_names();
+        for tool in PURGED {
+            assert!(
+                !names.contains(tool),
+                "`{tool}` was purged by operator order; it must not be advertised"
+            );
+        }
+        // The live registry check needs async setup, so this test covers the
+        // advertised list; the async pair is below.
+    }
+
+    /// (iter-1231) The async half: after a full registration pass, the
+    /// registry must not contain any purged tool.
+    #[tokio::test]
+    async fn purged_tools_are_not_in_a_registered_registry() {
+        let registry = ToolRegistry::new(Duration::from_secs(5));
+        let (_tmp, skills_dir) = setup_skills_dir();
+        let database =
+            Arc::new(Database::init(std::env::temp_dir().join("test_purged_builtin.db")).unwrap());
+        let cron_db =
+            Arc::new(CronDb::init(std::env::temp_dir().join("test_purged_cron.db")).unwrap());
+        let kanban_db =
+            Arc::new(KanbanDb::init(std::env::temp_dir().join("test_purged_kanban.db")).unwrap());
+        let memory_dir = skills_dir.parent().unwrap_or(&skills_dir).join("memory");
+        register_builtin_tools(
+            &registry,
+            &skills_dir,
+            &memory_dir,
+            database,
+            cron_db,
+            kanban_db,
+            None,
+        )
+        .await
+        .unwrap();
+
+        for tool in [
+            "feishu_doc_read",
+            "feishu_drive",
+            "openrouter_query",
+            "xai_http_request",
+            "neutts_synthesize",
+        ] {
+            assert!(
+                !registry.contains(tool).await,
+                "`{tool}` was purged by operator order; the registry must not serve it"
+            );
+        }
     }
 }
