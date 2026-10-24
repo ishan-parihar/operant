@@ -15,7 +15,7 @@ pub mod score;
 pub mod walker;
 
 pub use score::ScoredEntry;
-pub use walker::{DiscoveredEntry, WalkOptions, discover};
+pub use walker::{DiscoveredEntry, WalkOptions, discover, invalidate_path};
 
 use std::path::Path;
 

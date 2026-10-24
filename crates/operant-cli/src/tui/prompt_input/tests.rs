@@ -5,7 +5,7 @@
 // vim-motion test names mirror key names (motion_W_B_basic, etc.)
 #![allow(non_snake_case)]
 
-use super::typeahead::{compute_file_suggestions, compute_slash_suggestions};
+use super::typeahead::{compute_file_suggestions, compute_slash_suggestions, file_ref_value};
 use super::vim::{
     VimOperator, motion_B, motion_E, motion_G, motion_W, motion_b, motion_e, motion_find_char,
     motion_first_nonblank, motion_gg, motion_w,
@@ -1580,14 +1580,15 @@ fn accept_suggestion_file_ref_at_start() {
     s.text = "@src/ma".to_string();
     s.cursor = s.text.len();
     s.suggestions = vec![TypeaheadSuggestion {
-        text: "@src/main.rs".to_string(),
+        text: "@file:src/main.rs".to_string(),
         description: "file".to_string(),
         source: TypeaheadSource::FileRef,
     }];
     s.suggestion_index = Some(0);
     s.accept_suggestion();
-    assert_eq!(s.text, "@src/main.rs");
-    assert_eq!(s.cursor, "@src/main.rs".len());
+    // M4: values use the @file: grammar and file accepts append a space.
+    assert_eq!(s.text, "@file:src/main.rs ");
+    assert_eq!(s.cursor, "@file:src/main.rs ".len());
     assert!(s.suggestions.is_empty());
 }
 
@@ -1597,14 +1598,14 @@ fn accept_suggestion_file_ref_after_text_preserves_prefix() {
     s.text = "some text @src/ma".to_string();
     s.cursor = s.text.len();
     s.suggestions = vec![TypeaheadSuggestion {
-        text: "@src/main.rs".to_string(),
+        text: "@file:src/main.rs".to_string(),
         description: "file".to_string(),
         source: TypeaheadSource::FileRef,
     }];
     s.suggestion_index = Some(0);
     s.accept_suggestion();
-    assert_eq!(s.text, "some text @src/main.rs");
-    assert_eq!(s.cursor, "some text @src/main.rs".len());
+    assert_eq!(s.text, "some text @file:src/main.rs ");
+    assert_eq!(s.cursor, "some text @file:src/main.rs ".len());
 }
 
 #[test]
@@ -1616,14 +1617,15 @@ fn accept_suggestion_file_ref_preserves_tail() {
     s.text = format!("{}{}", prefix, tail);
     s.cursor = prefix.len();
     s.suggestions = vec![TypeaheadSuggestion {
-        text: "@src/main.rs".to_string(),
+        text: "@file:src/main.rs".to_string(),
         description: "file".to_string(),
         source: TypeaheadSource::FileRef,
     }];
     s.suggestion_index = Some(0);
     s.accept_suggestion();
-    assert_eq!(s.text, "@src/main.rs more text");
-    assert_eq!(s.cursor, "@src/main.rs".len());
+    // The tail already starts with a space: no second one is inserted.
+    assert_eq!(s.text, "@file:src/main.rs more text");
+    assert_eq!(s.cursor, "@file:src/main.rs".len());
 }
 
 // ---- word_nav (plan 2026-10-24 M1: OMP word classes) ------------------
@@ -1849,4 +1851,122 @@ fn replace_file_suggestions_swaps_and_clamps_index() {
     }]);
     assert_eq!(s.suggestions.len(), 1);
     assert_eq!(s.suggestion_index, Some(0), "index clamped to the new list");
+}
+
+// ---- @file:/@folder: grammar (plan 2026-10-24 M4) ----------------------
+
+#[test]
+fn file_ref_value_grammar_shapes() {
+    assert_eq!(file_ref_value("src/main.rs", false), "@file:src/main.rs");
+    assert_eq!(file_ref_value("crates", true), "@folder:crates/");
+    // Paths with spaces quote; a directory quote stays OPEN (the drill-down
+    // continues inside it) and a file quote closes — OMP's shape.
+    assert_eq!(
+        file_ref_value("my dir/a b.txt", false),
+        "@file:\"my dir/a b.txt\""
+    );
+    assert_eq!(file_ref_value("my dir", true), "@folder:\"my dir/");
+}
+
+#[test]
+fn parse_file_ref_token_forms() {
+    let bare = parse_file_ref_token("see @src/ma").expect("bare");
+    assert_eq!((bare.raw, bare.path), ("@src/ma", "src/ma"));
+    let file = parse_file_ref_token("see @file:src/ma").expect("file form");
+    assert_eq!((file.raw, file.path), ("@file:src/ma", "src/ma"));
+    let folder = parse_file_ref_token("see @folder:src/").expect("folder form");
+    assert_eq!((folder.raw, folder.path), ("@folder:src/", "src/"));
+    let quoted = parse_file_ref_token("see @file:\"a b").expect("quoted");
+    assert_eq!(quoted.path, "a b");
+    assert!(
+        parse_file_ref_token("a@b").is_none(),
+        "mid-word @ never triggers"
+    );
+}
+
+#[test]
+fn active_file_query_strips_kind_prefix() {
+    let q = active_file_query("read @file:crates/ope").expect("query");
+    assert_eq!(q.token, "@file:crates/ope");
+    assert_eq!(
+        q.query, "ope",
+        "kind prefix must not leak into the fuzzy query"
+    );
+}
+
+#[test]
+fn accept_file_ref_appends_space_and_uses_grammar() {
+    let mut s = nav_state("read @file:crates/ope", "read @file:crates/ope".len());
+    s.suggestions = vec![TypeaheadSuggestion {
+        text: "@file:crates/operant/README.md".to_string(),
+        description: "file".to_string(),
+        source: TypeaheadSource::FileRef,
+    }];
+    s.suggestion_index = Some(0);
+    s.accept_suggestion();
+    assert_eq!(s.text, "read @file:crates/operant/README.md ");
+    assert_eq!(s.cursor, s.text.len());
+}
+
+#[test]
+fn accept_directory_chains_without_space() {
+    let mut s = nav_state("read @crates/ope", "read @crates/ope".len());
+    s.suggestions = vec![TypeaheadSuggestion {
+        text: "@folder:crates/operant/".to_string(),
+        description: "directory".to_string(),
+        source: TypeaheadSource::FileRef,
+    }];
+    s.suggestion_index = Some(0);
+    s.accept_suggestion();
+    assert_eq!(s.text, "read @folder:crates/operant/");
+    assert_eq!(
+        s.cursor,
+        s.text.len(),
+        "cursor before the drill-down listing"
+    );
+    // The chained token still parses — the popup re-lists the directory.
+    assert!(s.has_active_file_ref());
+}
+
+#[test]
+fn accept_preserves_text_after_the_cursor() {
+    let mut s = nav_state("@crates tail", 7);
+    s.suggestions = vec![TypeaheadSuggestion {
+        text: "@folder:crates/".to_string(),
+        description: "directory".to_string(),
+        source: TypeaheadSource::FileRef,
+    }];
+    s.suggestion_index = Some(0);
+    s.accept_suggestion();
+    assert_eq!(s.text, "@folder:crates/ tail");
+}
+
+/// The ask-#2 acceptance gate: a token the popup inserts must be INJECTED
+/// by the agent-side expander — `@file:<path>` inlines the file's content
+/// into the effective message.
+#[tokio::test]
+async fn accepted_file_ref_token_injects_via_context_references() {
+    let dir = std::env::temp_dir().join(format!(
+        "operant-m4-inject-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    std::fs::create_dir_all(dir.join("src")).expect("fixture");
+    std::fs::write(dir.join("src/notes.txt"), "marker_line_for_injection").expect("fixture");
+    let ctx = operant_core::context_references::preprocess_context_references(
+        "read @file:src/notes.txt please",
+        &dir,
+        100_000,
+    )
+    .await;
+    assert!(!ctx.blocked, "injection refused: {:?}", ctx.warnings);
+    assert!(
+        ctx.message.contains("marker_line_for_injection"),
+        "the @file: token must inline the file content; got: {}",
+        ctx.message
+    );
+    let _ = std::fs::remove_dir_all(&dir);
 }

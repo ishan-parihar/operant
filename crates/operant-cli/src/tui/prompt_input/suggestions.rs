@@ -5,17 +5,11 @@
 use super::*;
 
 impl PromptInputState {
-    /// Returns true if the text (up to cursor) contains a word-boundary `@` token,
-    /// meaning an `@file` reference is actively being typed.
+    /// Returns true if the text (up to cursor) contains a word-boundary `@`
+    /// token — bare `@`, `@file:`, or `@folder:` (M4) — meaning a file
+    /// reference is actively being typed.
     pub fn has_active_file_ref(&self) -> bool {
-        let text = &self.text[..self.cursor];
-        text.rfind('@').is_some_and(|at_idx| {
-            at_idx == 0
-                || text[..at_idx]
-                    .chars()
-                    .last()
-                    .is_some_and(|c| c.is_whitespace())
-        })
+        parse_file_ref_token(&self.text[..self.cursor]).is_some()
     }
 
     /// Update typeahead suggestions for slash commands and file references in the current text.
@@ -120,9 +114,9 @@ impl PromptInputState {
         self.accept_suggestion();
         match source {
             Some(TypeaheadSource::FileRef) => {
-                // File refs end with a trailing space so the user can keep typing
-                // the instruction that follows the @file reference.
-                self.insert_char(' ');
+                // `accept_suggestion` already appended the trailing space
+                // for a FILE value (M4); a directory value chains instead.
+                // Either way Enter must keep editing, not submit.
                 AcceptForSubmitOutcome::ExtendInput
             }
             Some(TypeaheadSource::SlashCommand) | None => {
@@ -133,6 +127,11 @@ impl PromptInputState {
     }
 
     /// Accept the current suggestion.
+    ///
+    /// FileRef values (M4): files append a trailing space (the instruction
+    /// that follows the reference starts immediately); directories end
+    /// with `/` and append NOTHING — the subsequent refresh re-lists the
+    /// drilled directory, so both Tab and Enter chain.
     pub fn accept_suggestion(&mut self) {
         if let Some(idx) = self.suggestion_index
             && let Some(s) = self.suggestions.get(idx)
@@ -147,27 +146,22 @@ impl PromptInputState {
                     // Replace from the last word-boundary @ up to the cursor.
                     // Preserve any text that was already after the cursor.
                     let tail = self.text[self.cursor..].to_string();
+                    // The popup only offers FileRef values while a parseable
+                    // `@` token is live, so the plain rfind is the same `@`
+                    // the parser found.
                     if let Some(at_idx) = self.text[..self.cursor].rfind('@') {
-                        let at_word_boundary = at_idx == 0
-                            || self.text[..at_idx]
-                                .chars()
-                                .last()
-                                .map(|c| c.is_whitespace())
-                                .unwrap_or(false);
-                        if at_word_boundary {
-                            let mut new_text = self.text[..at_idx].to_string();
-                            new_text.push_str(&s.text);
-                            let cursor = new_text.len();
-                            new_text.push_str(&tail);
-                            self.text = new_text;
-                            cursor
-                        } else {
-                            let mut new_text = s.text.clone();
-                            let cursor = new_text.len();
-                            new_text.push_str(&tail);
-                            self.text = new_text;
-                            cursor
+                        let mut new_text = self.text[..at_idx].to_string();
+                        new_text.push_str(&s.text);
+                        // A file value ends the reference: trailing space,
+                        // unless the preserved tail already starts with one.
+                        // A directory value ends `/` and chains — no space.
+                        if !s.text.ends_with('/') && !tail.starts_with(char::is_whitespace) {
+                            new_text.push(' ');
                         }
+                        let cursor = new_text.len();
+                        new_text.push_str(&tail);
+                        self.text = new_text;
+                        cursor
                     } else {
                         let mut new_text = s.text.clone();
                         let cursor = new_text.len();

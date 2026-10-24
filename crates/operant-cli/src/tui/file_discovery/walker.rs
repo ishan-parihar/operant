@@ -140,13 +140,6 @@ pub fn discover(root: &Path, opts: WalkOptions, deadline: Instant) -> Arc<Vec<Di
 
 /// Drop every cached walk touching `path` (OMP `invalidate_path`): a
 /// created/deleted/renamed file makes its root's cache suspect.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "M4 wires disk-change invalidation (plan 2026-10-24)"
-    )
-)]
 pub fn invalidate_path(path: &Path) {
     let mut cache = SCAN_CACHE.lock();
     cache.retain(|(root, _), _| !path.starts_with(root) && !root.starts_with(path));

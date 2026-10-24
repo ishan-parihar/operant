@@ -29,7 +29,7 @@ pub use kill_ring::KillRing;
 pub use typeahead::{
     AcceptForSubmitOutcome, FileSuggestJob, FileSuggestResult, PendingFileQuery, TypeaheadSource,
     TypeaheadSuggestion, active_file_query, active_file_token, compute_typeahead,
-    fuzzy_file_suggestions, register_typeahead_names,
+    fuzzy_file_suggestions, parse_file_ref_token, register_typeahead_names,
 };
 pub use vim::{DotRepeatAction, VimFindKind, VimMode, VimPendingState, apply_vim_key};
 

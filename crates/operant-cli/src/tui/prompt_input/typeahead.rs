@@ -59,25 +59,39 @@ pub struct FileSuggestResult {
     pub suggestions: Vec<TypeaheadSuggestion>,
 }
 
-/// Map ranked walk entries to popup suggestions (M3). Directories render
-/// with a trailing `/` (the popup's chain-on-accept convention).
+/// Map ranked walk entries to popup suggestions (M3). Values use the
+/// reference grammar (M4): `@file:<path>` / `@folder:<path>/`.
 pub fn fuzzy_file_suggestions(
     entries: &[crate::tui::file_discovery::ScoredEntry],
 ) -> Vec<TypeaheadSuggestion> {
     entries
         .iter()
         .map(|e| TypeaheadSuggestion {
-            text: format!("@{}{}", e.rel_path, if e.is_dir { "/" } else { "" }),
+            text: file_ref_value(&e.rel_path, e.is_dir),
             description: if e.is_dir { "directory" } else { "file" }.to_string(),
             source: TypeaheadSource::FileRef,
         })
         .collect()
 }
 
-/// The live `@` token at a word boundary ending at the end of `input`
-/// (`@src/ma` → the full `@src/ma`), or `None` (M3; mirrors the boundary
-/// rule of `compute_file_suggestions`).
-pub fn active_file_token(input: &str) -> Option<&str> {
+/// A parsed `@` mention token (plan 2026-10-24 M4). The reference grammar
+/// the agent-side expander reads is `@file:` / `@folder:`
+/// (`operant_core::context_references::REFERENCE_PATTERN`); the popup
+/// triggers on bare `@`, `@file:`, and `@folder:` alike and inserts the
+/// grammar when a candidate is accepted — the kind comes from the accepted
+/// entry, not the typed prefix.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FileRefToken<'a> {
+    /// The raw token from the `@` to the end of `input`.
+    pub raw: &'a str,
+    /// The path part: after the optional `file:`/`folder:` kind prefix and
+    /// an optional opening quote.
+    pub path: &'a str,
+}
+
+/// Parse the live `@` mention token ending at the end of `input`, or
+/// `None` when there is no `@` at a word boundary.
+pub fn parse_file_ref_token(input: &str) -> Option<FileRefToken<'_>> {
     let at_idx = input.rfind('@')?;
     let at_word_boundary = at_idx == 0
         || input[..at_idx]
@@ -87,7 +101,43 @@ pub fn active_file_token(input: &str) -> Option<&str> {
     if !at_word_boundary {
         return None;
     }
-    Some(&input[at_idx..])
+    let raw = &input[at_idx..];
+    let after_at = &raw[1..];
+    let path = after_at
+        .strip_prefix("file:")
+        .or_else(|| after_at.strip_prefix("folder:"))
+        .unwrap_or(after_at);
+    let path = path.strip_prefix('"').unwrap_or(path);
+    Some(FileRefToken { raw, path })
+}
+
+/// The live `@` token at a word boundary ending at the end of `input`
+/// (`@src/ma` → the full `@src/ma`), or `None` (M3; mirrors the boundary
+/// rule of `compute_file_suggestions`).
+pub fn active_file_token(input: &str) -> Option<&str> {
+    parse_file_ref_token(input).map(|t| t.raw)
+}
+
+/// The inserted token for one accepted entry (M4): files complete as
+/// `@file:<path>` (the accept path appends the trailing space),
+/// directories as `@folder:<path>/` — no trailing space, so the popup
+/// chains into the drilled directory. Paths with spaces quote the value
+/// (`@file:"a b"`); a quoted DIRECTORY stays open (`@folder:"a b/`) and
+/// closes when a file inside it is accepted, exactly OMP's
+/// `buildCompletionValue` shape.
+pub fn file_ref_value(path: &str, is_dir: bool) -> String {
+    let kind = if is_dir { "@folder:" } else { "@file:" };
+    if path.contains(char::is_whitespace) {
+        if is_dir {
+            format!("{kind}\"{path}/")
+        } else {
+            format!("{kind}\"{path}\"")
+        }
+    } else if is_dir {
+        format!("{kind}{path}/")
+    } else {
+        format!("{kind}{path}")
+    }
 }
 
 /// The fuzzy-tier request for the current input, or `None` when the popup
@@ -97,14 +147,13 @@ pub fn active_file_query(input: &str) -> Option<PendingFileQuery> {
     if input.trim_start().starts_with('/') {
         return None; // slash-command input: no file tier
     }
-    let token = active_file_token(input)?;
-    let raw = &token[1..];
-    let query = raw.rsplit('/').next().unwrap_or(raw);
+    let token = parse_file_ref_token(input)?;
+    let query = token.path.rsplit('/').next().unwrap_or(token.path);
     if query.is_empty() {
         return None;
     }
     Some(PendingFileQuery {
-        token: token.to_string(),
+        token: token.raw.to_string(),
         query: query.to_string(),
     })
 }
@@ -405,7 +454,7 @@ fn suggest_files(
         };
 
         suggestions.push(TypeaheadSuggestion {
-            text: format!("@{}", suggestion_text),
+            text: file_ref_value(&suggestion_text, is_dir),
             description,
             source: TypeaheadSource::FileRef,
         });

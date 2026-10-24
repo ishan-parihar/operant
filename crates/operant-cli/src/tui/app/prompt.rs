@@ -166,6 +166,13 @@ impl App {
             let _ = execute!(out, LeaveAlternateScreen);
         }
         let result = crate::tui::external_editor::edit(&command, &self.prompt_input.text);
+        // The editor round-trip parks the user in a shell where anything may
+        // have changed on disk — drop the cached walks (plan 2026-10-24 M4:
+        // OMP invalidates the scan cache on writes; the editor is the one
+        // surface this TUI has where changes happen outside its knowledge).
+        if let Ok(cwd) = std::env::current_dir() {
+            crate::tui::file_discovery::invalidate_path(&cwd);
+        }
         if alt_screen {
             let _ = execute!(out, EnterAlternateScreen);
         }
