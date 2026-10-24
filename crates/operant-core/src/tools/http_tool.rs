@@ -136,9 +136,12 @@ impl OperantTool for HttpRequestTool {
                     .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
                     .collect();
 
-                // Get body
+                // Get body — bounded. `text()` read the whole response into
+                // memory with no cap, so one large or hostile endpoint
+                // streamed the process out of RAM (R48-7); the SSRF guard
+                // stops private addresses, not huge public ones.
                 let body_size = response.content_length();
-                let body = response.text().await.ok();
+                let body = read_bounded_body(response).await;
 
                 if status.is_success() {
                     ToolResult::success(
@@ -270,5 +273,115 @@ mod tests {
         assert!(!result.success);
         let err = result.error.unwrap_or_default();
         assert!(err.contains("SSRF"), "unexpected error: {err}");
+    }
+}
+
+/// The response-body cap for `http_request`: a fetched page fits, a
+/// multi-gigabyte stream does not take the agent down.
+const MAX_HTTP_BODY_BYTES: usize = 2 * 1024 * 1024;
+const MARKER: &str = "\n…[truncated]";
+
+/// Read a response body up to [`MAX_HTTP_BODY_BYTES`], appending a
+/// truncation marker when the source is larger (R48-7). Chunked reads so
+/// the cap applies DURING the download, not after it.
+async fn read_bounded_body(response: reqwest::Response) -> Option<String> {
+    use futures_util::StreamExt;
+
+    let mut stream = response.bytes_stream();
+    let mut buf: Vec<u8> = Vec::with_capacity(8192);
+    let mut truncated = false;
+    while let Some(chunk) = stream.next().await {
+        let Ok(chunk) = chunk else { break };
+        if buf.len() + chunk.len() > MAX_HTTP_BODY_BYTES {
+            let take = MAX_HTTP_BODY_BYTES.saturating_sub(buf.len());
+            buf.extend_from_slice(&chunk[..take]);
+            truncated = true;
+            break;
+        }
+        buf.extend_from_slice(&chunk);
+    }
+    let mut text = String::from_utf8_lossy(&buf).into_owned();
+    if truncated {
+        text.push_str(MARKER);
+    }
+    // The old path returned Option (None on a mid-body decode error);
+    // from_utf8_lossy never fails, so this is always Some.
+    Some(text)
+}
+
+#[cfg(test)]
+mod r48_tests {
+    use super::*;
+
+    /// R48-7: a response larger than the cap is cut at MAX_HTTP_BODY_BYTES
+    /// with the truncation marker, not streamed into memory whole. The
+    /// payload is cap + 4 KiB — just over the line, so the cap must bite.
+    #[tokio::test]
+    async fn an_oversized_body_is_capped_with_a_marker() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let payload_len = MAX_HTTP_BODY_BYTES + 4096;
+        let server = tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            // Drain the request head FIRST: dropping a socket that still
+            // holds unread peer data sends RST and destroys the in-flight
+            // response (the client saw ~96KB then a reset).
+            use tokio::io::AsyncReadExt;
+            let mut req = [0u8; 1024];
+            let _ = sock.read(&mut req).await;
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {payload_len}\r\nConnection: close\r\n\r\n"
+            );
+            use tokio::io::AsyncWriteExt;
+            sock.write_all(head.as_bytes()).await.unwrap();
+            // drip in 64 KiB chunks so the cap bites mid-download
+            let chunk = vec![b'a'; 64 * 1024];
+            let mut sent = 0usize;
+            while sent < payload_len {
+                // never write past the declared Content-Length — hyper
+                // treats an over-long body as a protocol error and drops
+                // the connection mid-read
+                let take = chunk.len().min(payload_len - sent);
+                sock.write_all(&chunk[..take]).await.unwrap();
+                sent += take;
+            }
+        });
+
+        let client = reqwest::Client::new();
+        let resp = client
+            .get(format!("http://{addr}/big"))
+            .send()
+            .await
+            .unwrap();
+        let body = read_bounded_body(resp).await.unwrap();
+        server.abort();
+        assert_eq!(body.len(), MAX_HTTP_BODY_BYTES + MARKER.len());
+        assert!(body.ends_with(MARKER));
+        assert!(body.starts_with("aaa"));
+    }
+
+    /// A body under the cap comes through whole, no marker.
+    #[tokio::test]
+    async fn a_small_body_passes_through_uncapped() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            use tokio::io::AsyncWriteExt;
+            sock.write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello",
+            )
+            .await
+            .unwrap();
+        });
+        let client = reqwest::Client::new();
+        let resp = client
+            .get(format!("http://{addr}/small"))
+            .send()
+            .await
+            .unwrap();
+        let body = read_bounded_body(resp).await.unwrap();
+        server.abort();
+        assert_eq!(body, "hello");
     }
 }
