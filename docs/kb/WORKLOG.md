@@ -344,3 +344,24 @@ Append-only: `kb log "<entry>"` — one entry per unit of work.
   2 'auxiliary vision model' via /proc strings. (3) operant doctor exits 0 with no findings related
   to any of the lanes (only pre-existing npm agent-browser/Playwright warnings, unrelated).
   No defects found this round — the first validation round with nothing to fix.
+- **2026-10-25T03:35Z** · `jcode` — fourth validation round, one real catch (iter-1272, pushed
+  8f1afe4b, deployed): the FIRST full unscoped suite run of the arc found
+  every_advertised_binding_dispatches (tui::app::tests) pinning the exact catalogue text
+  iters 1263/1267 had corrected — the test broke and neither iteration noticed, because both
+  ran only tui::keybindings tests while this one lives in tui::app::tests and reads the same
+  table. The test's intent (catalogue rows must match real dispatch) was right; its pinned
+  facts were stale. All three rows corrected (Ctrl+g → external editor, PageUp/Down → "one
+  page"), Shift+Home/End rows added, mutation-proven (stale PageUp row restored → exact
+  "must be catalogued" failure). Full CLI suite now 1758/1758 green. Discipline lesson
+  recorded in the test's doc comment: keybinding-touching iterations must run BOTH suites.
+  Other round-4 validations, all clean: (a) LIVE vision error-path acceptance — a real agent
+  turn called vision_analyze against a real image URL with no vision key configured and got
+  the honest "No vision model configured. Set auxiliary_models.vision in config or
+  OPENROUTER_API_KEY env var", completing the vision lane at acceptance level on the path
+  this box can exercise; (b) todo_tool.rs + info_widget_todos.rs untouched by peers since
+  iter-1243 (empty diff) — my tests still guard the live code; (c) the 9 full-suite core-lib
+  failures are the documented parallel-run port-contention family (slack/webhook/mcp/
+  model_catalog live-server tests; two sampled PASS in isolation — gateway::slack and
+  model_catalog), no lane involvement; (d) genome doctor stale-STATE finding closed by
+  regenerating the handoff zone (`genome handoff --write`) — doctor now healthy; (e) gateway
+  liveness confirmed (Telegram poll active, uptime 23min on the iter-1267 build at check time).
