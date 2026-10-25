@@ -618,7 +618,12 @@ impl Gateway {
             return Ok(Some(
                 OutgoingMessage::new(
                     &message.channel_id,
-                    format!("⏸️ Operant is paused{reason}. Resume with `operant resume`."),
+                    // RT-177 companion: lead with the channel-native escape.
+                    // `/unpause` dispatches BEFORE this gate, so it works
+                    // while paused; the CLI form stays for operators reading
+                    // logs. The old text named ONLY the CLI — an instruction
+                    // a channel user could not follow.
+                    format!("⏸️ Operant is paused{reason}. Send /unpause here, or run `operant resume` on the CLI."),
                 )
                 .with_thread_id(message.thread_id),
             ));
