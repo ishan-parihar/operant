@@ -206,3 +206,41 @@ Items 1 is shipped; 2-5 are filed with mechanisms and wait on user
 decisions where the decision is the user's (names, topology), and on the
 bridge-partition architecture where it changes the model-visible surface
 mid-stream.
+
+## 6. Interpretations this audit guessed at (flagged for the reader)
+
+The original ask was "audit for integration gaps, then architect the most
+token/tool-call-efficient tooling surface." Two readings were live before
+the request settled; what this audit shipped under each:
+
+1. **"Token/tool-call-efficient" was read as wire-cost efficiency.** The
+   numbers and the recommendations optimize what the model pays per request
+   (schema tokens riding every turn) and per discovery (one tool_search
+   call vs paying 23 schemas always). An alternative reading —
+   round-trip efficiency: fewest tool calls per TASK regardless of schema
+   cost — would rank differently (the 23 composites would look BETTER
+   eager, since a research task otherwise pays a search+describe+call
+   round-trip per composite). The recommendation assumes the user pays
+   per token (they do: usage is metered per request) and that model
+   tool-choice confusion from duplicate schemas (RT-192's wrong-tool
+   failure mode) is itself a token cost — both stated so the next reader
+   can re-rank if the premise is wrong.
+2. **Scope of "fix now" vs "file for decision."** The audit fixed the
+   unambiguous defects (wrong wire name, missing format key, dead CDP
+   path, first-call ordering — all four objectively broken against the
+   live server) and filed everything that changes the model-visible tool
+   surface or the cross-harness memory topology as open rows. The guess:
+   the user wants the architecture PROPOSED with real numbers, not
+   unilaterally implemented mid-audit — the consolidation (item 2) would
+   have been a ~20-line registry change, and "propose, don't land" was a
+   judgment call the row's NOT-fixed rationale now records explicitly.
+   If the intent was "implement the efficient surface too," items 2-3
+   are each one iteration of work on the filed shapes.
+3. **Bank topology presented as the user's call (RT-190), not a
+     recommendation.** The audit lists three options without ranking them
+   because joining the serve changes what every OTHER harness sees; that
+   restraint is itself an interpretation — the user may have wanted a
+   firm recommendation. For the record, the in-process store keeps the
+   `recall_with_weights`/`retain_doc` library surface the HTTP client
+   does not expose, which the audit weights toward option (b) (bridge)
+   without saying so in the row.
