@@ -518,6 +518,16 @@ enabled = true
 
 # [auxiliary_models]
 # Optional auxiliary model configurations for MoA / side-LLM tasks.
+# The `vision` slot below is the ONE real path behind the `vision_analyze`
+# tool (iter-1254/1261): the image is sent to this auxiliary model and the
+# tool returns its TEXT description — the pixels never reach your main
+# model's context. Without this slot (and without OPENROUTER_API_KEY in the
+# environment) vision_analyze returns a configuration error naming the fix.
+
+# [auxiliary_models.vision]
+# model = "google/gemini-2.0-flash-001"   # any image-capable chat model
+# api_key = "sk-or-..."                   # falls back to OPENROUTER_API_KEY
+# base_url = "https://openrouter.ai/api/v1"  # any OpenAI-compatible endpoint
 
 # [providers]
 # Named provider profiles + ordered cross-provider fallback chain (hermes
