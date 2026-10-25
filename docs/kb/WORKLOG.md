@@ -333,3 +333,14 @@ Append-only: `kb log "<entry>"` — one entry per unit of work.
   corrected: iteration count now ten code + six docs iterations across the arc, all on
   origin/main; every reachable validation surface is closed except the /usr/local/bin sync,
   which is a documented external constraint, not a gap in the work.
+- **2026-10-25T03:12Z** · `jcode` — third validation round, all clean: (1) the '· N doing' header
+  claim from iter-1243 re-verified in source (info_widget_todos.rs format!(" · {} doing", in_progress),
+  with iter-1243's own tests pinning "1 doing" and the zero-case no-suffix) and distinguished from the
+  separate agent_events.rs "Todos: X/Y done, N in progress" system message — both real, different
+  surfaces; my earlier round-2 grep simply missed the info-widget file. (2) The GATEWAY-served tool
+  registry now proven to carry the honest vision contract: gateway_runner.rs:2606 builds its agent
+  through the same create_runtime_agent_with → build_agent_core → register_builtin_tools path as the
+  CLI, and the RUNNING gateway process (e8d51e16, iter-1267 build) shows 0 'pixels yourself' /
+  2 'auxiliary vision model' via /proc strings. (3) operant doctor exits 0 with no findings related
+  to any of the lanes (only pre-existing npm agent-browser/Playwright warnings, unrelated).
+  No defects found this round — the first validation round with nothing to fix.
