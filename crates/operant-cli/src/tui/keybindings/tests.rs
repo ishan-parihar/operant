@@ -80,6 +80,47 @@ fn scroll_ladder_catalogue_matches_dispatch() {
             "catalogued scroll chord {key:?}+{mods:?} has no dispatch arm in key_handling.rs"
         );
     }
+
+    // (iter-1267) The scroll bookmark moved from Ctrl+G to Alt+G when Ctrl+G
+    // became the external editor (key_handling.rs:1311 vs 1314) — but only the
+    // Prompt table got the correction; the Global table advertised the dead
+    // chord until this validation pass caught it. Pin BOTH contexts so the
+    // drift can't ride a context split again.
+    for context in [BindingContext::Global, BindingContext::Prompt] {
+        let bindings = DEFAULT_KEYBINDINGS.get_bindings(context);
+        let described = |key: KeyCode, mods: KeyModifiers| -> &str {
+            bindings
+                .iter()
+                .find(|b| b.key == key && b.modifiers == mods)
+                .and_then(|b| b.description.as_deref())
+                .unwrap_or("")
+        };
+        assert_eq!(
+            described(KeyCode::Char('g'), KeyModifiers::CONTROL),
+            "Edit prompt in external editor ([tui] external_editor)",
+            "{context:?} still advertises Ctrl+G as the scroll bookmark — the chord moved to Alt+G"
+        );
+        assert_eq!(
+            described(KeyCode::Char('g'), KeyModifiers::ALT),
+            "Toggle scroll bookmark",
+            "{context:?} lost the Alt+G bookmark chord"
+        );
+    }
+    // And the real dispatch arms for the g chords, modifier-exact.
+    assert!(dispatch.contains(
+        "KeyCode::Char('g') if key.modifiers.contains(KeyModifiers::CONTROL) => { self.pending_external_editor = true; }"
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .as_str()
+    ));
+    assert!(dispatch.contains(
+        "KeyCode::Char('g') if key.modifiers.contains(KeyModifiers::ALT) => { self.toggle_scroll_bookmark(); }"
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .as_str()
+    ));
 }
 
 #[test]

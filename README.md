@@ -254,7 +254,7 @@ In the default app mode the transcript scrolls with the keyboard alone — no mo
 | `Alt+Up` / `Alt+Down` | Fast scroll, 20 rows |
 | `Shift+Home` | Jump to the top of the transcript |
 | `Shift+End` | Jump to the tail and resume following new messages |
-| `Ctrl+G` | Toggle a scroll bookmark and jump back to it |
+| `Alt+G` | Toggle a scroll bookmark and jump back to it (the bookmark moved from Ctrl+G, which now opens the external editor) |
 
 Unmodified `Home` / `End` stay composer caret moves. The status line announces where you are ("Top of transcript.", "Latest — following new messages."). `/hotkeys` lists the full ladder.
 

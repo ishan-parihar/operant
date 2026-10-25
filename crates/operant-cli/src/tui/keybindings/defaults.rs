@@ -266,7 +266,11 @@ impl KeyBindingRegistry {
                 modifiers: KeyModifiers::CONTROL,
                 action: KeyAction::Custom(9),
                 context: BindingContext::Global,
-                description: "Toggle scroll bookmark",
+                // (iter-1267) The bookmark moved to Alt+G; Ctrl+G is the
+                // external editor (key_handling.rs pending_external_editor).
+                // The Prompt table already had this right — the Global table
+                // kept the pre-move chord until iter-1267's validation pass.
+                description: "Edit prompt in external editor ([tui] external_editor)",
             },
             DefaultBinding {
                 key: KeyCode::Char('g'),
