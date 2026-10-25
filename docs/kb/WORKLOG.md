@@ -265,3 +265,21 @@ Append-only: `kb log "<entry>"` — one entry per unit of work.
   vision API key exists on this box for a live model round trip. Note for the next agent:
   the "iter-1" label on 9367f413 is a label-slicing artifact from a bad shell pipeline
   (noted in iter-1258's body) — it is not a series reset.
+- **2026-10-25T01:04Z** · `jcode` — self-check pass on the five survey-gap iterations surfaced
+  one real residual defect and one unverified claim; both closed as iter-1261 (pushed 3fff982f,
+  deployed ada39b7c, gateway restarted and md5-verified): (1) iter-1254 deleted the fake
+  "native fast-path" CODE but left the model-facing tool description promising it ("you read
+  the pixels yourself on the next turn") plus the schema summary ("for vision-capable models")
+  and the module doc — a model reading the schema would attach an image expecting native sight,
+  then hallucinate. All three surfaces now state the honest contract (pixels never reach the
+  caller; one real path = auxiliary vision LLM; requires auxiliary_models.vision or
+  OPENROUTER_API_KEY). Pin test tool_contract_must_not_promise_native_vision mutation-proven
+  RED on the exact "you can see it" assertion. (2) The "no live vision round trip possible"
+  claim is now verified fact, not assertion: the operator's aroute gateway catalog lists 18
+  models, every one input_image:false — no vision model exists on the operator's own gateway.
+  First mutation attempt failed silently (em-dash encoding) and produced a false GREEN —
+  redone with regex matching; lesson: mutation scripts must assert the substitution landed.
+  /usr/local/bin divergence: no sudo on this box, peer's 05:15 deploy put ab62ae1e there;
+  this deploy updates ~/.local/bin only (which PATH and the gateway unit resolve) — md5
+  verified. Tool-removal lane re-verified against the CURRENT deployed binary: none of the
+  five purged tools present (93 tools now, peers added more since iter-1233's 78).
