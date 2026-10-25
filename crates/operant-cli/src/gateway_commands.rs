@@ -42,6 +42,13 @@ pub struct CommandContext<'a> {
     /// the derivation depends on group/thread shape this context does not carry,
     /// and a third copy of it is exactly how `/stop` silently stops matching.
     pub session_key: &'a str,
+    /// The agent's LIVE steer queue — the same `Arc<Mutex<Vec<String>>>` the
+    /// TUI's `/steer` pushes to and `drain_steers` drains at the iteration
+    /// boundary. `None` means no live agent (tests, detached contexts) and
+    /// `/steer` must say so rather than writing a metadata flag nothing reads
+    /// (RT-175: the old gateway /steer wrote `steer_message` — a key with zero
+    /// readers — and replied "steer updated").
+    pub steer_queue: Option<std::sync::Arc<tokio::sync::Mutex<Vec<String>>>>,
 }
 
 impl<'a> CommandContext<'a> {
@@ -64,6 +71,7 @@ impl<'a> CommandContext<'a> {
             stop: None,
             session_pins: None,
             session_key: "",
+            steer_queue: None,
         }
     }
 
@@ -93,6 +101,18 @@ impl<'a> CommandContext<'a> {
     #[must_use]
     pub fn with_session_key(mut self, session_key: &'a str) -> Self {
         self.session_key = session_key;
+        self
+    }
+
+    /// Attach the agent's live steer queue (RT-175): the same queue
+    /// `drain_steers` drains at the iteration boundary, so `/steer` from a
+    /// channel reaches the RUNNING turn exactly like the TUI's `/steer`.
+    #[must_use]
+    pub fn with_steer_queue(
+        mut self,
+        queue: Option<std::sync::Arc<tokio::sync::Mutex<Vec<String>>>>,
+    ) -> Self {
+        self.steer_queue = queue;
         self
     }
 }
@@ -1385,23 +1405,41 @@ pub fn handle_command(cmd_name: &str, _args: &str, ctx: &CommandContext<'_>) -> 
         }
 
         "steer" => {
+            // RT-175: push to the agent's LIVE steer queue — the same queue
+            // `drain_steers` empties at the iteration boundary and the TUI's
+            // /steer writes to — instead of the old `steer_message` metadata
+            // flag, which nothing in the runtime ever read. try_lock mirrors
+            // the TUI contract: a contended queue means the agent is draining
+            // it RIGHT NOW, which is a retry, not a failure.
             let a = _args.trim();
             if a.is_empty() {
-                "Usage: `/steer <direction>` — guides the conversation in a specific direction.\nThe steer message will be included in the next agent turn.".into()
+                "Usage: `/steer <direction>` — guides the conversation in a specific direction.\nThe steer message reaches the agent at its next iteration boundary.".into()
             } else {
-                let mut msg = String::from("🧭 **Steering conversation.**");
-                if let Some(gateway) = ctx.gateway {
-                    let store = gateway.get_session_store();
-                    if let Some(session) = store.find_session(ctx.platform, ctx.user_id, ctx.channel_id) {
-                        store.update_session_metadata(ctx.platform, ctx.user_id, ctx.channel_id, &[
-                            ("steer_message".to_string(), a.to_string()),
-                            ("steer_active".to_string(), "true".to_string()),
-                        ]);
-                        msg.push_str(&format!("\nSession `{}` steer updated.", session.session_id));
+                let Some(queue) = ctx.steer_queue.as_ref() else {
+                    return Some(
+                        "🧭 Steer is unavailable here — no live agent is attached to this gateway process. Nothing was queued.".into(),
+                    );
+                };
+                match queue.try_lock() {
+                    Ok(mut q) => {
+                        q.push(a.to_string());
+                        tracing::info!(
+                            user = %ctx.user_id,
+                            platform = %ctx.platform,
+                            queued = q.len(),
+                            "Gateway /steer: pushed to the live steer queue"
+                        );
+                        format!("🧭 **Steer queued.** It reaches the agent at its next iteration boundary.\nSteer: `{a}`")
+                    }
+                    Err(_) => {
+                        tracing::info!(
+                            user = %ctx.user_id,
+                            platform = %ctx.platform,
+                            "Gateway /steer: queue contended (agent draining) — nothing written"
+                        );
+                        "🧭 The steer queue is being drained by the agent right now — send `/steer` again in a moment. Nothing was written.".into()
                     }
                 }
-                msg.push_str(&format!("\nSteer: `{}`", a));
-                msg
             }
         }
 
@@ -2586,6 +2624,47 @@ mod tests {
             !session_resume.contains("Operant resumed"),
             "/resume must not speak in the estop-clear voice"
         );
+    }
+
+    // RT-175: /steer must push to the LIVE queue the agent drains — not
+    // write the dead `steer_message` metadata flag. This is the exact
+    // command the audit called out: the old arm replied "steer updated"
+    // while nothing in the runtime ever read the flag it wrote.
+    #[tokio::test]
+    async fn steer_command_pushes_to_the_live_queue_and_writes_no_dead_flag() {
+        let cfg = AppConfig::default();
+        let queue = std::sync::Arc::new(tokio::sync::Mutex::new(Vec::<String>::new()));
+
+        // With the queue attached: the steer text lands in the queue.
+        let ctx = CommandContext::new(None, &cfg, true, "op-1", "telegram", "chan-1")
+            .with_steer_queue(Some(std::sync::Arc::clone(&queue)));
+        let resp =
+            handle_command("steer", "prefer the serde path", &ctx).expect("/steer must be handled");
+        let drained: Vec<String> = queue.lock().await.drain(..).collect();
+        assert_eq!(drained, vec!["prefer the serde path".to_string()]);
+        assert!(resp.contains("queued"));
+        assert!(
+            !resp.contains("steer updated"),
+            "the old theater reply must be gone"
+        );
+
+        // Without a queue: honest refusal, not a fake success.
+        let no_q = CommandContext::new(None, &cfg, true, "op-1", "telegram", "chan-1");
+        let refused = handle_command("steer", "x", &no_q).expect("handled");
+        assert!(
+            refused.contains("unavailable"),
+            "no live agent must be said aloud"
+        );
+
+        // Contended queue (held across the call): retry guidance, nothing lost.
+        let held = queue.lock().await;
+        let contended = handle_command("steer", "y", &ctx).expect("handled");
+        assert!(contended.contains("again in a moment"));
+        assert!(
+            held.is_empty(),
+            "nothing may be written while the lock is held"
+        );
+        drop(held);
     }
 
     // RT-177 companion: both commands are admin_only — they stop/resume

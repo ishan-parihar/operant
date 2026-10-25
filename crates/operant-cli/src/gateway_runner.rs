@@ -3945,7 +3945,15 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                                             .stop_flag_if_running(&turn_inflight, &session_key),
                                     )
                                     .with_session_pins(Some(session_pins.clone()))
-                                    .with_session_key(&session_key);
+                                    .with_session_key(&session_key)
+                                    // RT-175: the live steer queue off the
+                                    // handler's agent — the same queue
+                                    // drain_steers empties at the iteration
+                                    // boundary, so /steer from a channel
+                                    // reaches the RUNNING turn like the TUI's.
+                                    .with_steer_queue(Some(
+                                        handler_for_stop.agent.steer_queue_handle(),
+                                    ));
                                     if let Some(response_text) =
                                         handle_command(cmd_def.name, cmd_args, &ctx)
                                     {
