@@ -307,6 +307,10 @@ pub static COMMAND_REGISTRY: &[CommandDef] = &[
     // (gateway_runner.rs inbound loop), so these two commands are the only
     // way to operate the pause from the channel that is paused, and the
     // reason they must live here rather than inside the turn handler.
+    // NOTE: the estop-clear command is `unpause`, NOT `resume` — /resume is
+    // TAKEN (resume a saved session, above). The first draft of this change
+    // duplicated the name; the RT-178 uniqueness guard is what catches that
+    // shape now.
     CommandDef {
         name: "pause",
         description: "Pause operant globally (new work only)",
@@ -316,9 +320,9 @@ pub static COMMAND_REGISTRY: &[CommandDef] = &[
         admin_only: true,
     },
     CommandDef {
-        name: "resume",
+        name: "unpause",
         description: "Resume operant from a global pause",
-        aliases: &["unpause"],
+        aliases: &[],
         category: "Session",
         args_hint: "",
         admin_only: true,
@@ -1066,14 +1070,16 @@ pub fn handle_command(cmd_name: &str, _args: &str, ctx: &CommandContext<'_>) -> 
             msg
         }
 
-        // RT-177: pause/resume operable from the channel. These call the
+        // RT-177: pause/unpause operable from the channel. These call the
         // SAME estop machinery the CLI does (`operant pause`/`operant
         // resume`), so a channel user is never told to go to the CLI for
         // the one thing command dispatch can still do while paused —
         // dispatch runs before the estop gate in the inbound loop. Both
         // are admin_only because they stop/resume work for EVERY session,
         // every platform, not just this chat. In-flight work is never
-        // killed: this is pause-NEW-work, same as the CLI.
+        // killed: this is pause-NEW-work, same as the CLI. The estop-clear
+        // command is `unpause` because `/resume` already means "resume a
+        // saved session" — so the pause reply points at /unpause.
         "pause" => {
             let reason = _args.trim();
             let reason = if reason.is_empty() {
@@ -1089,7 +1095,7 @@ pub fn handle_command(cmd_name: &str, _args: &str, ctx: &CommandContext<'_>) -> 
                         "Gateway /pause: estop engaged"
                     );
                     format!(
-                        "⏸️ **Operant paused** (new work only — in-flight turns finish).\nReason: {reason}\nResume with `/resume` here, or `operant resume` on the CLI."
+                        "⏸️ **Operant paused** (new work only — in-flight turns finish).\nReason: {reason}\nResume with `/unpause` here, or `operant resume` on the CLI."
                     )
                 }
                 Err(e) => {
@@ -1103,7 +1109,7 @@ pub fn handle_command(cmd_name: &str, _args: &str, ctx: &CommandContext<'_>) -> 
             }
         }
 
-        "resume" => {
+        "unpause" => {
             if !operant_core::estop::is_engaged() {
                 return Some("▶️ Operant is not paused — nothing to resume.".into());
             }
@@ -1112,7 +1118,7 @@ pub fn handle_command(cmd_name: &str, _args: &str, ctx: &CommandContext<'_>) -> 
                     tracing::info!(
                         user = %ctx.user_id,
                         platform = %ctx.platform,
-                        "Gateway /resume: estop disengaged"
+                        "Gateway /unpause: estop disengaged"
                     );
                     "▶️ **Operant resumed.** New messages reach the agent again.".into()
                 }
@@ -1120,7 +1126,7 @@ pub fn handle_command(cmd_name: &str, _args: &str, ctx: &CommandContext<'_>) -> 
                     tracing::warn!(
                         user = %ctx.user_id,
                         error = %crate::gateway_runner::redact_err(&e),
-                        "Gateway /resume: disengaging the estop failed"
+                        "Gateway /unpause: disengaging the estop failed"
                     );
                     format!("⚠️ Could not resume: {e}")
                 }
@@ -2497,6 +2503,88 @@ mod tests {
         let ctx = CommandContext::new(None, &cfg, true, "test", "telegram", "123");
         let resp = handle_command("approve", "", &ctx).unwrap();
         assert!(resp.contains("approved"));
+    }
+
+    // RT-177: /pause and /unpause must operate the SAME estop the CLI does,
+    // through the scoped root so a test never touches the operator's real
+    // sentinel (iter-935: test runs once touched a real emergency stop).
+    // Serialised because the estop root is a process-global. `/resume` is
+    // NOT the estop-clear command — it resumes a saved session; the first
+    // draft of this change duplicated the name and the RT-178 guard caught
+    // the shape.
+    #[serial_test::serial]
+    #[test]
+    fn pause_command_engages_and_unpause_command_disengages_the_estop() {
+        let dir = tempfile::tempdir().expect("temp estop root");
+        let _root = operant_core::estop::scoped_root_for_tests(dir.path());
+        let cfg = AppConfig::default();
+        let ctx = CommandContext::new(None, &cfg, true, "op-1", "telegram", "chan-1");
+
+        // Pre-fix state: neither command exists, so handle_command returns
+        // None and the estop is never touched — a paused channel user is
+        // stuck with "Resume with `operant resume`" and no way to follow it.
+        assert!(!operant_core::estop::is_engaged());
+
+        let paused =
+            handle_command("pause", "testing RT-177", &ctx).expect("/pause must be handled");
+        assert!(
+            operant_core::estop::is_engaged(),
+            "/pause must engage the estop"
+        );
+        assert!(
+            paused.contains("paused"),
+            "the reply must say the pause took hold, not claim success silently"
+        );
+        assert!(
+            paused.contains("/unpause"),
+            "the pause reply must point at the estop-clear command, not the session-resume /resume"
+        );
+
+        // While engaged, /unpause must still dispatch (the runner's command
+        // interception runs BEFORE the estop gate) and clear the sentinel.
+        let resumed = handle_command("unpause", "", &ctx).expect("/unpause must be handled");
+        assert!(
+            !operant_core::estop::is_engaged(),
+            "/unpause must disengage"
+        );
+        assert!(resumed.contains("resumed"));
+
+        // A second /unpause is honest about there being nothing to resume.
+        let noop = handle_command("unpause", "", &ctx).expect("handled");
+        assert!(noop.contains("not paused"));
+
+        // And /resume stays the SESSION command: with the estop engaged it
+        // must not clear the sentinel — it answers about sessions.
+        operant_core::estop::engage(Some("session-command-must-not-clear-me")).expect("engage");
+        let session_resume = handle_command("resume", "", &ctx)
+            .expect("/resume must stay handled as the session command");
+        assert!(
+            operant_core::estop::is_engaged(),
+            "/resume resumes a saved session — it must never clear the estop"
+        );
+        assert!(
+            !session_resume.contains("Operant resumed"),
+            "/resume must not speak in the estop-clear voice"
+        );
+    }
+
+    // RT-177 companion: both commands are admin_only — they stop/resume
+    // work for every session on every platform, not just this chat.
+    #[test]
+    fn pause_and_unpause_are_admin_only() {
+        let pause = COMMAND_REGISTRY
+            .iter()
+            .find(|c| c.name == "pause")
+            .expect("/pause registry entry");
+        let unpause = COMMAND_REGISTRY
+            .iter()
+            .find(|c| c.name == "unpause")
+            .expect("/unpause registry entry");
+        assert!(pause.admin_only, "/pause halts every session — admin only");
+        assert!(
+            unpause.admin_only,
+            "/unpause un-halts every session — admin only"
+        );
     }
 
     #[test]
