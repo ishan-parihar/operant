@@ -365,3 +365,19 @@ Append-only: `kb log "<entry>"` — one entry per unit of work.
   model_catalog), no lane involvement; (d) genome doctor stale-STATE finding closed by
   regenerating the handoff zone (`genome handoff --write`) — doctor now healthy; (e) gateway
   liveness confirmed (Telegram poll active, uptime 23min on the iter-1267 build at check time).
+- **2026-10-25T03:53Z** · `jcode` — fifth validation round, four surfaces probed, two real fixes
+  (iter-1274, pushed a7240f50): (1) scripts/test-compile-gate.sh — the protocol obligation never
+  run this session — GREEN across all crates (45s). (2) Integration test targets (the mode
+  rounds 1-4 never ran): operant-core --tests and operant-cli --tests all compile and pass —
+  core integration 26/26, CLI targets 1758 + 16 + 3 + 1, zero FAILED — my tool removals broke
+  nothing downstream. (3) BUGS.md R29's browser_cdp row documented the pre-iter-1246 env-gate
+  mechanism; iter-1246 replaced it with env-or-managed-sourcehound-session. The CONCLUSION (no
+  model-controlled URL surface) was RE-VERIFIED under the new mechanism (BrowserCdpArgs carries
+  no URL field) and the row now names the live mechanism. (4) My own pre-iter-1226 scroll WIP
+  patch (preserved by a peer at .git/peer-wip/) is superseded by the shipped iter-1226 design
+  and would conflict with live key_handling.rs — quarantined to .git/peer-wip/superseded/ with
+  a do-not-apply README (preserved per the never-destroy rule, no longer presenting as
+  resumable). Also noted: docs-check's README length_in_band warn (353 lines vs the generic
+  100-170 band) predates this arc (337 lines before iter-1266's +15) and is warn-mode,
+  not gating; the README's archetype likely isn't 'generic' — left to the doc owner, not
+  restructured here per the surgical-changes rule.
