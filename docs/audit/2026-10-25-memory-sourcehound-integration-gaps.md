@@ -143,22 +143,31 @@ the hooks the infrastructure already emits:
 The objective stated for this audit. The constraints, MEASURED (not
 estimated — every number below was taken from the live binary's own
 `tools/list` over `operant mcp serve`, serialized in the exact wire format
-`client.rs::build_chat_request` sends after `clean_schema`, and
-counted at the agent loop's own chars/4 heuristic):
+`client.rs::build_chat_request` sends after `clean_schema`, and counted at
+the agent loop's own chars/4 heuristic — with two precision notes added
+on re-check: the run-path count is 73 not 74, because the registry's one
+`mcp_*`-prefixed tool (`mcp_management`) rides the tool_search bridge
+rather than the request under the live `tool_search=auto` rules; and the
+provider twins' figures are pre-intent-augmentation, so the five-tool
+cost is a ~590-650 range):
 
-1. **74 tools ride every request at ~14.5k tokens of wire schema**
-   (72 from the mcp-serve registry at ~14.3k clean + the two memory
-   provider twins at ~200). `tools.tool_search` (auto) defers only
-   `mcp_*`-prefixed tools — the entire native surface is eager. The
-   heaviest single schemas: `todo` ~777, `delegate_task` ~773,
-   `verify_task` ~545, `skill_manage` ~449, `kanban` ~435,
-   `browser` ~430. Every schema also carries the shared `intent` +
-   `accept_large_output` fields (`with_intent()`, added centrally at
-   publication).
-2. **Memory costs ~590 tokens per request for five tools that are two
-   tools.** The live trio (`memory_store` ~160, `memory_search` ~142,
-   `memory_recall` ~126, intent-augmented) plus the two provider twins
-   (`memory_save` ~106, `memory_smart_search` ~97). Consolidating to
+1. **73 tools ride every request at ~14.3k tokens of wire schema**
+   (71 eager from the mcp-serve registry — a figure that already
+   counts the `tool_search`/`tool_describe`/`tool_call` bridge trio —
+   plus the two memory provider twins at ~200; `mcp_management` is
+   `mcp_*`-prefixed, so it rides the BRIDGE, not the request).
+   `tools.tool_search` (auto) defers only `mcp_*`-prefixed tools — the
+   entire native surface is eager. The heaviest single schemas: `todo`
+   ~777, `delegate_task` ~773, `verify_task` ~545, `skill_manage` ~449,
+   `kanban` ~435, `browser` ~430. Every schema also carries the shared
+   `intent` + `accept_large_output` fields (`with_intent()`, added
+   centrally at publication).
+2. **Memory costs ~590-650 tokens per request for five tools that are
+   two tools.** The live trio (`memory_store` ~160, `memory_search` ~142,
+   `memory_recall` ~126, intent-augmented, measured from the live
+   registry) plus the two provider twins (`memory_save` ~106,
+   `memory_smart_search` ~97, source-derived BEFORE intent augmentation —
+   on the run path they carry it too, hence the range). Consolidating to
    `memory_store` + `memory_search(+key)` saves ~300 tokens per
    request — every request, not just turns that touch memory.
 3. **Every sourcehound call must send `format: "json"`** — the server
