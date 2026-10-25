@@ -555,7 +555,15 @@ fn every_advertised_binding_dispatches() {
         ("Ctrl+a", "Open model picker"),
         ("Ctrl+b", "Open session branch browser"),
         ("Ctrl+r", "History search"),
-        ("Ctrl+g", "Toggle scroll bookmark"),
+        // (iter-1263/1267) The scroll-ladder rows were corrected to match the
+        // real dispatch: PageUp/Down step by the live viewport height (not a
+        // fixed 10), and the bookmark chord moved from Ctrl+g (now the external
+        // editor) to Alt+g. The old rows pinned the stale text and failed
+        // once iters 1263/1267 fixed the catalogue.
+        (
+            "Ctrl+g",
+            "Edit prompt in external editor ([tui] external_editor)",
+        ),
         ("Alt+g", "Toggle scroll bookmark"),
         ("Alt+p", "Cycle configured models"),
         ("Ctrl+o", "Expand latest tool output"),
@@ -565,8 +573,10 @@ fn every_advertised_binding_dispatches() {
         ("Ctrl+Down", "Fine scroll down 3"),
         ("Alt+Up", "Fast scroll up 20"),
         ("Alt+Down", "Fast scroll down 20"),
-        ("PageUp", "Scroll transcript up 10"),
-        ("PageDown", "Scroll transcript down 10"),
+        ("PageUp", "Scroll transcript up one page"),
+        ("PageDown", "Scroll transcript down one page"),
+        ("Shift+Home", "Jump to transcript top"),
+        ("Shift+End", "Jump to transcript tail"),
     ];
 
     let catalogue = DEFAULT_KEYBINDINGS.catalogue();
