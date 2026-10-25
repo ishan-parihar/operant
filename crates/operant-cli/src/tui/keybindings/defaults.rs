@@ -200,14 +200,38 @@ impl KeyBindingRegistry {
                 modifiers: KeyModifiers::NONE,
                 action: KeyAction::Custom(6),
                 context: BindingContext::Global,
-                description: "Scroll transcript up 10",
+                // (iter-1263) The step is the live viewport's transcript
+                // height minus two (scroll_anchor::scroll_page_step), not a
+                // fixed 10 — the old text promised a number the dispatch
+                // never used.
+                description: "Scroll transcript up one page",
             },
             DefaultBinding {
                 key: KeyCode::PageDown,
                 modifiers: KeyModifiers::NONE,
                 action: KeyAction::Custom(6),
                 context: BindingContext::Global,
-                description: "Scroll transcript down 10",
+                description: "Scroll transcript down one page",
+            },
+            DefaultBinding {
+                key: KeyCode::Home,
+                modifiers: KeyModifiers::SHIFT,
+                action: KeyAction::Custom(6),
+                context: BindingContext::Global,
+                // (iter-1263) Dispatched at key_handling.rs's Shift+Home arm
+                // (scroll_to_top + "Top of transcript." notice). Live-verified
+                // 2026-10-25 in tmux; absent from the catalogue until now —
+                // /hotkeys never advertised the chord.
+                description: "Jump to transcript top",
+            },
+            DefaultBinding {
+                key: KeyCode::End,
+                modifiers: KeyModifiers::SHIFT,
+                action: KeyAction::Custom(6),
+                context: BindingContext::Global,
+                // (iter-1263) Dispatched at key_handling.rs's Shift+End arm
+                // (scroll_to_tail + "Latest — following new messages.").
+                description: "Jump to transcript tail",
             },
             DefaultBinding {
                 key: KeyCode::Up,

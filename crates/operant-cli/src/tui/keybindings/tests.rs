@@ -5,6 +5,83 @@
 use super::*;
 use crossterm::event::{KeyCode, KeyModifiers};
 
+/// iter-1263: the transcript scroll ladder's catalogue entries must match
+/// their real dispatch arms — KEY and MODIFIER, not just the keycode token
+/// the loose guard above accepts. The Shift+Home/End entries were absent from
+/// /hotkeys until iter-1263 (the chords worked live but were never advertised),
+/// and the PageUp/Down descriptions still promised a fixed "10" the dispatch
+/// never used. This pin normalizes whitespace and matches the full arm
+/// pattern so a deleted or modifier-changed arm fails the catalogue honestly.
+#[test]
+fn scroll_ladder_catalogue_matches_dispatch() {
+    let dispatch = include_str!("../app/key_handling.rs");
+    let dispatch = dispatch.split_whitespace().collect::<Vec<_>>().join(" ");
+
+    let globals = DEFAULT_KEYBINDINGS.get_bindings(BindingContext::Global);
+    let find = |key: KeyCode, mods: KeyModifiers| -> &KeyBinding {
+        globals
+            .iter()
+            .find(|b| b.key == key && b.modifiers == mods)
+            .unwrap_or_else(|| panic!("catalogue is missing {key:?}+{mods:?}"))
+    };
+    let described = |key: KeyCode, mods: KeyModifiers| -> &str {
+        find(key, mods)
+            .description
+            .as_deref()
+            .unwrap_or_else(|| panic!("catalogue entry {key:?}+{mods:?} has no description"))
+    };
+
+    // PageUp/PageDown: unconditional transcript paging (iter-1226).
+    assert_eq!(
+        described(KeyCode::PageUp, KeyModifiers::NONE),
+        "Scroll transcript up one page"
+    );
+    assert_eq!(
+        described(KeyCode::PageDown, KeyModifiers::NONE),
+        "Scroll transcript down one page"
+    );
+    // The page step is the live viewport height minus two — the description
+    // must not name a fixed number.
+    assert!(!described(KeyCode::PageUp, KeyModifiers::NONE).contains('1'));
+
+    // Shift+Home/Shift+End: jump to top/tail (iter-1226), catalogued iter-1263.
+    assert_eq!(
+        described(KeyCode::Home, KeyModifiers::SHIFT),
+        "Jump to transcript top"
+    );
+    assert_eq!(
+        described(KeyCode::End, KeyModifiers::SHIFT),
+        "Jump to transcript tail"
+    );
+
+    // Each catalogued chord must have a real dispatch arm — the full guard
+    // pattern including the modifier, whitespace-normalized to survive fmt.
+    for (key, mods, arm_prefix) in [
+        (KeyCode::PageUp, KeyModifiers::NONE, "KeyCode::PageUp =>"),
+        (
+            KeyCode::PageDown,
+            KeyModifiers::NONE,
+            "KeyCode::PageDown =>",
+        ),
+        (
+            KeyCode::Home,
+            KeyModifiers::SHIFT,
+            "KeyCode::Home if key.modifiers.contains(KeyModifiers::SHIFT) =>",
+        ),
+        (
+            KeyCode::End,
+            KeyModifiers::SHIFT,
+            "KeyCode::End if key.modifiers.contains(KeyModifiers::SHIFT) =>",
+        ),
+    ] {
+        let needle = arm_prefix.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(
+            dispatch.contains(&needle),
+            "catalogued scroll chord {key:?}+{mods:?} has no dispatch arm in key_handling.rs"
+        );
+    }
+}
+
 #[test]
 fn test_keybinding_registry_basic() {
     let mut registry = KeyBindingRegistry::new();
