@@ -258,6 +258,17 @@ In the default app mode the transcript scrolls with the keyboard alone — no mo
 
 Unmodified `Home` / `End` stay composer caret moves. The status line announces where you are ("Top of transcript.", "Latest — following new messages."). `/hotkeys` lists the full ladder.
 
+### Prompt history in the composer
+
+| Key | Action |
+|---|---|
+| `Up` / `Down` | Step through previously sent **prompts** (single-line drafts; multi-line drafts move the caret). Slash commands never enter this ladder — it is prompts only |
+| `Ctrl+R` | Search the full persisted history (prompts and commands) and paste the selected row into the composer |
+| `F5` / `Alt+R` | Retry the last **failed** turn — the failed prompt is restored to the composer for editing; nothing is resubmitted behind your back |
+| `Ctrl+P` | **File search** — ripgrep the workspace for files/lines (also `/search` or `/find`) |
+
+A recalled prompt never re-opens the slash-command popup, so Up/Down keep stepping history even when the recalled text starts with `/`. History persists in `~/.operant/history.jsonl` across sessions.
+
 ---
 
 ## CLI reference

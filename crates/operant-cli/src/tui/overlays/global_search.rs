@@ -158,7 +158,10 @@ pub fn render_global_search(
         buf,
         area,
         &ModalSpec {
-            title: "Search",
+            // (2026-10-25) The bare "Search" sent the operator looking for a
+            // name for "the unidentified popup Ctrl+P opens". Name the
+            // feature: it ripgreps the workspace for files/lines.
+            title: "File search",
             hint: &hint,
             // 80% width, 75% height. `modal_layout` owns the clamp against the
             // area and the readable floor.

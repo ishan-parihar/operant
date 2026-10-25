@@ -301,6 +301,28 @@ pub static COMMAND_REGISTRY: &[CommandDef] = &[
         args_hint: "",
         admin_only: true,
     },
+    // RT-177: the estop gate (gateway/mod.rs::route_message) rejects every
+    // inbound message with "Resume with `operant resume`" — an instruction a
+    // channel user cannot follow. Command dispatch runs BEFORE that gate
+    // (gateway_runner.rs inbound loop), so these two commands are the only
+    // way to operate the pause from the channel that is paused, and the
+    // reason they must live here rather than inside the turn handler.
+    CommandDef {
+        name: "pause",
+        description: "Pause operant globally (new work only)",
+        aliases: &[],
+        category: "Session",
+        args_hint: "[reason]",
+        admin_only: true,
+    },
+    CommandDef {
+        name: "resume",
+        description: "Resume operant from a global pause",
+        aliases: &["unpause"],
+        category: "Session",
+        args_hint: "",
+        admin_only: true,
+    },
     CommandDef {
         name: "sessions",
         description: "Browse previous sessions",
@@ -1042,6 +1064,67 @@ pub fn handle_command(cmd_name: &str, _args: &str, ctx: &CommandContext<'_>) -> 
                 msg.push_str("\nGateway not connected — use CLI `operant gateway restart`.");
             }
             msg
+        }
+
+        // RT-177: pause/resume operable from the channel. These call the
+        // SAME estop machinery the CLI does (`operant pause`/`operant
+        // resume`), so a channel user is never told to go to the CLI for
+        // the one thing command dispatch can still do while paused —
+        // dispatch runs before the estop gate in the inbound loop. Both
+        // are admin_only because they stop/resume work for EVERY session,
+        // every platform, not just this chat. In-flight work is never
+        // killed: this is pause-NEW-work, same as the CLI.
+        "pause" => {
+            let reason = _args.trim();
+            let reason = if reason.is_empty() {
+                format!("paused via /pause by {} on {}", ctx.user_id, ctx.platform)
+            } else {
+                reason.to_string()
+            };
+            match operant_core::estop::engage(Some(&reason)) {
+                Ok(()) => {
+                    tracing::info!(
+                        user = %ctx.user_id,
+                        platform = %ctx.platform,
+                        "Gateway /pause: estop engaged"
+                    );
+                    format!(
+                        "⏸️ **Operant paused** (new work only — in-flight turns finish).\nReason: {reason}\nResume with `/resume` here, or `operant resume` on the CLI."
+                    )
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        user = %ctx.user_id,
+                        error = %crate::gateway_runner::redact_err(&e),
+                        "Gateway /pause: engaging the estop failed"
+                    );
+                    format!("⚠️ Could not pause: {e}")
+                }
+            }
+        }
+
+        "resume" => {
+            if !operant_core::estop::is_engaged() {
+                return Some("▶️ Operant is not paused — nothing to resume.".into());
+            }
+            match operant_core::estop::disengage() {
+                Ok(()) => {
+                    tracing::info!(
+                        user = %ctx.user_id,
+                        platform = %ctx.platform,
+                        "Gateway /resume: estop disengaged"
+                    );
+                    "▶️ **Operant resumed.** New messages reach the agent again.".into()
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        user = %ctx.user_id,
+                        error = %crate::gateway_runner::redact_err(&e),
+                        "Gateway /resume: disengaging the estop failed"
+                    );
+                    format!("⚠️ Could not resume: {e}")
+                }
+            }
         }
 
         "sessions" => {

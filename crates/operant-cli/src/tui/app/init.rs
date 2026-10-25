@@ -100,8 +100,12 @@ impl App {
                 // Load persisted input history so up/down arrow cycling works
                 // across sessions. (iter-125 — closes the user-reported
                 // "up/down must cycle through previously sent messages"
-                // request.)
-                p.history = crate::tui::input_history::load();
+                // request.) (2026-10-25) PROMPTS ONLY: slash commands are not
+                // prompts and must not crowd the Up/Down ladder — legacy
+                // command entries in the file are filtered here, and new
+                // ones never enter (take_input). The Ctrl+R search overlay
+                // still searches the full file.
+                p.history = crate::tui::input_history::load_prompts_only();
                 p
             },
             scroll_offset: 0,

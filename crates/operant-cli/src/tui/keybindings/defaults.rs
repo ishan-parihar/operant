@@ -1068,14 +1068,17 @@ impl KeyBindingRegistry {
                 modifiers: KeyModifiers::NONE,
                 action: KeyAction::Custom(9),
                 context: BindingContext::Prompt,
-                description: "Retry: resubmit the composer or the last prompt",
+                // (2026-10-25) OMP semantics: retry is scoped to the last
+                // FAILED turn (the failed_input_recovery slot), never the
+                // plain last prompt.
+                description: "Retry: resubmit the composer, or refill it from the last failed turn",
             },
             DefaultBinding {
                 key: KeyCode::Char('r'),
                 modifiers: KeyModifiers::ALT,
                 action: KeyAction::Custom(9),
                 context: BindingContext::Prompt,
-                description: "Retry: resubmit the composer or the last prompt",
+                description: "Retry: resubmit the composer, or refill it from the last failed turn",
             },
             DefaultBinding {
                 key: KeyCode::Char('o'),

@@ -17,6 +17,7 @@ impl PromptInputState {
             history: Vec::new(),
             history_pos: None,
             history_draft: String::new(),
+            suppress_suggestions_once: false,
             paste_counter: 0,
             paste_contents: std::collections::HashMap::new(),
             yank_buf: String::new(),

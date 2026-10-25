@@ -1628,6 +1628,94 @@ fn accept_suggestion_file_ref_preserves_tail() {
     assert_eq!(s.cursor, "@file:src/main.rs".len());
 }
 
+// ---- history-nav fix (2026-10-25): recall must not open the popup ----
+
+/// (2026-10-25 history-nav fix) THE operator defect: recalling a `/…`
+/// entry re-opened the typeahead popup (update_suggestions saw the leading
+/// slash), and the NEXT Up/Down then fed the popup instead of stepping
+/// history — browsing was stranded in slash-completions. OMP's editor only
+/// auto-triggers autocomplete on a TYPED trigger character; recall is
+/// programmatic and must not. Mutation: delete the `suppress_suggestions_once`
+/// arm in history_up and this test fails (the popup reopens).
+#[test]
+fn recalling_a_slash_entry_must_not_reopen_the_popup_and_browsing_continues() {
+    let mut s = PromptInputState::new();
+    // oldest-first: the first Up recalls the NEWEST ("real prompt"), the
+    // second Up reaches the slash entry — THE defect case.
+    s.history = vec!["/help".to_string(), "real prompt".to_string()];
+    let cmds = [("help", "Show help")];
+    let usage = UsageStore::default();
+
+    s.history_up();
+    assert_eq!(s.text, "real prompt");
+    s.update_suggestions(
+        &cmds,
+        &usage,
+        TEST_FILE_AUTOCOMPLETE_LIMIT,
+        TEST_FILE_AUTOCOMPLETE_SHOW_HIDDEN,
+    );
+    assert!(s.suggestions.is_empty());
+
+    // Second Up recalls "/help": the leading slash must not re-open the
+    // typeahead popup, and browsing must keep stepping history.
+    s.history_up();
+    assert_eq!(s.text, "/help");
+    s.update_suggestions(
+        &cmds,
+        &usage,
+        TEST_FILE_AUTOCOMPLETE_LIMIT,
+        TEST_FILE_AUTOCOMPLETE_SHOW_HIDDEN,
+    );
+    assert!(
+        s.suggestions.is_empty(),
+        "a recalled /help must not re-open the popup — that is what stranded browsing"
+    );
+    assert!(!s.suppress_suggestions_once, "the one-shot is consumed");
+    assert_eq!(s.history_pos, Some(0), "still browsing — Up keeps control");
+
+    // And the next genuinely typed character re-arms normal behaviour.
+    s.clear();
+    s.insert_char('/');
+    s.update_suggestions(
+        &cmds,
+        &usage,
+        TEST_FILE_AUTOCOMPLETE_LIMIT,
+        TEST_FILE_AUTOCOMPLETE_SHOW_HIDDEN,
+    );
+    assert!(
+        !s.suggestions.is_empty(),
+        "typing / again must reopen the popup"
+    );
+}
+
+/// history_down's exit-to-draft path also arms the suppress one-shot: Down
+/// past the newest entry restores the draft, and if that draft begins with
+/// '/' the popup must still not hijack the next key.
+#[test]
+fn exiting_history_to_a_slash_draft_must_not_reopen_the_popup() {
+    let mut s = PromptInputState::new();
+    s.history = vec!["a real prompt".to_string()];
+    s.text = "/he".to_string();
+    s.cursor = 3;
+    let cmds = [("help", "Show help")];
+    let usage = UsageStore::default();
+
+    s.history_up();
+    assert_eq!(s.text, "a real prompt");
+    s.history_down();
+    assert_eq!(s.text, "/he", "the draft is restored");
+    s.update_suggestions(
+        &cmds,
+        &usage,
+        TEST_FILE_AUTOCOMPLETE_LIMIT,
+        TEST_FILE_AUTOCOMPLETE_SHOW_HIDDEN,
+    );
+    assert!(
+        s.suggestions.is_empty(),
+        "returning to a / draft via Down must not open the popup either"
+    );
+}
+
 // ---- word_nav (plan 2026-10-24 M1: OMP word classes) ------------------
 
 /// Helper: set text + cursor in one call.

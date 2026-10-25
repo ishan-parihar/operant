@@ -364,13 +364,24 @@ impl HistorySearchOverlay {
 
     /// Return the currently selected history entry text, if any.
     ///
-    /// The `history` parameter is accepted for backward compatibility but the
-    /// overlay uses its internal snapshot.  If `history` is non-empty it is
-    /// used as a fallback when the snapshot is empty.
-    pub fn current_entry<'a>(&self, history: &'a [String]) -> Option<&'a str> {
+    /// The selected match indexes THIS overlay's snapshot (newest-first,
+    /// deduped) — never the caller's raw `history` slice, which is oldest-
+    /// first and non-deduped. The old implementation did `history.get(
+    /// snapshot_idx)`, crossing the two orderings: with a real history the
+    /// selected entry and the pasted one were different entries, which is
+    /// the "Ctrl+R Enter pastes a partial random input" report (2026-10-25).
+    /// Owned `String` because the text can come from either the snapshot or
+    /// the caller's slice (fallback), so no single borrow covers both.
+    /// `history` is only used as a last-resort fallback when the snapshot
+    /// is somehow empty.
+    pub fn current_entry(&self, history: &[String]) -> Option<String> {
         let snap_idx = self.matches.get(self.selected_idx)?.snapshot_idx;
-        // Try the history slice first (keeps existing call-sites working).
-        history.get(snap_idx).map(String::as_str)
+        if let Some(entry) = self.snapshot.get(snap_idx) {
+            return Some(entry.text.clone());
+        }
+        // Defensive fallback for a caller-built overlay with an empty
+        // snapshot (not reachable through open()/update_matches today).
+        history.get(snap_idx).cloned()
     }
 
     pub fn close(&mut self) {

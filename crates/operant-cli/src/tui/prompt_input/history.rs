@@ -24,6 +24,14 @@ impl PromptInputState {
             self.text = self.history[pos].clone();
             self.cursor = self.text.len();
             self.update_token_estimate();
+            // (2026-10-25) A recalled `/…` entry must not re-open the
+            // typeahead popup — that is what stranded history browsing in
+            // slash-completions (the next Up/Down fed the popup instead of
+            // stepping history). OMP opens autocomplete only on a TYPED
+            // trigger character; recall is programmatic.
+            self.suppress_suggestions_once = true;
+            self.suggestions.clear();
+            self.suggestion_index = None;
         }
     }
 
@@ -36,12 +44,18 @@ impl PromptInputState {
                 self.text = self.history_draft.clone();
                 self.cursor = self.text.len();
                 self.update_token_estimate();
+                self.suppress_suggestions_once = true;
+                self.suggestions.clear();
+                self.suggestion_index = None;
             }
             Some(n) => {
                 self.history_pos = Some(n + 1);
                 self.text = self.history[n + 1].clone();
                 self.cursor = self.text.len();
                 self.update_token_estimate();
+                self.suppress_suggestions_once = true;
+                self.suggestions.clear();
+                self.suggestion_index = None;
             }
         }
     }

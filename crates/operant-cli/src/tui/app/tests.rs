@@ -1452,9 +1452,29 @@ fn test_ctrl_r_opens_history_search_carrying_the_history() {
     app.handle_key_event(press_key(KeyCode::Char('r'), KeyModifiers::CONTROL));
 
     assert!(app.history_search_overlay.visible);
-    // Not just "a dialog opened": the entries must be the ones we seeded. An
-    // overlay that opened empty would satisfy a bare `visible` assertion.
-    assert_eq!(app.history_search_overlay.snapshot.len(), 2);
+    // Not just "a dialog opened": the live entries must be in the searchable
+    // snapshot. (2026-10-25) The overlay now searches the FULL persisted
+    // history merged with the live in-session ladder, so the snapshot can
+    // legitimately hold more than the fixture's two rows — the invariant is
+    // that every live entry is findable, and that the snapshot stays deduped
+    // (each text once).
+    let snapshot_texts: Vec<&str> = app
+        .history_search_overlay
+        .snapshot
+        .iter()
+        .map(|e| e.text.as_str())
+        .collect();
+    for needle in ["first command", "second"] {
+        assert!(
+            snapshot_texts.contains(&needle),
+            "live entry {needle:?} must be searchable: {snapshot_texts:?}"
+        );
+        assert_eq!(
+            snapshot_texts.iter().filter(|t| **t == needle).count(),
+            1,
+            "snapshot stays deduped"
+        );
+    }
 }
 
 #[test]
@@ -4357,6 +4377,68 @@ fn the_restore_slot_tracks_the_turn_currently_in_flight() {
     assert_eq!(app.prompt_input.text, "second");
 }
 
+/// (2026-10-25 history-nav fix) THE pollution defect, write side: submitting a
+/// slash command must not append it to the Up/Down ladder. The operator's
+/// file held 593 command entries in 853 (70%) crowding out real prompts.
+/// Mutation: delete the `is_command` guard in take_input and this fails
+/// (`/help` lands in the ladder).
+#[test]
+fn submitting_a_slash_command_does_not_enter_the_history_ladder() {
+    // take_input persists real prompts to history.jsonl under the operant
+    // home — divert the home to a sandbox so the test does not write to the
+    // operator's real history file.
+    let _env_lock = crate::config::test_env_lock();
+    let saved_home = std::env::var("HERMES_HOME").ok();
+    let sandbox = std::env::temp_dir().join(format!("operant-history-test-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&sandbox);
+    // SAFETY: serialized by the crate-wide test_env_lock; restored below.
+    unsafe {
+        std::env::set_var("HERMES_HOME", &sandbox);
+    }
+    let mut app = make_app();
+    app.set_prompt_text("a real prompt".to_string());
+    app.take_input();
+    app.set_prompt_text("/help".to_string());
+    app.take_input();
+    app.set_prompt_text("another real prompt".to_string());
+    app.take_input();
+    let ladder = app.prompt_input.history.clone();
+    // Restore before asserting so a failure does not leak the sandbox home.
+    // SAFETY: still under test_env_lock.
+    unsafe {
+        match &saved_home {
+            Some(home) => std::env::set_var("HERMES_HOME", home),
+            None => std::env::remove_var("HERMES_HOME"),
+        }
+    }
+    let persisted = std::fs::read_to_string(sandbox.join("history.jsonl")).unwrap_or_default();
+    let _ = std::fs::remove_dir_all(&sandbox);
+    // Semantic assertions: parallel tests' take_input calls can append to
+    // the sandboxed file while the env flip is live (env is process-global),
+    // so the ladder may carry foreign prompts — but the INVARIANT is that
+    // no slash command ever lands in it, and this test's own prompts do.
+    assert!(
+        !ladder
+            .iter()
+            .any(|t| crate::tui::input::is_slash_command(t.trim())),
+        "slash commands never enter the Up/Down ladder: {ladder:?}"
+    );
+    assert!(
+        ladder.contains(&"a real prompt".to_string()),
+        "this test's first prompt is in the ladder: {ladder:?}"
+    );
+    assert!(
+        ladder.contains(&"another real prompt".to_string()),
+        "this test's second prompt is in the ladder: {ladder:?}"
+    );
+    // And the persisted file agrees: no command row ever lands there.
+    assert!(
+        !persisted.contains("\"/help\""),
+        "the file never gains command rows: {persisted}"
+    );
+    assert!(persisted.contains("a real prompt"));
+}
+
 /// A turn that succeeds is spent, not held. Without this, a later error
 /// arriving after an unrelated successful turn would pop a stale prompt into
 /// a composer the user had already moved on from.
@@ -5702,14 +5784,32 @@ fn new_composer_keys_do_what_they_say() {
     app.handle_key_event(press_key(KeyCode::Char('g'), KeyModifiers::CONTROL));
     assert!(app.pending_external_editor);
 
-    // F5 with an empty composer resubmits the last prompt.
+    // F5 / Alt+R with an empty composer retries the last FAILED turn only
+    // (OMP semantics — 2026-10-25). A failed turn restores its prompt to the
+    // composer itself (restore_failed_input_to_composer), so the common path
+    // is "press Enter on the restored text". The empty-composer arm refills
+    // from the failed-turn slot, never from the plain last prompt: the old
+    // behavior re-ran the previous prompt as a whole new turn on a stray
+    // Alt+R, which the operator reported as undesired.
     let mut app = make_app();
-    app.prompt_input.history.push("run the tests".to_string());
-    assert!(app.handle_key_event(press_key(KeyCode::F(5), KeyModifiers::NONE)));
-    assert_eq!(app.prompt_input.text, "run the tests");
+    app.prompt_input
+        .history
+        .push("a prompt that succeeded".to_string());
+    assert!(!app.handle_key_event(press_key(KeyCode::F(5), KeyModifiers::NONE)));
+    assert!(
+        app.prompt_input.text.is_empty(),
+        "a successful turn is not retryable — F5 must not resubmit it"
+    );
+
+    // The failed-turn slot refills the composer on retry.
+    let mut app = make_app();
+    app.failed_input_recovery = Some("the failed prompt".to_string());
+    assert!(app.handle_key_event(press_key(KeyCode::Char('r'), KeyModifiers::ALT)));
+    assert_eq!(app.prompt_input.text, "the failed prompt");
+
     // …and never while a turn is streaming.
     let mut app = make_app();
-    app.prompt_input.history.push("x".to_string());
+    app.failed_input_recovery = Some("x".to_string());
     app.is_streaming = true;
     assert!(!app.handle_key_event(press_key(KeyCode::Char('r'), KeyModifiers::ALT)));
 
