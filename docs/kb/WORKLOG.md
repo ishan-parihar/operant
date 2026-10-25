@@ -301,3 +301,22 @@ Append-only: `kb log "<entry>"` — one entry per unit of work.
   iterations have no CHANGELOG [Unreleased] entries yet (peers' iters 1229-1257 are there);
   operant.example.toml's [auxiliary_models] block does not document the vision key the honest
   vision contract names. Both flagged for the next docs iteration.
+- **2026-10-25T02:52Z** · `jcode` — second validation round, three honest surfaces found and fixed:
+  iter-1266 (docs, pushed 97981bba) documented the app-mode keyboard scroll ladder in the README
+  (previously the README's only scroll section covered terminal_scrollback mode, where the
+  TERMINAL scrolls its own buffer — the app-mode ladder from iter-1226 was documented nowhere
+  user-facing) and added the missing provider field to operant.example.toml's
+  [auxiliary_models.vision] block (AuxiliaryModelConfig carries provider/model/base_url/api_key;
+  iter-1265's block omitted provider). iter-1267 (code, pushed 35850256, deployed, live-verified)
+  caught a REAL dead chord: writing the README table exposed that the Global keybinding
+  catalogue still advertised Ctrl+G as "Toggle scroll bookmark" — but the bookmark moved to
+  Alt+G when Ctrl+G became the external editor (key_handling.rs:1311 vs 1314), and only the
+  Prompt table got that correction. /hotkeys was teaching a chord that opens the editor as if
+  it bookmarked a scroll position. Global table corrected, README row corrected to Alt+G, and
+  the pin test now covers the g chords in BOTH contexts (mutation-proven RED on the Global
+  assertion). Live on the deployed binary: /hotkeys renders "Ctrl+g → Edit prompt in external
+  editor" and "Alt+g → Toggle scroll bookmark". Validation also confirmed: browser tool files
+  unchanged since their live verification (git diff empty); the operator's
+  terminal_scroll_mode=false means the live scroll acceptance ran in the default app mode
+  (the mode the README table documents); genome lint 0 errors (W010 ToC warnings are inherent
+  to append-only docs); genome doctor's stale-STATE finding belongs to peers' commits, not mine.
