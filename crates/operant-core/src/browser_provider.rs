@@ -157,6 +157,13 @@ impl SourcehoundProvider {
         let mut args = args;
         if let Some(map) = args.as_object_mut() {
             map.insert("profile".to_string(), Value::String(self.profile.clone()));
+            // Every cloakctl call asks for the structured form (iter-1210's
+            // contract, extended here): `dispatch_value` strips
+            // `structuredContent` unless the TOP-LEVEL arguments carry
+            // `format: "json"`, and the server's TOON default answers with
+            // text operant then has to rescue field-by-field. `cloakctl.act`
+            // has no `format` field of its own, so the wire copy is free.
+            map.insert("format".to_string(), Value::String("json".to_string()));
         }
         let payload = self.sh.call(SH_TOOL_ACT, args).await?;
         Ok(payload.to_string())
@@ -178,7 +185,12 @@ impl BrowserProvider for SourcehoundProvider {
         self.sh
             .call(
                 SH_TOOL_NAVIGATE,
-                serde_json::json!({ "profile": self.profile, "action": "url", "url": url }),
+                serde_json::json!({
+                    "profile": self.profile,
+                    "action": "url",
+                    "url": url,
+                    "format": "json",
+                }),
             )
             .await?;
         // `cloakctl.navigate` answers with the navigation envelope only
@@ -189,6 +201,19 @@ impl BrowserProvider for SourcehoundProvider {
 
     async fn snapshot(&self) -> Result<String> {
         self.prepare().await?;
+        // `format` is TWO fields on the wire here: top-level `format: "json"`
+        // is the output-format switch `dispatch_value` keys on (without it the
+        // structuredContent is stripped and the page body has to be rescued
+        // from TOON text), and the nested `output.format` inside the flatten
+        // collision is dead — serde's NON-flattened `CloakctlReadInput.format`
+        // wins the key, so the value below doubles as the READ format
+        // (markdown|text|links). Verified live on 1.8.0: `format: "json"`
+        // alone answers structuredContent with format resolved as `json` and
+        // the page body in `content` (the TEXT walker — `markdown` there
+        // would drop the structured form, which is why the call below reads
+        // `format: "markdown"` for the body and sets the output switch via
+        // the same collision, accepting the TEXT body as the price of a
+        // parseable payload).
         let payload = self
             .sh
             .call(

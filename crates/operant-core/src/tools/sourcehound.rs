@@ -208,22 +208,51 @@ impl Sourcehound {
         unwrap_tool_result(tool, &raw)
     }
 
-    /// The name to send a crawl call under on the wire.
+    /// The name to send a crawl call under on the wire, and whether the
+    /// receiving surface needs `mode: "crawl"`.
     ///
     /// `web.crawl` on the v1 surface, `crawl` on v2 (which folded the four v1
     /// web tools into composites). Resolved per handle from the server's own
     /// advertised set, so a v2 install crawls and a v1 one is unchanged.
-    async fn crawl_wire_name(&self) -> &'static str {
+    ///
+    /// v2's `crawl` composite is dual-mode: `mode` defaults to `map` (sitemap /
+    /// link listing). A crawl call that does not send `mode: "crawl"` gets a
+    /// sitemap link list back and reports success — the tool returns an empty
+    /// page set while the server answered a different question (verified
+    /// live against 1.8.0: `crawl {url}` → `links[0]: count: 0`, `crawl
+    /// {url, mode:"crawl"}` → `pages[1]{url,title,content,depth}`).
+    async fn crawl_wire_surface(&self) -> (&'static str, bool) {
+        // Resolve the advertised set FIRST, on this call's own connect — a
+        // crawl is frequently the FIRST sourcehound call in a process, and
+        // reading the set before the handshake walks the `None` arm (v1
+        // name, no mode) into a v2 server's "tool not found" verdict. The
+        // first-call path is the live one; the tests that forced the
+        // handshake with a probe call masked exactly this ordering bug
+        // (live-verified: first web_crawl in a fresh `operant run` failed
+        // against stock 1.8.0 while every subsequent call would succeed).
+        if let Err(e) = self.client().await {
+            // A spawn failure is about to fail the call anyway — surface it
+            // from the dispatch rather than from here, where the caller has
+            // no error channel. The conservative v1 defaults stand.
+            tracing::warn!(
+                error = %e,
+                "sourcehound handshake failed before crawl; using v1 wire name"
+            );
+            return (TOOL_CRAWL, false);
+        }
         let advertised = self.advertised.lock().await.clone();
         match advertised.as_ref() {
             // The server has not told us what it lists (no spawn yet, or an
             // empty tools/list): try the v1 name, which is what the rest of
             // this module assumes, and let the server correct us.
-            None => TOOL_CRAWL,
-            // v2: the v1 name is absent and the composite is present.
-            Some(names) if !names.contains(TOOL_CRAWL) && names.contains("crawl") => "crawl",
+            None => (TOOL_CRAWL, false),
+            // v2: the v1 name is absent and the composite is present. The
+            // composite defaults to map mode, so the call must name crawl mode.
+            Some(names) if !names.contains(TOOL_CRAWL) && names.contains("crawl") => {
+                ("crawl", true)
+            }
             // v1, or a server listing neither (the gate will say why).
-            Some(_) => TOOL_CRAWL,
+            Some(_) => (TOOL_CRAWL, false),
         }
     }
 
@@ -532,7 +561,10 @@ async fn web_search_via(
 
 /// Scrape a URL to markdown through sourcehound's `web.scrape` MCP tool.
 pub async fn scrape_url(url: &str) -> Result<String> {
-    let arguments = serde_json::json!({ "url": url });
+    // `format: "json"` — the same iter-1210 contract as the search path: the
+    // server's TOON default is text operant cannot parse, and a TOON reply
+    // here degrades the markdown to whatever `first_text_field` rescues.
+    let arguments = serde_json::json!({ "url": url, "format": "json" });
     let payload = Sourcehound::global().call(TOOL_SCRAPE, arguments).await?;
     text_field(&payload, &["markdown", "content", "text"])
         .or_else(|| first_text_field(&payload))
@@ -596,9 +628,16 @@ impl OperantTool for WebScrapeTool {
         if !safe {
             return ToolResult::error("web_scrape", block_msg);
         }
+        // `format: "json"` — iter-1210's contract on every sourcehound call:
+        // the server's default TOON text cannot carry the markdown payload
+        // as a parseable object, so ask for the structured form. The SSRF
+        // guard runs first, unchanged.
         match self
             .0
-            .call(TOOL_SCRAPE, serde_json::json!({ "url": args.url }))
+            .call(
+                TOOL_SCRAPE,
+                serde_json::json!({ "url": args.url, "format": "json" }),
+            )
             .await
         {
             Ok(payload) => ToolResult::success("web_scrape", payload),
@@ -660,7 +699,10 @@ impl OperantTool for WebExtractTool {
         }
         match self
             .0
-            .call(TOOL_EXTRACT, serde_json::json!({ "url": args.url }))
+            .call(
+                TOOL_EXTRACT,
+                serde_json::json!({ "url": args.url, "format": "json" }),
+            )
             .await
         {
             Ok(payload) => ToolResult::success("web_extract", payload),
@@ -737,12 +779,21 @@ impl OperantTool for WebCrawlTool {
         if !safe {
             return ToolResult::error("web_crawl", block_msg);
         }
-        let arguments = serde_json::json!({
+        // v2's `crawl` composite defaults to `mode: "map"` (a sitemap link
+        // listing); the tool promises pages, so the call must name crawl
+        // mode. `format: "json"` is the same contract as the search path
+        // (iter-1210): the server's default TOON text cannot be parsed into
+        // a page list, and an unparseable reply reads as an empty crawl.
+        let (wire_name, needs_mode) = self.0.crawl_wire_surface().await;
+        let mut arguments = serde_json::json!({
             "url": args.url,
             "max_depth": args.max_depth,
             "max_pages": args.max_pages,
+            "format": "json",
         });
-        let wire_name = self.0.crawl_wire_name().await;
+        if needs_mode && let Some(map) = arguments.as_object_mut() {
+            map.insert("mode".to_string(), Value::String("crawl".to_string()));
+        }
         match self.0.call(wire_name, arguments).await {
             Ok(payload) => ToolResult::success("web_crawl", payload),
             Err(e) => ToolResult::error("web_crawl", e.to_string()),
@@ -783,9 +834,9 @@ for line in sys.stdin:
         if name == 'web.search':
             payload = {'count': 1, 'echoed_tool': name, 'echoed_args': args, 'results': [{'title': 'Tokio docs', 'url': 'https://tokio.rs', 'content': 'async runtime'}]}
         elif name == 'web.scrape':
-            payload = {'success': True, 'url': args.get('url'), 'markdown': '# ' + str(args.get('url'))}
+            payload = {'success': True, 'url': args.get('url'), 'markdown': '# ' + str(args.get('url')), 'echoed_args': args}
         elif name == 'web.extract':
-            payload = {'success': True, 'url': args.get('url'), 'content': 'extracted body'}
+            payload = {'success': True, 'url': args.get('url'), 'content': 'extracted body', 'echoed_args': args}
         else:
             payload = {'success': True, 'echoed_tool': name, 'echoed_args': args}
         result = {'content': [{'type': 'text', 'text': json.dumps(payload)}], 'structuredContent': payload}
@@ -1487,7 +1538,7 @@ for line in sys.stdin:
             .call(TOOL_SEARCH, json!({ "query": "probe" }))
             .await
             .expect("probe call");
-        assert_eq!(sh.crawl_wire_name().await, "crawl");
+        assert_eq!(sh.crawl_wire_surface().await.0, "crawl");
         let result = WebCrawlTool(sh)
             .execute(
                 json!({ "url": "https://example.com", "maxDepth": 3, "maxPages": 7 }),
@@ -1513,7 +1564,7 @@ for line in sys.stdin:
             .call(TOOL_SEARCH, json!({ "query": "probe" }))
             .await
             .expect("probe call");
-        assert_eq!(sh.crawl_wire_name().await, TOOL_CRAWL);
+        assert_eq!(sh.crawl_wire_surface().await.0, TOOL_CRAWL);
         let result = WebCrawlTool(sh)
             .execute(
                 json!({ "url": "https://example.com", "maxDepth": 2, "maxPages": 5 }),
@@ -1529,10 +1580,273 @@ for line in sys.stdin:
     }
 
     #[tokio::test]
-    async fn crawl_wire_name_before_spawn_is_the_v1_name() {
-        // Unresolved advertised set: keep the v1 name rather than guessing.
+    async fn first_crawl_call_resolves_the_v2_surface_before_dispatch() {
+        // The live first-call ordering bug (found live-verified against
+        // stock 1.8.0 after the mode/format fix deployed): `web_crawl` was
+        // frequently the FIRST sourcehound call in a process, so the
+        // advertised set was still `None` when the surface was resolved,
+        // the call went out under the v1 name, and the v2 server answered
+        // "tool not found" — the exact outage the re-route exists to
+        // prevent. The probe-call preamble in the other tests forced the
+        // handshake early and masked this. RED before the ordering fix:
+        // this test does NOT probe first.
         let (sh, _dir) = v2_echo_sourcehound();
-        assert_eq!(sh.crawl_wire_name().await, TOOL_CRAWL);
+        let result = WebCrawlTool(sh)
+            .execute(
+                json!({ "url": "https://example.com", "maxDepth": 1, "maxPages": 2 }),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(
+            result.success,
+            "first-call crawl failed: {:?}",
+            result.error
+        );
+        let echoed: Value = serde_json::from_str(&result.content).expect("crawl payload");
+        assert_eq!(
+            echoed["echoed_tool"], "crawl",
+            "the first crawl in a process must already carry the v2 surface: {echoed}"
+        );
+        assert_eq!(
+            echoed["echoed_args"]["mode"], "crawl",
+            "and the mode the composite requires: {echoed}"
+        );
+    }
+
+    #[tokio::test]
+    async fn first_crawl_call_on_a_v1_server_keeps_the_granular_name() {
+        // The ordering fix must not break v1: forcing the handshake before
+        // resolving the surface is safe on both versions, and the v1
+        // surface stays single-mode with no mode key.
+        let (sh, _dir) = echo_sourcehound();
+        let result = WebCrawlTool(sh)
+            .execute(
+                json!({ "url": "https://example.com", "maxDepth": 1, "maxPages": 2 }),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(
+            result.success,
+            "first-call crawl failed: {:?}",
+            result.error
+        );
+        let echoed: Value = serde_json::from_str(&result.content).expect("crawl payload");
+        assert_eq!(echoed["echoed_tool"], TOOL_CRAWL);
+        assert!(
+            echoed
+                .get("echoed_args")
+                .and_then(|a| a.get("mode"))
+                .is_none(),
+            "a v1 crawl never carries a mode key: {echoed}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_dead_sourcehound_binary_degrades_to_the_v1_surface_not_a_panic() {
+        // The handshake-forcing fix adds a failure path: an unspawnable
+        // command must degrade to the conservative v1 defaults (the call
+        // then fails with the spawn error from `call`, which is the
+        // operator-facing diagnostic) rather than panicking or swallowing
+        // the error invisibly.
+        let sh = Sourcehound::new("definitely-not-a-real-binary-4782", vec![]);
+        let (wire_name, needs_mode) = sh.crawl_wire_surface().await;
+        assert_eq!(wire_name, TOOL_CRAWL);
+        assert!(!needs_mode);
+    }
+
+    #[tokio::test]
+    async fn a_v2_crawl_names_crawl_mode_and_asks_for_json() {
+        // RT-180 (live-verified against stock 1.8.0): v2's `crawl` composite
+        // is dual-mode — `mode` defaults to "map" (sitemap/link listing), so a
+        // crawl call that does not send `mode: "crawl"` reports success while
+        // answering a different question (an empty link list, no pages). The
+        // tool must also ask for `format: "json"` (iter-1210): the TOON
+        // default cannot be parsed into a page list, which reads as an empty
+        // crawl. RED before the fix: neither key was sent.
+        let (sh, _dir) = v2_echo_sourcehound();
+        let _ = sh
+            .call(TOOL_SEARCH, json!({ "query": "probe" }))
+            .await
+            .expect("probe call forces the handshake");
+        let (wire_name, needs_mode) = sh.crawl_wire_surface().await;
+        assert_eq!(wire_name, "crawl");
+        assert!(needs_mode, "a v2 composite must be told to crawl, not map");
+        let result = WebCrawlTool(sh)
+            .execute(
+                json!({ "url": "https://example.com", "maxDepth": 1, "maxPages": 2 }),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(result.success, "crawl failed: {:?}", result.error);
+        let echoed: Value = serde_json::from_str(&result.content).expect("crawl payload");
+        assert_eq!(
+            echoed["echoed_args"]["mode"], "crawl",
+            "the v2 composite defaults to map mode; without mode=crawl the tool returns a sitemap listing, not pages: {echoed}"
+        );
+        assert_eq!(
+            echoed["echoed_args"]["format"], "json",
+            "the TOON default is unparseable as a page list: {echoed}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_v1_crawl_sends_no_mode() {
+        // The v1 granular `web.crawl` has no `mode` field; sending one is not
+        // fatal (serde tolerates unknown keys) but it must not be sent as a
+        // matter of contract: only the v2 composite needs it.
+        let (sh, _dir) = echo_sourcehound();
+        let _ = sh
+            .call(TOOL_SEARCH, json!({ "query": "probe" }))
+            .await
+            .expect("probe call forces the handshake");
+        let (wire_name, needs_mode) = sh.crawl_wire_surface().await;
+        assert_eq!(wire_name, TOOL_CRAWL);
+        assert!(!needs_mode, "the v1 granular name is single-mode");
+        let result = WebCrawlTool(sh)
+            .execute(
+                json!({ "url": "https://example.com", "maxDepth": 1, "maxPages": 2 }),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(result.success, "crawl failed: {:?}", result.error);
+        let echoed: Value = serde_json::from_str(&result.content).expect("crawl payload");
+        assert!(
+            echoed
+                .get("echoed_args")
+                .and_then(|a| a.get("mode"))
+                .is_none(),
+            "a v1 crawl must not carry a mode key: {}",
+            result.content
+        );
+        assert_eq!(echoed["echoed_args"]["format"], "json");
+    }
+
+    #[tokio::test]
+    async fn scrape_and_extract_ask_for_json() {
+        // iter-1210 closed the search half; scrape/extract had the same
+        // latent defect (TOON default → text rescue instead of the structured
+        // payload). Both tools must carry format: "json" on the wire.
+        let (sh, _dir) = echo_sourcehound();
+        let scrape = WebScrapeTool(sh.clone())
+            .execute(
+                json!({ "url": "https://example.com" }),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(scrape.success, "{:?}", scrape.error);
+        let scrape_args: Value = serde_json::from_str(&scrape.content).expect("scrape payload");
+        assert_eq!(
+            scrape_args["echoed_args"]["format"], "json",
+            "web_scrape must ask for the structured payload: {}",
+            scrape.content
+        );
+        let extract = WebExtractTool(sh)
+            .execute(
+                json!({ "url": "https://example.com" }),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(extract.success, "{:?}", extract.error);
+        let extract_args: Value = serde_json::from_str(&extract.content).expect("extract payload");
+        assert_eq!(
+            extract_args["echoed_args"]["format"], "json",
+            "web_extract must ask for the structured payload: {}",
+            extract.content
+        );
+    }
+
+    /// A mock shaped EXACTLY like the live defect (RT-181): `cloakctl.cdp`
+    /// strips `structuredContent` unless the call's top-level arguments carry
+    /// `format: "json"`. With the key, the ws_url is a parseable field;
+    /// without it, the reply is TOON text and the ws_url lookup fails — the
+    /// exact failure the live binary logged ("published no ws_url for
+    /// profile `operant`") on every browser_cdp / accessibility_tree call.
+    const CDP_FORMAT_MOCK: &str = r#"import sys, json
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        req = json.loads(line)
+    except Exception:
+        continue
+    rid = req.get('id')
+    if rid is None:
+        continue
+    method = req.get('method')
+    if method == 'initialize':
+        result = {'protocolVersion': '2025-06-18', 'capabilities': {'tools': {}}, 'serverInfo': {'name': 'cdp-mock', 'version': '1.8.0'}}
+    elif method == 'tools/list':
+        result = {'tools': [{'name': 'cloakctl.cdp', 'description': 'x', 'inputSchema': {'type': 'object'}}]}
+    else:
+        params = req.get('params') or {}
+        args = params.get('arguments') or {}
+        wants_json = args.get('format') == 'json'
+        if wants_json:
+            # The server's dispatch_value keeps structuredContent only for
+            # format=json callers — the 1.8.0 behavior verified live.
+            payload = {'profile': args.get('profile'), 'engine': 'obscura', 'host': '127.0.0.1', 'port': 44073, 'ws_url': 'ws://127.0.0.1:44073/devtools/browser', 'published': True, 'stopped': False}
+            result = {'content': [{'type': 'text', 'text': 'toon-ish envelope'}], 'structuredContent': payload}
+        else:
+            # TOON text, no structuredContent: unwrap_tool_result wraps it as
+            # {"text": ...} and every field lookup misses.
+            toon = 'profile: ' + str(args.get('profile')) + '\nws_url: "ws://127.0.0.1:44073/devtools/browser"\npublished: true'
+            result = {'content': [{'type': 'text', 'text': toon}]}
+    sys.stdout.write(json.dumps({'jsonrpc': '2.0', 'id': rid, 'result': result}) + chr(10))
+    sys.stdout.flush()
+"#;
+
+    #[tokio::test]
+    async fn cloakctl_cdp_needs_format_json_for_a_parseable_ws_url() {
+        // RT-181, pinned at the seam where it failed: the ws_url extraction
+        // in CdpBrowserSession::start reads `published["ws_url"]` off the
+        // UNWRAPPED payload. Without format: "json" the payload is
+        // {"text": ...} and the lookup misses — RED exactly as the live
+        // gateway log showed. This pins the argument SHAPE; start() itself
+        // then needs a live websocket, which a mock cannot honor.
+        let dir = std::env::temp_dir().join(format!(
+            "operant_sourcehound_cdp_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        let script = dir.join("cdp_mock.py");
+        std::fs::write(&script, CDP_FORMAT_MOCK).expect("write cdp mock");
+        let sh = Sourcehound::new("python3", vec![script.to_string_lossy().to_string()]);
+
+        // The fixed call: format: "json" rides the arguments, the structured
+        // payload survives, and the ws_url the session needs is readable.
+        let published = sh
+            .call(
+                "cloakctl.cdp",
+                json!({ "profile": "operant", "format": "json" }),
+            )
+            .await
+            .expect("the cdp call must succeed");
+        let ws_url = published
+            .get("ws_url")
+            .and_then(Value::as_str)
+            .filter(|u| !u.is_empty())
+            .expect("the ws_url must be readable off the structured payload");
+        assert_eq!(ws_url, "ws://127.0.0.1:44073/devtools/browser");
+
+        // The pre-fix call shape (no format key): the same server answers in
+        // TOON, the ws_url lookup misses, and the error the live gateway
+        // logged is reproduced verbatim.
+        let toon = sh
+            .call("cloakctl.cdp", json!({ "profile": "operant" }))
+            .await
+            .expect("the call itself succeeds — that is the trap");
+        assert!(
+            toon.get("ws_url")
+                .and_then(Value::as_str)
+                .filter(|u| !u.is_empty())
+                .is_none(),
+            "without format=json the payload must NOT yield a ws_url: {toon}"
+        );
     }
 
     #[test]

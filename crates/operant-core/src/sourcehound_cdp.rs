@@ -154,7 +154,7 @@ impl CdpBrowserSession {
     pub async fn start() -> Result<Self> {
         let profile = browser_profile();
         let published = Sourcehound::global()
-            .call(SH_TOOL_CDP, json!({ "profile": profile }))
+            .call(SH_TOOL_CDP, json!({ "profile": profile, "format": "json" }))
             .await?;
         let ws_url = published
             .get("ws_url")
