@@ -1158,4 +1158,84 @@ All tools have been exercised across 10 batches. Here are the results:\n\n\
         assert_eq!(calls.len(), 1, "the tagged heuristic must keep working");
         assert_eq!(calls[0].function.name, "cron");
     }
+
+    // ── R49-1 state-matrix edges ─────────────────────────────────────
+    // The gate keys on `in_tool_call`; these pin the boundaries so a
+    // future refactor cannot silently re-arm the Outside state or
+    // disarm the recovery paths.
+
+    #[test]
+    fn a_dangling_open_tag_still_arms_the_heuristic_on_flush() {
+        // Stream dies INSIDE an open tag: the feed("") flush must still
+        // recover the attempted call (this is the error-path recovery
+        // process_stream relies on for partial tool_use blocks).
+        let mut parser = ToolCallParser::new();
+        let mut events = parser.feed(concat!("<", "tool_call", ">", "git sta"));
+        assert!(
+            events.is_empty(),
+            "partial tagged content emits nothing yet"
+        );
+        events = parser.feed("");
+        let calls: Vec<_> = events
+            .iter()
+            .filter_map(|e| match e {
+                ParserEvent::ToolCall(tc) => Some(tc.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(calls.len(), 1, "the dangling-tag flush recovers the call");
+        assert_eq!(calls[0].function.name, "process");
+    }
+
+    #[test]
+    fn text_after_a_closed_tag_does_not_rearm_the_heuristic() {
+        // A real tagged call, then prose containing pipes: the second
+        // block must stay text (Outside state), not fabricate.
+        let content = concat!(
+            "<",
+            "tool_call",
+            ">",
+            "cron list",
+            "</",
+            "tool_call",
+            ">",
+            "\nSummary: a | b | c in prose\n"
+        );
+        let mut parser = ToolCallParser::new();
+        let calls = parser.parse(content).expect("parse must succeed");
+        assert_eq!(
+            calls.len(),
+            1,
+            "only the tagged call; the trailing pipe prose stays text"
+        );
+        assert_eq!(calls[0].function.name, "cron");
+    }
+
+    #[test]
+    fn a_second_tagged_block_rearms_the_heuristic() {
+        // Two tagged plain-text calls in one response: both must parse
+        // (the flag is per-block, not once-per-stream).
+        let content = concat!(
+            "<",
+            "tool_call",
+            ">",
+            "git status",
+            "</",
+            "tool_call",
+            ">",
+            "\nmiddle prose with a pipe | here\n",
+            "<",
+            "tool_call",
+            ">",
+            "cron list",
+            "</",
+            "tool_call",
+            ">"
+        );
+        let mut parser = ToolCallParser::new();
+        let calls = parser.parse(content).expect("parse must succeed");
+        assert_eq!(calls.len(), 2, "both tagged blocks parse");
+        assert_eq!(calls[0].function.name, "process");
+        assert_eq!(calls[1].function.name, "cron");
+    }
 }
