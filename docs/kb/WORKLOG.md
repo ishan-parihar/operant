@@ -250,3 +250,18 @@ Append-only: `kb log "<entry>"` — one entry per unit of work.
 - **2026-10-25T04:07** · `operator-agent` — tooling-surface red-team investigation: the process 12-failure storm is the provider emitting the model's answer text as 64 parallel tool calls with raw newlines in the JSON args (sess_62831bf4 row 57788; 32 executed before the fail-streak ladder halted at 12); root causes: message_safety Pass 0 comment promises strict=False control-char acceptance but calls strict serde_json (never implemented, 130 process-only warnings Oct 20-24), the parse-failure result carries no diagnostic, the streak gate only observes results so parallel batches drain, TUI collapse_tool_runs is dead at the show_tool_calls=true default, memory_* tools dead by the user's [memory] provider=builtin pin, and a default TUI logs to a discard sink. Plan: docs/plans/2026-10-25-tooling-surface-red-team-process-args-parse-dead-end-tool-ro.md; RUNBOOK gained post-mortem + trace rows.
 - **2026-10-25T04:59** · `jcode` 
 - **2026-10-25T05:15** · `operator-agent` — tooling-surface plan executed: iters 1251 (control-char args repair), 1253 (parse-refusal diagnostics + pre-flight batch streak gate; storm replay 8 refusals/56 skips/probe never ran), 1255 (identical-failure row fold + failed-header error summary), 1256 (TUI defaults to <home>/logs/operant.log; fresh-home gate verified out-of-process), 1257 (doctor names the builtin/disabled memory pins). Operator config fixed: the [memory] provider=builtin pin deleted from ~/.operant/operant.toml. Release built from d3f349d5 (tip; peer's docs-only delta post-verification), deployed both paths, gateway md5-verified (ab62ae1e). Workspace check/test green except the 4 pre-existing theme_colors palette failures (standing, not this plan's scope); clippy gate pass; skill_view failure not reproduced from the transcript — named follow-up.
+- **2026-10-25T00:16Z** · `jcode` — live keyboard-scroll acceptance: iter-1226's fix (plus the
+  operator-agent's iter-1242 convention unification layered on it) verified LIVE in tmux
+  110x45 against the deployed binary (ab62ae1e, both install paths): 2×PgUp moves the
+  viewport from tail-following to the oldest rows (indicator ↓42), 2×PgDn restores the tail,
+  Shift+Home lands on "Top of transcript." with the ↓N below-count, Shift+End returns to
+  "Latest — following new messages." — no mouse anywhere in either session. The earlier
+  survey-lane claim "keyboard scroll is dead behind a mouse-only focus gate" is now
+  fully closed on the acceptance surface, not just mutation-proven. Two probe cleanups
+  completed with the session: the 40-item scroll-probe todo file (4eb7ff81) removed from
+  the operator home after verifying it contained only probe items (and a live
+  confirmation the file-backed store from iter-1243 works: fresh-process read-back), and
+  the tmux sockets killed. Vision lane remains the one representative-level lane: no
+  vision API key exists on this box for a live model round trip. Note for the next agent:
+  the "iter-1" label on 9367f413 is a label-slicing artifact from a bad shell pipeline
+  (noted in iter-1258's body) — it is not a series reset.
