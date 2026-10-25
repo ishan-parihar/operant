@@ -286,14 +286,6 @@ pub static COMMAND_REGISTRY: &[CommandDef] = &[
         admin_only: false,
     },
     CommandDef {
-        name: "session",
-        description: "Show session info",
-        aliases: &["status"],
-        category: "Session",
-        args_hint: "",
-        admin_only: false,
-    },
-    CommandDef {
         name: "queue",
         description: "Queue a prompt for next turn",
         aliases: &["q"],
@@ -2452,6 +2444,32 @@ mod tests {
                 "Command {} missing category",
                 cmd.name
             );
+        }
+    }
+
+    // RT-178: the registry carried a dead duplicate `session` entry whose
+    // alias `status` could never match (resolve_command finds the FIRST
+    // entry, and the real `/status` command sits above it). A second entry
+    // with the same name is always one of two defects: unreachable dead
+    // weight, or an accidental shadow of the live handler. Either way it
+    // must fail the build, not sit in the list.
+    #[test]
+    fn registry_names_and_aliases_are_unique() {
+        let mut seen: std::collections::HashSet<&'static str> = std::collections::HashSet::new();
+        for cmd in COMMAND_REGISTRY {
+            assert!(
+                seen.insert(cmd.name),
+                "duplicate command name `{}` in COMMAND_REGISTRY — the second entry is dead weight or shadows the live handler (RT-178)",
+                cmd.name
+            );
+            for alias in cmd.aliases {
+                assert!(
+                    seen.insert(alias),
+                    "alias `{}` (on `{}`) collides with an earlier name or alias — resolve_command matches the FIRST entry, so this one can never fire (RT-178)",
+                    alias,
+                    cmd.name
+                );
+            }
         }
     }
 
