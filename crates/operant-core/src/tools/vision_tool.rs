@@ -1,11 +1,14 @@
 //! Vision analysis tool
 //!
-//! Tool for analyzing images from URLs or local file paths.
-//! Downloads images, converts to base64, and returns them for vision-capable models.
+//! Tool for analyzing images from URLs, local file paths, or data URLs.
+//! Downloads images, converts to base64, and sends them to the auxiliary
+//! vision LLM (config: `auxiliary_models.vision`, or `OPENROUTER_API_KEY`).
+//! The tool result is a TEXT description — the main model never receives
+//! the pixels. The old "native fast-path" envelope claimed otherwise and was
+//! deleted at iter-1254; nothing in production consumed it.
 //!
 //! Features:
-//! - Native fast-path: when the main model supports images, return multimodal envelope
-//! - Auxiliary LLM fallback: route to vision model when main model doesn't support vision
+//! - Auxiliary vision LLM: the one real path — sends the image, returns analysis text
 //! - Auto-resize: resize images to fit model limits (7900px max dimension, 4MB embed target)
 //! - SSRF protection: block private/internal IPs in image URLs
 
@@ -376,13 +379,13 @@ impl OperantTool for VisionTool {
     }
 
     fn description(&self) -> &str {
-        "Load an image into the conversation so you can see it. Accepts a URL, local file path, or data URL. When your active model has native vision, the image is attached to your context directly and you read the pixels yourself on the next turn. For non-vision models, falls back to an auxiliary vision model that returns a text description."
+        "Analyze an image and return a text description from the auxiliary vision model. Accepts an image URL, local file path, or data URL, plus your question. The image pixels are never attached to your context — your own model does not see the image, so never claim to have seen it yourself; rely on the returned description. Requires auxiliary_models.vision in config or OPENROUTER_API_KEY."
     }
 
     fn schema(&self) -> ToolSchema {
         ToolSchema::from_type::<VisionAnalyzeArgs>(
             "vision_analyze",
-            "Load an image into the conversation for vision-capable models",
+            "Analyze an image and return a text description from the auxiliary vision model",
         )
     }
 
@@ -709,6 +712,28 @@ mod tests {
             .execute(serde_json::json!({}), ToolContext::default())
             .await;
         assert!(!result.success);
+    }
+
+    /// iter-1261 regression pin: the model-facing contract must be the honest
+    /// one. Before iter-1254 the code faked a "native fast-path"; the fix
+    /// deleted the code path but LEFT the tool description promising it — a
+    /// model reading the schema would attach an image expecting to read
+    /// pixels itself, then hallucinate. This pins the description against
+    /// re-introducing either lie: no "you can see it", no "pixels yourself",
+    /// and it must name the auxiliary-vision reality.
+    #[test]
+    fn tool_contract_must_not_promise_native_vision() {
+        let tool = VisionTool;
+        let description = tool.description();
+        assert!(
+            !description.contains("you can see it"),
+            "the old iter-1254 lie survived in the description"
+        );
+        assert!(!description.contains("pixels yourself"));
+        assert!(!description.contains("native vision"));
+        assert!(description.contains("auxiliary vision model"));
+        let schema = tool.schema();
+        assert!(!schema.description.contains("vision-capable"));
     }
 
     #[tokio::test]
