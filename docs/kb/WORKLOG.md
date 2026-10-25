@@ -320,3 +320,16 @@ Append-only: `kb log "<entry>"` — one entry per unit of work.
   terminal_scroll_mode=false means the live scroll acceptance ran in the default app mode
   (the mode the README table documents); genome lint 0 errors (W010 ToC warnings are inherent
   to append-only docs); genome doctor's stale-STATE finding belongs to peers' commits, not mine.
+- **2026-10-25T03:01Z** · `jcode` — goal-assessment re-read pass: caught and fixed one protocol
+  miss before it aged. iter-1267 changed user-facing behavior (/hotkeys) AFTER iter-1265 wrote
+  the consolidated CHANGELOG entry, leaving the changelog behind the code — the exact
+  same-change obligation the first validation round flagged for iters 1226-1261. Discharged in
+  iter-1269 (pushed 8fddac71): item 6 now covers 1263+1267 (stale page-step text, missing
+  Shift+Home/End entries, and the Ctrl+G dead chord with the two-context pin). Binary-state
+  audit: ~/.local/bin/operant e8d51e16 (iter-1267 build) is the PATH winner and the gateway's
+  running inode; /usr/local/bin/operant ab62ae1e is STALE but shadowed — sudo still requires a
+  password this session, so the second install path cannot be updated from here (same constraint
+  as iters 1210/1226; the peer with sudo last synced it at their 05:15 deploy). Goal assessment
+  corrected: iteration count now ten code + six docs iterations across the arc, all on
+  origin/main; every reachable validation surface is closed except the /usr/local/bin sync,
+  which is a documented external constraint, not a gap in the work.
