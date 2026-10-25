@@ -2473,6 +2473,54 @@ mod tests {
         }
     }
 
+    // RT-177: /pause and /resume must operate the SAME estop the CLI does,
+    // through the scoped root so a test never touches the operator's real
+    // sentinel (iter-935: test runs once touched a real emergency stop).
+    // Serialised because the estop root is a process-global.
+    #[serial_test::serial]
+    #[test]
+    fn pause_command_engages_and_resume_command_disengages_the_estop() {
+        let dir = tempfile::tempdir().expect("temp estop root");
+        let _root = operant_core::estop::scoped_root_for_tests(dir.path());
+        let cfg = AppConfig::default();
+        let ctx = CommandContext::new(None, &cfg, true, "op-1", "telegram", "chan-1");
+
+        // Pre-fix state: neither command exists, so handle_command returns
+        // None and the estop is never touched — a paused channel user is
+        // stuck with "Resume with `operant resume`" and no way to follow it.
+        assert!(!operant_core::estop::is_engaged());
+
+        let paused = handle_command("pause", "testing RT-177", &ctx)
+            .expect("/pause must be handled");
+        assert!(operant_core::estop::is_engaged(), "/pause must engage the estop");
+        assert!(
+            paused.contains("paused"),
+            "the reply must say the pause took hold, not claim success silently"
+        );
+
+        // While engaged, /resume must still dispatch (the runner's command
+        // interception runs BEFORE the estop gate) and clear the sentinel.
+        let resumed = handle_command("resume", "", &ctx).expect("/resume must be handled");
+        assert!(!operant_core::estop::is_engaged(), "/resume must disengage");
+        assert!(resumed.contains("resumed"));
+
+        // A second /resume is honest about there being nothing to resume.
+        let noop = handle_command("resume", "", &ctx).expect("handled");
+        assert!(noop.contains("not paused"));
+    }
+
+    // RT-177 companion: both commands are admin_only — they stop/resume
+    // work for every session on every platform, not just this chat.
+    #[test]
+    fn pause_and_resume_are_admin_only() {
+        let pause = COMMAND_REGISTRY.iter().find(|c| c.name == "pause");
+        let resume = COMMAND_REGISTRY.iter().find(|c| c.name == "resume");
+        let pause = pause.expect("/pause registry entry");
+        let resume = resume.expect("/resume registry entry");
+        assert!(pause.admin_only, "/pause halts every session — admin only");
+        assert!(resume.admin_only, "/resume un-halts every session — admin only");
+    }
+
     #[test]
     fn test_approve_resolves_without_draining_store() {
         use std::sync::Arc;
