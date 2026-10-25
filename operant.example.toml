@@ -525,6 +525,7 @@ enabled = true
 # environment) vision_analyze returns a configuration error naming the fix.
 
 # [auxiliary_models.vision]
+# provider = "openrouter"                    # optional provider name
 # model = "google/gemini-2.0-flash-001"   # any image-capable chat model
 # api_key = "sk-or-..."                   # falls back to OPENROUTER_API_KEY
 # base_url = "https://openrouter.ai/api/v1"  # any OpenAI-compatible endpoint

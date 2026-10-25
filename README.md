@@ -243,6 +243,21 @@ Renders in your terminal's main buffer with a small live region at the bottom in
 - Full-screen views (`/rewind`, settings, pickers) still take the alternate screen while open and hand the scrollback back when closed.
 - Default is off (alt-screen app mode, with in-app mouse scroll/selection) until the live terminal sweep (tmux, kitty, ghostty, alacritty) is signed off.
 
+### Scrolling the transcript with the keyboard (app mode)
+
+In the default app mode the transcript scrolls with the keyboard alone — no mouse click needed to "unlock" scrolling (that gate was removed in iter-1226; a keyboard-only session in tmux or a plain tty used to be unable to scroll at all):
+
+| Key | Action |
+|---|---|
+| `PgUp` / `PgDn` | Page up / down (step = the visible transcript height, minus two rows) |
+| `Ctrl+Up` / `Ctrl+Down` | Fine scroll, 3 rows |
+| `Alt+Up` / `Alt+Down` | Fast scroll, 20 rows |
+| `Shift+Home` | Jump to the top of the transcript |
+| `Shift+End` | Jump to the tail and resume following new messages |
+| `Ctrl+G` | Toggle a scroll bookmark and jump back to it |
+
+Unmodified `Home` / `End` stay composer caret moves. The status line announces where you are ("Top of transcript.", "Latest — following new messages."). `/hotkeys` lists the full ladder.
+
 ---
 
 ## CLI reference
