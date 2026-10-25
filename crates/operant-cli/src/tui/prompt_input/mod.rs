@@ -156,6 +156,16 @@ pub struct PromptInputState {
     pub history_pos: Option<usize>,
     /// Saved draft while browsing history.
     pub history_draft: String,
+    /// (2026-10-25 history-nav fix) One-shot: the text change that just came
+    /// from a history recall must not open the typeahead popup. OMP's editor
+    /// auto-triggers autocomplete only on a TYPED trigger character in its
+    /// character-insert path (`char === "/"` / `"@"`); programmatic
+    /// `#setTextInternal` recalls never pass through it. Operant's single
+    /// `refresh_prompt_input` choke point cannot tell them apart, so the
+    /// recall path arms this flag and `update_suggestions` consumes it: the
+    /// popup stays shut while browsing, and the first genuinely typed
+    /// character after a recall re-arms normal behaviour.
+    pub suppress_suggestions_once: bool,
     /// Paste counter for placeholder numbering.
     pub paste_counter: u32,
     /// Stored paste contents: counter → content.

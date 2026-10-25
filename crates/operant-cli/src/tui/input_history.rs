@@ -97,6 +97,28 @@ pub fn load() -> Vec<String> {
     out
 }
 
+/// Load PROMPTS ONLY (slash commands excluded) for Up/Down arrow recall.
+///
+/// (2026-10-25 history-nav fix) The raw `load()` list feeds the Ctrl+R search
+/// overlay, which should find commands too — but the Up/Down scroll history
+/// is for prompts, and the operator's file held 593 slash commands in 853
+/// entries (70%), crowding out every real prompt. Entries written before the
+/// filter existed are still commands; filter them at load so the recall
+/// ladder is prompts-only without rewriting anyone's history file. New
+/// command submissions never enter (see App::take_input).
+pub fn load_prompts_only() -> Vec<String> {
+    prompts_only(load())
+}
+
+/// The pure filter behind `load_prompts_only` — separated so tests can pin
+/// the classification without touching the real operant home.
+fn prompts_only(entries: Vec<String>) -> Vec<String> {
+    entries
+        .into_iter()
+        .filter(|text| !crate::tui::input::is_slash_command(text.trim()))
+        .collect()
+}
+
 /// Append a single entry. We dedupe against the most-recent entry so
 /// spamming Enter on the same input doesn't fill the file. The file is
 /// created if missing. The parent directory is created if missing.
@@ -325,5 +347,44 @@ mod tests {
             assert_eq!(entries.len(), 1);
             assert_eq!(entries[0].use_count, 2);
         });
+    }
+
+    // ---- (2026-10-25 history-nav fix) prompts-only recall ladder --------
+
+    /// THE operator defect: 593 of 853 persisted entries (70%) were slash
+    /// commands, crowding real prompts out of the Up/Down ladder. The ladder
+    /// is prompts-only now — both at write time (take_input) and at load
+    /// time (legacy rows are filtered, nobody's file is rewritten). This
+    /// pins the LOAD side. Mutation: drop the `prompts_only` filter and the
+    /// `/help` row survives into the ladder.
+    #[test]
+    fn prompts_only_drops_slash_commands_keeps_prompts() {
+        let raw = vec![
+            "/help".to_string(),
+            "fix the login bug".to_string(),
+            "/model gpt-5".to_string(),
+            "what changed in the last commit?".to_string(),
+            // `//not-a-command` is a path-ish prompt, not a command — the
+            // double-slash escape in is_slash_command must keep it.
+            "//not-a-command".to_string(),
+        ];
+        let ladder = prompts_only(raw);
+        assert_eq!(
+            ladder,
+            vec![
+                "fix the login bug".to_string(),
+                "what changed in the last commit?".to_string(),
+                "//not-a-command".to_string(),
+            ],
+            "slash commands never enter the Up/Down ladder; //-escaped prompts stay"
+        );
+    }
+
+    /// Leading/trailing whitespace must not smuggle a command in: history
+    /// rows are trimmed before classification.
+    #[test]
+    fn prompts_only_trims_before_classifying() {
+        let ladder = prompts_only(vec!["  /help  ".to_string(), " a real prompt ".to_string()]);
+        assert_eq!(ladder, vec![" a real prompt ".to_string()]);
     }
 }

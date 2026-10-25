@@ -20,6 +20,20 @@ impl PromptInputState {
         file_autocomplete_limit: usize,
         file_autocomplete_show_hidden: bool,
     ) {
+        // (2026-10-25 history-nav fix) A history recall just replaced the
+        // text; OMP's editor only auto-triggers autocomplete on a TYPED
+        // trigger character, and a programmatic recall must not open the
+        // popup — a recalled `/help` stranding the next Up/Down in
+        // slash-completions is the exact defect this one-shot prevents.
+        // Consume the flag and leave the popup shut; the next genuine
+        // refresh (a typed character) recomputes normally.
+        if self.suppress_suggestions_once {
+            self.suppress_suggestions_once = false;
+            self.suggestions.clear();
+            self.suggestion_index = None;
+            self.pending_file_query = None;
+            return;
+        }
         // Only look at text up to the cursor — text after the cursor belongs to a
         // different editing position and would confuse rfind('@') / rfind('/').
         let text_before_cursor = &self.text[..self.cursor];

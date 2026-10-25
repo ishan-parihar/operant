@@ -97,8 +97,55 @@ fn history_search_navigation() {
 fn history_search_current_entry() {
     let history = vec!["first".to_string(), "second".to_string()];
     let hs = HistorySearchOverlay::open(&history);
-    // With no query all entries match; index 0 is first.
-    assert_eq!(hs.current_entry(&history), Some("first"));
+    // With no query all entries match. The first VISIBLE row is the newest
+    // ("second" — the overlay lists newest-first), so Enter on it must paste
+    // "second". The old implementation indexed the caller's raw
+    // oldest-first slice with the snapshot index and pasted "first" — the
+    // operator's "Ctrl+R Enter pastes a random/wrong entry" report
+    // (2026-10-25).
+    assert_eq!(hs.current_entry(&history), Some("second".to_string()));
+}
+
+/// THE mutation proof for the 2026-10-25 Ctrl+R fix: the raw history is
+/// oldest-first and non-deduped; the snapshot is newest-first and deduped.
+/// A history where the two orderings place DIFFERENT texts at the same
+/// index pins that Enter pastes the SELECTED (displayed) entry, not
+/// whatever sits at that index in the raw slice.
+#[test]
+fn ctrl_r_enter_pastes_the_selected_entry_not_the_same_index_in_raw_history() {
+    let history = vec![
+        "alpha".to_string(),
+        "/help".to_string(),
+        "beta".to_string(),
+        "gamma".to_string(),
+        "beta".to_string(), // duplicate: snapshot dedupes to the newest position
+    ];
+    let mut hs = HistorySearchOverlay::open(&history);
+    hs.query = "beta".to_string();
+    hs.update_matches(&history);
+    // The only visible match is beta (its snapshot slot), newest-first row 0.
+    let pasted = hs.current_entry(&history);
+    assert_eq!(
+        pasted.as_deref(),
+        Some("beta"),
+        "Enter pastes the selected entry"
+    );
+
+    // And with no filter, walking rows pastes exactly what each row shows.
+    // The snapshot is newest-first UNIQUE (a duplicate keeps its newest
+    // position): [beta(dup@4), gamma, beta@2, /help, alpha] → deduped to
+    // [beta, gamma, /help, alpha].
+    let mut hs = HistorySearchOverlay::open(&history);
+    hs.update_matches(&history);
+    let expect = ["beta", "gamma", "/help", "alpha"];
+    for (i, want) in expect.iter().enumerate() {
+        hs.selected_idx = i;
+        assert_eq!(
+            hs.current_entry(&history).as_deref(),
+            Some(*want),
+            "row {i} pastes its own text"
+        );
+    }
 }
 
 // --- subsequence_score tests --------------------------------------

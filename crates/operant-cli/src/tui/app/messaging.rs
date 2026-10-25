@@ -344,12 +344,23 @@ impl App {
         // text of the turn currently in flight.
         self.failed_input_recovery = (!input.trim().is_empty()).then(|| input.clone());
         if !input.is_empty() {
-            self.prompt_input.history.push(input.clone());
-            self.prompt_input.history_pos = None;
-            self.prompt_input.history_draft.clear();
-            // Persist the new entry to ~/.operant/history.jsonl so it
-            // survives restarts. (iter-125 — persistent input history.)
-            crate::tui::input_history::append(&input);
+            // (2026-10-25 history-nav fix) A slash command is a command, not
+            // a prompt: it must not enter the Up/Down scroll history (the
+            // operator's report — 70% of the persisted history was `/help`-
+            // style commands crowding out real prompts, and every recall of
+            // one re-opened the completion popup and stranded browsing).
+            // OMP keeps ordinary slash commands in history and filters only
+            // secret-carrying ones (shouldSkipHistory); the operator's
+            // directive here is stricter and wins: commands never enter.
+            let is_command = crate::tui::input::is_slash_command(input.trim());
+            if !is_command {
+                self.prompt_input.history.push(input.clone());
+                self.prompt_input.history_pos = None;
+                self.prompt_input.history_draft.clear();
+                // Persist the new entry to ~/.operant/history.jsonl so it
+                // survives restarts. (iter-125 — persistent input history.)
+                crate::tui::input_history::append(&input);
+            }
             // (plan 2026-10-24 M5) The word predictor learns from every
             // submitted prompt — same data, one submission, one lesson.
             if let Some(engine) = &self.word_predictor {

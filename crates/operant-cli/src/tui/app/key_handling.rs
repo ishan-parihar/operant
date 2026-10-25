@@ -1282,7 +1282,19 @@ impl App {
 
             // ---- History search ----------------------------------------
             KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                let overlay = HistorySearchOverlay::open(&self.prompt_input.history);
+                // (2026-10-25) The overlay searches the FULL persisted
+                // history — commands included, they are legitimate search
+                // targets — while the Up/Down ladder stays prompts-only
+                // (prompt_input.history). Merging the live in-session
+                // additions (prompts only now) with the full file gives the
+                // overlay both.
+                let mut searchable = crate::tui::input_history::load();
+                for p in &self.prompt_input.history {
+                    if !searchable.iter().any(|s| s == p) {
+                        searchable.push(p.clone());
+                    }
+                }
+                let overlay = HistorySearchOverlay::open(&searchable);
                 self.history_search_overlay = overlay;
             }
             KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -1319,8 +1331,13 @@ impl App {
             KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::ALT) => {
                 self.cycle_configured_model();
             }
-            // F5 / Alt+R: retry — resubmit the composer (a failed turn puts
-            // its prompt back there) or, when empty, the last prompt sent.
+            // F5 / Alt+R: retry — OMP semantics ("Retry last FAILED assistant
+            // turn"): the composer keeps its text and resubmits it; an
+            // EMPTY composer only refills from the failed-turn recovery slot,
+            // never from the plain last prompt. (2026-10-25) The old arm
+            // pulled `history.last()` unconditionally, so a stray Alt+R with
+            // an empty composer re-ran the previous prompt as a whole new
+            // turn — the operator's "undesired" report.
             KeyCode::F(5) | KeyCode::Char('r')
                 if key.code == KeyCode::F(5) || key.modifiers.contains(KeyModifiers::ALT) =>
             {
@@ -1328,13 +1345,15 @@ impl App {
                     return false;
                 }
                 if self.prompt_input.text.trim().is_empty() {
-                    match self.prompt_input.history.last().cloned() {
+                    match self.failed_input_recovery.clone() {
                         Some(last) => {
                             self.prompt_input.text = last;
                             self.prompt_input.cursor = self.prompt_input.text.len();
                         }
                         None => {
-                            self.set_status_notice("Nothing to retry yet.".to_string());
+                            self.set_status_notice(
+                                "Nothing to retry — the last turn did not fail.".to_string(),
+                            );
                             return false;
                         }
                     }
@@ -1803,6 +1822,13 @@ impl App {
                     let area = self.last_input_area.get();
                     let width = area.width.saturating_sub(4) as usize;
                     self.prompt_input.move_visual_up(width);
+                } else if self.prompt_input.history_pos.is_some()
+                    && !self.prompt_input.text.contains('\n')
+                {
+                    // (2026-10-25) Browsing wins over the popup (OMP
+                    // precedence: #historyIndex > -1 first): Up steps to the
+                    // older entry even if a stale popup lingers.
+                    self.prompt_input.history_up();
                 } else if !self.prompt_input.suggestions.is_empty()
                     && (self.prompt_input.text.starts_with('/')
                         || self.prompt_input.has_active_file_ref())
@@ -1813,6 +1839,13 @@ impl App {
                     // Single-line input: always navigate history (like hermes-agent).
                     // (iter-124 — was only navigating when move_visual_up failed,
                     // which meant Up did nothing on single-line input.)
+                    //
+                    // (2026-10-25 history-nav fix) The browsing check comes FIRST,
+                    // OMP-style (#historyIndex > -1 before any popup branch): while
+                    // the user is walking history, Up/Down step history even if a
+                    // stale popup is somehow showing. The old order fed the popup
+                    // after any recall that started with '/', stranding browsing in
+                    // slash-completions.
                     if !self.prompt_input.history.is_empty() {
                         self.prompt_input.history_up();
                     }
@@ -1844,6 +1877,12 @@ impl App {
                     let area = self.last_input_area.get();
                     let width = area.width.saturating_sub(4) as usize;
                     self.prompt_input.move_visual_down(width);
+                } else if self.prompt_input.history_pos.is_some()
+                    && !self.prompt_input.text.contains('\n')
+                {
+                    // (2026-10-25) Browsing wins over the popup (OMP
+                    // precedence): Down steps to the newer entry.
+                    self.prompt_input.history_down();
                 } else if !self.prompt_input.suggestions.is_empty()
                     && (self.prompt_input.text.starts_with('/')
                         || self.prompt_input.has_active_file_ref())
@@ -1851,10 +1890,10 @@ impl App {
                     // Suggestions visible: navigate them
                     self.prompt_input.suggestion_next();
                 } else if !self.prompt_input.text.contains('\n') {
-                    // Single-line input: always navigate history.
-                    if self.prompt_input.history_pos.is_some() {
-                        self.prompt_input.history_down();
-                    }
+                    // Single-line input, NOT browsing (the browsing-first
+                    // branch above already took the browsing case). OMP's Down
+                    // does nothing when not walking history — it must not
+                    // step into the past from a fresh composer.
                 } else {
                     // Multi-line input: move cursor down within the text.
                     let area = self.last_input_area.get();
@@ -2115,7 +2154,7 @@ impl App {
                     .history_search_overlay
                     .current_entry(&self.prompt_input.history)
                 {
-                    self.set_prompt_text(entry.to_string());
+                    self.set_prompt_text(entry);
                 }
                 self.history_search_overlay.close();
             }
