@@ -140,19 +140,40 @@ the hooks the infrastructure already emits:
 
 ## 5. Architecture — the token/tool-call-efficient tooling set
 
-The objective stated for this audit. The constraints, measured:
+The objective stated for this audit. The constraints, MEASURED (not
+estimated — every number below was taken from the live binary's own
+`tools/list` over `operant mcp serve`, serialized in the exact wire format
+`client.rs::build_chat_request` sends after `clean_schema`, and
+counted at the agent loop's own chars/4 heuristic):
 
-1. **80 tools register; ~5-8k tokens of schema ride every request**
-   (browser's description alone is a paragraph). `tools.tool_search`
-   (auto) defers only `mcp_*`-prefixed tools — the entire native surface
-   is eager.
-2. **Memory costs ~310 tokens/turn for five tools that are two tools.**
+1. **74 tools ride every request at ~14.5k tokens of wire schema**
+   (72 from the mcp-serve registry at ~14.3k clean + the two memory
+   provider twins at ~200). `tools.tool_search` (auto) defers only
+   `mcp_*`-prefixed tools — the entire native surface is eager. The
+   heaviest single schemas: `todo` ~777, `delegate_task` ~773,
+   `verify_task` ~545, `skill_manage` ~449, `kanban` ~435,
+   `browser` ~430. Every schema also carries the shared `intent` +
+   `accept_large_output` fields (`with_intent()`, added centrally at
+   publication).
+2. **Memory costs ~590 tokens per request for five tools that are two
+   tools.** The live trio (`memory_store` ~160, `memory_search` ~142,
+   `memory_recall` ~126, intent-augmented) plus the two provider twins
+   (`memory_save` ~106, `memory_smart_search` ~97). Consolidating to
+   `memory_store` + `memory_search(+key)` saves ~300 tokens per
+   request — every request, not just turns that touch memory.
 3. **Every sourcehound call must send `format: "json"`** — the server
    strips `structuredContent` otherwise (the RT-188/189 root cause; now
    pinned by tests on all six call sites).
 4. **The v2 composites are dual-mode and folded**: `crawl` = map+crawl,
    `read` = extract+page. A bridge that forwards one name must forward
    the mode/args each side expects (the RT-188 lesson, generalized).
+5. **The 23 sourcehound composites measured**: eager registration would
+   add ~4,738 tokens to EVERY request (live tools/list serialized in
+   wire format); the same 23 as `tool_search` catalog lines (name +
+   first-sentence description) cost ~760 tokens, paid only on the turn
+   the model actually searches. The bridge saves ~3,978 tokens per
+   request that does not search — and the heaviest composite
+   (`news.fetch`, ~810 tokens eager) is the clearest case.
 
 The recommended shape, in priority order:
 
@@ -160,17 +181,20 @@ The recommended shape, in priority order:
    Six call sites pinned by tests; the mock servers reproduce the live
    server's dispatch behavior, so a future regression fails locally.
 2. **Consolidate the memory tools to two** (RT-192): `memory_store`
-   (+key param) and `memory_search` (+optional key param). Saves ~190
-   tokens/turn and removes a wrong-tool-choice failure mode. The provider
-   twins (`memory_save`, `memory_smart_search`) retire; the review
-   whitelist already names the survivors.
+   (+key param) and `memory_search` (+optional key param). Saves ~300
+   tokens per REQUEST (measured: five tools ≈ 590 tokens, two ≈ 290) and
+   removes a wrong-tool-choice failure mode. The provider twins
+   (`memory_save`, `memory_smart_search`) retire; the review whitelist
+   already names the survivors.
 3. **Extend the `tool_search` deferral to heavy native tools** (RT-194's
    mechanism): a toolset/partition change so the 23 sourcehound
-   composites (and optionally the AFT 20) ride the deferred bridge — the
-   model discovers `papers.search` via one `tool_search` call instead of
-   paying its schema on every request. The bridge already exists and is
-   proven (`tool_search` auto, names listing, materialise on demand);
-   this is a partition edit, not a new mechanism.
+   composites (and optionally the AFT 20) ride the deferred bridge —
+   measured: eager costs ~4.7k tokens on every request, bridge catalog
+   lines cost ~760 tokens on the searching turn only. The same partition
+   could defer the heaviest native schemas (`todo` ~777, `delegate_task`
+   ~773, `verify_task` ~545) for a further ~2k. The bridge already
+   exists and is proven (`tool_search` auto, names listing, materialise
+   on demand); this is a partition edit, not a new mechanism.
 4. **Implement the remaining memory hooks** (RT-191) so session-end and
    delegation prose lands in the bank — the recall side then has real
    corpus to rank, which is also the precondition for any future score
