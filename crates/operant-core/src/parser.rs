@@ -488,8 +488,25 @@ impl ToolCallParser {
 
         // ── Plain-text heuristic (nemotron parity) ───────────────────
         // Some models (e.g. nemotron) emit tool calls as plain text inside
-        // XML <tool_calls> blocks instead of proper JSON. Detect common
+        // XML `tool_call` blocks instead of proper JSON. Detect common
         // patterns and map them to known tool invocations.
+        //
+        // INSIDE explicit `tool_call` content ONLY (R49-1). The heuristics
+        // below match prose shapes — any text containing " | ", any first
+        // word that names a tool — and when they ran on UNtagged assistant
+        // text they fabricated tool calls the model never requested: a
+        // markdown report table (2026-10-25, sess_7f145d24) became 136
+        // `process` calls quoting report slices, each failing "Unknown
+        // action", until the failure ladder halted the turn and the saved
+        // context held 136 phantom rows. The model's native tool_calls were
+        // empty and finish_reason was "stop" — the calls were entirely the
+        // parser's invention. Inside a real `tool_call` block the content is
+        // an attempted tool invocation by construction, so the heuristics
+        // stay armed there; JSON-shaped recovery (name_re/args_re above and
+        // try_parse_tool_call's brace scan) still runs everywhere.
+        if !self.in_tool_call {
+            return None;
+        }
         self.plain_text_fallback(content)
     }
 
@@ -999,5 +1016,146 @@ Some text here
         assert_eq!(tool_calls.len(), 1);
         assert_eq!(tool_calls[0].function.name, "echo");
         assert_eq!(text, "Before  after");
+    }
+
+    // ── R49-1: prose must never become tool calls ────────────────────
+    //
+    // The 2026-10-25 storm (gateway session sess_7f145d24, message row
+    // 58043): the model streamed a markdown TABLE as its final report
+    // with native tool_calls empty and finish_reason "stop", and the
+    // plain-text heuristic — armed on ALL text back then — turned every
+    // pipe-containing slice into a fabricated `process` call with a
+    // nanosecond-stamp id: 136 phantom calls, 136 "Unknown action"
+    // failures, the failure ladder halted the turn, and 136 corrupt rows
+    // were persisted into the session context. The same specimen shape
+    // recurred 2026-10-20 (90 calls), 2026-10-23 and 2026-10-24. These
+    // tests fail RED with the heuristic armed on untagged text.
+
+    #[test]
+    fn markdown_table_prose_must_not_become_tool_calls() {
+        // Byte-for-byte the storm's shape: a report whose every table
+        // row contains " | ", streamed in small chunks like SSE.
+        let specimen = "## Agentic-Core Tool Smoke Test — Complete Report\n\n\
+All tools have been exercised across 10 batches. Here are the results:\n\n\
+---\n\n\
+### Batch 1 — Basic / System / Config / Session / Kanban ✅\n\
+| Tool | Result |\n\
+|------|--------|\n\
+| `echo` | ✅ Returned message verbatim |\n\
+| `datetime` | ✅ UTC time: `2026-10-25 12:23:01`, ns precision |\n\n\
+### Batch 2 — File Operations via AFT ✅\n\
+| `aft_read` | ✅ Read AGENTS.md (first 20 lines shown) |\n";
+
+        let mut parser = ToolCallStreamParser::new();
+        // Feed in ~12-char chunks to exercise the incremental detection
+        // path (process_char fires try_parse_tool_call at '}', '\n' and
+        // ' ' boundaries) — the exact streaming shape of the incident.
+        // Chunk on CHAR boundaries: the specimen's glyphs are
+        // multi-byte, and a byte-width split would not compile into a
+        // str at all.
+        let mut calls = Vec::new();
+        let chars: Vec<char> = specimen.chars().collect();
+        for chunk in chars.chunks(12) {
+            let chunk: String = chunk.iter().collect();
+            calls.extend(parser.process_chunk(&chunk));
+        }
+        calls.extend(parser.finish().0);
+
+        assert!(
+            calls.is_empty(),
+            "prose with pipes must never fabricate tool calls, got: {:?}",
+            calls
+                .iter()
+                .map(|c| c.function.name.clone())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn batch_parse_of_pipe_prose_yields_no_calls_and_keeps_text() {
+        // The non-streaming twin: parse() runs feed(content) + feed("")
+        // — the flush path that ALSO consulted the heuristic before
+        // R49-1.
+        let mut parser = ToolCallParser::new();
+        let calls = parser
+            .parse("| `echo` | ✅ |\n| `datetime` | ✅ |")
+            .expect("parse must succeed");
+        assert!(calls.is_empty(), "markdown table rows are not tool calls");
+    }
+
+    #[test]
+    fn shellish_prose_prefixes_must_not_become_tool_calls() {
+        // The other heuristic arms that prose trips by accident: a
+        // report describing commands ("cd ...", "git status && git
+        // log", "npm run build") is commentary, not a call.
+        let prose = [
+            "To reproduce, cd into the repo and run the suite.",
+            "We ran git status && git log -1 to inspect the tree.",
+            "./scripts/build.sh --release produced the binary.",
+            "First, import the parser module, then feed it data.",
+            "echo this back to the user, said the config doc.",
+        ];
+        for line in prose {
+            let mut parser = ToolCallParser::new();
+            let calls = parser.parse(line).expect("parse must succeed");
+            assert!(
+                calls.is_empty(),
+                "descriptive prose must stay prose: {line:?} -> {calls:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn bare_tool_word_prose_must_not_become_tool_calls() {
+        // The first-word arm: "skills_list returned 107 skills" in the
+        // 2026-10-20 specimen fabricated a skills_list call with
+        // {"args": "returned"}. A table cell naming a tool is not an
+        // invocation.
+        let prose = [
+            "skills_list returned 107 skills",
+            "cron list showed 12 jobs",
+            "config_manage show printed the full JSON",
+            "session_search found 3 recent sessions",
+        ];
+        for line in prose {
+            let mut parser = ToolCallParser::new();
+            let calls = parser.parse(line).expect("parse must succeed");
+            assert!(
+                calls.is_empty(),
+                "prose naming a tool is not a call: {line:?} -> {calls:?}"
+            );
+        }
+    }
+
+    // ── R49-1 parity: the heuristic STAYS armed inside real tags ────
+    // nemotron-style models that cannot emit JSON still need the
+    // fallback for their explicit tool_call blocks. Removing the
+    // heuristic entirely would break them; these pin the kept half.
+
+    #[test]
+    fn tagged_plain_text_shell_command_still_parses() {
+        let content = concat!(
+            "<",
+            "tool_call",
+            ">",
+            "git status && git log -1",
+            "</",
+            "tool_call",
+            ">"
+        );
+        let mut parser = ToolCallParser::new();
+        let calls = parser.parse(content).expect("parse must succeed");
+        assert_eq!(calls.len(), 1, "the tagged heuristic must keep working");
+        assert_eq!(calls[0].function.name, "process");
+        assert!(calls[0].function.arguments.contains("git status"));
+    }
+
+    #[test]
+    fn tagged_bare_tool_name_still_parses() {
+        let content = concat!("<", "tool_call", ">", "cron list", "</", "tool_call", ">");
+        let mut parser = ToolCallParser::new();
+        let calls = parser.parse(content).expect("parse must succeed");
+        assert_eq!(calls.len(), 1, "the tagged heuristic must keep working");
+        assert_eq!(calls[0].function.name, "cron");
     }
 }
