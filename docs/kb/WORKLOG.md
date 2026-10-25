@@ -283,3 +283,21 @@ Append-only: `kb log "<entry>"` — one entry per unit of work.
   this deploy updates ~/.local/bin only (which PATH and the gateway unit resolve) — md5
   verified. Tool-removal lane re-verified against the CURRENT deployed binary: none of the
   five purged tools present (93 tools now, peers added more since iter-1233's 78).
+- **2026-10-25T02:04Z** · `jcode` — further-validation pass on the six survey-gap lanes surfaced and
+  closed a user-facing staleness (iter-1263, pushed b92701b5, deployed, live-verified): the
+  /hotkeys catalogue (a) still described PageUp/PageDown as "scroll 10" after iter-1226 changed
+  the step to viewport-height−2, and (b) never listed Shift+Home/Shift+End at all — the jump
+  chords worked (live-proven in tmux) but were undiscoverable from the help surface. The
+  binding registry is catalogue-only, so adding entries changes display, not dispatch. New pin
+  test scroll_ladder_catalogue_matches_dispatch matches each entry's full dispatch arm (key AND
+  modifier, whitespace-normalized) — the pre-existing loose guard only checked KeyCode tokens,
+  which is exactly how the stale "10" survived. Two mutations RED: broken Shift+Home modifier
+  → arm-match failure at tests.rs:82; stale "10" restored → left/right description failure.
+  Live verification on the deployed binary: /hotkeys renders "Scroll transcript up one page",
+  "Jump to transcript top", "Jump to transcript tail". Other validation this pass: purged-tool
+  names exist only in the pin test + historical audit docs (expected); the browser_dialog
+  error text is the honest 3-option message (expected); tool list re-verified against the
+  current binary (93 tools, none of the five). Known remaining doc debt, not code: my six
+  iterations have no CHANGELOG [Unreleased] entries yet (peers' iters 1229-1257 are there);
+  operant.example.toml's [auxiliary_models] block does not document the vision key the honest
+  vision contract names. Both flagged for the next docs iteration.
