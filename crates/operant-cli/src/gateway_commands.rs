@@ -1244,15 +1244,30 @@ pub fn handle_command(cmd_name: &str, _args: &str, ctx: &CommandContext<'_>) -> 
                 }
                 msg
             } else {
+                // RT-176: persist through the by-id API instead of mutating a
+                // CLONE and dropping it. The old arm inserted into a local
+                // `session` copy and admitted in a comment "we can't persist
+                // metadata changes through the current SessionStore API" —
+                // then replied success. `set_title` is that persistence.
                 if let Some(gateway) = ctx.gateway {
                     let store = gateway.get_session_store();
-                    if let Some(mut session) = store.find_session(ctx.platform, ctx.user_id, ctx.channel_id)
+                    if let Some(session) =
+                        store.find_session(ctx.platform, ctx.user_id, ctx.channel_id)
                     {
-                        session.metadata.insert("title".to_string(), a.to_string());
-                        // Note: we can't persist metadata changes through the current SessionStore API
+                        if store.set_title(&session.session_id, a) {
+                            format!("📝 Title set to: `{a}` on session `{}`.", session.session_id)
+                        } else {
+                            format!(
+                                "⚠️ Could not set the title — session `{}` vanished before the write.",
+                                session.session_id
+                            )
+                        }
+                    } else {
+                        "No active session.".into()
                     }
+                } else {
+                    "Gateway not connected.".into()
                 }
-                format!("📝 Title set to: `{}`\n(Note: Title changes apply to the current session.)", a)
             }
         }
 
@@ -1265,7 +1280,12 @@ pub fn handle_command(cmd_name: &str, _args: &str, ctx: &CommandContext<'_>) -> 
                     let new_session = store.create_session(ctx.platform, ctx.user_id, ctx.channel_id);
                     if let Ok(new) = new_session {
                         let title = if a.is_empty() { format!("branch-of-{}", &source.session_id[..8]) } else { a.to_string() };
-                        store.update_session_metadata(ctx.platform, ctx.user_id, ctx.channel_id, &[
+                        // RT-176: annotate the NEW branch session by id. The
+                        // old arm passed the SOURCE triple to
+                        // update_session_metadata, which re-annotated the
+                        // source row and never touched `new` — while the
+                        // reply claimed the branch had been created.
+                        store.update_session_metadata_by_id(&new.session_id, &[
                             ("title".to_string(), title.to_string()),
                             ("branched_from".to_string(), source.session_id.clone()),
                         ]);

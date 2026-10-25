@@ -1718,6 +1718,85 @@ mod tests {
         assert!(not_found.is_none());
     }
 
+    // RT-176: `/title` used to mutate a session CLONE and drop it — the
+    // store had no by-id persistence at all, so the command replied success
+    // while the title never landed. set_title/session_metadata_value pin
+    // the round-trip the command now depends on.
+    #[test]
+    fn session_store_set_title_persists_and_reads_back() {
+        let store = SessionStore::new();
+        let s = store
+            .create_session("telegram", "u1", "c1")
+            .expect("create");
+
+        assert!(store.set_title(&s.session_id, " debugging the gateway "));
+        assert_eq!(
+            store
+                .session_metadata_value(&s.session_id, "title")
+                .as_deref(),
+            Some(" debugging the gateway ")
+        );
+
+        // An unknown id is an honest failure, not a silent no-op.
+        assert!(!store.set_title("no-such-session", "x"));
+        assert_eq!(
+            store.session_metadata_value("no-such-session", "title"),
+            None
+        );
+    }
+
+    // RT-176: `/branch` used to call the TRIPLE-keyed update with the
+    // source session's (platform, user, channel) — annotating the source
+    // row and never the branch it just created (and both rows share the
+    // triple, so the write could never distinguish them). The by-id API
+    // must reach exactly the named row.
+    #[test]
+    fn session_store_update_metadata_by_id_targets_only_the_named_session() {
+        let store = SessionStore::new();
+        let source = store
+            .create_session("telegram", "u1", "c1")
+            .expect("source");
+        // Same triple — exactly the /branch shape.
+        let branch = store
+            .create_session("telegram", "u1", "c1")
+            .expect("branch");
+        assert_ne!(source.session_id, branch.session_id);
+
+        assert!(store.update_session_metadata_by_id(
+            &branch.session_id,
+            &[
+                ("title".to_string(), "branch-of-thing".to_string()),
+                ("branched_from".to_string(), source.session_id.clone()),
+            ],
+        ));
+
+        assert_eq!(
+            store
+                .session_metadata_value(&branch.session_id, "title")
+                .as_deref(),
+            Some("branch-of-thing")
+        );
+        assert_eq!(
+            store
+                .session_metadata_value(&branch.session_id, "branched_from")
+                .as_deref(),
+            Some(source.session_id.as_str())
+        );
+        // The SOURCE row is untouched — the old triple-keyed write would
+        // have scribbled on exactly this row.
+        assert_eq!(
+            store.session_metadata_value(&source.session_id, "title"),
+            None
+        );
+        assert_eq!(
+            store.session_metadata_value(&source.session_id, "branched_from"),
+            None
+        );
+
+        // Unknown id: false, not a panic and not a wrong-row write.
+        assert!(!store.update_session_metadata_by_id("missing", &[]));
+    }
+
     /// Each Telegram forum topic must get its own shared session — a message
     /// in a new topic must NOT continue the parent channel's (or another
     /// topic's) conversation. (hermes build_session_key parity — the bug

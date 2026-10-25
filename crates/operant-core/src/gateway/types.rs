@@ -494,6 +494,54 @@ impl SessionStore {
         }
     }
 
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
+    /// Update metadata fields on a session identified by its session id.
+    ///
+    /// RT-176: the store keys sessions by uuid (`sessions: HashMap<String,
+    /// PlatformSession>`), so a by-id update is the precise tool for commands
+    /// that hold a DIFFERENT session than the (platform, user, channel)
+    /// triple they were invoked from — `/branch` just created a new session
+    /// and must annotate THAT one, not re-annotate the source row it was
+    /// invoked against (which is all the triple-keyed API above can do).
+    pub fn update_session_metadata_by_id(
+        &self,
+        session_id: &str,
+        updates: &[(String, String)],
+    ) -> bool {
+        let mut sessions = self.sessions.write().expect("Session store lock poisoned");
+        let Some(s) = sessions.get_mut(session_id) else {
+            return false;
+        };
+        for (key, value) in updates {
+            s.metadata.insert(key.clone(), value.clone());
+        }
+        s.last_active = Utc::now().to_rfc3339();
+        true
+    }
+
+    /// Set a session's title by id. RT-176: `/title` previously mutated a
+    /// session CLONE and dropped it (its own comment admitted "we can't
+    /// persist metadata changes through the current SessionStore API");
+    /// this is the persistence it was waiting for.
+    pub fn set_title(&self, session_id: &str, title: &str) -> bool {
+        self.update_session_metadata_by_id(session_id, &[("title".to_string(), title.to_string())])
+    }
+
+    /// Read one metadata value by session id (None when absent or unknown id).
+    /// Companion read for the by-id writes so `/title` with no args and
+    /// `/branch` can report what they actually persisted.
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
+    pub fn session_metadata_value(&self, session_id: &str, key: &str) -> Option<String> {
+        let sessions = self.sessions.read().expect("Session store lock poisoned");
+        sessions.get(session_id)?.metadata.get(key).cloned()
+    }
+
     /// Find or create a shared session for a group chat. When `thread_id`
     /// (forum topic) is present, the session is scoped to that thread so
     /// each topic gets its own record — hermes build_session_key parity.
