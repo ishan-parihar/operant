@@ -66,8 +66,10 @@ on `[recap.model]` does not switch protocols — it labels.
 | `[auxiliary_models.reasoning]` | **inert** | Reasoning effort is `agent.reasoning_effort`, a knob on the primary model — not a routed slot |
 
 These six are "phantom routing surface": `operant setup` interviews the operator for them, and
-a set value is silently ignored. That is worse than absent — it invites a misconfiguration the
-operator cannot debug.
+a set value is silently ignored. That is worse than absence — it invites a misconfiguration the
+operator cannot debug. **They are also the only flagged cluster the repo does NOT already
+report** (see the correction at the end): `unused_setting_warnings` covers every other inert
+key, so those cost nothing beyond a startup warning.
 
 ## Flagged: live slots (keep — all verified with cited call sites)
 
@@ -116,34 +118,42 @@ old configs again.
 ## Net assessment (ponytail form)
 
 ```
-delete: 15 inert config keys (6 model slots + pk trio + grant_ttl_days + turn_budget +
-         6 [tui] + 2 [skills]) — migration shim or outright removal. [config.rs]
-keep:    every live slot in the table above, incl. MoA (fan-out primitive), and the
-         [memory] legacy tripwires (config.rs:1776-1810).
+delete: the 6 inert aux slots' PROMOTION surface — 2 sites (unused_setting_warnings
+        does not name them; operant setup interviews them). [config.rs:2651, cmd_setup.rs:746]
+keep:    every live slot in the table above, incl. MoA (fan-out primitive); AuxiliaryModelConfig
+        itself and provider (label-only, compat); and EVERY other inert key flagged below
+        — those already warn in production, so they cost the operator nothing.
 note:    AuxiliaryModelConfig.provider routes nothing on single-slot paths — decorative.
 ```
 
-Net if executed: -15 config keys, -6 `operant setup` interview prompts asking for values
-nobody reads, 0 deps. No code paths change behavior — every flagged key already governs
-nothing.
+Net if executed: -6 phantom slots promoted to honest "unread" status, -6 `operant setup`
+interview prompts asking for values nobody reads, 0 config-compat breakage (fields stay), 0
+deps, 0 behavior change. Not 15 key deletions — see the correction below: 9 of the 15
+flagged keys are already warned about at load time.
 
-**CAUTION for a future executor** — the attribute coverage is per-struct, verified here:
+**CAUTION for a future executor** — verified attribute coverage, plus the mechanism this
+repo ALREADY has (correction made after re-verification):
 
-| Struct holding flagged key(s) | `deny_unknown_fields` | Safe-execution shape |
-|---|---|---|
-| `AuxiliaryModels` (6 slots) | **no** | deleting the field is safe for any config that never set it; a config that SET it then hits `deny_unknown_fields` on the PARENT — confirm `AppConfig` tolerates an unknown `auxiliary_models.*` key before removing, else old configs break |
-| `PkSettings` (3 keys) | yes | removal makes a config naming them fail to load. Prefer the tripwire: keep the field, add a `warn_legacy_keys` path |
-| `BylawsSettings` (`grant_ttl_days`) | yes | same tripwire path (a README test already asserts its absence from docs) |
-| `SocializationSettings` (`turn_budget`) | yes | same tripwire path |
-| `TuiSettings` (6 keys) | yes | same tripwire path; ALSO strip them from `operant setup`'s interview, which is the half that actively misleads the operator |
-| `SkillsSettings` (2 keys) | yes | already documented accepted-but-unread; `example_template_loads.rs:223` keeps the template honest — leave the fields, drop the setup prompts |
+`AppConfig::unused_setting_warnings()` (config.rs:2651) is a **live, production-wired
+tripwire** — `load_app_config` calls it at config.rs:2347 and prints every line. It still
+accepts the key (TOML keeps parsing) but says, in production, "accepted but unread — it has
+no effect. Remove the key from operant.toml." It already covers: all of `[pk]`,
+`[bylaws] grant_ttl_days`, all of `[socialization]`, `[agent] max_consecutive_tool_only`,
+`[tools] event_channel_size / browser_binary_path`, `[tools.tool_search]`, both
+`[skills] template_*`, ALL SIX `[tui]` keys, and `[memory] agentmemory_*`.
 
-Do NOT silently drop a key from a `deny_unknown_fields` struct without one of the two shapes —
-that is how a config key silently becomes a load error. The `[tui]` six are the
-highest-value cut: `operant setup` interviews the operator for them and every set value is
-ignored — a misconfiguration the operator cannot debug.
+**The genuine gap is exactly one cluster**: the six inert `[auxiliary_models.*]` slots.
+No tripwire covers them, so a set value is accepted silently — no warning at load time,
+no effect at runtime. That is the only part of this audit that is actively misleading
+rather than merely dead.
+
+Safe-execution shape (verified):
+
+| Target | Shape |
+|---|---|
+| 6 inert aux slots | add an `unused_setting_warnings` flag (repo idiom) + drop from `cmd_setup.rs`. Field deletion IS a breaking change for any config that sets them (parent `AppConfig` carries `deny_unknown_fields`), so defer it |
+| `[pk]` / `[bylaws]` / `[socialization]` / `[tui]` / `[skills]` | nothing to do — already warned at load; delete struct fields only when a breaking release is acceptable |
 
 **Flag-only status**: this pass cut nothing (ponytail-audit reports, applies nothing).
-Next iteration, if the operator approves: strip the 6 inert slots from `cmd_setup.rs`'s
-interview (highest value, zero load-compat risk), and leave the struct fields for a
-follow-up that adds tripwires per the table above.
+Next iteration: add the 6-slot tripwire + strip them from `operant setup`'s interview.
+That is the entire fix — every other flagged key already warns in production.
