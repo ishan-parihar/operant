@@ -100,6 +100,7 @@ pub mod parser;
 pub mod persistence_seam;
 pub mod platform;
 pub mod plugins;
+pub mod ponytail;
 pub mod pool_adapter;
 pub mod process_registry;
 pub mod profile;

@@ -16,6 +16,7 @@ pub fn sourcehound_spec() -> Option<IntegrationSpec> {
         name: "sourcehound",
         repo: "ishan-parihar/sourcehound",
         asset_marker: "linux-x86_64",
+        content_tarball: false,
         install: InstallKind::ReplaceOnPath(bin),
     })
 }

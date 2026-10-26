@@ -102,6 +102,7 @@ pub fn aft_spec() -> crate::binary_updater::IntegrationSpec {
         name: "aft",
         repo: AFT_REPO,
         asset_marker: aft_platform_marker(),
+        content_tarball: false,
         install: crate::binary_updater::InstallKind::CacheDir {
             dir: operant_home().join(AFT_STORAGE_DIR),
             keep: 2,
