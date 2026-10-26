@@ -52,7 +52,7 @@
 //! that test's budget is ever exceeded, revisit this decision.
 
 use async_trait::async_trait;
-use memory_wire::api::{MemoryService, ScoredMemory};
+use memory_wire::api::{ApiError, MemoryService, ScoredMemory};
 use memory_wire::recall::FusionWeights;
 use memory_wire::store::{SqliteStore, Store};
 use serde_json::Value;
@@ -336,6 +336,49 @@ impl<S: Store> MemoryWireProvider<S> {
             svc.retain_doc(&bank, &body, None, &tags, document_id, mode)
         });
     }
+    /// (iter-1313) EXACT key recall: the store tags every keyed fact
+    /// `key:<id>`, so by-key recall is a TAG LOOKUP, not a semantic match.
+    /// `recall_filtered` cannot serve this: its include filter intersects
+    /// the FTS keyword hits, and a keyed fact whose content shares no
+    /// token with its key never enters the result (proven empirically —
+    /// the store returned Ok([]) for a tagged row whose content was
+    /// token-disjoint from the key). The honest path is `ids_tagged`
+    /// (by-tag id lookup) + `get_memory` per id, ranked newest-first for
+    /// determinism. Empty when the key matches nothing.
+    pub fn recall_keyed(&self, key: &str, limit: usize) -> Vec<ScoredMemory> {
+        if key.trim().is_empty() {
+            return Vec::new();
+        }
+        let bank = self.bank.read().map(|b| b.clone()).unwrap_or_default();
+        let tag = memory_wire::api::normalize_tags(&[format!("key:{key}")]);
+        if tag.is_empty() {
+            return Vec::new();
+        }
+        let svc = &self.service;
+        // Store-level by-tag id lookup; then materialize each row. Both
+        // calls are synchronous and infallible-shaped at this seam (guard
+        // degrades to empty on a panic, same contract as every call).
+        let ids = guard("recall_keyed", || {
+            svc.store.ids_tagged(&bank, &tag).map_err(ApiError::from)
+        });
+        let Some(ids) = ids else {
+            return Vec::new();
+        };
+        let mut hits: Vec<ScoredMemory> = Vec::new();
+        for id in ids.into_iter().take(limit.max(50)) {
+            let mem = guard("recall_keyed_get", || svc.get_memory(&bank, &id));
+            if let Some(Some(memory)) = mem
+                && !memory.content.trim().is_empty()
+            {
+                hits.push(ScoredMemory { memory, score: 1.0 });
+            }
+        }
+        // The exact-key hit has no rank to derive: score 1.0 is the honest
+        // by-construction value (a tag lookup is not a ranking).
+        hits.truncate(limit);
+        hits
+    }
+
     /// (plan 2026-10-26, RT-193) Recall for a query, returning the scored
     /// hits so callers that want the real fused RRF score can keep it.
     /// Same retrieval shape as [`Self::recall_text`] — `recall_text` is

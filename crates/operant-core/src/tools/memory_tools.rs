@@ -228,17 +228,14 @@ impl OperantTool for MemorySearchTool {
         // (iter-1307) Exactly one of query/key is required: key-only is the
         // retired memory_recall shape (folded, phase 2); neither is a genuine
         // misuse no deserializer can express — validated here instead.
-        let Some(search_query) = args
-            .key
-            .as_deref()
-            .filter(|k| !k.trim().is_empty())
-            .or(args.query.as_deref().filter(|q| !q.trim().is_empty()))
-        else {
+        let has_key = args.key.as_deref().is_some_and(|k| !k.trim().is_empty());
+        let has_query = args.query.as_deref().is_some_and(|q| !q.trim().is_empty());
+        if !has_key && !has_query {
             return ToolResult::error(
                 "memory_search",
                 "Provide either 'query' (semantic search) or 'key' (exact-key recall).".to_string(),
             );
-        };
+        }
 
         // (plan 11C3) one backend: semantic recall over memory-wire.
         let Some(provider) = ACTIVE_MEMORY_PROVIDER.read().await.clone() else {
@@ -247,9 +244,34 @@ impl OperantTool for MemorySearchTool {
                 "No memory backend attached in this session.".to_string(),
             );
         };
-        // (plan 2026-10-26, RT-193) real fused RRF score per hit, not a
-        // fabricated constant: the discarded `score` was the audit finding.
-        let hits = provider.recall_scored(search_query, max_results);
+        // (iter-1313) A key routes through the EXACT tag-filtered recall
+        // (the store tags every keyed fact key:<id>) — a semantic match on
+        // the key text loses the fact in a dense bank. A query with no key
+        // stays a plain semantic search. When the key matches nothing,
+        // fall back to the semantic query so a mistyped key still helps
+        // rather than returning an empty result set.
+        let hits = if let Some(key) = args.key.as_deref().filter(|k| !k.trim().is_empty()) {
+            let keyed = provider.recall_keyed(key, max_results);
+            if keyed.is_empty() {
+                provider.recall_scored(
+                    args.query
+                        .as_deref()
+                        .filter(|q| !q.trim().is_empty())
+                        .unwrap_or(key),
+                    max_results,
+                )
+            } else {
+                keyed
+            }
+        } else {
+            provider.recall_scored(
+                args.query
+                    .as_deref()
+                    .filter(|q| !q.trim().is_empty())
+                    .unwrap_or_default(),
+                max_results,
+            )
+        };
         let results: Vec<serde_json::Value> = hits
             .iter()
             .filter(|h| !h.memory.content.trim().is_empty())
@@ -263,7 +285,9 @@ impl OperantTool for MemorySearchTool {
         ToolResult::success(
             "memory_search",
             serde_json::json!({
-                "query": args.query.clone().unwrap_or_else(|| search_query.to_string()),
+                "query": args.query.clone().unwrap_or_else(|| {
+                    args.key.clone().unwrap_or_default()
+                }),
                 "results": results,
                 "count": results.len()
             }),
@@ -484,6 +508,68 @@ mod tests {
         assert!(
             !found.trim().is_empty(),
             "the fact is in the shared store: {found:?}"
+        );
+
+        *ACTIVE_MEMORY_PROVIDER.write().await = None;
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// (iter-1313) Key-recall must be EXACT, not semantic: the store tags
+    /// every keyed fact `key:<id>`, and `memory_recall`'s promise (folded
+    /// into memory_search's key param) was by-key recall. A semantic match
+    /// on the key text loses the fact in a dense bank — live probe found
+    /// the keyed fact at rank 11, outside the default 10-window, crowded
+    /// out by same-token rows (relevance ~0.019 all packed). The tag filter
+    /// (`recall_filtered` with `key:<id>`) guarantees rank 0.
+    #[tokio::test]
+    async fn key_recall_is_exact_not_semantic_under_token_crowding() {
+        let _guard = PROVIDER_TEST_GUARD.lock().await;
+        let _origin_lock = crate::write_origin::origin_test_lock().await;
+        let _origin = crate::write_origin::WriteOriginGuard::new("user");
+        let dir = std::env::temp_dir().join(format!("operant-mw-exact-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let provider =
+            std::sync::Arc::new(crate::memory_wire::MemoryWireProvider::new(dir.clone()).unwrap());
+        set_active_memory_provider(provider.clone()).await;
+
+        let store = MemoryStoreTool;
+        // The keyed fact: its CONTENT shares no token with the key.
+        let keyed = store
+            .execute(
+                json!({"key": "zebra-crowded-token", "content": "the maintenance hatch code is 7741"}),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(keyed.success, "store keyed: {keyed:?}");
+        // Crowding: many facts whose content carries the key's tokens —
+        // these OUTSCORE the keyed fact on a semantic match over the key.
+        for i in 0..12 {
+            let crowded = store
+                .execute(
+                    json!({"key": format!("crowd-{i}"), "content": format!("zebra crowded token fact number {i} about zebra tokens")}),
+                    ToolContext::default(),
+                )
+                .await;
+            assert!(crowded.success, "store crowd {i}: {crowded:?}");
+        }
+
+        let search = MemorySearchTool;
+        let result = search
+            .execute(
+                json!({"key": "zebra-crowded-token", "maxResults": 5}),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(result.success, "search: {result:?}");
+        let payload: serde_json::Value = serde_json::from_str(&result.content).expect("payload");
+        let results = payload["results"].as_array().expect("results");
+        assert!(!results.is_empty(), "must return results: {payload}");
+        // RED today: the keyed fact is crowded out of the default window —
+        // the tag filter must make the EXACT keyed fact rank 0.
+        assert_eq!(
+            results[0]["content"].as_str().unwrap_or(""),
+            "the maintenance hatch code is 7741",
+            "the keyed fact must be rank 0 under token crowding: {payload}"
         );
 
         *ACTIVE_MEMORY_PROVIDER.write().await = None;
