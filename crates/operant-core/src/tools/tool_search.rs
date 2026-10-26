@@ -62,10 +62,37 @@ pub const BRIDGE_TOOL_NAMES: &[&str] = &[TOOL_SEARCH_NAME, TOOL_DESCRIBE_NAME, T
 /// actually fit.
 const CHARS_PER_TOKEN: f64 = 4.0;
 
-/// Whether a tool name is deferrable. Only MCP server tools (`mcp_*`)
-/// defer; every native tool stays eager.
+/// Whether a tool name is deferrable.
+///
+/// Two families defer, both for the same reason — describing them eagerly costs
+/// far more tokens than the turn that needs them:
+///
+/// 1. **MCP server tools** (`mcp_*`): an unknown, unbounded set of tools from
+///    arbitrary servers. The bridge is the only way a model can discover them.
+/// 2. **sourcehound v2 composites** (`papers_search`, `news_fetch`, ... — 23
+///    tools): eagerly described they cost **~4,738 tokens on EVERY request**
+///    (measured on the live binary, heaviest `news_fetch` ~810); as catalog
+///    lines they cost **~760 on the turn that actually researches**. BUGS.md
+///    RT-194; the audit that measured both numbers is
+///    `docs/audit/2026-10-25-memory-sourcehound-integration-gaps.md` §5.
+///
+/// Native tools stay eager: they are the surface every turn may need.
 pub fn is_deferrable(name: &str) -> bool {
-    name.starts_with("mcp_")
+    name.starts_with("mcp_") || is_sourcehound_composite(name)
+}
+
+/// Whether `name` is one of sourcehound's 23 v2 composites under its operant
+/// spelling (`.` replaced by `_`: `papers.search` -> `papers_search`).
+///
+/// The check is a scan over the SAME table [`super::sourcehound_composites`]
+/// registers, so the classification and the registration cannot drift apart:
+/// a composite the table stops naming stops being deferred (and stops being
+/// registered), which `composite_table_has_no_duplicates` plus the
+/// registration test catch.
+fn is_sourcehound_composite(name: &str) -> bool {
+    super::sourcehound_composites::composite_specs()
+        .iter()
+        .any(|spec| spec.tool_name == name)
 }
 
 /// Result of assembling the model-visible tools array.

@@ -50,6 +50,7 @@ pub mod session_search_tool;
 pub mod skills_tool;
 pub mod sop_tool;
 pub mod sourcehound;
+pub mod sourcehound_composites;
 pub mod sourcehound_update;
 pub mod spotify_tool;
 pub mod sub_agent_tool;

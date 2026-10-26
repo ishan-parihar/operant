@@ -45,6 +45,7 @@ pub use super::send_message_tool::SendMessageTool;
 pub use super::skills_tool::{SkillManageTool, SkillViewTool, SkillsTool};
 pub use super::sop_tool::SopTool;
 pub use super::sourcehound::{WebCrawlTool, WebExtractTool, WebScrapeTool};
+use super::sourcehound_composites;
 pub use super::spotify_tool::{
     SpotifyAlbumsTool, SpotifyDevicesTool, SpotifyLibraryTool, SpotifyPlaybackTool,
     SpotifyPlaylistsTool, SpotifyQueueTool, SpotifySearchTool,
@@ -117,6 +118,14 @@ pub async fn register_builtin_tools(
     // Memory provider tools are NOT registered here. The agent-visible
     // memory tools (memory_store / memory_search) route through the
     // ACTIVE_MEMORY_PROVIDER global hook set by the CLI, so tool writes
+    // sourcehound's v2 composite surface (RT-194): the 23 research/news/OSINT
+    // composites (`papers_search`, `news_fetch`, `data_query`, ...). They ride
+    // the `tool_search` deferred bridge rather than the request (see
+    // `tool_search::is_deferrable`), so they cost ~760 catalog tokens on the
+    // turn that researches instead of ~4,738 on every request. Each tool
+    // self-disables via `is_available()` when the sourcehound binary is absent,
+    // exactly like the four web tools above.
+    sourcehound_composites::register_composites(registry).await;
     // reach the injected memory-wire store. The provider twins
     // (memory_save / memory_smart_search) and the folded memory_recall
     // are RETIRED from the wire (plan 2026-10-26 phase 2, RT-192) — the
@@ -333,6 +342,14 @@ pub fn builtin_tool_names() -> Vec<&'static str> {
         // matching memory provider is active. Including them here would
         // make the test_register_all_builtin_tools count wrong.
     ]
+    .into_iter()
+    // sourcehound's v2 composites (RT-194) ride the same registration path
+    // as every other builtin, so they belong in the same name surface — that
+    // is what `operant tools list` reports and what `tools disable` matches.
+    // Derived from the SAME table that registers them, so the two cannot
+    // drift (a composite the table stops naming stops being registered).
+    .chain(sourcehound_composites::composite_names())
+    .collect()
 }
 
 #[cfg(test)]
