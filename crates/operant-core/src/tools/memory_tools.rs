@@ -190,7 +190,10 @@ pub struct MemorySearchTool;
 #[derive(JsonSchema, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct MemorySearchArgs {
-    query: String,
+    /// (iter-1307) Optional when `key` is given: the retired `memory_recall`
+    /// shape was key-only, and the fold must accept it. Exactly one of
+    /// query/key is required (validated below).
+    query: Option<String>,
     /// (plan 2026-10-26 phase 2, RT-192) Optional exact key: performs the
     /// recall-by-key the retired `memory_recall` tool did (the store tag
     /// carries key:<id>). Absent = plain semantic search.
@@ -222,6 +225,21 @@ impl OperantTool for MemorySearchTool {
 
         let max_results = args.max_results.unwrap_or(10).min(50);
 
+        // (iter-1307) Exactly one of query/key is required: key-only is the
+        // retired memory_recall shape (folded, phase 2); neither is a genuine
+        // misuse no deserializer can express — validated here instead.
+        let Some(search_query) = args
+            .key
+            .as_deref()
+            .filter(|k| !k.trim().is_empty())
+            .or(args.query.as_deref().filter(|q| !q.trim().is_empty()))
+        else {
+            return ToolResult::error(
+                "memory_search",
+                "Provide either 'query' (semantic search) or 'key' (exact-key recall).".to_string(),
+            );
+        };
+
         // (plan 11C3) one backend: semantic recall over memory-wire.
         let Some(provider) = ACTIVE_MEMORY_PROVIDER.read().await.clone() else {
             return ToolResult::error(
@@ -229,14 +247,6 @@ impl OperantTool for MemorySearchTool {
                 "No memory backend attached in this session.".to_string(),
             );
         };
-        // (plan 2026-10-26 phase 2) The folded `memory_recall` behavior: a
-        // `key` routes the recall through the key (a semantic match on the
-        // key tag — the store has no by-id get; the tag carries key:<id>).
-        let search_query = args
-            .key
-            .as_deref()
-            .filter(|k| !k.trim().is_empty())
-            .unwrap_or(&args.query);
         // (plan 2026-10-26, RT-193) real fused RRF score per hit, not a
         // fabricated constant: the discarded `score` was the audit finding.
         let hits = provider.recall_scored(search_query, max_results);
@@ -253,7 +263,7 @@ impl OperantTool for MemorySearchTool {
         ToolResult::success(
             "memory_search",
             serde_json::json!({
-                "query": args.query,
+                "query": args.query.clone().unwrap_or_else(|| search_query.to_string()),
                 "results": results,
                 "count": results.len()
             }),
@@ -568,6 +578,82 @@ mod tests {
         );
     }
 
+    // ── Deep-validation findings (2026-10-26, iter-1307): the alias fold
+    // was name-only — the MCP pre-check (`contains`) rejected retired
+    // names, and the retired argument shape ({key} only, no query) failed
+    // deserialization. Both pinned here RED-first. ──
+
+    /// (iter-1307) The registry's `contains` must resolve aliases: the MCP
+    /// serve pre-check calls `contains()` before `execute()`, so a retired
+    /// name died as "Unknown tool" over the MCP surface even though
+    /// `get`/`execute` resolve it. Found by live MCP probe.
+    #[tokio::test]
+    async fn contains_resolves_retired_names_for_the_mcp_precheck() {
+        let registry = crate::tools::ToolRegistry::new(std::time::Duration::from_secs(5));
+        crate::tools::builtin::register_memory_tools(&registry)
+            .await
+            .unwrap();
+        assert!(
+            registry.contains("memory_recall").await,
+            "MCP pre-check passes for memory_recall"
+        );
+        assert!(
+            registry.contains("memory_save").await,
+            "MCP pre-check passes for memory_save"
+        );
+        assert!(
+            registry.contains("memory_smart_search").await,
+            "MCP pre-check passes for memory_smart_search"
+        );
+        assert!(!registry.contains("memory_not_a_thing").await);
+    }
+
+    /// (iter-1307) The retired `memory_recall` argument shape was `{key}`
+    /// ONLY — the fold must accept it. A key-only call (no query) routes
+    /// through the key; neither query nor key is the only invalid shape.
+    #[tokio::test]
+    async fn memory_search_accepts_key_only_the_recall_shape() {
+        let _guard = PROVIDER_TEST_GUARD.lock().await;
+        let _origin_lock = crate::write_origin::origin_test_lock().await;
+        let _origin = crate::write_origin::WriteOriginGuard::new("user");
+        let dir = std::env::temp_dir().join(format!("operant-mw-keyonly-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let provider =
+            std::sync::Arc::new(crate::memory_wire::MemoryWireProvider::new(dir.clone()).unwrap());
+        set_active_memory_provider(provider.clone()).await;
+
+        let store = MemoryStoreTool;
+        let stored = store
+            .execute(
+                json!({"key": "folded-key-probe", "content": "the folded recall probe fact"}),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(stored.success, "store: {stored:?}");
+
+        // The retired memory_recall shape: key ONLY, no query field.
+        let search = MemorySearchTool;
+        let key_only = search
+            .execute(json!({"key": "folded-key-probe"}), ToolContext::default())
+            .await;
+        assert!(
+            key_only.success,
+            "key-only (the memory_recall argument shape) must work: {key_only:?}"
+        );
+        assert!(
+            key_only.content.contains("folded recall probe"),
+            "the key-only call must recall the stored fact: {}",
+            key_only.content
+        );
+
+        // Neither query nor key: the ONE invalid shape.
+        let neither = search.execute(json!({}), ToolContext::default()).await;
+        assert!(!neither.success, "neither query nor key must be rejected");
+
+        *ACTIVE_MEMORY_PROVIDER.write().await = None;
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     // ── Phase 2 (plan 2026-10-26, RT-192): 5 tools → 2 ─────────────
 
     /// The consolidated surface registers exactly `memory_store` and
@@ -579,15 +665,18 @@ mod tests {
         crate::tools::builtin::register_memory_tools(&registry)
             .await
             .unwrap();
-        let names: Vec<String> = registry
+        let mut names: Vec<String> = registry
             .get_schemas_all()
             .await
             .into_iter()
             .map(|s| s.name)
             .collect();
+        // (iter-1307) sort: get_schemas_all iterates a HashMap, so the
+        // order is seed-random per process — the contract is the SET.
+        names.sort();
         assert_eq!(
             names,
-            vec!["memory_store".to_string(), "memory_search".to_string()],
+            vec!["memory_search".to_string(), "memory_store".to_string()],
             "the memory toolset is exactly two tools: {names:?}"
         );
     }

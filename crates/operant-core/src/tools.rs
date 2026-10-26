@@ -655,8 +655,9 @@ impl ToolRegistry {
     }
 
     pub async fn contains(&self, name: &str) -> bool {
+        let resolved = self.resolve_alias(name);
         let tools = self.tools.read().await;
-        tools.contains_key(name)
+        tools.contains_key(&resolved)
     }
 
     /// Whether a tool is registered AND currently available (not disabled
