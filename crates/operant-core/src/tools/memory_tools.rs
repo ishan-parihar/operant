@@ -237,15 +237,16 @@ impl OperantTool for MemorySearchTool {
             .as_deref()
             .filter(|k| !k.trim().is_empty())
             .unwrap_or(&args.query);
-        let hits = provider.recall_text(search_query, max_results);
+        // (plan 2026-10-26, RT-193) real fused RRF score per hit, not a
+        // fabricated constant: the discarded `score` was the audit finding.
+        let hits = provider.recall_scored(search_query, max_results);
         let results: Vec<serde_json::Value> = hits
-            .lines()
-            .filter(|l| l.starts_with("- "))
-            .take(max_results)
-            .map(|l| {
+            .iter()
+            .filter(|h| !h.memory.content.trim().is_empty())
+            .map(|h| {
                 serde_json::json!({
-                    "content": l.trim_start_matches("- "),
-                    "relevance": 1.0
+                    "content": h.memory.content.trim(),
+                    "relevance": h.score
                 })
             })
             .collect();
@@ -477,6 +478,94 @@ mod tests {
 
         *ACTIVE_MEMORY_PROVIDER.write().await = None;
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── Phase 3 (plan 2026-10-26, RT-193): score survives the wire ──
+
+    /// (plan 2026-10-26, RT-193) A store with one high-relevance and one
+    /// low-relevance row must return DISTINCT, ORDERED scores through the
+    /// tool layer — the hard-coded relevance:1.0 masked the ranking.
+    #[tokio::test]
+    async fn memory_search_reports_the_real_fused_score_per_hit() {
+        let _guard = PROVIDER_TEST_GUARD.lock().await;
+        let _origin_lock = crate::write_origin::origin_test_lock().await;
+        let _origin = crate::write_origin::WriteOriginGuard::new("user");
+        let dir = std::env::temp_dir().join(format!("operant-mw-score-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let provider =
+            std::sync::Arc::new(crate::memory_wire::MemoryWireProvider::new(dir.clone()).unwrap());
+        set_active_memory_provider(provider.clone()).await;
+
+        // Two facts with very different relevance to the query.
+        let store = MemoryStoreTool;
+        let a = store
+            .execute(
+                json!({"key": "koi-pond-depth", "content": "the koi pond depth is exactly two meters"}),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(a.success, "store a: {a:?}");
+        let b = store
+            .execute(
+                json!({"key": "unrelated-weather", "content": "sunny weather prevails over the valley today"}),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(b.success, "store b: {b:?}");
+
+        let search = MemorySearchTool;
+        let result = search
+            .execute(
+                json!({"query": "koi pond depth", "maxResults": 2}),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(result.success, "search: {result:?}");
+        let payload: serde_json::Value =
+            serde_json::from_str(&result.content).expect("search payload");
+        let results = payload["results"].as_array().expect("results array");
+        assert!(!results.is_empty(), "must find the koi fact: {payload}");
+        // RED today: every hit carries the fabricated relevance:1.0 —
+        // the test demands the REAL fused score (a float that varies
+        // between hits and is not constantly 1.0).
+        let scores: Vec<f64> = results
+            .iter()
+            .filter_map(|r| r.get("relevance").and_then(|v| v.as_f64()))
+            .collect();
+        assert_eq!(scores.len(), results.len(), "every hit carries a score");
+        assert!(
+            scores.iter().any(|s| *s != 1.0),
+            "the relevance must be the REAL fused score, not the fabricated 1.0: {scores:?}"
+        );
+        if scores.len() > 1 {
+            let first = scores[0];
+            assert!(
+                scores.iter().all(|s| s <= &first),
+                "hits arrive in rank order (score descending): {scores:?}"
+            );
+        }
+
+        *ACTIVE_MEMORY_PROVIDER.write().await = None;
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The prefetch TEXT contract is unchanged (no JSON, same [memory]
+    /// header) — scores rank internally but the injected block stays text.
+    #[tokio::test]
+    async fn prefetch_text_contract_is_unchanged_by_scores() {
+        let p = crate::memory_wire::in_memory_for_tests();
+        p.sync_turn("koi pond depth", "two meters exactly")
+            .await
+            .expect("sync_turn");
+        let recalled = p.prefetch("koi pond").await;
+        assert!(
+            recalled.starts_with("[memory]") || recalled.is_empty(),
+            "the injected block is text with the same header: {recalled:?}"
+        );
+        assert!(
+            !recalled.contains("\"relevance\""),
+            "no JSON in prefetch text"
+        );
     }
 
     // ── Phase 2 (plan 2026-10-26, RT-192): 5 tools → 2 ─────────────

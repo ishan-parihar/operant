@@ -204,6 +204,16 @@ pub struct MemoryWireProvider<S: Store = SqliteStore> {
     prefetch_queue: std::sync::Mutex<VecDeque<String>>,
 }
 
+/// (plan 2026-10-26, phase 3) A throwaway in-memory provider for
+/// cross-module tests (memory_tools' prefetch-contract test): the
+/// in-module `in_memory_provider` lives under cfg(test) and is not
+/// visible to the tools module.
+#[cfg(test)]
+pub fn in_memory_for_tests() -> MemoryWireProvider<SqliteStore> {
+    let store = SqliteStore::open_in_memory().expect("open in-memory store");
+    MemoryWireProvider::from_service(MemoryService::new(store), "test")
+}
+
 impl<S: Store> MemoryWireProvider<S> {
     /// Wrap an already-constructed service (used by tests and by [`Self::new`]).
     pub fn from_service(service: MemoryService<S>, bank: impl Into<String>) -> Self {
@@ -326,12 +336,13 @@ impl<S: Store> MemoryWireProvider<S> {
             svc.retain_doc(&bank, &body, None, &tags, document_id, mode)
         });
     }
-    /// Recall for a query, returning a formatted text block. Uses
-    /// `recall_with_weights` (not plain `recall`) so the fusion weights are
-    /// explicit and can be tuned without changing the call shape.
-    pub fn recall_text(&self, query: &str, limit: usize) -> String {
+    /// (plan 2026-10-26, RT-193) Recall for a query, returning the scored
+    /// hits so callers that want the real fused RRF score can keep it.
+    /// Same retrieval shape as [`Self::recall_text`] — `recall_text` is
+    /// now a thin formatting wrapper over this.
+    pub fn recall_scored(&self, query: &str, limit: usize) -> Vec<ScoredMemory> {
         if query.trim().is_empty() {
-            return String::new();
+            return Vec::new();
         }
         // (plan 06B) clone the key out of the lock: the service call
         // outlives any guard we could hold here.
@@ -341,8 +352,16 @@ impl<S: Store> MemoryWireProvider<S> {
             svc.recall_with_weights(&bank, query, 2000, &FusionWeights::SHIPPED)
         });
         let Some(hits) = hits else {
-            return String::new();
+            return Vec::new();
         };
+        hits.into_iter().take(limit).collect()
+    }
+
+    /// Recall for a query, returning a formatted text block. Uses
+    /// `recall_with_weights` (not plain `recall`) so the fusion weights are
+    /// explicit and can be tuned without changing the call shape.
+    pub fn recall_text(&self, query: &str, limit: usize) -> String {
+        let hits = self.recall_scored(query, limit);
         Self::format_hits(&hits, limit)
     }
 

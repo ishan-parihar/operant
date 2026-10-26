@@ -3354,7 +3354,6 @@ dependencies = [
  "mockito",
  "operant-config",
  "operant-harness",
- "operant-tools",
  "parking_lot",
  "rand 0.8.7",
  "regex",
@@ -3434,14 +3433,6 @@ dependencies = [
  "tokio",
  "toml 0.8.23",
  "tracing",
-]
-
-[[package]]
-name = "operant-tools"
-version = "0.2.1"
-dependencies = [
- "serde",
- "tempfile",
 ]
 
 [[package]]
