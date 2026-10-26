@@ -393,8 +393,17 @@ pub struct ToolRegistry {
     /// old name from a pinned prompt, at ZERO wire-schema cost. The
     /// memory consolidation retired `memory_recall` (→ `memory_search`,
     /// the folded key param), `memory_save` (→ `memory_store`), and
-    /// `memory_smart_search` (→ `memory_search`); drop this map when the
-    /// one-release alias window closes.
+    /// `memory_smart_search` (→ `memory_search`).
+    ///
+    /// The one-release window the plan set has CLOSED: the layer landed in
+    /// e45908f2 (iter-1300) and one published release containing it shipped
+    /// (v0.3.0, 2026-10-26) — but only ~18 hours later, which is no migration
+    /// window for an operator with pinned prompts, so the removal is scoped
+    /// to the release AFTER that one (RT-192 row, BUGS.md). Emptying this
+    /// map moves `OBSERVE_ALLOW` in operant-os/src/policy.rs (it names
+    /// `memory_recall` explicitly, and `native_tool_names()` cannot supply
+    /// it) and operant-config's readonly test in the SAME change — see the
+    /// row before touching it.
     aliases: Arc<std::sync::RwLock<HashMap<String, String>>>,
     /// §2.4 authority bindings, keyed by tool name. Absent = global.
     ///
@@ -404,7 +413,11 @@ pub struct ToolRegistry {
 }
 
 /// The retired-name → surviving-name aliases for the consolidated memory
-/// toolset (plan 2026-10-26 phase 2). One release, then the map empties.
+/// toolset (plan 2026-10-26 phase 2). The one-release window closed with
+/// v0.3.0 (2026-10-26); removal is deliberately deferred to the release
+/// AFTER that one, because 18 hours is no migration window for an operator
+/// with pinned prompts — see the RT-192 row in docs/audit/2026-06-19-BUGS.md
+/// and this struct's field doc for the dependents that move with it.
 fn builtin_tool_aliases() -> HashMap<String, String> {
     [
         ("memory_recall", "memory_search"),
