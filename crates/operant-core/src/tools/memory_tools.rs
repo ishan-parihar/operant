@@ -54,16 +54,15 @@ pub struct MemoryStoreTool;
 #[derive(JsonSchema, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct MemoryStoreArgs {
-    /// (iter-1321) Optional since the retired `memory_save` shape was
-    /// {content, concepts} with NO key: a keyless store is allowed (the
-    /// old memory_save behavior — content only, concepts as tags); the
-    /// synthesized tag keeps the row findable by content search.
+    /// Optional unique key; omit for a plain content store.
     key: Option<String>,
     content: String,
     block_type: Option<String>,
     tags: Option<Vec<String>>,
     /// (iter-1321) The retired memory_save field name — accepted as tags
     /// so the old shape keeps working through the alias.
+    /// (iter-1325) schemars(skip): same wire-cost contract as `limit`.
+    #[schemars(skip)]
     concepts: Option<Vec<String>>,
 }
 
@@ -79,7 +78,7 @@ fn store_bound_violation(args: &MemoryStoreArgs) -> Option<String> {
     if args
         .key
         .as_deref()
-        .map_or(false, |k| k.chars().count() > MAX_STORE_KEY_CHARS)
+        .is_some_and(|k| k.chars().count() > MAX_STORE_KEY_CHARS)
     {
         return Some(format!(
             "key is longer than {MAX_STORE_KEY_CHARS} characters"
@@ -209,18 +208,22 @@ pub struct MemorySearchTool;
 #[derive(JsonSchema, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct MemorySearchArgs {
-    /// (iter-1307) Optional when `key` is given: the retired `memory_recall`
-    /// shape was key-only, and the fold must accept it. Exactly one of
-    /// query/key is required (validated below).
+    /// Natural-language query for semantic search. Omit when `key` is given
+    /// (exact-key recall); exactly one of query/key is required.
     query: Option<String>,
-    /// (plan 2026-10-26 phase 2, RT-192) Optional exact key: performs the
-    /// recall-by-key the retired `memory_recall` tool did (the store tag
-    /// carries key:<id>). Absent = plain semantic search.
+    /// Optional exact key: recalls the row stored under key:<id> at rank 0.
+    /// Absent = plain semantic search over `query`.
     key: Option<String>,
+    /// Max results to return (default 8).
     max_results: Option<usize>,
     /// (iter-1321) The retired memory_smart_search's field name — an
     /// accepted alias for maxResults so the old wire shape keeps working
     /// through the alias layer.
+    /// (iter-1325) schemars(skip): accepted at deserialization but NOT
+    /// advertised — pinned prompts send it without reading the schema,
+    /// and advertising it pushed the pair to 601 tokens, worse than the
+    /// 590 five-tool baseline the consolidation exists to beat.
+    #[schemars(skip)]
     limit: Option<usize>,
 }
 
@@ -798,6 +801,49 @@ mod tests {
 
         *ACTIVE_MEMORY_PROVIDER.write().await = None;
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// (iter-1325) The compat fields (`limit`, `concepts`) must be ACCEPTED
+    /// at deserialization but ABSENT from the advertised schema: the wire
+    /// pair measured 601 tokens after they were added — worse than the
+    /// 590 five-tool baseline the consolidation exists to beat. Pinned
+    /// prompts send the old shapes regardless of the schema (that is the
+    /// premise of compat), so the model never needs to see them.
+    #[tokio::test]
+    async fn compat_fields_are_accepted_but_not_advertised() {
+        let registry = crate::tools::ToolRegistry::new(std::time::Duration::from_secs(5));
+        crate::tools::builtin::register_memory_tools(&registry)
+            .await
+            .unwrap();
+        let schemas = registry.get_schemas_all().await;
+        let search = schemas
+            .iter()
+            .find(|s| s.name == "memory_search")
+            .expect("memory_search schema");
+        let props = search
+            .parameters
+            .get("properties")
+            .and_then(|p| p.as_object())
+            .expect("properties");
+        assert!(
+            !props.contains_key("limit"),
+            "the compat alias must not be advertised (wire cost): {props:?}"
+        );
+        let store = schemas
+            .iter()
+            .find(|s| s.name == "memory_store")
+            .expect("memory_store schema");
+        let store_props = store
+            .parameters
+            .get("properties")
+            .and_then(|p| p.as_object())
+            .expect("properties");
+        assert!(
+            !store_props.contains_key("concepts"),
+            "the retired concepts field must not be advertised: {store_props:?}"
+        );
+        // And the old shapes still deserialize (rounds 4's pins cover the
+        // behavior; this test covers the SCHEMA half of the contract).
     }
 
     // ── Deep-validation findings (2026-10-26, iter-1307): the alias fold
