@@ -206,6 +206,22 @@ def runs_of(d):
     keys/assert/assert_screen unless it overrides them — the schema's
     inheritance rule.
     """
+    # Every scenario names its two golden filenames, INCLUDING the ones that
+    # opt out of golden-diffing (`deterministic: false`) — the names are the
+    # record of what a future pinned run would produce. The 2026-10-26 RT-180
+    # failure was a scenario with NEITHER the keys nor the opt-out, which died
+    # here as a bare `KeyError: 'baseline'` and took the whole verify corpus
+    # down with it. Name the scenario and the key so the next one is a
+    # five-second fix.
+    missing = [k for k in ("baseline", "style_baseline") if k not in d]
+    if missing:
+        raise SystemExit(
+            f"{d.get('_file', d.get('name', '<unknown scenario>'))}: missing "
+            f"{missing}. Every *.scenario.json names `baseline` and "
+            f"`style_baseline` — use the `deterministic: false` + `nondeterminism`"
+            f" opt-out (see footer-bar.scenario.json) when the surface cannot "
+            f"produce a stable golden."
+        )
     yield {
         "label": d["name"],
         "text": d["baseline"],

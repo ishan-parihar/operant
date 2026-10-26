@@ -2,11 +2,21 @@
   "name": "at-file-ref-grammar",
   "surface": "crates/operant-cli/src/tui/operant_ui/ui_input.rs::draw_command_suggestions_overlay",
   "opens_with": "typing '@' at a word boundary in the composer",
-  "keys": "<text>@cr<enter>",
+  "baseline": "at-file-ref-grammar.txt",
+  "style_baseline": "at-file-ref-grammar.style.txt",
+  "deterministic": false,
+  "nondeterminism": {
+    "reason": "The @ popup's CONTENT is working-directory dependent: the async fuzzy tier is sim-deterministic-disabled (maybe_spawn_file_suggest gates on is_simulating), so what the popup lists depends on the checkout that runs it, and the golden would differ between the CI clone and a developer's tree with untracked scratch files.",
+    "varying_region": "The suggestion rows themselves (which entries the listing found); the composer field and the overlay frame are stable.",
+    "surface_of_fix": "Seed the file-discovery scan with a pinned fixture root under OPERANT_SIM_FIXTURE_DIR (the corpus's existing pinning shape) so the listing is identical everywhere. Until then the grammar's HONEST oracle is the unit layer, which already pins it: prompt_input/tests.rs file_ref_value_grammar_shapes, accept_file_ref_appends_space_and_uses_grammar, accepted_file_ref_token_injects_via_context_references."
+  },
+  "keys": "@cr",
   "size": "120x40",
   "assert": [
-    "prompt_input.suggestions_source_file_ref == true"
+    "focus == Input"
   ],
-  "assert_screen": [],
-  "notes": "Plan 2026-10-24 M4: the @ popup shares the slash-command palette. The grammar shape (values are @file:/@folder: tokens) is pinned by unit tests in prompt_input/tests.rs (file_ref_value_grammar_shapes, accept_file_ref_appends_space_and_uses_grammar, accepted_file_ref_token_injects_via_context_references) \u2014 the async fuzzy tier is sim-deterministic-disabled (maybe_spawn_file_suggest gates on is_simulating), so the live popup contents depend on the working directory; the unit layer is the honest oracle for the grammar."
+  "assert_screen": [
+    "contains:@cr"
+  ],
+  "notes": "Plan 2026-10-24 M4: the @ popup shares the slash-command palette. The grammar shape (values are @file:/@folder: tokens) is pinned by unit tests in prompt_input/tests.rs (file_ref_value_grammar_shapes, accept_file_ref_appends_space_and_uses_grammar, accepted_file_ref_token_injects_via_context_references) — the async fuzzy tier is sim-deterministic-disabled (maybe_spawn_file_suggest gates on is_simulating), so the live popup contents depend on the working directory; the unit layer is the honest oracle for the grammar. RT-180/196 correction (2026-10-26): this scenario was never executable — it carried an illegal `<text>` key token, asserted a `prompt_input.suggestions_source_file_ref` field debug_snapshot() has never exposed, and had no baseline keys (which killed `_run.py verify` as a bare KeyError for the whole corpus). It now carries the three optional keys, the legal `@cr` key sequence, and the honest assertions: the composer keeps focus and shows the typed token. The popup's own contents stay with the unit layer, which is where they were already pinned."
 }

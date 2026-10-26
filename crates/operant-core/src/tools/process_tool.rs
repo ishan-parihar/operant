@@ -51,8 +51,8 @@ impl OperantTool for ProcessTool {
     }
 
     fn description(&self) -> &str {
-        "Manage background processes. Actions:\n\
-         - list: list all processes (no extra params)\n\
+        "Manage THIS agent's own spawned background processes (the session registry) — NOT the operating system's process table. Actions:\n\
+         - list: list the agent's own background process sessions (no extra params) — an empty list means nothing was spawned, not an OS-level 'no processes' verdict\n\
          - spawn: requires 'command' string (e.g. {\"action\":\"spawn\",\"command\":\"ls -la\"})\n\
          - poll: requires 'sessionId'\n\
          - wait: requires 'sessionId'\n\
@@ -189,5 +189,30 @@ mod tests {
         let schema = ToolSchema::from_type::<ProcessToolArgs>("process", "test");
         let json = serde_json::to_string(&schema).unwrap();
         assert!(!json.is_empty());
+    }
+
+    /// RT-196(a) (audit 2026-10-25, plan item 0.2): the description said
+    /// "list all processes", which reads as the OS process table. `list`
+    /// actually returns the agent's OWN spawned background sessions
+    /// (`registry.list()`), so an empty result is "nothing spawned", not a
+    /// system-level verdict — the smoke-test report read exactly that as a
+    /// wart. The description now states the scope so a model does not
+    /// conclude the OS has no processes.
+    #[test]
+    fn process_description_states_its_registry_scope_not_the_os_process_table() {
+        let tool = ProcessTool::new(ProcessRegistry::new());
+        let desc = tool.description();
+        assert!(
+            !desc.contains("list all processes"),
+            "'list all processes' reads as the OS table: {desc}"
+        );
+        assert!(
+            desc.contains("NOT the operating system"),
+            "the negative scope must be stated, not left implied: {desc}"
+        );
+        assert!(
+            desc.contains("spawned background processes"),
+            "the positive scope must name what is actually listed: {desc}"
+        );
     }
 }

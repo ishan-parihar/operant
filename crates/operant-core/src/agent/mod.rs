@@ -2435,6 +2435,141 @@ mod tests {
             "wrap-up rung appended final-call copy as the last message"
         );
     }
+
+    /// RT-181 (audit 2026-10-25 G2) — the ledger row claimed the ladder's
+    /// memory-assist insertion was live code that "always inserts nothing"
+    /// because `MemoryProvider::on_pre_compress` "has no real
+    /// implementation". That is stale: `MemoryWireProvider::on_pre_compress`
+    /// (`memory_wire.rs:707`) folds, retains and RETURNS the block, and the
+    /// "no implementation" was true only of the TRAIT DEFAULT the row was
+    /// reading.
+    ///
+    /// The provider-level battery pins the provider half. This pins the half
+    /// that had NO test at all and is the half an operator can observe: that
+    /// the LADDER inserts a non-empty block into the request. Same history
+    /// seeding shape as `build_messages_over_threshold_runs_preflight_ladder`
+    /// above (a proven way to fire the ladder deterministically), with a
+    /// provider whose hook returns a marker so a missing insertion is
+    /// observable rather than indistinguishable from "nothing to say".
+    ///
+    /// The POSITION is asserted too: after the frozen system prefix, never at
+    /// index 0 — a user message ahead of the system prompt is invalid for
+    /// strict providers and busts the whole prefix, which is precisely what
+    /// the insertion site's index computation exists to prevent.
+    #[serial]
+    #[tokio::test]
+    async fn build_messages_inserts_the_pre_compress_insight_after_the_system_prefix() {
+        /// Marker the stub's hook returns. Distinctive enough that finding it
+        /// in the built list can only mean the insertion path ran.
+        const PRECOMPRESS_MARKER: &str = "PRE-COMPRESS-INSIGHT-9F3A";
+
+        struct InsightProvider {
+            calls: std::sync::atomic::AtomicUsize,
+        }
+
+        #[async_trait]
+        impl crate::memory_provider::MemoryProvider for InsightProvider {
+            fn name(&self) -> &str {
+                "insight_stub"
+            }
+            fn is_available(&self) -> bool {
+                true
+            }
+            async fn initialize(&self, _session_id: &str) -> Result<()> {
+                Ok(())
+            }
+            async fn prefetch(&self, _query: &str) -> String {
+                String::new()
+            }
+            async fn sync_turn(&self, _user: &str, _assistant: &str) -> Result<()> {
+                Ok(())
+            }
+            fn queue_prefetch(&self, _query: &str) {}
+            fn on_pre_compress(&self, _messages: &[crate::client::Message]) -> String {
+                self.calls
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                PRECOMPRESS_MARKER.to_string()
+            }
+        }
+
+        let db =
+            Database::init(std::path::PathBuf::from("precompress-insert-test.sqlite")).unwrap();
+        let provider = Arc::new(InsightProvider {
+            calls: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let agent = OperantAgent::new(
+            AgentConfig {
+                context_window: 10_000,
+                ..AgentConfig::default()
+            },
+            Box::new(OpenAIModelClient::new(OpenAIClient::new(
+                crate::client::ClientConfig::default(),
+            ))),
+            ToolRegistry::new(Duration::from_secs(1)),
+            Arc::new(db),
+        )
+        .with_memory_provider(
+            Arc::clone(&provider) as Arc<dyn crate::memory_provider::MemoryProvider>
+        );
+
+        // Deterministic over-threshold history (the shape proven above).
+        agent.user_message("start").await;
+        agent
+            .user_message("pad past the head-protection window")
+            .await;
+        agent
+            .add_message(crate::client::Message::assistant("").with_tool_calls(vec![
+                crate::client::ToolCall {
+                    id: "t2".to_string(),
+                    function: crate::client::ToolCallFunction {
+                        name: "read_file".to_string(),
+                        arguments: "{}".to_string(),
+                    },
+                },
+            ]))
+            .await;
+        let mut tool_msg = crate::client::Message::new(Role::Tool, "x".repeat(40_000));
+        tool_msg.tool_call_id = Some("t2".to_string());
+        agent.add_message(tool_msg).await;
+        for filler in ["one", "two", "three", "four"] {
+            agent.user_message(filler).await;
+        }
+
+        let msgs = agent.build_messages("precompress-insert").await.unwrap();
+
+        assert!(
+            provider.calls.load(std::sync::atomic::Ordering::Relaxed) > 0,
+            "the ladder must consult the pre-compress hook when it fires — a \
+             zero call count means it did not run"
+        );
+
+        let marker_index = msgs
+            .iter()
+            .position(|m| m.content.contains(PRECOMPRESS_MARKER))
+            .unwrap_or_else(|| {
+                panic!("the pre-compress insight never reached the built list: {msgs:#?}")
+            });
+        // The insertion is framed by the production site, so the framing is
+        // asserted alongside the marker — it is what makes the block findable
+        // by the model (and by the next audit).
+        assert!(
+            msgs[marker_index]
+                .content
+                .contains("[memory context before compaction]"),
+            "the insertion carries the production framing header: {}",
+            msgs[marker_index].content
+        );
+        let system_index = msgs
+            .iter()
+            .position(|m| m.role == Role::System)
+            .unwrap_or_else(|| panic!("the built list lost the system prefix: {msgs:#?}"));
+        assert!(
+            marker_index > system_index,
+            "the insight must land AFTER the system prefix (got {marker_index}, \
+             system at {system_index}) — a user message ahead of it is invalid \
+             for strict providers and busts the frozen prefix"
+        );
+    }
     #[serial]
     #[tokio::test]
     async fn lcm_engine_injects_auto_recall_evidence_into_build_messages() {

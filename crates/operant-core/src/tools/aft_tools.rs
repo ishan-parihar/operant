@@ -233,7 +233,11 @@ impl OperantTool for AftSearchTool {
         "aft_search"
     }
     fn description(&self) -> &str {
-        "Semantic + trigram full-text search across the project. Returns matching file paths + line numbers + snippets (lexical fallback when the semantic index is not enabled). More accurate than basic file_search."
+        "Semantic + trigram full-text search across the project, served by the aft BINARY's index lanes.\n\
+         Both lanes are aft-side prerequisites: until `aft setup` / `aft warmup --only search` has run,\n\
+         this tool returns a HARD ERROR (`[search_lanes_unavailable]`) — it does NOT fall back to a\n\
+         lexical search. On that error, use `aft_grep` for a real (and independently reported) text\n\
+         search over the project."
     }
     fn schema(&self) -> ToolSchema {
         ToolSchema::from_type::<AftSearchArgs>("aft_search", "Search code via aft")
@@ -786,7 +790,9 @@ impl OperantTool for AftCheckpointTool {
         "aft_checkpoint"
     }
     fn description(&self) -> &str {
-        "Create a named checkpoint snapshot of the project state. Use before risky multi-file edits so they can be undone later."
+        "Create a named checkpoint snapshot of the project's GIT-TRACKED files (untracked files are NOT\n\
+         captured, so they are not restorable). Use before risky multi-file edits so they can be undone later.\n\
+         Use aft_checkpoint_paths to see exactly what a checkpoint would capture."
     }
     fn schema(&self) -> ToolSchema {
         ToolSchema::from_type::<AftCheckpointArgs>("aft_checkpoint", "Create checkpoint via aft")
@@ -1004,6 +1010,51 @@ mod tests {
         let tool = AftSearchTool { pool: make_pool() };
         let schema = tool.schema();
         assert_eq!(schema.name, "aft_search");
+    }
+
+    /// RT-195(a) (audit 2026-10-25, plan item 0.1): the description promised a
+    /// "lexical fallback when the semantic index is not enabled" that does
+    /// not exist — live aft 0.62.0 returns a HARD `[search_lanes_unavailable]`
+    /// error with both lanes `runtime_not_observed`. A model that believes a
+    /// fallback exists will trust an error-shaped response, which is the
+    /// model-facing contract bug family (same as the vision honesty fixes).
+    /// The description must now (1) not promise a fallback and (2) name the
+    /// real substitute (aft_grep) so the model has a working path.
+    #[test]
+    fn aft_search_description_does_not_promise_a_fallback_that_does_not_exist() {
+        let tool = AftSearchTool { pool: make_pool() };
+        let desc = tool.description();
+        assert!(
+            !desc.contains("lexical fallback"),
+            "the description must not promise a lexical fallback aft never runs: {desc}"
+        );
+        assert!(
+            desc.contains("does NOT fall back"),
+            "the description must state the hard-error behavior explicitly: {desc}"
+        );
+        assert!(
+            desc.contains("aft_grep"),
+            "the description must name the substitute tool a model can actually call: {desc}"
+        );
+    }
+
+    /// RT-196(b) (plan item 0.3): aft_checkpoint captures only git-TRACKED
+    /// files — an untracked file yields `file_count: 0` and a silent no-op
+    /// restore, which is what the 2026-10-25 smoke-test report hit twice and
+    /// read as a wart. "Snapshot of the project state" implied otherwise, so
+    /// the limit and the preview tool are now both named.
+    #[test]
+    fn aft_checkpoint_description_names_the_tracked_files_limit() {
+        let tool = AftCheckpointTool { pool: make_pool() };
+        let desc = tool.description();
+        assert!(
+            desc.contains("GIT-TRACKED"),
+            "the capture scope must be explicit, not implied: {desc}"
+        );
+        assert!(
+            desc.contains("aft_checkpoint_paths"),
+            "the operator needs the preview path that shows the blast radius: {desc}"
+        );
     }
 
     #[test]
