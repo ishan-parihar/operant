@@ -66,7 +66,10 @@ pub use super::working_diff_tool::WorkingDiffTool;
 /// exactly `memory_store` + `memory_search` on the wire. The retired
 /// names (`memory_recall`, `memory_save`, `memory_smart_search`) resolve
 /// through the registry's ALIAS layer — callable, zero schema cost — for
-/// one release, after which the aliases drop.
+/// TWO releases: the layer shipped in e45908f2 and v0.3.0 landed ~18 hours
+/// later, which is no migration window for an operator with pinned prompts,
+/// so the aliases span the next release too (see the RT-192 row in
+/// docs/audit/2026-06-19-BUGS.md for the full removal scope).
 pub async fn register_memory_tools(registry: &ToolRegistry) -> Result<()> {
     registry.register(MemoryStoreTool).await?;
     registry.register(MemorySearchTool).await?;
@@ -117,8 +120,10 @@ pub async fn register_builtin_tools(
     // reach the injected memory-wire store. The provider twins
     // (memory_save / memory_smart_search) and the folded memory_recall
     // are RETIRED from the wire (plan 2026-10-26 phase 2, RT-192) — the
-    // registry's alias layer resolves the old names for one release so
-    // pinned prompts elsewhere keep working at zero schema cost.
+    // registry's alias layer resolves the old names so pinned prompts
+    // elsewhere keep working at zero schema cost, deliberately across TWO
+    // releases (v0.3.0 shipped with the layer only ~18 hours after it
+    // landed, which is no migration window; see RT-192).
     registry.register(HttpRequestTool).await?;
     registry.register(DateTimeTool).await?;
     registry.register(TimestampTool).await?;
