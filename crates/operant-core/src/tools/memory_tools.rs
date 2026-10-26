@@ -850,24 +850,36 @@ mod tests {
         // The concept rode as a tag: the provider's own tag facet can
         // retrieve the row it wrote. The concepts tag normalizes to
         // lowercase; if `concepts` stopped deserializing, the tag is absent
-        // and the bank's distinct-tag count drops to zero.
-        let stored = provider.list_page(50, 0);
-        assert!(
-            stored
-                .iter()
-                .any(|m| m.content.contains("anchor torque reading")),
-            "the old-shape row must exist in the bank"
-        );
-        // And the tag facet is reachable through the public provider API:
-        // the concepts tag normalizes to lowercase, and the row's stored
-        // tags are exactly what `memory_smart_search`/`memory_search` can
-        // surface — if `concepts` stopped deserializing, the tag is absent
-        // and the provider's stats tag-count drops to zero.
+        // and the bank's distinct-tag count drops to zero. The assertion is
+        // bank-scoped (SqliteStore::bank_stats joins memory_tags through
+        // memories WHERE bank_id=?1 — a store-wide count would make this pin
+        // vacuous against any tagged row in any other bank), and the empty
+        // baseline below pins that zero means zero.
         let stats = provider.memory_bank_stats();
         assert!(
             stats.map(|s| s.tags > 0).unwrap_or(false),
             "the concepts tag must exist on the stored row (memory_tools.rs iter-1335)"
         );
+        assert!(
+            provider
+                .list_page(50, 0)
+                .iter()
+                .any(|m| m.content.contains("anchor torque reading")),
+            "the old-shape row must exist in the bank"
+        );
+        // Negative control: a bank that stored NOTHING has zero tags, so the
+        // `> 0` above cannot be satisfied by an untagged store.
+        let empty_dir =
+            std::env::temp_dir().join(format!("operant-mw-concepts-empty-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&empty_dir);
+        let empty = crate::memory_wire::MemoryWireProvider::new(empty_dir.clone()).unwrap();
+        let empty_stats = empty.memory_bank_stats();
+        assert_eq!(
+            empty_stats.map(|s| s.tags).unwrap_or(0),
+            0,
+            "an empty bank must report zero tags, or the tag>0 pin above means nothing"
+        );
+        let _ = std::fs::remove_dir_all(&empty_dir);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
