@@ -1323,3 +1323,135 @@ async fn goal_on_a_fresh_chat_arms_the_injection_anyway() {
         out.content
     );
 }
+
+/// RT-179 plan item 2.3 — `/effort` must drive the AGENT's live
+/// reasoning-effort cell, not reply plausibly. The sync-path test in
+/// gateway_commands.rs only covers the "no agent here" arm; this one
+/// drives the real `handle_runtime_command` through
+/// `run_session_scoped_command` and then READS the cell back, which is
+/// the only way a removed `set_reasoning_effort` call fails.
+///
+/// The turn lock and session resolution are real too, so this also guards
+/// the seam: an arm that ran outside the scope would act on whichever
+/// conversation happened to be loaded.
+#[tokio::test]
+async fn gateway_effort_settles_into_the_agents_live_cell() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let agent_db = Arc::new(
+        operant_core::database::Database::init(dir.path().join("agent.sqlite")).expect("db"),
+    );
+    let agent = Arc::new(operant_core::agent::OperantAgent::new(
+        operant_core::agent::AgentConfig::default(),
+        Box::new(
+            operant_core::agent::clients::openai::OpenAIModelClient::new(
+                operant_core::client::OpenAIClient::new(
+                    operant_core::client::ClientConfig::default(),
+                ),
+            ),
+        ),
+        operant_core::tools::ToolRegistry::new(std::time::Duration::from_secs(1)),
+        agent_db.clone(),
+    ));
+    let handler = GatewayMessageHandler {
+        admins: vec![],
+        agent: Arc::clone(&agent),
+        current_session_id: tokio::sync::Mutex::new(None),
+        gateway: tokio::sync::Mutex::new(None),
+        session_pins: Arc::new(SessionPins::default()),
+        exit_reasons: ExitReasonMap::default(),
+        turn_usage: TurnUsageMap::default(),
+        summary_ttl_minutes: 30,
+        default_budget: operant_core::config::BudgetSettings::default(),
+        context_injection: None,
+        turn_lock: tokio::sync::Mutex::new(()),
+        running_session: std::sync::Mutex::new(None),
+        cancelled_queued: Default::default(),
+        mcp_manager: operant_core::mcp::McpManager::new(),
+        mcp_server_configs: Vec::new(),
+        skills_root_dir: dir.path().join("skills-absent"),
+        queue_waits: tokio::sync::Mutex::new(Default::default()),
+    };
+
+    // Start from a KNOWN cell, so the assertion is about this command's
+    // effect rather than the agent's default.
+    agent.set_reasoning_effort(None);
+    assert_eq!(agent.reasoning_effort(), None);
+
+    let reply = handle_runtime_command(&handler, "effort", "high", "telegram:dm:u1")
+        .await
+        .expect("/effort must be a runtime command");
+    assert!(
+        reply.contains("high"),
+        "the reply must name the effort now in force, got: {reply}"
+    );
+    assert_eq!(
+        agent.reasoning_effort(),
+        Some("high".to_string()),
+        "/effort must settle into the agent's live cell — an arm that only \
+         replies leaves the wire field unchanged, which is the metadata \
+         theater R17 records"
+    );
+
+    // `off` clears it (None = the field is not sent), and `status` reads
+    // the cell rather than echoing the argument.
+    let off = handle_runtime_command(&handler, "effort", "off", "telegram:dm:u1")
+        .await
+        .expect("off must reply");
+    assert!(off.contains("off"), "got: {off}");
+    assert_eq!(
+        agent.reasoning_effort(),
+        None,
+        "/effort off must clear the cell"
+    );
+
+    let status = handle_runtime_command(&handler, "effort", "status", "telegram:dm:u1")
+        .await
+        .expect("status must reply");
+    assert!(
+        status.contains("not set"),
+        "status must report the real cell state, got: {status}"
+    );
+
+    // A junk level is refused and, critically, does NOT touch the cell.
+    let junk = handle_runtime_command(&handler, "effort", "banana", "telegram:dm:u1")
+        .await
+        .expect("junk must reply");
+    assert!(junk.contains("Unknown effort"), "got: {junk}");
+    assert_eq!(
+        agent.reasoning_effort(),
+        None,
+        "a refused /effort must leave the cell alone"
+    );
+}
+
+/// RT-179 plan item 2.3 — the plan-mode accessor pair, pinned to the same
+/// contract as `yolo_set_clear_and_enabled_roundtrip` above: the platform
+/// is part of the key, clearing works, and an untoggled channel defaults
+/// to OFF (a posture that defaulted ON would silently make every silent
+/// channel read-only).
+#[test]
+fn plan_mode_set_clear_and_enabled_roundtrip() {
+    set_plan_mode("telegram", "chan-a", true);
+    set_plan_mode("telegram", "chan-b", false);
+    assert!(
+        plan_mode_enabled("telegram", "chan-a"),
+        "an enabled channel must be plan mode"
+    );
+    assert!(
+        !plan_mode_enabled("telegram", "chan-b"),
+        "an explicitly-disabled channel must prompt as usual"
+    );
+    assert!(
+        !plan_mode_enabled("slack", "chan-a"),
+        "platform must be part of the key"
+    );
+    assert!(
+        !plan_mode_enabled("telegram", "chan-other"),
+        "an untoggled channel must prompt as usual"
+    );
+    set_plan_mode("telegram", "chan-a", false);
+    assert!(
+        !plan_mode_enabled("telegram", "chan-a"),
+        "a cleared channel must prompt as usual"
+    );
+}

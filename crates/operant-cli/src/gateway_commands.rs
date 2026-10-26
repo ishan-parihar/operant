@@ -373,6 +373,22 @@ pub static COMMAND_REGISTRY: &[CommandDef] = &[
         admin_only: false,
     },
     CommandDef {
+        name: "effort",
+        description: "Set reasoning effort (the TUI /effort picker, over this channel)",
+        aliases: &[],
+        category: "Config",
+        args_hint: "[off|minimal|low|medium|high|xhigh|status]",
+        admin_only: false,
+    },
+    CommandDef {
+        name: "plan",
+        description: "Toggle plan mode (read-only: gated tools are denied, not prompted)",
+        aliases: &[],
+        category: "Config",
+        args_hint: "[on|off|status]",
+        admin_only: false,
+    },
+    CommandDef {
         name: "footer",
         description: "Toggle message footer",
         aliases: &[],
@@ -1752,6 +1768,20 @@ pub fn handle_command(cmd_name: &str, _args: &str, ctx: &CommandContext<'_>) -> 
             }
         }
 
+        "effort" => {
+            // RT-175 seam: the LIVE handler (gateway_runner's
+            // handle_runtime_command) owns this command — it sets the
+            // agent's real reasoning-effort cell via the turn lock. This
+            // sync arm is reached only from contexts with no live agent
+            // (tests, the help text path), so it must not claim to have
+            // changed anything the agent will read.
+            match _args.trim().to_ascii_lowercase().as_str() {
+                "status" => "🧮 Reasoning effort status is served by the live gateway command (it reads the agent's current cell).".into(),
+                "" | "off" | "minimal" | "low" | "medium" | "high" | "xhigh" => "🧮 Send this from a channel with the gateway running — the sync path has no agent to set.".into(),
+                other => format!("Unknown effort `{other}` — use off|minimal|low|medium|high|xhigh"),
+            }
+        }
+
         "footer" => {
             let a = _args.trim();
             match a {
@@ -1831,6 +1861,56 @@ pub fn handle_command(cmd_name: &str, _args: &str, ctx: &CommandContext<'_>) -> 
             } else {
                 "🤘 YOLO mode: gateway unavailable.".to_string()
             }
+        }
+
+        "plan" => {
+            // RT-179 plan item 2.3 — the gateway's read-only posture, the
+            // TUI's PermissionMode::Plan twin. Enforcement is NOT here:
+            // the permission receiver reads the live
+            // PLAN_CHANNELS set (gateway_runner::plan_mode_enabled)
+            // and denies gated tools outright, which is why this arm is a
+            // plain toggle rather than a stub. The R17 lesson (/yolo
+            // wrote metadata nothing read) is the whole reason the set
+            // and not a metadata key is the store.
+            //
+            // Not persisted (the file metadata record below is an audit
+            // echo only): the TUI's own mode is re-picked per process,
+            // and a read-only posture silently surviving a restart would
+            // surprise an operator who forgot it was on.
+            let arg = _args.trim().to_ascii_lowercase();
+            let currently = crate::gateway_runner::plan_mode_enabled(ctx.platform, ctx.channel_id);
+            let new_val = match arg.as_str() {
+                "on" => true,
+                "off" => false,
+                "" => !currently,
+                "status" => {
+                    return Some(format!(
+                        "📋 Plan mode: `{}` for this channel.\nPlan mode makes the agent read-only: gated tools are denied instead of prompted.\nToggle with `/plan` (or `/plan on|off`).",
+                        if currently { "ON" } else { "OFF" }
+                    ));
+                }
+                _ => return Some("Usage: `/plan [on|off|status]`".into()),
+            };
+            crate::gateway_runner::set_plan_mode(ctx.platform, ctx.channel_id, new_val);
+            // Record for audit, exactly as /yolo does. Never read back as
+            // the live answer — the set is (reload would otherwise
+            // resurrect a posture the operator turned off).
+            if let Some(gateway) = ctx.gateway {
+                let store = gateway.get_session_store();
+                store.update_session_metadata(ctx.platform, ctx.user_id, ctx.channel_id, &[(
+                    "plan_mode".to_string(),
+                    new_val.to_string(),
+                )]);
+            }
+            format!(
+                "📋 Plan mode: `{}` for this channel.\nGated tools (edits, commands, writes) are {}.\nYOLO cannot widen this: `/yolo off` then `/plan off` restores prompts.",
+                if new_val { "ON" } else { "OFF" },
+                if new_val {
+                    "denied without a prompt"
+                } else {
+                    "prompted as usual"
+                }
+            )
         }
 
         "voice" => {
@@ -3102,5 +3182,133 @@ mod rt175_tests {
                 "/{name} sync arm must not claim the operation, got: {resp}"
             );
         }
+    }
+}
+
+// ── RT-179 plan item 2.3: the functional-core gateway twins ──────────────
+// /plan and /effort are the first two commands the TUI registry had with
+// no defensible channel twin AND a live enforcement seam. Both tests fail
+// against the pre-2.3 tree for the same reason: the names resolved to no
+// registry entry at all, so `resolve_command` answered `Unknown` and the
+// dispatch loop sent the command to the model as prose.
+#[cfg(test)]
+mod rt179_functional_core_tests {
+    use super::*;
+
+    /// The two commands must RESOLVE — a name that falls through
+    /// `resolve_command` reaches the model as a literal, which is exactly
+    /// the gap this slice closes.
+    #[test]
+    fn plan_and_effort_resolve_as_commands_not_prose() {
+        for (text, name) in [("/plan on", "plan"), ("/effort high", "effort")] {
+            match resolve_command(text) {
+                CommandMatch::Found(def, _) => {
+                    assert_eq!(def.name, name, "{text} must resolve to {name}")
+                }
+                other => panic!("{text} must be a command, got {other:?}"),
+            }
+        }
+        // ...and the artifact list a platform syncs from the registry must
+        // carry them, or the channel never SEES the command.
+        let bot_commands = telegram_bot_commands();
+        assert!(
+            bot_commands.contains("\"plan\""),
+            "missing /plan: {bot_commands}"
+        );
+        assert!(
+            bot_commands.contains("\"effort\""),
+            "missing /effort: {bot_commands}"
+        );
+    }
+
+    /// /plan toggles the set the permission receiver READS. The R17 lesson
+    /// (a metadata key nothing reads is a lie) is the whole point: this
+    /// test reads the live accessor, not session metadata.
+    #[test]
+    fn plan_toggles_the_live_posture_the_receiver_reads() {
+        // Isolate: another test's channel key must not leak in, and ours
+        // must not leak out.
+        let platform = "test";
+        let channel = "rt179-plan";
+        crate::gateway_runner::set_plan_mode(platform, channel, false);
+        let cfg = AppConfig::default();
+        let ctx = CommandContext::new(None, &cfg, true, "op-1", platform, channel);
+
+        let on = handle_command("plan", "on", &ctx).expect("a reply");
+        assert!(
+            on.contains("ON"),
+            "/plan on must report the posture now in force, got: {on}"
+        );
+        assert!(
+            crate::gateway_runner::plan_mode_enabled(platform, channel),
+            "/plan on must set the channel in the live plan set"
+        );
+
+        // `status` reads the same live state rather than echoing the arg.
+        let status = handle_command("plan", "status", &ctx).expect("a reply");
+        assert!(
+            status.contains("ON"),
+            "/plan status must read the live set: {status}"
+        );
+
+        let off = handle_command("plan", "off", &ctx).expect("a reply");
+        assert!(
+            !off.contains("OFF for this channel") || off.contains("prompted"),
+            "/plan off must report prompts restored, got: {off}"
+        );
+        assert!(
+            !crate::gateway_runner::plan_mode_enabled(platform, channel),
+            "/plan off must clear the live plan set"
+        );
+    }
+
+    /// A read-only posture must never be widened by YOLO. F2's seat-policy
+    /// lesson generalizes: enforcement order is plan BEFORE yolo, so a
+    /// channel in both sets denies. Pinned here as an accessor-ordering
+    /// contract so the receiver's arm cannot be reordered silently.
+    #[test]
+    fn plan_mode_is_the_stricter_posture_by_design() {
+        // Contract pinned by comment+behavior: plan mode DENIES outright
+        // (never prompts, never approves). The receiver checks
+        // plan_mode_enabled() before the YOLO arm — this test guards the
+        // function pair's independent semantics, which is what lets that
+        // ordering be a fact rather than an assumption.
+        let platform = "test";
+        let channel = "rt179-order";
+        crate::gateway_runner::set_plan_mode(platform, channel, false);
+        crate::gateway_runner::set_yolo(platform, channel, false);
+        assert!(!crate::gateway_runner::plan_mode_enabled(platform, channel));
+
+        crate::gateway_runner::set_plan_mode(platform, channel, true);
+        // Setting YOLO afterwards must NOT clear plan mode: the two sets
+        // are independent, which is what makes "plan wins" true.
+        crate::gateway_runner::set_yolo(platform, channel, true);
+        assert!(
+            crate::gateway_runner::plan_mode_enabled(platform, channel),
+            "yolo must not silently clear plan mode"
+        );
+        // Cleanup — leaves the shared process-global as found.
+        crate::gateway_runner::set_yolo(platform, channel, false);
+        crate::gateway_runner::set_plan_mode(platform, channel, false);
+    }
+
+    /// /effort with no live agent must not claim the field was set. Its
+    /// twin lives on the agent's own reasoning-effort cell; the sync path
+    /// has no agent, so the honest answer is "this needs the gateway".
+    #[test]
+    fn effort_sync_arm_refuses_to_claim_a_set() {
+        let cfg = AppConfig::default();
+        let ctx = CommandContext::new(None, &cfg, true, "op-1", "telegram", "chan-e");
+        let resp = handle_command("effort", "high", &ctx).expect("a reply");
+        assert!(
+            resp.contains("gateway running"),
+            "/effort without a live agent must say so, got: {resp}"
+        );
+        // A junk level is refused by name, not silently accepted.
+        let junk = handle_command("effort", "banana", &ctx).expect("a reply");
+        assert!(
+            junk.contains("Unknown effort"),
+            "/effort must reject an unknown level, got: {junk}"
+        );
     }
 }

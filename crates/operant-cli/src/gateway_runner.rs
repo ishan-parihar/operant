@@ -965,6 +965,69 @@ async fn handle_runtime_command(
             }
         }
 
+        // ── /effort [level] — the TUI's /effort picker, over a channel ──
+        // RT-179 plan item 2.3. The TUI funnels its picker through
+        // `pending_effort` into `OperantAgent::set_reasoning_effort`
+        // (adapter_types/tui_app.rs:1171) and that is the ONLY live
+        // reader/writer of the wire field — there was no channel way in,
+        // so a Telegram operator could not lower spend on a runaway turn.
+        // The same setter here is the honest twin, not a metadata echo:
+        // R17's `/yolo` lesson says a key nothing reads is a lie, so this
+        // arm writes the agent's own state and the reply names the value
+        // now in force.
+        //
+        // `off` maps to `None` (the field is not sent), matching the
+        // TUI's empty-string branch.
+        "effort" => {
+            let value = args.trim().to_ascii_lowercase();
+            if value == "status" {
+                // Read-only report of what the agent will send next.
+                // No session scope needed: the getter only touches the
+                // agent's own cell, not the conversation.
+                let held = handler.agent.reasoning_effort();
+                return Some(match held {
+                    Some(e) => format!(
+                        "🧮 Reasoning effort for this session: `{e}`.\nChange with `/effort off|minimal|low|medium|high|xhigh`."
+                    ),
+                    None => "🧮 Reasoning effort for this session: not set (the field is not sent).\nChange with `/effort off|minimal|low|medium|high|xhigh`.".to_string(),
+                });
+            }
+            // The wire values, exactly the TUI's own valid set — an empty
+            // value (bare `/effort`) means the same as `off` here rather
+            // than a toggle, because a channel has no display to show a
+            // cycle result in.
+            let valid = ["", "off", "minimal", "low", "medium", "high", "xhigh"];
+            if !valid.contains(&value.as_str()) {
+                return Some(format!(
+                    "Unknown effort `{value}` — use off|minimal|low|medium|high|xhigh"
+                ));
+            }
+            let reply = handler
+                .run_session_scoped_command(session_key, move |agent, session_id| async move {
+                    let wire = if value == "off" || value.is_empty() {
+                        None
+                    } else {
+                        Some(value.clone())
+                    };
+                    agent.set_reasoning_effort(wire);
+                    let shown = if value == "off" || value.is_empty() {
+                        "off".to_string()
+                    } else {
+                        value.clone()
+                    };
+                    tracing::info!(
+                        session_id = %session_id,
+                        effort = %shown,
+                        "Gateway /effort: set the live reasoning effort"
+                    );
+                    format!(
+                        "🧮 Reasoning effort: `{shown}` for this session — the next request carries it."
+                    )
+                })
+                .await;
+            Some(reply)
+        }
+
         _ => None,
     }
 }
@@ -1086,6 +1149,22 @@ pub static PENDING_USER_QUESTIONS: OnceLock<PendingUserQuestions> = OnceLock::ne
 /// PermissionMode::BypassPermissions.)
 pub static YOLO_CHANNELS: OnceLock<std::sync::Mutex<HashSet<String>>> = OnceLock::new();
 
+/// Live plan-mode channels: keys are `"{platform}:{channel_id}"` for
+/// channels that asked for read-only agent behaviour (via `/plan` in the
+/// gateway). RT-179 plan item 2.3 — the TUI's twin is
+/// `PermissionMode::Plan`, which the permission drain enforces by sending
+/// `Deny` for every gated tool (tui/app/channel_drains.rs:389). The
+/// gateway had NO equivalent, so a channel's only posture choices were
+/// prompt-every-tool or YOLO-everything.
+///
+/// Same in-memory-shape lesson as `YOLO_CHANNELS` (R17): the set is what
+/// the permission receiver READS, so the toggle is real rather than a
+/// metadata echo. Plan mode is deliberately not persisted — the TUI's
+/// own mode lives in settings.json and is re-picked per process, and a
+/// read-only posture that silently survived a restart would surprise
+/// more than a lost toggle does.
+pub static PLAN_CHANNELS: OnceLock<std::sync::Mutex<HashSet<String>>> = OnceLock::new();
+
 /// Redact secrets (API keys, bot tokens, passwords) from an error/display
 /// string before it reaches logs. Hermes `_redact_telegram_error_text` /
 /// `_redact_discord_error_text` parity: gateway error paths echo upstream
@@ -1142,6 +1221,36 @@ pub fn yolo_enabled(platform: &str, channel_id: &str) -> bool {
 /// Set (true) or clear (false) YOLO mode for a channel.
 pub fn set_yolo(platform: &str, channel_id: &str, enabled: bool) {
     let cell = YOLO_CHANNELS.get_or_init(|| std::sync::Mutex::new(HashSet::new()));
+    if let Ok(mut guard) = cell.lock() {
+        let key = yolo_key(platform, channel_id);
+        if enabled {
+            guard.insert(key);
+        } else {
+            guard.remove(&key);
+        }
+    }
+}
+
+/// Returns true when the given channel asked for plan (read-only) mode.
+/// Read by the permission receiver BEFORE it prompts: a plan-mode channel
+/// never prompts at all — the request is denied outright, which is the
+/// TUI's `PermissionMode::Plan` behaviour, not a stricter prompt.
+///
+/// Ordering against YOLO is deliberate: a channel in BOTH sets keeps plan
+/// mode winning. Read-only is the stance that cannot be widened by an
+/// accident of two toggles, while YOLO is the stance an operator can
+/// always re-assert manually.
+pub fn plan_mode_enabled(platform: &str, channel_id: &str) -> bool {
+    PLAN_CHANNELS
+        .get()
+        .and_then(|s| s.lock().ok())
+        .map(|guard| guard.contains(&yolo_key(platform, channel_id)))
+        .unwrap_or(false)
+}
+
+/// Set (true) or clear (false) plan mode for a channel.
+pub fn set_plan_mode(platform: &str, channel_id: &str, enabled: bool) {
+    let cell = PLAN_CHANNELS.get_or_init(|| std::sync::Mutex::new(HashSet::new()));
     if let Ok(mut guard) = cell.lock() {
         let key = yolo_key(platform, channel_id);
         if enabled {
@@ -4146,6 +4255,37 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
             let channel_info = current_channel_for_perm.lock().await.clone();
 
             if let Some((platform, channel_id, thread_id)) = &channel_info {
+                // RT-179 plan mode: a channel that asked for read-only
+                // behaviour never prompts — the gated tool is denied
+                // outright, exactly as the TUI's PermissionMode::Plan
+                // drain does (tui/app/channel_drains.rs:389). Checked
+                // BEFORE YOLO so a channel in both sets stays read-only:
+                // read-only is the posture that must never widen by an
+                // accident of two toggles.
+                //
+                // A seat-policy escalation is refused with the SAME audit
+                // recording as the YOLO arm (F2) — plan mode is a posture
+                // choice, not authority over a governed seat, and the
+                // queued row must survive for the approver.
+                if crate::gateway_runner::plan_mode_enabled(platform, channel_id) {
+                    if req.seat_escalation.is_some() {
+                        tracing::warn!(
+                            channel = %channel_id,
+                            tool = %req.tool_name,
+                            "plan mode denies a seat-policy escalation — the ask stays queued for the approver"
+                        );
+                        resolve_seat_escalation_on_deny(&req);
+                    }
+                    tracing::info!(
+                        channel = %channel_id,
+                        tool = %req.tool_name,
+                        "plan mode — denying the gated tool without prompting"
+                    );
+                    let _ = req
+                        .response_tx
+                        .send(operant_core::agent::ToolPermissionResponse::Deny);
+                    continue;
+                }
                 // YOLO mode: the channel opted into skipping approval prompts
                 // via /yolo. (R17: /yolo previously wrote a metadata key that
                 // nothing read — the receiver now honors the live set, mirroring
