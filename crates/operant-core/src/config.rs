@@ -1443,8 +1443,10 @@ pub struct PkSettings {
     /// the only Python surface.
     pub enabled: bool,
     /// Path to the sidecar entrypoint (the supervisor / NDJSON server).
-    /// Defaults to `pk-sidecar/main.py` relative to the operant repo
-    /// root. Phase 1 will switch this to a vendored python venv.
+    /// Nothing reads this (RT-136): it is kept so older configs parse and
+    /// `unused_setting_warnings` can name it. It has no default — `None`
+    /// means the operator has not named a path, and the live kernel surface
+    /// is `[tools.kernel]` driving `-m n.server` in `kernel-sidecar/`.
     pub sidecar_script: Option<PathBuf>,
     /// Unix socket path the supervisor binds to (Phase 1). When `None`,
     /// the supervisor picks a default under `~/.operant/run/pk.sock`.
