@@ -99,7 +99,9 @@ image = { workspace = true }
 # required a newer `anyhow` than the lock held). That failure is loud, not
 # silent — and the remedy is a pin. At release time, replace `branch =` with
 # the locked `rev =` (see scripts/sync-vendors.sh output) and re-verify.
-memory-wire = { git = "https://github.com/ishan-parihar/memory-wire", branch = "main" }
+# v0.3.0 release pin (2026-10-26): rev below is the locked rev the release was
+# built against. Post-release, restore `branch = "main"` tracking.
+memory-wire = { git = "https://github.com/ishan-parihar/memory-wire", rev = "fd704c8765342f9b9df8ac3c5b534dac7097f940" }
 # sourcehound_mcp = { package = "sourcehound", git = "https://github.com/ishan-parihar/sourcehound", branch = "master" }
 # HELD (round 2): vendored obscura-render breaks against registry taffy 0.12.2
 # (needs vendored 0.12.1 APIs) + cosmic-text feature-union divergence — 36 errors.

@@ -30,7 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.3.0] - 2026-10-26
 
-998 commits since v0.2.1 (2026-09-30), dominated by three waves: the jcode-parity composer upgrade (word completion, file discovery, scroll ladder, history-nav), the memory-wire deep integration (lifecycle hooks, wire-cost reduction, tool-surface consolidation, fused scoring), and the persistent-gateway daemon management suite (flock singleton, RAM budget, RSS visibility, queue-wait measurement) — plus the ponytail content-integration wave, the phantom-`process` parser fix, and the tooling-surface red-team execution.
+1014 commits since v0.2.1 (2026-09-30), dominated by three waves: the jcode-parity composer upgrade (word completion, file discovery, scroll ladder, history-nav), the memory-wire deep integration (lifecycle hooks, wire-cost reduction, tool-surface consolidation, fused scoring), and the persistent-gateway daemon management suite (flock singleton, RAM budget, RSS visibility, queue-wait measurement) — plus the ponytail content-integration wave, the phantom-`process` parser fix, and the tooling-surface red-team execution.
 
 ### Added
 
