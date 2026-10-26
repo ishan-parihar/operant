@@ -328,6 +328,7 @@ fn test_config(max_iterations: usize) -> AgentConfig {
         max_retries: 3,
         tool_search: Default::default(),
         guardrail_exempt_tools: Vec::new(),
+        ponytail: Default::default(),
     }
 }
 

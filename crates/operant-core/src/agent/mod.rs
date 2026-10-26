@@ -176,6 +176,11 @@ pub struct AgentConfig {
     /// `BehaviorSettings` — the config-schema wiring is a pending row; the
     /// facade threads it via `FacadeConstruction` today.
     pub guardrail_exempt_tools: Vec<String>,
+    /// Ponytail posture settings (phase 4): the frozen-prefix `<ponytail>`
+    /// block injects when `enabled && inject == always_on` (or the runtime
+    /// override forces it), never on Holon runs. Threaded from
+    /// `BehaviorSettings::ponytail`.
+    pub ponytail: crate::config::PonytailSettings,
 }
 
 /// Cap on truncation-continuation retries per turn (hermes
@@ -220,6 +225,7 @@ impl From<&BehaviorSettings> for AgentConfig {
             // empty — the runtime exempt path existed but no config-file
             // surface ever fed it.
             guardrail_exempt_tools: settings.guardrail_exempt_tools.clone(),
+            ponytail: settings.ponytail.clone(),
         }
     }
 }
@@ -3162,6 +3168,7 @@ mod tests {
             memory_review_interval: 0,
             max_retries: 3,
             tool_search: Default::default(),
+            ponytail: Default::default(),
         };
         let agent = OperantAgent::new(
             config,
@@ -3213,6 +3220,7 @@ mod tests {
             memory_review_interval: 0,
             max_retries: 3,
             tool_search: Default::default(),
+            ponytail: Default::default(),
         };
         let agent = OperantAgent::new(
             config,
@@ -3330,6 +3338,7 @@ mod tests {
             memory_review_interval: 0,
             max_retries: 3,
             tool_search: Default::default(),
+            ponytail: Default::default(),
         };
         let client: Box<dyn ModelClient> = Box::new(PooledModelClient::new(
             std::sync::Arc::new(DropRotateThenOkClient {

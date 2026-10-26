@@ -310,6 +310,10 @@ const REGISTERED_COMMANDS: &[RegisteredCommand] = &[
     RegisteredCommand::public("/new", "Start a new session (old one kept for /resume)"),
     RegisteredCommand::public("/output-style", "Cycle output style (auto|stream|verbose)"),
     RegisteredCommand::public("/personality", "Show or set the assistant personality"),
+    RegisteredCommand::public(
+        "/ponytail",
+        "Show or set the ponytail posture (lite|full|ultra|off)",
+    ),
     RegisteredCommand::public("/plugins", "Open the plugins panel"),
     RegisteredCommand::public("/queue", "Show the session task queue"),
     RegisteredCommand::public("/redraw", "Force a full redraw"),

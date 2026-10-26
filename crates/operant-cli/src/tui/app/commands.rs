@@ -1517,6 +1517,87 @@ impl App {
                 self.invalidate_transcript();
                 true
             }
+            // Ponytail phase 4: runtime posture switch. The command is a
+            // PROCESS-LOCAL override — it neither reads nor writes the
+            // config file, so a restart returns to `[agent.ponytail]`.
+            // `/ponytail` bare reports state; `lite|full|ultra` sets the
+            // level (injecting even when config has it off — the operator
+            // asked); `off` clears injection for this process.
+            "ponytail" => {
+                use operant_core::config::PonytailLevel;
+                use operant_core::ponytail::{PostureOverride, set_posture_override};
+                let requested = args.trim().to_ascii_lowercase();
+                if requested.is_empty() || requested == "show" || requested == "status" {
+                    let configured = &self.config.agent.ponytail;
+                    let notice = match operant_core::ponytail::posture_override() {
+                        Some(PostureOverride::Level(l)) => format!(
+                            "ponytail: {l} (runtime override; config: enabled={}, \
+                             inject={:?}, level={})",
+                            configured.enabled, configured.inject, configured.default_level
+                        ),
+                        Some(PostureOverride::Off) => format!(
+                            "ponytail: off (runtime override; config: enabled={}, \
+                             inject={:?})",
+                            configured.enabled, configured.inject
+                        ),
+                        None if configured.enabled
+                            && configured.inject
+                                == operant_core::config::PonytailInject::AlwaysOn =>
+                        {
+                            format!(
+                                "ponytail: {} (from config; /ponytail off clears it \
+                             for this process)",
+                                configured.default_level
+                            )
+                        }
+                        None => format!(
+                            "ponytail: off (config: enabled={}, inject={:?}; \
+                             /ponytail <lite|full|ultra> turns it on for this process)",
+                            configured.enabled, configured.inject
+                        ),
+                    };
+                    self.set_status_notice(notice);
+                    return true;
+                }
+                match requested.as_str() {
+                    "lite" | "full" | "ultra" => {
+                        let level = match requested.as_str() {
+                            "lite" => PonytailLevel::Lite,
+                            "ultra" => PonytailLevel::Ultra,
+                            _ => PonytailLevel::Full,
+                        };
+                        if operant_core::ponytail::installed_ruleset().is_none() {
+                            self.set_status_notice(
+                                "ponytail is not installed — run `operant update \
+                                 --integrations` first; the posture needs the upstream \
+                                 ruleset on disk.",
+                            );
+                            return true;
+                        }
+                        set_posture_override(Some(PostureOverride::Level(level)));
+                        self.set_status_notice(format!(
+                            "ponytail: {level} — the frozen prefix carries the ruleset \
+                             from the NEXT turn (a level switch invalidates the prompt \
+                             cache, like any config change)."
+                        ));
+                        true
+                    }
+                    "off" => {
+                        set_posture_override(Some(PostureOverride::Off));
+                        self.set_status_notice(
+                            "ponytail: off for this process — config on disk is \
+                             untouched; a restart returns to [agent.ponytail].",
+                        );
+                        true
+                    }
+                    other => {
+                        self.set_status_notice(format!(
+                            "Unknown ponytail level '{other}' — use lite|full|ultra|off"
+                        ));
+                        true
+                    }
+                }
+            }
             "todos" | "todo" => {
                 self.todos_band_hidden = !self.todos_band_hidden;
                 self.set_status_notice(if self.todos_band_hidden {

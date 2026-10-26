@@ -902,6 +902,16 @@ impl OperantAgent {
             // for free (byte-stable => prompt cache hits preserved).
             frozen.push_str(SKILLS_GUIDANCE);
         }
+        // Ponytail phase 4: the always-on posture block. Sits AFTER the
+        // skills guidance, gated on [agent.ponytail] enabled+always_on
+        // (or the /ponytail runtime override) and NEVER on Holon runs —
+        // the org brief is the only posture for a bound body. Changing
+        // the level or the install changes these prefix bytes: cache
+        // invalidation is the documented consequence (same class as any
+        // config change).
+        if let Some(block) = crate::ponytail::frozen_prefix_block(&self.config.ponytail) {
+            frozen.push_str(&block);
+        }
         // C1 — kernel-evolved prompt sections. Appended to the frozen
         // prefix (not to the per-turn system message) so provider
         // installs change the same bytes the review fork inherits, and a

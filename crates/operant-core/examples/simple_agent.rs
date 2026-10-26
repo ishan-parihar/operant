@@ -187,6 +187,7 @@ Use the echo tool to repeat information and the calculate tool for math."
         max_retries: 3,
         tool_search: Default::default(),
         guardrail_exempt_tools: Vec::new(),
+        ponytail: Default::default(),
     };
 
     let database = Arc::new(Database::init(std::path::PathBuf::from("simple_agent.db"))?);

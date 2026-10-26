@@ -874,6 +874,18 @@ pub enum PonytailLevel {
     Ultra,
 }
 
+impl std::fmt::Display for PonytailLevel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Matches the serde spelling AND the /ponytail CLI words, so the
+        // operator-facing text and the config file agree byte-for-byte.
+        f.write_str(match self {
+            PonytailLevel::Lite => "lite",
+            PonytailLevel::Full => "full",
+            PonytailLevel::Ultra => "ultra",
+        })
+    }
+}
+
 /// How the ponytail ruleset reaches the model.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
