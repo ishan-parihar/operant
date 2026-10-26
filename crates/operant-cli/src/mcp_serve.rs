@@ -167,6 +167,32 @@ async fn build_tool_registry(config: &AppConfig) -> Result<ToolRegistry> {
     let client = operant_core::client::OpenAIClient::new(operant_core::client::ClientConfig::from(
         &config.client,
     ));
+    // (iter-1309) attach the memory backend BEFORE registration so the
+    // memory tools execute over this surface: the agent paths attach in
+    // load_memory_manager (main.rs), but the serve path never did — every
+    // memory_search/memory_store call over `operant mcp serve` died with
+    // "No memory backend attached" (found by live probe while validating
+    // the iter-1308 alias fold; the registry registers the tools, and the
+    // tools route through the ACTIVE_MEMORY_PROVIDER global). Same gate
+    // as the agent path: enabled + a real provider + not a Holon run.
+    if config.memory.enabled
+        && config.memory.provider != "builtin"
+        && config.memory.provider != "disabled"
+        && !operant_core::platform::is_holon_run()
+    {
+        let storage_dir = operant_core::platform::operant_home();
+        match operant_core::memory_wire::MemoryWireProvider::new(storage_dir) {
+            Ok(concrete) => {
+                let concrete = std::sync::Arc::new(concrete);
+                operant_core::tools::memory_tools::set_active_memory_provider(concrete).await;
+            }
+            Err(e) => {
+                eprintln!(
+                    "[mcp-serve] warning: memory backend unavailable, memory tools degraded: {e}"
+                );
+            }
+        }
+    }
     let mcp_manager = McpManager::new();
     let database = Arc::new(
         Database::init(config.database_path.clone())
@@ -601,6 +627,99 @@ mod tests {
     }
 
     struct CalculatorTool;
+
+    /// (iter-1309) Pin HERMES_HOME to a temp dir for one test. The global
+    /// active-provider lock is process-wide, so home-pinned tests still
+    /// serialize through the provider where needed — this helper only
+    /// redirects WHERE the bank sqlite lands.
+    struct TempHermesHome;
+
+    impl TempHermesHome {
+        fn pin(path: &std::path::Path) -> Self {
+            // SAFETY: test-scoped env pin; tests in this module do not spawn
+            // threads that read HERMES_HOME concurrently.
+            unsafe { std::env::set_var("HERMES_HOME", path) };
+            Self
+        }
+    }
+
+    impl Drop for TempHermesHome {
+        fn drop(&mut self) {
+            // SAFETY: same test-scoped pin being released.
+            unsafe { std::env::remove_var("HERMES_HOME") };
+        }
+    }
+
+    fn temp_hermes_home(path: &std::path::Path) -> TempHermesHome {
+        TempHermesHome::pin(path)
+    }
+
+    /// (iter-1309) A minimal config pointing at the isolated home: the
+    /// memory provider default (memory-wire) with a temp database path.
+    fn test_app_config(home: &std::path::Path) -> operant_core::config::AppConfig {
+        operant_core::config::AppConfig {
+            database_path: home.join("test-db.sqlite"),
+            memory: operant_core::config::MemorySettings {
+                enabled: true,
+                provider: "memory-wire".to_string(),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    /// (iter-1309) The serve path must attach the memory backend: the
+    /// registry alone registers memory_search/memory_store, but without the
+    /// provider the tools error "No memory backend attached" over MCP —
+    /// the surface the consolidation pins. Found by live probe (iter-1308
+    /// re-probe); this pins the attachment itself.
+    #[tokio::test]
+    async fn serve_registry_attaches_the_memory_backend() {
+        // Isolated home so the probe cannot touch the real bank, and the
+        // global cleared FIRST: other tests in this binary set the active
+        // provider, and a stale handle would pass this test spuriously
+        // (found while validating: the first version of this test passed
+        // on pollution, not on attachment).
+        operant_core::tools::memory_tools::clear_active_memory_provider_for_tests().await;
+        let dir = std::env::temp_dir().join(format!("operant-mcp-mem-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let _home = temp_hermes_home(&dir);
+        let registry = build_tool_registry(&test_app_config(&dir)).await.unwrap();
+        assert!(
+            registry.contains("memory_search").await,
+            "memory_search registered on the serve path"
+        );
+        let result = registry
+            .execute(
+                "memory_search",
+                "mcp_probe",
+                serde_json::json!({"intent": "serve-path memory attachment pin", "key": "no-such-key"}),
+                operant_core::tools::ToolContext::default(),
+            )
+            .await
+            .expect("execute");
+        // (iter-1309) assert on SUCCESS, not on content text: ToolResult::error
+        // leaves `content` empty (the message lives in `error`), so a
+        // contains-check on content is vacuously green — this exact trap
+        // made two earlier versions of this test pass without proving
+        // anything.
+        assert!(
+            result.success,
+            "the serve path must attach the memory backend: {:?}",
+            result.error
+        );
+        assert!(
+            !result
+                .error
+                .as_deref()
+                .is_some_and(|e| e.contains("No memory backend attached")),
+            "the serve path must attach the memory backend: {:?}",
+            result.error
+        );
+        operant_core::tools::memory_tools::clear_active_memory_provider_for_tests().await;
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[async_trait::async_trait]
     impl OperantTool for CalculatorTool {
