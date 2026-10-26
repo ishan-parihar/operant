@@ -536,8 +536,19 @@ WantedBy=default.target
 
 /// Run the gateway in foreground.
 async fn cmd_run(config: &AppConfig) -> Result<()> {
+    // Audit finding 1 (iter-1335): `start_gateway` returns a REFUSAL
+    // message when another daemon owns the flock — and the plain
+    // `Ok(message)` flow below used to fall straight into the signal wait,
+    // leaving the operator watching a hung process that refuses to explain
+    // itself. Ask the runner whether this process actually holds a
+    // gateway: `is_running()` is false exactly in the refusal case (and in
+    // the in-process already-running case, which prints the same way).
     let msg = crate::gateway_runner::start_gateway(config).await?;
-    println!("{}", msg);
+    let started = crate::gateway_runner::is_running().await;
+    println!("{msg}");
+    if !started {
+        return Ok(());
+    }
     println!("Press Ctrl+C (SIGINT) or send SIGTERM to stop the gateway.");
 
     // `tokio::signal::unix` does not exist on Windows: the module is absent
