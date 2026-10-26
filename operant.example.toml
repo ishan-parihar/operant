@@ -520,6 +520,18 @@ enabled = false
 # on the first start after the upgrade (renamed *.imported).
 provider = "memory-wire"
 enabled = true
+# RT-190 (operator ruling, option c — documented boundary): this engine is
+# operant's OWN in-process store at $OPERANT_HOME/memory_wire.sqlite (bank
+# `operant`). If you also run `memory-wire serve` for other harnesses
+# (claude-code, codex, opencode, copilot via `memory-wire connect`), it is a
+# DIFFERENT store (`~/.local/share/memory-wire/memory.db`, banks `omp` /
+# `memory-wire`). Nothing crosses by default: what an operant session retains
+# is invisible to those harnesses, and what they retain is invisible here.
+# That is the accepted topology for now — the in-process path is what gives
+# operant `recall_with_weights`/`retain_doc`, which the HTTP surface does not
+# expose. Unifying the two banks is a planned tranche, not a config flip:
+# see RT-190 in docs/audit/2026-06-19-BUGS.md for the three options the
+# operator can pick between.
 
 [browser]
 # (plan 11C2) sourcehound is the only browser engine; the old provider
