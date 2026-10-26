@@ -148,6 +148,25 @@ creation_nudge_interval = 10
 # 0 = disabled. Default 240.
 recap_idle_seconds = 240
 
+# [agent.ponytail] — the ponytail content integration (DietrichGebert/
+# ponytail — lazy-senior-dev skills, self-updating from upstream's GitHub
+# tags like memory-wire / sourcehound / AFT). Installs live under
+# ~/.operant/integrations/ponytail-vX.Y.Z/ and are NEVER written into
+# ~/.operant/skills/. Install or refresh with `operant update --integrations`.
+# DEFAULT IS OFF: the posture changes what the model is told on every turn,
+# so it must never silently enable. Installed skills stay invocable
+# (/skill ponytail-review etc.) regardless of this flag.
+[agent.ponytail]
+enabled = false
+# Posture level when enabled: "lite" | "full" | "ultra" (upstream default full).
+default_level = "full"
+# "on_invoke" (default): skills only, zero prompt-byte change.
+# "always_on": the active level's ruleset rides the frozen system prefix
+# every turn (changing it invalidates the provider prompt cache, like any
+# config change). Holon runs NEVER get the injection: the org brief is the
+# only posture for a bound body.
+inject = "on_invoke"
+
 # [advisor] — always-on transcript watchdog (omp advisor/ parity).
 # Distinct from [moa]: MoA fans out per turn; the advisor reviews the
 # incremental transcript delta after each completed turn and surfaces short

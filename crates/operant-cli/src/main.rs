@@ -1645,6 +1645,17 @@ async fn build_agent_core_with_memory(
         );
     }
 
+    // Ponytail content integration (phase 2): the background update check
+    // fires once per process at agent construction, ONLY when the operator
+    // enabled it (`[agent.ponytail] enabled = true`). Content has no
+    // "first tool call" moment the way sourcehound/aft do, so construction
+    // is the natural gate; the once-guard + 6h throttle +
+    // OPERANT_NO_AUTO_UPDATE all still apply inside the kicker. A Holon
+    // run NEVER kicks it — org bodies do not carry personal postures.
+    if config.agent.ponytail.enabled && !operant_core::platform::is_holon_run() {
+        operant_core::ponytail::kick_update_check();
+    }
+
     // Plan 016 G1 — adopt the harness when [harness].enabled = true.
     // The kernel is constructed, the tool seam is registered against the
     // same `ToolRegistry` the agent loop already uses, and (if the

@@ -603,6 +603,9 @@ pub struct BehaviorSettings {
     /// the agent omits tools from the request to force a textual response.
     /// Set to 0 to disable (use max_iterations as the only limit).
     pub max_consecutive_tool_only: usize,
+    /// `[agent.ponytail]` — the ponytail content integration's operator
+    /// surface. Default OFF; see `PonytailSettings`.
+    pub ponytail: PonytailSettings,
 
     /// Ordered list of fallback models to try when the primary model fails
     /// with a retryable provider error (5xx, 429, network error).
@@ -823,8 +826,62 @@ impl Default for BehaviorSettings {
             context_lcm_assertion_extraction: false,
             context_lcm_ignore_session_patterns: Vec::new(),
             context_lcm_readonly_sessions: Vec::new(),
+            ponytail: PonytailSettings::default(),
         }
     }
+}
+
+/// `[agent.ponytail]` — the ponytail content integration's operator
+/// surface (plan 2026-10-26-ponytail-as-a-self-updating-content-integration).
+/// Default is OFF: the lazy-senior-dev posture changes what the model is
+/// told on every turn, so it must never silently enable. Skills shipped by
+/// the integration are invocable (`/skill ponytail-review`) once
+/// installed regardless of this flag; `enabled` gates (a) the background
+/// update check at startup and (b) the always-on ruleset injection
+/// (`inject = "always_on"`, phase 4).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct PonytailSettings {
+    /// Master switch. `false` (default): installed skills stay invocable,
+    /// but no background update check and no prompt injection.
+    pub enabled: bool,
+    /// Posture level when enabled: `lite` | `full` | `ultra` (upstream's
+    /// three levels; `full` is upstream's default).
+    pub default_level: PonytailLevel,
+    /// `on_invoke` (default): skills only — zero prompt-byte change.
+    /// `always_on`: the active level's ruleset rides the frozen prefix
+    /// (phase 4). Changing this changes the prefix bytes (cache
+    /// invalidation), like any config change.
+    pub inject: PonytailInject,
+}
+
+impl Default for PonytailSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            default_level: PonytailLevel::Full,
+            inject: PonytailInject::OnInvoke,
+        }
+    }
+}
+
+/// Ponytail posture level (upstream `lite` / `full` / `ultra`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PonytailLevel {
+    Lite,
+    Full,
+    Ultra,
+}
+
+/// How the ponytail ruleset reaches the model.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PonytailInject {
+    /// Skills only — `/skill ponytail-review` etc. No prompt change.
+    OnInvoke,
+    /// The active level's ruleset rides the frozen prefix every turn.
+    AlwaysOn,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -3307,6 +3364,47 @@ wonderful_unknown_key = 42
             config.autonomous.status_path,
             PathBuf::from("autonomous-status.toml")
         );
+        // [agent.ponytail] — phase 2: the example block must parse into the
+        // real fields. The block pins the OFF defaults explicitly; if the
+        // section header stops binding (wrong scope, like the first
+        // attempt that landed mid-[agent]), these assertions fail.
+        assert!(!config.agent.ponytail.enabled);
+        assert_eq!(config.agent.ponytail.default_level, PonytailLevel::Full);
+        assert_eq!(config.agent.ponytail.inject, PonytailInject::OnInvoke);
+    }
+
+    /// Ponytail defaults are OFF and skills-only: `enabled = false`,
+    /// `default_level = Full`, `inject = OnInvoke`. The posture changes
+    /// what the model is told every turn, so an EMPTY config must never
+    /// silently enable it (plan 2026-10-26, phase 2).
+    #[test]
+    fn ponytail_defaults_off_and_invoke_only() {
+        let config = parse_config_str("", Path::new("memory://ponytail-defaults")).unwrap();
+        assert!(!config.agent.ponytail.enabled);
+        assert_eq!(config.agent.ponytail.default_level, PonytailLevel::Full);
+        assert_eq!(config.agent.ponytail.inject, PonytailInject::OnInvoke);
+    }
+
+    /// The ponytail keys bind under `[agent.ponytail]`, not top-level
+    /// `[ponytail]` — the section scope IS the surface contract. A key at
+    /// the wrong scope must be rejected (`deny_unknown_fields`), not
+    /// silently ignored.
+    #[test]
+    fn ponytail_section_binds_under_agent_scope() {
+        let ok = parse_config_str(
+            "[agent.ponytail]\nenabled = true\ninject = \"always_on\"\ndefault_level = \"lite\"\n",
+            Path::new("memory://ponytail-scope-ok"),
+        )
+        .unwrap();
+        assert!(ok.agent.ponytail.enabled);
+        assert_eq!(ok.agent.ponytail.inject, PonytailInject::AlwaysOn);
+        assert_eq!(ok.agent.ponytail.default_level, PonytailLevel::Lite);
+
+        let wrong_scope = parse_config_str(
+            "[ponytail]\nenabled = true\n",
+            Path::new("memory://ponytail-scope-bad"),
+        );
+        assert!(wrong_scope.is_err(), "top-level [ponytail] must not bind");
     }
 
     /// The `[bylaws]` block (wave-2 slice F2) maps onto the real fields —

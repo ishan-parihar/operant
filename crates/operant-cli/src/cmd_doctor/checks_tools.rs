@@ -1019,6 +1019,38 @@ pub async fn run_integration_checks(issues: &mut Vec<String>, manual_issues: &mu
             },
             Err(_) => check_info("aft (check skipped)"),
         }
+        // Ponytail: same shared-updater check path as aft, but content —
+        // installed means a versioned dir under the integrations root, not
+        // a binary on PATH, and "latest" comes from upstream's tags.
+        let ponytail = operant_core::ponytail::ponytail_spec();
+        match operant_core::binary_updater::check(&ponytail).await {
+            Ok(v) => match (v.installed, v.latest) {
+                (Some(i), Some(l)) if l > i => check_warn(
+                    "ponytail",
+                    &format!(
+                        "{} (latest {} — run operant update --integrations)",
+                        operant_core::binary_updater::version_string(i),
+                        operant_core::binary_updater::version_string(l)
+                    ),
+                ),
+                (Some(i), Some(_)) => check_ok(
+                    "ponytail",
+                    &format!(
+                        "{} (up to date)",
+                        operant_core::binary_updater::version_string(i)
+                    ),
+                ),
+                (Some(i), None) => check_info(&format!(
+                    "ponytail {} (latest unknown — gh unavailable)",
+                    operant_core::binary_updater::version_string(i)
+                )),
+                (None, _) => check_warn(
+                    "ponytail",
+                    "(not installed — run operant update --integrations)",
+                ),
+            },
+            Err(_) => check_info("ponytail (check skipped)"),
+        }
     }
 }
 

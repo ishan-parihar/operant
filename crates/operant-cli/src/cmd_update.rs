@@ -49,6 +49,11 @@ async fn cmd_integrations() -> Result<()> {
     let aft = operant_core::aft_bridge::aft_spec();
     let r = operant_core::binary_updater::update(&aft).await;
     report("aft", r);
+    // Ponytail is a CONTENT integration (no asset): the tag tarball IS the
+    // payload, so `update()` installs directly and never returns Available.
+    let ponytail = operant_core::ponytail::ponytail_spec();
+    let r = operant_core::binary_updater::update(&ponytail).await;
+    report("ponytail", r);
     Ok(())
 }
 
