@@ -62,6 +62,17 @@ pub use super::web_tools::{WebFetchTool, WebSearchTool};
 pub use super::working_diff_tool::WorkingDiffTool;
 
 /// Register all built-in tools with a registry
+/// (plan 2026-10-26 phase 2, RT-192) The consolidated memory toolset:
+/// exactly `memory_store` + `memory_search` on the wire. The retired
+/// names (`memory_recall`, `memory_save`, `memory_smart_search`) resolve
+/// through the registry's ALIAS layer — callable, zero schema cost — for
+/// one release, after which the aliases drop.
+pub async fn register_memory_tools(registry: &ToolRegistry) -> Result<()> {
+    registry.register(MemoryStoreTool).await?;
+    registry.register(MemorySearchTool).await?;
+    Ok(())
+}
+
 pub async fn register_builtin_tools(
     registry: &ToolRegistry,
     skills_dir: &Path,
@@ -99,13 +110,15 @@ pub async fn register_builtin_tools(
     registry.register(ConfigManageTool).await?;
     registry.register(CronTool::new(cron_db)).await?;
     registry.register(KanbanTool::new(kanban_db)).await?;
-    registry.register(MemoryStoreTool).await?;
-    registry.register(MemorySearchTool).await?;
-    registry.register(MemoryRecallTool).await?;
-    // Memory provider tools (agentmemory_*, tdg_*) are NOT registered here.
-    // The agent-visible memory tools (memory_store / memory_search / memory_recall)
-    // route through the ACTIVE_MEMORY_MANAGER global hook set by the CLI, so tool
-    // writes reach the injected MemoryManager store.
+    register_memory_tools(registry).await?;
+    // Memory provider tools are NOT registered here. The agent-visible
+    // memory tools (memory_store / memory_search) route through the
+    // ACTIVE_MEMORY_PROVIDER global hook set by the CLI, so tool writes
+    // reach the injected memory-wire store. The provider twins
+    // (memory_save / memory_smart_search) and the folded memory_recall
+    // are RETIRED from the wire (plan 2026-10-26 phase 2, RT-192) — the
+    // registry's alias layer resolves the old names for one release so
+    // pinned prompts elsewhere keep working at zero schema cost.
     registry.register(HttpRequestTool).await?;
     registry.register(DateTimeTool).await?;
     registry.register(TimestampTool).await?;
@@ -267,7 +280,6 @@ pub fn builtin_tool_names() -> Vec<&'static str> {
         "image_generate",
         "kanban",
         "mcp_management",
-        "memory_recall",
         "memory_search",
         "memory_store",
         "notification",

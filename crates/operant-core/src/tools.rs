@@ -387,11 +387,33 @@ pub struct ToolRegistry {
     tools: Arc<RwLock<HashMap<String, Arc<dyn OperantTool>>>>,
     disabled_names: Arc<RwLock<HashSet<String>>>,
     disabled_toolsets: Arc<RwLock<HashSet<String>>>,
+    /// (plan 2026-10-26 phase 2, RT-192) Retired tool names → surviving
+    /// names. Resolved in `get`/`execute`/`is_available`, never in the
+    /// schema paths: an alias is callable by a model that learned the
+    /// old name from a pinned prompt, at ZERO wire-schema cost. The
+    /// memory consolidation retired `memory_recall` (→ `memory_search`,
+    /// the folded key param), `memory_save` (→ `memory_store`), and
+    /// `memory_smart_search` (→ `memory_search`); drop this map when the
+    /// one-release alias window closes.
+    aliases: Arc<std::sync::RwLock<HashMap<String, String>>>,
     /// §2.4 authority bindings, keyed by tool name. Absent = global.
     ///
     /// Additive state: a registry that declares nothing has an empty map and
     /// every method below that predates this field behaves exactly as it did.
     executor: ToolExecutor,
+}
+
+/// The retired-name → surviving-name aliases for the consolidated memory
+/// toolset (plan 2026-10-26 phase 2). One release, then the map empties.
+fn builtin_tool_aliases() -> HashMap<String, String> {
+    [
+        ("memory_recall", "memory_search"),
+        ("memory_save", "memory_store"),
+        ("memory_smart_search", "memory_search"),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.to_string(), v.to_string()))
+    .collect()
 }
 
 impl Clone for ToolRegistry {
@@ -400,6 +422,7 @@ impl Clone for ToolRegistry {
             tools: Arc::clone(&self.tools),
             disabled_names: Arc::clone(&self.disabled_names),
             disabled_toolsets: Arc::clone(&self.disabled_toolsets),
+            aliases: Arc::clone(&self.aliases),
             executor: ToolExecutor {
                 timeout: self.executor.timeout,
                 overrides: Arc::clone(&self.executor.overrides),
@@ -414,8 +437,21 @@ impl ToolRegistry {
             tools: Arc::new(RwLock::new(HashMap::new())),
             disabled_names: Arc::new(RwLock::new(HashSet::new())),
             disabled_toolsets: Arc::new(RwLock::new(HashSet::new())),
+            aliases: Arc::new(std::sync::RwLock::new(builtin_tool_aliases())),
             executor: ToolExecutor::new(timeout),
         }
+    }
+
+    /// (plan 2026-10-26 phase 2) Resolve a name through the alias layer:
+    /// the retired name maps to its surviving tool. A name with no alias
+    /// resolves to itself.
+    fn resolve_alias(&self, name: &str) -> String {
+        if let Ok(aliases) = self.aliases.read()
+            && let Some(target) = aliases.get(name)
+        {
+            return target.clone();
+        }
+        name.to_string()
     }
 
     /// Override the execution timeout for a single tool. LLM-backed tools
@@ -606,8 +642,11 @@ impl ToolRegistry {
     }
 
     pub async fn get(&self, name: &str) -> Option<Arc<dyn OperantTool>> {
+        // (plan 2026-10-26 phase 2) retired names resolve through the alias
+        // layer — `get("memory_recall")` returns the memory_search tool.
+        let resolved = self.resolve_alias(name);
         let tools = self.tools.read().await;
-        tools.get(name).cloned()
+        tools.get(&resolved).cloned()
     }
 
     pub async fn unregister(&self, name: &str) -> bool {
@@ -657,14 +696,17 @@ impl ToolRegistry {
         args: Value,
         context: ToolContext,
     ) -> Result<ToolResult> {
+        // (plan 2026-10-26 phase 2) retired names resolve through the alias
+        // layer: `execute("memory_save", …)` runs memory_store's logic.
+        let resolved = self.resolve_alias(tool_name);
         let tool = {
             let tools = self.tools.read().await;
-            tools.get(tool_name).cloned()
+            tools.get(&resolved).cloned()
         };
 
         match tool {
             Some(tool) => {
-                let name = tool_name.to_string();
+                let name = resolved;
                 let id = tool_call_id.to_string();
                 debug!(tool = %name, args = ?args, "Executing tool");
                 let result = self

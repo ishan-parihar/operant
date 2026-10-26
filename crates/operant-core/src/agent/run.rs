@@ -444,9 +444,10 @@ impl OperantAgent {
             let memory_tool_active = !self
                 .registry
                 .get_available_schemas_filtered(&[
+                    // (plan 2026-10-26 phase 2) the consolidated pair;
+                    // memory_recall is an alias now, not a registered name.
                     "memory_store".to_string(),
                     "memory_search".to_string(),
-                    "memory_recall".to_string(),
                 ])
                 .await
                 .is_empty();

@@ -548,7 +548,9 @@ impl<S: Store + Send + Sync + 'static> crate::memory_provider::MemoryProvider
     }
 
     async fn system_prompt_block(&self) -> String {
-        "In-process memory-wire memory active. Recall is automatic each turn; use memory_smart_search to search deeper and memory_save to store facts.".to_string()
+        // (plan 2026-10-26 phase 2) the prompt names the consolidated pair;
+        // the retired names still resolve through the registry alias layer.
+        "In-process memory-wire memory active. Recall is automatic each turn; use memory_search to search (optional key for exact-key recall) and memory_store to store facts.".to_string()
     }
 
     async fn prefetch(&self, query: &str) -> String {
@@ -602,32 +604,13 @@ impl<S: Store + Send + Sync + 'static> crate::memory_provider::MemoryProvider
     }
 
     fn tool_schemas(&self) -> Vec<Value> {
-        vec![
-            serde_json::json!({
-                "name": "memory_smart_search",
-                "description": "Hybrid BM25 + token-overlap search across long-term memory (memory-wire). Returns past work, decisions, and facts relevant to the query.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "query": {"type": "string", "description": "What to recall"},
-                        "limit": {"type": "integer", "description": "Max results (default 5)"}
-                    },
-                    "required": ["query"]
-                }
-            }),
-            serde_json::json!({
-                "name": "memory_save",
-                "description": "Save a fact, decision, or piece of work to long-term memory (memory-wire) so future sessions can recall it.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "content": {"type": "string", "description": "The memory content"},
-                        "concepts": {"type": "array", "items": {"type": "string"}, "description": "Optional keywords to index"}
-                    },
-                    "required": ["content"]
-                }
-            }),
-        ]
+        // (plan 2026-10-26 phase 2, RT-192) The provider twins are RETIRED
+        // from the wire: memory_save ≡ memory_store and memory_smart_search
+        // ≡ memory_search were the same calls with different names (~300
+        // tokens of duplicate schema per request). The registry's alias
+        // layer still resolves both names for a model that learned them
+        // from a pinned prompt — at zero schema cost.
+        Vec::new()
     }
 
     fn on_memory_write(&self, action: &str, _target: &str, content: &str) {

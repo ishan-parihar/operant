@@ -191,6 +191,10 @@ pub struct MemorySearchTool;
 #[serde(rename_all = "camelCase")]
 struct MemorySearchArgs {
     query: String,
+    /// (plan 2026-10-26 phase 2, RT-192) Optional exact key: performs the
+    /// recall-by-key the retired `memory_recall` tool did (the store tag
+    /// carries key:<id>). Absent = plain semantic search.
+    key: Option<String>,
     max_results: Option<usize>,
 }
 
@@ -225,7 +229,15 @@ impl OperantTool for MemorySearchTool {
                 "No memory backend attached in this session.".to_string(),
             );
         };
-        let hits = provider.recall_text(&args.query, max_results);
+        // (plan 2026-10-26 phase 2) The folded `memory_recall` behavior: a
+        // `key` routes the recall through the key (a semantic match on the
+        // key tag — the store has no by-id get; the tag carries key:<id>).
+        let search_query = args
+            .key
+            .as_deref()
+            .filter(|k| !k.trim().is_empty())
+            .unwrap_or(&args.query);
+        let hits = provider.recall_text(search_query, max_results);
         let results: Vec<serde_json::Value> = hits
             .lines()
             .filter(|l| l.starts_with("- "))
@@ -465,6 +477,111 @@ mod tests {
 
         *ACTIVE_MEMORY_PROVIDER.write().await = None;
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── Phase 2 (plan 2026-10-26, RT-192): 5 tools → 2 ─────────────
+
+    /// The consolidated surface registers exactly `memory_store` and
+    /// `memory_search` — the twins (`memory_save`, `memory_smart_search`)
+    /// and the folded `memory_recall` are gone from the registry.
+    #[tokio::test]
+    async fn the_registry_holds_exactly_two_memory_tools() {
+        let registry = crate::tools::ToolRegistry::new(std::time::Duration::from_secs(5));
+        crate::tools::builtin::register_memory_tools(&registry)
+            .await
+            .unwrap();
+        let names: Vec<String> = registry
+            .get_schemas_all()
+            .await
+            .into_iter()
+            .map(|s| s.name)
+            .collect();
+        assert_eq!(
+            names,
+            vec!["memory_store".to_string(), "memory_search".to_string()],
+            "the memory toolset is exactly two tools: {names:?}"
+        );
+    }
+
+    /// `memory_search` accepts the optional `key` param and performs the
+    /// exact-key recall the old `memory_recall` did (plan 2.2: the key
+    /// param routes to `recall_text(key)` — the store tag carries key:<id>).
+    #[tokio::test]
+    async fn memory_search_recalls_by_key_when_key_is_given() {
+        let _guard = PROVIDER_TEST_GUARD.lock().await;
+        let _origin_lock = crate::write_origin::origin_test_lock().await;
+        let _origin = crate::write_origin::WriteOriginGuard::new("user");
+        let dir = std::env::temp_dir().join(format!("operant-mw-key-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let provider =
+            std::sync::Arc::new(crate::memory_wire::MemoryWireProvider::new(dir.clone()).unwrap());
+        set_active_memory_provider(provider.clone()).await;
+
+        // Store a fact under a key first.
+        let store = MemoryStoreTool;
+        let stored = store
+            .execute(
+                json!({"key": "zephyr-catch", "content": "the zephyr catch count is 42"}),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(stored.success, "store first: {stored:?}");
+
+        // The folded behavior: memory_search WITH key performs the exact-key
+        // recall the old memory_recall performed.
+        let search = MemorySearchTool;
+        let result = search
+            .execute(
+                json!({"query": "zephyr", "key": "zephyr-catch"}),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(result.success, "key recall: {result:?}");
+        assert!(
+            result.content.to_string().contains("42"),
+            "the keyed fact must come back: {result:?}"
+        );
+
+        *ACTIVE_MEMORY_PROVIDER.write().await = None;
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The retired names still EXECUTE through the alias layer (plan 2.4:
+    /// one release of aliases): a model calling `memory_recall` gets the
+    /// folded behavior with a deprecation note, and `memory_save` /
+    /// `memory_smart_search` map to their surviving twins. No schema cost —
+    /// the aliases live in the registry's resolve step, not the wire.
+    #[tokio::test]
+    async fn retired_memory_names_still_execute_through_the_alias_layer() {
+        let registry = crate::tools::ToolRegistry::new(std::time::Duration::from_secs(5));
+        crate::tools::builtin::register_memory_tools(&registry)
+            .await
+            .unwrap();
+        // The alias RESOLUTION (not registration) is what keeps old names
+        // callable: execute("memory_recall", …) must resolve to the folded
+        // memory_search tool.
+        let tool = registry.get("memory_recall").await;
+        assert!(
+            tool.is_some(),
+            "the alias layer must resolve memory_recall to the consolidated tool"
+        );
+        let tool = registry.get("memory_save").await;
+        assert!(tool.is_some(), "memory_save must alias memory_store");
+        let tool = registry.get("memory_smart_search").await;
+        assert!(
+            tool.is_some(),
+            "memory_smart_search must alias memory_search"
+        );
+        // And the schema list (the WIRE) carries neither — aliases cost 0.
+        let wire_names: Vec<String> = registry
+            .get_schemas_all()
+            .await
+            .into_iter()
+            .map(|s| s.name)
+            .collect();
+        assert!(!wire_names.contains(&"memory_recall".to_string()));
+        assert!(!wire_names.contains(&"memory_save".to_string()));
+        assert!(!wire_names.contains(&"memory_smart_search".to_string()));
     }
 }
 

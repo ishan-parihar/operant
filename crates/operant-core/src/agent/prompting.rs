@@ -423,10 +423,13 @@ impl OperantAgent {
         // The review agent should ONLY have access to memory and skill
         // management tools. Never terminal, file_write, browser, etc.
         // This matches hermes-agent's `set_thread_tool_whitelist` pattern.
+        // (plan 2026-10-26 phase 2) memory_recall retired: the review's
+        // toolset is the consolidated pair; the alias layer still
+        // resolves the old name if a model calls it, but the review
+        // prompt names what is actually on the wire.
         let review_tool_names: Vec<String> = vec![
             "memory_store".to_string(),
             "memory_search".to_string(),
-            "memory_recall".to_string(),
             "skill_manage".to_string(),
             "skill_view".to_string(),
         ];
@@ -506,7 +509,7 @@ impl OperantAgent {
                         format!(
                             "[Background review context]\n\nYou are a background review agent. Your job is to evaluate the \
 conversation above and update skills and/or memory as needed. \
-You have access to memory_store, memory_search, memory_recall, \
+You have access to memory_store, memory_search, \
 skill_manage, and skill_view tools only — do not attempt other tools. \
 NEVER continue, execute, or complete the user's task from the conversation — \
 scheduling, coding, messaging and similar actions belong exclusively to the main agent. \
@@ -522,7 +525,7 @@ If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
                         format!(
                             "You are a background review agent. Your job is to evaluate the \
 conversation above and update skills and/or memory as needed. \
-You have access to memory_store, memory_search, memory_recall, \
+You have access to memory_store, memory_search, \
 skill_manage, and skill_view tools only — do not attempt other tools. \
 NEVER continue, execute, or complete the user's task from the conversation — \
 scheduling, coding, messaging and similar actions belong exclusively to the main agent. \
