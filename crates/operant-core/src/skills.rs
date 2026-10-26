@@ -27,6 +27,19 @@ struct SkillFrontmatter {
     metadata: Option<serde_json::Value>,
 }
 
+/// Where a loaded skill came from — the operator's own pool or a managed
+/// integration (ponytail phase 3). `create`/`delete` must only ever touch
+/// the operator's pool, so integration-sourced skills carry their origin
+/// and the mutators can refuse them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SkillOrigin {
+    /// `~/.operant/skills/` — the operator's own pool.
+    OperatorPool,
+    /// A versioned vendor dir under `~/.operant/integrations/` (e.g.
+    /// ponytail-v5.3.2/skills/) — auto-updated content, never hand-edited.
+    Integration,
+}
+
 /// A loaded skill with parsed metadata and content.
 #[derive(Debug, Clone)]
 pub struct Skill {
@@ -50,12 +63,18 @@ pub struct Skill {
     pub prerequisites_commands: Vec<String>,
     /// Supporting reference files: filename -> content
     pub references: HashMap<String, String>,
+    /// Which root this skill was loaded from (phase 3).
+    pub origin: SkillOrigin,
 }
 
 /// Manages skill discovery, loading, and lifecycle.
 pub struct SkillManager {
     /// Root directory containing skill subdirectories
     pub skills_dir: PathBuf,
+    /// Additional read-only roots scanned after the operator pool
+    /// (ponytail phase 3: installed integration skills). Additive,
+    /// default empty — the pre-phase-3 behavior is unchanged.
+    extra_roots: Vec<PathBuf>,
     /// Cache of loaded skills keyed by name
     skills: HashMap<String, Skill>,
 }
@@ -65,26 +84,67 @@ impl SkillManager {
     pub fn new(skills_dir: PathBuf) -> Self {
         Self {
             skills_dir,
+            extra_roots: Vec::new(),
             skills: HashMap::new(),
+        }
+    }
+
+    /// Add a read-only extra root scanned AFTER the operator pool
+    /// (ponytail phase 3: the installed integration's skills dir).
+    /// Operator-pool skills win name collisions by load order. The root
+    /// is optional at the call site — `None` (integration not installed)
+    /// is a no-op, so wiring can be unconditional.
+    pub fn add_extra_root(&mut self, root: Option<PathBuf>) {
+        if let Some(r) = root {
+            self.extra_roots.push(r);
         }
     }
 
     /// Scan the skills directory and load all valid skills.
     ///
     /// Each subdirectory containing a `SKILL.md` file is treated as a skill.
-    /// Skills with parse errors are logged and skipped.
+    /// Skills with parse errors are logged and skipped. Extra roots
+    /// (phase 3) are scanned after the primary; their skills are invocable
+    /// and listable but NOT creatable/deletable through this manager
+    /// (see [`Skill::origin`]).
     pub fn load_all(&mut self) -> Result<Vec<Skill>> {
         self.skills.clear();
 
-        let entries = std::fs::read_dir(&self.skills_dir).map_err(|e| {
+        let mut loaded = Vec::new();
+        // Same borrow shape as the extra-roots loop below: load_root takes
+        // &mut self, so the root path is cloned out first.
+        let primary = self.skills_dir.clone();
+        self.load_root(&primary, SkillOrigin::OperatorPool, &mut loaded)?;
+        // Take the extra roots out of self for the loop — load_root needs
+        // &mut self (it inserts into the cache), so iterating a self-borrow
+        // in the loop head would not compile.
+        let extra_roots = std::mem::take(&mut self.extra_roots);
+        for root in &extra_roots {
+            // A missing integration dir is a normal state (not installed
+            // yet) — skip it silently, never a load error.
+            if root.is_dir() {
+                self.load_root(root, SkillOrigin::Integration, &mut loaded)?;
+            }
+        }
+        self.extra_roots = extra_roots;
+
+        Ok(loaded)
+    }
+
+    /// Scan one root. `load_all`'s old body, parameterized per-root.
+    fn load_root(
+        &mut self,
+        root: &Path,
+        origin: SkillOrigin,
+        loaded: &mut Vec<Skill>,
+    ) -> Result<()> {
+        let entries = std::fs::read_dir(root).map_err(|e| {
             Error::Config(format!(
                 "Failed to read skills directory '{}': {}",
-                self.skills_dir.display(),
+                root.display(),
                 e
             ))
         })?;
-
-        let mut loaded = Vec::new();
 
         for entry in entries {
             let entry = match entry {
@@ -102,22 +162,28 @@ impl SkillManager {
                 continue;
             }
 
-            match load_skill(&path) {
+            match load_skill(&path, origin) {
                 Ok(skill) => {
                     // Index by both the frontmatter name and the directory
                     // name so lookups by either resolve (a skill's directory
                     // can differ from its `name:` frontmatter). Without the
                     // directory alias, `skills audit` misreports such skills
-                    // as "Failed to parse SKILL.md".
-                    self.skills.insert(skill.name.clone(), skill.clone());
+                    // as "Failed to parse SKILL.md". First root wins: the
+                    // operator pool is scanned before extra roots, so an
+                    // operator's same-named skill shadows the integration's.
                     let dir_key = path
                         .file_name()
                         .map(|n| n.to_string_lossy().to_string())
                         .unwrap_or_else(|| skill.name.clone());
-                    if dir_key != skill.name {
-                        self.skills.insert(dir_key, skill.clone());
+                    let shadowed =
+                        self.skills.contains_key(&skill.name) || self.skills.contains_key(&dir_key);
+                    if !shadowed {
+                        self.skills.insert(skill.name.clone(), skill.clone());
+                        if dir_key != skill.name {
+                            self.skills.insert(dir_key, skill.clone());
+                        }
+                        loaded.push(skill);
                     }
-                    loaded.push(skill);
                 }
                 Err(_) => {
                     // Skip skills that fail to parse
@@ -126,7 +192,7 @@ impl SkillManager {
             }
         }
 
-        Ok(loaded)
+        Ok(())
     }
 
     /// Get a specific skill by name.
@@ -198,8 +264,9 @@ impl SkillManager {
             Error::Config(format!("Failed to write SKILL.md for '{}': {}", name, e))
         })?;
 
-        // Reload the newly created skill into cache
-        if let Ok(skill) = load_skill(&skill_dir) {
+        // Reload the newly created skill into cache (always OperatorPool —
+        // `create` only ever writes under skills_dir).
+        if let Ok(skill) = load_skill(&skill_dir, SkillOrigin::OperatorPool) {
             self.skills.insert(skill.name.clone(), skill);
         }
 
@@ -207,7 +274,24 @@ impl SkillManager {
     }
 
     /// Delete a skill by removing its directory.
+    ///
+    /// Refuses integration-sourced skills (phase 3): the vendor tree is
+    /// version-managed by `operant update --integrations` — deleting a
+    /// skill from it would be silently undone by the next update anyway.
+    /// Delete the operator's shadowing copy or disable the integration
+    /// instead.
     pub fn delete(&mut self, name: &str) -> Result<()> {
+        if let Some(skill) = self.skills.get(name)
+            && skill.origin == SkillOrigin::Integration
+        {
+            return Err(Error::Config(format!(
+                "Skill '{}' is managed by an integration — delete is refused \
+                 (the next `operant update --integrations` would restore it). \
+                 Disable the integration or shadow it with an operator skill.",
+                name
+            )));
+        }
+
         let skill_dir = self.skills_dir.join(name);
 
         if !skill_dir.exists() {
@@ -227,7 +311,7 @@ impl SkillManager {
 // ---------------------------------------------------------------------------
 
 /// Load a single skill from its directory.
-fn load_skill(skill_dir: &Path) -> Result<Skill> {
+fn load_skill(skill_dir: &Path, origin: SkillOrigin) -> Result<Skill> {
     let dir_name = skill_dir
         .file_name()
         .and_then(|n| n.to_str())
@@ -276,6 +360,7 @@ fn load_skill(skill_dir: &Path) -> Result<Skill> {
         prerequisites_env,
         prerequisites_commands,
         references,
+        origin,
     })
 }
 
@@ -498,7 +583,7 @@ mod tests {
         fs::write(skill_dir.join("SKILL.md"), sample_skill_md()).unwrap();
         fs::write(skill_dir.join("helper.py"), "print('hello')").unwrap();
 
-        let skill = load_skill(&skill_dir).unwrap();
+        let skill = load_skill(&skill_dir, SkillOrigin::OperatorPool).unwrap();
         assert_eq!(skill.name, "test-skill");
         assert_eq!(skill.version, "1.0.0");
         assert_eq!(skill.platforms, vec!["linux", "macos", "windows"]);
@@ -549,6 +634,94 @@ mod tests {
         cleanup(&tmp);
     }
 
+    /// Ponytail phase 3: extra roots load alongside the operator pool,
+    /// carry `SkillOrigin::Integration`, and a missing extra root is a
+    /// silent no-op (integration not installed is a normal state).
+    #[test]
+    fn extra_root_loads_integration_skills_and_missing_root_is_noop() {
+        let pool = make_temp_dir();
+        let extra = make_temp_dir();
+
+        fs::create_dir_all(pool.join("mine")).unwrap();
+        fs::write(
+            pool.join("mine").join("SKILL.md"),
+            "---\nname: mine\ndescription: operator skill\n---\nbody\n",
+        )
+        .unwrap();
+        fs::create_dir_all(extra.join("ponytail-review")).unwrap();
+        fs::write(
+            extra.join("ponytail-review").join("SKILL.md"),
+            "---\nname: ponytail-review\ndescription: vendor skill\n---\nbody\n",
+        )
+        .unwrap();
+
+        let mut mgr = SkillManager::new(pool.clone());
+        mgr.add_extra_root(Some(extra.clone()));
+        mgr.add_extra_root(None); // None must be a no-op, not an error
+        mgr.add_extra_root(Some(pool.join("does-not-exist"))); // missing root skipped
+        let loaded = mgr.load_all().unwrap();
+        assert_eq!(loaded.len(), 2);
+        assert_eq!(mgr.get("mine").unwrap().origin, SkillOrigin::OperatorPool);
+        assert_eq!(
+            mgr.get("ponytail-review").unwrap().origin,
+            SkillOrigin::Integration
+        );
+
+        cleanup(&pool);
+        cleanup(&extra);
+    }
+
+    /// Ponytail phase 3: the operator pool wins name collisions — the
+    /// integration's same-named skill is shadowed in BOTH indexes.
+    #[test]
+    fn operator_pool_shadows_integration_skill_on_name_collision() {
+        let pool = make_temp_dir();
+        let extra = make_temp_dir();
+
+        for root in [&pool, &extra] {
+            fs::create_dir_all(root.join("clash")).unwrap();
+            fs::write(
+                root.join("clash").join("SKILL.md"),
+                "---\nname: clash\ndescription: from this root\n---\nbody\n",
+            )
+            .unwrap();
+        }
+
+        let mut mgr = SkillManager::new(pool.clone());
+        mgr.add_extra_root(Some(extra.clone()));
+        let loaded = mgr.load_all().unwrap();
+        assert_eq!(loaded.len(), 1, "shadowed duplicate must not double-list");
+        assert_eq!(mgr.get("clash").unwrap().origin, SkillOrigin::OperatorPool);
+
+        cleanup(&pool);
+        cleanup(&extra);
+    }
+
+    /// Ponytail phase 3: delete refuses integration-sourced skills — the
+    /// vendor tree is version-managed and a hand delete would be undone by
+    /// the next `operant update --integrations` anyway.
+    #[test]
+    fn delete_refuses_integration_skills() {
+        let pool = make_temp_dir();
+        let extra = make_temp_dir();
+        fs::create_dir_all(extra.join("vendor")).unwrap();
+        fs::write(
+            extra.join("vendor").join("SKILL.md"),
+            "---\nname: vendor\ndescription: v\n---\nbody\n",
+        )
+        .unwrap();
+
+        let mut mgr = SkillManager::new(pool.clone());
+        mgr.add_extra_root(Some(extra.clone()));
+        mgr.load_all().unwrap();
+
+        assert!(mgr.delete("vendor").is_err());
+        assert!(extra.join("vendor").join("SKILL.md").exists());
+
+        cleanup(&pool);
+        cleanup(&extra);
+    }
+
     #[test]
     fn test_skill_manager_create_and_delete() {
         let tmp = make_temp_dir();
@@ -589,6 +762,7 @@ mod tests {
             prerequisites_env: vec![],
             prerequisites_commands: vec![],
             references: HashMap::new(),
+            origin: SkillOrigin::OperatorPool,
         };
 
         let mgr = SkillManager::new(PathBuf::from("."));
@@ -608,6 +782,7 @@ mod tests {
             prerequisites_env: vec![],
             prerequisites_commands: vec![],
             references: HashMap::new(),
+            origin: SkillOrigin::OperatorPool,
         };
 
         let mgr = SkillManager::new(PathBuf::from("."));
@@ -627,6 +802,7 @@ mod tests {
             prerequisites_env: vec![],
             prerequisites_commands: vec![],
             references: HashMap::new(),
+            origin: SkillOrigin::OperatorPool,
         };
 
         let mgr = SkillManager::new(PathBuf::from("."));
@@ -646,6 +822,7 @@ mod tests {
             prerequisites_env: vec!["HERMES_NONEXISTENT_VAR_12345".into()],
             prerequisites_commands: vec![],
             references: HashMap::new(),
+            origin: SkillOrigin::OperatorPool,
         };
 
         let mgr = SkillManager::new(PathBuf::from("."));
@@ -663,7 +840,7 @@ mod tests {
         )
         .unwrap();
 
-        let skill = load_skill(&skill_dir).unwrap();
+        let skill = load_skill(&skill_dir, SkillOrigin::OperatorPool).unwrap();
         // Name falls back to directory name
         assert_eq!(skill.name, "minimal");
         assert_eq!(skill.version, "0.1.0");

@@ -941,6 +941,10 @@ async fn handle_runtime_command(
             let agent = Arc::clone(&handler.agent);
             let skills_dir = handler.skills_root_dir.clone();
             let mut mgr = operant_core::skills::SkillManager::new(skills_dir.clone());
+            // Ponytail phase 3: keep the extra root across reloads — a
+            // rescan that silently dropped integration skills would make
+            // /skill ponytail-review fail right after a reload.
+            mgr.add_extra_root(operant_core::ponytail::installed_skills_dir());
             match mgr.load_all() {
                 Ok(loaded) => {
                     let count = loaded.len();

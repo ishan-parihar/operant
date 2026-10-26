@@ -73,6 +73,10 @@ impl SkillsViewState {
         // Errors (e.g. dir doesn't exist yet on a fresh install) are surfaced
         // inline rather than crashing the overlay.
         let mut mgr = operant_core::skills::SkillManager::new(skills_dir);
+        // Ponytail phase 3: installed integration skills are listable in
+        // the overlay — the typeahead derives from this view, so they are
+        // also invocable via /skill <Tab>.
+        mgr.add_extra_root(operant_core::ponytail::installed_skills_dir());
         match mgr.load_all() {
             Ok(mut loaded) => {
                 // Sort by (category, name) so related skills cluster visually.
@@ -543,6 +547,7 @@ mod tests {
             prerequisites_env: Vec::new(),
             prerequisites_commands: Vec::new(),
             references: std::collections::HashMap::new(),
+            origin: operant_core::skills::SkillOrigin::OperatorPool,
         }
     }
 

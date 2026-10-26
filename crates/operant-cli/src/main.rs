@@ -1637,6 +1637,12 @@ async fn build_agent_core_with_memory(
     let skills_dir: &Path = holon_skills.as_deref().unwrap_or(skills_dir);
 
     let mut skill_manager = SkillManager::new(skills_dir.to_path_buf());
+    // Ponytail phase 3: installed integration skills ride as extra roots —
+    // invocable/listable, never creatable/deletable, operator pool wins
+    // collisions. None (integration absent) is a no-op.
+    if !operant_core::platform::is_holon_run() {
+        skill_manager.add_extra_root(operant_core::ponytail::installed_skills_dir());
+    }
     if let Err(e) = skill_manager.load_all() {
         warn!(
             error = %e,

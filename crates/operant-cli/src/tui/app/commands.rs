@@ -1330,6 +1330,10 @@ impl App {
             "reload-skills" => {
                 let skills_dir = self.config.skills.root_dir.clone();
                 let mut mgr = operant_core::skills::SkillManager::new(skills_dir.clone());
+                // Ponytail phase 3: keep integration skills across the
+                // rescan — dropping them here would evict ponytail skills
+                // from the overlay + typeahead until restart.
+                mgr.add_extra_root(operant_core::ponytail::installed_skills_dir());
                 match mgr.load_all() {
                     Ok(mut loaded) => {
                         // Same (category, name) sort skills_view.open() uses so

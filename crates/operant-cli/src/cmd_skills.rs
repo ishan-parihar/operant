@@ -485,6 +485,9 @@ fn list_skills(config: &AppConfig, json: bool, tree: bool) -> Result<()> {
     }
 
     let mut manager = SkillManager::new(skills_dir.clone());
+    // Ponytail phase 3: installed integration skills are listable and
+    // marked so the operator can tell vendor content from their own.
+    manager.add_extra_root(operant_core::ponytail::installed_skills_dir());
     manager
         .load_all()
         .with_context(|| format!("Failed to load skills from '{}'", skills_dir.display()))?;
@@ -494,7 +497,21 @@ fn list_skills(config: &AppConfig, json: bool, tree: bool) -> Result<()> {
     if json {
         let items: Vec<serde_json::Value> = skills
             .iter()
-            .map(|(name, desc)| serde_json::json!({"name": name, "description": desc}))
+            .map(|(name, desc)| {
+                // Ponytail phase 3: integration-sourced skills are
+                // marked in JSON too, so tooling can filter them.
+                let origin = manager
+                    .get(name)
+                    .map(|s| {
+                        if s.origin == operant_core::skills::SkillOrigin::Integration {
+                            "integration"
+                        } else {
+                            "operator"
+                        }
+                    })
+                    .unwrap_or("operator");
+                serde_json::json!({"name": name, "description": desc, "origin": origin})
+            })
             .collect();
         println!("{}", serde_json::to_string_pretty(&items)?);
         return Ok(());
@@ -508,7 +525,13 @@ fn list_skills(config: &AppConfig, json: bool, tree: bool) -> Result<()> {
     println!("Installed skills ({}):", skills.len());
     println!();
     for (name, description) in &skills {
-        println!("  {:<24} {}", name, description);
+        // Ponytail phase 3: mark vendor-managed skills so the operator can
+        // tell them from their own pool at a glance.
+        let marker = match manager.get(name).map(|s| s.origin) {
+            Some(operant_core::skills::SkillOrigin::Integration) => " [integration]",
+            _ => "",
+        };
+        println!("  {:<24} {}{}", name, description, marker);
     }
 
     Ok(())
