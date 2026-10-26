@@ -559,18 +559,29 @@ enabled = true
 
 # [auxiliary_models]
 # Optional auxiliary model configurations for MoA / side-LLM tasks.
-# The `vision` slot below is the ONE real path behind the `vision_analyze`
-# tool (iter-1254/1261): the image is sent to this auxiliary model and the
-# tool returns its TEXT description — the pixels never reach your main
-# model's context. Without this slot (and without OPENROUTER_API_KEY in the
-# environment) vision_analyze returns a configuration error naming the fix.
 #
-# The `compression` slot is the LLM context-compressor's SUMMARIZER model
-# (audit G6, 2026-10-26): when `agent.context_compression = true`, the
-# summarize-before-evict side call goes to THIS model. Without the slot the
-# hardcoded default `gpt-4o-mini` applies — set it to a model your route
-# actually serves, or every compaction fails and silently degrades to
-# deterministic eviction (cooldown after the first failure).
+# THREE slots route to a real code path (these are the ones worth setting):
+#
+#   * `compression` — the LLM context-compressor's SUMMARIZER model (audit G6,
+#     2026-10-26): when `agent.context_compression = true`, the
+#     summarize-before-evict side call goes to THIS model. Without the slot the
+#     hardcoded default `gpt-4o-mini` applies — set it to a model your route
+#     actually serves, or every compaction fails and silently degrades to
+#     deterministic eviction (cooldown after the first failure).
+#   * `vision` — the ONLY real path behind the `vision_analyze` tool
+#     (iter-1254/1261): the image is sent to this model and the tool returns
+#     its TEXT description — the pixels never reach your main model's context.
+#     Without this slot (and without OPENROUTER_API_KEY in the environment)
+#     vision_analyze returns a configuration error naming the fix.
+#   * `memory` — routes the periodic background memory-review side call.
+#
+# Six further slots (`web_extract`, `image_gen`, `embeddings`, `search`,
+# `code_execution`, `reasoning`) are PARSED BUT UNREAD — nothing in the code
+# routes to them, and `operant setup` no longer asks for them (audit
+# 2026-10-26, iter-1349). Setting one produces a load-time warning naming the
+# key to remove; the fields remain so existing configs keep parsing.
+# The live embeddings knob is `agent.context_lcm_embedding_model`, and image
+# generation reads the FAL_KEY environment variable.
 # [auxiliary_models.compression]
 # model = "gpt-4o-mini"   # match your route's model name
 # base_url = ""

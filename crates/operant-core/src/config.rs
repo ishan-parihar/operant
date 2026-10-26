@@ -2670,6 +2670,36 @@ impl AppConfig {
                 || self.tui.medium_width != d.tui.medium_width,
             "[tui]"
         );
+        // (iter-1349, audit 2026-10-26) the six `[auxiliary_models.*]` slots no
+        // code path reads. `web_extract` has no LLM step to route to, `image_gen`
+        // reads FAL_KEY, `embeddings` is `agent.context_lcm_embedding_model`,
+        // `search` is sourcehound-only, and `code_execution` / `reasoning` have
+        // no consumer. The struct fields stay (deleting one breaks any config
+        // that sets it — AppConfig carries `deny_unknown_fields`), but a SET
+        // value now reports instead of being accepted in silence, which is what
+        // made these phantom routing surface rather than merely dead. One line
+        // per slot (not one grouped line) so the message names the exact key the
+        // operator must delete — the "name only what is set" shape the test in
+        // this file pins for every other cluster.
+        for (name, slot) in [
+            ("web_extract", &self.auxiliary_models.web_extract),
+            ("image_gen", &self.auxiliary_models.image_gen),
+            ("embeddings", &self.auxiliary_models.embeddings),
+            ("search", &self.auxiliary_models.search),
+            ("code_execution", &self.auxiliary_models.code_execution),
+            ("reasoning", &self.auxiliary_models.reasoning),
+        ] {
+            let set = slot
+                .as_ref()
+                .and_then(|s| s.model.as_deref())
+                .is_some_and(|m| !m.trim().is_empty());
+            if set {
+                out.push(format!(
+                    "warning: [auxiliary_models.{}] is accepted but unread — nothing in the code routes to it. It has no effect. Remove the key from operant.toml.",
+                    name
+                ));
+            }
+        }
         flag!(
             self.skills.template_name != d.skills.template_name
                 || self.skills.template_description != d.skills.template_description,
@@ -3573,6 +3603,59 @@ wonderful_unknown_key = 42
         let warnings = config.unused_setting_warnings();
         assert_eq!(warnings.len(), 1, "{warnings:?}");
         assert!(warnings[0].contains("[socialization]"), "{warnings:?}");
+    }
+
+    /// The six inert `[auxiliary_models.*]` slots (audit 2026-10-26, iter-1349).
+    /// They are accepted-but-unread, and a SET value must REPORT rather than
+    /// be silently accepted — that silence is what made them phantom routing
+    /// surface. The three live slots (vision / compression / memory) must stay
+    /// quiet: a legitimately configured slot is not a defect, and warning on
+    /// it would train the operator to ignore the warning stream.
+    #[test]
+    fn unused_setting_warnings_name_the_inert_auxiliary_slots_only() {
+        // A clean config says nothing.
+        assert!(AppConfig::default().unused_setting_warnings().is_empty());
+
+        // Each of the six inert slots, set alone, produces exactly one warning
+        // naming that slot.
+        for slot in [
+            "web_extract",
+            "image_gen",
+            "embeddings",
+            "search",
+            "code_execution",
+            "reasoning",
+        ] {
+            let raw = format!("[auxiliary_models.{}]\nmodel = \"gpt-4o-mini\"\n", slot);
+            let config = parse_config_str(&raw, Path::new("memory://unused-aux-slot")).unwrap();
+            let warnings = config.unused_setting_warnings();
+            assert_eq!(warnings.len(), 1, "{slot}: {warnings:?}");
+            assert!(
+                warnings[0].contains(&format!("[auxiliary_models.{slot}]")),
+                "{slot}: {warnings:?}"
+            );
+        }
+
+        // A LIVE slot set to a real model is NOT flagged — the warning must
+        // name only what is inert, or it becomes noise the operator learns to
+        // skip (which is worse than no warning at all).
+        let raw = "[auxiliary_models.compression]\nmodel = \"gpt-4o-mini\"\n[auxiliary_models.vision]\nmodel = \"google/gemini-2.0-flash-001\"\n";
+        let config = parse_config_str(raw, Path::new("memory://live-aux-slots")).unwrap();
+        assert!(
+            config.unused_setting_warnings().is_empty(),
+            "a live slot must not warn: {:?}",
+            config.unused_setting_warnings()
+        );
+
+        // An EMPTY model name is not a set value: `[auxiliary_models.search]`
+        // with `model = ""` is a section the operator opened and left blank.
+        let raw = "[auxiliary_models.search]\nmodel = \"\"\n";
+        let config = parse_config_str(raw, Path::new("memory://empty-aux-slot")).unwrap();
+        assert!(
+            config.unused_setting_warnings().is_empty(),
+            "an empty model is not a set value: {:?}",
+            config.unused_setting_warnings()
+        );
     }
 
     #[test]

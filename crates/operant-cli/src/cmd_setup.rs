@@ -738,12 +738,21 @@ fn step_fallback_and_strategy(
     reason = "`*slot` was assigned `Some` on the lines above the unwrap"
 )]
 /// Configure auxiliary models for specialized tasks.
+///
+/// Only the THREE slots a code path actually reads are interviewed (audit
+/// 2026-10-26, iter-1349): `vision`, `compression`, `memory`. The other six
+/// struct slots (`web_extract`, `image_gen`, `embeddings`, `search`,
+/// `code_execution`, `reasoning`) are accepted-but-unread — interviewing the
+/// operator for them collected values nothing consumed, and a set value is
+/// now reported by `AppConfig::unused_setting_warnings` at load instead of
+/// being silently ignored. The fields stay in the struct (removing one would
+/// break any existing operant.toml that sets it, `deny_unknown_fields`).
 fn step_auxiliary_models(config: &mut AppConfig) -> Result<()> {
     if !prompt_yes_no("Configure auxiliary models for specialized tasks?", false)? {
         return Ok(());
     }
 
-    let slots: [(&str, &str, &mut Option<AuxiliaryModelConfig>); 9] = [
+    let slots: [(&str, &str, &mut Option<AuxiliaryModelConfig>); 3] = [
         (
             "vision",
             "Vision tasks (image analysis)",
@@ -755,35 +764,9 @@ fn step_auxiliary_models(config: &mut AppConfig) -> Result<()> {
             &mut config.auxiliary_models.compression,
         ),
         (
-            "web_extract",
-            "Web content extraction",
-            &mut config.auxiliary_models.web_extract,
-        ),
-        (
-            "image_gen",
-            "Image generation",
-            &mut config.auxiliary_models.image_gen,
-        ),
-        (
-            "embeddings",
-            "Embeddings",
-            &mut config.auxiliary_models.embeddings,
-        ),
-        ("search", "Web search", &mut config.auxiliary_models.search),
-        (
             "memory",
             "Memory/recall",
             &mut config.auxiliary_models.memory,
-        ),
-        (
-            "code_execution",
-            "Code execution",
-            &mut config.auxiliary_models.code_execution,
-        ),
-        (
-            "reasoning",
-            "Deep reasoning",
-            &mut config.auxiliary_models.reasoning,
         ),
     ];
 

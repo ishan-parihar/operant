@@ -154,6 +154,15 @@ Safe-execution shape (verified):
 | 6 inert aux slots | add an `unused_setting_warnings` flag (repo idiom) + drop from `cmd_setup.rs`. Field deletion IS a breaking change for any config that sets them (parent `AppConfig` carries `deny_unknown_fields`), so defer it |
 | `[pk]` / `[bylaws]` / `[socialization]` / `[tui]` / `[skills]` | nothing to do — already warned at load; delete struct fields only when a breaking release is acceptable |
 
-**Flag-only status**: this pass cut nothing (ponytail-audit reports, applies nothing).
-Next iteration: add the 6-slot tripwire + strip them from `operant setup`'s interview.
-That is the entire fix — every other flagged key already warns in production.
+**Flag-only status for the FLAG pass; the fix has since landed (iter-1349).**
+The two-site fix this plan called for is complete: the six inert slots now
+produce a per-slot "accepted but unread" warning at load
+(`AppConfig::unused_setting_warnings`, config.rs ~2673, pinned by
+`unused_setting_warnings_name_the_inert_auxiliary_slots_only` — mutation-proven:
+the test fails with `web_extract: []` when the flag is removed), and
+`operant setup`'s interview stops asking for them (`cmd_setup.rs`, 9 slots → 3:
+vision / compression / memory). Struct fields stay — deleting one breaks any
+config that sets it, because parent `AppConfig` carries `deny_unknown_fields`.
+Nothing else from the flag list needs work: every other flagged key already
+warns in production, so deleting its field is a future breaking-release
+cleanup, not a defect.
