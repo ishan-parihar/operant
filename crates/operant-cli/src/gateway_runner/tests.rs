@@ -1076,3 +1076,66 @@ async fn pending_goal_is_injected_into_the_next_turn_once() {
         "the consumed flag is written back"
     );
 }
+
+/// RT-175 live-acceptance regression: `/goal` can be the FIRST message a
+/// chat ever sends, so no session row exists when the command runs and the
+/// flag write silently no-ops (update_session_metadata returns false on a
+/// missing row) — the next turn then injects nothing while the command's
+/// reply promised it would. Found by the deployed-binary acceptance harness
+/// (stand-in Bot-API drive), not by unit tests: every unit test pre-created
+/// the session row, so the no-row path was never exercised.
+#[tokio::test]
+async fn goal_on_a_fresh_chat_arms_the_injection_anyway() {
+    use operant_core::gateway::GatewayConfig;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let handler = slow_echo_handler(&dir, 0);
+
+    let gateway = Arc::new(operant_core::gateway::Gateway::new(GatewayConfig::default()));
+    {
+        let mut gw_slot = handler.gateway.lock().await;
+        *gw_slot = Some(gateway.clone());
+    }
+
+    // NO session row — the exact fresh-chat shape the acceptance run hit.
+    // The /goal command handler must create-or-find before writing.
+    let config = operant_core::config::AppConfig::default();
+    let ctx = crate::gateway_commands::CommandContext::new(
+        Some(&gateway),
+        &config,
+        true,
+        "u-fresh",
+        "telegram",
+        "c-fresh",
+    );
+    let reply = crate::gateway_commands::handle_command("goal", "ship it", &ctx);
+    assert!(reply.is_some(), "the goal command replies");
+
+    // The flag must have landed on a real row, not vanished.
+    let store = gateway.get_session_store();
+    let session = store
+        .find_session("telegram", "u-fresh", "c-fresh")
+        .expect("the command must have created the session row");
+    assert_eq!(
+        session.metadata.get("goal").map(String::as_str),
+        Some("ship it"),
+        "the goal text landed"
+    );
+    assert_eq!(
+        session
+            .metadata
+            .get("goal_pending_inject")
+            .map(String::as_str),
+        Some("true"),
+        "the pending-inject flag is armed on a fresh chat"
+    );
+
+    // And the next turn injects it.
+    let msg = IncomingMessage::new("telegram", "u-fresh", "Fresh", "c-fresh", "go");
+    let out = handler.handle(msg).await.expect("turn completes");
+    assert!(
+        out.content.contains("[session goal] ship it"),
+        "fresh-chat goal must inject into the next turn, got: {:?}",
+        out.content
+    );
+}

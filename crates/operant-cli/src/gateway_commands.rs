@@ -1473,6 +1473,21 @@ pub fn handle_command(cmd_name: &str, _args: &str, ctx: &CommandContext<'_>) -> 
                     _ => {
                         if let Some(gateway) = ctx.gateway {
                             let store = gateway.get_session_store();
+                            // RT-175 live-acceptance defect: a command can be
+                            // the FIRST message a chat ever sends (the acceptance
+                            // harness hit this with `/goal` on a fresh chat), so
+                            // no session row exists yet and update_session_metadata
+                            // is a silent no-op — the goal flag vanished and the
+                            // next turn injected nothing while the reply above
+                            // promised it would. Create-or-find mirrors the /new
+                            // command's store bootstrap, then the write lands.
+                            if store
+                                .find_session(ctx.platform, ctx.user_id, ctx.channel_id)
+                                .is_none()
+                            {
+                                let _ = store
+                                    .create_session(ctx.platform, ctx.user_id, ctx.channel_id);
+                            }
                             store.update_session_metadata(ctx.platform, ctx.user_id, ctx.channel_id, &[
                                 ("goal".to_string(), a.to_string()),
                                 ("goal_paused".to_string(), "false".to_string()),
@@ -1535,6 +1550,18 @@ pub fn handle_command(cmd_name: &str, _args: &str, ctx: &CommandContext<'_>) -> 
                                 } else {
                                     format!("{}\n{}", existing, a)
                                 };
+                                let store = gateway.get_session_store();
+                                // RT-175 live-acceptance defect: same
+                                // create-or-find as the /goal set arm — a
+                                // /subgoal on a fresh chat must not lose its
+                                // flag to the no-row no-op.
+                                if store
+                                    .find_session(ctx.platform, ctx.user_id, ctx.channel_id)
+                                    .is_none()
+                                {
+                                    let _ = store
+                                        .create_session(ctx.platform, ctx.user_id, ctx.channel_id);
+                                }
                                 store.update_session_metadata(ctx.platform, ctx.user_id, ctx.channel_id, &[
                                     ("subgoal".to_string(), new_val),
                                     // RT-175: same turn-side injection as
