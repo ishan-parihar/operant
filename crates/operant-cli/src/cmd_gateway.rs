@@ -236,6 +236,57 @@ fn systemd_gateway_pid() -> Option<u32> {
 ///
 /// Shows which platforms are enabled, the webhook state, and a reminder
 /// that the gateway must be started for these to be active.
+/// The running process's resident memory, read from procfs.
+///
+/// Returns (VmRSS, VmHWM) in KB. `None` when the pid is unreadable or
+/// procfs is unavailable (non-Linux): the caller reports "unknown"
+/// rather than claiming zero — a memory line that lies is worse than no
+/// memory line (the family of every honesty fix in this repo's history).
+fn process_memory_kb(pid: u32) -> Option<(u64, u64)> {
+    #[cfg(target_os = "linux")]
+    {
+        let status = std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
+        let mut rss = None;
+        let mut hwm = None;
+        for line in status.lines() {
+            if let Some(rest) = line.strip_prefix("VmRSS:") {
+                rss = parse_kb_field(rest);
+            } else if let Some(rest) = line.strip_prefix("VmHWM:") {
+                hwm = parse_kb_field(rest);
+            }
+        }
+        Some((rss?, hwm.unwrap_or(0)))
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = pid;
+        None
+    }
+}
+
+/// Parse the kB value out of a procfs line's remainder (e.g. "   12345 kB").
+fn parse_kb_field(rest: &str) -> Option<u64> {
+    rest.split_whitespace().next()?.parse::<u64>().ok()
+}
+
+/// The `--json` shape of the memory line: the daemon's RSS/HWM when it
+/// is running (readable), null otherwise — the same honesty rule as the
+/// text arm (never claim 0 for a process we could not read).
+fn memory_json(runtime: GatewayRuntime) -> serde_json::Value {
+    match runtime {
+        GatewayRuntime::Running { pid, .. } => match process_memory_kb(pid) {
+            Some((rss, hwm)) => serde_json::json!({
+                "rss_kb": rss,
+                "hwm_kb": hwm,
+                "rss_mb": rss as f64 / 1024.0,
+                "hwm_mb": hwm as f64 / 1024.0,
+            }),
+            None => serde_json::Value::Null,
+        },
+        GatewayRuntime::NotRunning => serde_json::Value::Null,
+    }
+}
+
 fn cmd_status(config: &AppConfig, deep: bool, json: bool) -> Result<()> {
     let gw = &config.gateway;
 
@@ -272,6 +323,7 @@ fn cmd_status(config: &AppConfig, deep: bool, json: bool) -> Result<()> {
             "admins": gw.admins,
             "running": running,
             "pid_file": pid_path.display().to_string(),
+            "memory": memory_json(runtime),
         });
         println!("{}", serde_json::to_string_pretty(&status)?);
         return Ok(());
@@ -342,6 +394,19 @@ fn cmd_status(config: &AppConfig, deep: bool, json: bool) -> Result<()> {
     match runtime {
         GatewayRuntime::Running { pid, source } => {
             println!("Runtime: running (PID {pid}, {source})");
+            // Persistent-gateway audit finding 5: the daemon's RAM was
+            // invisible from every surface — the ledger/trim/cap work of
+            // iter-1336 is unmeasurable without it. Read the DAEMON's
+            // procfs entry (not this CLI process, which is a different,
+            // short-lived allocation profile).
+            match process_memory_kb(pid) {
+                Some((rss, hwm)) => println!(
+                    "Memory: RSS {:.1} MB (peak {:.1} MB)",
+                    rss as f64 / 1024.0,
+                    hwm as f64 / 1024.0
+                ),
+                None => println!("Memory: unknown (procfs unavailable for PID {pid})"),
+            }
         }
         GatewayRuntime::NotRunning => println!("Runtime: not running"),
     }
@@ -1044,7 +1109,7 @@ fn cmd_pairing_revoke(_config: &AppConfig, id: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{GatewayRuntime, classify_runtime};
+    use super::{GatewayRuntime, classify_runtime, memory_json, parse_kb_field, process_memory_kb};
 
     /// RT-144: a gateway running under systemd (no PID file) must NOT be
     /// reported as "not running" — the live box ran the gateway exactly
@@ -1076,5 +1141,57 @@ mod tests {
         assert_eq!(classify_runtime(None, None), GatewayRuntime::NotRunning);
         // systemd reports MainPID 0 for a unit with no process.
         assert_eq!(classify_runtime(None, Some(0)), GatewayRuntime::NotRunning);
+    }
+
+    // ── persistent-gateway audit finding 5 (iter-1337): daemon RAM
+    // observability. Two halves: a LIVE pid reports a real number, and an
+    // unreadable pid reports unknown — never zero.
+    #[test]
+    fn process_memory_reads_a_live_pid_and_an_unknown_pid_stays_unknown() {
+        #[cfg(target_os = "linux")]
+        {
+            // Our own process is guaranteed live and readable: the truth
+            // case, no fixtures.
+            let mine = process_memory_kb(std::process::id());
+            assert!(
+                mine.is_some(),
+                "this process's procfs entry must be readable on Linux"
+            );
+            let (rss, hwm) = mine.expect("own memory");
+            assert!(rss > 0, "a live process has nonzero RSS");
+            assert!(hwm >= rss, "peak (VmHWM) can never sit below current RSS");
+        }
+        // A pid that does not exist must read as unknown — a memory line
+        // that claimed 0 for an unreadable process would be a lie. A live
+        // but UNREADABLE pid (EACCES) would also read as None; the
+        // nonexistent pid is the deterministic case any environment
+        // guarantees. (pid 1 is NOT it: on this box it is a readable
+        // systemd, which the first draft of this test wrongly assumed.)
+        assert_eq!(
+            process_memory_kb(0),
+            None,
+            "an unreadable pid must not fabricate a memory number"
+        );
+        assert_eq!(
+            process_memory_kb(u32::MAX),
+            None,
+            "a nonexistent pid must not fabricate a memory number"
+        );
+    }
+
+    #[test]
+    fn parse_kb_field_reads_the_first_token() {
+        assert_eq!(parse_kb_field("     12345 kB"), Some(12_345));
+        assert_eq!(parse_kb_field(""), None);
+        assert_eq!(parse_kb_field(" kB"), None);
+    }
+
+    #[test]
+    fn memory_json_is_null_when_the_gateway_is_not_running() {
+        assert_eq!(
+            memory_json(GatewayRuntime::NotRunning),
+            serde_json::Value::Null,
+            "no gateway means no memory claim"
+        );
     }
 }
