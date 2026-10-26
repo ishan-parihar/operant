@@ -54,10 +54,17 @@ pub struct MemoryStoreTool;
 #[derive(JsonSchema, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct MemoryStoreArgs {
-    key: String,
+    /// (iter-1321) Optional since the retired `memory_save` shape was
+    /// {content, concepts} with NO key: a keyless store is allowed (the
+    /// old memory_save behavior — content only, concepts as tags); the
+    /// synthesized tag keeps the row findable by content search.
+    key: Option<String>,
     content: String,
     block_type: Option<String>,
     tags: Option<Vec<String>>,
+    /// (iter-1321) The retired memory_save field name — accepted as tags
+    /// so the old shape keeps working through the alias.
+    concepts: Option<Vec<String>>,
 }
 
 /// Bounds on one `memory_store` write (KB-12). A write over a bound is refused
@@ -69,7 +76,11 @@ const MAX_STORE_TAG_CHARS: usize = 64;
 
 /// The first bound `args` exceeds, as the message the tool returns.
 fn store_bound_violation(args: &MemoryStoreArgs) -> Option<String> {
-    if args.key.chars().count() > MAX_STORE_KEY_CHARS {
+    if args
+        .key
+        .as_deref()
+        .map_or(false, |k| k.chars().count() > MAX_STORE_KEY_CHARS)
+    {
         return Some(format!(
             "key is longer than {MAX_STORE_KEY_CHARS} characters"
         ));
@@ -162,7 +173,15 @@ impl OperantTool for MemoryStoreTool {
             );
         };
         let mut tags = args.tags.clone().unwrap_or_default();
-        tags.push(format!("key:{}", args.key));
+        // (iter-1321) the retired memory_save's `concepts` ride as tags,
+        // and a keyless store (content-only, the old shape) skips the
+        // key tag — the row stays findable by content search.
+        if let Some(concepts) = args.concepts.clone() {
+            tags.extend(concepts);
+        }
+        if let Some(key) = args.key.as_deref().filter(|k| !k.trim().is_empty()) {
+            tags.push(format!("key:{key}"));
+        }
         if let Some(block_type) = args.block_type.clone() {
             tags.push(format!("type:{block_type}"));
         }
@@ -199,6 +218,10 @@ struct MemorySearchArgs {
     /// carries key:<id>). Absent = plain semantic search.
     key: Option<String>,
     max_results: Option<usize>,
+    /// (iter-1321) The retired memory_smart_search's field name — an
+    /// accepted alias for maxResults so the old wire shape keeps working
+    /// through the alias layer.
+    limit: Option<usize>,
 }
 
 #[async_trait]
@@ -223,7 +246,7 @@ impl OperantTool for MemorySearchTool {
             }
         };
 
-        let max_results = args.max_results.unwrap_or(10).min(50);
+        let max_results = args.max_results.or(args.limit).unwrap_or(10).min(50);
 
         // (iter-1307) Exactly one of query/key is required: key-only is the
         // retired memory_recall shape (folded, phase 2); neither is a genuine
@@ -664,6 +687,119 @@ mod tests {
         );
     }
 
+    /// (iter-1321) The retired `memory_save` wire shape was
+    /// {content: required, concepts: optional} — NO key field. The alias
+    /// fold must accept it (a pinned prompt from the five-tool era calls
+    /// this shape; it died at deserialization). Live probe confirmed:
+    /// "Invalid arguments: missing field `key`".
+    #[tokio::test]
+    async fn memory_save_old_shape_content_only_still_stores() {
+        let _guard = PROVIDER_TEST_GUARD.lock().await;
+        let _origin_lock = crate::write_origin::origin_test_lock().await;
+        let _origin = crate::write_origin::WriteOriginGuard::new("user");
+        let dir = std::env::temp_dir().join(format!("operant-mw-oldshape-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let provider =
+            std::sync::Arc::new(crate::memory_wire::MemoryWireProvider::new(dir.clone()).unwrap());
+        set_active_memory_provider(provider.clone()).await;
+
+        // The registry ALIAS is what routes the retired name; execute through
+        // it so the test covers name resolution AND argument shape together.
+        let registry = crate::tools::ToolRegistry::new(std::time::Duration::from_secs(5));
+        crate::tools::builtin::register_memory_tools(&registry)
+            .await
+            .unwrap();
+        let result = registry
+            .execute(
+                "memory_save",
+                "probe",
+                json!({"content": "the filter-valve tolerance is exactly three turns"}),
+                ToolContext::default(),
+            )
+            .await
+            .expect("execute");
+        assert!(
+            result.success,
+            "the old memory_save shape (content-only, no key) must still store: {:?}",
+            result.error
+        );
+        // The stored fact must be recallable.
+        let search = registry
+            .execute(
+                "memory_search",
+                "probe2",
+                json!({"query": "filter-valve tolerance"}),
+                ToolContext::default(),
+            )
+            .await
+            .expect("execute");
+        assert!(search.success, "{search:?}");
+        assert!(
+            search.content.contains("three turns"),
+            "the content-only store must be recallable: {}",
+            search.content
+        );
+
+        *ACTIVE_MEMORY_PROVIDER.write().await = None;
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// (iter-1321) The retired `memory_smart_search` wire shape used `limit`
+    /// (not maxResults). The alias fold must honor it — a limit:2 call
+    /// returning 10 rows is the old surface silently broken.
+    #[tokio::test]
+    async fn memory_smart_search_old_limit_field_is_honored() {
+        let _guard = PROVIDER_TEST_GUARD.lock().await;
+        let _origin_lock = crate::write_origin::origin_test_lock().await;
+        let _origin = crate::write_origin::WriteOriginGuard::new("user");
+        let dir = std::env::temp_dir().join(format!("operant-mw-oldlimit-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let provider =
+            std::sync::Arc::new(crate::memory_wire::MemoryWireProvider::new(dir.clone()).unwrap());
+        set_active_memory_provider(provider.clone()).await;
+
+        // Store several matching facts.
+        let store = MemoryStoreTool;
+        for i in 0..6 {
+            let r = store
+                .execute(
+                    json!({"key": format!("tol-{i}"), "content": format!("brass fitting tolerance note {i} for the valve assembly")}),
+                    ToolContext::default(),
+                )
+                .await;
+            assert!(r.success, "store {i}: {r:?}");
+        }
+
+        let registry = crate::tools::ToolRegistry::new(std::time::Duration::from_secs(5));
+        crate::tools::builtin::register_memory_tools(&registry)
+            .await
+            .unwrap();
+        // The OLD shape: query + limit (no maxResults).
+        let result = registry
+            .execute(
+                "memory_smart_search",
+                "probe",
+                json!({"query": "brass fitting tolerance valve", "limit": 2}),
+                ToolContext::default(),
+            )
+            .await
+            .expect("execute");
+        assert!(
+            result.success,
+            "old smart_search shape must execute: {:?}",
+            result.error
+        );
+        let payload: serde_json::Value = serde_json::from_str(&result.content).expect("payload");
+        let count = payload["count"].as_u64().expect("count") as usize;
+        assert!(
+            count <= 2,
+            "the old `limit` field must be honored (limit:2 → ≤2 results): count={count}"
+        );
+
+        *ACTIVE_MEMORY_PROVIDER.write().await = None;
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     // ── Deep-validation findings (2026-10-26, iter-1307): the alias fold
     // was name-only — the MCP pre-check (`contains`) rejected retired
     // names, and the retired argument shape ({key} only, no query) failed
@@ -896,10 +1032,11 @@ mod store_bounds_tests {
 
     fn args(key: &str, content: &str, tags: Vec<String>) -> MemoryStoreArgs {
         MemoryStoreArgs {
-            key: key.to_string(),
+            key: Some(key.to_string()),
             content: content.to_string(),
             block_type: None,
             tags: Some(tags),
+            concepts: None,
         }
     }
 
