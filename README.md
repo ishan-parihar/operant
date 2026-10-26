@@ -80,14 +80,10 @@ operant
 │   ├── operant-plugins      WASM plugin bridge
 │   ├── operant-config       config schema · validation · defaults
 │   ├── operant-harness      unified harness (persistence seam + config)
-│   └── …                    api · os (8 crates total —
-│                           dead crates were deleted in the
-│                           2026-10-17 purge, the 2026-10-21 config
-│                           retirement, and the 2026-10-24 sweep that
-│                           removed `operant-memory`, `operant-infra`
-                           and `operant-providers`, which nothing
-                           linked but one doctor probe)
+│   └── operant-api · operant-os   (8 crates total)
 ```
+
+The workspace is self-contained; dead crates from earlier rounds were deleted, not disabled (see [`AGENTS.md`](AGENTS.md) for the history).
 
 ---
 
@@ -116,47 +112,9 @@ Skills are **markdown instruction packs** — the same mechanism hermes-agent us
 
 **SOPs** are the operator's own playbooks for recurring tasks: TOML files in `~/.operant/sops/` (`operant sop list` shows them). The agent reaches them through the `sop` tool — list the playbooks, read one — so a procedure you wrote down is one the harness can actually follow.
 
-### Directory layout
+### Layout and format
 
-Operant ships a **categorized** pool in the repo, and installs it **flat** into the user skills directory (matching `operant skills seed`):
-
-```
-repo:                                 installed (user):
-skills/                               ~/.operant/skills/
-├── devops/  github/  mcp/            ├── cli/
-├── productivity/  research/         ├── docker-management/
-├── security/  software-development/ ├── systematic-debugging/
-├── workspace-lint/                   ├── test-driven-development/
-├── autonomous-ai-agents/  apple/     ├── …
-├── creative/  email/  media/        └── <107 skills in the repo pool>
-├── mlops/  note-taking/
-├── smart-home/  social-media/
-```
-
-Each skill is a directory containing a `SKILL.md` (required) plus any reference files, scripts, and templates:
-
-```
-~/.operant/skills/systematic-debugging/
-├── SKILL.md          # frontmatter + instructions (injected verbatim)
-└── …                 # optional references/ scripts/ examples/
-```
-
-### SKILL.md frontmatter
-
-```yaml
----
-name: systematic-debugging        # slug used by /skill <name> and the skill tool
-description: "4-phase root cause debugging."  # one-line summary for the model
-author: Operant                  # provenance
-license: MIT
-platforms: [linux, macos, windows]
-version: 1.1.0
-metadata:
-  operant:
-    tags: [debugging, root-cause]       # used by the curator & search
-    related_skills: [plan, tdd]         # auto-suggested companions
----
-```
+Operant ships a **categorized** pool in the repo (`skills/<category>/<skill>/`) and installs it **flat** into `~/.operant/skills/` — one directory per skill, containing a required `SKILL.md` (YAML frontmatter: `name`, `description`, `metadata.operant.tags` … plus optional `references/`, `scripts/`, `examples/`) whose instructions are injected verbatim on invoke. 107 skills in the repo pool.
 
 ### Seeding (fresh installs are agent-ready from scratch)
 
