@@ -485,6 +485,23 @@ impl OperantAgent {
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(new_model);
     }
 
+    /// Swap the attached [`SkillManager`](crate::skills::SkillManager) at
+    /// runtime (RT-175 — the gateway's `/reload-skills`). Rescans the
+    /// configured skills directory and installs the result; the frozen
+    /// prefix reads the field on every build (no memoization), so the new
+    /// skill list reaches the very next request without a restart. Takes
+    /// `&self` through `Arc<OperantAgent>` like [`Self::set_model`].
+    /// `None` detaches skills entirely (the frozen prefix then carries no
+    /// `<available_skills>` block, matching the never-attached state).
+    pub fn set_skill_manager(&self, skill_manager: Option<SkillManager>) {
+        let count = skill_manager.as_ref().map(|m| m.list().len()).unwrap_or(0);
+        tracing::info!(skills = count, "Agent skill manager swapped at runtime");
+        *self
+            .skill_manager
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = skill_manager;
+    }
+
     /// Retarget the agent's model client at another OpenAI-compatible
     /// endpoint at runtime (`/connect`). Takes `&self` like [`Self::set_model`].
     /// Without this the client built at startup keeps hitting the original
@@ -856,7 +873,18 @@ impl OperantAgent {
             frozen.push_str(&charter);
             frozen.push_str("\n</employee_charter>");
         }
-        if let Some(skill_manager) = &self.skill_manager {
+        // RT-175: the field is a lock (runtime swap via `set_skill_manager`),
+        // so read through it. The lock guard is held across the skill
+        // listing only — a rescan (the swap) contends briefly, never
+        // deadlocks, because this build path holds no other locks.
+        // Poisoning falls back to NO skills — a degraded turn, never a
+        // dead one. SkillManager is not Clone (its map owns Skill values),
+        // so the listing borrows through the guard rather than cloning.
+        let skill_manager_guard = self
+            .skill_manager
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(skill_manager) = skill_manager_guard.as_ref() {
             let skills = skill_manager.list();
             if !skills.is_empty() {
                 frozen.push_str("\n\n<available_skills>\n");

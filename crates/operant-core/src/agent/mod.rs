@@ -508,7 +508,12 @@ pub struct OperantAgent {
     /// construction and written back on `AllowAlways`.
     persistent_allowlist: Arc<std::sync::RwLock<std::collections::HashSet<String>>>,
     memory_manager: Option<MemoryManager>,
-    skill_manager: Option<SkillManager>,
+    /// Wrapped for interior mutability (`set_skill_manager`, RT-175): the
+    /// gateway's `/reload-skills` swaps this at runtime through `&self`
+    /// (`Arc<OperantAgent>`), the same shape as `set_model`. The frozen
+    /// prefix re-reads it on every build (no memoization), so a swap lands
+    /// on the very next request.
+    skill_manager: Arc<std::sync::RwLock<Option<SkillManager>>>,
     database: Arc<Database>,
     /// Memory provider for long-term memory hooks. When set, the agent
     /// calls `sync_turn(user, assistant)` after each completed turn so

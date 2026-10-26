@@ -201,6 +201,40 @@ impl OperantAgent {
     pub fn rewind_marks(&self) -> Vec<UserTurnMark> {
         self.user_turns()
     }
+
+    /// The rewind marks that belong to the CURRENTLY-LOADED conversation,
+    /// oldest first (RT-175 — the gateway's `/undo`).
+    ///
+    /// [`Self::rewind_marks`] is process-global: marks accumulate across
+    /// every session the shared agent ever served and `set_session_id`
+    /// never clears them, so `marks.iter().rev().nth(n-1)` on a shared
+    /// gateway agent names a turn from WHATEVER chat turned last — a
+    /// cross-session rewind that truncates a stranger's history. This
+    /// filter keeps only marks whose recorded prompt text still appears
+    /// as a user message in the loaded conversation (the same
+    /// relocate-by-text rule [`Self::rewind_cut_point`] applies to stale
+    /// marks), so the n-th result is always a turn of THIS conversation.
+    ///
+    /// A shared-agent nuance: two chats that sent the same prompt text
+    /// both match. The gateway calls this only while holding the turn
+    /// lock with the invoking chat's session loaded, so "this
+    /// conversation" is the invoker's, and a duplicate text from another
+    /// chat is indistinguishable from resending the same prompt here —
+    /// which is what the user asked to undo either way.
+    pub async fn conversation_rewind_marks(&self) -> Vec<UserTurnMark> {
+        let marks = self.user_turns();
+        if marks.is_empty() {
+            return marks;
+        }
+        let conv = self.conversation.read().await;
+        marks
+            .into_iter()
+            .filter(|m| {
+                conv.iter()
+                    .any(|c| c.role == crate::client::Role::User && c.content == m.text)
+            })
+            .collect()
+    }
 }
 
 #[cfg(test)]
@@ -355,5 +389,53 @@ mod tests {
         agent.add_message(Message::user("real prompt")).await;
         agent.record_user_turn("real prompt".to_string(), 1);
         assert_eq!(agent.user_turns().len(), 1);
+    }
+
+    /// RT-175: the conversation-scoped filter is what makes gateway `/undo`
+    /// safe on the SHARED agent. Marks are process-global and
+    /// `set_session_id` never clears them, so the raw list names every
+    /// chat's turns; the filter must keep only marks whose text survives
+    /// in the LOADED conversation. Mutation shape: if the filter is
+    /// removed (raw `rewind_marks()` used instead), this test fails
+    /// because the other chat's mark appears in the result.
+    #[tokio::test]
+    async fn conversation_scoped_marks_exclude_other_sessions_turns() {
+        let (agent, db) = agent();
+        // Session A turns: "chat A question" (with parent row + session id
+        // so the store machinery is realistic).
+        let sid_a = format!("sess_a_{}", uuid::Uuid::new_v4());
+        let now = chrono::Utc::now().to_rfc3339();
+        db.save_session(&sid_a, None, "agent", &now, &now)
+            .expect("session A row");
+        agent.set_session_id(sid_a.clone());
+        let idx = agent.conversation.read().await.len();
+        agent.add_message(Message::user("chat A question")).await;
+        let a_turn = agent.record_user_turn("chat A question".to_string(), idx);
+
+        // Session B turns: a DIFFERENT chat, same shared agent.
+        let sid_b = format!("sess_b_{}", uuid::Uuid::new_v4());
+        db.save_session(&sid_b, None, "agent", &now, &now)
+            .expect("session B row");
+        agent.set_session_id(sid_b);
+        let idx = agent.conversation.read().await.len();
+        agent.add_message(Message::user("chat B question")).await;
+        let b_turn = agent.record_user_turn("chat B question".to_string(), idx);
+
+        // The raw mark list carries BOTH chats' turns (that is the defect):
+        let raw = agent.rewind_marks();
+        assert_eq!(raw.len(), 2, "marks are process-global across sessions");
+
+        // The conversation-scoped list names ONLY session B's turn — B is
+        // the loaded conversation. Chat A's mark must not be rewindable
+        // from here.
+        let scoped = agent.conversation_rewind_marks().await;
+        assert_eq!(
+            scoped.len(),
+            1,
+            "only the loaded conversation's marks survive the filter"
+        );
+        assert_eq!(scoped[0].turn_id, b_turn);
+        assert_ne!(scoped[0].turn_id, a_turn);
+        assert_eq!(scoped[0].text, "chat B question");
     }
 }

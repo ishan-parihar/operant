@@ -1009,71 +1009,51 @@ pub fn handle_command(cmd_name: &str, _args: &str, ctx: &CommandContext<'_>) -> 
             lines.join("\n")
         }
 
+        // RT-175: /retry executes in the DISPATCH LOOP via
+        // handle_runtime_command (it needs the turn lock + the invoker's
+        // loaded conversation + a real re-run). This sync arm exists for
+        // NON-runtime contexts only (tests, detached handlers) and must
+        // never claim a retry it cannot perform — the old arm wrote a
+        // `retry_requested` flag no runtime ever read (theater).
         "retry" => {
-            let mut msg = String::from("🔁 **Retrying last exchange.**");
-            if let Some(gateway) = ctx.gateway {
-                let store = gateway.get_session_store();
-                if let Some(session) = store.find_session(ctx.platform, ctx.user_id, ctx.channel_id) {
-                    store.update_session_metadata(ctx.platform, ctx.user_id, ctx.channel_id, &[
-                        ("retry_requested".to_string(), "true".to_string()),
-                    ]);
-                    msg.push_str(&format!("\nSession `{}` flagged for retry.", session.session_id));
-                } else {
-                    msg.push_str("\nNo active session found.");
-                }
-            }
-            msg.push_str("\nResend your last message to trigger the retry.");
-            msg
+            "🔁 Retry runs against the live agent — unavailable in this context. On a running gateway, send `/retry` again from the chat.".into()
         }
 
+        // RT-175: /undo executes in the DISPATCH LOOP via
+        // handle_runtime_command (rewind needs the turn lock + the
+        // invoker's loaded conversation). This sync arm exists for
+        // NON-runtime contexts only and must never claim an undo it
+        // cannot perform — the old arm decremented a `message_count`
+        // flag no runtime ever read (theater).
         "undo" => {
-            let mut msg = String::from("↩️ **Undoing last exchange.**");
-            if let Some(gateway) = ctx.gateway {
-                let store = gateway.get_session_store();
-                if let Some(session) = store.find_session(ctx.platform, ctx.user_id, ctx.channel_id) {
-                    let msg_count = session.metadata.get("message_count")
-                        .and_then(|v| v.parse::<usize>().ok())
-                        .unwrap_or(0);
-                    if msg_count > 0 {
-                        let new_count = msg_count.saturating_sub(2);
-                        store.update_session_metadata(ctx.platform, ctx.user_id, ctx.channel_id, &[
-                            ("message_count".to_string(), new_count.to_string()),
-                            ("undo_requested".to_string(), "true".to_string()),
-                        ]);
-                        msg.push_str(&format!("\nSession `{}` rolled back 2 messages.", session.session_id));
-                    } else {
-                        msg.push_str("\nNo messages to undo in this session.");
-                    }
-                } else {
-                    msg.push_str("\nNo active session found.");
-                }
-            }
-            msg
+            "↩️ Undo runs against the live agent — unavailable in this context. On a running gateway, send `/undo` again from the chat.".into()
         }
 
+        // RT-175: the TUI's /queue is the steer-queue surface — empty
+        // lists the LIVE queue, text is an alias for /steer. The old arm
+        // wrote a `queued_prompts` metadata key no runtime ever read
+        // (theater). Mirroring the TUI exactly: try_lock mirrors its
+        // contract — a contended queue means the agent is draining it
+        // RIGHT NOW, which is a retry, not a failure.
         "queue" => {
             let a = _args.trim();
-            if a.is_empty() {
-                "Usage: `/queue <prompt>` — queues a prompt for the next turn without interrupting.".into()
-            } else {
-                let mut msg = String::from("▶️ **Prompt queued.**");
-                if let Some(gateway) = ctx.gateway {
-                    let store = gateway.get_session_store();
-                    if let Some(session) = store.find_session(ctx.platform, ctx.user_id, ctx.channel_id) {
-                        let existing = session.metadata.get("queued_prompts").cloned().unwrap_or_default();
-                        let new_val = if existing.is_empty() {
-                            a.to_string()
-                        } else {
-                            format!("{}\n---\n{}", existing, a)
-                        };
-                        store.update_session_metadata(ctx.platform, ctx.user_id, ctx.channel_id, &[
-                            ("queued_prompts".to_string(), new_val),
-                        ]);
-                        msg.push_str(&format!("\nSession `{}` now has queued prompts.", session.session_id));
-                    }
-                }
-                msg.push_str(&format!("\nQueued: `{}`", a));
-                msg
+            if !a.is_empty() {
+                // Reuse the /steer arm verbatim: same queue, same delivery
+                // semantics (reaches the agent at the next iteration
+                // boundary).
+                return handle_command("steer", a, ctx);
+            }
+            let Some(queue) = ctx.steer_queue.as_ref() else {
+                return Some("▶️ Queue is unavailable here — no live agent is attached to this gateway process.".to_string());
+            };
+            match queue.try_lock() {
+                Ok(q) if q.is_empty() => "▶️ Queue is empty — nothing is waiting for the agent.".into(),
+                Ok(q) => format!(
+                    "▶️ Queued ({}): {}",
+                    q.len(),
+                    q.iter().map(|s| format!("`{s}`")).collect::<Vec<_>>().join("; ")
+                ),
+                Err(_) => "▶️ The queue is busy — the agent is draining it right now.".into(),
             }
         }
 
@@ -1319,68 +1299,53 @@ pub fn handle_command(cmd_name: &str, _args: &str, ctx: &CommandContext<'_>) -> 
             msg
         }
 
+        // RT-175: the TUI's /rollback points at /rewind ("use /rewind to
+        // step back to an earlier turn") — there are no named checkpoints
+        // in either surface. The old arm wrote `rollback_to`/
+        // `rollback_requested` metadata no runtime ever read. Mirror the
+        // TUI: surface the rewind surface honestly. The gateway's rewind
+        // is `/undo [N]` (same fork-at-turn machinery as the TUI's
+        // /rewind, implemented over `rewind_to_turn`).
         "rollback" => {
             let a = _args.trim();
             if a.is_empty() {
-                "Usage: `/rollback <checkpoint>` — restores to an earlier checkpoint.\nAvailable checkpoints are tracked via session metadata. Use `/status` to see session history.".into()
+                "⏪ There are no named checkpoints to roll back to. To step back to an earlier turn, use `/undo` (rewind one turn) or `/undo <N>` (rewind N turns). The conversation is forked — the old path stays intact.".into()
             } else {
-                let mut msg = String::from("⏪ **Rolling back to checkpoint.**");
-                if let Some(gateway) = ctx.gateway {
-                    let store = gateway.get_session_store();
-                    if let Some(session) = store.find_session(ctx.platform, ctx.user_id, ctx.channel_id) {
-                        store.update_session_metadata(ctx.platform, ctx.user_id, ctx.channel_id, &[
-                            ("rollback_to".to_string(), a.to_string()),
-                            ("rollback_requested".to_string(), "true".to_string()),
-                        ]);
-                        msg.push_str(&format!("\nSession `{}` flagged for rollback to: `{}`", session.session_id, a));
-                    } else {
-                        msg.push_str("\nNo active session found.");
-                    }
-                }
-                msg
+                format!(
+                    "⏪ There are no named checkpoints — `{a}` is not one. To step back, use `/undo` or `/undo <N>`. The conversation is forked, never destroyed."
+                )
             }
         }
 
+        // RT-175: /compress executes in the DISPATCH LOOP via
+        // handle_runtime_command (compact_history_now needs the turn
+        // lock + the invoker's loaded conversation). This sync arm exists
+        // for NON-runtime contexts only and must never claim a compaction
+        // it cannot perform — the old arm wrote `compress_requested`/
+        // `compress_focus` flags no runtime ever read (theater).
         "compress" => {
-            let a = _args.trim();
-            let mut msg = String::from("📦 **Compressing session context.**");
-            if let Some(gateway) = ctx.gateway {
-                let store = gateway.get_session_store();
-                if let Some(session) = store.find_session(ctx.platform, ctx.user_id, ctx.channel_id) {
-                    let focus = if a.is_empty() { "general" } else { a };
-                    store.update_session_metadata(ctx.platform, ctx.user_id, ctx.channel_id, &[
-                        ("compress_requested".to_string(), "true".to_string()),
-                        ("compress_focus".to_string(), focus.to_string()),
-                    ]);
-                    msg.push_str(&format!("\nSession `{}` flagged for compression.", session.session_id));
-                    if !a.is_empty() {
-                        msg.push_str(&format!("\nFocus topic: `{}`", a));
-                    }
-                } else {
-                    msg.push_str("\nNo active session found.");
-                }
-            }
-            msg
+            "📦 Compress runs against the live agent — unavailable in this context. On a running gateway, send `/compress` again from the chat.".into()
         }
 
+        // RT-175: honest refusal, mirroring the TUI's /background. The
+        // gateway runs ONE shared agent with ONE event channel — there is
+        // no second isolated agent to run a detached turn against, and a
+        // concurrent agent.run() would interleave into the live transcript.
+        // The old arm wrote `background_task`/`background_queued` metadata
+        // no runtime ever read and claimed the work was queued. The real
+        // detached-turn surface is the CLI: `operant run --query ... &`.
         "background" => {
             let a = _args.trim();
             if a.is_empty() {
-                "Usage: `/background <prompt>` — queues a task for background processing.\nThe agent will process it after the current turn.".into()
+                "Usage: `/background <prompt>` — sends a prompt that does not need this chat's turn history.\n\
+                 This gateway runs one agent at a time (same architecture as the TUI): there is no in-chat background executor.\n\
+                 For detached work, run `operant run --query <prompt> &` on the host.".into()
             } else {
-                let mut msg = String::from("⏳ **Background task queued.**");
-                if let Some(gateway) = ctx.gateway {
-                    let store = gateway.get_session_store();
-                    if let Some(session) = store.find_session(ctx.platform, ctx.user_id, ctx.channel_id) {
-                        store.update_session_metadata(ctx.platform, ctx.user_id, ctx.channel_id, &[
-                            ("background_task".to_string(), a.to_string()),
-                            ("background_queued".to_string(), Utc::now().to_rfc3339()),
-                        ]);
-                        msg.push_str(&format!("\nSession `{}` has a pending background task.", session.session_id));
-                    }
-                }
-                msg.push_str(&format!("\nTask: `{}`", a));
-                msg
+                format!(
+                    "⏳ Background execution is not available in-chat — this gateway runs one agent with one turn pipeline, so a detached turn would corrupt the live conversation.\n\
+                     For detached work: `operant run --query {a} &` on the host.\n\
+                     To guide the RUNNING turn instead, use `/steer {a}`."
+                )
             }
         }
 
@@ -1443,6 +1408,14 @@ pub fn handle_command(cmd_name: &str, _args: &str, ctx: &CommandContext<'_>) -> 
             }
         }
 
+        // RT-175: /goal wrote `goal`/`goal_paused` metadata that no
+        // runtime ever read — the agent never saw the goal. The TUI's
+        // /goal SUBMITS "[session goal] <text>" as a real user message;
+        // the gateway's turn-side companion (handle(), beside the
+        // model_override read) now injects the same marker into the next
+        // turn's query and consumes the pending flag, so the goal actually
+        // reaches the agent. The metadata write stays: it is what the
+        // status subcommand and the turn-side read consume.
         "goal" => {
             let a = _args.trim();
             if a.is_empty() {
@@ -1503,9 +1476,15 @@ pub fn handle_command(cmd_name: &str, _args: &str, ctx: &CommandContext<'_>) -> 
                             store.update_session_metadata(ctx.platform, ctx.user_id, ctx.channel_id, &[
                                 ("goal".to_string(), a.to_string()),
                                 ("goal_paused".to_string(), "false".to_string()),
+                                // RT-175: the turn-side read (handle(),
+                                // beside model_override) consumes this flag
+                                // and injects the goal marker into the next
+                                // turn's query — without it the goal never
+                                // reached the agent (theater).
+                                ("goal_pending_inject".to_string(), "true".to_string()),
                             ]);
                         }
-                        format!("🎯 Goal set: `{}`\nThis goal will guide the agent's responses.", a)
+                        format!("🎯 Goal set: `{a}`\nThe agent sees this goal on your next message here (injected as `[session goal] {a}`).")
                     }
                 }
             }
@@ -1558,36 +1537,70 @@ pub fn handle_command(cmd_name: &str, _args: &str, ctx: &CommandContext<'_>) -> 
                                 };
                                 store.update_session_metadata(ctx.platform, ctx.user_id, ctx.channel_id, &[
                                     ("subgoal".to_string(), new_val),
+                                    // RT-175: same turn-side injection as
+                                    // /goal — without a runtime read the
+                                    // sub-goal never reached the agent.
+                                    ("goal_pending_inject".to_string(), "true".to_string()),
                                 ]);
                             }
                         }
-                        format!("🎯 Sub-goal set: `{}`", a)
+                        format!("🎯 Sub-goal set: `{a}` — the agent sees it (with the session goal) on your next message here.")
                     }
                 }
             }
         }
 
+        // RT-175: /topic <session-id> was theater (a `topic_mode` metadata
+        // key no runtime read). What the command actually promises —
+        // "switch to a separate conversation context" — is EXACTLY what
+        // /resume's pin does: point this chat at a stored session whose
+        // transcript rehydrates on the next turn. Reuse that machinery
+        // (same honesty gate: the transcript must exist). `/topic off`
+        // returns to the chat's own derived session, same as /new without
+        // the fresh-transcript ceremony.
         "topic" => {
             let a = _args.trim();
             if a.is_empty() || a == "help" {
-                "Usage: `/topic [off|help|<session-id>]`\nSwitch to a topic-specific session or disable topic mode.\nExamples:\n• `/topic off` — return to main session\n• `/topic <session-id>` — switch to a specific session".into()
+                "Usage: `/topic [off|<session-id>]`\n\
+                 Switch this chat to a topic conversation (a stored session), or return to the main one.\n\
+                 Examples:\n• `/topic off` — return to the main conversation\n• `/topic <session-id>` — continue that session's conversation here\n\
+                 Session IDs come from `operant sessions list` — the same ids /resume accepts.".into()
             } else if a == "off" {
-                if let Some(gateway) = ctx.gateway {
-                    let store = gateway.get_session_store();
-                    store.update_session_metadata(ctx.platform, ctx.user_id, ctx.channel_id, &[
-                        ("topic_mode".to_string(), "off".to_string()),
-                    ]);
+                if let Some(conversation) = start_fresh_conversation(ctx) {
+                    format!("🔄 Topic mode disabled. Back on the main conversation `{conversation}`.")
+                } else {
+                    "🔄 Topic mode disabled — but no persistent session store is attached, so the switch applies to this process only.".into()
                 }
-                "🔄 Topic mode disabled. Returning to main conversation.".into()
+            } else if let Some(pins) =
+                ctx.session_pins
+                    .as_ref()
+                    .filter(|_| !ctx.session_key.is_empty())
+            {
+                // The same existence gate /resume applies: a topic whose
+                // transcript does not exist would pin an empty context.
+                match open_stored_transcript(ctx, a) {
+                    Ok(stored) if stored.messages == 0 => format!(
+                        "❌ No stored conversation for session `{a}` — nothing to switch to.\n\
+                         Session IDs come from `operant sessions list`."
+                    ),
+                    Ok(stored) => {
+                        pins.set(ctx.session_key, &stored.session_id);
+                        // GW-6: persisted too, so a restart keeps the topic.
+                        persist_conversation(ctx, &stored.session_id);
+                        let replayed = stored.messages.min(RESUME_WINDOW);
+                        format!(
+                            "🔄 Topic conversation on: continuing session `{}` — {} of its {} stored message(s) reloaded into context.\n\
+                             Your next message continues that conversation. `/topic off` returns to the main one.",
+                            stored.session_id, replayed, stored.messages
+                        )
+                    }
+                    Err(e) => format!("❌ Could not read session `{a}`: {e}"),
+                }
             } else {
-                if let Some(gateway) = ctx.gateway {
-                    let store = gateway.get_session_store();
-                    store.update_session_metadata(ctx.platform, ctx.user_id, ctx.channel_id, &[
-                        ("topic_mode".to_string(), a.to_string()),
-                        ("topic_active".to_string(), "true".to_string()),
-                    ]);
-                }
-                format!("🔄 Switching to topic session: `{}`\nTopic sessions use a separate conversation context.", a)
+                format!(
+                    "Session `{a}` was requested as a topic, but this context has no live agent to re-point.\n\
+                     Resume it from the CLI: `operant sessions resume {a}`"
+                )
             }
         }
 
@@ -2944,5 +2957,123 @@ mod tests {
         let mut personal = org_config(dir.path());
         personal.holon.enabled = false;
         assert!(unknown_org_employee(&personal, "hrmaster").is_none());
+    }
+}
+
+// ── RT-175: the theater-command replacements' contract tests ─────────────
+// Every one of these fails against the OLD arms: /queue wrote a metadata
+// key, /background claimed a queued task, /rollback claimed a rollback,
+// /topic wrote topic_mode. The new arms must either do real work or say
+// honestly what cannot be done — never claim success with no runtime read.
+#[cfg(test)]
+mod rt175_tests {
+    use super::*;
+
+    /// /queue <text> is the /steer alias: without a live agent attached it
+    /// must say so — the old arm replied "Prompt queued" and wrote
+    /// `queued_prompts` metadata nothing read.
+    #[test]
+    fn queue_with_text_degrades_to_the_steer_honesty_gate() {
+        let cfg = AppConfig::default();
+        let ctx = CommandContext::new(None, &cfg, true, "op-1", "telegram", "chan-1");
+        let resp = handle_command("queue", "do the thing", &ctx).expect("a reply");
+        assert!(
+            resp.contains("unavailable") || resp.contains("no live agent"),
+            "/queue must degrade honestly without a live agent, got: {resp}"
+        );
+    }
+
+    /// /queue empty lists the live queue state, not a usage line for a
+    /// metadata queue that does not exist.
+    #[test]
+    fn queue_empty_reports_live_queue_state() {
+        let cfg = AppConfig::default();
+        let ctx = CommandContext::new(None, &cfg, true, "op-1", "telegram", "chan-1");
+        let resp = handle_command("queue", "", &ctx).expect("a reply");
+        assert!(
+            resp.contains("unavailable") || resp.contains("Queue is"),
+            "/queue must report the live queue, got: {resp}"
+        );
+    }
+
+    /// /background must refuse honestly (single agent, no executor) and
+    /// point at the real surfaces. The old arm wrote
+    /// background_task/background_queued and claimed "queued".
+    #[test]
+    fn background_refuses_honestly_and_names_the_real_surfaces() {
+        let cfg = AppConfig::default();
+        let ctx = CommandContext::new(None, &cfg, true, "op-1", "telegram", "chan-1");
+        let resp = handle_command("background", "summarize the repo", &ctx).expect("a reply");
+        assert!(
+            !resp.contains("queued"),
+            "/background must never claim a queued task, got: {resp}"
+        );
+        assert!(
+            resp.contains("not available") || resp.contains("no in-chat background executor"),
+            "/background must state the honest limitation, got: {resp}"
+        );
+        assert!(
+            resp.contains("operant run"),
+            "/background must name the real detached surface, got: {resp}"
+        );
+    }
+
+    /// /rollback must not claim a rollback to a named checkpoint — there
+    /// are no checkpoints. It must point at the rewind surface (/undo).
+    #[test]
+    fn rollback_names_the_rewind_surface_instead_of_a_fake_checkpoint() {
+        let cfg = AppConfig::default();
+        let ctx = CommandContext::new(None, &cfg, true, "op-1", "telegram", "chan-1");
+        let with_arg = handle_command("rollback", "cp-1", &ctx).expect("a reply");
+        assert!(
+            !with_arg.contains("Rolling back"),
+            "/rollback must never claim a rollback it cannot do, got: {with_arg}"
+        );
+        assert!(
+            with_arg.contains("/undo"),
+            "/rollback must point at the rewind surface, got: {with_arg}"
+        );
+    }
+
+    /// /topic without pins (no live runtime) must say it cannot re-point,
+    /// naming the CLI surface. The old arm wrote topic_mode and claimed
+    /// "Switching to topic session".
+    #[test]
+    fn topic_without_runtime_refuses_instead_of_claiming_a_switch() {
+        let cfg = AppConfig::default();
+        let ctx = CommandContext::new(None, &cfg, true, "op-1", "telegram", "chan-1");
+        let resp = handle_command("topic", "sess_abc123", &ctx).expect("a reply");
+        assert!(
+            !resp.contains("Switching to topic session"),
+            "/topic must not claim a switch it cannot make, got: {resp}"
+        );
+        assert!(
+            resp.contains("no live agent") || resp.contains("operant sessions resume"),
+            "/topic must name the real resume surface, got: {resp}"
+        );
+    }
+
+    /// The sync undo/retry/compress arms are HONESTY STUBS: the live path
+    /// is the dispatch loop's handle_runtime_command. The stubs must say
+    /// "unavailable in this context" — the old arms wrote
+    /// undo_requested/retry_requested/compress_requested and claimed
+    /// success.
+    #[test]
+    fn undo_retry_compress_sync_arms_refuse_honestly() {
+        let cfg = AppConfig::default();
+        let ctx = CommandContext::new(None, &cfg, true, "op-1", "telegram", "chan-1");
+        for name in ["undo", "retry", "compress"] {
+            let resp = handle_command(name, "", &ctx).expect("a reply");
+            assert!(
+                resp.contains("unavailable in this context"),
+                "/{name} sync arm must be an honest context stub, got: {resp}"
+            );
+            assert!(
+                !resp.contains("**Undoing")
+                    && !resp.contains("**Retrying")
+                    && !resp.contains("**Compressing"),
+                "/{name} sync arm must not claim the operation, got: {resp}"
+            );
+        }
     }
 }

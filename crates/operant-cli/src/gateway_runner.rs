@@ -754,6 +754,268 @@ pub(crate) fn derived_gateway_session_id(session_key: &str) -> String {
     format!("gw_{:x}", hasher.finish())
 }
 
+/// RT-175 — the session-mutating runtime commands, executed through
+/// [`GatewayMessageHandler::run_session_scoped_command`] so each runs
+/// under the turn lock against the INVOKING chat's loaded conversation.
+/// Returns `None` for names that are not runtime commands (the dispatch
+/// loop then falls through to the sync registry handler).
+///
+/// These five replaced metadata theater (flags no runtime ever read)
+/// with the real agent APIs the TUI's twins call:
+/// - `/undo [N]` — `conversation_rewind_marks` + `rewind_to_turn` (the
+///   fork the TUI's /rewind drives)
+/// - `/retry` — the same rewind of 1 turn, then the prompt is re-sent as
+///   a fresh turn so the answer is re-run
+/// - `/compress` — `compact_history_now` (the TUI's /compact)
+/// - `/reload-mcp` — the TUI's reconnect task (remove+re-add configured
+///   servers, then `sync_tools_to_registry`)
+/// - `/reload-skills` — `SkillManager` rescan + `agent.set_skill_manager`
+///
+/// `handler` is the dispatch loop's live handler (the one holding the
+/// turn lock and the agent), `name` the canonical command name, `args`
+/// the raw argument text, `session_key` the invoking chat's routing key.
+async fn handle_runtime_command(
+    handler: &GatewayMessageHandler,
+    name: &str,
+    args: &str,
+    session_key: &str,
+) -> Option<String> {
+    match name {
+        // ── /undo [N] — fork the conversation back N user turns ──────
+        "undo" => {
+            let n: usize = args.trim().parse().unwrap_or(1).max(1);
+            let reply = handler
+                .run_session_scoped_command(session_key, move |agent, session_id| async move {
+                    // Conversation-scoped marks ONLY (the process-global
+                    // list names every chat this agent ever served).
+                    let marks = agent.conversation_rewind_marks().await;
+                    if marks.is_empty() {
+                        return "↩️ Nothing to undo — this conversation has no completed turns.".to_string();
+                    }
+                    let n = n.min(marks.len());
+                    let Some(mark) = marks.iter().rev().nth(n - 1) else {
+                        return "↩️ Nothing to undo.".to_string();
+                    };
+                    let turn_id = mark.turn_id;
+                    match agent.rewind_to_turn(turn_id).await {
+                        Ok(outcome) => {
+                            tracing::info!(
+                                session_id = %session_id,
+                                new_session = %outcome.new_session_id,
+                                removed_turns = outcome.removed_turns,
+                                "Gateway /undo: forked at the chosen turn"
+                            );
+                            format!(
+                                "↩️ Undid {} turn(s) — rewound to the turn that asked: `{}`.\n\
+                                 The conversation forked: the old path is intact under `{}`, and this chat now continues on `{}`.\n\
+                                 Send the prompt again (or /retry to re-run it).",
+                                outcome.removed_turns,
+                                truncate_for_reply(&outcome.prompt_text),
+                                outcome.parent_session_id,
+                                outcome.new_session_id
+                            )
+                        }
+                        Err(e) => format!("↩️ Undo failed: {e}"),
+                    }
+                })
+                .await;
+            Some(reply)
+        }
+
+        // ── /retry — undo 1 turn, then re-run its prompt as a fresh turn ──
+        "retry" => {
+            let reply = handler
+                .run_session_scoped_command(session_key, |agent, session_id| async move {
+                    let marks = agent.conversation_rewind_marks().await;
+                    let Some(mark) = marks.last() else {
+                        return "🔁 Nothing to retry — this conversation has no completed turns.".to_string();
+                    };
+                    let turn_id = mark.turn_id;
+                    match agent.rewind_to_turn(turn_id).await {
+                        Ok(outcome) => {
+                            if outcome.prompt_text.trim().is_empty() {
+                                return format!(
+                                    "🔁 Undid the last turn (forked onto `{}`), but its prompt was empty — nothing to re-run.",
+                                    outcome.new_session_id
+                                );
+                            }
+                            tracing::info!(
+                                session_id = %session_id,
+                                new_session = %outcome.new_session_id,
+                                "Gateway /retry: rewound one turn, re-running its prompt"
+                            );
+                            // Re-run the prompt as a REAL turn on the forked
+                            // conversation. agent.run() is the same entry the
+                            // dispatch loop's turn path uses; the reply is the
+                            // agent's own answer, delivered as the /retry reply.
+                            match agent.run(outcome.prompt_text.clone()).await {
+                                Ok(response) => {
+                                    format!("🔁 Retrying the last message:\n\n{}", response.content)
+                                }
+                                Err(e) => format!(
+                                    "🔁 The turn was rewound (forked onto `{}`), but the re-run failed: {}",
+                                    outcome.new_session_id,
+                                    e.user_message()
+                                ),
+                            }
+                        }
+                        Err(e) => format!("🔁 Retry failed at the rewind step: {e}"),
+                    }
+                })
+                .await;
+            Some(reply)
+        }
+
+        // ── /compress — fold older completed exchanges (the TUI /compact) ──
+        "compress" => {
+            let reply = handler
+                .run_session_scoped_command(session_key, |agent, session_id| async move {
+                    let (before, after) = agent.compact_history_now().await;
+                    tracing::info!(
+                        session_id = %session_id,
+                        before,
+                        after,
+                        "Gateway /compress: compacted the session's history"
+                    );
+                    if after < before {
+                        format!(
+                            "📦 Compacted context: {before} → {after} messages (recent turns kept verbatim)."
+                        )
+                    } else {
+                        "📦 Nothing to compact yet — the history is all recent turns.".to_string()
+                    }
+                })
+                .await;
+            Some(reply)
+        }
+
+        // ── /reload-mcp — the TUI's reconnect task, reported synchronously ──
+        "reload-mcp" => {
+            // McpManager is Clone-over-Arc: one clone reaches the live
+            // server set. The reconnect runs OUTSIDE the turn lock — it
+            // touches transports and the registry, not the conversation,
+            // and holding the lock through 60s server spawns would block
+            // every chat's turns for a tools refresh.
+            let agent = Arc::clone(&handler.agent);
+            let manager = handler.mcp_manager.clone();
+            let servers = handler.mcp_server_configs.clone();
+            let started = std::time::Instant::now();
+            let mut reconnected = Vec::new();
+            let mut failures = Vec::new();
+            for (name, transport, url, auth_token, command, args_v, env, enabled) in servers {
+                if !enabled {
+                    continue;
+                }
+                let _ = manager.remove_server(&name).await;
+                let result = connect_configured_mcp_server(
+                    &manager, &name, transport, url, auth_token, command, args_v, env,
+                )
+                .await;
+                match result {
+                    Ok(()) => reconnected.push(name),
+                    Err(e) => failures.push(format!("{name}: {e}")),
+                }
+            }
+            // Materialize the tools into the LIVE registry (the same
+            // shared-map handle the agent reads per iteration).
+            let tools = manager.sync_tools_to_registry(&agent.registry()).await;
+            let elapsed = started.elapsed().as_secs_f64();
+            let mut msg = format!(
+                "🔄 MCP reload complete in {elapsed:.1}s — {} server(s) reconnected: {}.",
+                reconnected.len(),
+                if reconnected.is_empty() {
+                    "none".to_string()
+                } else {
+                    reconnected.join(", ")
+                }
+            );
+            msg.push_str(&format!(" {tools} tool(s) synced to the live registry."));
+            if !failures.is_empty() {
+                msg.push_str(&format!(" Failed: {}", failures.join("; ")));
+            }
+            Some(msg)
+        }
+
+        // ── /reload-skills — rescan + runtime swap (set_skill_manager) ──
+        "reload-skills" => {
+            let agent = Arc::clone(&handler.agent);
+            let skills_dir = handler.skills_root_dir.clone();
+            let mut mgr = operant_core::skills::SkillManager::new(skills_dir.clone());
+            match mgr.load_all() {
+                Ok(loaded) => {
+                    let count = loaded.len();
+                    agent.set_skill_manager(Some(mgr));
+                    tracing::info!(
+                        skills = count,
+                        dir = %skills_dir.display(),
+                        "Gateway /reload-skills: rescanned and swapped the live skill manager"
+                    );
+                    Some(format!(
+                        "🔄 Skills reloaded: {count} skill(s) from `{}` — the agent's next message sees the fresh list.",
+                        skills_dir.display()
+                    ))
+                }
+                Err(e) => Some(format!(
+                    "🔄 Skill reload failed — the previous list stays active. Error: {e}"
+                )),
+            }
+        }
+
+        _ => None,
+    }
+}
+
+/// First ~80 chars of a prompt, for reply text that quotes what was undone.
+fn truncate_for_reply(text: &str) -> String {
+    let t = text.trim();
+    if t.chars().count() <= 80 {
+        t.to_string()
+    } else {
+        let head: String = t.chars().take(77).collect();
+        format!("{head}…")
+    }
+}
+
+/// Connect one configured MCP server by transport kind (the shared shape
+/// of the TUI's start_mcp_reconnect task, extracted so /reload-mcp and the
+/// boot path cannot drift).
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the McpServerConfig field set, flattened: one arg per connect input. The TUI's start_mcp_reconnect carries the same 8-field tuple (aliased ServerCfg) for the same reason."
+)]
+async fn connect_configured_mcp_server(
+    manager: &operant_core::mcp::McpManager,
+    name: &str,
+    transport: operant_core::config::McpTransportKind,
+    url: Option<String>,
+    auth_token: Option<String>,
+    command: Option<String>,
+    args: Vec<String>,
+    env: std::collections::HashMap<String, String>,
+) -> operant_core::Result<()> {
+    use operant_core::config::McpTransportKind;
+    match transport {
+        McpTransportKind::Http => match url {
+            Some(url) => manager.add_server(name, url, auth_token).await,
+            None => Err(operant_core::error::Error::Agent(format!(
+                "no URL configured for {name}",
+            ))),
+        },
+        McpTransportKind::StreamableHttp => match url {
+            Some(url) => manager.add_streamable_server(name, url, auth_token).await,
+            None => Err(operant_core::error::Error::Agent(format!(
+                "no URL configured for {name}",
+            ))),
+        },
+        McpTransportKind::Stdio => match command {
+            Some(command) => manager.add_stdio_server(name, command, args, env).await,
+            None => Err(operant_core::error::Error::Agent(format!(
+                "no command configured for stdio server {name}",
+            ))),
+        },
+    }
+}
+
 /// Record a dispatcher-side DENIAL of a seat-policy escalation (the YOLO
 /// arm): the approver's verdict on the queued row, best-effort — the run
 /// hears `Deny` from the arm either way, so a resolution failure only
@@ -1107,6 +1369,22 @@ fn endpoint_changed_on_disk() -> Option<ConfigEndpoint> {
 /// carries a `MemoryProvider` (attached in `create_runtime_agent`), so
 /// prefetch injection and sync_turn happen inside `run()` — this handler
 /// no longer needs its own provider copy (audit gap F1, docs/AUDIT_2026-08-02.md).
+/// RT-175 — the send-safe MCP server config tuple (name, transport,
+/// url, auth_token, command, args, env, enabled): the same 8-field shape
+/// the TUI's start_mcp_reconnect aliases as ServerCfg. Aliased so the
+/// handler field and the reconnect loop share one name, not a repeated
+/// 8-line type.
+type ServerConfigTuple = (
+    String,
+    operant_core::config::McpTransportKind,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Vec<String>,
+    std::collections::HashMap<String, String>,
+    bool,
+);
+
 struct GatewayMessageHandler {
     agent: Arc<OperantAgent>,
     /// `gateway.admins`. A turn from a sender outside this list is not retained
@@ -1168,9 +1446,76 @@ struct GatewayMessageHandler {
     /// and consumed under the `running_session` mutex, so a stop decided
     /// "not running yet" can never race the turn's claim of the lock.
     cancelled_queued: std::sync::Mutex<std::collections::HashSet<String>>,
+    /// RT-175 — the live MCP manager handle for `/reload-mcp`. Clone-over-
+    /// Arc, so this reaches the same server set the agent's tools read.
+    mcp_manager: operant_core::mcp::McpManager,
+    /// RT-175 — send-safe copies of the configured MCP servers for
+    /// `/reload-mcp`'s reconnect loop (the TUI's start_mcp_reconnect
+    /// built the same tuple list for the same reason: the AppConfig is
+    /// not `Send`-safe to move into a task).
+    mcp_server_configs: Vec<ServerConfigTuple>,
+    /// RT-175 — the configured skills root for `/reload-skills`' rescan.
+    skills_root_dir: std::path::PathBuf,
 }
 
 impl GatewayMessageHandler {
+    /// RT-175 — execute a session-mutating runtime command against THIS
+    /// chat's own conversation, safely on the shared agent.
+    ///
+    /// `/undo`, `/retry`, `/compress` mutate the agent's loaded
+    /// conversation. The dispatch loop intercepts commands BEFORE any turn
+    /// runs, and the shared agent holds whichever conversation turned
+    /// LAST — so executing against whatever happens to be loaded would
+    /// rewind/compact a STRANGER's history (the exact cross-session
+    /// corruption `turn_lock` exists to prevent). This helper is the safe
+    /// shape, mirroring `handle`'s own turn entry:
+    ///
+    /// 1. acquire `turn_lock` (a running turn finishes first — one
+    ///    mutation surface at a time);
+    /// 2. resolve THIS chat's session id the same way `handle` does
+    ///    (pin → persisted row → derived), then `set_session_id` it, so
+    ///    the loaded conversation is the invoker's;
+    /// 3. run the operation; `set_session_id`'s swap persists the
+    ///    outgoing conversation, so the previous chat loses nothing;
+    /// 4. reply text back to the dispatch loop's send path.
+    ///
+    /// `op` is the operation: `&self.agent` + the loaded session id in,
+    /// reply string out. Splitting it keeps the lock/resolve scaffolding
+    /// in ONE place — a second mutating command cannot forget the guard.
+    async fn run_session_scoped_command<F, Fut>(&self, session_key: &str, op: F) -> String
+    where
+        F: FnOnce(Arc<OperantAgent>, String) -> Fut,
+        Fut: std::future::Future<Output = String>,
+    {
+        // 1. One mutation surface at a time — same lock a turn takes.
+        let _turn = self.turn_lock.lock().await;
+
+        // 2. THIS chat's session id, resolved exactly as `handle` does.
+        // The gateway lock is a tokio Mutex held by no other command-path
+        // code at interception time (handle() takes it later in ITS own
+        // flow, under this same turn_lock), so a plain await here cannot
+        // deadlock.
+        let derived = derived_gateway_session_id(session_key);
+        let persisted = {
+            let gw_guard = self.gateway.lock().await;
+            gw_guard
+                .as_ref()
+                .and_then(|gw| gw.get_persistent_sessions())
+                .and_then(|store| store.conversation_id(session_key).ok().flatten())
+        };
+        let session_id = self
+            .session_pins
+            .get(session_key)
+            .or(persisted)
+            .unwrap_or(derived);
+        // Load THIS chat's transcript. The swap persists the outgoing
+        // conversation back to the store, so no other chat loses context.
+        self.agent.set_session_id(session_id.clone());
+
+        // 3. The operation, under the lock, against the invoker's session.
+        op(Arc::clone(&self.agent), session_id).await
+    }
+
     /// Plan 06A: `/stop` may only stop the turn that currently holds
     /// `turn_lock`. The interrupt flag is one object shared by every
     /// chat, so attaching it for any other session would let that
@@ -1269,7 +1614,7 @@ impl MessageHandler for GatewayMessageHandler {
         injector.record_feed_item(&seat, &message.username, &message.content);
     }
 
-    async fn handle(&self, message: IncomingMessage) -> operant_core::Result<OutgoingMessage> {
+    async fn handle(&self, mut message: IncomingMessage) -> operant_core::Result<OutgoingMessage> {
         // (iter-1132) A webhook subscription with `deliver_only` wants the
         // EVENT delivered, not an answer about it: no agent run, the event
         // body IS the message. The delivery target (if any) is applied by
@@ -1476,6 +1821,57 @@ impl MessageHandler for GatewayMessageHandler {
         // inspect them with native tools — vision_analyze for images,
         // file_read / STT for documents and audio. Hermes passes
         // `event.media_urls` to the agent the same way.
+        //
+        // RT-175 — the /goal + /subgoal runtime read runs BEFORE the query
+        // is built below, because it mutates `message.content`: after the
+        // binding, the mutation would reach neither the query nor the
+        // persisted transcript. The commands write `goal`/`subgoal` + a
+        // `goal_pending_inject` flag on the session row; this block injects
+        // them into this turn's query (the same "[session goal]" marker the
+        // TUI submits as a real user message) and consumes the flag, so the
+        // goal reaches the agent exactly once. Without this read the
+        // commands were theater: metadata written, reply claiming
+        // success, agent never told.
+        {
+            let gw_guard = self.gateway.lock().await;
+            if let Some(ref gw) = *gw_guard {
+                let store = gw.get_session_store();
+                if let Some(session) =
+                    store.find_session(&message.platform, &message.user_id, &message.channel_id)
+                {
+                    let pending = session
+                        .metadata
+                        .get("goal_pending_inject")
+                        .map(|v| v == "true")
+                        .unwrap_or(false);
+                    if pending {
+                        let goal = session.metadata.get("goal").cloned().unwrap_or_default();
+                        let subgoals = session.metadata.get("subgoal").cloned().unwrap_or_default();
+                        if !goal.is_empty() {
+                            let mut inject = format!("[session goal] {goal}");
+                            if !subgoals.is_empty() {
+                                inject.push_str(&format!("\n[session subgoals] {subgoals}"));
+                            }
+                            tracing::info!(
+                                platform = %message.platform,
+                                channel = %message.channel_id,
+                                "Injecting pending session goal into this turn"
+                            );
+                            message.content = format!("{}\n\n{}", inject, message.content);
+                        }
+                        // Consume the flag whether or not there was goal text
+                        // (a cleared goal must not re-inject forever).
+                        store.update_session_metadata(
+                            &message.platform,
+                            &message.user_id,
+                            &message.channel_id,
+                            &[("goal_pending_inject".to_string(), "false".to_string())],
+                        );
+                    }
+                }
+            }
+        }
+
         let query = if message.media_urls.is_empty() {
             message.content.clone()
         } else {
@@ -2786,6 +3182,30 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
         turn_lock: tokio::sync::Mutex::new(()),
         running_session: std::sync::Mutex::new(None),
         cancelled_queued: Default::default(),
+        // RT-175: the runtime-command handles. The MCP manager is the
+        // SAME clone-over-Arc instance the agent's tools live behind;
+        // the server configs are send-safe tuples (the same shape the
+        // TUI's reconnect task builds); the skills root is what
+        // /reload-skills rescans.
+        mcp_manager: mcp_manager.clone(),
+        mcp_server_configs: app_config
+            .mcp
+            .servers
+            .iter()
+            .map(|s| {
+                (
+                    s.name.clone(),
+                    s.transport.clone(),
+                    s.url.clone(),
+                    s.auth_token.clone(),
+                    s.command.clone(),
+                    s.args.clone(),
+                    s.env.clone(),
+                    s.enabled,
+                )
+            })
+            .collect(),
+        skills_root_dir: app_config.skills.root_dir.clone(),
     });
     gateway = gateway.with_handler(handler.clone());
 
@@ -3930,6 +4350,23 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                                         "⏹️ **Cancelled your queued message** (it was waiting behind another chat's turn).",
                                     )
                                     .with_thread_id(msg.thread_id);
+                                    gw.send_to_platform(&platform, response).await?;
+                                } else if let Some(reply) = handle_runtime_command(
+                                    &handler_for_stop,
+                                    cmd_def.name,
+                                    cmd_args,
+                                    &session_key,
+                                )
+                                .await
+                                {
+                                    // RT-175: session-mutating commands execute
+                                    // against THIS chat's conversation under the
+                                    // turn lock — the sync handle_command arms
+                                    // for them are unreachable honesty stubs
+                                    // kept for non-runtime contexts (tests).
+                                    let response =
+                                        OutgoingMessage::new(&msg.channel_id, reply)
+                                            .with_thread_id(msg.thread_id);
                                     gw.send_to_platform(&platform, response).await?;
                                 } else {
                                     let ctx = CommandContext::new(

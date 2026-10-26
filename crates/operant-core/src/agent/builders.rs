@@ -134,7 +134,7 @@ impl OperantAgent {
             steer_queue: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             user_turns: Arc::new(std::sync::RwLock::new(Vec::new())),
             conv_epoch: Arc::new(std::sync::atomic::AtomicU64::new(0)),
-            skill_manager: None,
+            skill_manager: Arc::new(std::sync::RwLock::new(None)),
             database,
             session_id: Arc::new(std::sync::RwLock::new(None)),
             seat_id: Arc::new(std::sync::RwLock::new(None)),
@@ -226,7 +226,7 @@ impl OperantAgent {
             steer_queue: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             user_turns: Arc::new(std::sync::RwLock::new(Vec::new())),
             conv_epoch: Arc::new(std::sync::atomic::AtomicU64::new(0)),
-            skill_manager: None,
+            skill_manager: Arc::new(std::sync::RwLock::new(None)),
             database,
             session_id: Arc::new(std::sync::RwLock::new(None)),
             seat_id: Arc::new(std::sync::RwLock::new(None)),
@@ -434,7 +434,7 @@ impl OperantAgent {
 
     /// Attach a skill manager for available skills injection into the system prompt.
     pub fn with_skill_manager(mut self, skill_manager: SkillManager) -> Self {
-        self.skill_manager = Some(skill_manager);
+        self.skill_manager = Arc::new(std::sync::RwLock::new(Some(skill_manager)));
         self
     }
 

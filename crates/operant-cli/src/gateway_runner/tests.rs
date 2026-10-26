@@ -178,6 +178,11 @@ async fn record_feed_routes_channel_posts_through_the_seat_map() {
         turn_lock: tokio::sync::Mutex::new(()),
         running_session: std::sync::Mutex::new(None),
         cancelled_queued: Default::default(),
+        // RT-175: runtime-command handles (unused by this suite — see
+        // slow_echo_handler for the rationale).
+        mcp_manager: operant_core::mcp::McpManager::new(),
+        mcp_server_configs: Vec::new(),
+        skills_root_dir: dir.path().join("skills-absent"),
     };
 
     // Unmapped channel → the `premiere` default (same default as the
@@ -348,6 +353,12 @@ fn slow_echo_handler(dir: &tempfile::TempDir, delay_ms: u64) -> Arc<GatewayMessa
         turn_lock: tokio::sync::Mutex::new(()),
         running_session: std::sync::Mutex::new(None),
         cancelled_queued: Default::default(),
+        // RT-175: runtime-command handles. Empty MCP set (no servers to
+        // reconnect) and a nonexistent skills dir (a rescan loads zero
+        // skills) — the tests exercise turns, not /reload-*.
+        mcp_manager: operant_core::mcp::McpManager::new(),
+        mcp_server_configs: Vec::new(),
+        skills_root_dir: dir.path().join("skills-absent"),
     })
 }
 
@@ -984,5 +995,84 @@ async fn test_gateway_start_stop_with_disabled_platforms() {
     assert_eq!(
         pid_after_stop, None,
         "the gateway pid file must be removed on stop, in the test's own home"
+    );
+}
+
+/// RT-175 — the /goal + /subgoal TURN-SIDE read. The commands write
+/// `goal`/`subgoal` + `goal_pending_inject` on the session row; the
+/// turn must inject the `[session goal]` marker into the query and
+/// consume the flag. Before this read existed, /goal replied "set" and
+/// the agent never saw the goal (theater). Mutation shape: remove the
+/// injection block (or move it after the `query` binding, the bug my
+/// first draft had) and the echoed answer loses the marker; skip the
+/// flag consumption and the SECOND turn re-injects forever.
+#[tokio::test]
+async fn pending_goal_is_injected_into_the_next_turn_once() {
+    use operant_core::gateway::GatewayConfig;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let handler = slow_echo_handler(&dir, 0);
+
+    // A real Gateway, attached the way start_gateway does — the read
+    // reaches the session store through it.
+    let gateway = Arc::new(operant_core::gateway::Gateway::new(GatewayConfig::default()));
+    {
+        let mut gw_slot = handler.gateway.lock().await;
+        *gw_slot = Some(gateway.clone());
+    }
+
+    // The session row the /goal command would have written: goal set,
+    // pending-inject flag armed.
+    {
+        let store = gateway.get_session_store();
+        store
+            .create_session("telegram", "u-goal", "c-goal")
+            .expect("session row");
+        assert!(store.update_session_metadata(
+            "telegram",
+            "u-goal",
+            "c-goal",
+            &[
+                ("goal".to_string(), "ship the release".to_string()),
+                ("subgoal".to_string(), "write the changelog".to_string()),
+                ("goal_pending_inject".to_string(), "true".to_string()),
+            ],
+        ));
+    }
+
+    // Turn 1: the goal MUST reach the agent's query.
+    let msg = IncomingMessage::new("telegram", "u-goal", "Goal User", "c-goal", "status update");
+    let out = handler.handle(msg).await.expect("turn 1 completes");
+    assert!(
+        out.content.contains("[session goal] ship the release"),
+        "the goal marker must reach the agent's query, got: {:?}",
+        out.content
+    );
+    assert!(
+        out.content
+            .contains("[session subgoals] write the changelog"),
+        "the subgoal marker must ride the same injection, got: {:?}",
+        out.content
+    );
+
+    // The flag was consumed: turn 2 must NOT re-inject.
+    let msg2 = IncomingMessage::new("telegram", "u-goal", "Goal User", "c-goal", "next update");
+    let out2 = handler.handle(msg2).await.expect("turn 2 completes");
+    assert!(
+        !out2.content.contains("[session goal]"),
+        "the goal injects exactly once — the flag must be consumed, got: {:?}",
+        out2.content
+    );
+    let store = gateway.get_session_store();
+    let session = store
+        .find_session("telegram", "u-goal", "c-goal")
+        .expect("row survives");
+    assert_eq!(
+        session
+            .metadata
+            .get("goal_pending_inject")
+            .map(String::as_str),
+        Some("false"),
+        "the consumed flag is written back"
     );
 }
