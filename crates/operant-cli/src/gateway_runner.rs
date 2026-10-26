@@ -3277,7 +3277,16 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
     // handing cron a channel nobody drains: `stream.rs:788-791` sleeps 120s per
     // dangerous call before denying, so that stalls every job instead of failing
     // closed. A real fail-closed path needs deny-without-prompting (new code).
-    let cron_mcp_manager = operant_core::mcp::McpManager::new();
+    // iter-1339 (audit delete: finding): the cron agent shares the
+    // gateway's McpManager — the D-5 shape. `config.mcp.autoload` connects
+    // every configured server INSIDE create_runtime_agent_with
+    // (main.rs:1462), so two managers meant 2N MCP server subprocesses and
+    // two stdio watchdog tasks for the same N configured servers (memory
+    // bloat and duplicate child processes — the audit's fragmentation
+    // family). The memory-pair hoist already proved this exact swap safe
+    // for the gateway's two agents (iter-98, BUGS D-5); MCP config is
+    // process-wide, so both agents' registries want the same tools.
+    let cron_mcp_manager = mcp_manager.clone();
     // iter-678 (gap 1, metering): the cron agent gets its OWN event channel.
     // Sharing the gateway's had two defects: usage events accumulated under
     // the *current DM channel's* key and drained into a stranger's rollup
