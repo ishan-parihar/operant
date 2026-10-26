@@ -803,6 +803,74 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// (iter-1335, mutation-prove for round 4's deserialization half)
+    /// `concepts` from the retired memory_save shape must arrive as TAGS on
+    /// the stored row — the round-4 pin only sent content-ONLY, so renaming
+    /// the `concepts` wire key passed all 106 memory tests silently (found by
+    /// the mutation sweep of iter-1335). This pin stores through the ALIAS
+    /// path with a concept token that appears NOWHERE in the content: the
+    /// tag is the only index entry that token can hit, so a subsequent
+    /// search for the token finding the row is the tag riding.
+    #[tokio::test]
+    async fn memory_save_concepts_arrive_as_tags_not_dropped() {
+        let _guard = PROVIDER_TEST_GUARD.lock().await;
+        let _origin_lock = crate::write_origin::origin_test_lock().await;
+        let _origin = crate::write_origin::WriteOriginGuard::new("user");
+        let dir = std::env::temp_dir().join(format!("operant-mw-concepts-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let provider =
+            std::sync::Arc::new(crate::memory_wire::MemoryWireProvider::new(dir.clone()).unwrap());
+        set_active_memory_provider(provider.clone()).await;
+
+        let registry = crate::tools::ToolRegistry::new(std::time::Duration::from_secs(5));
+        crate::tools::builtin::register_memory_tools(&registry)
+            .await
+            .unwrap();
+        // The OLD memory_save shape: content + concepts, no key. The concept
+        // "gasket-batch-seven" is token-disjoint from the content, so the
+        // only index entry for it is the tag the retired shape must produce.
+        let result = registry
+            .execute(
+                "memory_save",
+                "probe",
+                json!({
+                    "content": "the anchor torque reading was logged at shift change",
+                    "concepts": ["gasket-batch-seven"]
+                }),
+                ToolContext::default(),
+            )
+            .await
+            .expect("execute");
+        assert!(
+            result.success,
+            "old memory_save shape (content + concepts, no key) must still store: {:?}",
+            result.error
+        );
+
+        // The concept rode as a tag: the provider's own tag facet can
+        // retrieve the row it wrote. The concepts tag normalizes to
+        // lowercase; if `concepts` stopped deserializing, the tag is absent
+        // and the bank's distinct-tag count drops to zero.
+        let stored = provider.list_page(50, 0);
+        assert!(
+            stored
+                .iter()
+                .any(|m| m.content.contains("anchor torque reading")),
+            "the old-shape row must exist in the bank"
+        );
+        // And the tag facet is reachable through the public provider API:
+        // the concepts tag normalizes to lowercase, and the row's stored
+        // tags are exactly what `memory_smart_search`/`memory_search` can
+        // surface — if `concepts` stopped deserializing, the tag is absent
+        // and the provider's stats tag-count drops to zero.
+        let stats = provider.memory_bank_stats();
+        assert!(
+            stats.map(|s| s.tags > 0).unwrap_or(false),
+            "the concepts tag must exist on the stored row (memory_tools.rs iter-1335)"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// (iter-1325) The compat fields (`limit`, `concepts`) must be ACCEPTED
     /// at deserialization but ABSENT from the advertised schema: the wire
     /// pair measured 601 tokens after they were added — worse than the
