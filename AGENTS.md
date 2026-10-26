@@ -437,6 +437,24 @@ These are the user's intentional design choices. Do not replace, remove, or
   `web_extract`, `web_crawl` + sourcehound browser provider (`tools/sourcehound.rs`
   + `browser_provider.rs`), driven over the `sourcehound` binary's MCP server
   (stdio). No API keys required
+- **ponytail (content integration — iters 1306/1307/1311/1314)**: the fourth
+  self-updating integration and the first CONTENT one — upstream
+  `DietrichGebert/ponytail` ships SKILL.md prompt packs whose releases carry
+  NO assets, so the shared binary_updater's `InstallKind::Content` fetches
+  the tag tarball itself, extracts only `skills/` (guard-scanned per skill:
+  Dangerous refuses the install, keeps the prior version), and installs
+  under versioned `~/.operant/integrations/ponytail-vX.Y.Z/` (keep=2) —
+  NEVER in the operator's `~/.operant/skills/`. Installed skills ride
+  SkillManager extra roots: invocable (`/skill ponytail-review`), listed
+  with an `[integration]` marker, operator pool wins name collisions, delete
+  refused. `[agent.ponytail]` config defaults ALL OFF (`enabled=false`,
+  `default_level="full"`, `inject="on_invoke"`); `inject="always_on"`
+  rides the frozen prefix as a `<ponytail>` block (level suffix for
+  lite/ultra), NEVER on Holon runs. `/ponytail [lite|full|ultra|off]` is a
+  process-local runtime override (config untouched). Level/install changes
+  invalidate the prompt cache — documented, not a bug. Do NOT switch the
+  default away from OFF: the posture changes what the model is told every
+  turn and must never silently enable.
 - **LifeOS**: NOT INTEGRATED. The 22 Notion-backed life-management tools were ported at iter-47/48 and are gone from the tree — there is no `lifeos` cargo feature, no tool module, and no `lifeos_enabled` config key (the key was removed because it gated nothing; `config.rs::lifeos_key_is_gone_from_config` locks its absence). The Notion surface that DOES exist is the `ntn` CLI, used by the `notion` skill (`skills/productivity/notion`) — a skill, not a built-in tool. Do not add a LifeOS claim here without the code behind it.
 
 ### Context Management

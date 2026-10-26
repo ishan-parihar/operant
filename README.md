@@ -47,7 +47,7 @@ Why it is different:
 
 - **A real agentic loop, not a chat wrapper** — think → act → observe with a JSON-schema tool registry, automatic memory-context injection, provider fallbacks, and self-healing retries.
 - **Memory that stays in-process** — the default `memory-wire` provider is an embedded engine (hybrid BM25 + token-overlap search) called directly over its sync `retain`/`recall` API: no server to spawn, no port to wait on, and a `catch_unwind` boundary that turns a panic into a memory miss instead of a dead turn. Context is prefetched before every turn and written back after it.
-- **Skills you can point at a directory** — import an entire skill tree (with recursive security scan), bundle multiple skills, autoload at boot, and let the agent curate new ones.
+- **Skills you can point at a directory** — import an entire skill tree (with recursive security scan), bundle multiple skills, autoload at boot, and let the agent curate new ones. Vendor skill packs can self-update too: the [ponytail](https://github.com/DietrichGebert/ponytail) integration installs upstream's tag tarball under versioned `~/.operant/integrations/` dirs (guard-scanned, never in your own `~/.operant/skills/`), and its skills become invocable like your own (`/skill ponytail-review`) — `operant update --integrations` refreshes it.
 - **Only enabled, functional tools reach the model** — the registry serves the intersection of *registered ∩ available ∩ not-disabled*, so the agent never sees tools that can't run.
 - **One stealth browser for everything** — the `sourcehound` binary serves both the web tools (`web_search` / `web_scrape` / `web_extract` / `web_crawl`) and the browser (`cloakctl.navigate` / `read` / `act`) over its own MCP server on stdio. No API keys; if the binary is missing, every web tool degrades to a helpful error.
 - **Local-first** — no telemetry, no account required; bring any OpenAI-compatible endpoint or a local model.
@@ -99,6 +99,7 @@ operant
 | **Tools** | 70+ JSON-schema tools: fs, git, web (sourcehound search/scrape/extract/crawl), browser (CDP), shell, code, http, memory, skills, cron, kanban, process, notes, checkpoints |
 | **Browser** | Stealth **sourcehound** — the engine's own profile cookie jar and DevTools endpoint, driven over MCP and shared with the web tools |
 | **Skills** | Directory import with recursive security scan · bundles · autoload · curator |
+| **Postures** | Self-updating prompt packs (content integrations): [ponytail](https://github.com/DietrichGebert/ponytail) — `/skill ponytail-review` on invoke, or `[agent.ponytail] inject = "always_on"` to ride the frozen prefix as a `<ponytail>` block · `/ponytail [lite\|full\|ultra\|off]` flips it live; OFF by default |
 | **Models** | Any OpenAI-compatible endpoint (`base_url`), local llama.cpp, Ollama; fallback chains + token-bucket rate limiting |
 | **MCP** | Native client (stdio + HTTP, deferred loading) **and** server (`operant mcp serve` — stdio: `initialize` → `tools/list` → `tools/call`); reconnect materializes tools mid-session |
 | **Channels** | Telegram · Discord · Slack · WhatsApp · email · SMS · webhooks via the gateway (7 platforms) |
