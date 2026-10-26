@@ -33,9 +33,12 @@ missing, 34 are agent-reachable; only `chair_channels` is not, and should not be
 
 ## Phase 1 — Tier 0 removals (zero-risk, complete)
 
+Landed as `98a20fd1` → amended `refactor(iter-1356)` on the operant repo: 6 files, 372
+insertions, 852 deletions.
+
 ### T0.1 `worklog.rs` (executed)
 
-`crates/operant-core/src/org/worklog.rs` **1099 → 418 lines (-681, -62%)**.
+`crates/operant-core/src/org/worklog.rs` **1099 → 415 lines (-684, -62%)**.
 Removed `TurnObservation`, `WorklogEntry`, `WorklogRecord` — no producers or
 consumers outside the file's own tests — their 3 test helpers, an orphaned
 `to_i64` and the orphaned imports, and rewrote the module docstring to describe
@@ -132,3 +135,28 @@ Measured live, twice, and verified by name:
 - `cronjobs` (3,709) — 3 enabled jobs
 - `adapters/hermes/` in holon (108) — guarded by
   `test_hermes_driver_reaches_custom_endpoints_and_detects_stalls`
+
+## A lesson this execution paid for
+
+Two other sessions were working this tree while Tier 0 ran (iter-1345 through
+iter-1355 landed inside the same window, plus a `docs/library` build and a
+v0.3.0 release cut). Two near-misses are worth recording because both looked
+harmless:
+
+1. **`git stash push -- <my files>` is not a private operation.** Passing file
+   paths makes it *look* scoped, but the stash captured five of the other
+   sessions' in-flight files, and the pop then failed on a partial apply. The
+   tree ended up a mix of HEAD and half-restored work. Recovery was possible
+   only because the stash was kept as a patch before being dropped, and every
+   file was diffed against HEAD, the stash and the disk before restoring.
+   **Measure against three points, restore file by file, never pop blindly.**
+2. **A commit takes the whole index, not the paths you `git add`ed.** Three
+   `R100` moves under `docs/library/` — another session's deliberate
+   `kb: tombstone` re-homing — were staged in the shared index and landed in the
+   first cut of the commit. Content-identical, so nothing was lost, but the
+   change was not mine to make. `git diff --name-status HEAD~1 HEAD` is the only
+   authoritative view of what a commit contains; `--stat` shows rename
+   *detection* and reads like extra content.
+
+The discipline both corrections share: **staging is a shared resource in a
+parallel tree, so verify the commit against its parent before believing it.**
