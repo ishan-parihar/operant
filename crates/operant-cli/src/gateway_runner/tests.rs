@@ -1077,6 +1077,111 @@ fn second_gateway_daemon_lock_is_refused_until_released() {
     }
 }
 
+/// iter-1345 — the LIFETIME half of the lock (exclusivity is tested above).
+///
+/// The defect live verification caught: `start_gateway` bound the acquired
+/// guard to a LOCAL `let _daemon_lock`, which dropped at the function's
+/// return, closed the flock fd, and let the kernel release the lock while
+/// the daemon kept serving every platform. A second `gateway run` then
+/// acquired the lock happily and started a DUPLICATE daemon (verified live:
+/// the running daemon held zero fds on gateway.lock).
+///
+/// This test drives the REAL `start_gateway` (not a mirror of its shape, which
+/// would keep passing if the push regressed) and then attempts the acquire a
+/// second `gateway run` would make. It must be REFUSED: the guard now lives in
+/// the process-global `GATEWAY_DAEMON_LOCKS` slot, so it outlives the function
+/// frame.
+///
+/// Mutation shape: revert the production push to a local binding (the
+/// iter-1335 state) and the guard drops when `start_gateway` returns — the
+/// second acquire SUCCEEDS, the assertion fails, and that success is precisely
+/// what let the second daemon start.
+#[tokio::test]
+#[expect(
+    clippy::await_holding_lock,
+    reason = "test-only: the std mutex serialises process-env mutation across the whole test"
+)]
+async fn the_daemon_lock_survives_the_start_functions_return() {
+    let _env_lock = crate::config::test_env_lock();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let previous_home = std::env::var("HERMES_HOME").ok();
+    // SAFETY: serialised by the crate's environment lock.
+    unsafe { std::env::set_var("HERMES_HOME", tmp.path()) };
+    // PROVE the isolation before writing anything (RT-99 pattern): the
+    // gateway takes a real flock and writes its pid file in the operant home.
+    assert_eq!(
+        operant_core::platform::operant_home(),
+        tmp.path(),
+        "the daemon lock lives in the operant home — must be the test's temp dir"
+    );
+
+    stop_gateway().await.ok();
+    // Clear any guard left in the process-global slot by an earlier test in
+    // this binary: a stale guard would hold a DEAD temp home's lock. Clearing
+    // is the in-process restart the slot's own comment describes — the push
+    // adds a NEW guard for this start.
+    {
+        if let Ok(mut held) = super::GATEWAY_DAEMON_LOCKS.lock() {
+            held.clear();
+        }
+    }
+
+    // Ensure a fresh DB exists with the full schema before the gateway touches it.
+    let db_path = tmp.path().join("database.db");
+    let _db = operant_core::database::Database::init(db_path.clone()).expect("init test db");
+
+    let config = AppConfig {
+        database_path: db_path,
+        gateway: GatewaySettings {
+            telegram_enabled: false,
+            discord_enabled: false,
+            slack_enabled: false,
+            webhooks_enabled: false,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    // Drive the REAL start: it acquires the lock and (the fix) leaks the guard
+    // into the process-global slot. No platform is enabled, so this starts
+    // nothing but the lock and the runner handle.
+    let start_msg = start_gateway(&config)
+        .await
+        .expect("the first start must succeed");
+    assert!(
+        start_msg.contains("0 platform(s)"),
+        "the gateway started with no platforms, got: {start_msg}"
+    );
+
+    // THE ASSERTION: after `start_gateway` RETURNED, a second attempt — what a
+    // second `gateway run` does — must still be refused. With the iter-1335
+    // local binding the guard dropped at the return above, the kernel released
+    // the flock, and this acquire would return `Some` (the second daemon).
+    let second = super::acquire_gateway_daemon_lock().expect("second acquire attempt");
+    assert!(
+        second.is_none(),
+        "the guard leaked into the process-global slot keeps the flock held \
+         after `start_gateway` returned — a second `gateway run` must be refused \
+         (the iter-1345 defect was a second daemon while the first kept serving)"
+    );
+    drop(second);
+
+    // Restore the environment BEFORE any further gateway work, so a failure
+    // cannot leave the rest of the test binary with a redirected home.
+    match previous_home {
+        Some(v) => unsafe { std::env::set_var("HERMES_HOME", v) },
+        None => unsafe { std::env::remove_var("HERMES_HOME") },
+    }
+
+    // Stop first, then clear the slot.
+    stop_gateway().await.ok();
+    {
+        if let Ok(mut held) = super::GATEWAY_DAEMON_LOCKS.lock() {
+            held.clear();
+        }
+    }
+}
+
 /// RT-175 — the /goal + /subgoal TURN-SIDE read. The commands write
 /// `goal`/`subgoal` + `goal_pending_inject` on the session row; the
 /// turn must inject the `[session goal]` marker into the query and

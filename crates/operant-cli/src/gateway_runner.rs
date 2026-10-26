@@ -1228,6 +1228,21 @@ impl Drop for GatewayDaemonLock {
     }
 }
 
+/// The guards that have been taken and MUST STAY for the process's life.
+///
+/// iter-1345 (live verification): binding the lock to a local `let` in
+/// `start_gateway` dropped it at that function's return, closed the flock
+/// fd, and the kernel released the lock while the daemon went on serving
+/// every platform. A second `gateway run` then acquired it happily, which is
+/// the exact duplicate-daemon bug the lock exists to prevent (verified live:
+/// the running daemon held zero fds on gateway.lock). A Vec: in-process
+/// restarts push new guards and the older ones stay held until process exit,
+/// which is itself never a second daemon. A process exit or crash closes the
+/// fds and the kernel releases the flock, so the leak has no staleness cost;
+/// the lock file itself is removed by `Drop` and a leftover file is harmless.
+static GATEWAY_DAEMON_LOCKS: std::sync::Mutex<Vec<GatewayDaemonLock>> =
+    std::sync::Mutex::new(Vec::new());
+
 /// Take the exclusive gateway daemon lock, or report that a live gateway
 /// holds it. `Ok(None)` means REFUSE TO START — the caller must not boot a
 /// second daemon.
@@ -3007,7 +3022,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
     // become a SECOND daemon. The in-process RUNNER check below only covers
     // this process; the flock covers the MACHINE. `None` = a live gateway
     // holds the lock — say so and do not start.
-    let _daemon_lock = match acquire_gateway_daemon_lock()? {
+    let lock_guard = match acquire_gateway_daemon_lock()? {
         Some(lock) => lock,
         None => {
             return Ok(
@@ -3017,6 +3032,12 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
             );
         }
     };
+    // Leak the guard into the process-global slot so it outlives THIS
+    // function (the iter-1345 defect: a local `let` dropped at this
+    // return released the flock while the daemon kept serving).
+    if let Ok(mut held) = GATEWAY_DAEMON_LOCKS.lock() {
+        held.push(lock_guard);
+    }
 
     init_pending_permissions();
     let mut guard = runner().lock().await;
