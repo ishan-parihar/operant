@@ -183,6 +183,7 @@ async fn record_feed_routes_channel_posts_through_the_seat_map() {
         mcp_manager: operant_core::mcp::McpManager::new(),
         mcp_server_configs: Vec::new(),
         skills_root_dir: dir.path().join("skills-absent"),
+        queue_waits: tokio::sync::Mutex::new(Default::default()),
     };
 
     // Unmapped channel → the `premiere` default (same default as the
@@ -359,6 +360,7 @@ fn slow_echo_handler(dir: &tempfile::TempDir, delay_ms: u64) -> Arc<GatewayMessa
         mcp_manager: operant_core::mcp::McpManager::new(),
         mcp_server_configs: Vec::new(),
         skills_root_dir: dir.path().join("skills-absent"),
+        queue_waits: tokio::sync::Mutex::new(Default::default()),
     })
 }
 
@@ -998,7 +1000,42 @@ async fn test_gateway_start_stop_with_disabled_platforms() {
     );
 }
 
-/// iter-1333 (audit finding 1): the daemon lock is exclusive — a second
+/// iter-1338: the queue-wait measurement — the ponytail gate the
+/// turn_lock comment names. The agent-per-seat upgrade is taken when the
+/// numbers show a busy chat starving others, so the numbers must be
+/// honest: events, the total, the worst single wait, the busiest chat.
+#[test]
+fn queue_wait_stats_count_events_total_worst_and_busiest_chat() {
+    use super::QueueWaitStats;
+    let mut stats = QueueWaitStats::default();
+
+    // The empty state says so — no chat has waited, not "zero seconds".
+    assert!(
+        stats.line().contains("queued turns: 0"),
+        "got: {}",
+        stats.line()
+    );
+
+    stats.record(std::time::Duration::from_millis(12), "telegram:c1:u1");
+    stats.record(std::time::Duration::from_millis(34), "telegram:c1:u2");
+    stats.record(std::time::Duration::from_millis(7), "telegram:c1:u1");
+
+    // The busiest chat is the one that queued TWICE, and the worst is the
+    // 34ms tail — the number a user actually feels.
+    assert_eq!(stats.events, 3);
+    assert_eq!(stats.total_ms, 53);
+    assert_eq!(stats.worst_ms, 34);
+    let line = stats.line();
+    assert!(line.contains("queued turns: 3"), "got: {line}");
+    assert!(line.contains("total 53 ms"), "got: {line}");
+    assert!(line.contains("worst 34 ms"), "got: {line}");
+    assert!(
+        line.contains("telegram:c1:u1 ×2"),
+        "busiest chat should be the two-wait session, got: {line}"
+    );
+}
+
+/// iter-1335 (audit finding 1): the daemon lock is exclusive — a second
 /// `gateway run` on the same machine must refuse to start, and dropping the
 /// lock must free the path for the next start. The whole point of the
 /// audit fix: two daemons double-poll Telegram and double the RSS.

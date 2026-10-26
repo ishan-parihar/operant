@@ -1261,6 +1261,59 @@ fn acquire_gateway_daemon_lock() -> Result<Option<GatewayDaemonLock>> {
         }))
     }
 }
+/// How often (in queued turns) the gateway logs the aggregate queue-wait
+/// summary. 50 keeps the summary visible without flooding the log on a
+/// busy multi-chat deployment — the per-turn line still records every
+/// occurrence.
+const QUEUE_WAIT_SUMMARY_EVERY: u64 = 50;
+
+/// The shared-agent queue-wait measurement (iter-1338).
+///
+/// The one-agent design serializes every chat's turn behind `turn_lock`.
+/// This is the durable record of whether that ever costs a user anything:
+/// how often a turn queued behind another, the total and worst wait, and
+/// the sessions that waited most. It is the ponytail gate the lock's own
+/// comment names — the agent-per-seat upgrade path is taken when these
+/// numbers say a busy chat starves others, not before.
+#[derive(Debug, Default)]
+struct QueueWaitStats {
+    /// Turns that had to wait for another chat's turn.
+    events: u64,
+    /// Total wall time spent waiting across those turns (ms).
+    total_ms: u64,
+    /// Worst single wait (ms) — the tail a user actually feels.
+    worst_ms: u64,
+    /// Per-session event count, so a noisy chat is visible.
+    per_session: HashMap<String, u64>,
+}
+
+impl QueueWaitStats {
+    fn record(&mut self, waited: std::time::Duration, session_key: &str) {
+        let ms = waited.as_millis() as u64;
+        self.events += 1;
+        self.total_ms += ms;
+        self.worst_ms = self.worst_ms.max(ms);
+        *self.per_session.entry(session_key.to_string()).or_insert(0) += 1;
+    }
+
+    /// One human-readable line for the logs and `gateway status --deep`.
+    fn line(&self) -> String {
+        if self.events == 0 {
+            return "queued turns: 0 (no chat has waited yet)".to_string();
+        }
+        let top = self
+            .per_session
+            .iter()
+            .max_by_key(|(_, n)| **n)
+            .map(|(k, n)| format!("{k} ×{n}"))
+            .unwrap_or_else(|| "none".to_string());
+        format!(
+            "queued turns: {} (total {} ms, worst {} ms, busiest chat: {top})",
+            self.events, self.total_ms, self.worst_ms
+        )
+    }
+}
+
 /// Sticky per-session resume pins, set by the `/resume` command.
 ///
 /// The agent's session id is derived from the routing key
@@ -1513,6 +1566,11 @@ struct GatewayMessageHandler {
     /// built the same tuple list for the same reason: the AppConfig is
     /// not `Send`-safe to move into a task).
     mcp_server_configs: Vec<ServerConfigTuple>,
+    /// iter-1338: how often a turn queued behind another chat's turn, and
+    /// for how long. The ponytail gate for the agent-per-seat upgrade path
+    /// (see the turn_lock site). Read by the stop-time log and
+    /// `gateway status --deep`.
+    queue_waits: tokio::sync::Mutex<QueueWaitStats>,
     /// RT-175 — the configured skills root for `/reload-skills`' rescan.
     skills_root_dir: std::path::PathBuf,
 }
@@ -1790,15 +1848,34 @@ impl MessageHandler for GatewayMessageHandler {
         // ponytail: one turn at a time. Upgrade path: an agent per seat
         // (the create_runtime_agent seam) if a busy chat starves others —
         // measure queue wait first.
+        //
+        // That measurement (iter-1338, audit operationalization step 4):
+        // the counter below is the starvation signal, exposed through the
+        // log line at turn end and `gateway status --deep`. It answers
+        // "do concurrent chats queue, and for how long?" with a number, so
+        // agent-per-seat is a decision made on evidence rather than a
+        // guess. When the sum moved to seconds instead of milliseconds,
+        // take the upgrade path.
+        let queue_wait_start = std::time::Instant::now();
+        let mut queued = false;
         // Queue visibility (plan 06A): if another chat's turn holds the
         // lock, show the platform typing indicator while this one waits.
         if self.turn_lock.try_lock().is_err() {
+            queued = true;
             let gw = self.gateway.lock().await;
             if let Some(ref g) = *gw {
                 let _ = g.send_typing(&message.platform, &message.channel_id, message.thread_id);
             }
         }
         let _turn = self.turn_lock.lock().await;
+        let queue_wait = queue_wait_start.elapsed();
+        if queued {
+            self.queue_waits
+                .lock()
+                .await
+                .record(queue_wait, &session_key);
+        }
+
         let _running_marker = RunningSessionGuard(&self.running_session);
         {
             let mut running = self
@@ -2404,6 +2481,28 @@ impl MessageHandler for GatewayMessageHandler {
                 // inside `trim()` so a burst of turns costs one sweep, not
                 // one per turn.
                 allocator::trim();
+
+                // iter-1338: the queue-wait signal. The per-turn line names the
+                // turn; the aggregate line (every 50th queued turn) is the
+                // durable summary an operator greps the gateway log for —
+                // "queued turns: N (total X ms, worst Y ms, busiest chat: Z)"
+                // is the number the agent-per-seat decision needs, and the
+                // turn_lock comment names this exact measurement.
+                if queued {
+                    tracing::info!(
+                        session_key = %session_key,
+                        queue_wait_ms = queue_wait.as_millis() as u64,
+                        "Chat queued behind the running turn on the shared agent (audit gate for agent-per-seat)"
+                    );
+                    let summary_snapshot = {
+                        let stats = self.queue_waits.lock().await;
+                        stats.events % QUEUE_WAIT_SUMMARY_EVERY == 0
+                    };
+                    if summary_snapshot {
+                        let line = self.queue_waits.lock().await.line();
+                        tracing::info!("Shared-agent queue wait summary — {line}");
+                    }
+                }
 
                 // Turn persistence to long-term memory happens inside
                 // agent.run() via the agent's memory provider (sync_turn).
@@ -3299,6 +3398,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
             })
             .collect(),
         skills_root_dir: app_config.skills.root_dir.clone(),
+        queue_waits: tokio::sync::Mutex::new(QueueWaitStats::default()),
     });
     gateway = gateway.with_handler(handler.clone());
 
