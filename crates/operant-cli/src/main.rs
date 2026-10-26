@@ -1109,6 +1109,47 @@ pub(crate) fn client_config(config: &AppConfig) -> ClientConfig {
     ClientConfig::from(&config.client)
 }
 
+/// Build the compressor config from the TOML — the ONE place the
+/// summarizer model is resolved (2026-10-26, audit G6).
+///
+/// Resolution order for the summarizer model (the SMOL role: a cheap,
+/// fast model for the summarize-before-evict side call):
+/// 1. `[auxiliary_models.compression] model = "..."` (the slot the setup
+///    wizard has offered since it existed — previously read by nothing);
+/// 2. the hardcoded `gpt-4o-mini` default ONLY when no slot is set,
+///    matching the historical behavior for OpenAI routes.
+///
+/// The summary char ceiling (`agent.context_compression_summary_max_chars`)
+/// bounds the bill; it defaults to unbounded (the historical gateway path)
+/// and the example TOML shows how to bound it.
+pub(crate) fn llm_compressor_config(
+    config: &AppConfig,
+    context_window: usize,
+) -> operant_core::agent::llm_compressor::LlmCompressorConfig {
+    let summarizer_model = config
+        .auxiliary_models
+        .compression
+        .as_ref()
+        .and_then(|slot| slot.model.clone())
+        .map(|m| m.trim().to_string())
+        .filter(|m| !m.is_empty())
+        .unwrap_or_else(|| {
+            tracing::debug!(
+                "no [auxiliary_models.compression] model set — using the default \
+                 summarizer model (gpt-4o-mini); set the slot to match your route"
+            );
+            operant_core::agent::llm_compressor::LlmCompressorConfig::default().summarizer_model
+        });
+    operant_core::agent::llm_compressor::LlmCompressorConfig {
+        context_window,
+        enabled: config.agent.context_compression,
+        threshold_percent: config.agent.context_compression_threshold,
+        summarizer_model,
+        summary_max_chars: config.agent.context_compression_summary_max_chars as usize,
+        ..Default::default()
+    }
+}
+
 pub(crate) fn agent_config(
     config: &AppConfig,
     behavior: &BehaviorSettings,
@@ -2125,12 +2166,7 @@ pub(crate) async fn create_runtime_agent_with(
         .with_harness_prompt_slot_opt(core.harness_prompt_slot)
         .with_hook_registry_opt(core.hook_registry)
         .with_interrupt_flag(flag)
-        .with_llm_compressor(operant_core::agent::llm_compressor::LlmCompressorConfig {
-            context_window,
-            enabled: config.agent.context_compression,
-            threshold_percent: config.agent.context_compression_threshold,
-            ..Default::default()
-        });
+        .with_llm_compressor(llm_compressor_config(config, context_window));
         // Plan 016 G1 — attach the harness when [harness].enabled = true.
         // Default is `None`, so this is a no-op for the dark-merge path.
         if let Some(h) = core.harness.clone() {
@@ -2143,6 +2179,24 @@ pub(crate) async fn create_runtime_agent_with(
         // maintenance workers (rollups + assertion extraction).
         if let Some(engine) = build_context_engine(config, spawn_long_lived_maintenance) {
             agent = agent.with_context_engine(engine);
+        }
+        // RT-183: the semantic compaction rung. Same embedder knob as
+        // lcm_vector_recall (`context_lcm_embedding_model`), one instance
+        // for both — `"local:hash"` is the zero-dependency option. Armed
+        // but inert unless `agent.context_semantic_compaction` is true;
+        // without an embedder the rung degrades to recency (the stage's
+        // documented fallback), so attaching only on the flag keeps a
+        // false-config from paying for an unused client.
+        if config.agent.context_semantic_compaction {
+            if let Some(embedder) = build_semantic_embedder(config) {
+                agent = agent.with_semantic_embedder(embedder);
+            } else {
+                tracing::warn!(
+                    "agent.context_semantic_compaction is true but no embedder is \
+                     configured — set agent.context_lcm_embedding_model (\"local:hash\" for \
+                     the zero-dependency option). The rung degrades to recency."
+                );
+            }
         }
         // Share the external runtime-metrics registry (created by the TUI)
         // so stream-drop retries and memory-sync failures surface in the
@@ -2228,12 +2282,7 @@ pub(crate) async fn create_agent_without_events(
         .with_harness_prompt_slot_opt(core.harness_prompt_slot)
         .with_hook_registry_opt(core.hook_registry)
         .with_interrupt_flag(flag)
-        .with_llm_compressor(operant_core::agent::llm_compressor::LlmCompressorConfig {
-            context_window,
-            enabled: config.agent.context_compression,
-            threshold_percent: config.agent.context_compression_threshold,
-            ..Default::default()
-        });
+        .with_llm_compressor(llm_compressor_config(config, context_window));
         // Phase C (docs/agentic-os/): a Holon run — HOLON_RUN_DIR carries the
         // kernel's compiled policy.json — enforces that document through the
         // seat-authority consult on every tool call. Not a Holon run (no env
@@ -2263,6 +2312,18 @@ pub(crate) async fn create_agent_without_events(
         // see build_context_engine docs).
         if let Some(engine) = build_context_engine(config, false) {
             agent = agent.with_context_engine(engine);
+        }
+        // RT-183: same gate as the runtime agent path (see above).
+        if config.agent.context_semantic_compaction {
+            if let Some(embedder) = build_semantic_embedder(config) {
+                agent = agent.with_semantic_embedder(embedder);
+            } else {
+                tracing::warn!(
+                    "agent.context_semantic_compaction is true but no embedder is \
+                     configured — set agent.context_lcm_embedding_model (\"local:hash\" for \
+                     the zero-dependency option). The rung degrades to recency."
+                );
+            }
         }
         // Attach the long-term memory provider so turn/session hooks fire
         // (sync_turn, prefetch, on_session_end, ...). Closes audit gap F1.
@@ -2295,6 +2356,36 @@ pub(crate) fn lcm_config(config: &AppConfig) -> operant_core::context::LcmConfig
         ignore_session_patterns: config.agent.context_lcm_ignore_session_patterns.clone(),
         readonly_sessions: config.agent.context_lcm_readonly_sessions.clone(),
     }
+}
+
+/// RT-183: build the embedder for the semantic compaction rung from the
+/// SAME knob that feeds `lcm_vector_recall` (`agent.context_lcm_embedding_model`),
+/// so one setting serves both surfaces. `"local:hash"` → the zero-dependency
+/// built-in; any other model name → an OpenAI-compatible /embeddings client
+/// (with `context_lcm_embedding_base_url` overriding the chat base URL).
+/// `None` when no embedding model is configured — the rung then degrades to
+/// recency (its own documented fallback).
+fn build_semantic_embedder(
+    config: &AppConfig,
+) -> Option<std::sync::Arc<dyn operant_core::context::Embedder>> {
+    let model = config.agent.context_lcm_embedding_model.as_deref()?;
+    if model.trim().is_empty() {
+        return None;
+    }
+    if model.trim() == "local:hash" {
+        tracing::debug!("semantic compaction: zero-dependency local:hash embedder");
+        return Some(std::sync::Arc::new(
+            operant_core::context::LocalHashEmbedder::default(),
+        ));
+    }
+    let mut ccfg = client_config(config);
+    if let Some(eb) = &config.agent.context_lcm_embedding_base_url {
+        ccfg.base_url = eb.clone();
+    }
+    let client = OpenAIClient::new(ccfg);
+    Some(std::sync::Arc::new(
+        operant_core::context::OpenAIEmbedder::new(client, model.to_string()),
+    ))
 }
 
 /// Build the configured context engine (`agent.context_engine`).

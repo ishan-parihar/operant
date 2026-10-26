@@ -133,6 +133,7 @@ fn test_config() -> AgentConfig {
     AgentConfig {
         reasoning_effort: String::new(),
         reasoning_effort_param: Default::default(),
+        context_semantic_compaction: false,
         model: "demo-stream-interrupt".to_string(),
         max_trajectories: 0,
         max_iterations: 3,

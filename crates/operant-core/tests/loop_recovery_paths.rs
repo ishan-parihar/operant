@@ -308,6 +308,7 @@ fn test_config(model: &str, max_iterations: usize) -> AgentConfig {
     AgentConfig {
         reasoning_effort: String::new(),
         reasoning_effort_param: Default::default(),
+        context_semantic_compaction: false,
         model: model.to_string(),
         max_trajectories: 0,
         max_iterations,

@@ -196,7 +196,11 @@ impl TuiApp {
                     // turn renders a `※ recap:` line. 0 = off (engine returns a
                     // disconnected handle).
                     let idle = config.agent.recap_idle_seconds;
-                    let activity = agent.attach_recap_engine(std::time::Duration::from_secs(idle));
+                    let activity = agent.attach_recap_engine(
+                        std::time::Duration::from_secs(idle),
+                        config.recap.clone(),
+                        crate::client_config(&config),
+                    );
                     self.app.recap_activity = Some(activity);
                     // Advisor watchdog (omp advisor/ parity): always-on
                     // transcript reviewer emitting `⚑ advisor:` notes when

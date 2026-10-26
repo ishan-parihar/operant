@@ -2718,8 +2718,25 @@ impl OperantAgent {
         let preflight_threshold = budget * PREFLIGHT_THRESHOLD_PERCENT as usize / 100;
         let mut ladder_fired = false;
         let mut frozen_prefix: Vec<Message> = Vec::new();
+        // RT-182: the ladder's own before-numbers, captured at the same
+        // moment the reactive path captures its `tokens_before`, so the
+        // Completed event reports what the rungs actually started from
+        // (the same estimate the `info!` below logs).
+        let mut ladder_tokens_before = 0usize;
+        let mut ladder_messages_before = 0usize;
         if may_rewrite && estimated_tokens > preflight_threshold {
             ladder_fired = true;
+            ladder_tokens_before = estimated_tokens;
+            ladder_messages_before = messages.len();
+            // RT-182: the preflight ladder rewrites the BUILT list silently
+            // today — a long session's tool history is re-trimmed and its
+            // middle evicted with zero user-visible signal (the Compaction*
+            // events existed; only the reactive overflow path and /compact
+            // emitted them). Emit the pair the TUI already renders.
+            self.emit(AgentEvent::CompactionStarted {
+                tokens_before: ladder_tokens_before,
+            })
+            .await;
             // PromptCacheGuard (Wave-4): snapshot the frozen prefix before
             // any rung can touch it; verified after the evict rung below.
             frozen_prefix = messages
@@ -2785,12 +2802,46 @@ impl OperantAgent {
                 estimated_tokens = self.estimate_current_tokens(&messages) + turn_context_tokens;
             }
 
-            // ── Rung 3: summarize — LLM compression, summarize-before-evict ──
-            // The lossy rung 4 below used to be the only preflight fit;
+            // ── Rung 3: semantic selection — goal-similarity group cut ──
+            // RT-183 (audit G5): `semantic_compaction_cutoff` was complete,
+            // tested, and unwired. It runs BEFORE the summarize rung so the
+            // LLM pass sees a list that already dropped goal-irrelevant
+            // groups — cheaper summarize input, and a drifted conversation
+            // keeps its goal-relevant early exchanges instead of the oldest
+            // bytes. Armed by `agent.context_semantic_compaction` (default
+            // off) + an attached embedder; EVERY degrade path (no embedder,
+            // embed call failed, >64 groups) is the stage's own recency
+            // fallback — compaction never fails because an optional
+            // embedding endpoint is down.
+            if self.config.context_semantic_compaction && estimated_tokens > preflight_threshold {
+                let embedder = self.semantic_embedder.clone();
+                let budget_tokens = effective_budget;
+                let cut = crate::context_management::semantic_compaction_cutoff(
+                    &messages,
+                    budget_tokens,
+                    embedder.as_deref(),
+                )
+                .await;
+                if cut.semantic {
+                    info!(
+                        similarity = cut.goal_similarity,
+                        kept_groups = cut.head_cut,
+                        "Preflight rung 3 (semantic): goal-similarity group cut applied"
+                    );
+                    messages = cut.apply(messages);
+                    estimated_tokens =
+                        self.estimate_current_tokens(&messages) + turn_context_tokens;
+                } else {
+                    debug!("Preflight rung 3 (semantic): degraded to recency — skipped");
+                }
+            }
+
+            // ── Rung 4: summarize — LLM compression, summarize-before-evict ──
+            // The lossy rung 5 below used to be the only preflight fit;
             // this rung gives the summarizer first claim on the middle
             // of the conversation, mirroring the reactive overflow path.
             if estimated_tokens > preflight_threshold {
-                info!("Preflight rung 3 (summarize): LLM summarize-before-evict");
+                info!("Preflight rung 4 (summarize): LLM summarize-before-evict");
                 messages = self.preflight_llm_summarize(messages).await;
             }
         }
@@ -2827,6 +2878,24 @@ impl OperantAgent {
             // Standard eviction: remove oldest messages within tiers until
             // the total fits within the effective budget.
             messages = crate::context_management::evict_to_budget(messages, effective_budget);
+        }
+
+        // RT-182: close the pair the Started event above opened. Same
+        // payload shape as the reactive path's Completed event (the TUI
+        // renders both through one arm); `tokens_after` can exceed
+        // `tokens_before` when a summarizer pads its own summary — the
+        // payload is a report, not a guarantee (the same caveat the event
+        // doc carries).
+        if ladder_fired {
+            let tokens_after =
+                crate::context_management::estimate_total_tokens(&messages) + turn_context_tokens;
+            self.emit(AgentEvent::CompactionCompleted {
+                tokens_before: ladder_tokens_before,
+                tokens_after,
+                messages_before: ladder_messages_before,
+                messages_after: messages.len(),
+            })
+            .await;
         }
 
         // ── Context exhausted (plan 06 P1) ───────────────────────────────

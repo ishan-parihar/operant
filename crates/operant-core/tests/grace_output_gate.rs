@@ -195,6 +195,7 @@ fn test_config(max_iterations: usize) -> AgentConfig {
     AgentConfig {
         reasoning_effort: String::new(),
         reasoning_effort_param: Default::default(),
+        context_semantic_compaction: false,
         model: "demo".to_string(),
         max_trajectories: 0,
         max_iterations,

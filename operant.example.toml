@@ -90,6 +90,15 @@ max_healing_attempts = 3
 show_reasoning = true
 tool_progress = "auto"
 context_compression = false
+# Char ceiling for one LLM compaction summary (audit G6): unbounded by
+# default (the historical behavior); set a number to bound the bill.
+# context_compression_summary_max_chars = 4000
+# RT-183 (audit G5): goal-similarity group selection as a preflight rung —
+# keep goal-relevant exchanges over the oldest-prefix recency cut when the
+# ladder compacts. Off by default (costs one embedding call per compaction).
+# Needs an embedding model below (context_lcm_embedding_model; "local:hash"
+# is the zero-dependency option).
+# context_semantic_compaction = false
 # Same-provider model fallback (hermes `fallback_providers` parity, same
 # client): when the primary model fails with a retryable error (5xx, 429,
 # network), the agent retries each fallback model in order on the SAME client
@@ -182,6 +191,19 @@ enabled = false
 # instructions = ""
 # Consecutive-identical-note suppression streak (default 3).
 # suppress_streak = 3
+# Side-call timeout in seconds (default 120; a timeout is a skipped
+# review, never an error into the primary's path).
+# timeout_secs = 120
+
+# [recap] — the idle-recap engine's MODEL slot (omp `recap.*` + the `smol`
+# role parity). The idle window is `agent.recap_idle_seconds` above; this
+# section lets the ~40-word status line ride a CHEAP, FAST model instead of
+# the primary. Empty (default) = the primary model on the primary route.
+[recap]
+# [recap.model]
+# model = ""
+# base_url = ""
+# api_key = ""
 
 [autonomous]
 interval_secs = 300
@@ -542,6 +564,17 @@ enabled = true
 # tool returns its TEXT description — the pixels never reach your main
 # model's context. Without this slot (and without OPENROUTER_API_KEY in the
 # environment) vision_analyze returns a configuration error naming the fix.
+#
+# The `compression` slot is the LLM context-compressor's SUMMARIZER model
+# (audit G6, 2026-10-26): when `agent.context_compression = true`, the
+# summarize-before-evict side call goes to THIS model. Without the slot the
+# hardcoded default `gpt-4o-mini` applies — set it to a model your route
+# actually serves, or every compaction fails and silently degrades to
+# deterministic eviction (cooldown after the first failure).
+# [auxiliary_models.compression]
+# model = "gpt-4o-mini"   # match your route's model name
+# base_url = ""
+# api_key = ""
 
 # [auxiliary_models.vision]
 # provider = "openrouter"                    # optional provider name

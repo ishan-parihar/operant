@@ -43,7 +43,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 /// Advisor configuration (`[advisor]` section).
-#[derive(Debug, Clone, Default, serde::Deserialize, serde::Serialize)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct AdvisorConfig {
     /// Master switch. When false (default) the engine is never spawned.
@@ -61,6 +61,32 @@ pub struct AdvisorConfig {
     /// allowed through anyway (guards against a stuck guard hiding a real
     /// recurrence). Default 3.
     pub suppress_streak: u32,
+    /// Side-call timeout in seconds (default 120). The advisor is a
+    /// best-effort reviewer — a slow advisory model must never stall the
+    /// bus drain, so the call is bounded and a timeout is a skipped
+    /// review, never an error into the primary's path.
+    #[serde(default = "default_advisor_timeout_secs")]
+    pub timeout_secs: u64,
+}
+
+fn default_advisor_timeout_secs() -> u64 {
+    120
+}
+
+/// Manual impl so `timeout_secs` (120) and `suppress_streak` (3) match the
+/// serde defaults — a derived Default would hand the engine 0-second
+/// timeouts and a 0-streak suppression guard when constructed in code
+/// (which `AppConfig::default()` does).
+impl Default for AdvisorConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            model: AuxiliaryModelConfig::default(),
+            instructions: String::new(),
+            suppress_streak: 3,
+            timeout_secs: default_advisor_timeout_secs(),
+        }
+    }
 }
 
 /// The advisor's system prompt: an analyst, never the acting agent.
@@ -171,11 +197,13 @@ pub fn spawn_advisor(
         model,
         instructions,
         suppress_streak,
+        timeout_secs,
     } = config;
     if !enabled {
         return;
     }
     let suppress_streak = suppress_streak.max(1);
+    let timeout = Duration::from_secs(timeout_secs.max(1));
     let client = crate::moa::slot_client(&base, &model);
     let advisor_model = model
         .model
@@ -241,7 +269,7 @@ pub fn spawn_advisor(
             // delta rather than re-reviewing it forever.
             st.cursor.store(messages.len() as u64, Ordering::Relaxed);
             let reply = match tokio::time::timeout(
-                Duration::from_secs(120),
+                timeout,
                 client.chat(&advisor_model, &msgs, None, None, None),
             )
             .await
@@ -256,7 +284,11 @@ pub fn spawn_advisor(
                     continue;
                 }
                 Err(_) => {
-                    tracing::warn!(model = %advisor_model, "advisor side-call timed out (120s)");
+                    tracing::warn!(
+                        model = %advisor_model,
+                        secs = timeout_secs,
+                        "advisor side-call timed out"
+                    );
                     continue;
                 }
             };

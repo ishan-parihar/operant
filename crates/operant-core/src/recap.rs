@@ -55,12 +55,32 @@ impl RecapActivity {
     }
 }
 
+/// Configuration for the idle-recap engine (`[recap]` section, omp
+/// `recap.*` parity).
+///
+/// The recap is a side-channel turn over a transcript snapshot — the SMOL
+/// role in omp's model-roles: a cheap, fast model renders the status line
+/// while the primary stays untouched. `model` is the slot for exactly that;
+/// empty (default) keeps the historical behavior (the primary model on the
+/// primary route).
+#[derive(Debug, Clone, Default, serde::Deserialize, serde::Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct RecapConfig {
+    /// The recap model slot: provider/model/base_url/api_key overrides.
+    /// Empty model = the primary model (historical default).
+    #[serde(default)]
+    pub model: crate::config::AuxiliaryModelConfig,
+}
+
 /// Spawn the idle-recap engine. Call once per agent session; only call when
 /// `recap_idle_seconds > 0` (the host's gate).
 ///
-/// * `client` — model client for the side-channel call (the same client the
-///   agent uses; the call is non-streaming and carries no tools).
-/// * `model` — model name for the recap call (the session's model).
+/// * `client` — model client for the side-channel call. When the `[recap]`
+///   model slot pins base_url/api_key, the host passes the SLOT client;
+///   otherwise the same client the agent uses (the call is non-streaming
+///   and carries no tools).
+/// * `model` — model name for the recap call (the slot's model, or the
+///   session's primary model when the slot is empty).
 /// * `idle` — quiet window before the recap fires.
 /// * `turn_ends` — subscription to the agent's `TurnEndBus`.
 /// * `snapshot` — host callback returning the current transcript snapshot

@@ -3036,7 +3036,11 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
     // engines run.
     let mut agent = agent;
     let idle = app_config.agent.recap_idle_seconds;
-    let gateway_recap_activity = agent.attach_recap_engine(std::time::Duration::from_secs(idle));
+    let gateway_recap_activity = agent.attach_recap_engine(
+        std::time::Duration::from_secs(idle),
+        app_config.recap.clone(),
+        crate::client_config(app_config),
+    );
     agent.attach_advisor(app_config.advisor.clone(), crate::client_config(app_config));
     // Wire the permission channel so the agent can request approval for
     // dangerous tools (bash, file_write, file_edit). Without this, the

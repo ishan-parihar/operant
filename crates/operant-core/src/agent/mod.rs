@@ -176,6 +176,11 @@ pub struct AgentConfig {
     /// `BehaviorSettings` — the config-schema wiring is a pending row; the
     /// facade threads it via `FacadeConstruction` today.
     pub guardrail_exempt_tools: Vec<String>,
+    /// RT-183: arm the semantic-compaction preflight rung (goal-similarity
+    /// group selection). Threaded from `BehaviorSettings` at agent
+    /// construction; the rung still needs an attached embedder
+    /// (`with_semantic_embedder`) or it degrades to recency.
+    pub context_semantic_compaction: bool,
     /// Ponytail posture settings (phase 4): the frozen-prefix `<ponytail>`
     /// block injects when `enabled && inject == always_on` (or the runtime
     /// override forces it), never on Holon runs. Threaded from
@@ -225,6 +230,7 @@ impl From<&BehaviorSettings> for AgentConfig {
             // empty — the runtime exempt path existed but no config-file
             // surface ever fed it.
             guardrail_exempt_tools: settings.guardrail_exempt_tools.clone(),
+            context_semantic_compaction: settings.context_semantic_compaction,
             ponytail: settings.ponytail.clone(),
         }
     }
@@ -678,6 +684,14 @@ pub struct OperantAgent {
     /// `build_messages()` calls `engine.assemble(...)` instead of the lossy
     /// `evict_to_budget` step — lossless DAG + fresh-tail assembly.
     context_engine: Option<std::sync::Arc<dyn crate::context::ContextEngine>>,
+    /// RT-183: embedder for the semantic compaction rung
+    /// (`agent.context_semantic_compaction`). `None` = the rung degrades
+    /// to recency (the stage's own documented degradation path — a
+    /// compaction pass must never fail because an optional embedding
+    /// endpoint is down). Built by the CLI from the same
+    /// `context_lcm_embedding_model` knob that feeds lcm_vector_recall;
+    /// `"local:hash"` is the zero-dependency option.
+    semantic_embedder: Option<std::sync::Arc<dyn crate::context::Embedder>>,
     /// Credential pool for multi-key failover and rotation.
     /// When set, auth/rate-limit errors trigger automatic credential
     /// rotation via pool.invalidate() + pool.select(). Matches
@@ -3146,6 +3160,7 @@ mod tests {
         let config = AgentConfig {
             reasoning_effort: String::new(),
             reasoning_effort_param: crate::config::ReasoningEffortParam::Auto,
+            context_semantic_compaction: false,
             model: "demo".to_string(),
             max_trajectories: 0,
             max_iterations: 3,
@@ -3198,6 +3213,7 @@ mod tests {
         let config = AgentConfig {
             reasoning_effort: String::new(),
             reasoning_effort_param: crate::config::ReasoningEffortParam::Auto,
+            context_semantic_compaction: false,
             model: "demo".to_string(),
             max_trajectories: 0,
             max_iterations: 3,
@@ -3316,6 +3332,7 @@ mod tests {
         let config = AgentConfig {
             reasoning_effort: String::new(),
             reasoning_effort_param: crate::config::ReasoningEffortParam::Auto,
+            context_semantic_compaction: false,
             model: "demo".to_string(),
             max_trajectories: 0,
             max_iterations: 3,

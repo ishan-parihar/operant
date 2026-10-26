@@ -50,6 +50,13 @@ pub struct AppConfig {
     /// that notes concerns after each completed turn without joining the
     /// acting agent's context.
     pub advisor: crate::advisor::AdvisorConfig,
+    /// Idle-recap engine settings (`[recap]` section, omp `recap.*`
+    /// parity). The idle WINDOW stays `agent.recap_idle_seconds` (its
+    /// historical home); this section holds the recap MODEL slot — the
+    /// omp `smol` role: a cheap, fast model for the side-channel status
+    /// line instead of the primary.
+    #[serde(default)]
+    pub recap: crate::recap::RecapConfig,
     pub checkpoints: CheckpointsSettings,
     /// Plan 016 / Phase 0 config surface for `operant-harness`. Dark-merged:
     /// `enabled` defaults to `false` and no provider is mounted unless the
@@ -142,6 +149,7 @@ impl Default for AppConfig {
             auxiliary_models: AuxiliaryModels::default(),
             moa: MoaSettings::default(),
             advisor: crate::advisor::AdvisorConfig::default(),
+            recap: crate::recap::RecapConfig::default(),
             database_path,
             providers: operant_config::providers::ProvidersConfig::default(),
             command_allowlist: Vec::new(),
@@ -589,6 +597,14 @@ pub struct BehaviorSettings {
     pub session_reset: SessionResetMode,
     pub context_compression: bool,
     pub context_compression_threshold: f64,
+    /// Char ceiling for one LLM compaction summary. `u32::MAX` (the default)
+    /// = the summarizer's own output bound (historically unbounded on the
+    /// gateway path). u32 not usize: the value serialises to TOML, whose
+    /// integers are i64 — `usize::MAX` overflows it and made the whole
+    /// config file unwritable (the setup wizard's persist test caught it).
+    /// Set a number to bound the bill.
+    #[serde(default = "default_summary_max_chars")]
+    pub context_compression_summary_max_chars: u32,
     /// Maximum share of `context_window` that a SINGLE tool result may occupy
     /// before operant withholds the bulk of it. Expressed as a fraction
     /// (0.0-1.0) rather than an absolute token count so the bound tracks the
@@ -677,6 +693,17 @@ pub struct BehaviorSettings {
     ///     unchanged until rollups ship in P1.
     #[serde(default = "default_context_engine")]
     pub context_engine: String,
+    /// RT-183 (2026-10-25 audit G5): goal-similarity GROUP SELECTION as a
+    /// preflight rung between decay and the LLM summarize — the
+    /// `semantic_compaction_cutoff` stage that was complete and tested but
+    /// had zero live callers. When true, and an embedder is attached (the
+    /// same `context_lcm_embedding_model` knob feeds it; `"local:hash"`
+    /// is the zero-dependency option), the ladder selects which groups to
+    /// keep by similarity to the live task statement instead of keeping
+    /// the oldest prefix. Off by default: the pass costs one embedding call
+    /// per compaction, and recency already protects the tail.
+    #[serde(default)]
+    pub context_semantic_compaction: bool,
     /// SQLite path for the LCM lossless DAG (default `~/.operant/lcm.db`).
     #[serde(default)]
     pub context_lcm_db: Option<PathBuf>,
@@ -784,6 +811,14 @@ fn default_max_tool_result_share() -> f64 {
     crate::context_management::DEFAULT_MAX_TOOL_RESULT_SHARE
 }
 
+/// Default for `context_compression_summary_max_chars`: `u32::MAX` —
+/// effectively the compressor's historical unbounded summary, but still
+/// serialisable to TOML (i64 integers). The example TOML shows how to
+/// bound it.
+fn default_summary_max_chars() -> u32 {
+    u32::MAX
+}
+
 impl Default for BehaviorSettings {
     fn default() -> Self {
         Self {
@@ -803,6 +838,7 @@ impl Default for BehaviorSettings {
             session_reset: SessionResetMode::Never,
             context_compression: false,
             context_compression_threshold: 0.5,
+            context_compression_summary_max_chars: default_summary_max_chars(),
             max_tool_result_share: default_max_tool_result_share(),
             max_consecutive_tool_only: 90,
             fallback_models: Vec::new(),
@@ -814,6 +850,7 @@ impl Default for BehaviorSettings {
             creation_nudge_interval: 10,
             recap_idle_seconds: 240,
             context_engine: "compact".to_string(),
+            context_semantic_compaction: false,
             context_lcm_db: None,
             context_lcm_tail_tokens: 12_000,
             context_lcm_auto_recall: true,
@@ -2858,6 +2895,61 @@ fn apply_path_override(name: &str, target: &mut PathBuf) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    /// The 2026-10-26 context-management fixes (audit G2/G5/G6 follow-ups):
+    /// every new knob must PARSE from TOML and default to the documented
+    /// value — a key that silently fails to deserialize is a knob that
+    /// does not exist.
+    #[test]
+    fn context_management_knobs_parse_and_default() {
+        // Cold-start defaults: semantic compaction off, summary unbounded,
+        // recap section empty (primary model), advisor timeout 120.
+        let config: AppConfig = toml::from_str("").expect("empty config loads");
+        assert!(!config.agent.context_semantic_compaction);
+        assert_eq!(config.agent.context_compression_summary_max_chars, u32::MAX);
+        assert_eq!(config.recap.model.model, None);
+        assert_eq!(config.advisor.timeout_secs, 120);
+
+        // Every key parses and lands where the code reads it.
+        let config: AppConfig = toml::from_str(
+            r#"
+[agent]
+context_semantic_compaction = true
+context_compression_summary_max_chars = 4000
+
+[advisor]
+timeout_secs = 45
+
+[recap.model]
+model = "cheap-fast-model"
+base_url = "http://localhost:8080/v1"
+
+[auxiliary_models.compression]
+model = "my-route-summarizer"
+"#,
+        )
+        .expect("full config loads");
+        assert!(config.agent.context_semantic_compaction);
+        assert_eq!(config.agent.context_compression_summary_max_chars, 4000);
+        assert_eq!(config.advisor.timeout_secs, 45);
+        assert_eq!(
+            config.recap.model.model.as_deref(),
+            Some("cheap-fast-model")
+        );
+        assert_eq!(
+            config.recap.model.base_url.as_deref(),
+            Some("http://localhost:8080/v1")
+        );
+        assert_eq!(
+            config
+                .auxiliary_models
+                .compression
+                .as_ref()
+                .and_then(|s| s.model.clone())
+                .as_deref(),
+            Some("my-route-summarizer")
+        );
+    }
+
     /// Word completion is ON by default (iter-1234): a config that omits
     /// `[tui] word_completion` entirely must deserialize to `"ngram"`, and
     /// an explicit `"off"` must still be honored — the opt-out is the

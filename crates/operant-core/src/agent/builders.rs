@@ -168,6 +168,7 @@ impl OperantAgent {
             cache_tracker: crate::agent::clients::cache_monitor::PrefixTracker::new(),
             llm_compressor: None,
             context_engine: None,
+            semantic_embedder: None,
             credential_pool: None,
             active_credential_id: Arc::new(std::sync::RwLock::new(None)),
             rotation_cooldown_until: Arc::new(std::sync::RwLock::new(0.0)),
@@ -260,6 +261,7 @@ impl OperantAgent {
             cache_tracker: crate::agent::clients::cache_monitor::PrefixTracker::new(),
             llm_compressor: None,
             context_engine: None,
+            semantic_embedder: None,
             credential_pool: None,
             active_credential_id: Arc::new(std::sync::RwLock::new(None)),
             rotation_cooldown_until: Arc::new(std::sync::RwLock::new(0.0)),
@@ -625,10 +627,13 @@ impl OperantAgent {
     /// One-line host wiring: the agent owns everything the engine needs —
     /// the `TurnEndBus` (created and attached here if absent), the model
     /// client, the model name, and the conversation snapshot — so the host
-    /// passes only the idle window and gets back the activity handle.
-    /// Recaps surface through the agent's own event channel as
-    /// [`AgentEvent::BackgroundReview`] with the `※` prefix, the exact
-    /// channel the TUI already renders as an inline system line.
+    /// passes only the idle window and the `[recap]` model slot and gets
+    /// back the activity handle. The slot is the SMOL role: a cheap fast
+    /// model renders the status line; empty slot keeps the primary model
+    /// (the historical behavior). Recaps surface through the agent's own
+    /// event channel as [`AgentEvent::BackgroundReview`] with the `※`
+    /// prefix, the exact channel the TUI already renders as an inline
+    /// system line.
     ///
     /// No-op-friendly by design: `idle == 0` returns a disconnected handle
     /// (the config-off state costs one channel allocation), and hosts that
@@ -636,6 +641,8 @@ impl OperantAgent {
     pub fn attach_recap_engine(
         &mut self,
         idle: std::time::Duration,
+        slot: crate::recap::RecapConfig,
+        base: crate::client::ClientConfig,
     ) -> crate::recap::RecapActivity {
         if self.turn_end_bus.is_none() {
             self.turn_end_bus = Some(crate::turn_end::TurnEndBus::new());
@@ -649,8 +656,40 @@ impl OperantAgent {
             .clone()
             .unwrap_or_default();
         let rx = bus.subscribe();
-        let client = Arc::clone(&self.client);
-        let model = self.effective_model().to_string();
+        // SMOL slot resolution (omp model-roles parity, same shape as
+        // [`Self::attach_advisor`]): a pinned base_url/api_key gets a
+        // dedicated client seeded from `base`; a pinned model name rides
+        // the primary client; an empty slot keeps the primary model and
+        // client — the pre-slot behavior, byte-identical.
+        let has_slot_url_or_key = slot
+            .model
+            .base_url
+            .as_deref()
+            .is_some_and(|s| !s.trim().is_empty())
+            || slot
+                .model
+                .api_key
+                .as_deref()
+                .is_some_and(|s| !s.trim().is_empty());
+        let client: Arc<dyn ModelClient> = if has_slot_url_or_key {
+            // The engine takes `Arc<dyn ModelClient>` (the trait, not the
+            // inherent impl), so the slot's raw OpenAIClient is wrapped in
+            // the trait adapter — the same wrap every other ModelClient
+            // construction site uses.
+            std::sync::Arc::new(crate::agent::clients::openai::OpenAIModelClient::new(
+                crate::moa::slot_client(&base, &slot.model),
+            ))
+        } else {
+            Arc::clone(&self.client)
+        };
+        let model = slot
+            .model
+            .model
+            .as_deref()
+            .map(str::trim)
+            .filter(|m| !m.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| self.effective_model().to_string());
         let conversation = Arc::clone(&self.conversation);
         let event_tx = self.event_tx.clone();
         crate::recap::spawn_recap_engine(
@@ -777,6 +816,19 @@ impl OperantAgent {
         self.llm_compressor = Some(tokio::sync::Mutex::new(llm_compressor::LlmCompressor::new(
             config,
         )));
+        self
+    }
+
+    /// Attach an embedder for the semantic compaction rung (RT-183).
+    /// No-op for the agent when `agent.context_semantic_compaction` is
+    /// false (the rung reads that flag from the agent config); the CLI
+    /// passes the same embedder instance `context_lcm_embedding_model`
+    /// already builds for `lcm_vector_recall`, so one knob serves both.
+    pub fn with_semantic_embedder(
+        mut self,
+        embedder: std::sync::Arc<dyn crate::context::Embedder>,
+    ) -> Self {
+        self.semantic_embedder = Some(embedder);
         self
     }
 

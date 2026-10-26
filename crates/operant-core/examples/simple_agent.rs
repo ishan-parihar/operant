@@ -187,6 +187,7 @@ Use the echo tool to repeat information and the calculate tool for math."
         max_retries: 3,
         tool_search: Default::default(),
         guardrail_exempt_tools: Vec::new(),
+        context_semantic_compaction: false,
         ponytail: Default::default(),
     };
 
