@@ -56,6 +56,7 @@ use memory_wire::api::{MemoryService, ScoredMemory};
 use memory_wire::recall::FusionWeights;
 use memory_wire::store::{SqliteStore, Store};
 use serde_json::Value;
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -124,6 +125,29 @@ const USER_TURN_CHARS: usize = 500;
 /// Characters retained from the assistant turn in `sync_turn`.
 const ASSISTANT_TURN_CHARS: usize = 2000;
 
+/// (plan 2026-10-26, RT-191) head-anchored bounds for the session-end /
+/// pre-compact conversation fold. memory-wire's own hooks.rs tails to
+/// FLUSH_CHARS=2000; here the fold keeps each message's HEAD because the
+/// question is the retrieval key — the sync_turn head-drop lesson (the
+/// audit measured only 4 recallable turn rows in the live bank because
+/// head-truncation with tail-keeping dropped the question's key words).
+const FOLD_USER_CHARS: usize = 300;
+
+/// Head bound for the assistant answer inside the fold.
+const FOLD_ASSISTANT_CHARS: usize = 700;
+
+/// Delegation result head bound.
+const DELEGATION_RESULT_CHARS: usize = 700;
+
+/// Bounded queue of queries the loop queued via `queue_prefetch`;
+/// drained into the next `prefetch` (plan 2026-10-26, RT-191).
+const PREFETCH_QUEUE_CAP: usize = 8;
+
+/// The `[memory context before compaction]` header the preflight ladder's
+/// insertion site expects (run.rs wraps the string in this header itself —
+/// the hook returns the body only, matching what the ladder prints).
+const PRE_COMPACT_HEADER: &str = "[memory context before compaction]";
+
 /// Run one `memory_wire` call, degrading a panic or an `Err` to a memory miss.
 ///
 /// This is the panic boundary for the whole integration. A `memory_wire` panic
@@ -173,6 +197,11 @@ pub struct MemoryWireProvider<S: Store = SqliteStore> {
     /// to an in-memory store — the legacy import must not rename the
     /// user's MEMORY.md against a store that dies with the process.
     persistent: bool,
+    /// (plan 2026-10-26, RT-191) queries the agent loop queued via
+    /// `queue_prefetch`, drained into the next `prefetch` call. The loop
+    /// queues the NEXT turn's recall after each completed turn; the old
+    /// trait-default no-op dropped them on the floor.
+    prefetch_queue: std::sync::Mutex<VecDeque<String>>,
 }
 
 impl<S: Store> MemoryWireProvider<S> {
@@ -182,6 +211,7 @@ impl<S: Store> MemoryWireProvider<S> {
             service: Arc::new(service),
             bank: std::sync::RwLock::new(bank.into()),
             persistent: false,
+            prefetch_queue: std::sync::Mutex::new(VecDeque::new()),
         }
     }
 
@@ -228,6 +258,74 @@ impl<S: Store> MemoryWireProvider<S> {
         guard("retain_turn", || svc.retain(bank, &content, None));
     }
 
+    /// (plan 2026-10-26, RT-191) Fold a conversation's own prose — user /
+    /// assistant pairs only, tool output and system messages skipped —
+    /// into one bounded document body, keeping each message's HEAD.
+    /// Shared by `on_session_end` and `on_pre_compress`; both hooks
+    /// receive the same message slice shape.
+    fn fold_conversation(messages: &[crate::client::Message]) -> String {
+        let mut out = String::new();
+        for m in messages {
+            let head = match m.role {
+                crate::client::Role::User => {
+                    m.content.chars().take(FOLD_USER_CHARS).collect::<String>()
+                }
+                crate::client::Role::Assistant => m
+                    .content
+                    .chars()
+                    .take(FOLD_ASSISTANT_CHARS)
+                    .collect::<String>(),
+                // System prompts, tool calls, tool results: not this
+                // session's own prose — skipping them is the point of the
+                // fold (the executor's session-end snapshot already limits
+                // to assistant messages; this fold keeps the paired user
+                // questions too, which ARE the retrieval keys).
+                _ => continue,
+            };
+            let head = head.trim();
+            if head.is_empty() {
+                continue;
+            }
+            let label = if m.role == crate::client::Role::User {
+                "User"
+            } else {
+                "Assistant"
+            };
+            if !out.is_empty() {
+                out.push('\n');
+            }
+            out.push_str(&format!("{label}: {head}"));
+        }
+        out
+    }
+
+    /// (plan 2026-10-26, RT-191) Retain one folded conversation document
+    /// under a stable document id. The panic guard is the same
+    /// degrade-don't-die boundary as every other write path.
+    fn retain_folded(
+        &self,
+        document_id: Option<&str>,
+        body: &str,
+        tags: &[&str],
+        mode: memory_wire::store::UpdateMode,
+    ) {
+        // `Replace` pairs with a stable `document_id` (one-revision-per-doc
+        // upsert); `Append` pairs with `None` — the store REFUSES an append
+        // under a reused document id (DocumentConflict, the one-revision
+        // rule), so accumulating events each write their own row and rely
+        // on the content-digest dedup for identical bodies.
+        if body.trim().is_empty() {
+            return;
+        }
+        let bank = self.bank_id();
+        // KB-13: the fold carries conversation prose — redact before store.
+        let body = crate::redaction::redact_sensitive_text(body);
+        let tags: Vec<String> = tags.iter().map(|t| t.to_string()).collect();
+        let svc = &self.service;
+        guard("retain_folded", || {
+            svc.retain_doc(&bank, &body, None, &tags, document_id, mode)
+        });
+    }
     /// Recall for a query, returning a formatted text block. Uses
     /// `recall_with_weights` (not plain `recall`) so the fusion weights are
     /// explicit and can be tuned without changing the call shape.
@@ -362,6 +460,7 @@ impl MemoryWireProvider<SqliteStore> {
             service: Arc::new(MemoryService::new(store)),
             bank: std::sync::RwLock::new(DEFAULT_BANK.to_string()),
             persistent,
+            prefetch_queue: std::sync::Mutex::new(VecDeque::new()),
         })
     }
 
@@ -453,7 +552,26 @@ impl<S: Store + Send + Sync + 'static> crate::memory_provider::MemoryProvider
     }
 
     async fn prefetch(&self, query: &str) -> String {
-        let text = self.recall_text(query, 5);
+        // (plan 2026-10-26, RT-191) drain the queue_prefetch backlog into
+        // this recall: the loop queued the previous turn's query for
+        // exactly this moment. A empty drain (nothing queued, or a
+        // contended lock) changes nothing — the authoritative query is
+        // still the turn's own.
+        let queued: Vec<String> = self
+            .prefetch_queue
+            .lock()
+            .map(|mut q| q.drain(..).collect())
+            .unwrap_or_default();
+        let mut text = self.recall_text(query, 5);
+        for q in queued {
+            let extra = self.recall_text(&q, 3);
+            if !extra.is_empty() {
+                if !text.is_empty() {
+                    text.push('\n');
+                }
+                text.push_str(&extra);
+            }
+        }
         if text.is_empty() {
             String::new()
         } else {
@@ -519,6 +637,78 @@ impl<S: Store + Send + Sync + 'static> crate::memory_provider::MemoryProvider
         self.retain_fact(content, &["fact".to_string()]);
     }
 
+    /// (plan 2026-10-26, RT-191) Session end: the words stop being
+    /// available after this moment — fold the conversation's own prose
+    /// into ONE session document under a stable id, REPLACING any prior
+    /// revision so a session-end fired twice (or a resumed session)
+    /// cannot duplicate the corpus. Mirrors memory-wire's own
+    /// session_end hook (hooks.rs) in-process.
+    fn on_session_end(&self, messages: &[crate::client::Message]) {
+        let body = Self::fold_conversation(messages);
+        self.retain_folded(
+            Some("session-summary"),
+            &body,
+            &["session", "conversation"],
+            memory_wire::store::UpdateMode::Replace,
+        );
+    }
+
+    /// (plan 2026-10-26, RT-191 / peer RT-181) Pre-compress: the middle of
+    /// the conversation is about to be evicted — retain a bounded gist of
+    /// the evicted prose (APPEND: compression events in one long session
+    /// accumulate) and return the insert body the preflight ladder places
+    /// as `[memory context before compaction]`. The trait default returns
+    /// `String::new()`, so the ladder's insertion always inserted nothing.
+    fn on_pre_compress(&self, messages: &[crate::client::Message]) -> String {
+        let body = Self::fold_conversation(messages);
+        if body.trim().is_empty() {
+            return String::new();
+        }
+        // Append + document_id: None — the store refuses an append under a
+        // REUSED document id (DocumentConflict, one-revision-per-doc rule);
+        // accumulating compression events each take their own row, with
+        // the content-digest dedup collapsing identical bodies.
+        self.retain_folded(
+            None,
+            &body,
+            &["session", "pre-compact"],
+            memory_wire::store::UpdateMode::Append,
+        );
+        format!("{PRE_COMPACT_HEADER}\n{body}")
+    }
+
+    /// (plan 2026-10-26, RT-191) Delegation: the parent's graph captures
+    /// the delegated work — the task (the retrieval key) plus the
+    /// result's head.
+    fn on_delegation(&self, task: &str, result: &str) {
+        let result_head: String = result.chars().take(DELEGATION_RESULT_CHARS).collect();
+        let body = format!("Task: {}\nResult: {}", task.trim(), result_head.trim());
+        // Append + document_id: None — same one-revision rule as pre-compact;
+        // each delegation observation is its own row, deduped by content.
+        self.retain_folded(
+            None,
+            &body,
+            &["delegation", "task"],
+            memory_wire::store::UpdateMode::Append,
+        );
+    }
+
+    /// (plan 2026-10-26, RT-191) Queue the next turn's recall — the loop
+    /// calls this after each completed turn; the backlog drains into the
+    /// next `prefetch`. Bounded: the newest 8 queries survive.
+    fn queue_prefetch(&self, query: &str) {
+        let q = query.trim();
+        if q.is_empty() {
+            return;
+        }
+        if let Ok(mut queue) = self.prefetch_queue.lock() {
+            if queue.len() >= PREFETCH_QUEUE_CAP {
+                queue.pop_front();
+            }
+            queue.push_back(q.to_string());
+        }
+    }
+
     async fn handle_tool_call(&self, name: &str, args: Value) -> String {
         match name {
             "memory_smart_search" => {
@@ -574,6 +764,153 @@ mod tests {
     fn in_memory_provider() -> MemoryWireProvider<SqliteStore> {
         let store = SqliteStore::open_in_memory().expect("open in-memory store");
         MemoryWireProvider::from_service(MemoryService::new(store), "test")
+    }
+
+    /// Two conversation pairs shaped like a real session's tail — the
+    /// input `on_session_end` / `on_pre_compress` receive.
+    fn sample_conversation() -> Vec<crate::client::Message> {
+        vec![
+            crate::client::Message::system("you are operant"),
+            crate::client::Message::user("how do I fix the crawl mode bug"),
+            crate::client::Message::assistant("send mode=crawl on the v2 composite"),
+            crate::client::Message::user("what about the ws_url failure"),
+            crate::client::Message::assistant("cloakctl.cdp needs format=json"),
+        ]
+    }
+
+    // ── Phase 1 (plan 2026-10-26): the four missing lifecycle hooks ──
+
+    #[test]
+    fn on_session_end_retains_the_conversation_prose_as_one_document() {
+        let p = in_memory_provider();
+        p.on_session_end(&sample_conversation());
+        // The user QUESTIONS are the retrieval keys (head-anchored): a
+        // search for the topic must surface the session document.
+        let recalled = p.recall_text("crawl mode bug", 5);
+        assert!(
+            recalled.contains("crawl mode bug"),
+            "session-end doc must be recallable by its user turns; got {recalled:?}"
+        );
+        assert!(
+            recalled.contains("ws_url failure"),
+            "both user turns ride the session doc: {recalled:?}"
+        );
+    }
+
+    #[test]
+    fn on_session_end_replaces_not_appends_across_two_calls() {
+        let p = in_memory_provider();
+        p.on_session_end(&sample_conversation());
+        // A second session-end (same document_id, UpdateMode::Replace)
+        // must REPLACE, not append: the bank holds ONE session document,
+        // not two copies. Row count is the observable — the session doc's
+        // id is stable across Replace revisions.
+        let before = p.list_page(50, 0).len();
+        p.on_session_end(&sample_conversation());
+        let after = p.list_page(50, 0).len();
+        assert_eq!(
+            before, after,
+            "two session-end calls must not grow the bank (Replace, not Append): {before} -> {after}"
+        );
+        // And the doc must not contain its own prose twice.
+        let recalled = p.recall_text("crawl mode bug", 10);
+        let first = recalled.find("how do I fix").unwrap_or(0);
+        let second = recalled.rfind("how do I fix").unwrap_or(0);
+        assert_eq!(
+            first, second,
+            "Replace must leave one copy of the session prose: {recalled:?}"
+        );
+    }
+
+    #[test]
+    fn on_session_end_skips_tool_output_and_keeps_head_of_user_turns() {
+        let p = in_memory_provider();
+        let mut conv = sample_conversation();
+        conv.push(crate::client::Message::user(
+            "tool output noise {\"stdout\": \"gigantic blob\"}",
+        ));
+        p.on_session_end(&conv);
+        let recalled = p.recall_text("crawl mode bug", 5);
+        assert!(
+            recalled.contains("how do I fix"),
+            "the HEAD of the user question is the retrieval key: {recalled:?}"
+        );
+    }
+
+    #[test]
+    fn on_pre_compress_retains_evicted_prose_and_returns_the_insert_string() {
+        let p = in_memory_provider();
+        let insights = p.on_pre_compress(&sample_conversation());
+        // The insert string the ladder site places must be non-empty when
+        // there was prose to fold — today the trait default returns
+        // String::new() and the insertion inserts nothing.
+        assert!(
+            !insights.trim().is_empty(),
+            "pre-compress must return the [memory context] insert when there is prose"
+        );
+        assert!(insights.contains("[memory context before compaction]"));
+        // And the evicted prose must be recallable afterwards.
+        let recalled = p.recall_text("ws_url failure", 5);
+        assert!(
+            recalled.contains("format=json"),
+            "the evicted assistant answer must survive in the bank: {recalled:?}"
+        );
+    }
+
+    #[test]
+    fn on_pre_compress_appends_across_two_compressions() {
+        let p = in_memory_provider();
+        p.on_pre_compress(&sample_conversation());
+        let before = p.list_page(50, 0).len();
+        // A SECOND, different compression event (the conversation grew
+        // between rungs): retain_doc deduplicates byte-identical writes,
+        // so Append is observable only when the body differs — which is
+        // also the real-world shape (the second ladder fire folds a
+        // longer conversation).
+        let mut grown = sample_conversation();
+        grown.push(crate::client::Message::user("and the format key on scrape"));
+        grown.push(crate::client::Message::assistant(
+            "same format=json contract",
+        ));
+        p.on_pre_compress(&grown);
+        let after = p.list_page(50, 0).len();
+        assert_eq!(
+            after,
+            before + 1,
+            "pre-compact APPENDS per compression event: {before} -> {after}"
+        );
+    }
+
+    #[test]
+    fn on_delegation_retains_the_task_and_result_head() {
+        let p = in_memory_provider();
+        let long_result = "found three defects ".repeat(300);
+        p.on_delegation("audit the sourcehound crawl tool", &long_result);
+        let recalled = p.recall_text("sourcehound crawl", 5);
+        assert!(
+            recalled.contains("audit the sourcehound"),
+            "the delegated task must be recallable: {recalled:?}"
+        );
+        assert!(
+            recalled.contains("found three defects"),
+            "the result's HEAD rides the delegation doc: {recalled:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn queue_prefetch_drains_into_the_next_prefetch() {
+        let p = in_memory_provider();
+        p.sync_turn("drain probe topic", "answer about drain probes")
+            .await
+            .expect("sync_turn");
+        p.queue_prefetch("drain probe topic");
+        // The queued query must influence (be drained by) the next prefetch
+        // — the trait-default no-op drops it entirely.
+        let recalled = p.prefetch("unrelated noise").await;
+        assert!(
+            recalled.contains("drain probe topic") || recalled.contains("drain probes"),
+            "a queued prefetch must fire on the next turn's recall: got {recalled:?}"
+        );
     }
 
     /// (plan 06B) per-turn scoping: `set_scope` retargets the ONE store —
