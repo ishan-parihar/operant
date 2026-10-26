@@ -286,10 +286,14 @@ pub async fn update(spec: &IntegrationSpec) -> anyhow::Result<Option<UpdateNotic
     // Content integrations install the tag TARBALL itself — the release
     // carries no assets by design, and reporting `Available` on the empty
     // asset list (the pick_asset → None path) would strand the operator
-    // on an old version forever.
+    // on an old version forever. The URL is codeload, NOT the api tarball
+    // endpoint: `download()` sends `Accept: application/octet-stream`
+    // (required for private ASSET urls) and the api tarball endpoint 415s
+    // on that header — observed live 2026-10-26 on the ponytail first
+    // install. codeload serves the same tarball bytes with any Accept.
     if spec.content_tarball {
         let url = format!(
-            "https://api.github.com/repos/{}/tarball/{}",
+            "https://codeload.github.com/{}/tar.gz/{}",
             spec.repo, release.tag
         );
         let bytes = download(&url).await?;
