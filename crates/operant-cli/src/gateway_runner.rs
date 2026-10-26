@@ -1206,6 +1206,61 @@ pub fn pending_permission_exists(channel_id: &str) -> bool {
 fn pid_file_path() -> std::path::PathBuf {
     operant_core::platform::operant_home().join("gateway.pid")
 }
+
+/// The exclusive daemon lock beside the pid file. A SECOND `gateway run`
+/// used to start unconditionally: `start_gateway` checked only the
+/// in-process `RUNNER` static, never the pid file, so two daemons
+/// double-polled Telegram/Discord (fighting over getUpdates offsets),
+/// double-held model credentials, and double the RSS. `flock` is the
+/// fix's shape (the jcode daemon lock, server/socket.rs): the kernel
+/// releases it when the holder dies, so a crashed gateway never wedges
+/// the next start, and a pid-file race can never let two through.
+struct GatewayDaemonLock {
+    _file: std::fs::File,
+    path: std::path::PathBuf,
+}
+
+impl Drop for GatewayDaemonLock {
+    fn drop(&mut self) {
+        // Best effort: the flock is released by the fd close regardless, and
+        // a leftover lock file is harmless (the next gateway re-locks it).
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+/// Take the exclusive gateway daemon lock, or report that a live gateway
+/// holds it. `Ok(None)` means REFUSE TO START — the caller must not boot a
+/// second daemon.
+fn acquire_gateway_daemon_lock() -> Result<Option<GatewayDaemonLock>> {
+    #[cfg(unix)]
+    {
+        use std::os::fd::AsRawFd;
+
+        let path = operant_core::platform::operant_home().join("gateway.lock");
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(false)
+            .open(&path)
+            .with_context(|| format!("open gateway lock {}", path.display()))?;
+        let taken = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0;
+        Ok(taken.then_some(GatewayDaemonLock { _file: file, path }))
+    }
+    #[cfg(not(unix))]
+    {
+        // Windows has no flock; the pid file remains the (best-effort)
+        // duplicate signal there. The gateway daemon is a systemd/foreground
+        // Unix deployment surface in practice.
+        Ok(Some(GatewayDaemonLock {
+            _file: std::fs::File::create(std::path::PathBuf::from("NUL"))
+                .context("windows no-op lock placeholder")?,
+            path: std::path::PathBuf::new(),
+        }))
+    }
+}
 /// Sticky per-session resume pins, set by the `/resume` command.
 ///
 /// The agent's session id is derived from the routing key
@@ -2833,6 +2888,21 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
     // fires `holon tick` every 2 minutes (the kernel's schedules and
     // lease sweeps — the clock belongs to the resident runtime).
     operant_os::organs::spawn_if_configured(app_config);
+
+    // Finding 1 of the 2026-10-26 persistent-gateway audit: refuse to
+    // become a SECOND daemon. The in-process RUNNER check below only covers
+    // this process; the flock covers the MACHINE. `None` = a live gateway
+    // holds the lock — say so and do not start.
+    let _daemon_lock = match acquire_gateway_daemon_lock()? {
+        Some(lock) => lock,
+        None => {
+            return Ok(
+                "Gateway is already running on this machine — refusing to start a second daemon. \
+                 Run `operant gateway status` to see it, or `operant gateway stop` first."
+                    .to_string(),
+            );
+        }
+    };
 
     init_pending_permissions();
     let mut guard = runner().lock().await;
@@ -5247,19 +5317,15 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
         tracing::info!("Cron scheduler started");
     }
 
-    // Write PID file for cross-process status checks
-    if let Ok(_pid) = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-    {
-        // Use current PID as content (not timestamp)
-        let pid_str = std::process::id().to_string();
-        let pid_path = pid_file_path();
-        if let Some(parent) = pid_path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        let _ = std::fs::write(&pid_path, &pid_str);
+    // Write PID file for cross-process status checks (the flock above is
+    // the duplicate-prevention mechanism; the pid file only names the
+    // process for status/stop).
+    let pid_str = std::process::id().to_string();
+    let pid_path = pid_file_path();
+    if let Some(parent) = pid_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
     }
+    let _ = std::fs::write(&pid_path, &pid_str);
 
     // An empty admins list means every user who finds the bot can drive the
     // agent, with this process's model credentials. `operant gateway status`

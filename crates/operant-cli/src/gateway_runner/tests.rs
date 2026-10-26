@@ -998,6 +998,48 @@ async fn test_gateway_start_stop_with_disabled_platforms() {
     );
 }
 
+/// iter-1333 (audit finding 1): the daemon lock is exclusive — a second
+/// `gateway run` on the same machine must refuse to start, and dropping the
+/// lock must free the path for the next start. The whole point of the
+/// audit fix: two daemons double-poll Telegram and double the RSS.
+#[test]
+fn second_gateway_daemon_lock_is_refused_until_released() {
+    let _env_lock = crate::config::test_env_lock();
+    let tmp = tempfile::tempdir().unwrap();
+    let previous_home = std::env::var("HERMES_HOME").ok();
+    // SAFETY: serialised by the crate's environment lock.
+    unsafe { std::env::set_var("HERMES_HOME", tmp.path()) };
+    // PROVE the isolation before writing anything (RT-99 pattern): this
+    // test takes a real flock in the operant home.
+    assert_eq!(
+        operant_core::platform::operant_home(),
+        tmp.path(),
+        "the daemon lock lives in the operant home — must be the test's temp dir"
+    );
+
+    let first =
+        super::acquire_gateway_daemon_lock().expect("first gateway daemon lock acquisition");
+    assert!(first.is_some(), "a fresh home's lock must be acquirable");
+    let second = super::acquire_gateway_daemon_lock()
+        .expect("second gateway daemon lock acquisition attempt");
+    assert!(
+        second.is_none(),
+        "a live gateway holds the flock — the second start must be refused"
+    );
+    drop(first);
+    let third = super::acquire_gateway_daemon_lock()
+        .expect("third gateway daemon lock acquisition after release");
+    assert!(
+        third.is_some(),
+        "dropping the lock (gateway stopped) must free the next start"
+    );
+
+    match previous_home {
+        Some(v) => unsafe { std::env::set_var("HERMES_HOME", v) },
+        None => unsafe { std::env::remove_var("HERMES_HOME") },
+    }
+}
+
 /// RT-175 — the /goal + /subgoal TURN-SIDE read. The commands write
 /// `goal`/`subgoal` + `goal_pending_inject` on the session row; the
 /// turn must inject the `[session goal]` marker into the query and
