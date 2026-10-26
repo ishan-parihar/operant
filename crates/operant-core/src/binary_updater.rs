@@ -272,12 +272,7 @@ pub fn kick_session_update(spec: IntegrationSpec) {
 /// Compare and, when behind, download + verify + install. `Ok(None)` means
 /// current (or no platform asset) — nothing to report.
 pub async fn update(spec: &IntegrationSpec) -> anyhow::Result<Option<UpdateNotice>> {
-    let installed = match &spec.install {
-        InstallKind::ReplaceOnPath(bin) => local_version(bin).await?,
-        InstallKind::CacheDir { dir, .. } | InstallKind::Content { dir, .. } => {
-            cached_version(dir)?
-        }
-    };
+    let installed = installed_version(spec).await?;
     let Some(release) = latest_release(spec).await? else {
         return Ok(None);
     };
@@ -403,6 +398,21 @@ fn cached_version(dir: &Path) -> anyhow::Result<Version> {
     latest_version_dir(dir)
         .0
         .ok_or_else(|| anyhow::anyhow!("no versioned cache dirs in {}", dir.display()))
+}
+
+/// The version an integration currently runs, for the UPDATE path. Absent
+/// cache (first install) reads as `(0,0,0)` — install everything — while
+/// a missing on-PATH binary is still an error (nothing sensible to install
+/// over). Observed live 2026-10-26: `cached_version` errored on the empty
+/// integrations dir and `operant update integrations` reported "check
+/// failed — no versioned cache dirs" forever, never installing ponytail.
+async fn installed_version(spec: &IntegrationSpec) -> anyhow::Result<Version> {
+    match &spec.install {
+        InstallKind::ReplaceOnPath(bin) => local_version(bin).await,
+        InstallKind::CacheDir { dir, .. } | InstallKind::Content { dir, .. } => {
+            Ok(cached_version(dir).unwrap_or_default())
+        }
+    }
 }
 
 /// The newest `*-v*` version dir under `dir`, plus its parsed version.
@@ -1279,6 +1289,42 @@ mod tests {
                 std::env::set_var("PATH", path.clone());
             }
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// First install of a cache-kind integration: the empty cache dir must
+    /// read as version (0,0,0) so `update()` installs, NOT error out. This
+    /// is the live 2026-10-26 defect: `operant update integrations` on a
+    /// machine with no ponytail install reported "check failed — no
+    /// versioned cache dirs" forever and NEVER installed anything.
+    #[tokio::test]
+    async fn absent_cache_reads_as_zero_so_first_install_proceeds() {
+        let dir = std::env::temp_dir().join(format!("operant-pt-absent-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let spec = IntegrationSpec {
+            name: "ponytail",
+            repo: "DietrichGebert/ponytail",
+            asset_marker: "",
+            content_tarball: true,
+            install: InstallKind::Content {
+                dir: dir.clone(),
+                keep: 2,
+                content_subdir: "skills",
+                guard_source: "community:DietrichGebert/ponytail",
+            },
+        };
+        // The empty cache resolves to (0,0,0) — install-everything — on the
+        // update path (installed_version), while the check path keeps
+        // reporting None (doctor's "not installed" row).
+        let v = installed_version(&spec)
+            .await
+            .expect("absent cache must resolve");
+        assert_eq!(v, (0, 0, 0));
+        assert!(
+            cached_version(&dir).is_err(),
+            "check path keeps None semantics"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

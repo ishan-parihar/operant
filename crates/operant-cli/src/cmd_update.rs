@@ -9,7 +9,7 @@ pub enum UpdateSubcommand {
     /// Apply available update
     Apply,
     /// Force an update check for the external integrations (sourcehound,
-    /// aft) now — bypasses the 6 h throttle
+    /// aft, ponytail) now — bypasses the 6 h throttle
     Integrations,
 }
 
