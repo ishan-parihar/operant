@@ -2397,6 +2397,14 @@ impl MessageHandler for GatewayMessageHandler {
                     turn_started.elapsed(),
                 );
 
+                // Audit finding 3: the daemon's bursty per-turn allocations
+                // (transcript rehydration, tool outputs, streaming buffers)
+                // land in glibc arenas that RETAIN freed pages as RSS.
+                // Return them to the OS once the turn settles — debounced
+                // inside `trim()` so a burst of turns costs one sweep, not
+                // one per turn.
+                allocator::trim();
+
                 // Turn persistence to long-term memory happens inside
                 // agent.run() via the agent's memory provider (sync_turn).
 
@@ -2881,6 +2889,13 @@ fn build_session_context(
 /// builds the enabled platform adapters, creates the gateway session
 /// handler, and starts polling for incoming messages.
 pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
+    // Audit finding 3, first half: cap the arena count BEFORE the tokio
+    // runtime spawns its workers. glibc's default is one arena per core;
+    // on a 12-core box that is up to 12 × 64 MiB-aligned retained regions
+    // for a daemon whose hot set is one conversation. `MALLOC_ARENA_MAX`
+    // in the operator's environment still wins.
+    allocator::configure();
+
     // W4 (audit O-12, O-13): the resident organs. When [holon] supervise
     // is on, the gateway runs the supervisor loop as a task — one claim
     // loop over supervise_employees under a max_concurrent_runs
@@ -5429,6 +5444,7 @@ async fn edit_approval_prompt_message(
 // `turn_state.rs` with its own tests. The glob imports below keep every
 // call site in this file on its unqualified name — the split moved code,
 // it did not rewrite call sites.
+pub(crate) mod allocator;
 mod enrichment;
 mod turn_state;
 
