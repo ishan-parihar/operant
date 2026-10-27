@@ -1766,10 +1766,10 @@ impl MemorySettings {
     /// empty.
     pub fn legacy_warnings(&self) -> Vec<String> {
         let mut out = Vec::new();
-        if !matches!(
-            self.provider.as_str(),
-            "memory-wire" | "memory_wire" | "memory" | ""
-        ) {
+        // Only the canonical spelling is silent. `memory` and `memory_wire` used
+        // to be accepted beside it, which hid a typo instead of helping: the
+        // operator who wrote one was never told it is not the real key.
+        if !matches!(self.provider.as_str(), "memory-wire" | "") {
             out.push(format!(
                 "warning: [memory] provider = {:?} is ignored — memory-wire is the only memory engine now. Remove the key from operant.toml.",
                 self.provider
@@ -3853,6 +3853,54 @@ wonderful_unknown_key = 42
             response_cache_enabled: None,
         };
         assert_eq!(loud.legacy_warnings().len(), 2);
+    }
+
+    /// Only the canonical spelling may be silent. `memory` and `memory_wire`
+    /// were accepted beside `memory-wire` with no warning, which hides a typo
+    /// instead of helping: an operator who writes one never learns it is not
+    /// the real key. Both now warn like every other non-canonical value.
+    #[test]
+    fn only_the_canonical_memory_spelling_is_silent() {
+        let canonical = ["memory-wire", ""];
+        for name in canonical {
+            let s = MemorySettings {
+                provider: name.to_string(),
+                enabled: true,
+                agentmemory_url: None,
+                agentmemory_secret: None,
+                agentmemory_auto_spawn: None,
+                agentmemory_version: None,
+                audit_enabled: None,
+                response_cache_enabled: None,
+            };
+            assert!(
+                s.legacy_warnings().is_empty(),
+                "canonical spelling {name:?} must not warn, got: {:?}",
+                s.legacy_warnings()
+            );
+        }
+
+        // Every other spelling warns — including the ones that used to pass
+        // silently, and the retired `agentmemory` (the historical default),
+        // which got NO warning here while `tdg` did: an operator carrying the
+        // old default never learned it was retired.
+        for name in ["memory", "memory_wire", "agentmemory", "builtin", "tdg"] {
+            let s = MemorySettings {
+                provider: name.to_string(),
+                enabled: true,
+                agentmemory_url: None,
+                agentmemory_secret: None,
+                agentmemory_auto_spawn: None,
+                agentmemory_version: None,
+                audit_enabled: None,
+                response_cache_enabled: None,
+            };
+            assert!(
+                s.legacy_warnings().iter().any(|w| w.contains("provider")),
+                "non-canonical spelling {name:?} must warn about the provider key, got: {:?}",
+                s.legacy_warnings()
+            );
+        }
     }
 
     /// The keys the factory-era module docs told users to write. They were never

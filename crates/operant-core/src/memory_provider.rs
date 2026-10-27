@@ -395,12 +395,12 @@ pub fn build_memory_provider(
 ) -> Arc<dyn MemoryProvider> {
     // (plan 11C3) memory-wire is the ONLY provider. The name argument is
     // accepted so existing configs keep loading; anything other than the
-    // memory-wire family warns once (the legacy `builtin` selection is the
-    // important case — the user's own config may still say it).
-    if !matches!(
-        provider_name,
-        "memory-wire" | "memory_wire" | "agentmemory" | "memory" | ""
-    ) {
+    // memory-wire family warns once. Only the canonical `memory-wire` (and
+    // the empty default) are silent: every other spelling — including the
+    // retired `agentmemory` historical default, `memory`/`memory_wire`, and
+    // the legacy `builtin` selection the user's own config may still carry —
+    // warns, because the operator needs to know the key is no longer read.
+    if !matches!(provider_name, "memory-wire" | "") {
         eprintln!(
             "warning: [memory] provider = {provider_name:?} is ignored — memory-wire is the only memory engine now. Remove the key from operant.toml."
         );
