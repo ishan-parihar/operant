@@ -1283,6 +1283,110 @@ async fn handle_runtime_command(
             Some(status)
         }
 
+        // ── /skill [name [instruction]] — the installed skill surface ─────
+        // RT-179 plan item 3.3. /skills (plural) already EXISTS on the
+        // gateway as the ledger point of contact for this surface, and it
+        // opens the TUI's browse panel — which is exactly what a channel
+        // cannot render. /skill (singular) is the INVOKE form the TUI has
+        // (tui/app/commands.rs:394): `/skill gitcrawl summarize the repo`.
+        //
+        // There is one real seam and it is shared deliberately:
+        // `build_skill_invocation_message_in` is THE function the TUI
+        // injects into `pending_user_message`, so both surfaces expand a
+        // skill through one code path and produce one message shape.
+        //
+        // What /skill does NOT do is silently spawn a turn. The TUI injects
+        // its built message into the loop's own pending-user-message slot,
+        // a cell only the TUI process owns; the gateway dispatch loop
+        // returns a reply string and has no equivalent slot (adding one
+        // would be an architectural change to a peer-owned area). So the
+        // honest channel answer is to EXPAND the skill and hand back the
+        // full invocation message the agent will follow, so the operator
+        // can send it and the skill actually runs — that is a real seam
+        // against the alternative, which is a `/skill` that replies and
+        // does nothing.
+        "skill" => {
+            let rest = args.trim();
+            let skills_dir = handler.skills_root_dir.clone();
+            if rest.is_empty() {
+                // The browse half, over a channel: the REAL installed list,
+                // not a canned "see the TUI". A root with no skills says so
+                // rather than reading as an empty reply.
+                let mut mgr = operant_core::skills::SkillManager::new(skills_dir);
+                let loaded = mgr.load_all().unwrap_or_default();
+                let rows: Vec<(String, String)> = mgr
+                    .list()
+                    .into_iter()
+                    .filter(|(name, _)| {
+                        // Only what can actually run: a skill whose
+                        // prerequisites are unmet is listed by name so the
+                        // operator is not told it is usable when it is not.
+                        mgr.get(name).map(|s| mgr.is_available(s)).unwrap_or(false)
+                    })
+                    .collect();
+                let mut reply = format!("🧩 {} installed skills:", loaded.len());
+                if rows.is_empty() {
+                    reply.push_str(
+                        "\n(none loadable — check the skills directory paths in `[skills]`)",
+                    );
+                } else {
+                    // Bounded head + count, the same shape /memory uses: a
+                    // 107-skill dump through a chat message is a worse
+                    // answer than the head of the list plus its size.
+                    const CHANNEL_SKILL_HEAD: usize = 30;
+                    for (name, desc) in rows.iter().take(CHANNEL_SKILL_HEAD) {
+                        reply.push_str(&format!("\n• **{name}** — {desc}"));
+                    }
+                    if rows.len() > CHANNEL_SKILL_HEAD {
+                        reply.push_str(&format!(
+                            "\n…(and {} more — `operant skills list` for all)",
+                            rows.len() - CHANNEL_SKILL_HEAD
+                        ));
+                    }
+                    reply.push_str("\n`/skill <name> [instruction]` to run one.");
+                }
+                return Some(reply);
+            }
+            // `/skill <name> [instruction]` — optional trailing instruction
+            // after the name, split exactly as the TUI splits it (on the
+            // first whitespace) so both surfaces invoke the same way.
+            let (skill_name, instruction) = match rest.split_once(char::is_whitespace) {
+                Some((n, i)) => (n, i.trim().to_string()),
+                None => (rest, String::new()),
+            };
+            match operant_core::agent::skill_preprocessing::build_skill_invocation_message_in(
+                &skills_dir,
+                skill_name,
+                &instruction,
+            ) {
+                Some(msg) => {
+                    // Bounded to the same 1200-char head /memory uses, with
+                    // the marker made explicit so a truncated body is never
+                    // mistaken for the whole skill.
+                    const CHANNEL_SKILL_HEAD_CHARS: usize = 1200;
+                    let total_chars = msg.chars().count();
+                    let shown: String = msg.chars().take(CHANNEL_SKILL_HEAD_CHARS).collect();
+                    let mut reply = format!(
+                        "🧩 Skill `{skill_name}`{}\n\n{shown}",
+                        if instruction.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" — with your instruction: {instruction}")
+                        }
+                    );
+                    if total_chars > CHANNEL_SKILL_HEAD_CHARS {
+                        reply.push_str(
+                            "\n…(truncated — send this message to run the skill in full)",
+                        );
+                    }
+                    Some(reply)
+                }
+                None => Some(format!(
+                    "Skill `{skill_name}` not found — bare `/skill` lists what is installed."
+                )),
+            }
+        }
+
         _ => None,
     }
 }

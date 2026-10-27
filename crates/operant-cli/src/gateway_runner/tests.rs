@@ -1669,3 +1669,109 @@ async fn gateway_memory_reports_the_live_provider_and_recalls_through_it() {
         "the reply must be shaped as a recall, got: {recalled}"
     );
 }
+
+/// RT-179 plan item 3.3 — `/skill` over a channel must EXPAND a real
+/// installed skill, through the SAME `build_skill_invocation_message_in` the
+/// TUI injects. One code path, one format, so the channel answer IS the
+/// invocation message the agent will follow.
+///
+/// A REAL skill directory is created (the handler's `skills_root_dir`, not
+/// `~/.operant`) so the arm is proven to read the configured root rather
+/// than a fixture baked into the binary.
+///
+/// Note the command is registered as `skills` with `skill` as its alias
+/// (the registry's RT-178 uniqueness guard refuses a colliding name), so
+/// this drives the shared arm through the singular the operator types.
+#[tokio::test]
+async fn gateway_skill_expands_a_real_installed_skill() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let agent_db = Arc::new(
+        operant_core::database::Database::init(dir.path().join("agent.sqlite")).expect("db"),
+    );
+    let agent = Arc::new(operant_core::agent::OperantAgent::new(
+        operant_core::agent::AgentConfig::default(),
+        Box::new(
+            operant_core::agent::clients::openai::OpenAIModelClient::new(
+                operant_core::client::OpenAIClient::new(
+                    operant_core::client::ClientConfig::default(),
+                ),
+            ),
+        ),
+        operant_core::tools::ToolRegistry::new(std::time::Duration::from_secs(1)),
+        agent_db.clone(),
+    ));
+    // The configured skills root, carrying a real skill.
+    let skills_root = dir.path().join("skills");
+    let skill_dir = skills_root.join("probe-skill");
+    std::fs::create_dir_all(&skill_dir).expect("skill dir");
+    std::fs::write(
+        skill_dir.join("SKILL.md"),
+        "---\nname: probe-skill\ndescription: A probe\n---\n\n# Do the probe step.\n",
+    )
+    .expect("SKILL.md");
+
+    let handler = GatewayMessageHandler {
+        admins: vec![],
+        agent: Arc::clone(&agent),
+        current_session_id: tokio::sync::Mutex::new(None),
+        gateway: tokio::sync::Mutex::new(None),
+        session_pins: Arc::new(SessionPins::default()),
+        exit_reasons: ExitReasonMap::default(),
+        turn_usage: TurnUsageMap::default(),
+        summary_ttl_minutes: 30,
+        default_budget: operant_core::config::BudgetSettings::default(),
+        context_injection: None,
+        turn_lock: tokio::sync::Mutex::new(()),
+        running_session: std::sync::Mutex::new(None),
+        cancelled_queued: Default::default(),
+        mcp_manager: operant_core::mcp::McpManager::new(),
+        mcp_server_configs: Vec::new(),
+        skills_root_dir: skills_root.clone(),
+        queue_waits: tokio::sync::Mutex::new(Default::default()),
+    };
+
+    // Bare /skill lists the REAL installed skills from the configured root.
+    let list = handle_runtime_command(&handler, "skill", "", "telegram:dm:u1")
+        .await
+        .expect("/skill must be a runtime command");
+    assert!(
+        list.contains("probe-skill"),
+        "bare /skill must list the REAL installed skill, got: {list}"
+    );
+
+    // The named form expands the skill body and folds the instruction in.
+    let expanded = handle_runtime_command(
+        &handler,
+        "skill",
+        "probe-skill run it twice",
+        "telegram:dm:u1",
+    )
+    .await
+    .expect("a named /skill must expand a real skill");
+    assert!(
+        expanded.contains("Do the probe step"),
+        "the expansion must carry the skill's body, got: {expanded}"
+    );
+    assert!(
+        expanded.contains("has invoked the \"probe-skill\" skill"),
+        "the expansion must be the invocation message the agent follows, got: {expanded}"
+    );
+    assert!(
+        expanded.contains("run it twice"),
+        "the trailing instruction must ride the expansion, got: {expanded}"
+    );
+
+    // An unknown name must say not found — and must NOT be shaped like a
+    // successful expansion.
+    let missing = handle_runtime_command(&handler, "skill", "no-such-skill", "telegram:dm:u1")
+        .await
+        .expect("a missing skill must still reply");
+    assert!(
+        missing.contains("not found"),
+        "a missing skill must say not found, got: {missing}"
+    );
+    assert!(
+        !missing.contains("has invoked"),
+        "a missing skill must not produce an invocation message, got: {missing}"
+    );
+}

@@ -503,10 +503,10 @@ pub static COMMAND_REGISTRY: &[CommandDef] = &[
     },
     CommandDef {
         name: "skills",
-        description: "List installed skills",
+        description: "List installed skills, or expand one for this chat",
         aliases: &["skill"],
         category: "Tools",
-        args_hint: "",
+        args_hint: "[name [instruction]]",
         admin_only: false,
     },
     // ── Info ─────────────────────────────────────────────────
@@ -1405,6 +1405,7 @@ pub fn handle_command(cmd_name: &str, _args: &str, ctx: &CommandContext<'_>) -> 
             }
         }
 
+
         // RT-175: honest refusal, mirroring the TUI's /background. The
         // gateway runs ONE shared agent with ONE event channel — there is
         // no second isolated agent to run a detached turn against, and a
@@ -2182,35 +2183,88 @@ pub fn handle_command(cmd_name: &str, _args: &str, ctx: &CommandContext<'_>) -> 
             msg
         }
 
-        "skills" => {
-            let skills_dir = &ctx.config.skills.root_dir;
-            if skills_dir.exists() && skills_dir.is_dir() {
-                let mut skill_names: Vec<String> = Vec::new();
-                if let Ok(entries) = std::fs::read_dir(skills_dir) {
-                    for entry in entries.flatten() {
-                        let path = entry.path();
-                        if path.is_dir() && path.join("SKILL.md").exists()
-                            && let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                                skill_names.push(name.to_string());
-                            }
-                    }
-                }
-                if skill_names.is_empty() {
-                    "📦 No skills found in the skills directory.\nUse CLI `operant skills list` or `operant skills install` to manage skills."
-                        .into()
+        // /skills [name [instruction]] — RT-179 item 3.3. This command is
+        // now the WHOLE skill surface over a channel: no args lists what is
+        // installed, a name EXPANDS that skill for this chat through
+        // `build_skill_invocation_message_in` — the same function the TUI
+        // injects, so both surfaces produce one message shape.
+        //
+        // The sync arm expands on purpose: expanding a skill is a pure file
+        // read, so unlike /memory this arm CAN answer the named form
+        // honestly. What it must not do is point at the TUI's browse panel,
+        // which a channel cannot render.
+        //
+        // The arm this replaces listed raw `read_dir` names, which is why
+        // `/skills` could only ever be a listing: bare directory names are
+        // not invoke-shaped, so the invoke form had nowhere to live.
+        "skills" | "skill" => {
+            let root = ctx.config.skills.root_dir.clone();
+            let rest = args.trim();
+            if rest.is_empty() {
+                // The browse half, over a channel: the REAL installed list,
+                // through the manager that also knows descriptions and
+                // prerequisites, so an unmet-prerequisite skill is not
+                // listed as usable.
+                let mut mgr = operant_core::skills::SkillManager::new(root);
+                let loaded = mgr.load_all().unwrap_or_default();
+                let rows: Vec<(String, String)> = mgr
+                    .list()
+                    .into_iter()
+                    .filter(|(name, _)| {
+                        mgr.get(name).map(|s| mgr.is_available(s)).unwrap_or(false)
+                    })
+                    .collect();
+                let mut reply = format!("🧩 {} installed skills:", loaded.len());
+                if rows.is_empty() {
+                    reply.push_str(
+                        "\n(none — `operant skills list` on the CLI shows what is installed)",
+                    );
                 } else {
-                    skill_names.sort();
-                    let mut text = format!("📦 *Installed Skills:* ({} found)\n", skill_names.len());
-                    for name in &skill_names {
-                        text.push_str(&format!("• `{}`\n", name));
+                    // Bounded head + count, the same shape /memory uses.
+                    const CHANNEL_SKILL_HEAD: usize = 30;
+                    for (name, desc) in rows.iter().take(CHANNEL_SKILL_HEAD) {
+                        reply.push_str(&format!("\n• **{name}** — {desc}"));
                     }
-                    text
+                    if rows.len() > CHANNEL_SKILL_HEAD {
+                        reply.push_str(&format!("\n…(and {} more)", rows.len() - CHANNEL_SKILL_HEAD));
+                    }
+                    reply.push_str("\n`/skill <name> [instruction]` to run one.");
                 }
+                reply
             } else {
-                format!(
-                    "📦 Skills directory not found: `{}`.\nUse CLI `operant skills list` to see available skills.",
-                    skills_dir.display()
-                )
+                // `/skill <name> [instruction]`, split exactly as the TUI
+                // splits it (first whitespace), so both surfaces invoke the
+                // same way.
+                let (name, instruction) = match rest.split_once(char::is_whitespace) {
+                    Some((n, i)) => (n, i.trim().to_string()),
+                    None => (rest, String::new()),
+                };
+                match operant_core::agent::skill_preprocessing::build_skill_invocation_message_in(
+                    &root,
+                    name,
+                    &instruction,
+                ) {
+                    Some(msg) => {
+                        const CHANNEL_SKILL_HEAD_CHARS: usize = 1200;
+                        let total = msg.chars().count();
+                        let shown: String = msg.chars().take(CHANNEL_SKILL_HEAD_CHARS).collect();
+                        let mut out = format!(
+                            "🧩 Skill `{name}`{} — send this to run it:\n\n{shown}",
+                            if instruction.is_empty() {
+                                String::new()
+                            } else {
+                                format!(" (with your instruction: {instruction})")
+                            }
+                        );
+                        if total > CHANNEL_SKILL_HEAD_CHARS {
+                            out.push_str("\n…(truncated)");
+                        }
+                        out
+                    }
+                    None => {
+                        format!("Skill `{name}` not found — `/skills` with no args lists what is installed.")
+                    }
+                }
             }
         }
 
@@ -3585,6 +3639,100 @@ mod rt179_memory_tests {
         assert!(
             !bare.contains("reachable") && !queried.contains("reachable"),
             "the sync arm must not report engine health it cannot read"
+        );
+    }
+}
+
+// ── RT-179 item 3.3: /skill's channel-twin contract ────────────────────
+// The named form must EXPAND a real skill, and the expansion must be the
+// same message the TUI injects — one code path, one format. A /skill that
+// replied "see the TUI" would be the theater this slice exists to close.
+#[cfg(test)]
+mod rt179_skill_tests {
+    use super::*;
+
+    /// A REAL skill on disk (not a stub), so the named form is proven to
+    /// read the real `[skills]` root rather than a fixture baked into the
+    /// binary. The invocation marker is what the agent actually follows, so
+    /// its presence — not a substring of the description — is the assertion.
+    #[test]
+    fn skill_expands_a_real_installed_skill() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let skill_dir = dir.path().join("fizzbuzz");
+        std::fs::create_dir_all(&skill_dir).expect("skill dir");
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: fizzbuzz\ndescription: Count the fizzy numbers\n---\n\n# Count every number that is fizzy.\n",
+        )
+        .expect("SKILL.md");
+
+        let mut cfg = AppConfig::default();
+        cfg.skills.root_dir = dir.path().to_path_buf();
+        let ctx = CommandContext::new(None, &cfg, true, "op-1", "telegram", "chan-s");
+
+        let reply = handle_command("skill", "fizzbuzz count to 100", &ctx)
+            .expect("a named /skill must expand a real skill");
+        assert!(
+            reply.contains("Count every number that is fizzy"),
+            "the expansion must carry the skill's body, got: {reply}"
+        );
+        assert!(
+            reply.contains("has invoked the \"fizzbuzz\" skill"),
+            "the expansion must be the invocation message the agent follows, got: {reply}"
+        );
+        // The trailing instruction is the TUI's own contract — it must be
+        // folded in, not dropped.
+        assert!(
+            reply.contains("count to 100"),
+            "the trailing instruction must ride the expansion, got: {reply}"
+        );
+    }
+
+    /// An unknown name must say so and point at the listing — never reply
+    /// with a success-shaped message that expands nothing.
+    #[test]
+    fn skill_unknown_name_says_not_found_and_names_the_listing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut cfg = AppConfig::default();
+        cfg.skills.root_dir = dir.path().to_path_buf();
+        let ctx = CommandContext::new(None, &cfg, true, "op-1", "telegram", "chan-s");
+
+        let reply = handle_command("skill", "no-such-skill", &ctx).expect("a reply");
+        assert!(
+            reply.contains("not found") && reply.contains("/skill"),
+            "an unknown name must say not found and name the listing, got: {reply}"
+        );
+        assert!(
+            !reply.contains("has invoked"),
+            "a nonexistent skill must not produce an invocation message, got: {reply}"
+        );
+    }
+
+    /// The command must resolve (so the dispatch loop stops feeding the
+    /// literal to the model) and reach the platform's command list.
+    ///
+    /// ONE command, not two: `skill` is `skills`' alias, and the registry's
+    /// uniqueness guard (RT-178) refuses a name that collides with an
+    /// existing alias. So `/skill` resolves to `skills` and carries the
+    /// BOTH-forms contract — no args lists, a name expands — which is also
+    /// why the reply names `/skill` for the invoke form while the platform's
+    /// command list carries `skills`.
+    #[test]
+    fn skill_resolves_and_reaches_the_command_list() {
+        for (text, expected) in [
+            ("/skills", "skills"),
+            ("/skill", "skills"),
+            ("/skill fizzbuzz count", "skills"),
+        ] {
+            assert!(
+                matches!(resolve_command(text), CommandMatch::Found(d, _) if d.name == expected),
+                "{text} must resolve to the `{expected}` command (its alias), not prose"
+            );
+        }
+        let bot_commands = telegram_bot_commands();
+        assert!(
+            bot_commands.contains("\"skills\""),
+            "missing /skills: {bot_commands}"
         );
     }
 }
