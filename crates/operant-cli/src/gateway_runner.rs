@@ -1028,8 +1028,115 @@ async fn handle_runtime_command(
             Some(reply)
         }
 
+        // ── /context — the status half of the TUI's context view ─────────
+        // RT-179: `/context`'s mutation half already exists as `/compress`;
+        // this is the read-only half — how full the session's context is.
+        //
+        // READ-ONLY, and reported from the SAME figures the TUI's footer
+        // divides by, for the iter-1207 reason spelled out there: two
+        // surfaces quoting two denominators is a lie about how close the
+        // window is to full. So the window resolves through
+        // `models_dev::cached_capabilities` with the per-provider offline
+        // fallbacks, identical to the TUI's `refresh_context_window_size`,
+        // and the token count uses the same `estimate_total_tokens`
+        // estimator the context manager itself uses.
+        //
+        // It takes the session scope (turn lock + this chat's conversation)
+        // rather than reading a cell, because the thing being reported is
+        // the conversation's own store — the same reason /undo and
+        // /compress do.
+        "context" => {
+            let reply = handler
+                .run_session_scoped_command(session_key, |agent, session_id| async move {
+                    let messages = agent.conversation().await;
+                    let estimated =
+                        operant_core::context_management::estimate_total_tokens(&messages);
+                    let model = agent.model();
+                    let window = gateway_context_window_for_model(&model);
+                    tracing::debug!(
+                        session_id = %session_id,
+                        messages = messages.len(),
+                        estimated,
+                        window,
+                        "Gateway /context: reported the session's context occupancy"
+                    );
+                    format!(
+                        "📐 *Context for this session:*\n\
+                         • Messages: {}\n\
+                         • Estimated tokens: ~{} (the same estimator the context manager uses)\n\
+                         • Window: {} for `{}`\n\
+                         {}\n\
+                         Shrink it with `/compress` — it folds older completed exchanges and keeps the recent tail.",
+                        messages.len(),
+                        estimated,
+                        window,
+                        model,
+                        context_headroom_line(estimated, window)
+                    )
+                })
+                .await;
+            Some(reply)
+        }
+
         _ => None,
     }
+}
+
+/// The one-line share-of-window sentence for `/context`.
+///
+/// Split out so the arithmetic (and its ceiling) is testable directly, and so
+/// the reply reads as a fraction rather than a bare percentage — a channel
+/// user cannot see the footer bar, so the numbers have to carry the shape.
+pub(crate) fn context_headroom_line(estimated: usize, window: usize) -> String {
+    if window == 0 {
+        return "• Share of window: unknown (no window is resolved for this model).".to_string();
+    }
+    let pct = (estimated as f64 / window as f64 * 100.0).round() as u64;
+    let pct = pct.min(100);
+    format!(
+        "• Share of window: ~{pct}% full — roughly {} of {} tokens used.",
+        estimated.min(window),
+        window
+    )
+}
+
+/// The context window for a model, resolved EXACTLY as the TUI's
+/// `refresh_context_window_size` resolves it (models_dev cache first, the
+/// per-provider offline defaults as fallback).
+///
+/// Duplicated rather than shared because the resolver lives on the TUI's app
+/// struct and needs `active_provider`; the gateway resolves from the model
+/// name alone, which is what the TUI's own model-key fallback path
+/// (`context_window_for_model`) was for. Keeping the two fallback tables
+/// adjacent is what stops the iter-1207 divergence from reappearing here.
+pub(crate) fn gateway_context_window_for_model(model: &str) -> usize {
+    // The model string may be `provider/model` (the gateway's common form)
+    // or a bare model id — strip a known prefix before either lookup.
+    for provider in ["anthropic", "openai", "google"] {
+        if let Some(rest) = model.strip_prefix(&format!("{provider}/")) {
+            if let Some(caps) = operant_core::models_dev::cached_capabilities(provider, rest)
+                && let Some(window) = caps.context_window
+            {
+                return window as usize;
+            }
+            return match provider {
+                "anthropic" => 200_000,
+                "openai" => 128_000,
+                "google" => 1_048_576,
+                _ => 128_000,
+            };
+        }
+    }
+    // A bare model id: try each provider's cache, then the flat default the
+    // TUI's own fallback uses, so an unresolved name never reports infinity.
+    for provider in ["anthropic", "openai", "google"] {
+        if let Some(caps) = operant_core::models_dev::cached_capabilities(provider, model)
+            && let Some(window) = caps.context_window
+        {
+            return window as usize;
+        }
+    }
+    128_000
 }
 
 /// First ~80 chars of a prompt, for reply text that quotes what was undone.

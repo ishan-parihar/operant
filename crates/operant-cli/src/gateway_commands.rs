@@ -389,6 +389,14 @@ pub static COMMAND_REGISTRY: &[CommandDef] = &[
         admin_only: false,
     },
     CommandDef {
+        name: "context",
+        description: "Show this session's context occupancy (messages, tokens, window)",
+        aliases: &[],
+        category: "Session",
+        args_hint: "[status]",
+        admin_only: false,
+    },
+    CommandDef {
         name: "footer",
         description: "Toggle message footer",
         aliases: &[],
@@ -1341,6 +1349,17 @@ pub fn handle_command(cmd_name: &str, _args: &str, ctx: &CommandContext<'_>) -> 
         // `compress_focus` flags no runtime ever read (theater).
         "compress" => {
             "📦 Compress runs against the live agent — unavailable in this context. On a running gateway, send `/compress` again from the chat.".into()
+        }
+
+        // RT-179: /context executes in the DISPATCH LOOP via
+        // handle_runtime_command (the report reads the live conversation
+        // under the turn lock). This sync arm is reached only from
+        // contexts with no live agent, so it must not quote a token count
+        // it cannot see — it names the live command instead. The old
+        // behavior was nothing at all: `/context` fell through
+        // `resolve_command` as Unknown and the model answered as prose.
+        "context" => {
+            "📐 Context occupancy is served by the live gateway command — it reads this session's conversation. Send `/context` from the chat with the gateway running.".into()
         }
 
         // RT-175: honest refusal, mirroring the TUI's /background. The
@@ -3194,6 +3213,7 @@ mod rt175_tests {
 #[cfg(test)]
 mod rt179_functional_core_tests {
     use super::*;
+    use crate::gateway_runner::{context_headroom_line, gateway_context_window_for_model};
 
     /// The two commands must RESOLVE — a name that falls through
     /// `resolve_command` reaches the model as a literal, which is exactly
@@ -3310,5 +3330,113 @@ mod rt179_functional_core_tests {
             junk.contains("Unknown effort"),
             "/effort must reject an unknown level, got: {junk}"
         );
+    }
+
+    /// /context must RESOLVE and reach the synced command list — the same
+    /// failure mode /plan and /effort had: an unresolved name falls through
+    /// `resolve_command` as Unknown and the dispatch loop feeds the literal
+    /// to the model, which improvises a help-shaped answer.
+    #[test]
+    fn context_resolves_as_a_command_not_prose() {
+        match resolve_command("/context") {
+            CommandMatch::Found(def, _) => {
+                assert_eq!(def.name, "context", "/context must resolve to context")
+            }
+            other => panic!("/context must be a command, got {other:?}"),
+        }
+        // `status` is the explicit form of the same read; it must not be a
+        // separate name that can drift.
+        match resolve_command("/context status") {
+            CommandMatch::Found(def, args) => {
+                assert_eq!(def.name, "context");
+                assert_eq!(args, "status");
+            }
+            other => panic!("/context status must be a command, got {other:?}"),
+        }
+        let bot_commands = telegram_bot_commands();
+        assert!(
+            bot_commands.contains("\"context\""),
+            "missing /context: {bot_commands}"
+        );
+    }
+
+    /// The sync arm is the honest-context stub: it names the live command
+    /// instead of quoting numbers it cannot see. A channel user never meets
+    /// this arm (the dispatch loop's runtime arm answers first), so its only
+    /// job is to be honest when reached.
+    #[test]
+    fn context_sync_arm_refuses_to_quote_numbers_it_cannot_see() {
+        let cfg = AppConfig::default();
+        let ctx = CommandContext::new(None, &cfg, true, "op-1", "telegram", "chan-ctx");
+        let resp = handle_command("context", "", &ctx).expect("a reply");
+        assert!(
+            resp.contains("live gateway command"),
+            "the sync arm must point at the live command, got: {resp}"
+        );
+        assert!(
+            !resp.contains("Messages:"),
+            "the sync arm has no conversation to count — it must not quote one: {resp}"
+        );
+    }
+
+    /// The headroom line's arithmetic, and its ceiling. Two surfaces quoting
+    /// different denominators is the iter-1207 lie; this pins the ONE place
+    /// the share is computed so it cannot silently round past the window.
+    #[test]
+    fn context_headroom_line_reports_the_share_and_never_exceeds_the_window() {
+        // 160k of a 200k window is 80%.
+        let line = context_headroom_line(160_000, 200_000);
+        assert!(line.contains("80%"), "160k of 200k is 80%: {line}");
+        assert!(
+            line.contains("160000 of 200000"),
+            "the fraction must show: {line}"
+        );
+
+        // An unresolved window says so, rather than dividing by zero.
+        let unknown = context_headroom_line(1_000, 0);
+        assert!(
+            unknown.contains("unknown"),
+            "a zero window must report unknown: {unknown}"
+        );
+
+        // Over the window (possible when the estimator overshoots a very
+        // small window): capped at 100 and at the window itself, never a
+        // nonsensical 130% or a used count above the window.
+        let over = context_headroom_line(400_000, 200_000);
+        assert!(over.contains("100%"), "the share is capped: {over}");
+        assert!(
+            over.contains("200000 of 200000"),
+            "the used count is capped at the window: {over}"
+        );
+    }
+
+    /// The window resolver must agree with the TUI's own fallback table —
+    /// the iter-1207 defect was TWO denominators, and the way it reappears
+    /// is a gateway resolver that quietly drifts from the TUI's.
+    #[test]
+    fn gateway_context_window_matches_the_tui_fallback_table() {
+        // The TUI table (tui/app/providers.rs refresh_context_window_size):
+        // anthropic 200_000, openai 128_000, google 1_048_576, else 128_000.
+        // These are the OFFLINE fallbacks — the models_dev cache may override
+        // them when populated, so this asserts the FALLBACK path by using
+        // model ids the cache cannot resolve.
+        assert_eq!(
+            gateway_context_window_for_model("anthropic/__nope__"),
+            200_000
+        );
+        assert_eq!(gateway_context_window_for_model("openai/__nope__"), 128_000);
+        assert_eq!(
+            gateway_context_window_for_model("google/__nope__"),
+            1_048_576
+        );
+        // An unknown provider prefix falls to the flat default, not zero and
+        // not infinity — a division by zero would hang the percentage.
+        assert_eq!(
+            gateway_context_window_for_model("mystery/__nope__"),
+            128_000
+        );
+        // A bare model with no provider prefix still resolves to a finite
+        // window rather than an unwindowed divisor.
+        assert!(gateway_context_window_for_model("some-bare-model") > 0);
     }
 }
