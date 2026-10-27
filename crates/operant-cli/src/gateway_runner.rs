@@ -1078,6 +1078,127 @@ async fn handle_runtime_command(
             Some(reply)
         }
 
+        // ── /export [path] — the TUI's /transcript twin ───────────────
+        // RT-179 plan item 3.4. The channel twin of the TUI's
+        // `/transcript` (tui/app/commands.rs:786), which writes the same
+        // markdown to `~/.operant/transcripts/` and opens it in the
+        // external editor. A channel has no editor to open, so the reply
+        // names the file path instead — the artifact is the deliverable.
+        //
+        // It goes through `run_session_scoped_command` for the SAME reason
+        // /compress does: the conversation being exported is THIS chat's
+        // loaded transcript, and reading the agent's cell without the
+        // scope would export whichever conversation happened to be loaded
+        // (the cross-session corruption the turn lock prevents).
+        //
+        // Markdown shape is `export_dialog::export_as_markdown`'s, kept in
+        // ONE place by reusing the function rather than re-deriving a
+        // second format that would drift from the TUI's.
+        "export" => {
+            let requested = args.trim().to_string();
+            let reply = handler
+                .run_session_scoped_command(session_key, move |agent, session_id| async move {
+                    let messages = agent.conversation().await;
+                    if messages.is_empty() {
+                        return "📄 Nothing to export — this conversation has no messages yet."
+                            .to_string();
+                    }
+                    // The TUI's own formatter, so both surfaces produce one
+                    // format. Its Message carries only (role, content) with
+                    // content as Text or Blocks — core's Message carries the
+                    // wire fields — so the conversion is explicit and
+                    // mechanical: text content maps straight through, and
+                    // anything with tool calls or reasoning becomes a Text
+                    // carrying what a reader of a transcript needs (the
+                    // reasoning is kept, the tool plumbing is not: a
+                    // transcript is prose, and `get_all_text` on a Blocks
+                    // message would re-derive the same choice anyway).
+                    use crate::tui::adapter_types::types::MessageContent;
+                    let adapted: Vec<crate::tui::adapter_types::types::Message> = messages
+                        .iter()
+                        .map(|m| {
+                            // A Tool message has no TUI role, and the honest
+                            // choice is not to drop it: a transcript that
+                            // silently omits what the tools did is a
+                            // misleading artifact. It is kept as a System
+                            // block naming the tool, so the reader sees the
+                            // call happened and can go to the raw session
+                            // for the payload.
+                            let role = match m.role {
+                                operant_core::client::Role::User => {
+                                crate::tui::adapter_types::types::Role::User
+                            }
+                            operant_core::client::Role::Assistant => {
+                                crate::tui::adapter_types::types::Role::Assistant
+                            }
+                            operant_core::client::Role::System
+                            | operant_core::client::Role::Tool => {
+                                crate::tui::adapter_types::types::Role::System
+                            }
+                            };
+                            let mut text = m.content.clone();
+                            if m.role == operant_core::client::Role::Tool {
+                                let tool_name = m.name.as_deref().unwrap_or("tool");
+                                text = format!("_[tool result: {tool_name}]_\n\n{text}");
+                            }
+                            if let Some(reasoning) = &m.reasoning
+                                && !reasoning.trim().is_empty()
+                            {
+                                text.push_str("\n\n> ");
+                                text.push_str(reasoning.trim());
+                            }
+                            crate::tui::adapter_types::types::Message {
+                                role,
+                                content: MessageContent::Text(text),
+                            }
+                        })
+                        .collect();
+                    let markdown =
+                        crate::tui::export_dialog::export_as_markdown(&adapted, None);
+
+                    // The path: `/export <path>` writes exactly there (an
+                    // operator who wants a specific file names it); a bare
+                    // `/export` uses the TUI's timestamped default in the
+                    // same directory.
+                    let dir = operant_core::platform::operant_home().join("transcripts");
+                    let path = if requested.is_empty() {
+                        let stamp = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_secs())
+                            .unwrap_or_default();
+                        dir.join(format!("transcript-{stamp}.md"))
+                    } else {
+                        std::path::PathBuf::from(&requested)
+                    };
+                    if let Some(parent) = path.parent()
+                        && let Err(e) = std::fs::create_dir_all(parent)
+                    {
+                        return format!("📄 Could not create `{}`: {e}", parent.display());
+                    }
+                    match std::fs::write(&path, markdown) {
+                        Ok(()) => {
+                            tracing::info!(
+                                session_id = %session_id,
+                                path = %path.display(),
+                                messages = adapted.len(),
+                                "Gateway /export: wrote the session transcript"
+                            );
+                            format!(
+                                "📄 Exported {} message(s) to `{}`\nSend me a message and I can keep going from there.",
+                                adapted.len(),
+                                path.display()
+                            )
+                        }
+                        Err(e) => format!(
+                            "📄 Could not write `{}`: {e}\nThe conversation is intact — nothing was lost.",
+                            path.display()
+                        ),
+                    }
+                })
+                .await;
+            Some(reply)
+        }
+
         _ => None,
     }
 }

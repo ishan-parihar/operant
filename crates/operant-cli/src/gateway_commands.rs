@@ -397,6 +397,14 @@ pub static COMMAND_REGISTRY: &[CommandDef] = &[
         admin_only: false,
     },
     CommandDef {
+        name: "export",
+        description: "Export this session's transcript to a markdown file",
+        aliases: &["transcript"],
+        category: "Session",
+        args_hint: "[path]",
+        admin_only: false,
+    },
+    CommandDef {
         name: "footer",
         description: "Toggle message footer",
         aliases: &[],
@@ -1360,6 +1368,17 @@ pub fn handle_command(cmd_name: &str, _args: &str, ctx: &CommandContext<'_>) -> 
         // `resolve_command` as Unknown and the model answered as prose.
         "context" => {
             "📐 Context occupancy is served by the live gateway command — it reads this session's conversation. Send `/context` from the chat with the gateway running.".into()
+        }
+
+        // RT-179 item 3.4: /export executes in the DISPATCH LOOP via
+        // handle_runtime_command (it writes THIS chat's loaded transcript
+        // under the turn lock, so the file is the invoker's, not whatever
+        // conversation happened to be loaded). This sync arm is reached
+        // only from contexts with no live agent, so it must not claim a
+        // file it cannot read — it names the live command instead. Same
+        // shape as /context's stub above, for the same reason.
+        "export" => {
+            "📄 Export is served by the live gateway command — it reads this session's conversation. Send `/export` from the chat with the gateway running.".into()
         }
 
         // RT-175: honest refusal, mirroring the TUI's /background. The
@@ -3438,5 +3457,55 @@ mod rt179_functional_core_tests {
         // A bare model with no provider prefix still resolves to a finite
         // window rather than an unwindowed divisor.
         assert!(gateway_context_window_for_model("some-bare-model") > 0);
+    }
+}
+
+// ── RT-179 item 3.4: /export's channel-twin contract ────────────────────
+// Resolves as a command (not prose), reaches the platform's command list,
+// and the sync arm refuses to claim a file it cannot read.
+#[cfg(test)]
+mod rt179_export_tests {
+    use super::*;
+
+    /// The name must resolve and reach the platform's command list. A name
+    /// that falls through `resolve_command` reaches the model as a literal,
+    /// which is the gap this slice closes.
+    #[test]
+    fn export_resolves_as_a_command_and_reaches_the_command_list() {
+        for (text, name) in [
+            ("/export", "export"),
+            ("/transcript", "export"),
+            ("/export /tmp/x.md", "export"),
+        ] {
+            match resolve_command(text) {
+                CommandMatch::Found(def, _) => {
+                    assert_eq!(def.name, name, "{text} must resolve to {name}")
+                }
+                other => panic!("{text} must be a command, got {other:?}"),
+            }
+        }
+        let bot_commands = telegram_bot_commands();
+        assert!(
+            bot_commands.contains("\"export\""),
+            "missing /export: {bot_commands}"
+        );
+    }
+
+    /// Without a live agent the sync arm must not claim a file was written.
+    /// The old behavior was an `Unknown` match, which sent the literal to
+    /// the model as prose.
+    #[test]
+    fn export_sync_arm_refuses_to_claim_a_file_it_cannot_read() {
+        let cfg = AppConfig::default();
+        let ctx = CommandContext::new(None, &cfg, true, "op-1", "telegram", "chan-x");
+        let resp = handle_command("export", "/tmp/x.md", &ctx).expect("a reply");
+        assert!(
+            resp.contains("gateway running"),
+            "the sync arm must name the live command, got: {resp}"
+        );
+        assert!(
+            !resp.contains("Exported"),
+            "the sync arm must not claim a write, got: {resp}"
+        );
     }
 }

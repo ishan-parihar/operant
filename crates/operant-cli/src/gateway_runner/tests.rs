@@ -1455,3 +1455,123 @@ fn plan_mode_set_clear_and_enabled_roundtrip() {
         "a cleared channel must prompt as usual"
     );
 }
+
+/// RT-179 plan item 3.4 — `/export` must write a REAL markdown file of
+/// THIS chat's conversation, in the SAME format the TUI's `/transcript`
+/// writes (one formatter, so the two surfaces cannot drift). Read-only
+/// except for the file it creates, so the turn lock is about reading the
+/// right conversation rather than about mutation.
+///
+/// Drives the real `handle_runtime_command` through
+/// `run_session_scoped_command`, with a seeded conversation, and then reads
+/// the file back — the only way "the file exists and has the right shape"
+/// is a fact rather than an assertion about a reply string.
+#[tokio::test]
+async fn gateway_export_writes_this_sessions_transcript_as_markdown() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let agent_db = Arc::new(
+        operant_core::database::Database::init(dir.path().join("agent.sqlite")).expect("db"),
+    );
+    let agent = Arc::new(operant_core::agent::OperantAgent::new(
+        operant_core::agent::AgentConfig::default(),
+        Box::new(
+            operant_core::agent::clients::openai::OpenAIModelClient::new(
+                operant_core::client::OpenAIClient::new(
+                    operant_core::client::ClientConfig::default(),
+                ),
+            ),
+        ),
+        operant_core::tools::ToolRegistry::new(std::time::Duration::from_secs(1)),
+        agent_db.clone(),
+    ));
+    let handler = GatewayMessageHandler {
+        admins: vec![],
+        agent: Arc::clone(&agent),
+        current_session_id: tokio::sync::Mutex::new(None),
+        gateway: tokio::sync::Mutex::new(None),
+        session_pins: Arc::new(SessionPins::default()),
+        exit_reasons: ExitReasonMap::default(),
+        turn_usage: TurnUsageMap::default(),
+        summary_ttl_minutes: 30,
+        default_budget: operant_core::config::BudgetSettings::default(),
+        context_injection: None,
+        turn_lock: tokio::sync::Mutex::new(()),
+        running_session: std::sync::Mutex::new(None),
+        cancelled_queued: Default::default(),
+        mcp_manager: operant_core::mcp::McpManager::new(),
+        mcp_server_configs: Vec::new(),
+        skills_root_dir: dir.path().join("skills-absent"),
+        queue_waits: tokio::sync::Mutex::new(Default::default()),
+    };
+
+    // A two-turn conversation, so the file has both roles in it.
+    //
+    // Seed the DURABLE store under the session id the handler will resolve,
+    // NOT the agent's hot slot: `run_session_scoped_command` calls
+    // `set_session_id`, which swaps the hot slot for whatever the store holds
+    // for that session (events.rs:748's retarget swap). Seeding the hot slot
+    // would be swapped out and the export would see an empty transcript —
+    // the exact failure this shape avoids.
+    let store_key =
+        operant_core::session::SessionKey::new(derived_gateway_session_id("telegram:dm:u1"));
+    agent.session_store().append(
+        &store_key,
+        operant_core::client::Message::user("what files changed today?"),
+    );
+    agent.session_store().append(
+        &store_key,
+        operant_core::client::Message::assistant("Three: src/main.rs, src/lib.rs, README.md."),
+    );
+
+    // `/export <explicit path>` — an operator who names a file gets it.
+    let out_path = dir.path().join("exported.md");
+    let reply = handle_runtime_command(
+        &handler,
+        "export",
+        out_path.to_str().expect("utf-8 path"),
+        "telegram:dm:u1",
+    )
+    .await
+    .expect("/export must be a runtime command");
+
+    assert!(
+        reply.contains("exported.md"),
+        "the reply must name the file it wrote, got: {reply}"
+    );
+    assert!(
+        reply.contains("2 message"),
+        "the reply must report the message count, got: {reply}"
+    );
+    let written = std::fs::read_to_string(&out_path).expect("the file must exist");
+    // The TUI formatter's own shape — pinned here so a second format cannot
+    // appear without failing this test.
+    assert!(
+        written.contains("**User**") && written.contains("**Operant**"),
+        "the file must use the TUI export's role labels, got: {written}"
+    );
+    assert!(
+        written.contains("what files changed today?") && written.contains("Three: src/main.rs"),
+        "the file must carry this chat's actual turns, got: {written}"
+    );
+
+    // A failure must be reported AND must not claim the conversation is
+    // lost: the exporter degrades without destroying state. A path whose
+    // parent cannot be created (a FILE sits where the directory would go):
+    // create_dir_all refuses, so the exporter must report it rather than
+    // write somewhere else.
+    let blocker = dir.path().join("blocker");
+    std::fs::write(&blocker, b"not a dir").expect("write the blocker");
+    let impossible = blocker.join("under-a-file.md");
+    let refused = handle_runtime_command(
+        &handler,
+        "export",
+        impossible.to_str().expect("utf-8 path"),
+        "telegram:dm:u1",
+    )
+    .await
+    .expect("even a failure must reply");
+    assert!(
+        refused.contains("Could not"),
+        "an unwritable path must be reported, got: {refused}"
+    );
+}
