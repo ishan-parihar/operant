@@ -1199,6 +1199,90 @@ async fn handle_runtime_command(
             Some(reply)
         }
 
+        // ── /memory [query] — the live memory engine, over a channel ──
+        // RT-179 plan item 3.2. The TUI's twin SHELLS OUT to `operant
+        // memory` (tui/app/commands.rs:387), which is a second process with
+        // its own store view — so the channel twin is FREE to be better and
+        // go straight at the agent's own provider, the same engine the
+        // turn's prefetch reads.
+        //
+        // It is deliberately built on the TRAIT surface (`name`,
+        // `is_available`, `check_health`, `write_bank`, `prefetch`) rather
+        // than downcasting to `MemoryWireProvider`. `recall_scored` is a
+        // concrete-only method and there is no `as_any` seam on the trait,
+        // so a downcast would compile and silently fail for any provider
+        // that is not memory-wire — the exact shape of the defect this
+        // slice exists to close. The trait surface is what EVERY provider
+        // guarantees, so `/memory` works on memory-wire, on builtin, and on
+        // whatever replaces them, and it degrades honestly on
+        // `builtin`/`disabled` by saying memory is OFF.
+        //
+        // `prefetch` is the recall path: it returns the SAME `[memory]`
+        // block the agent's own turn prefetch injects, so the channel and
+        // the turn agree about what is in there.
+        "memory" => {
+            let query = args.trim().to_string();
+            let provider = handler.agent.memory_provider();
+            let Some(provider) = provider else {
+                return Some(
+                    "🧠 No memory backend is attached to this session.\nSet `[memory] provider` in the config (the default `memory-wire` is the in-process engine) and restart.".to_string(),
+                );
+            };
+            // Status is cheap and always honest, and it is the answer to a
+            // bare `/memory`.
+            let name = provider.name().to_string();
+            let available = provider.is_available();
+            let persistent = provider.is_persistent();
+            let bank = provider.write_bank();
+            let healthy = provider.check_health().await;
+            let mut status = format!(
+                "🧠 Memory: `{name}` — {}\nPersistent: {} · Bank: `{}`",
+                if healthy {
+                    "reachable"
+                } else {
+                    "NOT reachable"
+                },
+                persistent,
+                bank.as_deref()
+                    .unwrap_or("(none — this turn is not banked)"),
+            );
+            if !available {
+                status.push_str(
+                    "\n⚠️ The engine is configured but not available — the agent runs without memory this turn.",
+                );
+            }
+            if query.is_empty() {
+                status.push_str(
+                    "\nAsk me a question, or `/memory <text>` to recall matching entries directly.",
+                );
+                return Some(status);
+            }
+            // The recall itself. `prefetch` formats the `[memory]` block
+            // the turn would see, so this is the REAL answer rather than a
+            // second query path that could drift.
+            let recalled = provider.prefetch(&query).await;
+            if recalled.trim().is_empty() {
+                status.push_str(&format!("\n🔍 Nothing recalled for `{query}`."));
+            } else {
+                status.push_str(&format!("\n🔍 Recall for `{query}`:\n"));
+                // Bounded: a channel message has a practical ceiling, and a
+                // full bank dump through a chat is a worse experience than
+                // the head of one. The tool surface
+                // (`operant memory search`) is where an unbounded query
+                // belongs, and it is named so the operator knows where to
+                // go for more.
+                const CHANNEL_RECALL_HEAD_CHARS: usize = 1200;
+                let shown: String = recalled.chars().take(CHANNEL_RECALL_HEAD_CHARS).collect();
+                status.push_str(shown.trim_end());
+                if recalled.chars().count() > CHANNEL_RECALL_HEAD_CHARS {
+                    status.push_str(&format!(
+                        "\n…(truncated — `operant memory search \"{query}\"` for the full list)"
+                    ));
+                }
+            }
+            Some(status)
+        }
+
         _ => None,
     }
 }

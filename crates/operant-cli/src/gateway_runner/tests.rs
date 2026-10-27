@@ -1575,3 +1575,97 @@ async fn gateway_export_writes_this_sessions_transcript_as_markdown() {
         "an unwritable path must be reported, got: {refused}"
     );
 }
+
+/// RT-179 plan item 3.2 — `/memory` must report the agent's LIVE provider
+/// and route a query through its own recall, over a channel. The TUI's twin
+/// shells out to `operant memory`, a second process with its own store view,
+/// so this is the first surface that answers in-process.
+///
+/// A REAL `MemoryWireProvider` over a temp dir is attached — not a stub —
+/// because the point is that the command reads the same engine the turn's
+/// prefetch reads. The trait surface is used on purpose (the comment at the
+/// arm says why): `recall_scored` is concrete-only with no `as_any` seam, so
+/// a downcast would compile and silently fail on any other provider.
+use operant_core::memory_provider::MemoryProvider as _;
+#[tokio::test]
+async fn gateway_memory_reports_the_live_provider_and_recalls_through_it() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let agent_db = Arc::new(
+        operant_core::database::Database::init(dir.path().join("agent.sqlite")).expect("db"),
+    );
+    let provider = Arc::new(
+        operant_core::memory_wire::MemoryWireProvider::new(dir.path().to_path_buf())
+            .expect("a memory-wire provider over the temp dir"),
+    );
+    let agent = Arc::new(
+        operant_core::agent::OperantAgent::new(
+            operant_core::agent::AgentConfig::default(),
+            Box::new(
+                operant_core::agent::clients::openai::OpenAIModelClient::new(
+                    operant_core::client::OpenAIClient::new(
+                        operant_core::client::ClientConfig::default(),
+                    ),
+                ),
+            ),
+            operant_core::tools::ToolRegistry::new(std::time::Duration::from_secs(1)),
+            agent_db.clone(),
+        )
+        .with_memory_provider(
+            provider.clone() as Arc<dyn operant_core::memory_provider::MemoryProvider>
+        ),
+    );
+    let handler = GatewayMessageHandler {
+        admins: vec![],
+        agent: Arc::clone(&agent),
+        current_session_id: tokio::sync::Mutex::new(None),
+        gateway: tokio::sync::Mutex::new(None),
+        session_pins: Arc::new(SessionPins::default()),
+        exit_reasons: ExitReasonMap::default(),
+        turn_usage: TurnUsageMap::default(),
+        summary_ttl_minutes: 30,
+        default_budget: operant_core::config::BudgetSettings::default(),
+        context_injection: None,
+        turn_lock: tokio::sync::Mutex::new(()),
+        running_session: std::sync::Mutex::new(None),
+        cancelled_queued: Default::default(),
+        mcp_manager: operant_core::mcp::McpManager::new(),
+        mcp_server_configs: Vec::new(),
+        skills_root_dir: dir.path().join("skills-absent"),
+        queue_waits: tokio::sync::Mutex::new(Default::default()),
+    };
+
+    // A bare /memory is a status report, and it must name the engine the
+    // agent is ACTUALLY running — not a hard-coded default.
+    let status = handle_runtime_command(&handler, "memory", "", "telegram:dm:u1")
+        .await
+        .expect("/memory must be a runtime command");
+    assert!(
+        status.contains("memory_wire"),
+        "the status must name the live provider, got: {status}"
+    );
+    assert!(
+        status.contains("Persistent: true"),
+        "the status must report the engine's own persistence, got: {status}"
+    );
+
+    // A seeded fact, recalled through the SAME prefetch path the turn uses.
+    provider
+        .sync_turn("the deploy target is the gateway", "noted")
+        .await
+        .expect("seed the bank");
+    // Give the background sync executor a moment: sync_turn queues on the
+    // agent's FIFO worker, so the recall that follows must wait for it.
+    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+
+    let recalled = handle_runtime_command(&handler, "memory", "deploy target", "telegram:dm:u1")
+        .await
+        .expect("a query must reply");
+    assert!(
+        recalled.contains("gateway"),
+        "the recall must return the seeded fact, got: {recalled}"
+    );
+    assert!(
+        recalled.contains("Recall for") || recalled.contains("memory"),
+        "the reply must be shaped as a recall, got: {recalled}"
+    );
+}

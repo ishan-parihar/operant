@@ -405,6 +405,14 @@ pub static COMMAND_REGISTRY: &[CommandDef] = &[
         admin_only: false,
     },
     CommandDef {
+        name: "memory",
+        description: "Show the live memory engine, or recall entries for a query",
+        aliases: &[],
+        category: "Config",
+        args_hint: "[query]",
+        admin_only: false,
+    },
+    CommandDef {
         name: "footer",
         description: "Toggle message footer",
         aliases: &[],
@@ -1379,6 +1387,22 @@ pub fn handle_command(cmd_name: &str, _args: &str, ctx: &CommandContext<'_>) -> 
         // shape as /context's stub above, for the same reason.
         "export" => {
             "📄 Export is served by the live gateway command — it reads this session's conversation. Send `/export` from the chat with the gateway running.".into()
+        }
+
+        // RT-179 item 3.2: /memory reports the LIVE provider (name, health,
+        // bank) and routes a query through the agent's own recall. This sync
+        // arm is reached only from contexts with no live agent, so it must
+        // not quote an engine state it cannot see — it names the live
+        // command and the CLI surface that answers the same question.
+        "memory" => {
+            let a = _args.trim();
+            if a.is_empty() {
+                "🧠 Memory status is served by the live gateway command — it reads the agent's own provider. Send `/memory` from the chat with the gateway running, or run `operant memory stats` on the CLI.".into()
+            } else {
+                format!(
+                    "🧠 Recall is served by the live gateway command. Send `/memory {a}` from the chat with the gateway running, or run `operant memory search \"{a}\"` on the CLI."
+                )
+            }
         }
 
         // RT-175: honest refusal, mirroring the TUI's /background. The
@@ -3506,6 +3530,61 @@ mod rt179_export_tests {
         assert!(
             !resp.contains("Exported"),
             "the sync arm must not claim a write, got: {resp}"
+        );
+    }
+}
+
+// ── RT-179 item 3.2: /memory's channel-twin contract ────────────────────
+// Resolves as a command, reaches the platform's command list, and the sync
+// arm refuses to quote an engine state it cannot see.
+#[cfg(test)]
+mod rt179_memory_tests {
+    use super::*;
+
+    /// The name must resolve and reach the platform's command list — a name
+    /// that falls through `resolve_command` reaches the model as a literal,
+    /// which is the gap this slice closes. Note the TUI's `/memory` shells
+    /// out to the CLI, so this is the FIRST surface that answers the
+    /// question in-process.
+    #[test]
+    fn memory_resolves_as_a_command_and_reaches_the_command_list() {
+        for (text, name) in [("/memory", "memory"), ("/memory deploy notes", "memory")] {
+            match resolve_command(text) {
+                CommandMatch::Found(def, _) => {
+                    assert_eq!(def.name, name, "{text} must resolve to {name}")
+                }
+                other => panic!("{text} must be a command, got {other:?}"),
+            }
+        }
+        let bot_commands = telegram_bot_commands();
+        assert!(
+            bot_commands.contains("\"memory\""),
+            "missing /memory: {bot_commands}"
+        );
+    }
+
+    /// Without a live agent the sync arm must name the real surfaces rather
+    /// than quoting an engine state it cannot read. The CLI pointer matters:
+    /// it is the same question's other answer, so a stuck operator is never
+    /// stranded.
+    #[test]
+    fn memory_sync_arm_names_the_live_command_and_the_cli_surface() {
+        let cfg = AppConfig::default();
+        let ctx = CommandContext::new(None, &cfg, true, "op-1", "telegram", "chan-m");
+        let bare = handle_command("memory", "", &ctx).expect("a reply");
+        assert!(
+            bare.contains("gateway running") && bare.contains("operant memory stats"),
+            "bare /memory must name both surfaces, got: {bare}"
+        );
+        let queried = handle_command("memory", "deploy notes", &ctx).expect("a reply");
+        assert!(
+            queried.contains("gateway running") && queried.contains("operant memory search"),
+            "a query must name both surfaces, got: {queried}"
+        );
+        // Neither arm may claim an engine state.
+        assert!(
+            !bare.contains("reachable") && !queried.contains("reachable"),
+            "the sync arm must not report engine health it cannot read"
         );
     }
 }
