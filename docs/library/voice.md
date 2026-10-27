@@ -1,37 +1,35 @@
-# Voice — TTS, STT, and the voice-mode state machine
+# Voice — TTS and STT as agent tools
 
-Owns: operant's speech surfaces — the voice-mode state machine, recording,
-the STT and TTS provider matrices, VAD, and the hallucination filter.
-Not for: the TTS tool's schema ([tools.md](tools.md)), provider auth
+Owns: operant's speech surfaces — the `text_to_speech` and `transcription`
+tools and their provider matrices. 
+Not for: the tools' schemas ([tools.md](tools.md)), provider auth
 ([providers.md](providers.md)).
 
-Source: `crates/operant-core/src/voice.rs` (the library core),
-`crates/operant-core/src/tools/tts_tool.rs`, `tts_provider.rs`,
+Source: `crates/operant-core/src/tools/tts_tool.rs`, `tts_provider.rs`,
 `tts_registry.rs`, `tts_command_provider.rs`,
 `crates/operant-core/src/tools/transcription_tool.rs`,
 `crates/operant-cli/src/tui/operant_model/transcription.rs` (TUI wiring).
 
-## The voice-mode state machine (`voice.rs`)
+## What this page no longer covers, and why
 
-Voice mode is a library, not a tool: composable primitives for the CLI
-and gateway. The state machine runs Idle → Listening → Processing →
-Speaking, with:
+The interactive voice-mode state machine (`voice.rs`: Idle → Listening →
+Processing → Speaking, FFmpeg/Termux recorders, energy-based VAD, the
+Whisper hallucination filter) was **deleted in iter-1420**
+(`docs/audit/2026-10-27-ponytail-audit-memory-compat-and-dead-code.md`):
+1,516 lines, 25 pub fns, and a module-qualified call-path scan found
+**zero callers** — the state machine was never wired into the CLI, the
+gateway, or the TUI. The same sweep deleted `retrieval.rs` (1,068 lines,
+zero qualified callers). If push-to-talk voice mode is ever wanted, it is
+a NEW build against a fresh design, not a restore — the audit record is
+the honest account of what existed and why it died.
 
-- **Recording** via subprocess (ffmpeg/arecord) or Termux:API
-  (`FFmpegRecorder`, `TermuxRecorder`), push-to-talk.
-- **Voice Activity Detection** — energy-based RMS threshold with a
-  silence callback, so recording can stop itself when the user stops
-  talking.
-- **STT dispatch** — transcription through the configured provider.
-- **Whisper hallucination filter** — Whisper-family models hallucinate
-  text on silence; the filter drops the known phantom outputs.
-- **TTS synthesis** — the spoken reply.
+## STT: the transcription tool (groq + openai)
 
-## STT providers (6 + local)
-
-`SttProvider::parse_provider` (voice.rs): `whisper` (also `openai`),
-`google`, `azure`, `assemblyai`, `deepgram`, `local` — unknown names
-default to Whisper. Config: `[tools.stt]`.
+`transcription_tool.rs` speaks two providers — `groq`
+(`whisper-large-v3-turbo` default) and `openai` (`whisper-1` default),
+keys from `[tools.stt]`. The per-provider model knobs exist because a
+hard-coded model name on a provider that retires it 404s with no way
+out short of a new build (`groq_model` / `openai_model`).
 
 ## TTS providers (11 built-in + custom commands + plugins)
 
@@ -57,10 +55,9 @@ contract every provider implements.
 
 ## Intention
 
-The voice surface is deliberately split: `voice.rs` is the interactive
-state machine (the thing a human talks to), while `text_to_speech` /
-`transcription` are model-callable TOOLS (the thing the agent uses to
-speak/listen inside a turn). Both share the provider matrices. The VAD +
-hallucination filter exist because push-to-talk without them produces
-phantom transcripts — a known Whisper-family behavior that once produced
-confident nonsense from silence.
+The voice surface is deliberately tool-shaped: `text_to_speech` and
+`transcription` are model-callable TOOLS (the agent speaks/listens
+inside a turn), resolved through the provider registry at call time.
+The dead state machine was the opposite bet — interactive primitives
+waiting for a caller that never came; iter-1420 closed it honestly
+instead of letting the library keep pretending it was reachable.

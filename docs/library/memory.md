@@ -12,7 +12,6 @@ Source: `crates/operant-core/src/memory_provider.rs`,
 `crates/operant-core/src/memory_wire.rs`,
 `crates/operant-core/src/memory.rs`,
 `crates/operant-core/src/memory_import.rs`,
-`crates/operant-core/src/retrieval.rs`,
 `crates/operant-core/src/tools/memory_tools.rs`,
 `crates/operant-cli/src/cmd_memory.rs` (CLI), `memory-wire` upstream at
 <https://github.com/ishan-parihar/memory-wire> (cargo git-dependency,
@@ -43,7 +42,7 @@ memory failure is a logged miss, never a dead turn.
 | Phase | What happens | Where |
 |---|---|---|
 | **retain** | a durable fact is written, content + context redacted server-side before the write | `memory_wire.rs` → upstream `retain` |
-| **prefetch / recall** | most relevant memories for the current turn are retrieved, weighted, formatted, and queued for the next turn's `<turn_context>` | `memory.rs` prefetch + `retrieval.rs` |
+| **prefetch / recall** | most relevant memories for the current turn are retrieved, weighted, formatted, and queued for the next turn's `<turn_context>` | `memory.rs` prefetch + memory-wire `n` (RRF fusion, SHIPPED weights) |
 | **sync_turn** | after each completed turn the loop auto-writes the turn's durable content back to the store | `agent/turn_finalizer.rs` |
 | **reflect** | answer a question from the bank citing its top hit | upstream `reflect` |
 
@@ -51,22 +50,18 @@ The store is a bank-isolated SQLite database under the operant home
 (`~/.operant/memory_wire.sqlite`, personal bank) — resolved through the
 one-home resolver (see [config.md](config.md)).
 
-## Retrieval (`retrieval.rs`)
+## Retrieval (memory-wire `n`, in-process)
 
-Hybrid scoring with injectable reranking. The historical defect this
-module exists for: the only real recall path iterated `results.take(10)`
-in whatever order the store returned them, and a relevant memory could
-lose to an arbitrary row. The current engine:
-
-- fuses BM25 and token-overlap scores via RRF,
-- ranks by fused score, then recency,
-- supports tag filters (`tags` / `exclude_tags`) — the store-level tag
-  lookup is exact, and the FTS intersection trap (token-disjoint rows
-  dropped by an FTS `AND`) is worked around by the ids_tagged + fetch
-  path when exact-key recall is required,
-- is measured: the wire cost of the agent-facing tool pair is pinned
-  against a five-tool historical baseline (RT-192: the live pair rides
-  ~396 compact-form wire tokens vs the ~590 five-tool baseline).
+Hybrid scoring lives in the memory-wire engine itself —
+`svc.n(&bank, query, …, &FusionWeights::SHIPPED)` — fused BM25 +
+token-overlap via RRF, dispatched through `memory_wire.rs`'s
+`catch_unwind` seam. The historical defect the fusion exists for: the
+only real recall path iterated `results.take(10)` in whatever order the
+store returned them, and a relevant memory could lose to an arbitrary
+row. A local `retrieval.rs` (1,068 lines) duplicated this with zero
+qualified callers and was deleted in iter-1420
+(`docs/audit/2026-10-27-ponytail-audit-memory-compat-and-dead-code.md`);
+the engine path above is the only live retrieval.
 
 ## Agent-facing tools
 

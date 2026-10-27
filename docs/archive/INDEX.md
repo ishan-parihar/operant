@@ -39,3 +39,8 @@
 | 2026-10-27 | docs/kernel.md | Re-homed into the mechanism library as docs/library/kernel.md (iter-1384) — same content plus a library header; the shelf keeps a tombstone pointer |
 | 2026-10-27 | docs/harness-kernel.md | Re-homed into the mechanism library as docs/library/harness.md (iter-1384) — same content plus a library header; the shelf keeps a tombstone pointer |
 | 2026-10-27 | docs/tui-debugging.md | Re-homed into the mechanism library as docs/library/tui-debugging.md (iter-1384) — same content plus a library Owns/Not-for header; the shelf keeps a tombstone pointer |
+| 2026-10-27 | docs/kb/workflows/holon-seat-redteam-2026-10-19.md | board complete: 9/9 rows done with BUGS.md verdicts (2026-10-20); the directory keeps only active work per the operator's one-active-file directive |
+| 2026-10-27 | docs/kb/workflows/org-tui-foundation.md | board complete: 3/3 rows done (AD-028 owner ruling recorded); directory keeps only active work |
+| 2026-10-27 | docs/kb/workflows/ponytail-integration.md | board complete: 5/5 phases done with deploy evidence (iters 1306-1315); the ponytail feature is documented in AGENTS.md + docs/library |
+| 2026-10-27 | docs/kb/workflows/tui-redteam-2026-10-19.md | board complete: 9/9 rows done with BUGS.md verdicts; directory keeps only active work |
+| 2026-10-27 | docs/kb/workflows/knowledge-base-redteam-2026-10-19.md | prose report, not a row board: all 22 KB-n findings are closed in BUGS.md (verified [x] count 22, open 0); the durable content is the BUGS.md rows |
