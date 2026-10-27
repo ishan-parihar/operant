@@ -35,6 +35,10 @@ asks = "docs/kb/ASKS.md"
 [core]
 dated_pattern = "^(plan-\\d{4}-\\d{2}-\\d{2}|\\d{4}-\\d{2}-\\d{2}-)"
 pointer_ignore = "SKILL.md autonomous-status.toml settings.json auth.json"
+# Living plans carry a maintained 'Resume here' section instead of
+# same-day v3 churn: an execution plan with open iterations is amended in
+# place under this key, per the dated-frozen header's own escape clause.
+living_plans = ["docs/plans/2026-10-28-unified-session-management-v2-jcode-picker-pane-omp-hub-empl.md"]
 # the gate the repo's own iteration loop names: fast checks, then the workspace suite
 gate = "./scripts/check.sh check --workspace && cargo test --workspace"
 # the judgement the iteration loop makes mandatory, in its own order

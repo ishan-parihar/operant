@@ -1,9 +1,11 @@
 # Unified session management v2: jcode picker pane + omp hub + employee tags + the session server phase
 
-Dated-frozen: published `2026-10-28`. A plan that changes is a new plan — this
-v2 SUPERSEDES
-`docs/plans/2026-10-28-unified-session-management-jcode-style-session-picker-pane-o.md`
-(kept for the record). Companion audit:
+Dated-frozen: published `2026-10-28`. This plan is registered in genome.toml
+`core.living_plans` — its five iterations are open, so corrections land as
+typed amendments below (each dated and attributed) rather than as same-day
+v3 files; the dated-frozen body above them is the frozen design.
+Supersedes `docs/plans/2026-10-28-unified-session-management-jcode-style-session-picker-pane-o.md`
+(archived with tombstone). Companion audit:
 `docs/audit/2026-10-28-session-management-red-team-audit-v2-corrections-the-server-.md`
 (supersedes the v1 audit — same corrections led to this plan's v2).
 
@@ -84,11 +86,16 @@ result tail); Enter on a Session/Branch row = existing
 `pending_switch_session` flow (tui_app.rs:1125 — untouched). `/session`
 `/resume` `/sessions` route here; `session_browser.rs` DELETED.
 
-**4. The ←← gesture** — omp's shape: key_handling.rs Left arm (:1617)
-plain-Left + `prompt_input` empty + cursor 0 → tap counter on App; second tap
-inside 500ms opens the hub; `armCloseTap` handoff seeds the hub's close
-detector so the same ←← closes it (omp issue #4780's fix); focused-subagent
-←← returns to the list. jcode's config-gated single-Left variant NOT ported.
+**4. The ←← gesture** — omp's shape, burst-proof: key_handling.rs Left arm
+(:1617) plain-Left + `prompt_input` empty + cursor 0 → tap counter on App;
+the SECOND tap fires only inside omp's window `[40ms, 500ms)`
+(`LEFT_DOUBLE_TAP_MIN_GAP_MS`/`MAX_GAP_MS`, input-controller.ts:265-266,
+`#detectLeftDoubleTap` :902-923) — the 40ms floor rejects
+terminal-synthesized arrow bursts (a stray click emitting a ←-run never
+fires; a third-and-later tap before a quiet gap resets). `armCloseTap`
+handoff seeds the hub's close detector so ONE further ← closes it
+(agent-hub.ts:626-636, :2467); focused-subagent ←← returns to the list.
+jcode's config-gated single-Left variant NOT ported.
 
 ### Part 2 — the session server phase (jcode parity, ponytail-scoped)
 
@@ -136,8 +143,10 @@ EXPOSES the unified record, it does not own it.
   focuses; ←←/Esc returns; rows prune with the registry.
 - G4: Enter on a session row retargets via `pending_switch_session`;
   transcript rehydrates; existing regression tests stay green.
-- G5: double-tap ← on empty input opens the page; ← inside the page closes it
-  (handoff); ←← with text in the composer changes nothing.
+- G5: double-tap ← on empty input opens the page, honoring omp's full
+  window `[40ms, 500ms)` (two taps < 40ms apart = burst, never fires);
+  ONE further ← inside the page closes it (handoff); ←← with text in the
+  composer changes nothing.
 - G6: scoped tests green; clippy gate passes; `command_sweep.py` 98/98 holds
   (command names unchanged).
 - G7: 50-row cap gone (default 500 + search).
@@ -167,11 +176,23 @@ key_handling, app/mod, app/commands, app/init, tui_app, terminal_setup):
   `app/commands.rs` (re-grep peer state first).
 3. **iter-C (subagent rows + focus view)**: registry join, `RowKind::Subagent`,
   focus view, tests.
-4. **iter-D (the gesture)**: Left arm + tap state + handoff + G5 tests.
+4. **iter-D (the gesture)**: Left arm + tap state (min-gap 40ms burst
+  floor + 500ms ceiling) + handoff + G5 tests.
 5. **iter-E (the server routes)**: axum route group on the gateway daemon,
   dashboard-token auth, `[gateway] api` config block, `curl`-able smoke
   test + a router unit test per route. Files: `gateway_runner.rs` (router
   assembly), `dashboard_server.rs` (token helper reuse), `operant.example.toml`.
+
+### CLI surface ownership (amended 2026-10-28 — a gap in the v2 body)
+
+`cmd_sessions.rs` (12 subcommands: List/Show/Delete/Stats/Export/Prune/
+Rename/Browse/Search/Recap/Resume) consumes `db.list_sessions()` today and
+moves to `SessionEntryV2` **in iter-A** — one loader, every surface. iter-A
+adds the `list_sessions_rich` call sites for List/Stats/Show (the same
+`database.rs` edit, no extra iteration); Browse/Resume keep their TUI/agent
+flows untouched. WITHOUT this amendment the plan's own "only the TUI/CLI
+`sessions` surface moves to the v2 record" line had no owner — the audit's
+RT-A fragmentation would survive the plan by hiding in the CLI.
 
 ## Risks
 
@@ -191,5 +212,19 @@ key_handling, app/mod, app/commands, app/init, tui_app, terminal_setup):
 
 ## Resume here
 
-All five iterations open. Start iter-A (zero peer overlap). iter-E can run
-independently any time after iter-A (it only needs the loader + snapshot).
+All five iterations open. Start iter-A (zero peer overlap; note the CLI
+amendment above — `cmd_sessions.rs` call sites ride the same `database.rs`
+change). iter-E can run independently any time after iter-A (it only needs
+the loader + snapshot).
+
+## Amendments (living-plan log)
+
+- **2026-10-28, agent-jcode (self-review round 2):** (1) gesture window
+  corrected to omp's full `[40ms, 500ms)` with the 40ms burst floor
+  (input-controller.ts:265-266, :902-923) — v2 body said only "500ms",
+  which would have re-introduced the terminal-burst bug omp's floor
+  exists to reject; (2) close semantics corrected: `armCloseTap` makes
+  ONE further ← close (agent-hub.ts:626-636, :2467), not "the same ←←"
+  (the body contradicted its own G5); (3) `cmd_sessions.rs` ownership
+  added (the 12-subcommand CLI surface had no iteration owner — RT-A
+  would have survived in the CLI).
