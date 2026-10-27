@@ -77,11 +77,45 @@ confident false positive that would have shipped.
 
 ## Ranked shortlist
 
-1. retrieval.rs + voice.rs (2,584 LOC) — delete. Compile-proven, zero callers,
-   no dependents, no docs. The ponytail answer.
-2. Six dead config fields — delete, but ONLY after deny_unknown_fields is
-   dropped; keep the generic retired-key warning.
-3. One-caller factories to collapse: build_browser_provider(_name) ignores its
-   only argument and BrowserProvider has exactly 1 impl (SourcehoundProvider) —
-   inline the sourcehound construction.
+1. retrieval.rs + voice.rs (2,584 LOC) — DONE, iter-1419/dead_modules_stay_dead.rs.
+   Compile-proven, zero callers, no dependents, no docs. The ponytail answer.
+2. Six dead config fields — DELETE DEFERRED, then cancelled on evidence (see
+   the 2026-10-27 addendum below).
+3. One-caller factories to collapse: build_browser_provider(_name) — CANCELLED
+   as a FALSE POSITIVE (see the addendum).
 4. Alias map — do NOT cut (Finding 3).
+
+## 2026-10-27 addendum: two of my own shortlist items were wrong
+
+Executed against the list and found two of the four entries did not survive
+investigation. Both are recorded because a future agent reading the audit
+without the addendum would repeat them.
+
+**Item 3 (build_browser_provider) — RETRACTED, it is not indirection.** The
+audit called `_name` an ignored argument, which is false: the caller in
+`browser_tool.rs` passes a REAL config value (`cfg.browser.provider`), and the
+factory's whole documented job is to map every name — including the retired
+`igs` / `obscura` / `lightpanda` — onto sourcehound instead of failing the
+config load. Three tests pin that, one of them naming the reason. Collapsing it
+would delete a compatibility shim the operator's config still depends on, not
+remove dead weight. The single-impl count that made it look like a
+collapsible factory was the same impl-count method that produced the ToolProvider
+false positive (Finding 4).
+
+**Item 2 (config fields) — CANCELLED, deletion would break the thing that
+protects the secret.** The operator's premise is verified true (zero retired
+keys in the live config), and it does license deletion. But deletion is not
+"done right" here, because the fields are load-bearing in a way the audit
+framed as dead weight: `every_retired_memory_key_warns` is the regression test
+for the iter-1412 fix, and removing the fields removes the only notice that a
+parked `agentmemory_secret` is unused. A generic unknown-key message could
+replace it, but that is a behavior change across 68 deny_unknown_fields
+structs, and the struct comment states the decision it would violate: "a
+config that parsed yesterday must parse today". This is a judgement call
+between two defensible positions, so it is left to the operator rather than
+quietly executed on an audit's ranking.
+
+The general lesson, stated for the record: a ponytail audit's shortlist is a
+hypothesis, not a work order. Both retracted items came from counting
+implementations and counting readers — structural signals that look like
+indirection and are sometimes deliberate compatibility.
