@@ -54,5 +54,6 @@ the contract (the operator seeds it, the loop consumes it), the
 snapshot gate is the honesty check (publish what actually changed, not
 what the model claims), and the pause-state persistence exists because
 a crash-looping task must not become a crash-looping *machine* after a
-restart. The `Pending` three items and `Review` five rows in the live
-ledger are tracked in `docs/handoff/STATE.md`.
+restart. The live `Pending` and `Review` rows (derive them from
+`TODO.md` at read time — never carry a count here, RG-008) are tracked
+in `docs/handoff/STATE.md`.

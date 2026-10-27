@@ -59,7 +59,7 @@ mechanisms as they exist in the code; frozen plans and audits
 - [security.md](security.md) — the security stack: approval, blast radius, justification, redaction, credential registry, path safety, SSRF
 - [persistence.md](persistence.md) — SQLite layer: state database, migrations, declarative reconciliation, trajectory, checkpoints
 - [observability.md](observability.md) — observer events, runtime metrics, logging, insights, dashboard
-- [operability.md](operability.md) — doctor, setup, self-update, service install, backup/import, MCP-serve
+- [operability.md](operability.md) — doctor, setup, integrations updater, service install, backup/import, MCP-serve
 
 ## Maintenance law
 

@@ -19,7 +19,7 @@ Operant is an open-source, production-grade **ReAct agent runtime** written in R
 What makes Operant different:
 
 - **Self-improving through skills** — reusable procedures live as `SKILL.md` files that load into sessions on demand.
-- **Persistent memory** — the default `agentmemory` provider (hybrid BM25 + vector + graph) auto-spawns on first use; `builtin` file memory (`MEMORY.md` / `USER.md`) is always available.
+- **Persistent memory** — the `memory-wire` engine (default; the historical name `agentmemory` is accepted) is in-process hybrid semantic memory over a bank-isolated SQLite store — no server spawn, no node/npx dependency.
 - **Multi-platform gateway** — the same agent runs on Telegram, Discord, Slack, WhatsApp, email, and webhooks with full tool access.
 - **A single stealth browser** — the `obscura` CDP browser and the IGS web tools (search / scrape / extract) share the same binary, auto-provisioned.
 - **Pluggable everything** — MCP clients/servers, WASM plugins, credential pools with key rotation, cron, kanban, checkpoints, profiles, SOPs.
@@ -67,7 +67,7 @@ Profiles use `~/.operant/profiles/<name>/` with the same layout. When a profile 
 |---|---|
 | CLI commands, subcommands, flags, "how do I run X" | `references/cli-reference.md` |
 | Config sections, memory provider, gateway channels | `references/configuration.md` |
-| Memory (agentmemory vs builtin, session hooks) | `references/configuration.md` |
+| Memory (memory-wire engine, session hooks) | `references/configuration.md` |
 | Skills: install, seed, bundle, audit, author | `references/skills.md` |
 | MCP servers (add, reconnect, deferred loading) | `references/native-mcp.md` |
 | The browser (obscura CDP) or IGS web tools | `references/browser-and-web.md` |

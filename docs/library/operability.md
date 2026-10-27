@@ -17,10 +17,13 @@ checks_config, checks_fix, checks_tools, check_result),
 
 ## The doctor (`operant doctor`)
 
-A 5-check battery: API connectivity (probes the CONFIGURED endpoint,
-never the provider default — the omp omniroute false-failure was the
-defect, iter-336), config validity, database integrity, tool
-registration, version/dependency status. Checks never send a base URL
+The doctor runs grouped checks from `cmd_doctor/` — config, tools,
+integrations, API connectivity, platform, binaries — plus the unified
+engine (`crates/operant-core/src/doctor.rs`) whose same list the
+gateway serves at `GET /api/doctor`, and a Holon org-mode section when
+`[holon] enabled`. API connectivity probes the CONFIGURED endpoint,
+never the provider default (the omp omniroute false-failure was the
+defect, iter-336). Checks never send a base URL
 as a Bearer token (iter-344) and the provider checks read the static
 `provider_catalog.rs` (157-name recognition surface) since the second
 provider surface was deleted (iter-1215, RT-153). `--fix` runs the
@@ -33,15 +36,19 @@ The interactive wizard: model config → provider key → runtime defaults,
 with a `--non-interactive` report mode. The product's intended
 first-run path.
 
-## Self-update (`operant update`)
+## Updates (`operant update`)
 
-`binary_updater.rs` is the ONE updater with FOUR consumers (operant
-itself + three integrations: AFT, sourcehound, ponytail), distinguished
-by `InstallKind` (Binary vs Content). For operant's own binary: fetch
-the latest release → download → verify → swap-in. For integrations:
-versioned directories with keep=2, guard-scanned content, auto-update
-checks (AFT/sourcehound) or fully opt-in install (ponytail —
-default OFF).
+`binary_updater.rs` is the ONE updater behind the three self-updating
+INTEGRATIONS (AFT, sourcehound, ponytail), distinguished by `InstallKind`
+(ReplaceOnPath / CacheDir vs Content). The integrations get versioned
+directories with keep=2, guard-scanned content (ponytail), and
+auto-update checks (AFT/sourcehound) or fully opt-in install (ponytail
+— default OFF). Operant's OWN binary does not self-swap through this
+mechanism: `operant update` reports integration versions and prints the
+git-pull / cargo-install / releases-page steps for the binary itself
+(`cmd_update.rs` — the honest non-implementation), because a running
+process swapping its own inode is the deploy protocol's job
+(`AGENTS.md` §7), not a background updater's.
 
 ## Service install (`operant service install`)
 

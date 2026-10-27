@@ -1,5 +1,5 @@
 {
-  "$comment": "Surfaces the corpus tracks but deliberately does NOT execute. Every entry names the render target, the baseline filenames a future run should create if the surface is ever unblocked, and the single reason it cannot run today. A surface belongs here rather than as a *.scenario.json because a scenario file that cannot pass teaches people to ignore red; see docs/tui-debugging.md. Nothing in this file is ever reported as PASSED.",
+  "$comment": "Surfaces the corpus tracks but deliberately does NOT execute. Every entry names the render target, the baseline filenames a future run should create if the surface is ever unblocked, and the single reason it cannot run today. A surface belongs here rather than as a *.scenario.json because a scenario file that cannot pass teaches people to ignore red; see docs/library/tui-debugging.md. Nothing in this file is ever reported as PASSED.",
   "excluded": [
     {
       "name": "mcp-approval",

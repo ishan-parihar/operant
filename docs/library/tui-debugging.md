@@ -563,9 +563,9 @@ Current entries (5): `background-task-rows`, `debug-overlay`, `tool-block`
 > first.* When judging a candidate golden, ask what would differ on someone
 > else's machine, not merely what differs between two runs here.
 
-Current `excluded.json` entries (7 excluded, 56 scenario files —
-derive this table
-from the file, never from memory):
+Current `excluded.json` entries (7 excluded, 56 scenario files at
+writing — derive both counts from `excluded.json` and the
+`*.scenario.json` listing at read time, never from this table):
 
 | Surface | Why |
 |---------|-----|

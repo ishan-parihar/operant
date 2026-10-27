@@ -87,7 +87,7 @@ they describe. The front door is `docs/library/README.md`; the
 | `docs/library/security.md` | the guard stack: approval, blast radius, justification, redaction, credentials, path safety, SSRF, staging | skill content scanning (`skills.md`) |
 | `docs/library/persistence.md` | the SQLite substrate: state DB, schema reconciliation, migrations, trajectory, RAM budget | session semantics (`sessions.md`), the memory store (`memory.md`) |
 | `docs/library/observability.md` | observer events, runtime metrics, logging, insights, the dashboard | the doctor (`operability.md`) |
-| `docs/library/operability.md` | doctor, setup, self-update, service install, backup/import, MCP-serve | the gateway daemon (`gateway.md`) |
+| `docs/library/operability.md` | doctor, setup, integrations updater, service install, backup/import, MCP-serve | the gateway daemon (`gateway.md`) |
 
 ## The frozen reference shelf
 
@@ -96,7 +96,12 @@ The 2026-08 one-off design and parity documents (`docs/HERMES_*`,
 cite them, never edit them, never let them answer a current question.
 They are the *evidence* behind decisions, not the decisions.
 `docs/PAGE-INDEX.md` is that shelf's table of contents. Three shelf
-pages were re-homed into the library (with tombstones left behind):
-`docs/kernel.md` → `docs/library/kernel.md`,
-`docs/harness-kernel.md` → `docs/library/harness.md`,
-`docs/tui-debugging.md` → `docs/library/tui-debugging.md`.
+pages were re-homed into the library — the original paths now hold
+tombstones pointing at the archived copies, and the library pages are
+the live answers:
+`docs/kernel.md` → `docs/library/kernel.md`
+(archive: `docs/archive/kernel.md`),
+`docs/harness-kernel.md` → `docs/library/harness.md`
+(archive: `docs/archive/harness-kernel.md`),
+`docs/tui-debugging.md` → `docs/library/tui-debugging.md`
+(archive: `docs/archive/tui-debugging.md`).

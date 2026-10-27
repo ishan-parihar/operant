@@ -24,7 +24,7 @@ Skills are markdown instruction packs (`SKILL.md`) that inject guidance into the
   - **Core file/exec**: `terminal`, `file_read`, `file_write`, `patch`, `file_search`, `file_list`, `file_state`, `code_execution`, `process`
   - **Web**: `web_search`, `web_fetch`, `web_extract`, `web_scrape`, `web_crawl`, `http_request`, `openrouter_query`, `xai_http_request`
   - **Browser**: `browser` (navigate/snapshot/click/type/scroll/accessibility_tree/cookies_*), `browser_cdp`, `browser_dialog`, `browser_camofox_state`
-  - **Memory**: `memory_save`, `memory_search`, `memory_store`, `memory_recall`, `memory_smart_search`
+  - **Memory**: `memory_store`, `memory_search` (the retired `memory_save`, `memory_recall`, `memory_smart_search` names still execute through the registry alias layer, but the live wire registers exactly two)
   - **Skills/MCP**: `skills_list`, `skill_view`, `skill_manage`, `mcp_management`
   - **Context/LCM**: `lcm_recall`, `lcm_recent`, `lcm_stats`, `lcm_assert`, `lcm_vector_recall`, `lcm_doctor`, `lcm_load_session`, `lcm_recall_round`
   - **Agentic**: `delegate_task`, `clarify`, `todo`, `kanban`, `cron`, `checkpoint`, `approval_request`, `notify`, `send_message`, `session_search`, `session_insights`, `vision_analyze`, `video_analyze`, `image_generate`, `text_to_speech`, `transcribe_audio`, `config_manage`, `datetime`, `timestamp`, `debug_env`, `debug_system`, `osv_check`, `learning_manage`, `tool_backend`, `echo`, `neutts_synthesize`

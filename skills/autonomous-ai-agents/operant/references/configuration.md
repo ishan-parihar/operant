@@ -6,7 +6,7 @@ Config lives at `~/.operant/operant.toml`; secrets live in `~/.operant/.env` onl
 
 - `[client]` — base_url, api_key, timeout, additional_api_keys (credential rotation)
 - `[agent]` — model, fallbacks, max_iterations, tool_timeout_secs, context_window, stream, context_engine
-- `[memory]` — provider: `agentmemory` (default, hybrid BM25+vector+graph, auto-spawns via npx) or `builtin` (MEMORY.md/USER.md files); `enabled`
+- `[memory]` — provider: `memory-wire` (default; the historical name `agentmemory` is accepted) — in-process, no npx spawn; `enabled`
 - `[tools]` — igs_enabled, aft_enabled, disabled_tools, disabled_toolsets, browser provider
 - `[skills]` — root_dir (default `~/.operant/skills`), autoload, template_vars
 - `[mcp]` — servers (stdio/http, deferred flag), autoload
@@ -16,8 +16,8 @@ Config lives at `~/.operant/operant.toml`; secrets live in `~/.operant/.env` onl
 
 ## Memory provider
 
-- `agentmemory` (default): hybrid search; session/start on init, observe after every turn, recall before turns. Server auto-spawns (`npx @agentmemory/mcp`); graceful degradation to builtin when node is missing.
-- `builtin`: file-backed MEMORY.md/USER.md via `memory_store` / `memory_search` / `memory_recall`.
+- `memory-wire` (default; the historical name `agentmemory` is still accepted): in-process hybrid semantic memory over a bank-isolated SQLite store — no server to spawn. The legacy `builtin` name is accepted-but-ignored (file-backed MEMORY.md/USER.md was removed; memory-wire is the only engine).
+- Agent-facing tools: `memory_store` / `memory_search` (retired `memory_recall`, `memory_save`, `memory_smart_search` still execute through the registry alias layer).
 
 ## Gateway channels
 

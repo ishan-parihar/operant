@@ -326,8 +326,13 @@ enabled = false
 # EXAMPLE_ROOT = "C:/workspace"
 
 [skills]
-root_dir = "$HOME/.operant/skills"
-memory_dir = "$HOME/.operant/memory"
+# NO expansion exists for these paths — neither `$HOME` nor `~` is
+# resolved here (only `[holon]` paths expand a leading `~`). A literal
+# `$HOME/...` or `~/...` value creates a directory with that literal
+# name under the working directory. Leave these keys ABSENT to use the
+# defaults (the operant-home resolver), or write an absolute path.
+# root_dir = "/home/you/.operant/skills"
+# memory_dir = "/home/you/.operant/memory"
 autoload = true
 # `template_name` / `template_description` are accepted but UNREAD (RT-136).
 
