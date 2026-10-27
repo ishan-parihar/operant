@@ -62,6 +62,9 @@ Working a `## Pending` row, one row per iteration:
 - The TTS engine's ONNX Runtime panic is a tool error, and the release profile unwinds (BUGS CR-1, CR-3; AD-016, iter-970)
 - ONNX Runtime is pinned to 1.24.4 in every script and AGENTS.md, and `install.sh` refuses a library without API 24 (BUGS CR-2; AD-017, iter-970)
 - `operant doctor` reports a tool available only through its configuration, flags a second `operant` on PATH, and the config loads once (BUGS CR-4, CR-5, CR-6; AD-018, iter-970)
+- Enter submits registered slash commands mid-stream, `/thinking-display off` included, and a plain prompt gets an honest "turn is running" notice instead of a dead key (2026-10-27 red-team audit; iter-1402)
+- Ctrl+R history search previews into the composer live, restores the draft on Esc, and steps older on repeat Ctrl+R (jcode parity; iter-1403)
+- The `@` file-ref typeahead renders while a turn streams, rows show the bare path (no `@file:`/`@folder:` grammar), a directory never gains a doubled separator, and an oversized `@file:` skips alone with a notice instead of refusing the whole turn's injection (operator report 2026-10-27; OMP file-mentions parity; iter-1418)
 
 ## Pending
 
