@@ -529,8 +529,17 @@ struct ToolSchema {
 }
 
 /// Every registered tool as its own measured line.
+///
+/// Uses `get_schemas`, NOT `get_schemas_all`: the `_all` view is the
+/// unfiltered registry (deliberately, so `operant tools list` can still show
+/// a tool the operator turned off), and measuring it counts tools the agent
+/// does NOT receive. That made every number here overstated and — worse —
+/// made the optimization loop a lie: it proposed `operant tools disable todo`
+/// and then still measured `tool:todo` at 769 tok/request after the disable.
+/// Proven by round-trip, not by reading: disabling two tools moved the
+/// measured total by exactly zero.
 async fn per_tool_schemas(registry: &ToolRegistry) -> Vec<ToolSchema> {
-    let schemas = registry.get_schemas_all().await;
+    let schemas = registry.get_schemas().await;
     schemas
         .into_iter()
         .map(|s| {
@@ -954,5 +963,64 @@ mod tests {
         let out = render_rollup(&r);
         assert!(out.contains("[day 2026-08-13] 5 nodes"));
         assert!(out.contains("Deploys happen biweekly."));
+    }
+
+    /// THE BUDGET ROUND-TRIP. An optimization proposal that does not reduce
+    /// the measured number is worse than no proposal: the operator takes the
+    /// advice, pays the capability cost, and gets nothing back.
+    ///
+    /// This is a regression test for a real defect, found by validation on
+    /// 2026-10-27 and not by inspection. The measurement used
+    /// `get_schemas_all()` — the UNFILTERED registry, which deliberately
+    /// includes disabled tools so `operant tools list` can show what the
+    /// operator turned off. So after `operant tools disable todo`, the budget
+    /// still counted `tool:todo` at 769 tok/request, and the round-trip moved
+    /// the total by exactly ZERO. Two tools disabled, measured delta 0.
+    ///
+    /// The fix is to measure what the agent actually receives. Both halves are
+    /// pinned here because either one alone would have hidden the defect:
+    /// a filtered view with no disable, and a disable with no measurement.
+    #[tokio::test]
+    async fn the_budget_measures_what_the_agent_receives_not_the_whole_registry() {
+        use operant_core::tools::ToolRegistry;
+
+        let registry = ToolRegistry::new(std::time::Duration::from_secs(5));
+        registry
+            .register(operant_core::tools::FileReadTool)
+            .await
+            .unwrap();
+        registry
+            .register(operant_core::tools::FileWriteTool)
+            .await
+            .unwrap();
+
+        // Nothing disabled: both are measured.
+        let before = per_tool_schemas(&registry).await;
+        assert_eq!(
+            before.len(),
+            2,
+            "both tools are measured when nothing is disabled"
+        );
+
+        // The mechanism the real `operant tools disable` uses.
+        let mut disabled = std::collections::BTreeSet::new();
+        disabled.insert("file_write".to_string());
+        registry
+            .set_disabled_tools(std::collections::HashSet::from_iter(
+                disabled.iter().cloned(),
+            ))
+            .await;
+
+        let after = per_tool_schemas(&registry).await;
+        assert!(
+            !after.iter().any(|t| t.name == "file_write"),
+            "a disabled tool must NOT be measured — the agent does not receive its schema, \
+             so counting it overstates the bill and makes the optimization loop a lie"
+        );
+        assert!(
+            after.iter().any(|t| t.name == "file_read"),
+            "an ENABLED tool must still be measured"
+        );
+        assert_eq!(after.len(), 1);
     }
 }
