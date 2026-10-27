@@ -518,7 +518,7 @@ operant/
 │       ├── src/
 │       │   ├── main.rs        # CLI entry point, Clap enum, agent setup
 │       │   ├── mcp_serve.rs   # Operant as an MCP SERVER over stdio (`operant mcp serve`); the CLIENT lives in operant-core/src/mcp.rs
-│       │   ├── tui/           # 63 TUI modules (303 .rs files) — (app, render, prompt_input, dialogs)
+│       │   ├── tui/           # 64 TUI modules (303 .rs files) — (app, render, prompt_input, dialogs)
 │       │   ├── gateway_runner.rs # Gateway mode agent handler
 │       │   ├── autonomous.rs  # Autonomous coding mode
 │       │   ├── config.rs      # CLI config
@@ -1562,6 +1562,7 @@ were adopted without moving files this repo already owns.
 | where does the project stand right now | `docs/handoff/STATE.md` | current snapshot — regenerate, archive old |
 | what a fresh agent reads, in order | `docs/handoff/README.md` | current |
 | what is left to do, decided per item (autonomous mode's ledger) | `TODO.md` | rows update, verdicts append — never delete |
+| how a mechanism works and why it is that way (one doc per architectural element) | `docs/library/` (front door: `docs/library/README.md`; full list in `docs/INDEX.md`) | current — changes in the same iteration as the code it describes |
 | how we will do X (pre-registered, current work) | `docs/plans/` (dated `plan-YYYY-MM-DD-*`, frozen) | dated-frozen |
 | what was audited, what was found | `docs/audit/` (dated, frozen) | dated-frozen |
 | why X is the way it is | `docs/decisions/` (AD-NNN-*.md) | immutable once numbered — the CLI enforces it; a correction is a NEW record (`genome rec supersede`), never a file edit (RG-002) |

@@ -49,3 +49,14 @@ never_commit = [".serena/**", "target/**", "**/*.genome-lock", ".genome/**"]
 [card]
 architecture = "AGENTS.md#Architecture Overview"
 status_into = "docs/handoff/STATE.md"
+
+[ops]
+# E301: every doc in an owner location must be listed in docs/INDEX.md —
+# a mechanism-library page that is not in the ownership map is lint, so the
+# "cover every relevant thing" contract is machine-enforced, not aspirational.
+owner_globs = ["docs/library/*.md"]
+# E303: backticked file-shaped pointers in these surfaces must exist —
+# library pages cite source modules, and a stale citation is a broken link
+# the gate catches instead of a reader.
+link_surfaces = ["docs/INDEX.md", "docs/library/*.md"]
+link_prefixes = ["crates/", "scripts/", "docs/", "kernel-sidecar/"]

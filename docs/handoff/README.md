@@ -10,6 +10,7 @@
 | 6 | `docs/kb/CLOSED.md` | what was tried and rejected — do not re-litigate |
 | 7 | `docs/plans/` | current pre-registered plans (dated, frozen). **There is no single live batch** — the directory holds dated plan sets side by side, and most of their subjects are already implemented. The newest are `plan-2026-10-19-plugin-ecosystem.md`, `plan-2026-10-17-remaining-implementation-gaps.md` and `plan-2026-10-17-redteam-audit-of-remaining-gaps.md`; `docs/plans/2026-10-14-batch/` is a 2026-10-14 set whose subjects are largely done. Files under 600 bytes are TOMBSTONES, not plans — read them for the archive pointer |
 | 8 | `docs/kb/WORKLOG.md` | what happened, unit of work by unit of work |
+| 9 | `docs/library/README.md` | the mechanism library: one doc per architectural element (mechanism + intention) — read the agentic core group first, then the domain you came for |
 
 Legacy one-off design/parity docs (`docs/HERMES_*`, `docs/ORGANISM-*`,
 `docs/*PLAN*`, `docs/*AUDIT*`, 2026-08 era) are a frozen reference shelf — cite,

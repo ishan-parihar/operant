@@ -49,7 +49,7 @@ copied from each page's first heading.
 - [PLAN-TUI-OVERHAUL-v1.md](PLAN-TUI-OVERHAUL-v1.md) — Plan: TUI Visual Overhaul → jcode parity
 - [ROADMAP-TUI-FLEET.md](ROADMAP-TUI-FLEET.md) — TUI Overhaul — Fleet Roadmap (Waves 3–6)
 - [TUI_AUDIT_AND_REFACTOR_PLAN.md](TUI_AUDIT_AND_REFACTOR_PLAN.md) — Operant TUI Audit Report & Refactor Plan
-- [tui-debugging.md](tui-debugging.md) — TUI Debugging & Headless Simulation
+- [tui-debugging.md](tui-debugging.md) — TUI Debugging & Headless Simulation (moved to the mechanism library: `library/tui-debugging.md`)
 - [JCODE-VISUAL-LAYER-IMPLEMENTATION-PLAN.md](JCODE-VISUAL-LAYER-IMPLEMENTATION-PLAN.md) — jcode Visual Layer — Full Port Implementation Plan
 
 ## Agent loop, audits and plans
@@ -67,7 +67,7 @@ copied from each page's first heading.
 - [R40-12-13-WIRE-OR-RETIRE-REVIEW.md](R40-12-13-WIRE-OR-RETIRE-REVIEW.md) — R40-12 / R40-13 — wire-or-retire review, and a YAGNI audit of the harness
 - [RUST_BEST_PRACTICES_PLAN.md](RUST_BEST_PRACTICES_PLAN.md) — Operant — Rust Best Practices & Operational-Loop Fix Plan
 - [WAVE1-DECISIONS.md](WAVE1-DECISIONS.md) — Wave 1 Decision Document
-- [harness-kernel.md](harness-kernel.md) — Operant Harness Kernel (plan 016)
+- [harness-kernel.md](harness-kernel.md) — Operant Harness Kernel (moved to the mechanism library: `library/harness.md`)
 - [MEMORY_BUDGET.md](MEMORY_BUDGET.md) — Memory Budget
 - [HOLON-INTEGRATION.md](HOLON-INTEGRATION.md) — Holon integration (proposed, 2026-10-14)
 
