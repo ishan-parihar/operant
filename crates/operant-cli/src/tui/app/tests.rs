@@ -1475,6 +1475,76 @@ fn test_ctrl_r_opens_history_search_carrying_the_history() {
     }
 }
 
+/// (2026-10-27, jcode parity, operator report) Ctrl+R must PREVIEW the
+/// selected prompt in the composer as the search navigates — jcode's
+/// `apply_prompt_history_search_preview`. Before this, only the floating
+/// panel showed the match and the composer kept its old text.
+#[test]
+fn history_search_previews_the_selected_match_in_the_composer() {
+    let mut app = make_app();
+    app.prompt_input.history = vec!["alpha prompt".to_string(), "beta prompt".to_string()];
+    app.set_prompt_text("draft".to_string());
+
+    // Open the search; the empty-query browse-all must NOT clobber the
+    // draft before the user has picked anything.
+    app.handle_key_event(press_key(KeyCode::Char('r'), KeyModifiers::CONTROL));
+    assert_eq!(app.prompt_input.text, "draft");
+
+    // Typing a query previews the top match into the composer.
+    app.handle_key_event(press_key(KeyCode::Char('b'), KeyModifiers::NONE));
+    app.handle_key_event(press_key(KeyCode::Char('e'), KeyModifiers::NONE));
+    assert_eq!(
+        app.prompt_input.text, "beta prompt",
+        "the selected match must preview in the input box"
+    );
+
+    // Stepping down (older match, newest-first list) moves the preview.
+    app.handle_key_event(press_key(KeyCode::Up, KeyModifiers::NONE));
+    assert_eq!(app.prompt_input.text, "beta prompt");
+}
+
+/// Esc must restore the composer draft the search opened on — the live
+/// preview overwrites the composer, so cancel has to put it back (jcode's
+/// `cancel_prompt_history_search`).
+#[test]
+fn history_search_esc_restores_the_pre_search_draft() {
+    let mut app = make_app();
+    app.prompt_input.history = vec!["alpha prompt".to_string()];
+    app.set_prompt_text("my half-written draft".to_string());
+
+    app.handle_key_event(press_key(KeyCode::Char('r'), KeyModifiers::CONTROL));
+    // Navigate so the preview overwrites the composer.
+    app.handle_key_event(press_key(KeyCode::Char('a'), KeyModifiers::NONE));
+    assert_eq!(app.prompt_input.text, "alpha prompt");
+
+    app.handle_key_event(press_key(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(!app.history_search_overlay.visible);
+    assert_eq!(
+        app.prompt_input.text, "my half-written draft",
+        "Esc must restore the pre-search draft, not strand the preview"
+    );
+}
+
+/// Ctrl+R again while the search is open must STEP to the older match
+/// (readline), not fall through as a dead key.
+#[test]
+fn history_search_ctrl_r_again_steps_older() {
+    let mut app = make_app();
+    app.prompt_input.history = vec!["alpha prompt".to_string(), "beta prompt".to_string()];
+
+    app.handle_key_event(press_key(KeyCode::Char('r'), KeyModifiers::CONTROL));
+    app.handle_key_event(press_key(KeyCode::Char('a'), KeyModifiers::NONE));
+    let before = app.history_search_overlay.selected_idx;
+
+    app.handle_key_event(press_key(KeyCode::Char('r'), KeyModifiers::CONTROL));
+    let after = app.history_search_overlay.selected_idx;
+    assert_ne!(
+        before, after,
+        "Ctrl+R while open must move the selection (readline step)"
+    );
+    assert!(app.history_search_overlay.visible, "the search stays open");
+}
+
 #[test]
 fn test_tab_accepts_the_typeahead_suggestion() {
     use crate::tui::prompt_input::{TypeaheadSource, TypeaheadSuggestion};

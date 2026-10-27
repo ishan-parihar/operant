@@ -1294,7 +1294,14 @@ impl App {
                         searchable.push(p.clone());
                     }
                 }
-                let overlay = HistorySearchOverlay::open(&searchable);
+                let mut overlay = HistorySearchOverlay::open(&searchable);
+                // (2026-10-27, jcode parity) the live preview overwrites
+                // the composer as the selection moves; Esc needs the draft
+                // the search opened on to put it back.
+                overlay.capture_composer_draft(
+                    self.prompt_input.text.clone(),
+                    self.prompt_input.cursor,
+                );
                 self.history_search_overlay = overlay;
             }
             KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -2168,7 +2175,26 @@ impl App {
     fn handle_history_search_overlay_key(&mut self, key: KeyEvent) -> bool {
         match key.code {
             KeyCode::Esc => {
+                // (2026-10-27, jcode parity) Cancel restores the pre-search
+                // draft — the live preview overwrote the composer, so
+                // closing without restoring would strand the preview text.
+                let (text, cursor) = self.history_search_overlay.restore_draft();
+                self.prompt_input.replace_text(text);
+                self.prompt_input.cursor = cursor;
+                self.prompt_input.suppress_suggestions_once = true;
+                self.prompt_input.suggestions.clear();
+                self.prompt_input.suggestion_index = None;
+                self.refresh_prompt_input();
                 self.history_search_overlay.close();
+            }
+            // (2026-10-27, jcode parity) readline step: Ctrl+R again while
+            // the search is open moves to the OLDER match (jcode's
+            // `Char('r') if ctrl` arm), instead of falling to `_ => {}` and
+            // re-opening the overlay over itself (which would also discard
+            // the query via `HistorySearchOverlay::open`).
+            KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.history_search_overlay.select_prev();
+                self.apply_history_search_preview();
             }
             KeyCode::Enter => {
                 if let Some(entry) = self
@@ -2181,13 +2207,16 @@ impl App {
             }
             KeyCode::Up => {
                 self.history_search_overlay.select_prev();
+                self.apply_history_search_preview();
             }
             KeyCode::Down => {
                 self.history_search_overlay.select_next();
+                self.apply_history_search_preview();
             }
             KeyCode::Backspace => {
                 let history = self.prompt_input.history.clone();
                 self.history_search_overlay.pop_char(&history);
+                self.apply_history_search_preview();
             }
             // 'p' with no modifiers and an empty query = pin/unpin the selected entry.
             // When the query is non-empty 'p' is treated as a filter character so
@@ -2202,10 +2231,34 @@ impl App {
                 let c = normalize_char_with_shift(c, key.modifiers);
                 let history = self.prompt_input.history.clone();
                 self.history_search_overlay.push_char(c, &history);
+                self.apply_history_search_preview();
             }
             _ => {}
         }
         false
+    }
+
+    /// (2026-10-27, jcode parity) Write the currently selected match into
+    /// the composer as the search navigates — jcode's
+    /// `apply_prompt_history_search_preview`: the input box SHOWS the
+    /// prompt while you browse, instead of only the floating panel. No
+    /// match → restore the pre-search draft. The install rides the same
+    /// popup-suppression the Up/Down history recall uses, so a previewed
+    // `/…` entry cannot re-open the typeahead popup and strand the next
+    // Up/Down in slash-completions (the 2026-10-25 history-nav fix).
+    fn apply_history_search_preview(&mut self) {
+        let Some((text, cursor)) = self
+            .history_search_overlay
+            .preview_composer(&self.prompt_input.history)
+        else {
+            return;
+        };
+        self.prompt_input.replace_text(text);
+        self.prompt_input.cursor = cursor.min(self.prompt_input.text.len());
+        self.prompt_input.suppress_suggestions_once = true;
+        self.prompt_input.suggestions.clear();
+        self.prompt_input.suggestion_index = None;
+        self.refresh_prompt_input();
     }
 
     /// (plan 05) Keys inside the fullscreen rewind selector.

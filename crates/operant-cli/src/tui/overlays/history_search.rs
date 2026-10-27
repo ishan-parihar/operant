@@ -193,6 +193,12 @@ pub struct HistorySearchOverlay {
     /// Snapshot of the history taken at `open()` time, stored as
     /// `HistoryEntry` so timestamps are available.
     pub snapshot: Vec<HistoryEntry>,
+    /// (2026-10-27, jcode parity) Composer draft captured when the search
+    /// opened. The live preview overwrites the composer as the selection
+    /// moves, so Esc needs the pre-search draft to restore — jcode's
+    /// `PromptHistorySearchState.original_input`/`original_cursor`.
+    pub original_input: String,
+    pub original_cursor: usize,
 }
 
 impl HistorySearchOverlay {
@@ -227,9 +233,53 @@ impl HistorySearchOverlay {
             matches: Vec::new(),
             selected_idx: 0,
             snapshot: entries,
+            original_input: String::new(),
+            original_cursor: 0,
         };
         s.recompute_matches();
         s
+    }
+
+    /// (2026-10-27, jcode parity) Capture the composer draft the live
+    /// preview must restore on cancel. Called by the App right after it
+    /// installs the overlay; the constructors cannot see the composer.
+    pub fn capture_composer_draft(&mut self, text: String, cursor: usize) {
+        self.original_input = text;
+        self.original_cursor = cursor;
+    }
+
+    /// (2026-10-27, jcode parity) The composer content the search should
+    /// show right now: the selected match when one exists, else the
+    /// pre-search draft (jcode's `apply_prompt_history_search_preview`
+    /// fallback). Returns `(text, cursor)` for the caller to install with
+    /// the popup-suppressing recall path.
+    ///
+    /// `None` when the overlay is closed OR when the query is empty and the
+    /// user has not navigated yet: operant's empty-query mode lists ALL
+    /// history (jcode shows nothing), and previewing the newest entry into
+    /// the composer the instant Ctrl+R opens would visually clobber a
+    /// half-typed draft before the user asked for anything. The first
+    /// Up/Down/Ctrl+R/char makes the preview real.
+    pub fn preview_composer(&self, history: &[String]) -> Option<(String, usize)> {
+        if !self.visible {
+            return None;
+        }
+        if self.query.is_empty() && self.selected_idx == 0 {
+            return None; // browse-all, nothing picked yet — keep the draft
+        }
+        Some(self.current_entry(history).map_or(
+            (self.original_input.clone(), self.original_cursor),
+            |text| {
+                let cursor = text.len();
+                (text, cursor)
+            },
+        ))
+    }
+
+    /// (2026-10-27, jcode parity) The draft to restore on cancel — the
+    /// composer as it stood when the search opened.
+    pub fn restore_draft(&self) -> (String, usize) {
+        (self.original_input.clone(), self.original_cursor)
     }
 
     /// Toggle the pinned state of the currently selected entry.
