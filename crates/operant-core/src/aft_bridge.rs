@@ -935,6 +935,34 @@ impl AftBridge {
 // Bridge pool — one bridge per project root, shared across calls
 // ---------------------------------------------------------------------------
 
+/// The aft warmup areas `AftBridgePool` fires per project root.
+///
+/// RT-195(b): `search` is here because operant never built a search index
+/// before, so `aft_search` returned `[search_lanes_unavailable]` on a fresh
+/// root and the tool's description had to send the operator to
+/// `aft warmup --only search` by hand. One string shared by the call site and
+/// its contract test, so the two cannot drift.
+const WARMUP_AREAS: &str = "callgraph,search";
+
+/// The argv a detached aft warmup spawns with, for one root and one area-set.
+///
+/// A free function (not a method) because the spawn site is a `move` closure
+/// that has no `self`, and because a test can pin the exact contract this way:
+/// RT-195(b)'s contract is that the SEARCH lane is in the set and that both
+/// areas ride ONE process rather than paying two spawns per root.
+fn warmup_argv(root: &str, areas: &str) -> Vec<String> {
+    vec![
+        "warmup".to_string(),
+        "--root".to_string(),
+        root.to_string(),
+        "--only".to_string(),
+        areas.to_string(),
+        "--timeout".to_string(),
+        "600000".to_string(),
+        "--quiet".to_string(),
+    ]
+}
+
 /// A pool of aft bridges, one per project root. Bridges are lazily spawned
 /// on first use and reused for subsequent calls to the same project.
 #[derive(Default)]
@@ -963,16 +991,29 @@ impl AftBridgePool {
         // fresh project root so aft_callers / aft_inspect(dead-code) are warm
         // on first use — even if this operant session exits before it
         // finishes (the detached warmup survives; the store persists).
-        self.warm_callgraph_detached(&root).await;
+        //
+        // RT-195(b): the SEARCH lanes ride the same spawn. `aft_search`
+        // returns a hard `[search_lanes_unavailable]` until a search index
+        // exists for the root, and nothing in operant ever built one — so the
+        // tool's own description had to tell the model to run
+        // `aft warmup --only search` by hand. Firing it here closes that gap
+        // with operant doing the work instead of leaving it to the operator,
+        // which is the whole content of the row's part (b).
+        self.warm_aft_areas_detached(&root, WARMUP_AREAS).await;
         Ok(bridge)
     }
 
-    /// Best-effort detached `aft warmup --only callgraph` for a project root.
+    /// Best-effort detached `aft warmup --only <areas>` for a project root.
     /// Never blocks or fails the caller: resolve the binary; if found, spawn
     /// a detached process (no kill_on_drop) so the build outlives operant.
     /// Deduped per root per process. AFT's warmup returns almost immediately
     /// when the store is already warm, so re-firing is cheap.
-    async fn warm_callgraph_detached(&self, root: &Path) {
+    ///
+    /// `areas` is aft's own comma-separated vocabulary (`callgraph,search`,
+    /// `semantic`, ...). One process warms every area named, which is why the
+    /// caller passes both the callgraph and the search lane together rather
+    /// than paying two spawns per root.
+    async fn warm_aft_areas_detached(&self, root: &Path, areas: &str) {
         let mut warming = self.warming.lock().await;
         if !warming.insert(root.to_path_buf()) {
             return;
@@ -980,25 +1021,26 @@ impl AftBridgePool {
         let binary = match resolve_aft_binary().await {
             Ok(b) => b,
             Err(e) => {
-                tracing::warn!(error = %e, "aft warmup: no binary to warm the callgraph");
+                tracing::warn!(error = %e, "aft warmup: no binary to warm {areas}");
                 return;
             }
         };
         let root_s = root.to_string_lossy().to_string();
         let bin_s = binary.to_string_lossy().to_string();
+        let areas_s = areas.to_string();
         std::thread::spawn(move || {
+            let argv = warmup_argv(&root_s, &areas_s);
+            let argv_refs: Vec<&str> = argv.iter().map(String::as_str).collect();
             let result = std::process::Command::new(&bin_s)
-                .args([
-                    "warmup",
-                    "--root",
-                    &root_s,
-                    "--only",
-                    "callgraph",
-                    "--timeout",
-                    "600000",
-                    "--quiet",
-                ])
+                .args(&argv_refs)
                 .stdin(std::process::Stdio::null())
+                // nulled, deliberately (NOT piped): this is fire-and-forget
+                // and the only reader would be this very thread's wait().
+                // Piping without draining is the plan-07.1 freeze in reverse
+                // — aft's warmup prints its index progress to these fds, a
+                // full 64KB pipe would block the build, and nothing would
+                // read it. operant does not need the output (the store
+                // persists), so the child writes to nowhere and cannot block.
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
                 .spawn();
@@ -1011,11 +1053,10 @@ impl AftBridgePool {
                 // detached intent: operant exiting first never kills the
                 // build (no kill_on_drop; init reaps then).
                 Ok(mut child) => {
-                    tracing::debug!(root = %root_s, "aft callgraph warmup spawned detached");
                     let _ = child.wait();
                 }
                 Err(e) => {
-                    tracing::warn!(error = %e, root = %root_s, "aft callgraph warmup spawn failed")
+                    tracing::warn!(error = %e, root = %root_s, "aft {areas_s} warmup spawn failed")
                 }
             }
         });
@@ -1240,5 +1281,52 @@ mod tests {
         });
         let line = serde_json::to_string(&nested).unwrap();
         assert!(line.contains("\"params\""));
+    }
+
+    /// RT-195(b) — operant warms aft's SEARCH lane itself.
+    ///
+    /// Before this, `AftBridgePool` only ever fired `--only callgraph`, so a
+    /// fresh project root had no search index and every `aft_search` call
+    /// returned the hard `[search_lanes_unavailable]` error — the tool's
+    /// description had to tell the model to run
+    /// `aft warmup --only search` by hand, which is exactly the operator-side
+    /// gap the row names.
+    ///
+    /// The contract pinned here: BOTH areas ride ONE process (aft's `--only`
+    /// takes a comma-separated set and one spawn is cheaper than two), the
+    /// root is the bridge's own root, and the timeout is bounded so a detached
+    /// warmup can never linger indefinitely.
+    ///
+    /// Mutation shape: dropping `search` from the pool's call site fails the
+    /// area assertion below, because the argv is built from the same string.
+    #[test]
+    fn detached_warmup_carries_the_search_lane_alongside_the_callgraph() {
+        let argv = warmup_argv("/repo", WARMUP_AREAS);
+        let only = argv
+            .iter()
+            .position(|a| a == "--only")
+            .and_then(|i| argv.get(i + 1))
+            .expect("the warmup always names its areas");
+        let areas: Vec<&str> = only.split(',').collect();
+        assert!(
+            areas.contains(&"search"),
+            "the search lane must be warmed by operant, not left to the operator: {only}"
+        );
+        assert!(
+            areas.contains(&"callgraph"),
+            "the callgraph warmup must not regress: {only}"
+        );
+        // ONE process for both areas: a second spawn per root would double the
+        // detached children for a build aft performs in a single invocation.
+        assert_eq!(
+            argv.iter().filter(|a| *a == "--only").count(),
+            1,
+            "both areas ride one warmup process"
+        );
+        assert_eq!(argv[0], "warmup");
+        assert!(
+            argv.contains(&"/repo".to_string()),
+            "the bridge's own root rides the argv"
+        );
     }
 }
