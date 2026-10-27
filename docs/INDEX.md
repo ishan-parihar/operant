@@ -25,7 +25,9 @@ here or the gate is red.
 | `docs/decisions/` | IMMUTABLE | why X is the way it is (`AD-NNN-*.md`) | what to do next |
 | `docs/regressions/` | IMMUTABLE | what bit us, and the law it produced (`RG-NNN-*.md`) | decisions |
 | `docs/plans/` | DATED-FROZEN | current pre-registered plans | findings (that is `docs/audit/`) |
+| `docs/plans/2026-10-27-kb-management-protocol-consolidation-lifecycle-compaction-an.md` | DATED-FROZEN | the KB management protocol proposal — consolidation lifecycle (incl. `consolidating`), compaction, scratch, the /project-genome upgrade, awaiting operator ratification | the operant KB survey numbers (that is `docs/audit/2026-10-27-kb-surface-management-the-operant-survey-and-its-long-horizo.md`) |
 | `docs/audit/` | DATED-FROZEN | what was audited, what was found | live findings (that is `docs/audit/2026-06-19-BUGS.md`) |
+| `docs/audit/2026-10-27-kb-surface-management-the-operant-survey-and-its-long-horizo.md` | DATED-FROZEN | the 2026-10-27 KB surface survey: measured state + the L1–L6 long-horizon limitations | the protocol that answers them (that is `docs/plans/2026-10-27-kb-management-protocol-consolidation-lifecycle-compaction-an.md`) |
 | `docs/archive/` | TOMBSTONE | superseded history, with a tombstone at each original path | anything current |
 | `docs/CHANGELOG.md` | APPEND-ONLY | release history, dated | the current state |
 | `docs/INDEX.md` | LIVE | this map | anything else |
