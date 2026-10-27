@@ -2174,6 +2174,44 @@ mod tests {
         // Opening the gate for /steer must not let ordinary prompts start a
         // second turn while one is already streaming.
         assert!(!app.handle_key_event(press_key(KeyCode::Enter, KeyModifiers::NONE)));
+
+        // (2026-10-27) But the dead key must SAY so now instead of doing
+        // nothing — the silent swallow is what made the operator think
+        // Enter was broken while a turn streamed.
+        assert!(
+            app.status_message
+                .as_deref()
+                .is_some_and(|m| m.contains("A turn is running")),
+            "plain-prompt Enter mid-stream must surface the /queue hint"
+        );
+    }
+
+    /// (2026-10-27, operator report) `/thinking-display off` + Enter while a
+    /// turn streams used to be a silent dead key: the submit arm gated on
+    /// !is_streaming and admitted only /steer + /queue, so the command sat in
+    /// the composer forever. Registered commands must reach the dispatch —
+    /// their intercept arms already guard themselves for mid-stream safety
+    /// (/clear defers, /stop interrupts, /undo refuses honestly).
+    #[test]
+    fn registered_command_with_args_submits_while_streaming() {
+        let mut app = make_app();
+        app.is_streaming = true;
+        app.set_prompt_text("/thinking-display off".to_string());
+
+        assert!(app.handle_key_event(press_key(KeyCode::Enter, KeyModifiers::NONE)));
+    }
+
+    /// The gate must stay CLOSED for unregistered `/…` text mid-stream —
+    /// the catch-all contract (iter-790) says a registered name may never
+    /// fall through to the model, and the reverse must hold too: a typo'd
+    /// command stays put rather than submitting as prompt text.
+    #[test]
+    fn unregistered_slash_text_still_waits_while_streaming() {
+        let mut app = make_app();
+        app.is_streaming = true;
+        app.set_prompt_text("/definitely-not-a-command hi".to_string());
+
+        assert!(!app.handle_key_event(press_key(KeyCode::Enter, KeyModifiers::NONE)));
     }
 
     // ── plan 03 §1/§2: the context commands drive the agent ────────────

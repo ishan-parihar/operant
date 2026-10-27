@@ -1714,17 +1714,23 @@ impl App {
                 self.prompt_input.insert_newline();
                 self.refresh_prompt_input();
             }
-            // Plain Enter submits. The gate opens for `/steer` + `/queue`
-            // even while streaming: those are the one input that is
-            // meaningful in both states — streaming, they feed the agent's
-            // steer queue which the loop drains at the next iteration
-            // boundary; idle, they queue for the next turn. The modifier
-            // arm above stays `!is_streaming` so composing a multi-line
-            // prompt mid-stream is unaffected.
+            // Plain Enter submits. While a turn streams, the gate opens
+            // for steer/queue (the prompt-shaped input that feeds the steer
+            // queue) AND for any REGISTERED slash command (2026-10-27):
+            // the command arms guard themselves for mid-stream safety
+            // (`/clear`, `/stop`, `/new`, `/undo`, `/retry`, `/compact` defer
+            // or refuse honestly; display toggles just flip state), so a
+            // typed `/thinking-display off` used to hit a silent dead key
+            // here — the operator's report. Unregistered `/…` text stays
+            // on the old path: it must never fall through to the model as
+            // prompt text (iter-790). The modifier arm above stays
+            // `!is_streaming` so composing a multi-line prompt mid-stream
+            // is unaffected.
             KeyCode::Enter
                 if !self.is_streaming
                     || (key.modifiers == KeyModifiers::NONE
-                        && is_steer_command_input(&self.prompt_input.text)) =>
+                        && (is_steer_command_input(&self.prompt_input.text)
+                            || is_registered_command_input(&self.prompt_input.text))) =>
             {
                 use crate::tui::prompt_input::AcceptForSubmitOutcome;
                 // (plan 04) An EXACT command submits as typed — Enter must
@@ -1938,6 +1944,21 @@ impl App {
 
             // ---- Toggle last thinking block (t key) -------------------
             // (Removed: shadowed by KeyCode::Char(c) prompt input handler.)
+
+            // (2026-10-27) Enter on a PLAIN prompt while a turn streams:
+            // the submit arm above gates on !is_streaming, so this used to
+            // fall to `_ => {}` — a silent dead key. The text stays in the
+            // composer (deliberately: queueing plain prompts is /queue's
+            // job, not a hidden side effect), but the key must SAY so.
+            // Commands never land here — the guard above already took
+            // steer/queue and every registered command.
+            KeyCode::Enter if self.is_streaming && key.modifiers == KeyModifiers::NONE => {
+                self.set_status_notice(
+                    "A turn is running — use /queue to queue this for the next turn, or wait.\n\
+                     The text is kept in the composer."
+                        .to_string(),
+                );
+            }
             _ => {}
         }
 
@@ -2341,9 +2362,9 @@ impl App {
     //       session-scoped is the closest equivalent)
 }
 
-/// True when the prompt holds a `/steer` or `/queue` command — the only
-/// input the loop steers on rather than starting a new turn, so Enter
-/// must reach the submit path even while a turn is streaming.
+/// True when the prompt holds a `/steer` or `/queue` command — the one
+/// PROMPT input the loop steers on rather than starting a new turn, so
+/// Enter must reach the submit path even while a turn is streaming.
 fn is_steer_command_input(text: &str) -> bool {
     let Some(rest) = text.trim().strip_prefix('/') else {
         return false;
@@ -2352,6 +2373,32 @@ fn is_steer_command_input(text: &str) -> bool {
         rest.split_whitespace().next().unwrap_or_default(),
         "steer" | "queue"
     )
+}
+
+/// True when the prompt's FIRST WORD is a locally dispatchable registered
+/// slash command (`/thinking-display off` → `thinking-display`).
+/// (2026-10-27) Enter used to be silently swallowed for every non-steer
+/// command while a turn streamed — the operator's "/thinking-display off
+/// won't submit" report. The interceptor arms already guard themselves
+/// for mid-stream safety (`/clear`, `/stop`, `/new`, `/undo`, `/retry`,
+/// `/compact` defer or refuse honestly; display toggles just flip state),
+/// so the ENTER key is the only blocker. Admitting exactly the registered
+/// names keeps unregistered text (`/fakecmd`, a prose line starting with
+/// `/`) on the old silent path — it must never fall through to the model
+/// as prompt text (the iter-790 catch-all contract).
+fn is_registered_command_input(text: &str) -> bool {
+    let trimmed = text.trim();
+    let Some(rest) = trimmed.strip_prefix('/') else {
+        return false;
+    };
+    if trimmed.starts_with("//") {
+        return false; // literal comment, not a command
+    }
+    let Some(first_word) = rest.split_whitespace().next() else {
+        return false; // bare "/" — nothing dispatchable
+    };
+    crate::tui::operant_app::app::locally_dispatchable_command_names()
+        .any(|name| name.trim_start_matches('/') == first_word)
 }
 
 // ── (plan 05B) The unified inline picker's key handling ─────────────────────
