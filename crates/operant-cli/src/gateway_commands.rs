@@ -509,6 +509,14 @@ pub static COMMAND_REGISTRY: &[CommandDef] = &[
         args_hint: "[name [instruction]]",
         admin_only: false,
     },
+    CommandDef {
+        name: "search",
+        description: "Search past sessions (or browse recent ones with no query)",
+        aliases: &["find"],
+        category: "Session",
+        args_hint: "<query>",
+        admin_only: false,
+    },
     // ── Info ─────────────────────────────────────────────────
     CommandDef {
         name: "start",
@@ -2268,6 +2276,26 @@ pub fn handle_command(cmd_name: &str, _args: &str, ctx: &CommandContext<'_>) -> 
             }
         }
 
+        // RT-179 item 3.5 — /search drives the session_search tool over the
+        // live agent's store. See the runtime arm in gateway_runner.rs for
+        // why the file-search reading of the TUI's /search is the WRONG
+        // twin for a daemon with no project root.
+        //
+        // This sync arm runs only where no live agent exists, and the tool
+        // needs a database the sync context does not carry — so it must not
+        // pretend to have searched. It names the live command and the CLI
+        // surface that answers the same question.
+        "search" | "find" => {
+            let a = _args.trim();
+            if a.is_empty() {
+                "🔎 Session search is served by the live gateway command — it reads the agent's own store. Send `/search` from the chat with the gateway running, or `operant sessions` on the CLI.".into()
+            } else {
+                format!(
+                    "🔎 Session search is served by the live gateway command. Send `/search {a}` from the chat with the gateway running, or `operant sessions` on the CLI."
+                )
+            }
+        }
+
         "kanban" => {
             let a = _args.trim();
             if a.is_empty() {
@@ -3733,6 +3761,58 @@ mod rt179_skill_tests {
         assert!(
             bot_commands.contains("\"skills\""),
             "missing /skills: {bot_commands}"
+        );
+    }
+}
+
+// ── RT-179 item 3.5: /search's channel-twin contract ───────────────────
+#[cfg(test)]
+mod rt179_search_tests {
+    use super::*;
+
+    /// Both names must resolve and reach the platform's command list. `/find`
+    /// is the alias the TUI itself carries, so the channel honours it rather
+    /// than making the operator learn a second spelling.
+    #[test]
+    fn search_resolves_under_both_names_and_reaches_the_command_list() {
+        for (text, expected) in [
+            ("/search", "search"),
+            ("/search deploy notes", "search"),
+            ("/find", "search"),
+        ] {
+            assert!(
+                matches!(resolve_command(text), CommandMatch::Found(d, _) if d.name == expected),
+                "{text} must resolve to `{expected}`, not prose"
+            );
+        }
+        let bot_commands = telegram_bot_commands();
+        assert!(
+            bot_commands.contains("\"search\""),
+            "missing /search: {bot_commands}"
+        );
+    }
+
+    /// Without a live agent the sync arm cannot search — the tool needs the
+    /// agent's database. It must say so and name both live surfaces rather
+    /// than reporting an empty result that reads as "nothing anywhere".
+    #[test]
+    fn search_sync_arm_names_the_live_command_and_the_cli_surface() {
+        let cfg = AppConfig::default();
+        let ctx = CommandContext::new(None, &cfg, true, "op-1", "telegram", "chan-q");
+        let bare = handle_command("search", "", &ctx).expect("a reply");
+        assert!(
+            bare.contains("gateway running") && bare.contains("operant sessions"),
+            "bare /search must name both surfaces, got: {bare}"
+        );
+        let queried = handle_command("search", "deploy notes", &ctx).expect("a reply");
+        assert!(
+            queried.contains("gateway running") && queried.contains("operant sessions"),
+            "a query must name both surfaces, got: {queried}"
+        );
+        // The sync arm must not claim to have searched an empty store.
+        assert!(
+            !bare.contains("No sessions") && !queried.contains("No sessions"),
+            "the sync arm must not report a result it never computed, got: {bare}"
         );
     }
 }

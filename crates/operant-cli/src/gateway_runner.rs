@@ -1387,6 +1387,81 @@ async fn handle_runtime_command(
             }
         }
 
+        // ── /search <query> — long-term conversation recall ──────────────
+        // RT-179 plan item 3.5. The plan said "resolve which search first":
+        // resolved. The TUI's `/search` (`commands.rs:373`, aliased `/find`)
+        // opens the ripgrep GLOBAL SEARCH dialog — a file search over
+        // whatever CWD the TUI was launched in. A gateway daemon has no
+        // project root (it is a systemd unit started from `$HOME`), so the
+        // file twin would be searching a directory the operator never chose
+        // and never sees — a literal that runs, an answer to the wrong
+        // question, which is the theater the R17 /yolo lesson names.
+        //
+        // What the agent ITSELF searches when a channel user asks "have we
+        // talked about this?" is `session_search` — FTS5 over every session
+        // with browse/discovery/scroll modes. That is the twin: the SAME
+        // tool the model calls, driven from the command.
+        //
+        // It rides the storage-window contract, though: a fresh turn-scoped
+        // session is created on the fly if this chat has no history yet
+        // (`notify_sessions_can_appear_after_a_fresh_empty_turn` pins WHY) —
+        // so a bare `/search` must not read as "nothing anywhere". It
+        // reports the STORE, not this chat, and says so.
+        "search" | "find" => {
+            let reply = handler
+                .run_session_scoped_command(session_key, move |agent, session_id| async move {
+                    let db = agent.session_store().db();
+                    let tool = operant_core::tools::session_search_tool::SessionSearchTool::new(db);
+                    // The trait owns `execute`; without it in scope the
+                    // inherent-method lookup fails.
+                    use operant_core::tools::OperantTool as _;
+                    let query = args.trim();
+                    // Bare /search = browse: the recent sessions, exactly the
+                    // tool's no-query mode. Zero LLM cost, and it is the
+                    // shape a channel user wants first.
+                    let args_value = if query.is_empty() {
+                        serde_json::json!({ "limit": 10 })
+                    } else {
+                        serde_json::json!({ "query": query, "limit": 10 })
+                    };
+                    let result = tool
+                        .execute(args_value, operant_core::tools::ToolContext::default())
+                        .await;
+                    tracing::debug!(
+                        session_id = %session_id,
+                        query = %query,
+                        success = result.success,
+                        "Gateway /search: drove the session_search tool"
+                    );
+                    if !result.success {
+                        return format!("🔎 Search failed: {}", result.content);
+                    }
+                    // The tool already formats its own browse/listing output;
+                    // pass it through rather than re-deriving a second
+                    // renderer that could drift from what the model sees.
+                    // Only the head is surfaced, the same 1200-char bound
+                    // /memory and /skill use, with a pointer to the CLI for
+                    // the rest.
+                    const CHANNEL_SEARCH_HEAD_CHARS: usize = 1200;
+                    let total = result.content.chars().count();
+                    let shown: String =
+                        result.content.chars().take(CHANNEL_SEARCH_HEAD_CHARS).collect();
+                    let mut reply = if query.is_empty() {
+                        format!("🔎 Recent sessions (this agent's store, all chats):\n{shown}")
+                    } else {
+                        format!("🔎 Sessions matching `{query}`:\n{shown}")
+                    };
+                    if total > CHANNEL_SEARCH_HEAD_CHARS {
+                        reply.push_str(
+                            "\n…(truncated — `operant sessions` or ask me for the rest, and I can read them in full)",
+                        );
+                    }
+                    reply
+                })
+                .await;
+            Some(reply)
+        }
+
         _ => None,
     }
 }

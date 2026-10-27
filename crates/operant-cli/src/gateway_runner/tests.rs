@@ -1775,3 +1775,88 @@ async fn gateway_skill_expands_a_real_installed_skill() {
         "a missing skill must not produce an invocation message, got: {missing}"
     );
 }
+
+/// RT-179 plan item 3.5 — `/search` must drive the REAL `session_search`
+/// tool over the agent's OWN store, so the channel answer is what the model
+/// itself would find. The plan said "resolve which search first": resolved
+/// to session recall, because the TUI's `/search` is a ripgrep over the
+/// TUI's CWD and a gateway daemon has no project root (see the arm comment).
+///
+/// Seeds the durable store under a session id, then searches for a token
+/// only that seed carries — proving the search reaches the seeded session
+/// rather than answering an empty store.
+#[tokio::test]
+async fn gateway_search_drives_the_session_search_tool_over_the_real_store() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let agent_db = Arc::new(
+        operant_core::database::Database::init(dir.path().join("agent.sqlite")).expect("db"),
+    );
+    let agent = Arc::new(operant_core::agent::OperantAgent::new(
+        operant_core::agent::AgentConfig::default(),
+        Box::new(
+            operant_core::agent::clients::openai::OpenAIModelClient::new(
+                operant_core::client::OpenAIClient::new(
+                    operant_core::client::ClientConfig::default(),
+                ),
+            ),
+        ),
+        operant_core::tools::ToolRegistry::new(std::time::Duration::from_secs(1)),
+        agent_db.clone(),
+    ));
+    let handler = GatewayMessageHandler {
+        admins: vec![],
+        agent: Arc::clone(&agent),
+        current_session_id: tokio::sync::Mutex::new(None),
+        gateway: tokio::sync::Mutex::new(None),
+        session_pins: Arc::new(SessionPins::default()),
+        exit_reasons: ExitReasonMap::default(),
+        turn_usage: TurnUsageMap::default(),
+        summary_ttl_minutes: 30,
+        default_budget: operant_core::config::BudgetSettings::default(),
+        context_injection: None,
+        turn_lock: tokio::sync::Mutex::new(()),
+        running_session: std::sync::Mutex::new(None),
+        cancelled_queued: Default::default(),
+        mcp_manager: operant_core::mcp::McpManager::new(),
+        mcp_server_configs: Vec::new(),
+        skills_root_dir: dir.path().join("skills-absent"),
+        queue_waits: tokio::sync::Mutex::new(Default::default()),
+    };
+
+    // Seed the durable store with a query-unique token. `run_session_scoped_command`
+    // swaps in the store's contents for the resolved session id, so the seed
+    // must land under the id the handler will resolve.
+    let seed_key =
+        operant_core::session::SessionKey::new(derived_gateway_session_id("telegram:dm:q9"));
+    let seed_id = seed_key.id().to_string();
+    agent.session_store().append(
+        &seed_key,
+        operant_core::client::Message::user("the quokkabirch hatch ships on friday"),
+    );
+
+    // A query must surface the seeded session. The FTS5 index is behind a
+    // flush, so give it a moment the same way the memory twin does.
+    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    let found = handle_runtime_command(&handler, "search", "quokkabirch", "telegram:dm:q9")
+        .await
+        .expect("/search must be a runtime command");
+    assert!(
+        found.contains("quokkabirch") || found.contains(&seed_id),
+        "the search must reach the seeded session, got: {found}"
+    );
+
+    // A bare /search browses, and must say what it is browsing — the STORE
+    // (all chats), not this chat — so an empty-looking browse does not read
+    // as "no history anywhere".
+    let browse = handle_runtime_command(&handler, "search", "", "telegram:dm:q9")
+        .await
+        .expect("a bare /search must browse");
+    assert!(
+        browse.contains("all chats"),
+        "a bare /search must name the store it is browsing, got: {browse}"
+    );
+    assert!(
+        browse.contains("Recent sessions"),
+        "a bare /search must be shaped as a browse, got: {browse}"
+    );
+}

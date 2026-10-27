@@ -191,6 +191,21 @@ impl SessionStore {
         Self::with_config(db, SessionStoreConfig::default())
     }
 
+    /// RT-179 item 3.5 — read-only access to the store's own database.
+    ///
+    /// The gateway's `/search` twin needs to run the `session_search` tool
+    /// over the SAME database the live agent writes its sessions to, rather
+    /// than opening a second handle to `app_config.database_path` (which
+    /// would be a second connection whose WAL state can differ from the
+    /// agent's). Handing back the store's own `Arc` is the one way to
+    /// guarantee the search sees what the agent just wrote.
+    ///
+    /// Deliberately a clone of the `Arc`, never `&mut`: the caller shares
+    /// the connection, it does not take ownership of it.
+    pub fn db(&self) -> std::sync::Arc<Database> {
+        std::sync::Arc::clone(&self.db)
+    }
+
     /// Build a store over `db` with explicit bounds.
     pub fn with_config(db: std::sync::Arc<Database>, config: SessionStoreConfig) -> Self {
         Self {
