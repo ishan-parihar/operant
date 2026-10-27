@@ -75,12 +75,22 @@ pub const SOURCEHOUND_INSTALL_HINT: &str = "sourcehound binary not found. Instal
 
 /// sourcehound supports two MCP `tools/list` surfaces and only lists the
 /// tool groups its settings allow-list names (`tools.groups` in
-/// `~/.config/sourcehound-mcp/settings.yml`). The **v1** surface lists every
-/// granular name; the **v2** surface (sourcehound 1.8.0's default) lists only
-/// the 23 per-intent composites (`search`, `read`, `crawl`, ...) plus
-/// `cloakctl.call`. A group allow-list that omits `web` means the server has
-/// no web tool at all and answers every call with a bare "unknown tool".
-pub const SOURCEHOUND_GROUP_HINT: &str = "sourcehound is running but does not offer this tool. Enable its tool group: add \"web\" to `tools.groups` in ~/.config/sourcehound-mcp/settings.yml (or drop the `groups` allow-list) and restart the sourcehound process.";
+/// `settings.yml`). The **v1** surface lists every granular name; the **v2**
+/// surface (sourcehound 1.8.0's default) lists only the 23 per-intent
+/// composites (`search`, `read`, `crawl`, ...) plus `cloakctl.call`. A group
+/// allow-list that omits `web` means the server has no web tool at all and
+/// answers every call with a bare "unknown tool".
+///
+/// The path below is sourcehound's DEFAULT layout, verified against the live
+/// 1.8.0 installation rather than assumed: `sourcehound status` prints
+/// `Config: ~/.config/sourcehound` and `settings.yml` sits inside it. The
+/// `-mcp` directory name this hint used to carry is real in the binary (its
+/// `strings` output names both `sourcehound-mcp` and `sourcehound`), but it
+/// only materializes under `SOURCEHOUND_CONFIG_DIR=<dir>/sourcehound-mcp` — so
+/// naming it as the default sent operators looking for a file that did not
+/// exist, which is the RT-195 residual. `XDG_CONFIG_HOME` redirects the base
+/// too, so the hint names the env vars in the order sourcehound consults them.
+pub const SOURCEHOUND_GROUP_HINT: &str = "sourcehound is running but does not offer this tool. Enable its tool group: add \"web\" to `tools.groups` in ~/.config/sourcehound/settings.yml (or drop the `groups` allow-list) and restart the sourcehound process. If you redirected the config, it lives under `SOURCEHOUND_CONFIG_DIR` (or a `sourcehound-mcp` subdir of `XDG_CONFIG_HOME`) — run `sourcehound status` to print the path this install actually uses.";
 
 /// Whether a tool result is sourcehound's own "this name does not exist".
 ///
@@ -1931,4 +1941,48 @@ for line in sys.stdin:
         assert!(!result.success);
         assert!(result.error.unwrap_or_default().contains("url is required"));
     }
+}
+
+/// RT-195 residual: the group hint named a config path that does not
+/// exist in sourcehound's default layout, so an operator following it
+/// went looking for a file that was never there. Verified against the
+/// LIVE 1.8.0 install (`sourcehound status` prints
+/// `Config: ~/.config/sourcehound`, with `settings.yml` inside it), and
+/// the `-mcp` variant confirmed to be a redirect-only name by reading
+/// the binary's own strings (`SOURCEHOUND_CONFIG_DIR`, `XDG_CONFIG_HOME`,
+/// `sourcehound-mcp`, `sourcehound`).
+///
+/// Three assertions, because the hint has three jobs: name a path that
+/// EXISTS on the default layout, name the redirect, and keep the action
+/// word ("web") so the fix is still findable. Fails if the path is
+/// reverted or the redirect note is dropped.
+#[test]
+fn group_hint_names_the_path_the_live_install_actually_uses() {
+    // 1. The default path, exactly as `sourcehound status` prints it.
+    assert!(
+        SOURCEHOUND_GROUP_HINT.contains("~/.config/sourcehound/settings.yml"),
+        "the hint must name the live default settings path, got: {SOURCEHOUND_GROUP_HINT}"
+    );
+    // 1b. ...and it must NOT name the -mcp path as the default. The
+    // `~/.config/sourcehound-mcp` spelling may appear only as part of
+    // the redirect note, so assert the default spelling is unambiguous.
+    let without_redirect = SOURCEHOUND_GROUP_HINT
+        .split("If you redirected")
+        .next()
+        .unwrap_or(SOURCEHOUND_GROUP_HINT);
+    assert!(
+        !without_redirect.contains("sourcehound-mcp"),
+        "the pre-redirect half of the hint must name only the default path, got: {without_redirect}"
+    );
+    // 2. The redirect is named, so a non-default install is not stranded.
+    assert!(
+        SOURCEHOUND_GROUP_HINT.contains("SOURCEHOUND_CONFIG_DIR"),
+        "the hint must name the redirect env var, got: {SOURCEHOUND_GROUP_HINT}"
+    );
+    // 3. The actionable half survives: the group name and the file to edit.
+    assert!(
+        SOURCEHOUND_GROUP_HINT.contains("\"web\"")
+            && SOURCEHOUND_GROUP_HINT.contains("tools.groups"),
+        "the hint must still name the group to enable, got: {SOURCEHOUND_GROUP_HINT}"
+    );
 }
