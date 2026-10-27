@@ -2287,11 +2287,14 @@ pub fn handle_command(cmd_name: &str, _args: &str, ctx: &CommandContext<'_>) -> 
         // surface that answers the same question.
         "search" | "find" => {
             let a = _args.trim();
+            // The CLI has no search subcommand (`operant sessions list` takes
+            // no query flag), so the honest pointer is the live command and
+            // the model's own tool — NOT a CLI path that does not exist.
             if a.is_empty() {
-                "🔎 Session search is served by the live gateway command — it reads the agent's own store. Send `/search` from the chat with the gateway running, or `operant sessions` on the CLI.".into()
+                "🔎 Session search is served by the live gateway command — it reads the agent's own store. Send `/search` from the chat with the gateway running.".into()
             } else {
                 format!(
-                    "🔎 Session search is served by the live gateway command. Send `/search {a}` from the chat with the gateway running, or `operant sessions` on the CLI."
+                    "🔎 Session search is served by the live gateway command. Send `/search {a}` from the chat with the gateway running."
                 )
             }
         }
@@ -3793,26 +3796,29 @@ mod rt179_search_tests {
     }
 
     /// Without a live agent the sync arm cannot search — the tool needs the
-    /// agent's database. It must say so and name both live surfaces rather
-    /// than reporting an empty result that reads as "nothing anywhere".
+    /// agent's database. It must name the live command rather than report an
+    /// empty result that reads as "nothing anywhere", AND it must not point
+    /// at a CLI search that does not exist: `operant sessions list` takes no
+    /// query flag (verified against the deployed binary), so the honest
+    /// pointer is the gateway command alone.
     #[test]
-    fn search_sync_arm_names_the_live_command_and_the_cli_surface() {
+    fn search_sync_arm_names_the_live_command_and_refuses_to_invent_a_cli_search() {
         let cfg = AppConfig::default();
         let ctx = CommandContext::new(None, &cfg, true, "op-1", "telegram", "chan-q");
-        let bare = handle_command("search", "", &ctx).expect("a reply");
-        assert!(
-            bare.contains("gateway running") && bare.contains("operant sessions"),
-            "bare /search must name both surfaces, got: {bare}"
-        );
-        let queried = handle_command("search", "deploy notes", &ctx).expect("a reply");
-        assert!(
-            queried.contains("gateway running") && queried.contains("operant sessions"),
-            "a query must name both surfaces, got: {queried}"
-        );
-        // The sync arm must not claim to have searched an empty store.
-        assert!(
-            !bare.contains("No sessions") && !queried.contains("No sessions"),
-            "the sync arm must not report a result it never computed, got: {bare}"
-        );
+        for (args, label) in [("", "bare"), ("deploy notes", "queried")] {
+            let reply = handle_command("search", args, &ctx).expect("a reply");
+            assert!(
+                reply.contains("gateway running"),
+                "{label} /search must name the live command, got: {reply}"
+            );
+            assert!(
+                !reply.contains("operant sessions"),
+                "{label} /search must not point at a CLI search that does not exist (no --query on `sessions list`), got: {reply}"
+            );
+            assert!(
+                !reply.contains("No sessions"),
+                "{label} /search must not report a result it never computed, got: {reply}"
+            );
+        }
     }
 }

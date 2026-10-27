@@ -1452,8 +1452,14 @@ async fn handle_runtime_command(
                         format!("🔎 Sessions matching `{query}`:\n{shown}")
                     };
                     if total > CHANNEL_SEARCH_HEAD_CHARS {
+                        // The pointer is to ASK, not to a CLI flag: `operant
+                        // sessions` lists but has no query mode (verified
+                        // against the deployed binary — `sessions list`
+                        // takes no `--query`), so pointing there would be a
+                        // dead end. Asking the agent runs the search tool
+                        // with the full result, which is the real answer.
                         reply.push_str(
-                            "\n…(truncated — `operant sessions` or ask me for the rest, and I can read them in full)",
+                            "\n…(truncated — ask me to search further and I will read the full results)",
                         );
                     }
                     reply
