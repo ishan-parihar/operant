@@ -109,7 +109,6 @@ pub mod rate_limiter;
 pub mod reasoning_timeouts;
 pub mod recap;
 pub mod redaction;
-pub mod retrieval;
 pub mod runtime_adapter;
 pub mod runtime_metrics;
 pub mod schema;
@@ -131,7 +130,6 @@ pub mod turn_end_heuristics;
 pub mod turn_summary;
 pub mod user_question;
 pub mod verification;
-pub mod voice;
 pub mod write_approval;
 pub mod write_origin;
 
