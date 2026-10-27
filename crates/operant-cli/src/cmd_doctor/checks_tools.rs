@@ -1203,7 +1203,11 @@ mod operant_binary_tests {
 
 #[cfg(test)]
 mod memory_provider_surface_tests {
-    use super::*;
+    // `use super::*` was removed (2026-10-27): every test in this module is
+    // a source-scan over `include_str!` output and uses nothing from the
+    // parent module — the import was dead the moment the last check_* call
+    // in here was rewritten as a scan (iter-1385), and the clippy gate
+    // flagged it as the workspace's one new warning.
 
     /// A removed provider name must never produce a RED doctor failure: no
     /// such provider exists, so `check_fail` on its API key would tell the

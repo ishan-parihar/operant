@@ -240,6 +240,11 @@ pub trait TuiState {
         self.elapsed()
     }
     fn status(&self) -> ProcessingStatus;
+    /// `(display, description)` rows for the typeahead popup. The tuple's
+    /// first element is the DISPLAY text (OMP `AutocompleteItem.label`):
+    /// for `@` file refs that is the bare path, NOT the `@file:` grammar
+    /// token that accept inserts (2026-10-27 — the grammar prefix was
+    /// eating reading space on every row).
     fn command_suggestions(&self) -> Vec<(String, String)>;
     /// Invalidate any per-frame memo backing [`Self::command_suggestions`].
     ///

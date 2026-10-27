@@ -5,7 +5,9 @@
 // vim-motion test names mirror key names (motion_W_B_basic, etc.)
 #![allow(non_snake_case)]
 
-use super::typeahead::{compute_file_suggestions, compute_slash_suggestions, file_ref_value};
+use super::typeahead::{
+    compute_file_suggestions, compute_slash_suggestions, file_ref_display_label, file_ref_value,
+};
 use super::vim::{
     VimOperator, motion_B, motion_E, motion_G, motion_W, motion_b, motion_e, motion_find_char,
     motion_first_nonblank, motion_gg, motion_w,
@@ -1581,6 +1583,7 @@ fn accept_suggestion_file_ref_at_start() {
     s.cursor = s.text.len();
     s.suggestions = vec![TypeaheadSuggestion {
         text: "@file:src/main.rs".to_string(),
+        display: "@file:src/main.rs".to_string(),
         description: "file".to_string(),
         source: TypeaheadSource::FileRef,
     }];
@@ -1599,6 +1602,7 @@ fn accept_suggestion_file_ref_after_text_preserves_prefix() {
     s.cursor = s.text.len();
     s.suggestions = vec![TypeaheadSuggestion {
         text: "@file:src/main.rs".to_string(),
+        display: "@file:src/main.rs".to_string(),
         description: "file".to_string(),
         source: TypeaheadSource::FileRef,
     }];
@@ -1618,6 +1622,7 @@ fn accept_suggestion_file_ref_preserves_tail() {
     s.cursor = prefix.len();
     s.suggestions = vec![TypeaheadSuggestion {
         text: "@file:src/main.rs".to_string(),
+        display: "@file:src/main.rs".to_string(),
         description: "file".to_string(),
         source: TypeaheadSource::FileRef,
     }];
@@ -1922,11 +1927,13 @@ fn replace_file_suggestions_swaps_and_clamps_index() {
     s.suggestions = vec![
         TypeaheadSuggestion {
             text: "@a".into(),
+            display: "@a".into(),
             description: String::new(),
             source: TypeaheadSource::FileRef,
         },
         TypeaheadSuggestion {
             text: "@b".into(),
+            display: "@b".into(),
             description: String::new(),
             source: TypeaheadSource::FileRef,
         },
@@ -1934,6 +1941,7 @@ fn replace_file_suggestions_swaps_and_clamps_index() {
     s.suggestion_index = Some(1);
     s.replace_file_suggestions(vec![TypeaheadSuggestion {
         text: "@nested/deep/one.rs".into(),
+        display: "@nested/deep/one.rs".into(),
         description: "file".into(),
         source: TypeaheadSource::FileRef,
     }]);
@@ -1954,6 +1962,50 @@ fn file_ref_value_grammar_shapes() {
         "@file:\"my dir/a b.txt\""
     );
     assert_eq!(file_ref_value("my dir", true), "@folder:\"my dir/");
+}
+
+/// (2026-10-27, operator report) The interim directory listing builds its
+/// rows as `name/` — `file_ref_value` used to append ANOTHER separator,
+/// producing `@folder:crates//` on screen AND in the accepted token (which
+/// then failed to round-trip as a path). The separator normalizes to
+/// exactly one, OMP's `isDirectoryCompletionValue` semantics.
+#[test]
+fn file_ref_value_never_doubles_the_separator() {
+    assert_eq!(
+        file_ref_value("crates/", true),
+        "@folder:crates/",
+        "a directory already carrying its listing separator must not gain a second one"
+    );
+    assert_eq!(
+        file_ref_value("my dir/", true),
+        "@folder:\"my dir/",
+        "the quoted form keeps exactly one separator inside the open quote"
+    );
+    assert_eq!(
+        file_ref_value("docs///", true),
+        "@folder:docs/",
+        "pathological multi-separator input normalizes to one"
+    );
+}
+
+/// (2026-10-27, operator report: "it shows a suffix: folder:, or file: which
+/// takes up reading space") The popup row is the DISPLAY label — the bare
+/// path, OMP `AutocompleteItem.label` — never the `@file:`/`@folder:`
+/// insertion grammar. The grammar stays on `text`, which accept inserts.
+#[test]
+fn file_ref_display_label_is_the_bare_path() {
+    assert_eq!(file_ref_display_label("crates", true), "crates/");
+    assert_eq!(
+        file_ref_display_label("crates/", true),
+        "crates/",
+        "exactly one trailing separator, same normalization as the value"
+    );
+    assert_eq!(file_ref_display_label("src/main.rs", false), "src/main.rs");
+    assert_eq!(file_ref_display_label("docs///", true), "docs/");
+    // The grammar NEVER appears in the display label.
+    assert!(!file_ref_display_label("crates", true).contains('@'));
+    assert!(!file_ref_display_label("crates", true).contains("folder:"));
+    assert!(!file_ref_display_label("src/main.rs", false).contains("file:"));
 }
 
 #[test]
@@ -1987,6 +2039,7 @@ fn accept_file_ref_appends_space_and_uses_grammar() {
     let mut s = nav_state("read @file:crates/ope", "read @file:crates/ope".len());
     s.suggestions = vec![TypeaheadSuggestion {
         text: "@file:crates/operant/README.md".to_string(),
+        display: "@file:crates/operant/README.md".to_string(),
         description: "file".to_string(),
         source: TypeaheadSource::FileRef,
     }];
@@ -2001,6 +2054,7 @@ fn accept_directory_chains_without_space() {
     let mut s = nav_state("read @crates/ope", "read @crates/ope".len());
     s.suggestions = vec![TypeaheadSuggestion {
         text: "@folder:crates/operant/".to_string(),
+        display: "@folder:crates/operant/".to_string(),
         description: "directory".to_string(),
         source: TypeaheadSource::FileRef,
     }];
@@ -2021,6 +2075,7 @@ fn accept_preserves_text_after_the_cursor() {
     let mut s = nav_state("@crates tail", 7);
     s.suggestions = vec![TypeaheadSuggestion {
         text: "@folder:crates/".to_string(),
+        display: "@folder:crates/".to_string(),
         description: "directory".to_string(),
         source: TypeaheadSource::FileRef,
     }];
@@ -2075,6 +2130,7 @@ fn ghost_query_gates() {
     let mut popup = nav_state("read the par", 12);
     popup.suggestions = vec![TypeaheadSuggestion {
         text: "@file:x".into(),
+        display: "@file:x".into(),
         description: String::new(),
         source: TypeaheadSource::FileRef,
     }];

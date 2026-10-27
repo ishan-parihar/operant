@@ -215,3 +215,77 @@ three dead-weight items flagged for the next cleanup iteration (the
 `#[cfg(any())]` row, `--json`, `--quick`); one agent-plane gap flagged
 (`skills uninstall --yes`). The setup menu itself is honest — no lying
 options found beyond the two no-op flags.
+
+---
+
+## Appendix A — OMP context-injection study (2026-10-27, turn-2 follow-up)
+
+The operator asked for OMP parity-or-better on the three context-injection
+surfaces. Sources read in full:
+`external-repos/oh-my-pi/packages/tui/src/autocomplete.ts` (value/label
+split, `isDirectoryCompletionValue`, `buildCompletionValue`),
+`packages/coding-agent/src/utils/file-mentions.ts` (the auto-read engine),
+`packages/coding-agent/src/session/messages.ts` (the `fileMention` →
+LLM-content conversion),
+`packages/coding-agent/src/session/agent-session.ts:8630-8660` (the submit
+path), `packages/coding-agent/src/extensibility/skills.ts` +
+`prompts/skills/{user-invocation,autoload}.md` (skill templates),
+`packages/coding-agent/src/discovery/at-imports.ts` (AGENTS.md `@`-imports —
+a DIFFERENT feature: memory-file includes, not prompt mentions).
+
+### What OMP does (file/dir mentions)
+
+- The composer inserts BARE `@path` values (no `@file:`/`@folder:` kind
+  prefix — `buildCompletionValue` is `@"path"` for spaces, `@path`
+  otherwise). The kind lives only in the popup row's icon column.
+- On submit, `extractFileMentions` regex-matches every `@token` at a word
+  boundary (emails excluded), `generateFileMentionMessages` resolves each
+  EXACT path (no fuzzy guessing), and produces ONE `role: "fileMention"`
+  message per turn packing all files.
+- Per-file handling: directories → a listing (`name/ (age)` lines, 500-entry
+  cap); text → full content (5 MB cap); images → real `ImageContent`
+  (25 MB cap, auto-resized); videos → contact-sheet PNG. Over-cap or binary
+  → a `{skipped auto-read: too large, N}` notice, file skipped, TURN
+  SURVIVES.
+- Model-side conversion (messages.ts:1085): text files wrap as
+  `<file path="...">\ncontent\n</file>` in a **developer**-role message;
+  image files go in a separate **user**-role message with real
+  `ImageContent` parts.
+
+### Operant vs OMP — surface by surface
+
+| surface | OMP | operant today | verdict |
+|---|---|---|---|
+| `@` token grammar | bare `@path` | kinded `@file:`/`@folder:` (+ `@git:`, `@url:`, line ranges) | operant AHEAD (explicit, machine-parseable, zero ambiguity with prose emails) — keep |
+| popup row | label/value split (`AutocompleteItem.label`) | was value-as-row (verbose) → NOW fixed: `display` field + `file_ref_display_label` (iter this) | parity |
+| directory row | `name/` + icon column | `name/` + description column | parity (since this fix) |
+| mid-stream popup | always active | was `is_processing`-gated → NOW fixed | parity |
+| auto-read | submit-time, developer-role `<file path>` block | submit-time, appended `--- Attached Context ---` blocks in the user message | parity (different but equivalent; operant's security model is stricter) |
+| per-file cap | 5 MB, skip-with-notice, turn survives | WAS: no cap → one huge file refused the WHOLE turn at the 50% budget → NOW: 5 MB cap + skip notice (this iteration) | parity |
+| images/videos | real ImageContent + contact sheets | binary notice only | OMP ahead — noted, not ported (vision support is its own project; flagged for the operator) |
+| skills | `[IMPORTANT: User invoked …]` + `[Skill directory: …]` template | `build_skill_invocation_message_in` mirrors both parts verbatim | parity |
+| dir listing detail | flat `name/ (age)` listing, 500 cap | recursive visible-tree listing with sizes + limit + `...` marker | operant AHEAD (depth) — keep |
+| budget guard | none (per-file caps only) | 50% refuse / 25% warn turn budget + cwd confinement + sensitive-path deny-list | operant AHEAD — keep |
+
+### Delivered in this iteration
+
+1. `@` popup mid-stream fix (render gate) — live-verified with
+   `scripts/at-verify-midstream.sh`: 5-frame capture, 2 frames show the
+   popup WITH directory rows WHILE the spinner runs (frames 0003/0004).
+2. Display-label split — bare path rows (OMP `label` parity).
+3. Double-separator fix (`@folder:crates//` → `@folder:crates/`).
+4. Per-file auto-read cap in `context_references.rs` — an oversized file
+   now skips with a notice instead of blocking the whole turn's injection
+   (the one place operant was strictly BEHIND OMP).
+
+### Not ported, deliberately
+
+- OMP's developer-role `<file>` wrapper: operant appends to the user
+  message; both carry the content. No behavior difference observed to
+  justify a migration.
+- OMP's image/video auto-read: real vision plumbing (ImageContent parts,
+  resizing, contact sheets). Out of scope for a parity iteration; the
+  binary notice already points the model at its tools.
+- OMP's `at-imports.ts` (AGENTS.md `@path` includes): operant has no
+  memory-file include expansion. Noted as a candidate, not a gap —
+  operant's skills system covers the load-by-reference use case.

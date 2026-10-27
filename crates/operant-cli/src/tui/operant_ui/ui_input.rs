@@ -121,11 +121,34 @@ fn command_suggestions_overlay_rect(
 }
 
 /// Whether the command palette is active for the current composer state.
+///
+/// (2026-10-27, operator report: "the preview from `@` while a stream is
+/// ongoing is broken") The `!app.is_processing()` gate only ever applied
+/// to Chat-mode rows. In jcode that gate is DEAD CODE — its Chat-mode
+/// suggestions are always empty (the popup is slash-only, see
+/// `get_suggestions_for`'s `if !input.starts_with('/') { return vec![] }`),
+/// so porting it looked safe. Operant's `@` file typeahead ALSO renders
+/// through this popup in Chat mode, and the composer is deliberately
+/// editable mid-stream (text entry is allowed so the next message can be
+/// composed during a turn) — so the gate killed the `@` popup exactly
+/// when the user needed to queue a file-mention prompt. Chat-mode rows
+/// no longer gate on `is_processing`; SlashCommand rows never did.
 fn command_suggestions_active(app: &dyn TuiState, suggestions: &[(String, String)]) -> bool {
     let mode = composer_mode(app.input(), app.is_remote_mode());
-    !suggestions.is_empty()
-        && matches!(mode, ComposerMode::SlashCommand | ComposerMode::Chat)
-        && (matches!(mode, ComposerMode::SlashCommand) || !app.is_processing())
+    !suggestions.is_empty() && matches!(mode, ComposerMode::SlashCommand | ComposerMode::Chat)
+}
+
+/// Test seam for [`command_suggestions_active`] — the gate is private to
+/// this render module, and the regression test that pins the
+/// mid-stream `@`-popup behavior lives at App level (it needs a real App
+/// for `TuiState::command_suggestions`). Mutation-proven against the
+/// `is_processing` gate this file used to carry.
+#[cfg(test)]
+pub(crate) fn command_suggestions_active_for_test(
+    app: &dyn TuiState,
+    suggestions: &[(String, String)],
+) -> bool {
+    command_suggestions_active(app, suggestions)
 }
 
 /// Draw the Ctrl+R reverse prompt-history search overlay. Reuses the

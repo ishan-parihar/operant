@@ -1554,6 +1554,7 @@ fn test_tab_accepts_the_typeahead_suggestion() {
     app.prompt_input.cursor = 3;
     app.prompt_input.suggestions = vec![TypeaheadSuggestion {
         text: "/help".to_string(),
+        display: "/help".to_string(),
         description: "Show help".to_string(),
         source: TypeaheadSource::SlashCommand,
     }];
@@ -1601,6 +1602,7 @@ fn test_shift_tab_cycles_permission_mode_not_completions() {
     let mut app = make_app();
     app.prompt_input.suggestions = vec![crate::tui::prompt_input::TypeaheadSuggestion {
         text: "/help".to_string(),
+        display: "/help".to_string(),
         description: "Show help".to_string(),
         source: crate::tui::prompt_input::TypeaheadSource::SlashCommand,
     }];
@@ -6859,5 +6861,37 @@ mod keyboard_scroll_reachability_tests {
         }
         assert_eq!(app.scroll_offset, 0, "upward paging parks at the top row");
         crate::tui::operant_ui::set_last_max_scroll(0);
+    }
+
+    /// (2026-10-27, operator report: "the preview from `@` when stream is
+    /// ongoing is broken") The typeahead popup's render gate used to hide
+    /// Chat-mode rows — the `@` file-ref suggestions — whenever
+    /// `is_processing()` (== is_streaming) was true. In jcode that gate is
+    /// dead code (Chat-mode suggestions are always empty there); operant's
+    /// `@` typeahead made it live, and the composer is deliberately editable
+    /// mid-stream, so the popup must render while a turn streams.
+    #[test]
+    fn file_ref_suggestions_render_while_streaming() {
+        let mut app = make_app();
+        // A file-ref suggestion is live (as if `@cr` had been typed) and a
+        // turn is streaming — the exact state the operator reported.
+        app.prompt_input.suggestions =
+            vec![crate::tui::prompt_input::TypeaheadSuggestion::file_ref(
+                "@folder:crates/".to_string(),
+                "crates/".to_string(),
+                "directory".to_string(),
+            )];
+        app.prompt_input.suggestion_index = Some(0);
+        app.is_streaming = true;
+
+        let rows = app.command_suggestions();
+        assert_eq!(rows.len(), 1);
+        // The DISPLAY label — bare path, no @folder: grammar (OMP label parity).
+        assert_eq!(rows[0].0, "crates/");
+        // The render gate must say the popup is active DESPITE is_streaming.
+        assert!(
+            crate::tui::operant_ui::input_ui::command_suggestions_active_for_test(&app, &rows),
+            "@ file-ref suggestions must render while a turn streams — the composer is editable mid-turn"
+        );
     }
 }

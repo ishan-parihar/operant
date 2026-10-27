@@ -427,14 +427,16 @@ impl TuiState for App {
     }
 
     fn command_suggestions(&self) -> Vec<(String, String)> {
-        // Descriptions are owned (`TypeaheadSuggestion.description`, built per
-        // keystroke in prompt_input/typeahead.rs), so the tuple carries String
-        // rather than &'static str — widening the seam instead of dropping the
-        // descriptions the overlay renders.
+        // (2026-10-27, OMP parity) Rows carry the DISPLAY label (bare path
+        // for `@` refs), not the insertion grammar — OMP's AutocompleteItem
+        // splits value from label. Descriptions are owned
+        // (`TypeaheadSuggestion.description`, built per keystroke in
+        // prompt_input/typeahead.rs), so the tuple carries String rather
+        // than &'static str.
         self.prompt_input
             .suggestions
             .iter()
-            .map(|suggestion| (suggestion.text.clone(), suggestion.description.clone()))
+            .map(|suggestion| (suggestion.display.clone(), suggestion.description.clone()))
             .collect()
     }
 

@@ -421,6 +421,15 @@ fn is_binary(path: &Path) -> bool {
     buf[..n].contains(&0)
 }
 
+/// Per-file auto-read cap (2026-10-27, OMP `file-mentions.ts` parity).
+/// OMP skips a file ABOVE its cap (`MAX_AUTO_READ_TEXT_BYTES`, 5 MB) with a
+/// `(skipped auto-read: too large, N)` notice and injects the REST; operant
+/// had no per-file cap, so one huge file inflated `injected_tokens` until the
+/// 50% turn budget tripped and refused the WHOLE injection — every other
+/// reference in the same message died with it. Same shape as OMP: cap,
+/// skip notice, keep going.
+const MAX_AUTO_READ_TEXT_BYTES: u64 = 5 * 1024 * 1024;
+
 fn expand_file_reference(
     ref_: &ContextReference,
     cwd: &Path,
@@ -432,6 +441,19 @@ fn expand_file_reference(
     };
     if !path.is_file() {
         return (Some(format!("{}: path is not a file", ref_.raw)), None);
+    }
+    // Per-file cap BEFORE reading (OOM guard + budget guard). A file over
+    // the cap skips alone with a notice — the remaining references in the
+    // same message still inject. OMP parity: `MAX_AUTO_READ_TEXT_BYTES`.
+    let meta_len = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+    if meta_len > MAX_AUTO_READ_TEXT_BYTES {
+        let block = format!(
+            "🗂 {} (skipped auto-read: too large, {}) — use your tools to read a range of this file\n```\nPath: {}\n```",
+            ref_.raw,
+            human_bytes(meta_len),
+            path.display()
+        );
+        return (None, Some(block));
     }
     if is_binary(&path) {
         let meta = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
@@ -822,6 +844,48 @@ mod tests {
         assert!(result.message.contains("line3"));
         assert!(!result.message.contains("line1"));
         assert!(result.message.contains("```rust"));
+    }
+
+    /// (2026-10-27, OMP file-mentions parity) A file over the per-file
+    /// auto-read cap must skip ALONE with a notice — not blow the turn
+    /// budget and refuse every other reference in the same message.
+    /// Pre-fix behavior: no per-file cap existed, so the huge file's tokens
+    /// inflated `injected_tokens` past the 50% hard limit and `blocked=true`
+    /// killed the small sibling reference too.
+    #[tokio::test]
+    async fn oversized_file_skips_alone_instead_of_blocking_the_turn() {
+        let dir = tmp_repo();
+        // A tiny context window makes the budget trip on a genuinely huge
+        // file even though the write is small: write a sparse file whose
+        // METADATA size exceeds the cap (seek + write a trailing byte), so
+        // the test does not allocate 5 MB of memory.
+        let big = dir.path().join("big.log");
+        {
+            use std::io::{Seek, SeekFrom, Write};
+            let mut f = std::fs::File::create(&big).expect("create big");
+            f.seek(SeekFrom::Start(MAX_AUTO_READ_TEXT_BYTES + 1))
+                .expect("seek past cap");
+            f.write_all(b"x").expect("trailing byte");
+        }
+        write_file(dir.path(), "small.txt", "tiny sibling content\n");
+
+        let result = preprocess_context_references(
+            "compare @file:big.log and @file:small.txt",
+            dir.path(),
+            100_000,
+        )
+        .await;
+
+        assert!(
+            result.message.contains("skipped auto-read: too large"),
+            "the oversized file must produce a skip notice, got: {}",
+            result.message
+        );
+        assert!(
+            result.message.contains("tiny sibling content"),
+            "the small sibling reference must still inject"
+        );
+        assert!(!result.blocked, "the whole turn must not be blocked");
     }
 
     #[tokio::test]

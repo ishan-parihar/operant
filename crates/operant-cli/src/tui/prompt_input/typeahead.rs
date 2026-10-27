@@ -24,9 +24,38 @@ pub enum AcceptForSubmitOutcome {
 /// A single typeahead suggestion.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeaheadSuggestion {
+    /// The INSERTED token on accept (the `@file:`/`@folder:` grammar the
+    /// agent-side expander reads).
     pub text: String,
+    /// The DISPLAYED row label (2026-10-27, OMP `AutocompleteItem.label`
+    /// parity): the bare path — no `@`, no kind prefix. Defaults to `text`
+    /// for slash-command rows, whose display IS the command token.
+    pub display: String,
     pub description: String,
     pub source: TypeaheadSource,
+}
+
+impl TypeaheadSuggestion {
+    /// A slash-command row: the display IS the token (`/help`).
+    pub fn command(text: String, description: String) -> Self {
+        Self {
+            display: text.clone(),
+            text,
+            description,
+            source: TypeaheadSource::SlashCommand,
+        }
+    }
+
+    /// A file-ref row: `text` carries the insertion grammar, `display`
+    /// the bare OMP-style label.
+    pub fn file_ref(text: String, display: String, description: String) -> Self {
+        Self {
+            text,
+            display,
+            description,
+            source: TypeaheadSource::FileRef,
+        }
+    }
 }
 
 /// A fuzzy-tier request the pure prompt-input layer hands to the App
@@ -66,10 +95,12 @@ pub fn fuzzy_file_suggestions(
 ) -> Vec<TypeaheadSuggestion> {
     entries
         .iter()
-        .map(|e| TypeaheadSuggestion {
-            text: file_ref_value(&e.rel_path, e.is_dir),
-            description: if e.is_dir { "directory" } else { "file" }.to_string(),
-            source: TypeaheadSource::FileRef,
+        .map(|e| {
+            TypeaheadSuggestion::file_ref(
+                file_ref_value(&e.rel_path, e.is_dir),
+                file_ref_display_label(&e.rel_path, e.is_dir),
+                if e.is_dir { "directory" } else { "file" }.to_string(),
+            )
         })
         .collect()
 }
@@ -125,18 +156,47 @@ pub fn active_file_token(input: &str) -> Option<&str> {
 /// (`@file:"a b"`); a quoted DIRECTORY stays open (`@folder:"a b/`) and
 /// closes when a file inside it is accepted, exactly OMP's
 /// `buildCompletionValue` shape.
+///
+/// (2026-10-27) `path` may already end with `/` (the directory listing
+/// builds `name/`); the old unconditional append produced the doubled
+/// `@folder:crates//` the operator reported — on screen AND in the
+/// accepted token, which then failed to round-trip through the
+/// agent-side expander's path resolution.
 pub fn file_ref_value(path: &str, is_dir: bool) -> String {
     let kind = if is_dir { "@folder:" } else { "@file:" };
-    if path.contains(char::is_whitespace) {
-        if is_dir {
+    // OMP's `isDirectoryCompletionValue`: the separator decides chaining,
+    // never append a second one. The caller's `name/` listing form and a
+    // bare `name` both normalize to exactly one trailing separator.
+    let path = path.trim_end_matches('/');
+    if is_dir {
+        // A directory always ends the separator (chain into the drilled
+        // dir); quoted values keep it INSIDE the open quote (M4: a quoted
+        // DIRECTORY stays open until a file inside closes it).
+        if path.contains(char::is_whitespace) {
             format!("{kind}\"{path}/")
         } else {
-            format!("{kind}\"{path}\"")
+            format!("{kind}{path}/")
         }
-    } else if is_dir {
-        format!("{kind}{path}/")
+    } else if path.contains(char::is_whitespace) {
+        format!("{kind}\"{path}\"")
     } else {
         format!("{kind}{path}")
+    }
+}
+
+/// The DISPLAY label for one suggestion (2026-10-27, OMP parity): OMP's
+/// `AutocompleteItem` splits `value` (the inserted token, `@file:` grammar
+/// included) from `label` (what the row SHOWS — the bare `name/` for a
+/// directory, `name` for a file, no `@`, no kind prefix). The operator's
+/// report: `@folder:`/`@file:` prefixes eat reading space. The
+/// file/directory distinction is already the description column's job
+/// ("directory"/"file"), matching OMP's iconName column.
+pub fn file_ref_display_label(path: &str, is_dir: bool) -> String {
+    let path = path.trim_end_matches('/');
+    if is_dir {
+        format!("{path}/")
+    } else {
+        path.to_string()
     }
 }
 
@@ -231,10 +291,11 @@ pub(super) fn compute_slash_suggestions(
     let candidates: Vec<(&str, &str)> = matching.iter().map(|&i| slash_commands[i]).collect();
     rank_commands(&candidates, usage)
         .into_iter()
-        .map(|j| TypeaheadSuggestion {
-            text: format!("/{}", candidates[j].0),
-            description: candidates[j].1.to_string(),
-            source: TypeaheadSource::SlashCommand,
+        .map(|j| {
+            TypeaheadSuggestion::command(
+                format!("/{}", candidates[j].0),
+                candidates[j].1.to_string(),
+            )
         })
         .collect()
 }
@@ -273,6 +334,7 @@ fn compute_name_completions(
         .take(20)
         .map(|n| TypeaheadSuggestion {
             text: format!("/{} {}", command, n),
+            display: format!("/{} {}", command, n),
             description: format!("Expand {} '{}' into the turn", command, n),
             source: source.clone(),
         })
@@ -453,11 +515,11 @@ fn suggest_files(
             "file".to_string()
         };
 
-        suggestions.push(TypeaheadSuggestion {
-            text: file_ref_value(&suggestion_text, is_dir),
+        suggestions.push(TypeaheadSuggestion::file_ref(
+            file_ref_value(&suggestion_text, is_dir),
+            file_ref_display_label(&suggestion_text, is_dir),
             description,
-            source: TypeaheadSource::FileRef,
-        });
+        ));
     }
 
     suggestions
