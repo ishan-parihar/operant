@@ -257,7 +257,7 @@ fn handle_edit() -> Result<()> {
 }
 
 /// Resolve the config file path, creating a default file if none exists.
-fn resolve_or_create_config_path() -> Result<PathBuf> {
+pub(crate) fn resolve_or_create_config_path() -> Result<PathBuf> {
     if let Ok(path) = std::env::var("HERMES_CONFIG") {
         let path = PathBuf::from(&path);
         if !path.exists() {

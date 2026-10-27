@@ -302,6 +302,28 @@ enabled = false
 # over the conversation, an `aggregator` synthesizes their advice, and the
 # guidance is injected into the agent's context for that turn. Off by
 # default: MoA costs N+1 LLM calls per turn.
+# CLI tool surface — binaries the agent may invoke, opted in EXACTLY like MCP
+# servers above. Being on PATH grants nothing: a binary absent from
+# [[cli.tools]] is invisible to the agent, so `enabled = true` does not hand
+# the model every tool on the machine.
+# Off by default. Costs: name + usage line = ~7 tok/request per CLI; the agent
+# gets subcommand depth on demand via `cli_exec(cli, argv=["--help"])`.
+[cli]
+enabled = false
+# What the <cli_reference> block carries per granted CLI: "usage" (measured
+# default, ~7 tok/CLI/request), "description" (your own one-liner), or "off".
+inject_help = "usage"
+default_timeout_secs = 30
+max_help_lines = 60
+
+# [[cli.tools]]
+# name = "git"
+# description = "Version control"          # shows INSTEAD of the usage line when inject_help = "description"
+# global_args = ["--no-pager"]             # argv always prepended to every call
+# allow_subcommands = ["status", "diff"]   # empty = the whole CLI
+# List the catalogue with install + grant status:
+#   operant context cli list
+
 [moa]
 enabled = false
 # references = [

@@ -169,6 +169,20 @@ pub fn discover_cli_tools(additional: &[String], excluded: &[String]) -> Vec<Dis
     results
 }
 
+/// The catalogue of CLIs the agent could be granted.
+///
+/// This exists so the surface can be CONFIGURED, not just discovered: an
+/// operator choosing `[[cli.tools]]` entries needs to know what the choices
+/// are, and `operant context cli --list` renders this list. Discovery then
+/// filters it to what is actually on PATH — a name in this list that is not
+/// installed reports unusable rather than silently vanishing.
+///
+/// Deliberately does NOT grant anything: listing a CLI here means it is a
+/// candidate, and the `[[cli.tools]]` entries decide what is active.
+pub fn known_cli_names() -> Vec<String> {
+    KNOWN_CLIS.iter().map(|k| k.name.to_string()).collect()
+}
+
 /// Probe a single CLI tool: check if it exists and get its version.
 fn probe_cli(name: &str, version_args: &[&str], category: CliCategory) -> Option<DiscoveredCli> {
     // Try to find the tool using `which` (Unix) or `where` (Windows)

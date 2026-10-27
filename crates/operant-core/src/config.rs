@@ -39,6 +39,19 @@ pub struct AppConfig {
     pub tts: TtsSettings,
     pub memory: MemorySettings,
     pub browser: BrowserSettings,
+    /// The config file this config was LOADED from, recorded so a handler
+    /// that edits the config writes back to the file the operator actually
+    /// invoked rather than re-resolving a different default path.
+    ///
+    /// Not serialized: this is provenance, not configuration. A handler must
+    /// never derive it by searching default paths again — that is how
+    /// `operant -c pinned.toml context cli add git` came to write into the
+    /// operator's live config instead of the pinned file.
+    #[serde(skip)]
+    pub config_path: Option<PathBuf>,
+    /// CLI tool surface (`[cli]`) — which binaries the agent may invoke, and
+    /// how much of their surface context it pays for per request.
+    pub cli: CliSettings,
     pub vision: VisionSettings,
     pub credential_pool: CredentialPoolSettings,
     pub terminal_backend: TerminalBackend,
@@ -120,6 +133,8 @@ impl Default for AppConfig {
         let database_path = platform::operant_home().join("database.db");
 
         Self {
+            cli: CliSettings::default(),
+            config_path: None,
             version: Some(2),
             client: ClientSettings::default(),
             proxy: Default::default(),
@@ -580,6 +595,17 @@ pub struct BehaviorSettings {
     pub max_iterations: usize,
     pub tool_timeout_secs: u64,
     pub request_timeout_secs: u64,
+    /// Target total tokens the tool SURFACES (builtin schemas + each enabled
+    /// MCP server + each granted CLI) may add per request. 0 (the default)
+    /// means unset: `operant context budget` still reports the numbers, but
+    /// `operant context optimize` proposes nothing, because silently trimming
+    /// capability the operator never asked to optimize is worse than doing
+    /// nothing.
+    ///
+    /// A different axis from `seat_budgets`: that governs what a seat may DO,
+    /// this governs what the agent PAYS on every turn.
+    #[serde(default)]
+    pub context_budget_tokens: usize,
     pub system_prompt: Option<String>,
     pub stream: bool,
     pub context_window: usize,
@@ -826,6 +852,7 @@ impl Default for BehaviorSettings {
             max_iterations: 90,
             tool_timeout_secs: 30,
             request_timeout_secs: 120,
+            context_budget_tokens: 0,
             system_prompt: None,
             stream: true,
             context_window: 128_000,
@@ -1170,6 +1197,115 @@ impl Default for McpSettings {
             deferred_loading: true,
             watchdog_interval_secs: default_mcp_watchdog_interval(),
             servers: Vec::new(),
+        }
+    }
+}
+
+/// One CLI tool the agent may invoke, opted in exactly like an MCP server.
+///
+/// Not every binary on PATH is a tool an agent should hold, so the grant is
+/// per-entry: a binary that is on PATH but absent from `[[cli.tools]]` is
+/// invisible to the agent, exactly as an unlisted MCP server is never
+/// connected. `cli_discovery`'s `KNOWN_CLIS` roster is the catalogue the
+/// operator chooses from, not an automatic grant.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct CliToolSettings {
+    /// The binary name as it appears on PATH (e.g. "git"). If it is not
+    /// discoverable the entry reports unusable and is skipped.
+    pub name: String,
+    /// Whether the agent may invoke this CLI. Defaults to true so a newly
+    /// added entry works without also flipping a switch.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// What this CLI is for, in the operator's words. Renders in the
+    /// `<cli_reference>` block, because the operator knows what they use it
+    /// for better than `--help` describes.
+    pub description: Option<String>,
+    /// argv ALWAYS prepended to every invocation (a global `--no-pager`,
+    /// `-C /some/repo` for git). Lets one entry pin a working context
+    /// instead of every call repeating it.
+    #[serde(default)]
+    pub global_args: Vec<String>,
+    /// Hard per-call timeout in seconds. 0 means use the surface default
+    /// (`cli.default_timeout_secs`).
+    #[serde(default)]
+    pub timeout_secs: u64,
+    /// Subcommands the agent may invoke, when the operator wants a narrower
+    /// grant than the whole binary. Empty means the whole CLI.
+    #[serde(default)]
+    pub allow_subcommands: Vec<String>,
+}
+
+impl Default for CliToolSettings {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            enabled: true,
+            description: None,
+            global_args: Vec::new(),
+            timeout_secs: 0,
+            allow_subcommands: Vec::new(),
+        }
+    }
+}
+
+/// The CLI tool surface: which binaries the agent may invoke, and how much of
+/// their surface context it pays for per request.
+///
+/// Mirrors `[mcp]` on purpose — an operator who understands "list a server,
+/// flip enabled" already understands this section.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct CliSettings {
+    /// Master switch for the CLI surface. When false no CLI is injected and
+    /// `cli_exec` is not registered. Defaults to false: unlike MCP, a
+    /// machine's PATH is full of binaries the agent has no business running,
+    /// so the surface is opt-in rather than on-by-default.
+    #[serde(default)]
+    pub enabled: bool,
+    /// What the `<cli_reference>` block carries per opted-in CLI.
+    /// `"usage"` (the measured default) injects name + the Usage line —
+    /// ~261 tok/request for a 15-CLI roster. `"description"` injects name +
+    /// one description line (~285). `"off"` injects nothing, which leaves
+    /// `cli_exec` reachable but undiscoverable. Raw full `--help` is
+    /// deliberately NOT offered: it measured 3,643 tok/request for that same
+    /// roster, which loses to the schema surface it replaces.
+    #[serde(default = "default_cli_inject")]
+    pub inject_help: String,
+    /// Global per-call timeout in seconds. A tool entry's own
+    /// `timeout_secs` overrides it. Default 30.
+    #[serde(default = "default_cli_timeout")]
+    pub default_timeout_secs: u64,
+    /// Cap on the number of lines served when the agent asks for a CLI's
+    /// full `--help` on demand. Default 60.
+    #[serde(default = "default_cli_help_lines")]
+    pub max_help_lines: usize,
+    /// The opted-in tools. Empty means none, regardless of PATH.
+    #[serde(default)]
+    pub tools: Vec<CliToolSettings>,
+}
+
+fn default_cli_inject() -> String {
+    "usage".to_string()
+}
+
+fn default_cli_timeout() -> u64 {
+    30
+}
+
+fn default_cli_help_lines() -> usize {
+    60
+}
+
+impl Default for CliSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            inject_help: default_cli_inject(),
+            default_timeout_secs: default_cli_timeout(),
+            max_help_lines: default_cli_help_lines(),
+            tools: Vec::new(),
         }
     }
 }
@@ -2643,20 +2779,25 @@ pub fn parse_config_file(path: &Path) -> Result<AppConfig> {
 }
 
 pub fn parse_config_str(raw: &str, source: &Path) -> Result<AppConfig> {
-    toml::from_str(raw).map_err(|error| {
-        let message = match error.span() {
-            Some(span) => format!(
-                "Invalid TOML in '{}': {} (bytes {}..{})",
-                source.display(),
-                error,
-                span.start,
-                span.end
-            ),
-            None => format!("Invalid TOML in '{}': {}", source.display(), error),
-        };
+    toml::from_str(raw)
+        .map_err(|error| {
+            let message = match error.span() {
+                Some(span) => format!(
+                    "Invalid TOML in '{}': {} (bytes {}..{})",
+                    source.display(),
+                    error,
+                    span.start,
+                    span.end
+                ),
+                None => format!("Invalid TOML in '{}': {}", source.display(), error),
+            };
 
-        Error::Config(message)
-    })
+            Error::Config(message)
+        })
+        .map(|mut cfg: AppConfig| {
+            cfg.config_path = Some(source.to_path_buf());
+            cfg
+        })
 }
 
 impl AppConfig {
