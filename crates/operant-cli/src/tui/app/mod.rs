@@ -910,9 +910,6 @@ impl App {
         // Send-safe ToolRegistry handle so deferred MCP servers
         // materialize their tools mid-session.
         let registry_clone = self.core_tool_registry.clone();
-        // Send-safe memory provider handle so the task can warm the
-        // agentmemory backend first.
-        let memory_provider_clone = self.core_memory_provider.clone();
         let server_configs: Vec<ServerCfg> = self
             .config
             .mcp
@@ -939,35 +936,6 @@ impl App {
         tokio::spawn(async move {
             use operant_core::config::McpTransportKind;
             let started = std::time::Instant::now();
-            // Ensure the agentmemory REST backend is up BEFORE connecting
-            // its MCP stdio server: the MCP server's initialize handshake
-            // completes in <1s against a live backend, but retries for
-            // minutes against a cold one (the observed 2.5-min reconnect).
-            // The provider auto-spawns the backend when
-            // memory.agentmemory_auto_spawn is enabled (default).
-            let mut backend_status = String::new();
-            if let Some(ref provider) = memory_provider_clone
-                && provider.name() == "agentmemory"
-            {
-                let was_up = provider.check_health().await;
-                // Time-box the backend warmup to 15s so a genuinely
-                // unreachable backend (missing npx, auto_spawn disabled)
-                // fails fast with a clear status instead of blocking the
-                // reconnect for the full 60s SPAWN_WARMUP_TIMEOUT.
-                let ensured = tokio::time::timeout(
-                    std::time::Duration::from_secs(15),
-                    provider.ensure_server(),
-                )
-                .await
-                .unwrap_or(false);
-                backend_status = if was_up {
-                    "agentmemory backend: already up".to_string()
-                } else if ensured {
-                    "agentmemory backend: spawned".to_string()
-                } else {
-                    "agentmemory backend: unreachable".to_string()
-                };
-            }
             let mut reconnected = Vec::new();
             let mut failures = Vec::new();
             for (name, transport, url, auth_token, command, args, env, enabled) in server_configs {
@@ -1036,9 +1004,6 @@ impl App {
                     reconnected.join(", ")
                 }
             );
-            if !backend_status.is_empty() {
-                msg.push_str(&format!(" {}", backend_status));
-            }
             if registry_clone.is_some() {
                 msg.push_str(&format!(
                     " {tool_count} tool(s) synced to the agent registry."

@@ -547,9 +547,9 @@ pub fn run_platform_checks(
             vec!["TAVILY_API_KEY", "EXA_API_KEY"],
             sourcehound_present,
         ),
-        // memory: builtin MEMORY.md + agentmemory (auto-spawned, keyless) are
-        // always available; HONCHO/MEM0 keys remain an optional upgrade
-        ("memory", vec!["HONCHO_API_KEY", "MEM0_API_KEY"], true),
+        // memory: memory-wire only, in-process and keyless. There is no
+        // external memory provider left to hold a key for.
+        ("memory", vec![], true),
         ("cron", vec![], true),
         // browser: sourcehound (keyless) OR any cloud-provider key
         (
@@ -731,64 +731,48 @@ pub fn run_platform_checks(
     // read it from the TOML file or fall back to env vars.
     let memory_provider = detect_memory_provider(config);
 
+    // memory-wire is the ONLY engine (plan 11C3): every other spelling in an
+    // old config is accepted by the parser — `deny_unknown_fields` means the
+    // retired `[memory] agentmemory_*` keys must keep parsing — and then
+    // routed to the same in-process provider. The honest check is therefore
+    // "is memory actually attached", never "is this provider's API key set":
+    // no external memory provider exists, so probing for a removed engine's
+    // credential would send the operator to set a key nothing reads, and a red
+    // failure on it would fail the install for an engine not compiled in.
+    //
+    // `builtin` and `disabled` are the two names that leave memory DEAD
+    // (`load_memory_manager` attaches no provider, so memory_store/search
+    // answer "No memory backend attached") — the core doctor flags them for
+    // the same reason, and this surface must agree, not soften them.
     match memory_provider.as_deref() {
-        None | Some("") => {
+        None | Some("") | Some("memory-wire") | Some("memory_wire") | Some("memory") => {
             check_ok(
-                "Built-in memory active",
-                "(no external provider configured — this is fine)",
+                "memory-wire active",
+                "(the only memory engine — in-process, no API key)",
             );
         }
-        Some("honcho") => {
-            let honcho_key = env_var("HONCHO_API_KEY");
-            if let Some(_key) = honcho_key {
-                check_ok("Honcho API key", "(configured)");
-            } else {
-                check_fail(
-                    "Honcho API key not set",
-                    "(set HONCHO_API_KEY in .env or run operant memory setup)",
-                );
-                issues.push(
-                    "Honcho is set as memory provider but HONCHO_API_KEY is missing".to_string(),
-                );
-            }
-        }
-        Some("mem0") => {
-            let mem0_key = env_var("MEM0_API_KEY");
-            if let Some(_key) = mem0_key {
-                check_ok("Mem0 API key", "(configured)");
-            } else {
-                check_fail(
-                    "Mem0 API key not set",
-                    "(set MEM0_API_KEY in .env or run operant memory setup)",
-                );
-                issues
-                    .push("Mem0 is set as memory provider but MEM0_API_KEY is missing".to_string());
-            }
-        }
-        Some(other) => {
-            // Legacy/removed providers silently downgrade to builtin at runtime
-            // (build_memory_provider). Don't falsely instruct setting a dead API key.
-            let legacy = matches!(
-                other,
-                "tdg" | "hindsight" | "retaindb" | "local-vector" | "mem0"
+        Some("builtin") | Some("disabled") => {
+            check_warn(
+                "memory is OFF — no backend attaches",
+                "(memory-wire is the only engine; delete the [memory] provider key)",
             );
-            if legacy {
-                check_ok(
-                    &format!("{other} provider (legacy/removed)"),
-                    "(using built-in memory — remove this key from config to avoid confusion)",
-                );
-            } else {
-                // Generic check
-                let generic_var = format!("{}_API_KEY", other.to_uppercase().replace('-', "_"));
-                if env_var(&generic_var).is_some() {
-                    check_ok(&format!("{other} provider"), "(configured)");
-                } else {
-                    check_warn(
-                        &format!("{other} provider"),
-                        &format!("(not configured — set {generic_var} in .env)"),
-                    );
-                }
-            }
+            manual_issues.push(
+                "[memory] provider pins a legacy no-op: memory_store/memory_search answer \"No memory backend attached\". Delete the provider key to enable memory-wire."
+                    .to_string(),
+            );
+        }
+        Some(legacy) => {
+            // Any other retired spelling (agentmemory, tdg, hindsight,
+            // retaindb, mem0, local-vector, honcho, ...). It parses, then
+            // routes to the same in-process engine — memory still works — so
+            // the only actionable advice is removing the stale key.
+            check_warn(
+                &format!("provider = {legacy:?} is retired"),
+                "(memory-wire is the only engine now — remove the [memory] provider key)",
+            );
+            manual_issues.push(format!(
+                "[memory] provider = {legacy:?} is retired: memory-wire is the only engine now. Remove the key from operant.toml."
+            ));
         }
     }
 
@@ -1213,6 +1197,71 @@ mod operant_binary_tests {
         assert!(
             advice.is_none(),
             "the hub check must not ask for a fix it cannot perform: {advice:?}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod memory_provider_surface_tests {
+    use super::*;
+
+    /// A removed provider name must never produce a RED doctor failure: no
+    /// such provider exists, so `check_fail` on its API key would tell the
+    /// operator to go set a key for an engine that is not compiled in.
+    /// The whole engine is memory-wire now; every other name is a legacy
+    /// spelling that still parses (config stays tolerant) and downgrades.
+    #[test]
+    fn no_removed_memory_provider_can_fail_the_doctor() {
+        // The guard scans the FUNCTION BODIES, not this test's own string
+        // literals: strip the test module so its needles cannot match
+        // themselves (a self-matching guard is vacuously green).
+        let full = include_str!("checks_tools.rs");
+        let source = full
+            .split("mod memory_provider_surface_tests")
+            .next()
+            .expect("the source always precedes its test module");
+
+        // The dead per-provider API-key probes must be gone: they instruct
+        // setting MEM0_API_KEY / HONCHO_API_KEY, keys nothing reads. The
+        // category table is the second place they hid (an "optional upgrade"
+        // row claiming those keys upgrade the memory category).
+        for dead in ["MEM0_API_KEY", "HONCHO_API_KEY", "operant memory setup"] {
+            assert!(
+                !source.contains(dead),
+                "doctor still references the dead probe {dead}"
+            );
+        }
+
+        // And the match must not carry per-name arms that pretend those
+        // providers are selectable.
+        assert!(
+            !source.contains("Some(\"mem0\")"),
+            "doctor still matches mem0 as a live provider arm"
+        );
+        assert!(
+            !source.contains("Some(\"honcho\")"),
+            "doctor still matches honcho as a live provider arm"
+        );
+    }
+
+    /// The one canonical engine must still be reported, and the legacy list
+    /// must not claim a `builtin` fallback — BuiltinProvider is deleted, so a
+    /// doctor line telling the operator they are "using built-in memory"
+    /// describes a provider that cannot exist.
+    #[test]
+    fn memory_wire_is_reported_and_builtin_is_not_claimed_as_a_fallback() {
+        let full = include_str!("checks_tools.rs");
+        let source = full
+            .split("mod memory_provider_surface_tests")
+            .next()
+            .expect("the source always precedes its test module");
+        assert!(
+            source.contains("memory-wire"),
+            "doctor no longer names the canonical memory-wire engine"
+        );
+        assert!(
+            !source.contains("using built-in memory"),
+            "doctor still claims a built-in memory fallback, which no longer exists"
         );
     }
 }

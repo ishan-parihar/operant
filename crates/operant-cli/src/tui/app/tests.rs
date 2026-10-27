@@ -138,15 +138,13 @@ fn drain_mcp_reconnect_status_renders_without_keystroke() {
     // runs on every frame (including tick frames with no input), so the
     // completion message must surface with zero keystrokes.
     tx.send("MCP reconnect initiated...".to_string()).unwrap();
-    tx.send(
-        "MCP reconnect complete in 1.9s — agentmemory backend: up, 53 tool(s) synced".to_string(),
-    )
-    .unwrap();
+    tx.send("MCP reconnect complete in 1.9s — 53 tool(s) synced".to_string())
+        .unwrap();
 
     app.drain_mcp_reconnect_status();
     assert_eq!(
         app.status_message.as_deref(),
-        Some("MCP reconnect complete in 1.9s — agentmemory backend: up, 53 tool(s) synced")
+        Some("MCP reconnect complete in 1.9s — 53 tool(s) synced")
     );
 
     // The channel is drained to empty — a second drain is a no-op and the
@@ -154,7 +152,7 @@ fn drain_mcp_reconnect_status_renders_without_keystroke() {
     app.drain_mcp_reconnect_status();
     assert_eq!(
         app.status_message.as_deref(),
-        Some("MCP reconnect complete in 1.9s — agentmemory backend: up, 53 tool(s) synced")
+        Some("MCP reconnect complete in 1.9s — 53 tool(s) synced")
     );
 }
 
