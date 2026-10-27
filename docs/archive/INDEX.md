@@ -44,3 +44,4 @@
 | 2026-10-27 | docs/kb/workflows/ponytail-integration.md | board complete: 5/5 phases done with deploy evidence (iters 1306-1315); the ponytail feature is documented in AGENTS.md + docs/library |
 | 2026-10-27 | docs/kb/workflows/tui-redteam-2026-10-19.md | board complete: 9/9 rows done with BUGS.md verdicts; directory keeps only active work |
 | 2026-10-27 | docs/kb/workflows/knowledge-base-redteam-2026-10-19.md | prose report, not a row board: all 22 KB-n findings are closed in BUGS.md (verified [x] count 22, open 0); the durable content is the BUGS.md rows |
+| 2026-10-28 | docs/plans/2026-10-28-unified-session-management-jcode-style-session-picker-pane-o.md | Superseded same-day by v2 (docs/plans/2026-10-28-unified-session-management-v2-jcode-picker-pane-omp-hub-empl.md): v1 excluded the server phase the operator explicitly asked for and overstated three remediation details. Archived so the v2 plan is the one owner (W006). |
