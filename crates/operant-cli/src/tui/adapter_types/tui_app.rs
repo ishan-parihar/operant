@@ -116,6 +116,18 @@ impl TuiApp {
 
         enable_raw_mode()?;
 
+        // (2026-10-27, jcode parity) Request the kitty keyboard protocol so
+        // Enter CHORDS become distinguishable — without this, every terminal
+        // sends a bare `\r` for Shift+Enter / Ctrl+Enter and the app cannot
+        // tell a newline request from a submit (the operator's
+        // "SHIFT+ENTER is not adding line breaks" report). Balanced by the
+        // pop in the teardown below and in the panic hook; ownership-gated so
+        // a suspended editor's own entry can never be popped by mistake.
+        let keyboard_enhanced = crate::tui::keyboard_enhancement::enable_keyboard_enhancement();
+        if keyboard_enhanced {
+            tracing::info!("kitty keyboard protocol requested (Enter chords distinguishable)");
+        }
+
         // Install a panic hook that restores the terminal before printing
         // the panic message. Without this, any panic between enable_raw_mode
         // and disable_raw_mode leaves the user's terminal in raw mode +
@@ -124,6 +136,9 @@ impl TuiApp {
         let prev_hook = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
             let _ = disable_raw_mode();
+            // Pop our kitty entry too: a panic between push and teardown
+            // must not leave the shell in CSI-u mode.
+            let _ = crate::tui::keyboard_enhancement::disable_keyboard_enhancement();
             let _ = execute!(std::io::stdout(), LeaveAlternateScreen);
             if !no_mouse {
                 let _ = execute!(std::io::stdout(), crossterm::event::DisableMouseCapture);
@@ -442,6 +457,14 @@ impl TuiApp {
         };
 
         disable_raw_mode()?;
+        // Mark teardown BEFORE the pop: a suspended-editor resume that
+        // loses this race and calls `enable_keyboard_enhancement` again
+        // is refused by the TERMINATION_STARTED gate, so the shell never
+        // inherits a pushed entry nothing will pop.
+        crate::tui::keyboard_enhancement::begin_termination_cleanup();
+        // Pop the kitty entry this process pushed (ownership-gated: a no-op
+        // when the panic hook already popped it, or when the push failed).
+        let _ = crate::tui::keyboard_enhancement::disable_keyboard_enhancement();
         if !self.no_mouse {
             let _ = execute!(
                 terminal.backend_mut(),

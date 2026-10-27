@@ -2,16 +2,20 @@
 //!
 //! ## Why this exists
 //!
-//! `app/key_handling.rs` maps Enter + (Shift | Alt | Ctrl) to
-//! `PromptInputState::insert_newline`, and plain Enter to submit. That handler
-//! has been live since iter-120. The gap is entirely terminal-side: most
-//! terminals and multiplexers send a bare `\r` for Shift+Enter, which crossterm
-//! reports as an unmodified `KeyCode::Enter` — indistinguishable from a plain
-//! submit. Nothing in the app can recover the distinction, because the
-//! information was never transmitted.
+//! `app/key_handling.rs` maps Enter + (Shift | Alt) to
+//! `PromptInputState::insert_newline`, and plain Enter to submit. Since
+//! 2026-10-27 the TUI also requests the kitty keyboard protocol at startup
+//! (`keyboard_enhancement.rs`), so on every modern terminal (kitty, WezTerm,
+//! Alacritty, iTerm2, foot, Ghostty, recent VTE) Shift+Enter arrives as a
+//! real Shift-modified Enter and works out of the box.
 //!
-//! So the fix is a terminal or multiplexer configuration change, and the only
-//! useful thing operant can do is say which one applies here.
+//! The residual gap is now genuinely terminal-side: a terminal or multi-
+//! plexer that ignores or strips the kitty push (tmux without
+//! `extended-keys on`, Terminal.app, some SSH chains) still sends a bare
+//! `\r` for every Enter chord — crossterm reports an unmodified
+//! `KeyCode::Enter` and the information was simply never transmitted.
+//! Nothing in the app can recover it, so the fix is a configuration change,
+//! and the only useful thing operant can do is say which one applies here.
 //!
 //! ## What this deliberately does NOT do
 //!
@@ -22,10 +26,12 @@
 //!
 //! ## What is always true
 //!
-//! Alt+Enter and Ctrl+Enter take the same branch as Shift+Enter, and Ctrl+J
-//! arrives as a Control-modified key in the terminals that matter. Operant has
-//! three newline routes that need no configuration at all; this command exists
-//! only for the one that does.
+//! Alt+Enter and Ctrl+J take the same newline branch as Shift+Enter on
+//! terminals that report the modifiers, and the trailing-backslash
+//! continuation (type `foo\\` then Enter) works on EVERY terminal with no
+//! configuration at all — key_handling.rs consumes the backslash and
+//! inserts the newline. Operant has three newline routes that need no
+//! configuration; this command exists only for the one that does.
 
 use std::fmt::Write as _;
 
@@ -156,9 +162,11 @@ pub fn advice(env: &EnvSnapshot) -> Vec<Advice> {
     if env.kitty_window {
         out.push(Advice {
             target: "kitty".to_string(),
-            detail: "kitty only reports Shift+Enter distinctly once the application enables the \
-                     progressive keyboard protocol, which operant does not currently do. Until \
-                     it does, use Ctrl+J or Alt+Enter."
+            detail: "kitty reports Shift+Enter distinctly through the progressive keyboard \
+                     protocol, which operant now requests at startup (2026-10-27) — it \
+                     should already work. If it does not, the session may be running \
+                     through a multiplexer stripping the sequence; check the tmux entry \
+                     above. Ctrl+J and Alt+Enter are the configuration-free fallbacks."
                 .to_string(),
             snippet: None,
         });
@@ -350,7 +358,7 @@ mod tests {
     }
 
     #[test]
-    fn kitty_is_named_but_not_claimed_to_be_fixable() {
+    fn kitty_advice_says_the_protocol_is_now_requested_and_names_fallbacks() {
         let env = EnvSnapshot {
             kitty_window: true,
             ..Default::default()
@@ -360,6 +368,10 @@ mod tests {
             .find(|a| a.target == "kitty")
             .map(|a| a.detail)
             .expect("kitty must be reported");
+        assert!(
+            detail.contains("requests at startup"),
+            "the advice must say the app now requests the protocol, got: {detail}"
+        );
         assert!(detail.contains("Ctrl+J"), "got: {detail}");
     }
 

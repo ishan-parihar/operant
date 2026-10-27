@@ -48,6 +48,7 @@ pub mod external_editor;
 pub mod file_discovery;
 pub mod journey_view;
 pub mod keybindings;
+pub mod keyboard_enhancement;
 pub mod mcp_view;
 pub mod messages;
 pub mod model_effort;

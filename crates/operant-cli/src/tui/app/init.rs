@@ -168,6 +168,7 @@ impl App {
             scroll_last_width: Cell::new(0),
             scroll_resize_replay_at_ms: Cell::new(0),
             scroll_cls_divider: Cell::new(false),
+            terminal_setup_hint_shown: Cell::new(false),
             help_overlay: {
                 let mut overlay = HelpOverlay::new();
                 overlay.populate_from_commands(help_overlay_entries());

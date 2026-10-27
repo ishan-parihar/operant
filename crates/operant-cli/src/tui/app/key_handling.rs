@@ -1587,7 +1587,13 @@ impl App {
 
             // ---- Text entry (allowed while streaming so users can queue
             // the next message; submission queues via Enter at the CLI layer).
-            KeyCode::Char(c) => {
+            // CONTROL-modified letters NEVER reach this arm — they are chords
+            // (Ctrl+J newline, Ctrl+C/K/U/W editor keys, …) matched by the
+            // arms above and below; without this guard the arm swallows them
+            // and inserts the bare letter (the Ctrl+J regression that made it
+            // insert `j` instead of a newline — the iter-120 contract died
+            // to exactly this shape once already, in the extraction refactor).
+            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                 let c = normalize_char_with_shift(c, key.modifiers);
                 if self.prompt_input.vim_enabled && self.prompt_input.vim_mode != VimMode::Insert {
                     self.prompt_input.vim_command(&c.to_string());
@@ -1707,19 +1713,110 @@ impl App {
             }
 
             // ---- Submit ------------------------------------------------
-            // Shift+Enter / Alt+Enter / Ctrl+Enter / Ctrl+J insert a literal
-            // newline so users can compose multi-line prompts before sending.
-            // Ctrl+J is the traditional Unix "newline" key and is what
-            // hermes-agent uses for line breaks in the TUI.
-            // (iter-120 — user-requested: Ctrl+J was not working.)
+            // Shift+Enter / Alt+Enter insert a literal newline so users can
+            // compose multi-line prompts before sending — in BOTH states:
+            // composing the next multi-line prompt while a turn streams is
+            // exactly when users reach for it, and the composer is
+            // deliberately editable mid-turn. (Shift+Enter needs the kitty
+            // keyboard protocol, requested at TUI startup since 2026-10-27 —
+            // see keyboard_enhancement.rs; before that every Enter chord
+            // arrived as a bare \r.) Ctrl+J is the traditional Unix
+            // "newline" key. Ctrl+Enter is deliberately NOT a newline: it is
+            // the QUEUE key (jcode parity — `handle_alternate_enter`:
+            // while a turn runs, Ctrl+Enter queues the draft for the next
+            // turn instead of submitting into the void).
             KeyCode::Enter
-                if !self.is_streaming
-                    && (key.modifiers.contains(KeyModifiers::SHIFT)
-                        || key.modifiers.contains(KeyModifiers::ALT)
-                        || key.modifiers.contains(KeyModifiers::CONTROL)) =>
+                if key.modifiers.contains(KeyModifiers::SHIFT)
+                    || key.modifiers.contains(KeyModifiers::ALT) =>
             {
                 self.prompt_input.insert_newline();
                 self.refresh_prompt_input();
+            }
+            // Ctrl+J: the terminal-portable newline (iter-120's contract,
+            // LOST in the key_handling extraction refactor — the comment
+            // survived, the arm did not; no `Char('j')` composer arm existed
+            // in the extracted file, so the key has been dead since. Restored
+            // 2026-10-27 from iter-120's app.rs:4666, with the `!streaming`
+            // gate removed for the same reason as Shift/Alt above.)
+            KeyCode::Char('j')
+                if key.modifiers.contains(KeyModifiers::CONTROL)
+                    && !key.modifiers.contains(KeyModifiers::SHIFT) =>
+            {
+                self.prompt_input.insert_newline();
+                self.refresh_prompt_input();
+            }
+            // Ctrl+Enter: QUEUE. While a turn streams this pushes the draft
+            // to the steer queue (the same mechanism /queue and /steer
+            // drive — `queue_steer`) and says so; while idle it submits like
+            // plain Enter. jcode's `send_action` routes the alternate Enter
+            // to Queue when processing and Submit otherwise — same shape here.
+            // Ctrl+J keeps its newline meaning in BOTH states (the iter-120
+            // contract, unchanged). A failed push must NOT lose the draft:
+            // `queue_steer` refuses without consuming, so the composer is
+            // only cleared after the text is held.
+            KeyCode::Enter
+                if key.modifiers.contains(KeyModifiers::CONTROL)
+                    && !key.modifiers.contains(KeyModifiers::SHIFT) =>
+            {
+                if self.is_streaming {
+                    let held = self.prompt_input.text.clone();
+                    if held.trim().is_empty() {
+                        self.set_status_notice(
+                            "Nothing to queue — the composer is empty.".to_string(),
+                        );
+                    } else {
+                        let notice = self.queue_steer(&held);
+                        let queued = notice.starts_with("Steer queued");
+                        if queued {
+                            // Success: consume the composer (take() also
+                            // clears any paste-placeholder metadata).
+                            let _ = self.prompt_input.take();
+                        }
+                        self.set_status_notice(notice);
+                    }
+                    self.refresh_prompt_input();
+                } else {
+                    // Idle: Ctrl+Enter is just another submit (jcode's
+                    // SendAction::Submit when not processing).
+                    return true;
+                }
+            }
+            // Trailing-backslash continuation (jcode `newline.rs`): the
+            // universal newline fallback that needs NO keyboard protocol —
+            // plain Enter on a draft whose tail is an ODD number of back-
+            // slashes consumes the backslash and inserts a newline instead
+            // of submitting (shell line-continuation muscle memory). An
+            // EVEN count is an escaped backslash: literal text, still
+            // submits. Gate on cursor-at-end so Enter mid-draft never
+            // surprises. Applies in BOTH streaming states.
+            KeyCode::Enter
+                if self.prompt_input.cursor == self.prompt_input.text.len()
+                    && self.prompt_input.text.ends_with('\\')
+                    && {
+                        let t = &self.prompt_input.text;
+                        let trailing = t.len() - t.trim_end_matches('\\').len();
+                        trailing % 2 == 1
+                    }
+                    && key.modifiers == KeyModifiers::NONE =>
+            {
+                // Remove ONE trailing backslash, then newline. The cursor must
+                // be pulled back BEFORE the pop: insert_char asserts a char
+                // boundary at `self.cursor`, and a cursor left at the old
+                // (now over-long) length panics the boundary check.
+                self.prompt_input.cursor = self.prompt_input.cursor.saturating_sub(1);
+                self.prompt_input.text.pop();
+                self.prompt_input.insert_newline();
+                self.sync_legacy_prompt_fields();
+                self.refresh_prompt_input();
+                // Once per session: reaching for the fallback means Shift+Enter
+                // did not work for this user, and that is a terminal-config
+                // problem with a real fix — say so once, not on every line
+                // (jcode's hint_terminal_setup_once).
+                if !self.terminal_setup_hint_shown.replace(true) {
+                    self.set_status_notice(
+                        "Tip: /terminal-setup explains making Shift+Enter insert newlines directly.".to_string(),
+                    );
+                }
             }
             // Plain Enter submits. While a turn streams, the gate opens
             // for steer/queue (the prompt-shaped input that feeds the steer

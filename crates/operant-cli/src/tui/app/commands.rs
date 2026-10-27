@@ -166,7 +166,9 @@ impl App {
     /// adapter_types.rs, but uses `try_lock` because this runs on the
     /// sync slash-command path while the queue is a tokio Mutex.
     /// (iter-240 — wires /steer and /queue `<text>` to the real steer queue.)
-    fn queue_steer(&mut self, text: &str) -> String {
+    /// (2026-10-27) `pub(super)`: the Ctrl+Enter queue key in key_handling
+    /// drives the same path — one mechanism, two entries.
+    pub(super) fn queue_steer(&mut self, text: &str) -> String {
         const NO_QUEUE: &str = "Steer is unavailable (no live agent).";
         const QUEUE_BUSY: &str = "Queue is busy (agent is draining it).";
         match self.steer_queue_handle.as_ref() {

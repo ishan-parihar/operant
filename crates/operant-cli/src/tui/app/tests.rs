@@ -6895,3 +6895,227 @@ mod keyboard_scroll_reachability_tests {
         );
     }
 }
+
+// ---- Enter chords: newline, queue, continuation (2026-10-27) -------------
+//
+// The operator's report: "SHIFT+ENTER is not adding line breaks. CTRL+ENTER
+// must queue it." Two independent defects were behind it: (1) operant never
+// requested the kitty keyboard protocol, so every Enter chord arrived as a
+// bare \r (fixed by keyboard_enhancement.rs — these tests drive the key
+// handler directly, so they pin the APP side: given a chord event, the right
+// thing happens); (2) the app side had its own gaps — Ctrl+J's newline arm
+// was lost in the key_handling extraction (the comment survived, the arm
+// did not), Ctrl+Enter was mapped to a newline instead of jcode's QUEUE,
+// and Shift/Alt+Enter were dead mid-stream.
+
+#[cfg(test)]
+mod enter_chord_tests {
+    use super::*;
+
+    fn press_key(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
+        KeyEvent {
+            code,
+            modifiers,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        }
+    }
+
+    fn make_steer_queue() -> std::sync::Arc<tokio::sync::Mutex<Vec<String>>> {
+        std::sync::Arc::new(tokio::sync::Mutex::new(Vec::new()))
+    }
+
+    /// Shift+Enter inserts a newline — in BOTH states. The idle case is the
+    /// long-standing contract; the streaming case is the fix (the composer
+    /// is deliberately editable mid-turn, and composing the next
+    /// multi-line prompt while a turn streams is exactly when it is used).
+    #[test]
+    fn shift_enter_inserts_newline_idle_and_streaming() {
+        for streaming in [false, true] {
+            let mut app = make_app();
+            app.is_streaming = streaming;
+            app.prompt_input.replace_text("first line".to_string());
+            app.prompt_input.cursor = app.prompt_input.text.len();
+
+            let submitted = app.handle_key_event(press_key(KeyCode::Enter, KeyModifiers::SHIFT));
+
+            assert!(
+                !submitted,
+                "Shift+Enter must never submit (streaming={streaming})"
+            );
+            assert!(
+                app.prompt_input.text.contains('\n'),
+                "Shift+Enter must insert a literal newline (streaming={streaming}), got: {:?}",
+                app.prompt_input.text
+            );
+        }
+    }
+
+    /// Alt+Enter shares the Shift+Enter newline branch.
+    #[test]
+    fn alt_enter_inserts_newline() {
+        let mut app = make_app();
+        app.prompt_input.replace_text("one".to_string());
+        app.prompt_input.cursor = app.prompt_input.text.len();
+
+        let submitted = app.handle_key_event(press_key(KeyCode::Enter, KeyModifiers::ALT));
+
+        assert!(!submitted, "Alt+Enter must never submit");
+        assert!(app.prompt_input.text.contains('\n'));
+    }
+
+    /// Ctrl+J is the terminal-portable newline (iter-120). Its arm was LOST
+    /// in the key_handling extraction refactor — the doc comment claimed
+    /// the contract, no arm existed. Restored 2026-10-27; this test is the
+    /// one that would have caught the loss.
+    #[test]
+    fn ctrl_j_inserts_newline() {
+        let mut app = make_app();
+        app.prompt_input.replace_text("line a".to_string());
+        app.prompt_input.cursor = app.prompt_input.text.len();
+
+        let submitted = app.handle_key_event(press_key_with_control(KeyCode::Char('j')));
+
+        assert!(!submitted, "Ctrl+J must never submit");
+        assert!(
+            app.prompt_input.text.contains('\n'),
+            "Ctrl+J must insert a newline, got: {:?}",
+            app.prompt_input.text
+        );
+    }
+
+    /// Ctrl+Enter while a turn streams QUEUES the draft into the steer
+    /// queue (jcode's `handle_alternate_enter` → SendAction::Queue) and
+    /// clears the composer. The operator's "CTRL+ENTER must queue it".
+    #[test]
+    fn ctrl_enter_queues_the_draft_while_streaming() {
+        let mut app = make_app();
+        let queue = make_steer_queue();
+        app.steer_queue_handle = Some(std::sync::Arc::clone(&queue));
+        app.is_streaming = true;
+        app.prompt_input
+            .replace_text("then check the tests".to_string());
+
+        let submitted = app.handle_key_event(press_key(KeyCode::Enter, KeyModifiers::CONTROL));
+
+        assert!(!submitted, "Ctrl+Enter must not submit while streaming");
+        assert_eq!(
+            queue.try_lock().unwrap().as_slice(),
+            ["then check the tests".to_string()],
+            "the draft must land in the steer queue"
+        );
+        assert!(
+            app.prompt_input.text.is_empty(),
+            "a successful queue consumes the composer"
+        );
+        assert!(
+            app.status_notice()
+                .as_deref()
+                .is_some_and(|n| n.contains("Steer queued")),
+            "the queue must be announced: {:?}",
+            app.status_notice()
+        );
+    }
+
+    /// Ctrl+Enter while idle submits like plain Enter (jcode's
+    /// SendAction::Submit when not processing).
+    #[test]
+    fn ctrl_enter_submits_when_idle() {
+        let mut app = make_app();
+        app.is_streaming = false;
+        app.prompt_input.replace_text("hello there".to_string());
+
+        let submitted = app.handle_key_event(press_key(KeyCode::Enter, KeyModifiers::CONTROL));
+
+        assert!(submitted, "idle Ctrl+Enter must submit");
+    }
+
+    /// An empty composer + Ctrl+Enter mid-stream says so and queues nothing.
+    #[test]
+    fn ctrl_enter_on_an_empty_composer_says_so() {
+        let mut app = make_app();
+        let queue = make_steer_queue();
+        app.steer_queue_handle = Some(std::sync::Arc::clone(&queue));
+        app.is_streaming = true;
+
+        let submitted = app.handle_key_event(press_key(KeyCode::Enter, KeyModifiers::CONTROL));
+
+        assert!(!submitted);
+        assert!(queue.try_lock().unwrap().is_empty());
+        assert!(
+            app.status_notice()
+                .as_deref()
+                .is_some_and(|n| n.contains("Nothing to queue")),
+            "the empty-composer case must be named: {:?}",
+            app.status_notice()
+        );
+    }
+
+    /// Trailing-backslash continuation (jcode newline.rs): plain Enter on a
+    /// draft ending in an ODD number of backslashes consumes one backslash
+    /// and inserts a newline — the universal fallback that needs no
+    /// keyboard protocol. An EVEN count is an escaped backslash: literal
+    /// text, still submits.
+    #[test]
+    fn odd_trailing_backslash_makes_enter_a_newline() {
+        let mut app = make_app();
+        app.prompt_input
+            .replace_text("ps aux | grep operant\\".to_string());
+        app.prompt_input.cursor = app.prompt_input.text.len();
+
+        let submitted = app.handle_key_event(press_key(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert!(!submitted, "the continuation must not submit");
+        assert_eq!(
+            app.prompt_input.text, "ps aux | grep operant\n",
+            "the trailing backslash is consumed and a newline inserted"
+        );
+    }
+
+    #[test]
+    fn even_trailing_backslashes_still_submit() {
+        let mut app = make_app();
+        app.prompt_input
+            .replace_text("literal path C:\\\\".to_string());
+        app.prompt_input.cursor = app.prompt_input.text.len();
+
+        let submitted = app.handle_key_event(press_key(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert!(
+            submitted,
+            "an escaped backslash is literal text — Enter submits"
+        );
+    }
+
+    /// The /terminal-setup hint fires ONCE per session, not per line.
+    /// Asserted on the FLAG (not the notice text): `status_notice` returns
+    /// the last set message even when nothing new was set, so a second
+    /// silent continuation would still read the first press's tip from the
+    /// accessor — the honest oracle for "shown once" is the flag itself.
+    #[test]
+    fn continuation_hint_is_shown_once_per_session() {
+        let mut app = make_app();
+        app.prompt_input.replace_text("one\\".to_string());
+        app.handle_key_event(press_key(KeyCode::Enter, KeyModifiers::NONE));
+        let first_notice = app.status_notice().unwrap_or_default();
+        assert!(
+            first_notice.contains("/terminal-setup"),
+            "the first continuation must point at the real fix: {first_notice}"
+        );
+        assert!(
+            app.terminal_setup_hint_shown.get(),
+            "the first continuation must set the once-flag"
+        );
+
+        // Second continuation: the flag is already set, so no new notice is
+        // set. Clear status_message to prove NOTHING was written.
+        app.status_message = None;
+        app.prompt_input.replace_text("two\\".to_string());
+        app.handle_key_event(press_key(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(
+            app.status_message.is_none(),
+            "the second continuation must not re-set the tip: {:?}",
+            app.status_message
+        );
+    }
+}

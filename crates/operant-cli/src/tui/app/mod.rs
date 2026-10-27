@@ -381,6 +381,12 @@ pub struct App {
     /// the next emitted content, so cleared-view boundaries are visible
     /// in the terminal's own scrollback. One-shot.
     pub scroll_cls_divider: Cell<bool>,
+    /// (2026-10-27) The /terminal-setup hint has been shown this session.
+    /// The trailing-backslash newline fallback fires when Shift+Enter did
+    /// NOT work for the user — a terminal-configuration problem with a
+    /// real fix — so point at it ONCE (jcode's `hint_terminal_setup_once`)
+    /// rather than on every continuation.
+    pub terminal_setup_hint_shown: Cell<bool>,
 
     // ---- New overlay / notification fields --------------------------------
     /// Full-screen help overlay (? / F1).
