@@ -661,8 +661,14 @@ fn cli_command(config: &AppConfig, cmd: &CliSubcommand) -> Result<()> {
                 );
             }
             println!(
-                "The agent sees it on its next turn; injected cost ~{} tok/request.",
+                "Injected cost once the agent surface is wired: ~{} tok/request.",
                 estimate_tokens(&format!("- {name} (v): usage: {name} [opts]"))
+            );
+            println!(
+                "NOTE: the grant is recorded and `operant context budget` measures it, but the \
+                 agent cannot invoke it yet — `cli_exec` and the <cli_reference> injection are the \
+                 next phase (plan 2026-10-27-cli-surface-as-an-agent-tool-surface). Until then this \
+                 configures the surface, it does not activate it."
             );
         }
         CliSubcommand::Remove { name } => {

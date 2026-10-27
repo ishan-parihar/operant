@@ -51,6 +51,11 @@ pub struct AppConfig {
     pub config_path: Option<PathBuf>,
     /// CLI tool surface (`[cli]`) — which binaries the agent may invoke, and
     /// how much of their surface context it pays for per request.
+    ///
+    /// PHASE 1 OF 2: configurable and measured (`operant context cli|budget`).
+    /// The agent-facing half — `cli_exec` plus the `<cli_reference>` prompt
+    /// block — is still to come, so a granted CLI does not yet reach the
+    /// model. See the CliToolSettings status note.
     pub cli: CliSettings,
     pub vision: VisionSettings,
     pub credential_pool: CredentialPoolSettings,
@@ -1208,6 +1213,12 @@ impl Default for McpSettings {
 /// invisible to the agent, exactly as an unlisted MCP server is never
 /// connected. `cli_discovery`'s `KNOWN_CLIS` roster is the catalogue the
 /// operator chooses from, not an automatic grant.
+///
+/// STATUS (2026-10-27): this records the grant and `operant context budget`
+/// measures its cost, but the agent-facing half is NOT wired — `cli_exec` and
+/// the `<cli_reference>` prompt injection are the next phase. Nothing in the
+/// runtime reads this list yet, so a granted CLI is configured but not
+/// invocable. The doc comment would otherwise promise the finished feature.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct CliToolSettings {
@@ -3083,6 +3094,52 @@ fn apply_path_override(name: &str, target: &mut PathBuf) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    /// THE AGENT-FACING HALF IS NOT WIRED — this test exists so nobody
+    /// assumes it is, including a future me.
+    ///
+    /// iter-1422 shipped the `[cli]` config surface and the
+    /// `operant context cli/budget/optimize` commands, and its `add` message
+    /// told the operator "The agent sees it on its next turn". That was
+    /// FALSE: grep-verified, nothing in the runtime reads `config.cli` except
+    /// those two commands, and there is no `cli_exec` tool and no
+    /// `<cli_reference>` injection. A granted CLI was configurable and
+    /// measurable, not invocable.
+    ///
+    /// The claims were corrected (message, doc comments, example template).
+    /// This test pins the boundary: the config must keep PARSING (phase 1 is
+    /// real and tested), and the phase-1 status must stay documented rather
+    /// than implied. It deliberately does NOT assert that a tool exists —
+    /// when `cli_exec` lands, this test should be deleted, not weakened.
+    #[test]
+    fn the_cli_surface_is_phase_one_config_only() {
+        // Phase 1 is real: the config parses, including every per-entry knob.
+        let raw = r#"
+[cli]
+enabled = true
+inject_help = "usage"
+
+[[cli.tools]]
+name = "git"
+global_args = ["--no-pager"]
+allow_subcommands = ["status"]
+"#;
+        let cfg = parse_config_str(raw, std::path::Path::new("t.toml"))
+            .expect("phase 1 must keep parsing — that IS what shipped");
+        assert!(cfg.cli.enabled);
+        assert_eq!(cfg.cli.tools.len(), 1);
+        assert_eq!(cfg.cli.tools[0].global_args, vec!["--no-pager".to_string()]);
+
+        // The documented boundary is a string in the doc comments, so assert
+        // the source of truth says it rather than trusting memory.
+        let src = include_str!("config.rs");
+        assert!(
+            src.contains("PHASE 1 OF 2"),
+            "the config must STATE that the agent-facing half is unwired — \
+             an undocumented boundary is how a future agent ships the same \
+             overclaim iter-1422 did"
+        );
+    }
+
     /// The 2026-10-26 context-management fixes (audit G2/G5/G6 follow-ups):
     /// every new knob must PARSE from TOML and default to the documented
     /// value — a key that silently fails to deserialize is a knob that

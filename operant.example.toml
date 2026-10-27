@@ -306,8 +306,14 @@ enabled = false
 # servers above. Being on PATH grants nothing: a binary absent from
 # [[cli.tools]] is invisible to the agent, so `enabled = true` does not hand
 # the model every tool on the machine.
-# Off by default. Costs: name + usage line = ~7 tok/request per CLI; the agent
-# gets subcommand depth on demand via `cli_exec(cli, argv=["--help"])`.
+#
+# PHASE 1 OF 2 (2026-10-27): this section CONFIGURES the surface and
+# `operant context cli|budget` measures it. The agent-facing half — `cli_exec`
+# and the `<cli_reference>` prompt block — is not wired yet, so a granted CLI
+# is not yet invocable by the model. Until then, editing this changes cost and
+# grant state, not what the agent can actually run.
+#
+# Off by default. Cost once wired: name + usage line = ~7 tok/request per CLI.
 [cli]
 enabled = false
 # What the <cli_reference> block carries per granted CLI: "usage" (measured
