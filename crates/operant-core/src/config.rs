@@ -1781,6 +1781,21 @@ impl MemorySettings {
                     .to_string(),
             );
         }
+        // url/secret/version warned nothing at all. They are read by nothing
+        // (verified: zero readers of these fields outside this file), and a
+        // *secret* parked under a retired key is the worst possible place for
+        // silence — the operator must be told it is unused and can be removed.
+        for (key, present) in [
+            ("agentmemory_url", self.agentmemory_url.is_some()),
+            ("agentmemory_secret", self.agentmemory_secret.is_some()),
+            ("agentmemory_version", self.agentmemory_version.is_some()),
+        ] {
+            if present {
+                out.push(format!(
+                    "warning: [memory] {key} is removed — the agentmemory server era is over. Remove the key from operant.toml."
+                ));
+            }
+        }
         if self.audit_enabled.is_some() {
             out.push(
                 "warning: [memory] audit_enabled is removed — audit logging is not wired into the live memory path. Remove the key from operant.toml."
@@ -3853,6 +3868,40 @@ wonderful_unknown_key = 42
             response_cache_enabled: None,
         };
         assert_eq!(loud.legacy_warnings().len(), 2);
+    }
+
+    /// Every accepted-but-ignored key must warn. `agentmemory_url` and
+    /// `agentmemory_secret` were the two that did not: an operator carrying a
+    /// *secret* under a retired key was never told the key is dead and the
+    /// value is unused, which is the worst place for silence.
+    #[test]
+    fn every_retired_memory_key_warns() {
+        let cases = [
+            ("agentmemory_url", "http://127.0.0.1:8929"),
+            ("agentmemory_secret", "a-secret-nothing-reads"),
+            ("agentmemory_version", "0.9.29"),
+        ];
+        for (key, value) in cases {
+            let toml = format!("{key} = {value:?}");
+            let parsed: MemorySettings =
+                toml::from_str(&toml).expect("a retired key must not fail the config load");
+            let warnings = parsed.legacy_warnings();
+            assert!(
+                warnings.iter().any(|w| w.contains(key)),
+                "retired key {key} must warn, got: {warnings:?}"
+            );
+        }
+
+        let parsed: MemorySettings = toml::from_str("agentmemory_auto_spawn = true")
+            .expect("a retired key must not fail the config load");
+        assert!(
+            parsed
+                .legacy_warnings()
+                .iter()
+                .any(|w| w.contains("agentmemory_auto_spawn")),
+            "auto_spawn must keep warning, got: {:?}",
+            parsed.legacy_warnings()
+        );
     }
 
     /// Only the canonical spelling may be silent. `memory` and `memory_wire`
