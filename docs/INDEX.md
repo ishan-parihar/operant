@@ -36,7 +36,7 @@ here or the gate is red.
 
 One doc per architectural element: the mechanism AND the intention.
 These are LIVE pages — they change in the same iteration as the code
-they describe. The front door is `docs/library/README.md`; the
+they describe. The front door is [docs/library/README.md](library/README.md); the
 `Source:` header of each page cites its modules.
 
 ### The agentic core

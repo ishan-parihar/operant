@@ -67,6 +67,7 @@ copied from each page's first heading.
 - [R40-12-13-WIRE-OR-RETIRE-REVIEW.md](R40-12-13-WIRE-OR-RETIRE-REVIEW.md) — R40-12 / R40-13 — wire-or-retire review, and a YAGNI audit of the harness
 - [RUST_BEST_PRACTICES_PLAN.md](RUST_BEST_PRACTICES_PLAN.md) — Operant — Rust Best Practices & Operational-Loop Fix Plan
 - [WAVE1-DECISIONS.md](WAVE1-DECISIONS.md) — Wave 1 Decision Document
+- [kernel.md](kernel.md) — persistent Python kernel + continual harness (moved to the mechanism library: `library/kernel.md`; tombstone at the original path, archived copy `archive/kernel.md`)
 - [harness-kernel.md](harness-kernel.md) — Operant Harness Kernel (moved to the mechanism library: `library/harness.md`; tombstone at the original path, archived copy `archive/harness-kernel.md`)
 - [MEMORY_BUDGET.md](MEMORY_BUDGET.md) — Memory Budget
 - [HOLON-INTEGRATION.md](HOLON-INTEGRATION.md) — Holon integration (proposed, 2026-10-14)
