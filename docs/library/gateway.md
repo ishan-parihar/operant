@@ -83,10 +83,16 @@ markdown to Telegram-compatible HTML; the WhatsApp asterisk dialect is
 shared (`asterisk_dialect`, iter-341) — one dialect owner per platform
 family instead of per-adapter hand-rolls.
 
-## Admin commands + subscriptions
+## Commands + subscriptions
 
-- `gateway_commands.rs` — the canonical Telegram bot command registry +
-  admin gating + `setMyCommands` payloads.
+- `gateway_commands.rs` — the `COMMAND_REGISTRY` (58 defs at writing —
+  derive, do not copy: the runtime-command surface, not the admin
+  subset) with the Telegram `setMyCommands` payloads, admin gating,
+  and the runtime-command arms. The functional-core twins resolve
+  through it and ride `run_session_scoped_command`: `/effort`, `/plan`,
+  `/context`, `/export`, `/memory`, `/skills <name>` expansion,
+  `/search` (RT-179, iters 1379-1396 — every one reachable from a
+  channel through a real enforcement seam).
 - `webhook_subscriptions.rs` + `cmd_webhook.rs` — a subscription records
   an INBOUND route: the path under `/webhook/`, the prompt/skills that
   shape handling, and the delivery target (`deliver` / `deliver_chat_id`

@@ -47,7 +47,9 @@ ground design for the visual layer.
   the tails — no flushes at ToolStart.
 - **Registered slash commands can never fall through to the model** —
   the not-wired catch-all covers both dispatch loops, and the unit test
-  `no_registered_tui_command_is_unwired` pins it statically.
+  `no_registered_tui_command_is_unwired` pins it statically. The
+  functional-core subset now has gateway twins over a channel
+  (see [gateway.md](gateway.md) §commands — RT-179).
 
 ## The composer (`tui/prompt_input/` + `file_discovery/` + `prediction/`)
 

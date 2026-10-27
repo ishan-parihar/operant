@@ -100,11 +100,15 @@ renamed on a failed retain).
 
 `operant memory` (`cmd_memory.rs`) reads and writes the SAME engine the
 agent recalls from (`MemoryWireProvider::new(operant_home())`), so the
-operator view and the agent view cannot drift. `operant doctor` reports
-memory provider health and names the provider pins that leave the tools
-dead. The old `MemoryManager`/`MEMORY.md` store the CLI once wrote was a
-store the agent never read — that split is the documented reason the CLI
-now opens the engine directly.
+operator view and the agent view cannot drift. `operant doctor`'s
+memory check is honest to the one-engine world (iter-1385): it prints
+"memory-wire active (the only memory engine — in-process, no API
+key)", warns that `builtin`/`disabled` leave the tools answering "No
+memory backend attached", and tells the operator to delete any
+retired `[memory] provider` spelling. The old `MemoryManager`/
+`MEMORY.md` store the CLI once wrote was a store the agent never read —
+that split is the documented reason the CLI now opens the engine
+directly.
 
 ## Intention
 

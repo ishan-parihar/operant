@@ -76,6 +76,11 @@ per project root, lazily) and `tools/aft_tools.rs` registers 20 tools
 ast_search, ast_replace, apply_patch, callers, checkpoint paths /
 checkpoint / list_checkpoints / restore_checkpoint, undo, status). NDJSON
 protocol; params flat at top level except `bash` (nested + async).
+The bridge warms `aft warmup --only callgraph,search` per project
+root in one detached spawn (iter-1381, RT-195b) so the search lanes
+are ready when the tools arrive — `aft_search` returns a HARD ERROR
+(`[search_lanes_unavailable]`) rather than falling back when they are
+not (its description says so; no phantom fallback promise).
 **When `aft_enabled=true`, the basic file/terminal tools are
 auto-disabled** — no duplication (iter-51). Native tools stay as
 fallback if the binary is missing (degradation, not death).

@@ -22,7 +22,12 @@ keys required:
 - **`web_crawl`** — breadth-first site crawl.
 
 All degrade to a helpful error naming the fix when the `sourcehound`
-binary is missing (PATH or `SOURCEHOUND_BINARY`).
+binary is missing (PATH or `SOURCEHOUND_BINARY`). A second honest
+degradation: when the running sourcehound omits a tool GROUP
+(`tools.groups` allow-list in its `~/.config/sourcehound/settings.yml`),
+the tool answers with `SOURCEHOUND_GROUP_HINT` naming the live config
+path and `sourcehound status` as the ground truth (iter-1389 fixed
+the hint's stale `-mcp` path).
 
 ## `http_request`
 
