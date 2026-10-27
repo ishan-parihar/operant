@@ -34,7 +34,13 @@ repair legs (`checks_fix.rs`); results are typed
 
 The interactive wizard: model config → provider key → runtime defaults,
 with a `--non-interactive` report mode. The product's intended
-first-run path.
+first-run path. Known dead flags, filed by the 2026-10-27 setup
+red-team audit: `--json` parses but is never read (the `_json`
+parameter), and `--quick` is the DEFAULT unless `--reconfigure` is
+passed (`quick || !reconfigure`) — so plain `operant setup` is already
+quick mode and `--reconfigure` is the flag that actually changes
+behavior. The audit lives at
+`docs/audit/2026-10-27-operant-setup-subcommand-architecture-red-team-ponytail-audi.md`.
 
 ## Updates (`operant update`)
 

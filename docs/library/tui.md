@@ -47,7 +47,13 @@ ground design for the visual layer.
   the tails — no flushes at ToolStart.
 - **Registered slash commands can never fall through to the model** —
   the not-wired catch-all covers both dispatch loops, and the unit test
-  `no_registered_tui_command_is_unwired` pins it statically. The
+  `no_registered_tui_command_is_unwired` pins it statically. Plain
+  Enter dispatches a REGISTERED command even mid-stream (iter-1402:
+  the command arms guard their own mid-stream safety — `/clear`,
+  `/stop`, `/new`, `/undo`, `/retry`, `/compact` defer or refuse
+  honestly, display toggles flip state — so the composer no longer
+  swallows them while a turn streams; unregistered `/…` text still
+  waits for idle). The
   functional-core subset now has gateway twins over a channel
   (see [gateway.md](gateway.md) §commands — RT-179).
 
@@ -77,6 +83,9 @@ permission dialogs (real prompts, iter-20), session browser/branching,
 diff viewer, journey view (learning graph), skills/MCP/plugins panels,
 settings screen (19 entries, all applied — iter-1176), stats, usage
 overlay, theme screen, image paste/pinned images, osc8 hyperlinks.
+The Ctrl+R history-search overlay previews the recalled prompt live in
+the composer as the selection moves and restores the pre-search draft
+on Esc (iter-1403, jcode parity).
 
 ## Redraw discipline (`tui/redraw.rs`)
 
