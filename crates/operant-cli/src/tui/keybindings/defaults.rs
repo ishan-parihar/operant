@@ -279,6 +279,26 @@ impl KeyBindingRegistry {
                 context: BindingContext::Global,
                 description: "Toggle scroll bookmark",
             },
+            // (2026-10-28, jcode parity) Prompt jump: Alt+[ / Alt+] land on
+            // the previous / next user prompt (jcode's default chords —
+            // Ctrl+[ is byte 0x1b, the Esc key, so it only exists as a
+            // kitty-reported alias; the catalogue advertises the chords that
+            // work on EVERY terminal). Ctrl+[ / Ctrl+] aliases are
+            // dispatched in key_handling.rs for terminals that report them.
+            DefaultBinding {
+                key: KeyCode::Char('['),
+                modifiers: KeyModifiers::ALT,
+                action: KeyAction::Custom(23),
+                context: BindingContext::Global,
+                description: "Jump to previous user prompt",
+            },
+            DefaultBinding {
+                key: KeyCode::Char(']'),
+                modifiers: KeyModifiers::ALT,
+                action: KeyAction::Custom(23),
+                context: BindingContext::Global,
+                description: "Jump to next user prompt",
+            },
             DefaultBinding {
                 key: KeyCode::Char('p'),
                 modifiers: KeyModifiers::ALT,
@@ -1055,6 +1075,23 @@ impl KeyBindingRegistry {
                 action: KeyAction::Custom(7),
                 context: BindingContext::Prompt,
                 description: "Toggle scroll bookmark",
+            },
+            // (2026-10-28, jcode parity) Prompt jump — same chords as the
+            // Global table row above; the Prompt table lists them so /keys
+            // shows the map in both contexts.
+            DefaultBinding {
+                key: KeyCode::Char('['),
+                modifiers: KeyModifiers::ALT,
+                action: KeyAction::Custom(23),
+                context: BindingContext::Prompt,
+                description: "Jump to previous user prompt",
+            },
+            DefaultBinding {
+                key: KeyCode::Char(']'),
+                modifiers: KeyModifiers::ALT,
+                action: KeyAction::Custom(23),
+                context: BindingContext::Prompt,
+                description: "Jump to next user prompt",
             },
             DefaultBinding {
                 key: KeyCode::Char('p'),

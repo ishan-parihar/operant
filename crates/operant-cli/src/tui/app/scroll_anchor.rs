@@ -211,6 +211,97 @@ impl App {
         self.new_messages_while_scrolled = 0;
     }
 
+    /// Wrapped-row index where each user prompt starts, from the frame the
+    /// renderer last drew (jcode `prompt_row_starts`): the prompt-jump keys
+    /// navigate the operator's mental model — prompts, not row counts.
+    fn prompt_row_starts(&self) -> Vec<usize> {
+        crate::tui::operant_ui::last_chat_frame()
+            .map(|frame| frame.wrapped_user_prompt_starts.clone())
+            .unwrap_or_default()
+    }
+
+    /// Jump to the previous user prompt (Ctrl+[ — jcode
+    /// `scroll_to_prev_prompt`, default ctrl+[). Document order: each press
+    /// lands on the next-earlier prompt start; while auto-following the
+    /// first press jumps to the MOST RECENT prompt (the reader is at the
+    /// tail, so "previous" means the last prompt boundary above it).
+    pub(crate) fn scroll_to_prev_prompt(&mut self) {
+        let positions = self.prompt_row_starts();
+        if positions.is_empty() {
+            self.set_status_notice("No prompts to jump to yet.".to_string());
+            return;
+        }
+        // An explicit jump should win over a still-settling reflow anchor:
+        // a pending resize would otherwise re-pin the view to the pre-jump
+        // position on the next paint (the same one-shot the reconcile takes).
+        self.scroll_memory.pending_resize = None;
+
+        let current = self.scroll_offset;
+        if self.auto_scroll {
+            // Following the tail: land on the most recent prompt.
+            if let Some(&pos) = positions.last() {
+                self.scroll_offset = pos;
+                self.auto_scroll = false;
+                self.report_prompt_jump(positions.len());
+            }
+            return;
+        }
+
+        // Paused: the last start strictly above the current row.
+        let target = positions.iter().rev().copied().find(|&pos| pos < current);
+        match target {
+            Some(pos) => {
+                self.scroll_offset = pos;
+                let rank = positions.iter().filter(|&&p| p >= pos).count();
+                self.report_prompt_jump(rank);
+            }
+            None => {
+                // Already at (or above) the first loaded prompt: to the top.
+                self.scroll_offset = 0;
+                self.auto_scroll = false;
+                self.report_prompt_jump(1);
+            }
+        }
+    }
+
+    /// Jump to the next user prompt (Ctrl+] — jcode
+    /// `scroll_to_next_prompt`). No-op while auto-following (the reader is
+    /// already at the tail). Past the last prompt: resume following.
+    pub(crate) fn scroll_to_next_prompt(&mut self) {
+        if self.auto_scroll {
+            return;
+        }
+        let positions = self.prompt_row_starts();
+        if positions.is_empty() {
+            return;
+        }
+        self.scroll_memory.pending_resize = None;
+
+        let current = self.scroll_offset;
+        let target = positions.iter().copied().find(|&pos| pos > current);
+        match target {
+            Some(pos) => {
+                self.scroll_offset = pos;
+                let rank = positions.iter().filter(|&&p| p >= pos).count();
+                self.report_prompt_jump(rank);
+            }
+            None => {
+                // No prompt below: hand the view back to auto-follow.
+                self.scroll_to_tail();
+                self.set_status_notice("Prompt jump: tail — following again.".to_string());
+            }
+        }
+    }
+
+    /// The status-row breadcrumb so the jump is discoverable without the
+    /// help overlay (the scroll-bookmark discipline): names the prompt's
+    /// 1-based position from the TOP, matching how a transcript reads.
+    fn report_prompt_jump(&mut self, rank_from_top: usize) {
+        self.set_status_notice(format!(
+            "Prompt {rank_from_top} — Ctrl+[ earlier, Ctrl+] later."
+        ));
+    }
+
     /// A terminal resize is about to rewrap every transcript line. Capture
     /// where the reader is in content coordinates so the next paint can put
     /// them back on the same message, rather than at the new bottom of the

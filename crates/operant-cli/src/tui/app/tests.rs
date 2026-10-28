@@ -642,6 +642,10 @@ fn every_advertised_binding_dispatches() {
         ("PageDown", "Scroll transcript down one page"),
         ("Shift+Home", "Jump to transcript top"),
         ("Shift+End", "Jump to transcript tail"),
+        // (2026-10-28, jcode parity) Prompt jump — verified against the
+        // Alt+[ / Alt+] dispatch arms in key_handling.rs.
+        ("Alt+[", "Jump to previous user prompt"),
+        ("Alt+]", "Jump to next user prompt"),
     ];
 
     let catalogue = DEFAULT_KEYBINDINGS.catalogue();
@@ -7298,6 +7302,257 @@ mod enter_chord_tests {
             app.status_message.is_none(),
             "the second continuation must not re-set the tip: {:?}",
             app.status_message
+        );
+    }
+}
+
+// ---- Prompt jump (2026-10-28, jcode parity) -----------------------------
+//
+// Alt+[ / Alt+] (and the Ctrl+[ / Ctrl+] aliases where the terminal reports
+// them) jump the transcript viewport to the previous / next USER prompt,
+// using the wrapped_user_prompt_starts the renderer already publishes on
+// every frame — the same seam jcode's prompt-jump reads. The jump pauses
+// auto-follow and clears a pending resize anchor (an explicit jump wins
+// over a still-settling reflow); the status row names the landed prompt so
+// the chord is discoverable without the help overlay.
+mod prompt_jump_tests {
+    use super::*;
+    use crate::tui::operant_model::{PreparedChatFrame, PreparedMessages};
+    use std::sync::Arc;
+
+    /// Seed `last_chat_frame` with a body whose user prompts start at the
+    /// given wrapped-row indices. Only the prompt-jump seam reads this frame
+    /// in these tests, so the other fields stay empty.
+    fn seed_frame_with_prompt_starts(starts: &[usize]) {
+        let line_count = starts.last().map(|s| s + 4).unwrap_or(8);
+        let wrapped_lines: Vec<ratatui::text::Line<'static>> =
+            (0..line_count).map(|i| format!("row {i}").into()).collect();
+        let plain: Vec<String> = wrapped_lines
+            .iter()
+            .map(|l| crate::tui::operant_render::line_plain_text(l))
+            .collect();
+        let mut user_indices = Vec::new();
+        for &s in starts {
+            user_indices.extend(s..s + 2);
+        }
+        let prepared = Arc::new(PreparedMessages {
+            wrapped_lines,
+            wrapped_plain_lines: Arc::new(plain),
+            wrapped_copy_offsets: Arc::new(vec![0; line_count]),
+            raw_plain_lines: Arc::new(Vec::new()),
+            wrapped_line_map: Arc::new(Vec::new()),
+            wrapped_user_indices: user_indices,
+            wrapped_user_prompt_starts: starts.to_vec(),
+            wrapped_user_prompt_ends: starts.iter().map(|s| s + 2).collect(),
+            user_prompt_texts: Vec::new(),
+            image_regions: Vec::new(),
+            edit_tool_ranges: Vec::new(),
+            copy_targets: Vec::new(),
+            message_boundaries: Vec::new(),
+            mermaid_pending_epoch: None,
+        });
+        crate::tui::operant_ui::set_last_chat_frame(Arc::new(PreparedChatFrame::from_single(
+            prepared,
+        )));
+    }
+
+    #[test]
+    fn prev_jump_from_tail_lands_on_most_recent_prompt() {
+        let mut app = make_app();
+        seed_frame_with_prompt_starts(&[0, 10, 20]);
+        app.auto_scroll = true;
+
+        app.handle_key_event(press_key(KeyCode::Char('['), KeyModifiers::ALT));
+
+        assert_eq!(
+            app.scroll_offset, 20,
+            "first Alt+[ lands on the last prompt"
+        );
+        assert!(!app.auto_scroll, "the jump pauses auto-follow");
+        let notice = app.status_notice().unwrap_or_default();
+        assert!(
+            notice.contains("Prompt 3"),
+            "the status row names the landed prompt: {notice}"
+        );
+    }
+
+    #[test]
+    fn repeated_prev_jumps_walk_earlier_prompts_in_document_order() {
+        let mut app = make_app();
+        seed_frame_with_prompt_starts(&[0, 10, 20]);
+        app.auto_scroll = true;
+
+        app.handle_key_event(press_key(KeyCode::Char('['), KeyModifiers::ALT));
+        app.handle_key_event(press_key(KeyCode::Char('['), KeyModifiers::ALT));
+        assert_eq!(app.scroll_offset, 10, "second press walks one prompt up");
+
+        app.handle_key_event(press_key(KeyCode::Char('['), KeyModifiers::ALT));
+        assert_eq!(app.scroll_offset, 0, "third press reaches the first prompt");
+
+        // Past the first prompt: the jump clamps to the top, not below it.
+        app.handle_key_event(press_key(KeyCode::Char('['), KeyModifiers::ALT));
+        assert_eq!(app.scroll_offset, 0, "no earlier prompt: stay at the top");
+    }
+
+    #[test]
+    fn next_jump_walks_back_down_and_resumes_following_at_the_tail() {
+        let mut app = make_app();
+        seed_frame_with_prompt_starts(&[0, 10, 20]);
+        app.auto_scroll = true;
+
+        app.handle_key_event(press_key(KeyCode::Char('['), KeyModifiers::ALT));
+        app.handle_key_event(press_key(KeyCode::Char('['), KeyModifiers::ALT));
+        assert_eq!(app.scroll_offset, 10);
+
+        app.handle_key_event(press_key(KeyCode::Char(']'), KeyModifiers::ALT));
+        assert_eq!(app.scroll_offset, 20, "Alt+] walks down to the next prompt");
+
+        app.handle_key_event(press_key(KeyCode::Char(']'), KeyModifiers::ALT));
+        assert!(
+            app.auto_scroll,
+            "past the last prompt the view hands itself back to auto-follow"
+        );
+    }
+
+    #[test]
+    fn next_jump_is_a_noop_while_following_the_tail() {
+        let mut app = make_app();
+        seed_frame_with_prompt_starts(&[0, 10, 20]);
+        app.auto_scroll = true;
+
+        app.handle_key_event(press_key(KeyCode::Char(']'), KeyModifiers::ALT));
+        assert!(
+            app.auto_scroll,
+            "Alt+] while following must not pause the view"
+        );
+    }
+
+    #[test]
+    fn alt_brackets_never_insert_into_the_composer() {
+        // The generic text-entry arm accepts every non-CONTROL char; without
+        // the chord arms sitting ABOVE it, Alt+[ would type a literal `[`
+        // instead of jumping. This is the mutation the arms must survive.
+        let mut app = make_app();
+        seed_frame_with_prompt_starts(&[0, 10, 20]);
+        app.auto_scroll = true;
+
+        app.handle_key_event(press_key(KeyCode::Char('['), KeyModifiers::ALT));
+        app.handle_key_event(press_key(KeyCode::Char(']'), KeyModifiers::ALT));
+
+        assert!(
+            app.prompt_input.text.is_empty(),
+            "the prompt-jump chords must not leak into the composer: {:?}",
+            app.prompt_input.text
+        );
+    }
+
+    #[test]
+    fn jump_with_no_prompts_reports_rather_than_teleporting() {
+        let mut app = make_app();
+        seed_frame_with_prompt_starts(&[]);
+        app.auto_scroll = true;
+
+        app.handle_key_event(press_key(KeyCode::Char('['), KeyModifiers::ALT));
+
+        assert!(app.auto_scroll, "no prompts loaded: nothing to pause over");
+        let notice = app.status_notice().unwrap_or_default();
+        assert!(
+            notice.contains("No prompts"),
+            "the chord must say why it did nothing: {notice}"
+        );
+    }
+
+    #[test]
+    fn ctrl_bracket_alias_jumps_too() {
+        // tmux extended-keys and some terminals report Ctrl+[ as
+        // Char('[')+CONTROL (the kitty protocol instead reports it as
+        // Esc+CONTROL — the arm below covers that). Both spellings are the
+        // same physical chord.
+        let mut app = make_app();
+        seed_frame_with_prompt_starts(&[0, 10, 20]);
+        app.auto_scroll = true;
+
+        app.handle_key_event(press_key(KeyCode::Char('['), KeyModifiers::CONTROL));
+        assert_eq!(app.scroll_offset, 20, "Char('[')+CONTROL is the same jump");
+
+        // And the kitty spelling:
+        app.handle_key_event(press_key(KeyCode::Esc, KeyModifiers::CONTROL));
+        assert_eq!(
+            app.scroll_offset, 10,
+            "Esc+CONTROL (kitty Ctrl+[) jumps too"
+        );
+    }
+
+    #[test]
+    fn streaming_esc_still_cancels_but_ctrl_esc_does_not() {
+        // The streaming-cancel arm used to take Esc with ANY modifiers;
+        // under kitty that would make the prompt-jump chord cancel the turn
+        // whenever one was running. The NONE guard keeps plain-Esc cancel
+        // and frees Esc+CONTROL for the jump.
+        let mut app = make_app();
+        seed_frame_with_prompt_starts(&[0, 10, 20]);
+        app.is_streaming = true;
+
+        // Esc+CONTROL mid-stream: a JUMP, not a cancel.
+        app.handle_key_event(press_key(KeyCode::Esc, KeyModifiers::CONTROL));
+        assert!(app.is_streaming, "Ctrl+[ must not cancel the running turn");
+        assert_eq!(app.scroll_offset, 20, "the jump still lands mid-stream");
+
+        // Plain Esc mid-stream: the interrupt survives intact.
+        app.handle_key_event(press_key(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(!app.is_streaming, "plain Esc still cancels the turn");
+    }
+
+    #[test]
+    fn transcript_focus_esc_returns_focus_but_ctrl_esc_jumps() {
+        // With the transcript focused (a mouse click is the only way in),
+        // plain Esc hands focus back to the composer — but Esc+CONTROL is
+        // Ctrl+[ under kitty and must JUMP, not silently switch focus.
+        let mut app = make_app();
+        seed_frame_with_prompt_starts(&[0, 10, 20]);
+        app.auto_scroll = true;
+        app.focus = crate::tui::app::enums::FocusTarget::Transcript;
+
+        app.handle_key_event(press_key(KeyCode::Esc, KeyModifiers::CONTROL));
+        assert_eq!(
+            app.focus,
+            crate::tui::app::enums::FocusTarget::Transcript,
+            "Esc+CONTROL must not be treated as a plain-Esc focus return"
+        );
+        assert_eq!(
+            app.scroll_offset, 20,
+            "the jump still fires from transcript focus"
+        );
+
+        app.handle_key_event(press_key(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(
+            app.focus,
+            crate::tui::app::enums::FocusTarget::Input,
+            "plain Esc still hands focus back to the composer"
+        );
+    }
+
+    #[test]
+    fn jump_clears_a_pending_resize_anchor() {
+        // An armed resize anchor re-pins the viewport on the next paint; an
+        // explicit jump must win, or the reader snaps straight back.
+        let mut app = make_app();
+        seed_frame_with_prompt_starts(&[0, 10, 20]);
+        app.auto_scroll = true;
+        app.scroll_memory.pending_resize = Some(super::super::scroll_anchor::PendingResize {
+            target: crate::tui::operant_model::ContentPos::Section {
+                kind: crate::tui::operant_model::PreparedSectionKind::Body,
+                raw_line: 0,
+                column: 0,
+            },
+            captured_offset: 7,
+        });
+
+        app.handle_key_event(press_key(KeyCode::Char('['), KeyModifiers::ALT));
+
+        assert!(
+            app.scroll_memory.pending_resize.is_none(),
+            "the jump must consume the pending resize anchor"
         );
     }
 }

@@ -1144,7 +1144,9 @@ impl App {
         // keystroke is processed normally by the prompt editor below.
         if self.focus == FocusTarget::Transcript {
             match key.code {
-                KeyCode::Esc => {
+                // Plain Esc only: Esc+CONTROL is Ctrl+[ as kitty reports it
+                // (codepoint 27) — the prompt-jump chord, not a focus change.
+                KeyCode::Esc if key.modifiers == KeyModifiers::NONE => {
                     self.focus = FocusTarget::Input;
                     return false;
                 }
@@ -1173,7 +1175,13 @@ impl App {
 
         match key.code {
             // ---- ESC: cancel streaming (status bar advertises "esc interrupt") ----
-            KeyCode::Esc if self.is_streaming => {
+            // MODIFIER GUARD (2026-10-28, with prompt-jump): under the kitty
+            // protocol operant pushes at boot, Ctrl+[ is reported by its
+            // codepoint 27 — crossterm maps that to KeyCode::Esc+CONTROL,
+            // not Char('['). Without the NONE guard this arm would eat the
+            // Ctrl+[ prompt jump as a turn cancel whenever a turn streams.
+            // Plain Esc (no modifiers) keeps its interrupt meaning.
+            KeyCode::Esc if self.is_streaming && key.modifiers == KeyModifiers::NONE => {
                 self.cancel_streaming_turn();
             }
 
@@ -1225,7 +1233,10 @@ impl App {
             // (plan 05) A second Esc within 500 ms, not streaming, composer
             // empty: open the fullscreen rewind selector. A single Esc keeps
             // all of its current meanings.
-            KeyCode::Esc if !self.is_streaming => {
+            // NONE-guard: Esc+CONTROL is Ctrl+[ as kitty reports it (the
+            // prompt-jump arm below) and must not arm the double-tap clock
+            // or anything else.
+            KeyCode::Esc if !self.is_streaming && key.modifiers == KeyModifiers::NONE => {
                 let now = std::time::Instant::now();
                 let double = self
                     .last_esc_at
@@ -1362,6 +1373,43 @@ impl App {
             }
             KeyCode::Char('g') if key.modifiers.contains(KeyModifiers::ALT) => {
                 self.toggle_scroll_bookmark();
+            }
+            // ---- Prompt jump (jcode parity, highest-value audit gap) ----
+            // Alt+[ / Alt+] jump to the previous / next USER prompt in the
+            // transcript (jcode `scroll_to_prev/next_prompt`; jcode's
+            // default chords are Alt+[ / Alt+] too — Ctrl+[ is byte 0x1b,
+            // the Esc key itself, so under the kitty protocol it arrives as
+            // Esc+CONTROL and in legacy mode it is indistinguishable from
+            // plain Esc. The ctrl-bracket aliases below cover the terminals
+            // that DO report them).
+            //
+            // Deliberate divergence from jcode's fallback ladder: jcode
+            // also maps Ctrl+K/Ctrl+J to prompt up/down, but operant's
+            // Ctrl+K is the command palette and Ctrl+J is the traditional
+            // newline (iter-120 contract) — both predate this port and
+            // stay. While a turn streams the jump still works: reading the
+            // transcript mid-generation is exactly when the operator needs
+            // to get back to "what did I ask".
+            KeyCode::Char('[')
+                if key.modifiers.contains(KeyModifiers::ALT)
+                    && !key.modifiers.contains(KeyModifiers::SHIFT)
+                    || key.modifiers == KeyModifiers::CONTROL =>
+            {
+                self.scroll_to_prev_prompt();
+            }
+            KeyCode::Char(']')
+                if key.modifiers.contains(KeyModifiers::ALT)
+                    && !key.modifiers.contains(KeyModifiers::SHIFT)
+                    || key.modifiers == KeyModifiers::CONTROL =>
+            {
+                self.scroll_to_next_prompt();
+            }
+            // Ctrl+[ as kitty reports it (codepoint 27 = Esc+CONTROL — see
+            // the Esc arm's modifier-guard note). This is the SAME physical
+            // chord as the Char('[')+CONTROL alias above; both names exist
+            // because the reporting mode decides which one arrives.
+            KeyCode::Esc if key.modifiers == KeyModifiers::CONTROL => {
+                self.scroll_to_prev_prompt();
             }
             // Alt+P: cycle the configured models (`[agent] model` +
             // `fallback_models`) for this session; Ctrl+A is the full picker.
