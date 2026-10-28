@@ -1038,6 +1038,113 @@ fn double_escape_opens_rewind_selector() {
     );
 }
 
+// ---- (plan 2026-10-28 iter-D, G5) the ←← session-hub gesture ----
+//
+// omp agent-hub.ts: a second ← within [40ms, 500ms) on an empty composer
+// opens the session hub — armed, so ONE further ← closes it. The 40ms floor
+// rejects key-repeat bursts; the 500ms ceiling matches omp's window.
+mod left_tap_gesture_tests {
+    use super::*;
+
+    fn left() -> KeyEvent {
+        press_key(KeyCode::Left, KeyModifiers::NONE)
+    }
+
+    /// The gap the gesture tests need between two taps. Real time, because
+    /// the window itself is real: two calls in the same microsecond are a
+    /// <40ms burst and are correctly rejected. 50ms sits inside [40, 500).
+    fn tap_gap() {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+
+    #[test]
+    fn double_left_opens_the_hub_armed() {
+        let mut app = make_app();
+        app.handle_key_event(left());
+        assert!(!app.session_hub.visible, "the first tap only arms");
+        tap_gap();
+        app.handle_key_event(left());
+        assert!(app.session_hub.visible, "the second tap in-window opens");
+        assert!(
+            app.session_hub.armed_close_tap.is_some(),
+            "the gesture open is armed: ONE further ← closes"
+        );
+        assert!(app.session_list_pending, "rows load on open");
+    }
+
+    #[test]
+    fn one_further_left_closes_the_armed_hub() {
+        let mut app = make_app();
+        app.handle_key_event(left());
+        tap_gap();
+        app.handle_key_event(left());
+        assert!(app.session_hub.visible);
+        // The hub's own Left handler consumes the close-tap while visible.
+        app.handle_key_event(left());
+        assert!(!app.session_hub.visible, "the handoff: one ← closes");
+    }
+
+    #[test]
+    fn a_burst_under_40ms_never_fires() {
+        // Two taps < 40ms apart are a key-repeat burst, not a gesture.
+        let mut app = make_app();
+        app.handle_key_event(left());
+        // No gap: the immediate second tap is a burst.
+        app.handle_key_event(left());
+        assert!(!app.session_hub.visible, "a burst is not a double-tap");
+        // The burst ALSO re-armed: a normal second tap still opens.
+        tap_gap();
+        app.handle_key_event(left());
+        assert!(app.session_hub.visible);
+    }
+
+    #[test]
+    fn a_gap_over_500ms_is_two_single_taps() {
+        let mut app = make_app();
+        app.handle_key_event(left());
+        // Backdate the arm past the ceiling: the next tap is a fresh first
+        // tap, not the gesture's second.
+        app.last_left_tap_at =
+            Some(std::time::Instant::now() - std::time::Duration::from_millis(600));
+        app.handle_key_event(left());
+        assert!(!app.session_hub.visible, "the window is closed");
+        // Re-armed by the stale tap: the next tap pairs with IT.
+        tap_gap();
+        app.handle_key_event(left());
+        assert!(app.session_hub.visible);
+    }
+
+    #[test]
+    fn left_with_text_in_the_composer_disarms() {
+        let mut app = make_app();
+        app.handle_key_event(left());
+        app.prompt_input.insert_char('a');
+        app.handle_key_event(left());
+        assert!(!app.session_hub.visible, "←← with text never opens the hub");
+        assert!(app.last_left_tap_at.is_none(), "text disarms the clock");
+        // Clearing the composer: the gesture starts fresh.
+        app.prompt_input.text.clear();
+        app.prompt_input.cursor = 0;
+        app.handle_key_event(left());
+        tap_gap();
+        app.handle_key_event(left());
+        assert!(app.session_hub.visible);
+    }
+
+    #[test]
+    fn shift_left_never_participates() {
+        // Shift+← is selection; it must not arm or fire the gesture.
+        let mut app = make_app();
+        app.handle_key_event(left());
+        app.handle_key_event(press_key(KeyCode::Left, KeyModifiers::SHIFT));
+        assert!(!app.session_hub.visible);
+        assert!(
+            app.last_left_tap_at.is_none(),
+            "the modified tap disarms the clock"
+        );
+    }
+}
+
 /// 2026-10-14 batch, plan 05: Enter on a compacted mark refuses with the
 /// inline notice; on a live mark it queues the fork (pending_rewind).
 #[test]

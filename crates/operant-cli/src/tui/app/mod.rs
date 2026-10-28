@@ -204,6 +204,11 @@ pub struct App {
     /// (plan 05) Timestamp of the last bare Esc — the double-Esc window
     /// (500 ms) for opening the rewind selector.
     pub last_esc_at: Option<std::time::Instant>,
+    /// (plan 2026-10-28 iter-D) Timestamp of the last bare ← that landed on
+    /// an empty composer at column 0 — the omp double-tap window
+    /// `[40ms, 500ms)` (agent-hub.ts): a second ← inside the window opens
+    /// the session hub; a burst < 40ms apart never fires.
+    pub last_left_tap_at: Option<std::time::Instant>,
     /// (plan 05) `/rewind <n>` awaiting y/n confirmation in the status
     /// line; the number is the prompt to rewind before.
     pub pending_rewind_confirm: Option<usize>,

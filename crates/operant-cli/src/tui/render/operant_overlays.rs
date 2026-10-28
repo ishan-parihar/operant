@@ -655,7 +655,7 @@ mod tests {
         ("custom_provider_dialog", Sink::Frame),
         ("free_mode_dialog", Sink::Frame),
         ("command_palette", Sink::Frame),
-        ("session_browser", Sink::Buffer),
+        ("session_hub", Sink::Frame),
         ("session_branching", Sink::Buffer),
         ("export_dialog", Sink::Frame),
         ("context_viz", Sink::Frame),

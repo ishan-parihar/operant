@@ -1645,6 +1645,38 @@ impl App {
                 self.refresh_prompt_input();
             }
             KeyCode::Left => {
+                // (plan 2026-10-28 iter-D, G5) omp's ←← gesture on an EMPTY
+                // composer opens the session hub. The window is
+                // `[40ms, 500ms)`: two taps under 40ms apart are a key
+                // repeat burst and never fire; over 500ms they are two
+                // single taps. The first tap arms (timestamped), the
+                // second inside the window opens — and the open is
+                // `open(armed)` so ONE further ← closes it (the handoff).
+                // Shift/Ctrl/Super Left (selection, word motions) never
+                // participate, and a Left on text or mid-cursor disarms.
+                let gesture_candidate = key.modifiers == KeyModifiers::NONE
+                    && self.prompt_input.is_empty()
+                    && self.prompt_input.cursor == 0
+                    && !self.is_streaming;
+                if gesture_candidate {
+                    let opened = match self.last_left_tap_at {
+                        Some(t) => {
+                            let gap = std::time::Instant::now().duration_since(t);
+                            self.last_left_tap_at = None;
+                            gap >= std::time::Duration::from_millis(40)
+                                && gap < std::time::Duration::from_millis(500)
+                        }
+                        None => false,
+                    };
+                    if opened {
+                        self.session_hub.open(Some(std::time::Instant::now()));
+                        self.session_list_pending = true;
+                        return false;
+                    }
+                    self.last_left_tap_at = Some(std::time::Instant::now());
+                } else {
+                    self.last_left_tap_at = None;
+                }
                 if key.modifiers.contains(KeyModifiers::SHIFT) {
                     // jcode textarea selection: anchor + extend left.
                     self.prompt_input.selection_begin_or_extend();
