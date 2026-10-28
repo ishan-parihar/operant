@@ -135,6 +135,10 @@ pub enum CliSubcommand {
     /// cannot invoke it (no `cli_exec`, no `<cli_reference>` injection).
     /// `--global-args` and `--allow-subcommands` are stored for phase 2 and
     /// read by nothing yet.
+    ///
+    /// This WRITES the config file directly (your comments are preserved),
+    /// unlike `operant mcp add`, which only tests the connection and prints
+    /// the `[[mcp.servers]]` block for you to paste by hand.
     Add {
         /// The binary name, e.g. "git"
         name: String,
