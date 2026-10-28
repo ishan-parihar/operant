@@ -249,6 +249,23 @@ plan assumed, so a ratifier can veto cheaply instead of after iter-A:
 
 ## Amendments (living-plan log)
 
+- **2026-10-28, agent-jcode (execution record — all five iterations landed):**
+  iter-A: f8f09486 (SessionEntryV2 + list_sessions_rich + employee_id + CLI
+  call sites). iter-B: landed INSIDE the peer's sweep 43b6f814 (indexed-
+  commit collision — the whole shared-tree index was committed under a docs
+  label; nothing lost, documented in F0141/F0142) with the tests.rs
+  conversions completed by d4a6b815. iter-C: folded into iter-B (the
+  records_snapshot join + focus view shipped with the pane). iter-D:
+  df18f5a3 (the ←← gesture, six tests, and the operant_overlays EXPECTED-row
+  fix the rename had missed). iter-E: e8f1899b (gateway_api.rs route group
+  + GatewaySettings.api_enabled/api_bind + example.toml block). Deviations
+  from the plan text: (1) the route uses axum 0.8 `{id}` capture syntax —
+  the plan's `:id` form panics at router build on this axum; (2) the
+  messages route hand-maps rows to JSON via RowStatus::api_label rather
+  than deriving Serialize on core types (Message is the legacy shape;
+  explicit map = visible contract); (3) bare `/rename` now surfaces usage
+  text instead of opening a rename-on-first-row modal — the hub has no
+  inline rename arm (TUI-8's old behavior went with the modal).
 - **2026-10-28, agent-jcode (self-review round 3):** (1) iter-A CLI
   call-site list CORRECTED after reading cmd_sessions.rs: the
   `list_sessions()` consumers are List (:113), Browse (:362), Prune (:299),

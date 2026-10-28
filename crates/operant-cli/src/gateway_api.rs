@@ -239,11 +239,12 @@ pub fn spawn_if_enabled(
     }
     let bind = gateway.api_bind.clone();
     // The dashboard's token generator (/dev/urandom-backed) — same
-    // discipline, a fresh token per daemon start.
-    let state = GatewayApiState::new(
-        db_path.to_path_buf(),
-        crate::dashboard_server::new_session_token(),
-    );
+    // discipline, a fresh token per daemon start. PRINTED once to stdout
+    // (journal under systemd): a token the operator cannot read is a
+    // feature nobody can use, and the dashboard sets the precedent.
+    let token = crate::dashboard_server::new_session_token();
+    println!("Gateway session API on http://{bind} — Authorization: Bearer {token}");
+    let state = GatewayApiState::new(db_path.to_path_buf(), token);
     tokio::spawn(async move {
         let listener = match tokio::net::TcpListener::bind(&bind).await {
             Ok(l) => l,
