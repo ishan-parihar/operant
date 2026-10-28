@@ -316,6 +316,26 @@ impl TuiApp {
                 self.submit_user_message(agent, retry_text).await;
                 continue;
             }
+            // (2026-10-28, omp advisor parity) A CONTINUE-channel advisor
+            // review queued its batch: submit it as the next turn's query
+            // the moment the primary is idle — the host side of omp's
+            // steer/continuation channel. The batch text already carries
+            // the boundary guidance + <advisory> framing, and the query is
+            // tagged in the conversation by turn_context's normal user-
+            // message path; the engine's continuation latch (advisor.rs)
+            // sees the tag in the next delta and skips its review, so one
+            // batch can never cascade into two continuations.
+            if !self.app.is_streaming
+                && let Some(agent) = agent.as_ref()
+                && let Some(batch) = self.app.pending_advisor_continuation.take()
+            {
+                self.app.clear_failed_input_recovery();
+                self.app.set_status_notice(
+                    "⚑ advisor: continuing the run on the review's advice.".to_string(),
+                );
+                self.submit_user_message(agent, batch).await;
+                continue;
+            }
             // (plan 03 §2) /clear, /new, /undo deferred from a mid-stream
             // invocation: the agent-side work runs once the turn has fully
             // finished (is_streaming false), so the stopping turn's tail
@@ -486,6 +506,13 @@ impl TuiApp {
         text: String,
     ) {
         use crate::tui::adapter_types::types::{Message, MessageContent, Role};
+        // (omp advisor parity 2026-10-28) The operator is driving again:
+        // their message supersedes any queued advisor continuation (omp
+        // delivers preserved advice with the next genuine user turn — the
+        // batch text is already in the transcript as a card, so nothing is
+        // lost). A queued batch would otherwise hijack the operator's turn
+        // ordering at the next idle boundary.
+        self.app.pending_advisor_continuation = None;
         // User activity cancels any pending idle recap (omp parity: the
         // recap exists to greet a returning user, never to interrupt one).
         if let Some(activity) = &self.app.recap_activity {
@@ -1060,6 +1087,10 @@ impl TuiApp {
                     app.set_status_notice("No agent attached — cannot clear.".to_string());
                     return;
                 };
+                // A queued advisor continuation belongs to the wiped
+                // transcript; submitting it into a cleared session would
+                // reference work that no longer exists.
+                app.pending_advisor_continuation = None;
                 agent.clear_history().await;
                 let conv = agent.conversation().await;
                 Self::rebuild_display_from_agent(app, conv);
@@ -1099,6 +1130,7 @@ impl TuiApp {
                     app.set_status_notice("New session started.".to_string());
                     return;
                 };
+                app.pending_advisor_continuation = None;
                 let old = agent.session_id().unwrap_or_default();
                 let fresh = operant_core::agent::rewind::new_session_id();
                 agent.set_session_id(fresh.clone());

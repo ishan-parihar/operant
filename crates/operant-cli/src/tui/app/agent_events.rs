@@ -536,6 +536,22 @@ impl App {
                 // Advisor notes and idle recaps share the BackgroundReview
                 // channel (both are side-channel LLM output); the prefix the
                 // engine stamps picks the card style.
+                // (2026-10-28) A CONTINUE-channel advisor review embeds
+                // `[ADVISOR_CONTINUATION]` + the model-visible batch in the
+                // summary (omp's steer/continuation delivery, host-triggered):
+                // show the card AND queue the batch as the next turn's query.
+                // The main loop applies it once the run is complete.
+                let marker = operant_core::advisor::CONTINUATION_TAG;
+                if let Some(pos) = summary.find(marker) {
+                    // Keep the marker IN the extracted text: it becomes
+                    // part of the submitted query, the conversation carries
+                    // it, and the engine's continuation latch (advisor.rs)
+                    // greps for it on the next delta — the omp cascade guard.
+                    let batch = summary[pos..].trim().to_string();
+                    if !batch.is_empty() {
+                        self.pending_advisor_continuation = Some(batch);
+                    }
+                }
                 if summary.starts_with("⚑") {
                     self.push_system_message(summary, SystemMessageStyle::Advisor);
                 } else if summary.starts_with("※") {

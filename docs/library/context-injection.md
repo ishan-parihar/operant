@@ -65,9 +65,21 @@ agentic-core upgrade plan). Where MoA is a per-turn amplifier, the advisor
 is an **always-on transcript watchdog**: a second LLM receives an
 INCREMENTAL delta after each completed turn (via the `TurnEndBus`, see
 [agent-loop.md](agent-loop.md)) and streams back short notes. The notes
-ride the next turn's tail. Off by default: `[advisor] enabled = false`,
-with optional `[advisor.model]` override and `timeout_secs` (default 120s,
-Default-impl bug fixed iter-1328). Cost: one side-channel call per turn.
+deliver per merged review with a channel decision (2026-10-28, omp
+`resolveAdvisorDeliveryChannel` parity): a note at/above
+`continue_severity` (default `concern`) CONTINUES the run — the batch
+(boundary guidance + `<advisory severity="...">` elements) is submitted
+as the next turn's query, so the primary model sees and acts on the
+advice; lower severities PRESERVE as a visible card that rides the
+transcript into the model's context with the next genuine user turn. The
+continuation query carries `[ADVISOR_CONTINUATION]`, which the engine's
+latch greps on the next delta — a continuation's own review never
+triggers a second continuation (the omp cascade guard), and a user
+interrupt drops any queued continuation (omp user-stop suppression).
+Off by default: `[advisor] enabled = false`, with optional
+`[advisor.model]` override, `continue_severity`, and `timeout_secs`
+(default 120s, Default-impl bug fixed iter-1328). Cost: one side-channel
+call per turn.
 
 ### 5. Recap — idle "where the session stands" (side channel; never in context)
 

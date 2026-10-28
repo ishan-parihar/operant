@@ -580,9 +580,14 @@ impl OperantAgent {
     /// Attach the always-on advisor watchdog (omp `coding-agent/src/advisor/`
     /// parity). One-line host wiring mirroring [`Self::attach_recap_engine`]:
     /// the agent provides the bus, client config, model, and conversation
-    /// snapshot; the host passes only the `[advisor]` config. Notes surface
-    /// through the agent's event channel as [`AgentEvent::BackgroundReview`]
-    /// with an `⚑ advisor:` prefix — never into the acting agent's context.
+    /// snapshot; the host passes only the `[advisor]` config. One merged
+    /// review surfaces through the agent's event channel as
+    /// [`AgentEvent::BackgroundReview`] with an `⚑ advisor:` prefix;
+    /// when the review's channel decision is CONTINUE (a note at/above
+    /// `advisor.continue_severity`), the summary carries the continuation
+    /// marker + batch so the TUI submits the batch as the next turn's
+    /// query — the omp steer/continuation channel, host-triggered because
+    /// notes structurally arrive after `run()` returned.
     /// No-op when `advisor.enabled` is false (default).
     pub fn attach_advisor(
         &mut self,
@@ -600,6 +605,7 @@ impl OperantAgent {
         let model = self.effective_model().to_string();
         let conversation = Arc::clone(&self.conversation);
         let event_tx = self.event_tx.clone();
+        let continuation_prefix = format!("{}\n", crate::advisor::CONTINUATION_TAG);
         crate::advisor::spawn_advisor(
             config,
             base,
@@ -611,11 +617,29 @@ impl OperantAgent {
                     .map(|c| c.clone())
                     .unwrap_or_default()
             },
-            move |note| {
+            move |review| {
                 if let Some(tx) = &event_tx {
+                    // Card channel (preserve): the batch rides the event to
+                    // the TUI as before. Continue channel: the same event,
+                    // but the summary embeds the marker + batch so the TUI
+                    // can both SHOW the card and submit the batch as the
+                    // next turn's query.
                     let _ = tx.try_send(AgentEvent::BackgroundReview {
-                        summary: format!("⚑ advisor ({}): {}", note.advisor, note.text),
-                        session_id: note.session_id.clone(),
+                        summary: format!(
+                            "⚑ advisor ({}): {}",
+                            review.advisor,
+                            if review.should_continue {
+                                format!("{continuation_prefix}{}", review.batch)
+                            } else {
+                                review
+                                    .notes
+                                    .iter()
+                                    .map(|n| n.text.as_str())
+                                    .collect::<Vec<_>>()
+                                    .join("; ")
+                            }
+                        ),
+                        session_id: review.session_id.clone(),
                     });
                 }
             },

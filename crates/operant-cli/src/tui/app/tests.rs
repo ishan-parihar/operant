@@ -26,6 +26,73 @@ pub(crate) fn make_app() -> App {
     App::new(config, settings, cost_tracker, command_registry)
 }
 
+// ---- Advisor delivery: preserve card vs continuation (2026-10-28) ----
+//
+// omp advisor parity: a CONTINUE-channel review (a note at/above
+// [advisor] continue_severity) embeds [ADVISOR_CONTINUATION] + the
+// model-visible batch in its BackgroundReview summary. The handler queues
+// the batch; the main loop submits it as the next turn's query once the
+// run is complete.
+mod advisor_delivery_tests {
+    use super::*;
+    use operant_core::agent::AgentEvent;
+
+    fn review(summary: String) -> AgentEvent {
+        AgentEvent::BackgroundReview {
+            summary,
+            session_id: "sess-adv".to_string(),
+        }
+    }
+
+    /// A CONTINUE review queues the batch (marker included — the engine's
+    /// continuation latch greps the conversation for it).
+    #[test]
+    fn continue_review_queues_the_batch() {
+        let mut app = make_app();
+        let batch = format!(
+            "{}\n<advisory severity=\"concern\">fix the race</advisory>",
+            operant_core::advisor::CONTINUATION_TAG
+        );
+        app.handle_agent_event(review(format!("⚑ advisor (small-stack): {batch}")));
+        let queued = app.pending_advisor_continuation.clone();
+        assert_eq!(queued.as_deref(), Some(batch.as_str()));
+    }
+
+    /// A preserve-channel review (below continue_severity) renders the
+    /// card and queues NOTHING.
+    #[test]
+    fn preserve_review_queues_nothing() {
+        let mut app = make_app();
+        app.handle_agent_event(review(
+            "⚑ advisor (small-stack): typo in the comment".to_string(),
+        ));
+        assert!(app.pending_advisor_continuation.is_none());
+    }
+
+    /// An interrupted run drops any queued continuation (omp
+    /// autoResumeSuppressed: a deliberate user stop is never auto-resumed).
+    #[test]
+    fn interrupted_run_drops_the_queued_continuation() {
+        let mut app = make_app();
+        let batch = format!(
+            "{}\n<advisory severity=\"blocker\">tests are broken</advisory>",
+            operant_core::advisor::CONTINUATION_TAG
+        );
+        app.handle_agent_event(review(format!("⚑ advisor: {batch}")));
+        assert!(app.pending_advisor_continuation.is_some());
+
+        // The run-complete drain sees Error::Interrupted.
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let _ = tx.send(Err(operant_core::error::Error::Interrupted));
+        app.run_complete_rx = Some(rx);
+        let _ = app.drain_run_complete();
+        assert!(
+            app.pending_advisor_continuation.is_none(),
+            "an interrupted run must not be auto-continued by advice"
+        );
+    }
+}
+
 fn press_key(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
     KeyEvent {
         code,
@@ -6369,20 +6436,29 @@ fn any_key_other_than_y_or_n_cancels_the_rewind_confirmation() {
     assert!(app.pending_rewind.is_none(), "cancelling must not fork");
 }
 
-/// TUI-2: Enter in the /resume browser must retarget the agent, not only load
+/// TUI-2: Enter in the session hub must retarget the agent, not only load
 /// the transcript. Otherwise the next prompt is written to the old session.
+/// (plan 2026-10-28 iter-B: the hub replaces the old browser modal.)
 #[test]
 fn resume_picks_the_session_the_agent_switches_to() {
-    use crate::tui::session_browser::SessionEntry;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use operant_core::session::listing::{RowKind, RowStatus, SessionEntryV2};
 
     let mut app = make_app();
-    app.session_browser.open(vec![SessionEntry {
+    app.session_hub.open(None);
+    app.session_hub.replace_rows(vec![SessionEntryV2 {
         id: "s-42".to_string(),
-        title: "old work".to_string(),
-        last_updated: "1h ago".to_string(),
+        parent_id: None,
+        title: Some("old work".to_string()),
+        updated_at: chrono::Utc::now(),
+        employee_id: None,
+        source: "local".to_string(),
         message_count: 3,
         cost_usd: 0.0,
+        tokens: 0,
+        cwd: None,
+        status: RowStatus::Idle,
+        kind: RowKind::Session,
     }]);
     app.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     assert_eq!(
@@ -6390,33 +6466,27 @@ fn resume_picks_the_session_the_agent_switches_to() {
         Some("s-42"),
         "/resume must hand the picked session to the agent switch"
     );
+    assert!(!app.session_hub.visible, "Enter closes the hub");
 }
 
 #[cfg(test)]
 mod rename_on_load_tests {
     use super::*;
-    use crate::tui::session_browser::{SessionBrowserMode, SessionEntry};
 
     #[test]
-    fn a_bare_rename_starts_on_the_first_row_once_the_list_arrives() {
-        // TUI-8: `/rename` with no argument opens the rename on the list's first row.
+    fn a_bare_rename_no_longer_opens_modal_state_but_hints() {
+        // TUI-8 behavior under the hub (plan 2026-10-28 iter-B): the old
+        // modal's inline rename arm is gone; a bare `/rename` surfaces the
+        // /rename <title> hint instead. The flag is still consumed once.
         let mut app = make_app();
         app.rename_on_list_load = true;
         let (tx, rx) = tokio::sync::mpsc::channel(1);
         app.session_list_rx = Some(rx);
-        tx.try_send(vec![SessionEntry {
-            id: "s-7".to_string(),
-            title: "release notes".to_string(),
-            last_updated: "now".to_string(),
-            message_count: 1,
-            cost_usd: 0.0,
-        }])
-        .unwrap();
+        tx.try_send(Vec::<operant_core::session::listing::SessionEntryV2>::new())
+            .unwrap();
 
         assert!(app.drain_session_list());
 
-        assert_eq!(app.session_browser.mode, SessionBrowserMode::Rename);
-        assert_eq!(app.session_browser.rename_input, "release notes");
         assert!(!app.rename_on_list_load, "the flag is consumed once used");
     }
 }
@@ -6441,19 +6511,27 @@ mod delegation_status_tests {
 mod approval_gate_tests {
     use super::*;
     use crate::tui::dialogs::PermissionRequest;
-    use crate::tui::session_browser::SessionEntry;
+    use operant_core::session::listing::{RowKind, RowStatus, SessionEntryV2};
 
     #[test]
-    fn a_pending_approval_takes_the_key_before_an_open_browser() {
+    fn a_pending_approval_takes_the_key_before_an_open_hub() {
         // TUI-1: an approval the agent is waiting on is answered first, so an
         // open overlay cannot swallow its key and leave the turn stalled.
         let mut app = make_app();
-        app.session_browser.open(vec![SessionEntry {
+        app.session_hub.open(None);
+        app.session_hub.replace_rows(vec![SessionEntryV2 {
             id: "s-1".to_string(),
-            title: "t".to_string(),
-            last_updated: "now".to_string(),
+            parent_id: None,
+            title: Some("t".to_string()),
+            updated_at: chrono::Utc::now(),
+            employee_id: None,
+            source: "local".to_string(),
             message_count: 0,
             cost_usd: 0.0,
+            tokens: 0,
+            cwd: None,
+            status: RowStatus::Idle,
+            kind: RowKind::Session,
         }]);
         app.permission_request = Some(PermissionRequest::bash(
             "Bash".to_string(),
@@ -6469,10 +6547,7 @@ mod approval_gate_tests {
             app.permission_request.is_none(),
             "the approval answered the key"
         );
-        assert!(
-            app.session_browser.visible,
-            "the browser did not take the key"
-        );
+        assert!(app.session_hub.visible, "the hub did not take the key");
     }
 
     // ---- drag hit-test geometry ------------------------------------------
