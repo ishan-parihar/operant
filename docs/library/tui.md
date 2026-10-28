@@ -111,3 +111,65 @@ mix, and every overlay is reachable (a dialog no code opens is dead
 code). The corpus + headless simulator exist because TUI regressions
 are otherwise only found by hand — 64 gated scenarios now run in the
 local gate.
+
+## Transcript navigation keys (iter-1461)
+
+`tui/app/scroll_anchor.rs` is the scroll state machine; the chords that
+drive it are dispatched in `tui/app/key_handling.rs`. Beyond the row
+ladder (PageUp/Down, Ctrl+Up/Down ±3, Alt+Up/Down ±20, Shift+Home/End,
+Ctrl+G bookmark), the transcript is navigable by **prompt**:
+
+- **Alt+[** jumps to the previous user prompt; **Alt+]** to the next
+  (jcode's `scroll_to_prev/next_prompt`, and jcode's own DEFAULT chords
+  — not fallbacks).
+- Target rows come from `PreparedChatFrame::wrapped_user_prompt_starts`
+  on the frame the renderer **last drew** (`operant_ui::last_chat_frame`)
+  — the same seam jcode reads. No second copy of the starts exists
+  anywhere: an earlier iteration of this idea kept a live mirror and the
+  mirror could disagree with the paint.
+- While auto-following, the first Alt+[ lands on the MOST RECENT prompt
+  (the reader is at the tail, so "previous" is the last boundary above
+  it) and pauses follow; paused, each press walks strictly earlier, and
+  past the first prompt it clamps to row 0 rather than pivoting.
+  Alt+] is a no-op while following, walks strictly later when paused,
+  and past the last prompt resumes following.
+- Both jump functions consume `scroll_memory.pending_resize`. An armed
+  resize anchor re-pins the view on the next paint, so without the
+  consume the reader snaps straight back to where they jumped from.
+
+### Why the advertised chords are Alt+[, not Ctrl+[
+
+`Ctrl+[` is byte `0x1b` — the Esc key — and crossterm's kitty parser maps
+codepoint 27 to `KeyCode::Esc` (it is special-cased, before the generic
+`Char(c)` arm). So the SAME physical key reports differently per mode:
+`Esc+CONTROL` under the kitty protocol (pushed at boot since iter-1426),
+`Char('[')+CONTROL` under tmux extended-keys, and indistinguishable from
+plain Esc in the legacy path. `Ctrl+]` is worse: the legacy raw-byte
+path maps 0x1D to `Char('5')+CONTROL`, a different chord entirely. All
+three spellings are dispatched (`Char('[')+CONTROL`, `Char(']')+CONTROL`,
+`Esc+CONTROL`), but the catalogue and help overlay advertise only the
+Alt chords because those are the ones that work in every mode.
+
+### The three Esc consumers are the load-bearing part
+
+Every always-live `KeyCode::Esc` arm in `handle_key_event` must gate on
+`KeyModifiers::NONE` or it swallows the Esc+CONTROL spelling of the
+prompt jump. There are three, and each failure was a different
+operator-visible regression:
+
+1. `Esc if is_streaming` (cancel) — a mid-stream prompt jump would
+   cancel the running turn.
+2. `Esc if !is_streaming` (double-Esc → rewind selector) — would arm the
+   500 ms double-tap clock, so the next plain Esc opened the fullscreen
+   rewind selector instead of collapsing.
+3. the transcript-focus `Esc` (mouse-focused pane) — would silently
+   switch focus back to the composer instead of jumping.
+
+Modal surfaces' Esc arms (dialogs, pickers, copy mode, the hubs) are
+correctly UNguarded: a modal's Esc closes the modal whatever the
+modifiers, which matches jcode.
+
+The regression tests for this family live in
+`tui/app/tests.rs::prompt_jump_tests`; the `streaming_esc_still_cancels_but_ctrl_esc_does_not`
+and `transcript_focus_esc_returns_focus_but_ctrl_esc_jumps` pair is
+what keeps a future refactor from re-widening any of the three arms.
