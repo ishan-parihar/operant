@@ -828,7 +828,7 @@ impl App {
             || self.settings_screen.visible
             || self.stats_dialog.visible
             || self.context_viz.visible
-            || self.session_browser.visible;
+            || self.session_hub.visible;
 
         if any_dialog {
             match mouse_event.kind {

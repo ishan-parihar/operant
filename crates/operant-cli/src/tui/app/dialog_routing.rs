@@ -50,8 +50,8 @@ impl App {
         if self.context_viz.visible {
             return Some(DialogPriority::ContextViz);
         }
-        if self.session_browser.visible {
-            return Some(DialogPriority::SessionBrowser);
+        if self.session_hub.visible {
+            return Some(DialogPriority::SessionHub);
         }
         if self.session_branching.visible {
             return Some(DialogPriority::SessionBranching);

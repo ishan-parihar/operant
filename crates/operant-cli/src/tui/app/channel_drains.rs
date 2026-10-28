@@ -180,23 +180,26 @@ impl App {
         }
     }
 
-    /// 1. Drain background session-list results into the `/resume` browser.
+    /// 1. Drain background session-hub row loads into the unified page.
     pub(super) fn drain_session_list(&mut self) -> bool {
         let Some(ref mut rx) = self.session_list_rx else {
             return false;
         };
         match rx.try_recv() {
-            Ok(entries) => {
+            Ok(rows) => {
                 self.debug_hub
                     .publish(crate::tui::debug::TuiEvent::SessionList {
-                        count: entries.len(),
+                        count: rows.len(),
                         at: crate::tui::debug::event_bus::now_secs(),
                     });
-                self.session_browser.sessions = entries;
-                self.session_browser.selected_idx = 0;
+                self.session_hub.replace_rows(rows);
                 self.session_list_rx = None;
                 if std::mem::take(&mut self.rename_on_list_load) {
-                    self.session_browser.start_rename();
+                    // /rename with no argument: the hub does not own rename
+                    // state (the old modal did) — surface the hint instead.
+                    self.set_status_notice(
+                        "Rename: use /rename <new title> for the open session.".to_string(),
+                    );
                 }
                 true
             }
@@ -520,6 +523,13 @@ impl App {
                 // the tail was already committed and "Cancelled." is on
                 // the status line; an error card would read as failure.
                 let interrupted = matches!(result, Err(operant_core::error::Error::Interrupted));
+                // (omp advisor parity 2026-10-28) user-stop suppression:
+                // a deliberately interrupted run must never be auto-
+                // resumed by an advisor note (omp `autoResumeSuppressed`).
+                // A CONTINUE batch that raced the interrupt is dropped.
+                if interrupted {
+                    self.pending_advisor_continuation = None;
+                }
                 if let Err(e) = result
                     && !self.run_error_surfaced
                     && !interrupted

@@ -66,7 +66,6 @@ use crate::tui::mcp_view::render_mcp_view;
 use crate::tui::memory_file_selector::render_memory_file_selector;
 use crate::tui::overlays::render_global_search;
 use crate::tui::session_branching::render_session_branching;
-use crate::tui::session_browser::render_session_browser;
 use crate::tui::settings_screen::render_settings_screen;
 use crate::tui::stats_dialog::render_stats_dialog;
 use crate::tui::theme_screen::render_theme_screen;
@@ -194,7 +193,7 @@ overlay_visible_guards!(
     is_visible_custom_provider_dialog => custom_provider_dialog,
     is_visible_free_mode_dialog => free_mode_dialog,
     is_visible_command_palette => command_palette,
-    is_visible_session_browser => session_browser,
+    is_visible_session_hub => session_hub,
     is_visible_session_branching => session_branching,
     is_visible_export_dialog => export_dialog,
     is_visible_context_viz => context_viz,
@@ -355,10 +354,10 @@ const OVERLAYS: &[Entry] = &[
         sink: Sink::Frame,
     },
     Entry {
-        name: "session_browser",
-        visible: is_visible_session_browser,
-        paint: paint_session_browser,
-        sink: Sink::Buffer,
+        name: "session_hub",
+        visible: is_visible_session_hub,
+        paint: paint_session_hub,
+        sink: Sink::Frame,
     },
     Entry {
         name: "session_branching",
@@ -539,8 +538,12 @@ fn paint_command_palette(frame: &mut Frame, app: &App, ctx: &mut FrameCtx) {
     render_dialog_select(frame, &app.command_palette, ctx.size);
 }
 
-fn paint_session_browser(frame: &mut Frame, app: &App, ctx: &mut FrameCtx) {
-    render_session_browser(&app.session_browser, ctx.size, frame.buffer_mut());
+fn paint_session_hub(frame: &mut Frame, app: &App, _ctx: &mut FrameCtx) {
+    // Full-frame page (the journey_view pattern): renders INSTEAD of the
+    // chat frame, never both (the one-renderer rule). `render_session_hub`
+    // takes `&state` — ratatui's ListState is constructed locally from the
+    // selected index, so no interior mutability is needed.
+    crate::tui::session_hub::render_session_hub(frame, &app.session_hub, frame.area());
 }
 
 fn paint_session_branching(frame: &mut Frame, app: &App, ctx: &mut FrameCtx) {

@@ -70,7 +70,7 @@ impl App {
             // (plan 05B) the unified inline picker replaced the legacy
             // model_picker overlay.
             ("inline_interactive", self.inline_interactive.is_some()),
-            ("session_browser", self.session_browser.visible),
+            ("session_hub", self.session_hub.visible),
             ("session_branching", self.session_branching.visible),
             ("export_dialog", self.export_dialog.visible),
             ("context_viz", self.context_viz.visible),
@@ -524,7 +524,9 @@ impl App {
             // dead commands — removed from the registry; their arms went with
             // them. Their status surface lives on via /status and /info.
             "session" | "resume" => {
-                self.session_browser.open(vec![]);
+                // (plan 2026-10-28 iter-B) the unified session hub replaces
+                // the 70x20 browser modal.
+                self.session_hub.open(None);
                 self.session_list_pending = true;
                 true
             }
@@ -756,7 +758,7 @@ impl App {
             // /sessions — alias for /session / /resume (open session browser).
             // (iter-270: fixed broken stub.)
             "sessions" => {
-                self.session_browser.open(vec![]);
+                self.session_hub.open(None);
                 self.session_list_pending = true;
                 true
             }
@@ -1056,10 +1058,10 @@ impl App {
             "rename" => {
                 let title = args.trim();
                 if title.is_empty() {
-                    // The rows arrive with the list, so the rename starts on arrival (TUI-8).
-                    self.session_browser.open(vec![]);
-                    self.session_list_pending = true;
-                    self.rename_on_list_load = true;
+                    // (plan 2026-10-28 iter-B) the hub has no inline rename
+                    // arm — surface the usage instead of opening a list the
+                    // operator cannot rename from.
+                    self.set_status_notice("Usage: /rename <new title>".to_string());
                 } else {
                     // `/rename <title>` names the open session. The adapter saves it
                     // to the agent's session (`run_pending_agent_actions`).
@@ -1778,7 +1780,7 @@ impl App {
         self.skills_view.close();
         self.plugins_hub.close();
         self.journey_view.close();
-        self.session_browser.close();
+        self.session_hub.close();
         self.session_branching.close();
         self.export_dialog.dismiss();
         self.context_viz.close();

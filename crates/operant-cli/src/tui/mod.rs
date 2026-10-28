@@ -105,7 +105,7 @@ pub mod redraw;
 pub mod render;
 pub mod rustle;
 pub mod session_branching;
-pub mod session_browser;
+pub mod session_hub;
 pub mod settings_screen;
 pub mod skills_view;
 pub mod slash_usage;

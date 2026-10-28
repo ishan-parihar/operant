@@ -677,53 +677,83 @@ impl App {
             return false;
         }
 
-        // Session browser intercepts navigation and Esc
-        if self.session_browser.visible {
-            use crate::tui::session_browser::SessionBrowserMode;
-            match self.session_browser.mode {
-                SessionBrowserMode::Browse => {
-                    match key.code {
-                        KeyCode::Esc => self.session_browser.close(),
-                        KeyCode::Up => self.session_browser.select_prev(),
-                        KeyCode::Down => self.session_browser.select_next(),
-                        KeyCode::Char('r') => self.session_browser.start_rename(),
-                        // Enter: switch the agent to the selected session. The
-                        // switch is applied by run_pending_agent_actions, which
-                        // retargets the agent and rebuilds the transcript from
-                        // it, so the two cannot diverge (TUI-2).
-                        KeyCode::Enter => {
-                            if let Some(entry) = self
-                                .session_browser
-                                .sessions
-                                .get(self.session_browser.selected_idx)
-                                .cloned()
-                            {
-                                self.session_browser.close();
-                                self.pending_switch_session = Some(entry.id.clone());
-                                self.status_message =
-                                    Some(format!("Loading session '{}'…", entry.title));
-                            }
-                        }
-                        _ => {}
+        // Session hub intercepts navigation, search, filters, and Esc
+        // (plan 2026-10-28 iter-B: jcode picker mechanics; the old 70x20
+        // modal's rename arm moved to /rename <title> only).
+        if self.session_hub.visible {
+            use crate::tui::session_hub::HubSelection;
+            // Search-edit mode swallows plain keys first (jcode's
+            // search_active).
+            if self.session_hub.search_active {
+                match key.code {
+                    KeyCode::Esc => {
+                        self.session_hub.search_active = false;
+                        self.session_hub.search_query.clear();
+                        self.session_hub.rebuild_visible();
+                    }
+                    KeyCode::Enter => self.session_hub.search_active = false,
+                    KeyCode::Backspace => {
+                        self.session_hub.search_query.pop();
+                        self.session_hub.rebuild_visible();
+                    }
+                    KeyCode::Char(c) => {
+                        self.session_hub.search_query.push(c);
+                        self.session_hub.rebuild_visible();
+                    }
+                    _ => {}
+                }
+                return false;
+            }
+            match key.code {
+                KeyCode::Esc => self.session_hub.close(),
+                KeyCode::Up => self.session_hub.select_prev(),
+                KeyCode::Down => self.session_hub.select_next(),
+                KeyCode::PageUp => {
+                    for _ in 0..8 {
+                        self.session_hub.select_prev();
                     }
                 }
-                SessionBrowserMode::Rename => match key.code {
-                    KeyCode::Esc => self.session_browser.cancel(),
-                    KeyCode::Enter => {
-                        if let Some((id, name)) = self.session_browser.confirm_rename() {
-                            // TUI-8: the name is saved, not only shown until the next /resume.
-                            self.session_title = Some(name.clone());
-                            tokio::spawn(crate::tui::adapter_types::history::save_session_title(
-                                id,
-                                name.clone(),
-                            ));
-                            self.set_status_notice(format!("Renamed to: {}", name));
-                        }
+                KeyCode::PageDown => {
+                    for _ in 0..8 {
+                        self.session_hub.select_next();
                     }
-                    KeyCode::Backspace => self.session_browser.pop_rename_char(),
-                    KeyCode::Char(c) => self.session_browser.push_rename_char(c),
-                    _ => {}
-                },
+                }
+                KeyCode::Left => {
+                    // omp's close-tap: armed by the ←← opener, ONE further
+                    // Left closes; a plain open takes two Lefts to close
+                    // (agent-hub.ts:2460-2475).
+                    if self.session_hub.focused_subagent.is_some() {
+                        self.session_hub.focused_subagent = None;
+                    } else {
+                        self.session_hub.left_tap_close();
+                    }
+                }
+                KeyCode::Right => {
+                    self.session_hub.scroll_preview(2);
+                }
+                KeyCode::Char('/') if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    self.session_hub.search_active = true;
+                }
+                KeyCode::Char('s') => self.session_hub.cycle_filter(),
+                // Enter: switch to the selected session (the existing
+                // pending_switch_session flow — run_pending_agent_actions
+                // retargets and rebuilds, so the two cannot diverge; TUI-2),
+                // or focus a live subagent row (iter-C).
+                KeyCode::Enter => {
+                    match self.session_hub.confirm_selection() {
+                        Some(HubSelection::SwitchSession(id)) => {
+                            self.session_hub.close();
+                            self.pending_switch_session = Some(id);
+                            self.status_message = Some("Loading session…".to_string());
+                        }
+                        Some(HubSelection::FocusSubagent(_)) => {
+                            // The hub renders the focus view itself; nothing
+                            // to apply here.
+                        }
+                        None => {}
+                    }
+                }
+                _ => {}
             }
             return false;
         }

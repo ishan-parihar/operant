@@ -45,7 +45,6 @@ use crate::tui::notifications::NotificationKind;
 use crate::tui::overlays::{GlobalSearchState, HelpOverlay, HistorySearchOverlay};
 use crate::tui::prompt_input::{InputMode, PromptInputState, VimMode};
 use crate::tui::render;
-use crate::tui::session_browser::SessionBrowserState;
 use crate::tui::settings_screen::SettingsScreen;
 use crate::tui::stats_dialog::StatsDialogState;
 use crate::tui::theme_screen::ThemeScreen;
@@ -527,8 +526,11 @@ pub struct App {
     /// Memory update notification banner.
     /// MCP elicitation dialog (form requested by an MCP server).
     /// Model picker overlay (/model command).
-    /// Session browser overlay (/session, /resume, /rename, /export).
-    pub session_browser: SessionBrowserState,
+    /// Session hub page (/session, /resume, /sessions, ←←) — the unified
+    /// full-frame picker: sessions, branches, and live subagents as peer
+    /// rows (plan 2026-10-28 iter-B/C; replaced the 70x20 session_browser
+    /// modal).
+    pub session_hub: crate::tui::session_hub::SessionHubState,
     /// Session branching overlay (Ctrl+B) — create and switch branches.
     pub session_branching: crate::tui::session_branching::SessionBranchingState,
     /// Export format picker dialog (/export).
@@ -576,9 +578,10 @@ pub struct App {
     pub rename_on_list_load: bool,
     /// `/rename <title>` for the open session, saved by the adapter (TUI-8).
     pub pending_title_save: Option<String>,
-    /// Receiver for background session-list results.
+    /// Receiver for background session-hub row loads (plan 2026-10-28: the
+    /// unified `SessionEntryV2` rows — DB list + delegation snapshot).
     pub session_list_rx:
-        Option<tokio::sync::mpsc::Receiver<Vec<crate::tui::session_browser::SessionEntry>>>,
+        Option<tokio::sync::mpsc::Receiver<Vec<operant_core::session::listing::SessionEntryV2>>>,
     /// Receiver for the Ctrl+B fork tree, read off the event loop (TUI-11).
     pub branch_list_rx: Option<
         tokio::sync::mpsc::Receiver<Result<Vec<crate::tui::session_branching::BranchInfo>, String>>,
@@ -1154,36 +1157,27 @@ impl App {
             self.drain_model_fetch();
             self.drain_default_model();
 
-            // Spawn async session-list load when requested.
+            // Spawn async session-hub row load when requested. One load =
+            // DB rows + live subagent rows (plan 2026-10-28: the unified
+            // record, the plan-03 mpsc pattern, the 50-cap gone — G7).
             if self.session_list_pending {
                 self.session_list_pending = false;
                 let (tx, rx) = tokio::sync::mpsc::channel(1);
                 self.session_list_rx = Some(rx);
+                let db_path = self.config.database_path.clone();
                 tokio::spawn(async move {
-                    let sessions = crate::tui::adapter_types::history::list_sessions().await;
-                    let entries: Vec<crate::tui::session_browser::SessionEntry> = sessions
-                        .into_iter()
-                        .map(|s| {
-                            let age = chrono::Utc::now().signed_duration_since(s.updated_at);
-                            let last_updated = if age.num_minutes() < 1 {
-                                "just now".to_string()
-                            } else if age.num_hours() < 1 {
-                                format!("{}m ago", age.num_minutes())
-                            } else if age.num_hours() < 24 {
-                                format!("{}h ago", age.num_hours())
-                            } else {
-                                format!("{}d ago", age.num_days())
-                            };
-                            crate::tui::session_browser::SessionEntry {
-                                id: s.id,
-                                title: s.title.unwrap_or_else(|| "(untitled)".to_string()),
-                                last_updated,
-                                message_count: s.messages.len(),
-                                cost_usd: s.total_cost,
-                            }
-                        })
-                        .collect();
-                    let _ = tx.send(entries).await;
+                    let rows = tokio::task::spawn_blocking(move || {
+                        let mut rows = operant_core::database::Database::init(db_path)
+                            .and_then(|db| db.list_sessions_rich(500))
+                            .unwrap_or_default();
+                        // iter-C: subagent rows are process-local registry
+                        // state, appended (not joined) to the DB rows.
+                        rows.extend(operant_core::tools::async_delegation::records_snapshot());
+                        rows
+                    })
+                    .await
+                    .unwrap_or_default();
+                    let _ = tx.send(rows).await;
                 });
             }
 

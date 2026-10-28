@@ -112,8 +112,8 @@ pub enum DialogPriority {
     Stats = 170,
     /// Context viz
     ContextViz = 180,
-    /// Session browser
-    SessionBrowser = 190,
+    /// Session hub (the unified full-frame picker, plan 2026-10-28)
+    SessionHub = 190,
     /// Session branching
     SessionBranching = 200,
     /// Global search
