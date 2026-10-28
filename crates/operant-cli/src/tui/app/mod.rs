@@ -232,6 +232,15 @@ pub struct App {
     /// display rebuild), the plan-03 pattern.
     pub pending_switch_session: Option<String>,
 
+    /// A queued advisor continuation (2026-10-28, omp advisor parity):
+    /// set by the `BackgroundReview` handler when an advisor review's
+    /// channel decision is CONTINUE (a note at/above
+    /// `[advisor] continue_severity`). The main loop submits this as the
+    /// next turn's query once the current run is complete — the host side
+    /// of the omp steer/continuation channel. An interrupted run never
+    /// auto-continues (omp user-stop suppression).
+    pub pending_advisor_continuation: Option<String>,
+
     /// Pasted/dropped images waiting to be pinned into the persistent graphics
     /// strip.
     ///
