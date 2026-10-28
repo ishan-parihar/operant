@@ -98,24 +98,18 @@ impl ContextBudget {
     ///
     /// Reads the materialized field rather than re-summing, so the value the
     /// JSON consumer sees and the value the loop compares against the target
-    /// are the SAME number by construction. A deserialized document from
-    /// before this field existed carries `total_tokens_per_request: 0` with a
-    /// populated `surfaces` — `#[serde(default)]` fills the zero — so callers
-    /// that read `--json` back must run [`ContextBudget::reconcile_total`]
-    /// first, or a real bill reports as 0.
+    /// are the SAME number by construction — the two definitions of "total"
+    /// in this file cannot disagree.
+    ///
+    /// Deliberately NOT `#[serde(default)]`-proofed with a reconcile step: this
+    /// type is PRODUCED by `measure_surfaces` and SERIALIZED for `--json`; it
+    /// is never deserialized in the workspace (measured — the only
+    /// `from_str`/`from_value` sites are in this module's own tests). A
+    /// `reconcile_total()` existed here briefly to handle a round-trip that
+    /// has no caller, which is speculative code for a path that does not
+    /// exist; it was deleted with that reason recorded.
     pub fn total(&self) -> usize {
         self.total_tokens_per_request
-    }
-
-    /// Re-derive the materialized total from the surfaces after a
-    /// deserialize, so an older document (or a hand-edited one) cannot make
-    /// `total()` report 0 over a populated bill. Called by the command that
-    /// reads `--json` back, and by any future round-trip.
-    pub fn reconcile_total(&mut self) {
-        let summed: usize = self.surfaces.iter().map(|s| s.tokens_per_request).sum();
-        if summed != self.total_tokens_per_request {
-            self.total_tokens_per_request = summed;
-        }
     }
 
     /// True when a target is set and the current total exceeds it.
@@ -245,34 +239,32 @@ mod tests {
         // Round-trips: a consumer reading the document back gets the same
         // number WITHOUT re-summing, which is the whole point of the field.
         let raw = serde_json::to_string(&b).expect("serializes");
-        let mut back: ContextBudget = serde_json::from_str(&raw).expect("deserializes");
+        // A fresh round-trip carries the total WITH the surfaces, so a consumer
+        // that deserializes does not need a repair step.
+        let back: ContextBudget = serde_json::from_str(&raw).expect("deserializes");
         assert_eq!(back.total(), 1861);
-        back.reconcile_total();
-        assert_eq!(
-            back.total(),
-            1861,
-            "reconcile is a no-op on a fresh document"
-        );
     }
 
     /// A document written BEFORE the total field existed has
     /// `total_tokens_per_request` defaulted to 0 over a populated `surfaces`.
-    /// Reading it back must not report a bill of zero for a real bill.
+    ///
+    /// This is a CHARACTERIZATION, not a claim that the gap is closed: nothing
+    /// in the workspace deserializes a `ContextBudget` (measured — the only
+    /// `from_str`/`from_value` sites are these tests), so no consumer can hit
+    /// this. It exists so the next person to add a round-trip sees the trap in
+    /// the suite rather than discovering it in production. The earlier version
+    /// of this test asserted `reconcile_total()` recovered the bill; that
+    /// function guarded a path with no caller and was deleted.
     #[test]
-    fn a_document_without_the_total_reconciles_instead_of_reporting_zero() {
+    fn an_older_document_defaults_its_total_to_zero() {
         // The exact shape an older `--json` emitted: no total field.
         let raw = r#"{"surfaces":[{"id":"cli:git","kind":"prompt-block","items":1,"tokens_per_request":261}],"target_tokens_per_request":1000}"#;
-        let mut b: ContextBudget = serde_json::from_str(raw).expect("old document deserializes");
+        let b: ContextBudget = serde_json::from_str(raw).expect("old document deserializes");
         assert_eq!(
             b.total(),
             0,
-            "the defaulted field is 0 until reconciled — this is the trap"
+            "the trap, pinned: a caller that deserializes would read a zero bill"
         );
-        b.reconcile_total();
-        assert_eq!(b.total(), 261, "reconcile recovers the real bill");
-        // 261 is NOT over a 1000 target — stated so the assertion above cannot
-        // be satisfied by a budget that over-reports.
-        assert!(!b.over_target(), "261 must not read as over a 1000 target");
     }
 
     /// `push` maintains the total in the same breath, so the two cannot
