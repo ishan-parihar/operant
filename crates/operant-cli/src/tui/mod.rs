@@ -104,7 +104,6 @@ pub mod prompt_input;
 pub mod redraw;
 pub mod render;
 pub mod rustle;
-pub mod session_branching;
 pub mod session_hub;
 pub mod settings_screen;
 pub mod skills_view;

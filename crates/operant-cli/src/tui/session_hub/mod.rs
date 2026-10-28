@@ -37,6 +37,10 @@ pub enum HubFilterMode {
     ByEmployee,
     /// Live rows only: the streaming session + pending delegations.
     Active,
+    /// The current session and its forks/children — the Ctrl+B branch
+    /// view (audit R1 2026-10-28: replaces the session_branching
+    /// overlay, which listed exactly this set).
+    CurrentBranch,
     Archived,
 }
 
@@ -46,7 +50,8 @@ impl HubFilterMode {
             Self::All => Self::CurrentDir,
             Self::CurrentDir => Self::ByEmployee,
             Self::ByEmployee => Self::Active,
-            Self::Active => Self::Archived,
+            Self::Active => Self::CurrentBranch,
+            Self::CurrentBranch => Self::Archived,
             Self::Archived => Self::All,
         }
     }
@@ -57,6 +62,7 @@ impl HubFilterMode {
             Self::CurrentDir => "current dir",
             Self::ByEmployee => "by employee",
             Self::Active => "active",
+            Self::CurrentBranch => "this branch's tree",
             Self::Archived => "archived",
         }
     }
@@ -96,6 +102,9 @@ pub struct SessionHubState {
     /// The id of the subagent row currently focused (omp's chat view),
     /// rendered in place of the message preview.
     pub focused_subagent: Option<String>,
+    /// The row the `CurrentBranch` filter treats as the branch root (the
+    /// agent's live session id, fed at open). `None` = no anchor.
+    pub branch_root: Option<String>,
 }
 
 impl Default for SessionHubState {
@@ -118,6 +127,7 @@ impl SessionHubState {
             preview_scroll: 0,
             armed_close_tap: None,
             focused_subagent: None,
+            branch_root: None,
         }
     }
 
@@ -145,6 +155,15 @@ impl SessionHubState {
     /// selection on the same row id when possible.
     pub fn replace_rows(&mut self, rows: Vec<SessionEntryV2>) {
         let keep = self.selected_row().map(|r| r.id.clone());
+        // (audit R1) the CurrentBranch filter needs an anchor. Without one
+        // (the operator opened by Ctrl+B, not by a session switch), take the
+        // live row — the only session the App could be streaming into.
+        if self.branch_root.is_none() {
+            self.branch_root = rows
+                .iter()
+                .find(|r| matches!(r.status, RowStatus::Live))
+                .map(|r| r.id.clone());
+        }
         self.rows = rows;
         self.loading = false;
         self.rebuild_visible();
@@ -217,6 +236,10 @@ impl SessionHubState {
                         )
                 }
                 HubFilterMode::Archived => matches!(r.status, RowStatus::Archived),
+                HubFilterMode::CurrentBranch => match self.branch_root.as_deref() {
+                    Some(root) => r.id == root || r.parent_id.as_deref() == Some(root),
+                    None => true,
+                },
             })
             .filter(|(_, r)| {
                 // AND-token search over a lowercase haystack: title, id,
@@ -258,6 +281,23 @@ impl SessionHubState {
     pub fn select_next(&mut self) {
         if self.selected + 1 < self.visible_idx.len() {
             self.selected += 1;
+            self.preview_scroll = 0;
+        }
+    }
+
+    /// Jump to the first row (Home — R5 of the 2026-10-28 audit: the pane
+    ///'s nav matches the other overlays').
+    pub fn select_first(&mut self) {
+        if !self.visible_idx.is_empty() {
+            self.selected = 0;
+            self.preview_scroll = 0;
+        }
+    }
+
+    /// Jump to the last row (End).
+    pub fn select_last(&mut self) {
+        if !self.visible_idx.is_empty() {
+            self.selected = self.visible_idx.len() - 1;
             self.preview_scroll = 0;
         }
     }

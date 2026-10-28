@@ -216,9 +216,6 @@ pub struct App {
     /// disables): seeded from the TOML at TuiApp create; the App itself has
     /// no config handle.
     pub double_escape_action: String,
-    /// (plan 05) Ctrl+B opened the branch browser — populate the fork tree
-    /// from the agent's DB on the next pending-actions pass.
-    pub pending_branch_list: bool,
     /// (plan 07 step 5) true while a full-screen overlay has taken the
     /// alternate screen in native-scroll mode. Full-screen overlays
     /// painting INTO the native scroll region would duplicate rows that
@@ -545,8 +542,6 @@ pub struct App {
     /// rows (plan 2026-10-28 iter-B/C; replaced the 70x20 session_browser
     /// modal).
     pub session_hub: crate::tui::session_hub::SessionHubState,
-    /// Session branching overlay (Ctrl+B) — create and switch branches.
-    pub session_branching: crate::tui::session_branching::SessionBranchingState,
     /// Export format picker dialog (/export).
     pub export_dialog: ExportDialogState,
     /// Context window / rate limit visualization overlay (/context).
@@ -596,10 +591,6 @@ pub struct App {
     /// unified `SessionEntryV2` rows — DB list + delegation snapshot).
     pub session_list_rx:
         Option<tokio::sync::mpsc::Receiver<Vec<operant_core::session::listing::SessionEntryV2>>>,
-    /// Receiver for the Ctrl+B fork tree, read off the event loop (TUI-11).
-    pub branch_list_rx: Option<
-        tokio::sync::mpsc::Receiver<Result<Vec<crate::tui::session_branching::BranchInfo>, String>>,
-    >,
     /// Fuzzy file-suggestion tier (plan 2026-10-24 M3). Receiver for the
     /// walk running on the blocking pool; `drain_file_suggest` applies the
     /// result on the next frame when the `@` token it answered is still
@@ -1160,9 +1151,6 @@ impl App {
             // Ghost-text replies (plan 2026-10-24 M6): apply the engine's
             // answer when the query it answered is still at the caret.
             self.drain_word_predict();
-
-            // Drain the fork tree for the Ctrl+B branch browser.
-            self.drain_branch_list();
 
             // Drain the git diff read on a worker thread (TUI-11).
             self.diff_viewer.drain_git_diff();

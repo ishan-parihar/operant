@@ -868,8 +868,12 @@ impl App {
                     }
                 }
                 MouseEventKind::ScrollUp => {
-                    // Scroll through dialog items
-                    if self.connect_dialog.visible {
+                    // Scroll through dialog items. (audit R4 2026-10-28)
+                    // the hub leads: the wheel scrolls its preview, like
+                    // every other operant overlay.
+                    if self.session_hub.visible {
+                        self.session_hub.scroll_preview(-2);
+                    } else if self.connect_dialog.visible {
                         self.connect_dialog.move_up();
                     } else if self.import_config_picker.visible {
                         self.import_config_picker.move_up();
@@ -878,7 +882,9 @@ impl App {
                     }
                 }
                 MouseEventKind::ScrollDown => {
-                    if self.connect_dialog.visible {
+                    if self.session_hub.visible {
+                        self.session_hub.scroll_preview(2);
+                    } else if self.connect_dialog.visible {
                         self.connect_dialog.move_down();
                     } else if self.import_config_picker.visible {
                         self.import_config_picker.move_down();

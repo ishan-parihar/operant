@@ -114,8 +114,6 @@ pub enum DialogPriority {
     ContextViz = 180,
     /// Session hub (the unified full-frame picker, plan 2026-10-28)
     SessionHub = 190,
-    /// Session branching
-    SessionBranching = 200,
     /// Global search
     GlobalSearch = 220,
     /// History search overlay

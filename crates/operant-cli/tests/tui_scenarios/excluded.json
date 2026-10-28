@@ -48,14 +48,7 @@
       "style_baseline": "diff-viewer-turn.style.txt",
       "reason": "THE MODE DOES NOT EXIST. The scenario was written for a turn-diff mode reached by `/changes` -> `diff_viewer.open_turn`, but there is no `open_turn` in the codebase and no 'turn diff mode' string to render: `DiffViewerState` has ONE opener, `open(&project_root)`, and the dispatch arm `\"diff\" | \"review\" | \"changes\"` calls it for all three. The scenario asserted a header the renderer cannot produce, so it could only ever fail.",
       "unblock_when": "A turn-diff mode is implemented: a second opener on DiffViewerState, a second mode in the renderer, and a dispatch arm that reaches it."
-    },
-    {
-      "name": "session-branching",
-      "surface": "crates/operant-cli/src/tui/session_branching.rs::render_session_branching",
-      "baseline": "session-branching.txt",
-      "style_baseline": "session-branching.style.txt",
-      "reason": "A HARNESS RACE, not a defect. `/branch` sets `pending_branch_list`; the overlay opens only when the ASYNC fork-tree load completes and the result is drained (`drain_branch_list` -> `session_branching.open`). The headless simulation paints a bounded number of frames after the key events, and the spawn_blocking DB read has no guarantee of landing inside that window, so the assertion `overlays.session_branching == true` is a coin flip on a loaded machine. The surface itself is fine and the drain is unit-tested.",
-      "unblock_when": "The harness can WAIT for the overlay: a way to drive the simulation until an assertion holds (a settle loop) rather than a fixed frame budget, or a seeded fork tree so the load is synchronous."
     }
-  ]
+  ],
+  "$comment_history": "Two entries were REMOVED as their surfaces were deleted: session-browser (iter-B) replaced by the hub, and session-branching (iter-1467 / audit R1) whose fork-tree load race is moot because /branch now opens the hub on the CurrentBranch filter, which paints synchronously. A deleted surface has no render target to park."
 }

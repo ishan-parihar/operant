@@ -6833,48 +6833,13 @@ mod approval_gate_tests {
     }
 }
 
-#[cfg(test)]
-mod branch_list_tests {
-    use super::*;
-
-    #[test]
-    fn a_failed_fork_tree_read_is_reported_not_shown_as_an_empty_tree() {
-        // TUI-11: a database error must not open an empty branch browser.
-        let mut app = make_app();
-        let (tx, rx) = tokio::sync::mpsc::channel(1);
-        app.branch_list_rx = Some(rx);
-        tx.try_send(Err("database is locked".to_string())).unwrap();
-
-        assert!(app.drain_branch_list());
-
-        assert!(!app.session_branching.visible);
-        assert!(app.branch_list_rx.is_none());
-        assert!(
-            app.system_annotations
-                .iter()
-                .any(|a| a.text.contains("database is locked")),
-            "the error reaches the transcript"
-        );
-    }
-
-    #[test]
-    fn a_loaded_fork_tree_opens_the_branch_browser() {
-        let mut app = make_app();
-        let (tx, rx) = tokio::sync::mpsc::channel(1);
-        app.branch_list_rx = Some(rx);
-        tx.try_send(Ok(vec![crate::tui::session_branching::BranchInfo {
-            id: "b-1".to_string(),
-            name: "fork".to_string(),
-            created_at: String::new(),
-            is_current: false,
-        }]))
-        .unwrap();
-
-        assert!(app.drain_branch_list());
-
-        assert!(app.session_branching.visible);
-    }
-}
+// (audit R1 2026-10-28) the `branch_list_tests` module's two tests
+// went with the deleted session_branching overlay: they fed a fork tree
+// into a now-dead drain and asserted a now-deleted overlay opened. The
+// behaviour they protected — Ctrl+B reaches a fork view, and a database
+// failure never pretends an empty answer — is pinned on the hub instead
+// in `left_tap_gesture_tests` and `session_hub/tests.rs`, and the
+// error path is exercised through the hub's own loader failure notice.
 
 // ---------------------------------------------------------------------------
 // iter-1213: keyboard scroll ladder reachability (PgUp/PgDn/Shift+Home/Shift+End)

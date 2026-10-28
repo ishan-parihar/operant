@@ -151,3 +151,94 @@ fn close_tap_window_expires_after_500ms() {
     );
     assert!(!hub.visible);
 }
+
+// ---- (audit R1 2026-10-28) the CurrentBranch filter that replaced the
+// session_branching overlay: it listed parent + forks of one session, the
+// hub filter shows exactly that set over the same rows.
+
+fn branch_row(id: &str, parent: &str) -> SessionEntryV2 {
+    let mut r = row(id, None, None);
+    r.kind = RowKind::Branch;
+    r.parent_id = Some(parent.to_string());
+    r
+}
+
+#[test]
+fn current_branch_shows_the_root_and_its_forks_only() {
+    let mut hub = SessionHubState::new();
+    hub.filter_mode = HubFilterMode::CurrentBranch;
+    hub.branch_root = Some("s-1".to_string());
+    hub.replace_rows(vec![
+        row("s-1", Some("live work"), None),
+        branch_row("s-1-fork-a", "s-1"),
+        branch_row("s-1-fork-b", "s-1"),
+        row("s-2", Some("unrelated"), None),
+        branch_row("s-2-fork", "s-2"),
+    ]);
+    let ids: Vec<&str> = hub.visible_rows().iter().map(|r| r.id.as_str()).collect();
+    assert_eq!(ids, vec!["s-1", "s-1-fork-a", "s-1-fork-b"], "{ids:?}");
+}
+
+#[test]
+fn current_branch_without_an_anchor_shows_everything() {
+    // An unanchored filter must not pretend an empty answer is right — the
+    // hub is the surface that tells the operator what exists.
+    let mut hub = SessionHubState::new();
+    hub.filter_mode = HubFilterMode::CurrentBranch;
+    hub.branch_root = None;
+    hub.replace_rows(vec![row("s-1", None, None), row("s-2", None, None)]);
+    assert_eq!(hub.visible_rows().len(), 2);
+}
+
+#[test]
+fn a_live_row_auto_anchors_the_branch_root_when_the_load_lands() {
+    // Ctrl+B opens before the background load answers, so the anchor is
+    // taken from the live row — the only session that could be streaming.
+    let mut hub = SessionHubState::new();
+    hub.filter_mode = HubFilterMode::CurrentBranch;
+    let mut live = row("s-live", Some("streaming"), None);
+    live.status = RowStatus::Live;
+    hub.replace_rows(vec![
+        live,
+        branch_row("s-live-fork", "s-live"),
+        row("s-other", None, None),
+    ]);
+    assert_eq!(hub.branch_root.as_deref(), Some("s-live"));
+    let ids: Vec<&str> = hub.visible_rows().iter().map(|r| r.id.as_str()).collect();
+    assert_eq!(ids, vec!["s-live", "s-live-fork"], "{ids:?}");
+}
+
+#[test]
+fn the_filter_cycle_includes_the_branch_view_between_active_and_archived() {
+    let mut hub = SessionHubState::new();
+    hub.filter_mode = HubFilterMode::Active;
+    hub.cycle_filter();
+    assert_eq!(hub.filter_mode, HubFilterMode::CurrentBranch);
+    assert_eq!(hub.filter_mode.label(), "this branch's tree");
+    hub.cycle_filter();
+    assert_eq!(hub.filter_mode, HubFilterMode::Archived);
+}
+
+// ---- (audit R4/R5 2026-10-28) the pane's nav and wheel match jcode's ----
+
+#[test]
+fn home_and_end_jump_to_the_list_edges() {
+    let mut hub = SessionHubState::new();
+    hub.replace_rows(vec![
+        row("s-1", None, None),
+        row("s-2", None, None),
+        row("s-3", None, None),
+    ]);
+    hub.select_last();
+    assert_eq!(hub.selected_row().map(|r| r.id.as_str()), Some("s-3"));
+    hub.select_first();
+    assert_eq!(hub.selected_row().map(|r| r.id.as_str()), Some("s-1"));
+}
+
+#[test]
+fn edge_jumps_are_inert_on_an_empty_list() {
+    let mut hub = SessionHubState::new();
+    hub.select_first();
+    hub.select_last();
+    assert_eq!(hub.selected, 0, "no panic, no jump on an empty pane");
+}

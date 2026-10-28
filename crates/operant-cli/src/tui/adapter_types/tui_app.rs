@@ -1008,21 +1008,6 @@ impl TuiApp {
         {
             tokio::spawn(super::history::save_session_title(id, title));
         }
-        // (plan 05) Ctrl+B: populate the branch browser with the current
-        // session's fork tree (parent + children) from the agent's DB.
-        // TUI-11: the fork tree is read on a blocking thread; `drain_branch_list`
-        // opens the browser when it arrives, so a slow database does not stall
-        // the event loop.
-        if std::mem::take(&mut app.pending_branch_list)
-            && let Some(agent) = agent
-        {
-            let current = agent.session_id().unwrap_or_default();
-            let (tx, rx) = tokio::sync::mpsc::channel(1);
-            app.branch_list_rx = Some(rx);
-            tokio::task::spawn_blocking(move || {
-                let _ = tx.blocking_send(super::history::fork_tree(&current));
-            });
-        }
         // (plan 05) rewind selector: sync marks from the agent while open
         // (or while a /rewind <n> confirmation is pending — the numeric
         // path resolves against the mark list without opening the UI),

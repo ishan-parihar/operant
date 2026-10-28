@@ -1,0 +1,36 @@
+{
+  "name": "session-hub",
+  "surface": "crates/operant-cli/src/tui/render/operant_overlays.rs::paint_session_hub",
+  "opens_with": "/session",
+  "keys": "/session<enter>",
+  "size": "120x40",
+  "variants": [
+    {
+      "size": "80x24",
+      "keys": "/session<enter>"
+    },
+    {
+      "size": "120x40",
+      "keys": "/branch<enter>",
+      "assert": [
+        "overlays.session_hub == true",
+        "any_modal_open == true"
+      ],
+      "assert_screen": [
+        "contains:this branch",
+        "contains:Sessions"
+      ]
+    }
+  ],
+  "assert": [
+    "overlays.session_hub == true",
+    "any_modal_open == true"
+  ],
+  "assert_screen": [
+    "contains:Sessions",
+    "contains:Loading sessions"
+  ],
+  "baseline": "session-hub.txt",
+  "style_baseline": "session-hub.style.txt",
+  "notes": "ENV, one dependency: the hub's rows come from the sessions table in the live database, so the body text is machine-specific (which sessions exist, their ages, the branch tree). The assertions pin the FRAME SHAPE, not the body: the overlay is on, no other modal is, and the hub's own chrome renders (the title block ' Sessions [<filter>] ' at session_hub/render.rs:245 and, once rows land, the footer 's cycles filters · Esc closes' at :182). ENV, third and load-bearing: the headless runner paints a BOUNDED number of frames after the key events, and the session load lands on a spawn_blocking DB read — so the painted frame is the hub's interim state ('⏳ Loading sessions… · scanning local sessions and live subagents…' at :160-169). The asserts therefore pin strings present in BOTH states: the title block and the interim banner. The footer and rows are NOT asserted because they are a race, which is precisely the old session-branching exclusion's reason text rewritten as a scenario that can pass. The 120x40 /branch variant pins audit R1's replacement: /branch used to open the DELETED session_branching overlay and now opens THIS pane on the CurrentBranch filter, whose label 'this branch's tree' (session_hub/mod.rs:65) appears in the title block. VERIFY BY HAND for the body text against a machine with sessions; the shape assertions are the gate."
+}

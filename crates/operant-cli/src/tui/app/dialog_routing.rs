@@ -53,9 +53,6 @@ impl App {
         if self.session_hub.visible {
             return Some(DialogPriority::SessionHub);
         }
-        if self.session_branching.visible {
-            return Some(DialogPriority::SessionBranching);
-        }
         if self.global_search.visible {
             return Some(DialogPriority::GlobalSearch);
         }

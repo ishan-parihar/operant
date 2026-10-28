@@ -1,0 +1,24 @@
+┌ Sessions [all] ──────────────┐┌ Preview ─────────────────────────────────────┐
+│  ⏳  Loading sessions…        ││                                              │
+│     scanning local sessions a││                                              │
+│                              ││                                              │
+│                              ││                                              │
+│operant · replay              ││                                              │
+│operant                       ││                                              │
+│/model to switch · Offline Cap││re                                            │
+│v0.3.0                        ││                                              │
+│/login to add provider        ││                                              │
+│● anthropic(key)              ││                                              │
+│~                             ││                                              │
+│                              ││                                              │
+│                              ││                                              │
+│>                             ││                                              │
+│                              ││                      ~ API key Offline Captur│
+│                              ││                                              │
+│                              ││                                              │
+│                              ││                                              │
+│                              ││                                              │
+│                              ││                                              │
+│                              ││                                              │
+│                              ││                                              │
+└──────────────────────────────┘└──────────────────────────────────────────────┘

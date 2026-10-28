@@ -48,7 +48,7 @@ impl App {
     /// `effort_picker` from `any_modal_open` in iter-227). Each entry is
     /// `(snapshot_key, is_visible)`. `permission_request` is tracked via
     /// `.is_some()` rather than a `.visible` flag.
-    pub(crate) fn overlay_flags(&self) -> [(&'static str, bool); 30] {
+    pub(crate) fn overlay_flags(&self) -> [(&'static str, bool); 29] {
         [
             ("help_overlay", self.help_overlay.visible),
             (
@@ -71,7 +71,6 @@ impl App {
             // model_picker overlay.
             ("inline_interactive", self.inline_interactive.is_some()),
             ("session_hub", self.session_hub.visible),
-            ("session_branching", self.session_branching.visible),
             ("export_dialog", self.export_dialog.visible),
             ("context_viz", self.context_viz.visible),
             (
@@ -530,15 +529,15 @@ impl App {
                 self.session_list_pending = true;
                 true
             }
-            // /branch — open the session branching overlay (hermes /branch
-            // parity). The overlay was previously only reachable via a
-            // keybinding; the slash arm makes it discoverable.
+            // /branch — the hub's branch filter (hermes /branch parity;
+            // audit R1 2026-10-28: was the session_branching overlay, now
+            // the same pane as /session with CurrentBranch preselected).
             "branch" => {
-                // (plan 04) the arm opened the overlay with an EMPTY list
-                // (it never set pending_branch_list, so the fork-tree backfill
-                // in tui_app.rs never ran). One flag: the real feeder builds
-                // parent + child forks from the agent's DB.
-                self.pending_branch_list = true;
+                self.session_hub.branch_root = None;
+                self.session_hub.filter_mode =
+                    crate::tui::session_hub::HubFilterMode::CurrentBranch;
+                self.session_hub.open(None);
+                self.session_list_pending = true;
                 true
             }
             // /status — session/model/token summary (hermes /status parity).
@@ -1781,7 +1780,6 @@ impl App {
         self.plugins_hub.close();
         self.journey_view.close();
         self.session_hub.close();
-        self.session_branching.close();
         self.export_dialog.dismiss();
         self.context_viz.close();
         self.connect_dialog.close();

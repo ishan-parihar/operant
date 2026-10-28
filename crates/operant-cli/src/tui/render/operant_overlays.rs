@@ -65,7 +65,6 @@ use crate::tui::key_input_dialog::render_key_input_dialog;
 use crate::tui::mcp_view::render_mcp_view;
 use crate::tui::memory_file_selector::render_memory_file_selector;
 use crate::tui::overlays::render_global_search;
-use crate::tui::session_branching::render_session_branching;
 use crate::tui::settings_screen::render_settings_screen;
 use crate::tui::stats_dialog::render_stats_dialog;
 use crate::tui::theme_screen::render_theme_screen;
@@ -194,7 +193,6 @@ overlay_visible_guards!(
     is_visible_free_mode_dialog => free_mode_dialog,
     is_visible_command_palette => command_palette,
     is_visible_session_hub => session_hub,
-    is_visible_session_branching => session_branching,
     is_visible_export_dialog => export_dialog,
     is_visible_context_viz => context_viz,
 );
@@ -358,12 +356,6 @@ const OVERLAYS: &[Entry] = &[
         visible: is_visible_session_hub,
         paint: paint_session_hub,
         sink: Sink::Frame,
-    },
-    Entry {
-        name: "session_branching",
-        visible: is_visible_session_branching,
-        paint: paint_session_branching,
-        sink: Sink::Buffer,
     },
     Entry {
         name: "export_dialog",
@@ -546,10 +538,6 @@ fn paint_session_hub(frame: &mut Frame, app: &App, _ctx: &mut FrameCtx) {
     crate::tui::session_hub::render_session_hub(frame, &app.session_hub, frame.area());
 }
 
-fn paint_session_branching(frame: &mut Frame, app: &App, ctx: &mut FrameCtx) {
-    render_session_branching(&app.session_branching, ctx.size, frame.buffer_mut());
-}
-
 fn paint_export_dialog(frame: &mut Frame, app: &App, ctx: &mut FrameCtx) {
     render_export_dialog(frame, &app.export_dialog, ctx.size);
 }
@@ -656,7 +644,6 @@ mod tests {
         ("free_mode_dialog", Sink::Frame),
         ("command_palette", Sink::Frame),
         ("session_hub", Sink::Frame),
-        ("session_branching", Sink::Buffer),
         ("export_dialog", Sink::Frame),
         ("context_viz", Sink::Frame),
         ("selection_highlight", Sink::Frame),

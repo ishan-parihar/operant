@@ -620,62 +620,12 @@ impl App {
 
         // Invalid-config dialog intercepts Enter/Esc to dismiss
 
-        // Session branching overlay intercepts navigation and Esc
-        if self.session_branching.visible {
-            use crate::tui::session_branching::BranchBrowserMode;
-            match self.session_branching.mode {
-                BranchBrowserMode::Browse => match key.code {
-                    KeyCode::Esc => self.session_branching.cancel(),
-                    KeyCode::Up => self.session_branching.select_prev(),
-                    KeyCode::Down => self.session_branching.select_next(),
-                    KeyCode::Char('n') => self.session_branching.start_create_new(),
-                    KeyCode::Char('d') => self.session_branching.start_delete_confirm(),
-                    KeyCode::Enter => {
-                        if let Some(branch) = self.session_branching.selected_branch() {
-                            // (plan 04) real switch: the drain retargets the
-                            // agent and rebuilds the display (the old body
-                            // printed "Switched to branch" and did nothing).
-                            self.pending_switch_session = Some(branch.id.clone());
-                            self.session_branching.close();
-                        }
-                    }
-                    _ => {}
-                },
-                BranchBrowserMode::CreateNew => match key.code {
-                    KeyCode::Esc => self.session_branching.cancel(),
-                    KeyCode::Enter => {
-                        // (plan 04) a named fork at the current point IS
-                        // /rewind's documented behavior ("forks the session,
-                        // old path kept") — the old body printed "Created
-                        // branch" and did nothing. Close; the fork happens
-                        // through /rewind.
-                        self.session_branching.cancel();
-                        self.set_status_notice(
-                            "Fork at a point: use /rewind (forks the session, old path kept)."
-                                .to_string(),
-                        );
-                    }
-                    KeyCode::Backspace => self.session_branching.pop_create_char(),
-                    KeyCode::Char(c) => self.session_branching.push_create_char(c),
-                    _ => {}
-                },
-                BranchBrowserMode::ConfirmDelete => match key.code {
-                    KeyCode::Esc | KeyCode::Char('n') => self.session_branching.cancel(),
-                    KeyCode::Enter | KeyCode::Char('y') => {
-                        // (plan 04) the old body printed "Deleted branch" and
-                        // never touched the store — sessions are the durable
-                        // record (\resume), deletion belongs to the CLI where
-                        // it can be deliberate: `operant sessions delete`.
-                        self.session_branching.cancel();
-                        self.set_status_notice(
-                            "Deleting sessions: `operant sessions delete <id>` (they are kept for /resume by design).".to_string(),
-                        );
-                    }
-                    _ => {}
-                },
-            }
-            return false;
-        }
+        // (audit R1 2026-10-28) the session_branching overlay is gone —
+        // its navigation lives in the hub (Session hub block below), its
+        // switch mechanism moved to `pending_switch_session` on Enter, and
+        // its two write arms became documentation instead of dead UI:
+        // forking is /rewind, deletion is `operant sessions delete`.
+        // Nothing is unbound: Ctrl+B now opens the hub's branch filter.
 
         // Session hub intercepts navigation, search, filters, and Esc
         // (plan 2026-10-28 iter-B: jcode picker mechanics; the old 70x20
@@ -708,6 +658,8 @@ impl App {
                 KeyCode::Esc => self.session_hub.close(),
                 KeyCode::Up => self.session_hub.select_prev(),
                 KeyCode::Down => self.session_hub.select_next(),
+                KeyCode::Home => self.session_hub.select_first(),
+                KeyCode::End => self.session_hub.select_last(),
                 KeyCode::PageUp => {
                     for _ in 0..8 {
                         self.session_hub.select_prev();
@@ -1351,15 +1303,20 @@ impl App {
             }
 
             // ---- Session branching (Ctrl+B) -----------------------------
-            // Bug #6 from iter-82 audit: Ctrl+B was documented in the help
-            // overlay comment but had no keybinding. session_branching.open()
-            // was never called from anywhere. Now it opens the branch browser
-            // seeded with the current message count.
+            // (audit R1 2026-10-28) the session_branching overlay was a second
+            // session browser — it listed exactly the parent+forks of the
+            // current session, which the unified hub row already carries
+            // (parent_id + RowKind::Branch). Ctrl+B now opens the hub on
+            // its `CurrentBranch` filter: one pane, one loader, one switch
+            // path. Enter on any row switches through the same flow.
             KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.session_branching.open(vec![], self.messages.len());
-                // (plan 05) populate the browser with the fork tree on the
-                // next agent-touching pass (the DB lives on the agent).
-                self.pending_branch_list = true;
+                // None = let replace_rows anchor on the live row when the
+                // load lands (the App has no agent handle here to ask).
+                self.session_hub.branch_root = None;
+                self.session_hub.filter_mode =
+                    crate::tui::session_hub::HubFilterMode::CurrentBranch;
+                self.session_hub.open(None);
+                self.session_list_pending = true;
             }
 
             // ---- Scroll bookmark (Ctrl+G) -------------------------------

@@ -151,35 +151,6 @@ impl App {
         changed
     }
 
-    /// Opens the Ctrl+B branch browser once the fork tree has loaded. A
-    /// database error is shown in the transcript and the browser stays closed.
-    pub(super) fn drain_branch_list(&mut self) -> bool {
-        let Some(ref mut rx) = self.branch_list_rx else {
-            return false;
-        };
-        match rx.try_recv() {
-            Ok(Ok(branches)) => {
-                self.branch_list_rx = None;
-                let at = self.session_branching.branch_at_message;
-                self.session_branching.open(branches, at);
-                true
-            }
-            Ok(Err(e)) => {
-                self.branch_list_rx = None;
-                self.push_system_message(
-                    format!("Could not load this session's branches: {e}"),
-                    SystemMessageStyle::Error,
-                );
-                true
-            }
-            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
-                self.branch_list_rx = None;
-                false
-            }
-            Err(tokio::sync::mpsc::error::TryRecvError::Empty) => false,
-        }
-    }
-
     /// 1. Drain background session-hub row loads into the unified page.
     pub(super) fn drain_session_list(&mut self) -> bool {
         let Some(ref mut rx) = self.session_list_rx else {
