@@ -67,7 +67,13 @@ pub enum GatewaySubcommand {
         #[arg(long)]
         deep: bool,
     },
-    /// List active gateway sessions
+    /// List active gateway BINDINGS (which chat maps to which conversation)
+    ///
+    /// This is a binding view, not a second session browser: the hub
+    /// (`/session`) and the API's `/api/sessions` list conversation records,
+    /// and every row here also exists there. The columns you see ONLY here —
+    /// platform, platform user, channel — live in this store, not on the hub
+    /// row (audit R2, 2026-10-28).
     Sessions,
     /// List registered channels
     Channels,
@@ -858,11 +864,16 @@ fn cmd_sessions(config: &AppConfig) -> Result<()> {
     let sessions = store.list_active_sessions(None);
 
     if sessions.is_empty() {
-        println!("No active gateway sessions.");
+        println!("No active gateway session bindings.");
         return Ok(());
     }
 
-    println!("Gateway Sessions");
+    // (audit R2, 2026-10-28) the honesty line: this is a BINDING view, not a
+    // second session browser. The conversation records live in the hub
+    // (`/session`) and the API's `/api/sessions`; the platform/user/channel
+    // columns below exist ONLY here, on the bindings row.
+    println!("Gateway Session Bindings (platform -> conversation maps)");
+    println!("Conversation records live in the hub: /session (or /api/sessions)");
     println!("────────────────");
     println!();
     println!(
