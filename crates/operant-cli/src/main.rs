@@ -50,6 +50,7 @@ mod commands;
 pub(crate) mod config;
 mod dashboard_server;
 mod env_store;
+mod gateway_api;
 mod gateway_commands;
 mod gateway_platforms;
 mod gateway_runner;

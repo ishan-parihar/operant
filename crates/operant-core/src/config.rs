@@ -1431,6 +1431,14 @@ pub struct GatewaySettings {
     /// loses a conversation they still want, short enough that the store
     /// does not grow without limit.
     pub session_retention_days: u32,
+    /// (plan 2026-10-28 iter-E, G9) Expose the unified session record over
+    /// HTTP on the gateway daemon: GET /api/sessions,
+    /// /api/sessions/:id/messages, /api/subagents. Read-only,
+    /// token-gated (the dashboard's discipline). Default ON for
+    /// `gateway run` per the plan; the bind stays loopback.
+    pub api_enabled: bool,
+    /// Bind address for the session API listener (loopback default).
+    pub api_bind: String,
 }
 
 impl Default for GatewaySettings {
@@ -1464,6 +1472,8 @@ impl Default for GatewaySettings {
             telegram_dm_topics_enabled: false,
             max_concurrent_sessions: None,
             session_retention_days: 90,
+            api_enabled: true,
+            api_bind: "127.0.0.1:8731".to_string(),
         }
     }
 }

@@ -30,6 +30,18 @@ pub enum RowStatus {
     Archived,
 }
 
+impl RowStatus {
+    /// The wire label for the read-only session API (iter-E): lowercase,
+    /// stable, distinct from the TUI's display label.
+    pub fn api_label(&self) -> &'static str {
+        match self {
+            RowStatus::Live => "live",
+            RowStatus::Idle => "idle",
+            RowStatus::Archived => "archived",
+        }
+    }
+}
+
 /// What a row in the unified list IS.
 ///
 /// Sessions, rewind/branch forks (they ARE sessions — the fork creates one),

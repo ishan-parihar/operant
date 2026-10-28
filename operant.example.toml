@@ -416,6 +416,14 @@ admins = []
 # the gateway ever saw).
 # session_retention_days = 90
 
+# Read-only session API on the daemon (plan 2026-10-28): GET /api/sessions,
+# GET /api/sessions/:id/messages?cap=N, GET /api/subagents — the same
+# unified rows the TUI session hub shows, token-gated like the dashboard
+# (Authorization: Bearer / X-Hermes-Session-Token / dashboard cookie).
+# The token is minted at each daemon start; keep the bind loopback.
+api_enabled = true
+api_bind = "127.0.0.1:8731"
+
 # Global emergency stop — `operant pause` / `operant resume` writes/removes a
 # sentinel (fail-safe: any file pauses new work). While paused, the cron
 # scheduler skips dispatch, kanban dispatch is blocked, and new gateway turns

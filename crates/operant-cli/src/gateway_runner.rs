@@ -3646,6 +3646,13 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
     }
 
     init_pending_permissions();
+
+    // (plan 2026-10-28 iter-E, G8) The read-only session API: same daemon,
+    // same flock, one axum route group for the OTHER surfaces. The lock is
+    // held HERE, so spawning after it means the API shares the daemon's
+    // single-instance discipline.
+    crate::gateway_api::spawn_if_enabled(&app_config.gateway, &app_config.database_path);
+
     let mut guard = runner().lock().await;
 
     if guard.is_some()
