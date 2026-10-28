@@ -183,16 +183,17 @@ key_handling, app/mod, app/commands, app/init, tui_app, terminal_setup):
   test + a router unit test per route. Files: `gateway_runner.rs` (router
   assembly), `dashboard_server.rs` (token helper reuse), `operant.example.toml`.
 
-### CLI surface ownership (amended 2026-10-28 — a gap in the v2 body)
+### CLI surface ownership (amended 2026-10-28 — a gap in the v2 body;
+verified against cmd_sessions.rs in amendment round 3)
 
-`cmd_sessions.rs` (12 subcommands: List/Show/Delete/Stats/Export/Prune/
-Rename/Browse/Search/Recap/Resume) consumes `db.list_sessions()` today and
-moves to `SessionEntryV2` **in iter-A** — one loader, every surface. iter-A
-adds the `list_sessions_rich` call sites for List/Stats/Show (the same
-`database.rs` edit, no extra iteration); Browse/Resume keep their TUI/agent
-flows untouched. WITHOUT this amendment the plan's own "only the TUI/CLI
-`sessions` surface moves to the v2 record" line had no owner — the audit's
-RT-A fragmentation would survive the plan by hiding in the CLI.
+`cmd_sessions.rs` has 12 subcommands. The `list_sessions()` consumers —
+List (:113, limit 20), Browse (:362, limit 50, dialoguer fuzzy-select →
+cmd_show), Prune (:299, limit 10_000), Stats (:472, limit 1) — move to
+`list_sessions_rich` **in iter-A**, riding the same `database.rs` change.
+Show/Search/Recap/Resume consume `get_session_messages*` / `search_sessions`
+and need NO loader change (Resume prints a recap; it does not attach a
+chat — verified :501-513). WITHOUT this ownership the audit's RT-A
+fragmentation would survive the plan by hiding in the CLI.
 
 ## Risks
 
@@ -217,8 +218,48 @@ amendment above — `cmd_sessions.rs` call sites ride the same `database.rs`
 change). iter-E can run independently any time after iter-A (it only needs
 the loader + snapshot).
 
+## Interpretation notes (what this plan GUESSES the operator means — flag at ratification)
+
+The operator's two messages left specifics to interpretation. What this
+plan assumed, so a ratifier can veto cheaply instead of after iter-A:
+
+1. **"unified server/session-management like jcode"** — read as: jcode's
+   ARCHITECTURE (single-instance daemon, one session record, picker reading
+   it), NOT jcode's 66K-line harness surface (swarm reload, stdio bridge,
+   translate). Materialized as the iter-E route group. Alternative reading:
+   a full standalone session server owning all sessions server-side —
+   explicitly rejected as ponytail (the daemon exists; a second one is
+   cost without a consumer).
+2. **"TUI like that of jcode"** — read as: the picker PANE (full-frame,
+   40/60 list+preview, search, filters), not a wholesale TUI rewrite.
+   Operant's existing chat surface (jcode-parity chrome since iter-649) is
+   untouched.
+3. **"unified session/subagent page like omp"** — read as: omp's AgentHub
+   roster+focus model (main and subagents as peer rows, one page), not its
+   IRC bus or advisor-agent kinds.
+4. **"employee-level tags so each session is identified for who is
+   executing it"** — read as: a nullable `employee_id` on the sessions
+   table, written from the agent's seat at session start, grouped/filtered
+   in the picker. NOT a new employee directory (org/seat_policy_db and
+   operant-os stay the source of truth) and NOT per-turn attribution.
+5. **"directly copy/paste and then refactor"** — read as: literal vendoring
+   of jcode's session_picker sources into `tui/session_hub/` followed by a
+   compile-fix + cut loop, per the repo's port-decision precedent — not a
+   semantic reimplementation from scratch.
+
 ## Amendments (living-plan log)
 
+- **2026-10-28, agent-jcode (self-review round 3):** (1) iter-A CLI
+  call-site list CORRECTED after reading cmd_sessions.rs: the
+  `list_sessions()` consumers are List (:113), Browse (:362), Prune (:299),
+  Stats (:472) — round 2's amendment wrongly named Show among them (Show
+  uses `get_session_messages` :167); "Browse/Resume keep their TUI/agent
+  flows" was an UNVERIFIED claim at round 2, now verified (Browse is a
+  dialoguer fuzzy-select → cmd_show; Resume prints a recap :501-513,
+  attaches no chat). (2) Interpretation notes section added — the plan
+  made five silent guesses about the operator's intent; they are now
+  written down where a ratifier can veto them before iter-A spends a
+  code iteration.
 - **2026-10-28, agent-jcode (self-review round 2):** (1) gesture window
   corrected to omp's full `[40ms, 500ms)` with the 40ms burst floor
   (input-controller.ts:265-266, :902-923) — v2 body said only "500ms",
