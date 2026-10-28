@@ -425,10 +425,83 @@ async fn optimize_command(config: &AppConfig, apply: bool, floor: usize, json: b
     }
     if !apply {
         println!("\nDry run. Re-run with --apply to take the moves one at a time and re-measure.");
-    } else {
-        println!("\nApplied. Re-run `operant context budget` to measure the realized saving.");
+        return Ok(());
+    }
+
+    // `--apply` takes the FIRST proposal it can perform and then stops.
+    //
+    // It used to print "Applied. Re-run ... to measure the realized saving"
+    // and write NOTHING — a proven no-op (before 17775 tok, after 17775 tok).
+    // The message is the loop's contract with the operator, so a flag that
+    // lies is worse than no flag: it spends trust and produces a second
+    // wasted measurement.
+    //
+    // Taking one move per invocation is the promise the docs already make
+    // ("one change at a time, so you can tell which change caused the
+    // problem"). A move is only offered when this process can APPLY it
+    // without a future phase's mechanism.
+    let mut applied = 0usize;
+    for opt in &proposals {
+        if apply_one(config, opt)? {
+            applied += 1;
+            println!("\nApplied 1: {}", opt.action);
+            println!(
+                "  expected ~{} tok/request back. Re-run `operant context budget` to measure it.",
+                opt.saves_per_request
+            );
+            break;
+        }
+    }
+    if applied == 0 {
+        println!(
+            "\nNo move applied. Every proposal names a change this command cannot safely write: \
+             run the listed command yourself (they are the same commands the loop would run)."
+        );
     }
     Ok(())
+}
+
+/// Apply ONE proposal, returning whether it actually changed something.
+///
+/// Deliberately narrow. Only moves that write through a mechanism this
+/// process can validate are applied:
+///
+///  * `tool:<name>` → the `tool_state.json` disable set. This is the exact
+///    code path `operant tools disable` uses (`tool_state::save_disabled_tools`),
+///    so applying is not a second, divergent writer.
+///  * `cli.inject_help` → `config::persist_config_key`, which validates the
+///    rendered document through the REAL loader before renaming it over the
+///    operator's file and keeps every comment (`toml_edit`).
+///
+/// Everything else (an MCP server, a CLI grant removal) is left to the
+/// operator's own command rather than guessed at: an `--apply` that writes
+/// something other than what it printed is the same defect in a new coat.
+fn apply_one(
+    config: &operant_core::config::AppConfig,
+    opt: &operant_core::context_budget::Optimization,
+) -> Result<bool> {
+    if let Some(tool) = opt.surface.strip_prefix("tool:") {
+        let mut disabled = operant_core::tools::tool_state::load_disabled_tools(config);
+        if !disabled.insert(tool.to_string()) {
+            // Already disabled before this run — nothing to claim.
+            return Ok(false);
+        }
+        operant_core::tools::tool_state::save_disabled_tools(config, &disabled)
+            .map_err(|e| anyhow::anyhow!("failed to persist tool state: {e}"))?;
+        return Ok(true);
+    }
+    if opt.action.starts_with("set cli.inject_help") {
+        let next = opt
+            .action
+            .split('"')
+            .nth(1)
+            .with_context(|| format!("unparseable proposal action: {}", opt.action))?
+            .to_string();
+        operant_core::config::persist_config_key("cli.inject_help", &next)
+            .map_err(|e| anyhow::anyhow!("failed to persist cli.inject_help: {e:?}"))?;
+        return Ok(true);
+    }
+    Ok(false)
 }
 
 /// Measure every tool surface in THIS config and report the per-request bill.
@@ -547,6 +620,234 @@ async fn per_tool_schemas(registry: &ToolRegistry) -> Vec<ToolSchema> {
             ToolSchema { name: s.name, json }
         })
         .collect()
+}
+
+/// Rewrite only the `[[cli.tools]]` entry for `name`, preserving EVERY other
+/// byte of the config — comments, blank lines, key order, inline notes.
+///
+/// The first implementation round-tripped the whole document through
+/// `toml::parse` + `to_string_pretty`, which silently deleted every comment in
+/// the operator's config. That is a destructive side effect on a file this
+/// command does not own: removing a CLI grant must not cost someone their
+/// documentation. Proven: a config with 3 comments had 0 after `cli remove`.
+///
+/// This repo already has the right tool — `persist_config_key` keeps every
+/// comment — and `context cli add` was correct by construction because it
+/// appends instead of rewriting.
+fn rewrite_cli_tool_entry(
+    cfg_path: &std::path::Path,
+    edit: impl FnOnce(&mut String) -> bool,
+) -> Result<bool> {
+    let raw = std::fs::read_to_string(cfg_path)
+        .with_context(|| format!("failed to read {}", cfg_path.display()))?;
+    let mut out = raw;
+    if !edit(&mut out) {
+        return Ok(false);
+    }
+    std::fs::write(cfg_path, &out)
+        .with_context(|| format!("failed to write {}", cfg_path.display()))?;
+    Ok(true)
+}
+
+/// The entry's current `enabled` state as it sits in the FILE, defaulting to
+/// true when the key is absent (that is `CliToolSettings::default`). Reading
+/// the file rather than the in-memory config keeps `toggle` honest against an
+/// edit that happened after this process started.
+///
+/// Line-oriented and explicitly scoped: the target entry is the lines between
+/// its own `[[cli.tools]]` header and the next table header (or EOF). A
+/// matcher that only looked for `name = "git"` anywhere would answer from
+/// whichever entry happened to come first, which is why `git` and its
+/// neighbour `gitignore` are two different answers here.
+fn cli_tool_enabled_in(text: &str, name: &str) -> Option<bool> {
+    let mut in_entry = false;
+    let mut target = false;
+    let mut enabled_line: Option<bool> = None;
+    let mut answer: Option<bool> = None;
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed == "[[cli.tools]]" {
+            // Close the previous entry out before opening the next one: the
+            // header is a boundary, and a target answered by the line AFTER
+            // its boundary reads the wrong entry.
+            if target {
+                answer = Some(enabled_line.unwrap_or(true));
+                target = false;
+            }
+            in_entry = true;
+            enabled_line = None;
+            continue;
+        }
+        if trimmed.starts_with('[') {
+            if target {
+                answer = Some(enabled_line.unwrap_or(true));
+                target = false;
+            }
+            in_entry = false;
+            continue;
+        }
+        if !in_entry {
+            continue;
+        }
+        if trimmed.starts_with("name =") && cli_tool_name_matches(trimmed, name) {
+            target = true;
+            continue;
+        }
+        if target && trimmed.starts_with("enabled =") {
+            enabled_line = Some(trimmed.contains("true"));
+        }
+    }
+    if target {
+        answer = Some(enabled_line.unwrap_or(true));
+    }
+    answer
+}
+
+fn cli_tool_name_matches(trimmed: &str, name: &str) -> bool {
+    trimmed
+        .split('=')
+        .nth(1)
+        .map(str::trim)
+        .and_then(|v| v.strip_prefix('"'))
+        .and_then(|v| v.strip_suffix('"'))
+        .is_some_and(|v| v == name)
+}
+
+/// Delete the `[[cli.tools]]` block for `name`, comments-preserving. Only the
+/// entry's own lines are consumed: a comment sitting BETWEEN entries is the
+/// operator's, so a comment preceded by a table header ends the block.
+fn remove_cli_tool_block(text: &mut String, name: &str) -> bool {
+    let block = format!("[[cli.tools]]\nname = \"{name}\"\n");
+    let Some(start) = text.find(&block) else {
+        return false;
+    };
+    let mut end = start + block.len();
+    for line in text[start + block.len()..].split_inclusive('\n') {
+        let trimmed = line.trim();
+        let ends_entry = trimmed.is_empty()
+            || trimmed.starts_with('[')
+            || (trimmed.starts_with('#') && text[end..].contains("\n[["));
+        if ends_entry {
+            break;
+        }
+        end += line.len();
+    }
+    text.replace_range(start..end, "");
+    // The seam left behind can now hold two blank lines where the entry used
+    // to be. `String::replace` RETURNS the collapsed text — it does not edit
+    // in place — so assign it, or this line is a no-op wearing a costume.
+    let collapsed = text.replace("\n\n\n", "\n\n");
+    text.clear();
+    text.push_str(&collapsed);
+    true
+}
+
+/// Whether the NAMED entry owns an `enabled` line at all. A toggle that
+/// inserts a key must not also flip an existing one — a duplicate key is a
+/// silently-corrupt TOML file (the last value wins, so it LOOKS right).
+fn cli_entry_has_enabled_line(text: &str, name: &str) -> bool {
+    let mut in_entry = false;
+    let mut target = false;
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed == "[[cli.tools]]" {
+            if target {
+                return false;
+            }
+            in_entry = true;
+            target = false;
+            continue;
+        }
+        if trimmed.starts_with('[') {
+            if target {
+                return false;
+            }
+            in_entry = false;
+            continue;
+        }
+        if !in_entry {
+            continue;
+        }
+        if trimmed.starts_with("name =") && cli_tool_name_matches(trimmed, name) {
+            target = true;
+            continue;
+        }
+        if target && trimmed.starts_with("enabled =") {
+            return true;
+        }
+    }
+    false
+}
+
+/// Flip `enabled` on one `[[cli.tools]]` entry, comments-preserving. When the
+/// entry has no `enabled` line the key is INSERTED right after `name` instead
+/// of silently doing nothing, so `toggle` works on hand-written entries too.
+///
+/// Every line of the entry other than the one `enabled` line is copied
+/// through verbatim — comments included — so an operator's notes survive a
+/// flip. The FIRST implementation rebuilt the whole document with
+/// `toml::to_string_pretty` and took every comment with it.
+fn set_cli_tool_enabled(text: &mut String, name: &str, next: bool) -> bool {
+    let Some(current) = cli_tool_enabled_in(text, name) else {
+        return false;
+    };
+    if current == next {
+        // The file already says what we want. Rewriting identical bytes is
+        // churn that dirties the operator's file for no reason.
+        return true;
+    }
+    // Insert only when NO line exists to flip: an insert AND a flip both
+    // landing leaves `enabled = false` twice, which parses (last one wins)
+    // and is therefore worse than an obvious failure.
+    let insert = !cli_entry_has_enabled_line(text, name);
+    let mut in_entry = false;
+    let mut target = false;
+    let mut wrote = false;
+    let mut out = String::with_capacity(text.len());
+    for line in text.split_inclusive('\n') {
+        let rtrimmed = line.trim();
+        if rtrimmed == "[[cli.tools]]" {
+            in_entry = true;
+            target = false;
+            out.push_str(line);
+            continue;
+        }
+        if rtrimmed.starts_with('[') {
+            in_entry = false;
+            target = false;
+            out.push_str(line);
+            continue;
+        }
+        if in_entry && rtrimmed.starts_with("name =") && cli_tool_name_matches(rtrimmed, name) {
+            target = true;
+            out.push_str(line);
+            if insert {
+                out.push_str(&format!("enabled = {next}\n"));
+                wrote = true;
+            }
+            continue;
+        }
+        if target && rtrimmed.starts_with("enabled =") {
+            // Preserve any trailing comment: the operator's
+            // `enabled = true # granted last week` keeps its note. Replacing
+            // the whole line is how the first rebuild lost every comment.
+            if let Some(hash) = rtrimmed.find('#') {
+                out.push_str(&format!("enabled = {next} "));
+                out.push_str(&rtrimmed[hash..]);
+                out.push('\n');
+            } else {
+                out.push_str(&format!("enabled = {next}\n"));
+            }
+            wrote = true;
+            continue;
+        }
+        out.push_str(line);
+    }
+    if !target || !wrote {
+        return false;
+    }
+    *text = out;
+    true
 }
 
 /// Manage the granted CLI set. Mirrors `operant mcp` in shape and in the rule
@@ -675,61 +976,37 @@ fn cli_command(config: &AppConfig, cmd: &CliSubcommand) -> Result<()> {
             let cfg_path = config.config_path.clone().with_context(|| {
                 "the loaded config has no recorded source path — refusing to guess where to write"
             })?;
-            let raw = std::fs::read_to_string(&cfg_path).unwrap_or_default();
-            let doc: toml::Value =
-                toml::from_str(&raw).unwrap_or_else(|_| toml::Value::Table(Default::default()));
-            let mut table = doc.as_table().cloned().unwrap_or_default();
-            let removed = if let Some(toml::Value::Array(a)) =
-                table.get_mut("cli").and_then(|c| c.get_mut("tools"))
-            {
-                let before = a.len();
-                a.retain(|v| v.get("name").and_then(|n| n.as_str()) != Some(name.as_str()));
-                before - a.len()
-            } else {
-                0
-            };
-            if removed == 0 {
+            let removed =
+                rewrite_cli_tool_entry(&cfg_path, |text| remove_cli_tool_block(text, name))?;
+            if !removed {
                 println!("No [[cli.tools]] entry named '{name}'.");
                 return Ok(());
             }
-            std::fs::write(&cfg_path, toml::to_string_pretty(&table)?)
-                .with_context(|| format!("failed to write {}", cfg_path.display()))?;
-            println!("Removed the '{name}' grant.");
+            println!("Removed the '{name}' grant from {}.", cfg_path.display());
         }
         CliSubcommand::Toggle { name, enabled } => {
             let cfg_path = config.config_path.clone().with_context(|| {
                 "the loaded config has no recorded source path — refusing to guess where to write"
             })?;
+            // Read the entry's CURRENT state from the file rather than from the
+            // parsed config: a config edited since this process started would
+            // otherwise make `toggle` flip against a stale value.
             let raw = std::fs::read_to_string(&cfg_path).unwrap_or_default();
-            let doc: toml::Value =
-                toml::from_str(&raw).unwrap_or_else(|_| toml::Value::Table(Default::default()));
-            let mut table = doc.as_table().cloned().unwrap_or_default();
-            let mut new_state = None;
-            let tools = table.get_mut("cli").and_then(|c| c.get_mut("tools"));
-            if let Some(toml::Value::Array(a)) = tools {
-                for v in a.iter_mut() {
-                    if v.get("name").and_then(|n| n.as_str()) != Some(name.as_str()) {
-                        continue;
-                    }
-                    let cur = v.get("enabled").and_then(|e| e.as_bool()).unwrap_or(true);
-                    let next = enabled.unwrap_or(!cur);
-                    if let Some(t) = v.as_table_mut() {
-                        t.insert("enabled".into(), toml::Value::Boolean(next));
-                    }
-                    new_state = Some(next);
-                }
+            let Some(current_on) = cli_tool_enabled_in(&raw, name) else {
+                println!("No [[cli.tools]] entry named '{name}'.");
+                return Ok(());
+            };
+            let next = enabled.unwrap_or(!current_on);
+            let changed =
+                rewrite_cli_tool_entry(&cfg_path, |text| set_cli_tool_enabled(text, name, next))?;
+            if !changed {
+                println!("No [[cli.tools]] entry named '{name}'.");
+                return Ok(());
             }
-            match new_state {
-                Some(next) => {
-                    std::fs::write(&cfg_path, toml::to_string_pretty(&table)?)
-                        .with_context(|| format!("failed to write {}", cfg_path.display()))?;
-                    println!(
-                        "'{name}' is now {}.",
-                        if next { "enabled" } else { "disabled" }
-                    );
-                }
-                None => println!("No [[cli.tools]] entry named '{name}'."),
-            }
+            println!(
+                "'{name}' is now {}.",
+                if next { "enabled" } else { "disabled" }
+            );
         }
     }
     Ok(())
@@ -1028,5 +1305,307 @@ mod tests {
             "an ENABLED tool must still be measured"
         );
         assert_eq!(after.len(), 1);
+    }
+
+    // ---- iter-1432: the three round-3 defects of the CLI surface ----
+
+    /// Removing a grant is a config EDIT, not a config REWRITE. The first
+    /// implementation serialized the whole document through
+    /// `toml::to_string_pretty`, which drops every comment: a config with 3
+    /// comments had 0 after `context cli remove`. The operator's
+    /// documentation of their own file is not collateral damage this command
+    /// is entitled to collect.
+    #[test]
+    fn cli_remove_preserves_every_comment() {
+        let mut text = String::from(
+            "# my important header\n[agent]\nmodel = \"gpt-4\" # inline note\n\n[cli]\nenabled = true\n\n[[cli.tools]]\nname = \"git\"\nenabled = true\n\n# keep me\n[[cli.tools]]\nname = \"node\"\nenabled = true\n",
+        );
+        assert!(remove_cli_tool_block(&mut text, "git"), "git entry exists");
+        assert_eq!(
+            text.matches('#').count(),
+            3,
+            "every comment must survive, including the one between entries"
+        );
+        assert!(!text.contains("name = \"git\""), "git is gone");
+        assert!(text.contains("name = \"node\""), "node untouched");
+        assert!(text.contains("# my important header"));
+        assert!(text.contains("model = \"gpt-4\" # inline note"));
+        assert!(
+            !text.contains("\n\n\n"),
+            "the seam where the entry was must not be left as a doubled blank line: {text:?}"
+        );
+        // The document must still PARSE: a comments-preserving edit that
+        // corrupts the TOML trades one defect for a worse one.
+        toml::from_str::<toml::Value>(&text).expect("the edited config still parses as TOML");
+    }
+
+    /// The same for `toggle`: flipping a flag edits a line, it does not
+    /// reformat the operator's file.
+    #[test]
+    fn cli_toggle_preserves_every_comment() {
+        let mut text = String::from(
+            "# header\n[agent]\nmodel = \"gpt-4\" # inline\n\n[cli]\nenabled = true\n\n[[cli.tools]]\nname = \"git\"\nenabled = true # granted last week\n",
+        );
+        let current = cli_tool_enabled_in(&text, "git").expect("git is granted");
+        assert!(current, "a grant is on by default");
+        assert!(set_cli_tool_enabled(&mut text, "git", false));
+        assert_eq!(text.matches('#').count(), 3, "comments survive the flip");
+        assert!(text.contains("enabled = false"));
+        // The `[cli]` master switch is legitimately `enabled = true`, so assert
+        // on the entry's OWN line rather than a substring of the document.
+        assert!(
+            text.contains("enabled = false # granted last week"),
+            "the trailing comment rode along with the flipped value: {text}"
+        );
+        assert!(!text.contains("enabled = true # granted last week"));
+    }
+
+    /// `enabled` defaults to true when a hand-written entry omits it, and a
+    /// toggle on that entry must INSERT the key rather than silently do
+    /// nothing — because a silent no-op is exactly the defect class this
+    /// iteration is closing.
+    #[test]
+    fn cli_toggle_inserts_enabled_when_the_key_is_absent() {
+        let mut text = String::from(
+            "[cli]\n\n[[cli.tools]]\nname = \"git\"\ndescription = \"version control\"\n",
+        );
+        assert_eq!(
+            cli_tool_enabled_in(&text, "git"),
+            Some(true),
+            "absent `enabled` means on"
+        );
+        assert!(set_cli_tool_enabled(&mut text, "git", false));
+        assert!(text.contains("enabled = false"), "the key was inserted");
+        assert!(
+            text.contains("description = \"version control\""),
+            "the operator's other keys survive the insert: {text}"
+        );
+    }
+
+    /// `cli_tool_enabled_in` reads the FILE, not the in-memory config, so a
+    /// config edited after the process started cannot make `toggle` flip
+    /// against a stale value. Distinguishing same-shaped neighbors is the
+    /// whole point: a substring match on the name flips both.
+    #[test]
+    fn cli_tool_enabled_in_picks_the_named_entry_not_its_neighbour() {
+        let text = "[cli]\n\n[[cli.tools]]\nname = \"gitignore\"\nenabled = false\n\n[[cli.tools]]\nname = \"git\"\nenabled = true\n";
+        assert_eq!(cli_tool_enabled_in(text, "git"), Some(true));
+        assert_eq!(cli_tool_enabled_in(text, "gitignore"), Some(false));
+        assert_eq!(cli_tool_enabled_in(text, "nope"), None, "no such grant");
+    }
+
+    /// `--apply` writes. The first implementation accepted the flag, printed
+    /// "Applied. Re-run to measure the realized saving" and applied NOTHING
+    /// — proven by a before/after pair that moved by exactly 0 tok (17775 →
+    /// 17775). The message is the loop's contract, so a flag that lies costs
+    /// more than no flag: it spends trust and produces a second wasted
+    /// measurement.
+    #[test]
+    fn apply_one_disable_writes_the_tool_state_file() {
+        let cfg = test_config("iter1432_apply");
+        let opt = operant_core::context_budget::Optimization {
+            surface: "tool:todo".to_string(),
+            action: "operant tools disable todo".to_string(),
+            saves_per_request: 769,
+            risk: "x".to_string(),
+        };
+        assert!(
+            apply_one(&cfg, &opt).expect("applying a disable must succeed"),
+            "the first apply is a real change"
+        );
+        let state = std::fs::read_to_string(operant_core::tools::tool_state::tool_state_path(&cfg))
+            .expect("tool state written");
+        assert!(
+            state.contains("todo"),
+            "the tool is persisted disabled: {state}"
+        );
+        assert!(
+            !apply_one(&cfg, &opt).expect("a repeat apply is not an error"),
+            "applying the same twice reports no change rather than lying"
+        );
+    }
+
+    /// A move this process cannot perform must report false, so the caller
+    /// prints the honest "run the listed command yourself" text instead of
+    /// claiming success. MCP server moves are deliberately in that set:
+    /// applying one would write a config the measured surface never reads.
+    #[test]
+    fn apply_one_reports_false_for_action_shapes_it_cannot_perform() {
+        let cfg = test_config("iter1432_noop");
+        let opt = operant_core::context_budget::Optimization {
+            surface: "mcp:sourcehound".to_string(),
+            action: "disable or defer the server mcp:sourcehound".to_string(),
+            saves_per_request: 1600,
+            risk: "x".to_string(),
+        };
+        assert!(
+            !apply_one(&cfg, &opt).expect("an unperformed move is not an error"),
+            "an unperformed move reports false so the caller stays honest"
+        );
+    }
+
+    /// A config whose TEXT is written exactly as given, for tests that need
+    /// comments and odd formatting present before a command runs.
+    fn test_config_with(tag: &str, content: &str) -> operant_core::config::AppConfig {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir =
+            std::env::temp_dir().join(format!("operant_{tag}_{}_{}", std::process::id(), nanos));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("operant.toml");
+        let content = content.replace("__DB__", &dir.join("test.db").display().to_string());
+        std::fs::write(&path, &content).unwrap();
+        operant_core::config::parse_config_str(&content, &path).expect("the test config parses")
+    }
+
+    /// The handler, end to end. Every other CLI test pins the helper
+    /// functions; the OPERATOR's data loss happened in the handler, which is
+    /// the one place the two are not interchangeable. Proven by mutation:
+    /// restoring the handler's original `toml::to_string_pretty` rewrite left
+    /// every helper-level test GREEN — the gap that let the defect ship.
+    #[test]
+    fn cli_remove_via_the_handler_preserves_the_operators_comments() {
+        let cfg = test_config_with(
+            "iter1432_rm_e2e",
+            "database_path = \"__DB__\"\n\n# my header\n[agent]\nmodel = \"gpt-4\" # inline note\n\n[cli]\nenabled = true\n\n[[cli.tools]]\nname = \"git\"\nenabled = true\n",
+        );
+        let path = cfg
+            .config_path
+            .clone()
+            .expect("the config records its path");
+        cli_command(&cfg, &CliSubcommand::Remove { name: "git".into() })
+            .expect("remove must succeed");
+        let after = std::fs::read_to_string(&path).expect("config still there");
+        // The file carries two comment tokens: `# my header` and the inline
+        // one on the model line. The removed entry owns neither, so a
+        // lossless remove still reports 2.
+        assert_eq!(
+            after.matches('#').count(),
+            2,
+            "the handler must not cost the operator their comments: {after}"
+        );
+        assert!(!after.contains("name = \"git\""), "the grant is gone");
+        assert!(after.contains("# my header"));
+        assert!(after.contains("model = \"gpt-4\" # inline note"));
+        toml::from_str::<toml::Value>(&after).expect("the edited config still parses");
+    }
+
+    /// Same for `toggle`, and it also pins the flip itself: the handler must
+    /// report the state it actually produced, not the state it intended.
+    #[test]
+    fn cli_toggle_via_the_handler_flips_and_preserves_comments() {
+        let cfg = test_config_with(
+            "iter1432_tg_e2e",
+            "database_path = \"__DB__\"\n\n# my header\n[cli]\nenabled = true\n\n[[cli.tools]]\nname = \"git\"\nenabled = true # granted last week\n",
+        );
+        let path = cfg
+            .config_path
+            .clone()
+            .expect("the config records its path");
+        cli_command(
+            &cfg,
+            &CliSubcommand::Toggle {
+                name: "git".into(),
+                enabled: None,
+            },
+        )
+        .expect("toggle must succeed");
+        let after = std::fs::read_to_string(&path).expect("config still there");
+        // `# my header` and the trailing note are both comments; 2 total.
+        assert_eq!(after.matches('#').count(), 2, "comments survive: {after}");
+        assert!(
+            after.contains("enabled = false"),
+            "the grant is now off: {after}"
+        );
+        assert!(
+            after.contains("# granted last week"),
+            "the trailing note survives: {after}"
+        );
+        toml::from_str::<toml::Value>(&after).expect("the edited config still parses");
+    }
+
+    /// A toggle must never leave TWO `enabled` keys in one entry. The
+    /// duplicate is worse than a crash: TOML takes the last value, so the
+    /// file reads correctly while carrying a second key that a future edit
+    /// may resolve the other way. Found by the end-to-end handler test, not
+    /// by the helper tests — the insert and the flip each looked right alone.
+    #[test]
+    fn cli_toggle_leaves_exactly_one_enabled_line() {
+        let mut text = String::from(
+            "[cli]\n\n[[cli.tools]]\nname = \"git\"\nenabled = true # granted last week\n",
+        );
+        assert!(set_cli_tool_enabled(&mut text, "git", false));
+        assert_eq!(
+            text.matches("enabled =").count(),
+            1,
+            "one entry, one enabled key: {text:?}"
+        );
+        assert!(
+            text.contains("enabled = false # granted last week"),
+            "the flip preserved the note: {text}"
+        );
+    }
+
+    /// `optimize()` formats a CLI move as `set cli.inject_help = "usage" ...`.
+    /// The APPLY side parses the quoted word back out, so the two must agree
+    /// on the quoting — a rename on either side silently stops applying.
+    #[test]
+    fn apply_one_writes_cli_inject_help_and_keeps_comments() {
+        let cfg = test_config_with(
+            "iter1432_inject",
+            "database_path = \"__DB__\"\n\n# documented by hand\n[cli]\nenabled = true\ninject_help = \"usage\"\n",
+        );
+        let path = cfg.config_path.clone().expect("config path recorded");
+        // The exact string `optimize()` produces for a CLI surface.
+        let action = operant_core::context_budget::optimize(&{
+            let mut b = operant_core::context_budget::ContextBudget::new(100);
+            b.push(operant_core::context_budget::SurfaceCost::new(
+                "cli:git",
+                "prompt-block",
+                1,
+                "- git",
+            ));
+            b
+        });
+        let opt = action
+            .into_iter()
+            .find(|o| o.surface == "cli:git")
+            .expect("a CLI surface gets a proposal");
+        assert!(apply_one(&cfg, &opt).expect("applying must succeed"));
+        let after = std::fs::read_to_string(&path).expect("config still there");
+        assert!(
+            after.contains("# documented by hand"),
+            "persist_config_key keeps comments: {after}"
+        );
+        assert!(
+            after.contains("inject_help"),
+            "the move named the key it wrote: {after}"
+        );
+    }
+
+    fn test_config(tag: &str) -> operant_core::config::AppConfig {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir =
+            std::env::temp_dir().join(format!("operant_{tag}_{}_{}", std::process::id(), nanos));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("operant.toml");
+        // The tool-state file lives next to the DATABASE, not next to the
+        // config — so a config that does not name its own database resolves
+        // `tool_state_path` against the REAL operant home. A test that then
+        // calls `apply_one` reads and writes the operator's LIVE
+        // `tool_state.json` (this test did exactly that and read
+        // `{"disabled":["todo"]}` out of it, which is why the first apply
+        // reported "already disabled"). Name the database explicitly.
+        let content = format!(
+            "database_path = \"{}\"\n\n[agent]\nmodel = \"test-model\"\n",
+            dir.join("test.db").display()
+        );
+        std::fs::write(&path, &content).unwrap();
+        operant_core::config::parse_config_str(&content, &path).expect("a minimal config parses")
     }
 }

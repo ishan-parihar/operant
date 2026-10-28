@@ -2793,8 +2793,8 @@ dependencies = [
 
 [[package]]
 name = "memory-wire"
-version = "0.9.0"
-source = "git+https://github.com/ishan-parihar/memory-wire?branch=main#fd704c8765342f9b9df8ac3c5b534dac7097f940"
+version = "0.10.0"
+source = "git+https://github.com/ishan-parihar/memory-wire?branch=main#a16f374ebb2e02dd9a6ebcefe410fb196ff4f858"
 dependencies = [
  "anyhow",
  "axum 0.7.9",
