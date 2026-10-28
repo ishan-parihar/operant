@@ -8,6 +8,7 @@
 //! reconcile_columns() diffs live columns against DESIRED_SCHEMA_SQL and ADDs
 //! any missing ones. This makes column additions a declarative operation.
 
+use chrono::{DateTime, Utc};
 use rusqlite::{Connection, TransactionBehavior, params};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -65,6 +66,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     handoff_error TEXT,
     rewind_count INTEGER NOT NULL DEFAULT 0,
     archived INTEGER NOT NULL DEFAULT 0,
+    employee_id TEXT,
     FOREIGN KEY (parent_session_id) REFERENCES sessions(id)
 );
 
@@ -673,12 +675,13 @@ impl Database {
                 cwd, billing_provider, billing_base_url, billing_mode,
                 estimated_cost_usd, actual_cost_usd, cost_status, cost_source,
                 pricing_version, title, api_call_count, handoff_state,
-                handoff_platform, handoff_error, rewind_count, archived
+                handoff_platform, handoff_error, rewind_count, archived,
+                employee_id
             ) VALUES (
                 ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
                 ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20,
                 ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30,
-                ?31, ?32, ?33
+                ?31, ?32, ?33, ?34
             )
             ON CONFLICT(id) DO UPDATE SET
                 source = excluded.source,
@@ -712,7 +715,8 @@ impl Database {
                 handoff_platform = excluded.handoff_platform,
                 handoff_error = excluded.handoff_error,
                 rewind_count = excluded.rewind_count,
-                archived = excluded.archived",
+                archived = excluded.archived,
+                employee_id = excluded.employee_id",
             params![
                 session.id,
                 session.source,
@@ -747,6 +751,7 @@ impl Database {
                 session.handoff_error,
                 session.rewind_count,
                 session.archived,
+                session.employee_id,
             ],
         )
         .map_err(|e| Error::Agent(format!("Failed to save session: {}", e)))?;
@@ -1009,10 +1014,112 @@ impl Database {
         Ok(sessions)
     }
 
+    /// List recent sessions as the unified `SessionEntryV2` record — the
+    /// ONE shape every surface renders (session hub, CLI, gateway routes;
+    /// plan 2026-10-28, audit RT-A).
+    ///
+    /// One SELECT over columns the schema already carries (plus
+    /// `employee_id`, which `reconcile_columns` adds to existing DBs).
+    /// `COALESCE(ended_at, started_at)` gives an ordering key even for a
+    /// session that never ended. Subagent rows are NOT joined here — the
+    /// delegation registry is process-local, so the caller (same process)
+    /// appends `RowKind::Subagent` rows from
+    /// [`crate::tools::async_delegation::records_snapshot`].
+    pub fn list_sessions_rich(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<crate::session::listing::SessionEntryV2>> {
+        let conn = self.lock_conn()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT s.id, s.title, s.parent_session_id, s.employee_id, s.source,
+                        COALESCE(s.ended_at, s.started_at) AS updated_at,
+                        s.cwd, s.archived,
+                        s.input_tokens + s.output_tokens + s.cache_read_tokens + s.cache_write_tokens AS tokens,
+                        COALESCE(s.actual_cost_usd, s.estimated_cost_usd, 0.0) AS cost_usd,
+                        COUNT(m.id) AS msg_count
+                 FROM sessions s
+                 LEFT JOIN messages m ON s.id = m.session_id
+                 GROUP BY s.id
+                 ORDER BY updated_at DESC
+                 LIMIT ?1",
+            )
+            .map_err(|e| {
+                Error::Agent(format!("Failed to prepare list_sessions_rich: {}", e))
+            })?;
+
+        let rows = stmt
+            .query_map(params![limit], |row| {
+                Ok(RichSessionRow {
+                    id: row.get(0)?,
+                    title: row.get(1)?,
+                    parent_id: row.get(2)?,
+                    employee_id: row.get(3)?,
+                    source: row.get(4)?,
+                    updated_at: row.get(5)?,
+                    cwd: row.get(6)?,
+                    archived: row.get::<_, i64>(7)? != 0,
+                    tokens: row.get::<_, i64>(8)?.max(0) as u64,
+                    cost_usd: row.get(9)?,
+                    message_count: row.get::<_, i64>(10)?.max(0) as usize,
+                })
+            })
+            .map_err(|e| Error::Agent(format!("list_sessions_rich query error: {}", e)))?;
+
+        let mut out = Vec::new();
+        for row in rows {
+            let row = row.map_err(|e| Error::Agent(format!("list_sessions_rich row: {}", e)))?;
+            let updated_at = DateTime::parse_from_rfc3339(&row.updated_at)
+                .map(|dt| dt.with_timezone(&Utc))
+                .unwrap_or_else(|_| Utc::now());
+            let status = if row.archived {
+                crate::session::listing::RowStatus::Archived
+            } else {
+                // Same-process presence: the hub sets `Live` on the current
+                // session id after loading; the DB cannot know it.
+                crate::session::listing::RowStatus::Idle
+            };
+            let kind = if row.parent_id.is_some() {
+                crate::session::listing::RowKind::Branch
+            } else {
+                crate::session::listing::RowKind::Session
+            };
+            out.push(crate::session::listing::SessionEntryV2 {
+                id: row.id,
+                parent_id: row.parent_id,
+                title: row.title,
+                updated_at,
+                employee_id: row.employee_id,
+                source: row.source,
+                message_count: row.message_count,
+                cost_usd: row.cost_usd,
+                tokens: row.tokens,
+                cwd: row.cwd,
+                status,
+                kind,
+            });
+        }
+        Ok(out)
+    }
+
     /// Search sessions by content query (using FTS5).
     /// Returns session IDs and matching content snippets.
     pub fn search_sessions(&self, query: &str, limit: usize) -> Result<Vec<SessionSearchResult>> {
         self.search_sessions_filtered(query, None, limit)
+    }
+
+    /// Stamp the bylaws seat on a session row (the operator's employee
+    /// tag, plan 2026-10-28 iter-A). Idempotent; a no-op on an unknown id
+    /// (the turn-prologue save creates the row first, so a miss means a
+    /// concurrent delete — not worth failing the turn over).
+    pub fn set_session_employee(&self, session_id: &str, employee_id: &str) -> Result<()> {
+        let conn = self.lock_conn()?;
+        conn.execute(
+            "UPDATE sessions SET employee_id = ?2 WHERE id = ?1",
+            params![session_id, employee_id],
+        )
+        .map_err(|e| Error::Agent(format!("Failed to stamp session employee: {}", e)))?;
+        Ok(())
     }
 
     /// FTS5 session search with an optional role filter (`user`/`assistant`/
@@ -2089,6 +2196,9 @@ pub struct SessionData {
     pub handoff_error: Option<String>,
     pub rewind_count: i64,
     pub archived: i64,
+    /// The bylaws seat executing this session (the operator's "who is
+    /// running it" tag). None = personal mode / predates the column.
+    pub employee_id: Option<String>,
 }
 
 /// Full message data matching Python operant_state.py schema.
@@ -2124,6 +2234,22 @@ pub struct DatabaseSession {
     pub updated_at: String,
     pub message_count: usize,
     pub actual_cost_usd: Option<f64>,
+}
+
+/// Raw row shape for `list_sessions_rich` (private — the public type is
+/// [`crate::session::listing::SessionEntryV2`]).
+struct RichSessionRow {
+    id: String,
+    title: Option<String>,
+    parent_id: Option<String>,
+    employee_id: Option<String>,
+    source: String,
+    updated_at: String,
+    cwd: Option<String>,
+    archived: bool,
+    tokens: u64,
+    cost_usd: f64,
+    message_count: usize,
 }
 
 /// A search result from FTS5 query.
@@ -2739,6 +2865,7 @@ mod tests {
             handoff_error: None,
             rewind_count: 0,
             archived: 0,
+            employee_id: None,
         };
 
         db.save_session_full(&session).unwrap();
@@ -3393,6 +3520,7 @@ mod tests {
             handoff_error: None,
             rewind_count: 2,
             archived: 0,
+            employee_id: None,
         };
         db.save_session_full(&session).unwrap();
         let conn = db.conn.lock().unwrap();
@@ -3702,5 +3830,88 @@ mod tests {
         assert!(bounded.ends_with('…'));
         // Short text passes through untouched.
         assert_eq!(Database::bound_activity_description("  hi  "), "hi");
+    }
+
+    // ── plan 2026-10-28 iter-A: the unified record + employee tag ──
+
+    #[test]
+    fn list_sessions_rich_returns_the_unified_record() {
+        let db = test_db();
+        let now = chrono::Utc::now().to_rfc3339();
+        db.save_session("rich-1", Some("Rich One"), "local", &now, &now)
+            .expect("save");
+        db.save_session("rich-2", None, "agent", &now, &now)
+            .expect("save");
+        db.set_session_employee("rich-1", "premiere")
+            .expect("stamp");
+
+        let rows = db.list_sessions_rich(10).expect("rich list");
+        let one = rows.iter().find(|r| r.id == "rich-1").expect("rich-1");
+        assert_eq!(one.title.as_deref(), Some("Rich One"));
+        assert_eq!(one.employee_id.as_deref(), Some("premiere"));
+        assert_eq!(one.source, "local");
+        assert_eq!(one.status, crate::session::listing::RowStatus::Idle);
+        assert!(matches!(
+            one.kind,
+            crate::session::listing::RowKind::Session
+        ));
+        let two = rows.iter().find(|r| r.id == "rich-2").expect("rich-2");
+        assert_eq!(two.employee_id, None, "personal sessions carry no seat");
+        assert_eq!(two.title, None);
+    }
+
+    #[test]
+    fn employee_column_reconciles_onto_a_preexisting_database() {
+        // A DB created BEFORE the column existed (the schema minus
+        // employee_id) must gain it via reconcile_columns — the G2 gate.
+        let counter = DB_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "operant_test_reconcile_{}_{}.db",
+            std::process::id(),
+            counter
+        ));
+        let _ = std::fs::remove_file(&path);
+        {
+            let conn = Connection::open(&path).expect("open");
+            conn.execute_batch(
+                "CREATE TABLE sessions (
+                    id TEXT PRIMARY KEY,
+                    source TEXT NOT NULL DEFAULT 'local',
+                    started_at TEXT NOT NULL,
+                    ended_at TEXT,
+                    archived INTEGER NOT NULL DEFAULT 0
+                );",
+            )
+            .expect("legacy schema");
+        }
+        let db = Database::init(path).expect("init reconciles");
+        // The stamp proves the column exists: an UPDATE against a missing
+        // column is a prepare error, and set_session_employee returns it.
+        db.set_session_employee("legacy-1", "premiere")
+            .expect("employee column reconciled onto legacy DB");
+        let rows = db.list_sessions_rich(10).expect("rich list on legacy");
+        assert!(
+            rows.iter()
+                .all(|r| r.employee_id.is_none() || r.employee_id.as_deref() == Some("premiere"))
+        );
+    }
+
+    #[test]
+    fn set_session_employee_is_idempotent_and_targets_only_its_row() {
+        let db = test_db();
+        let now = chrono::Utc::now().to_rfc3339();
+        db.save_session("emp-a", None, "local", &now, &now)
+            .expect("a");
+        db.save_session("emp-b", None, "local", &now, &now)
+            .expect("b");
+        db.set_session_employee("emp-a", "analyst")
+            .expect("stamp 1");
+        db.set_session_employee("emp-a", "analyst")
+            .expect("stamp 2");
+        let rows = db.list_sessions_rich(10).expect("list");
+        let a = rows.iter().find(|r| r.id == "emp-a").expect("a");
+        let b = rows.iter().find(|r| r.id == "emp-b").expect("b");
+        assert_eq!(a.employee_id.as_deref(), Some("analyst"));
+        assert_eq!(b.employee_id, None, "the stamp must not leak to other rows");
     }
 }

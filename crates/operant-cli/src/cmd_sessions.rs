@@ -6,7 +6,7 @@
 use std::io::{self, Write};
 
 use anyhow::{Context, Result};
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use clap::Subcommand;
 use operant_core::config::AppConfig;
 use operant_core::database::Database;
@@ -110,7 +110,11 @@ pub async fn handle_sessions_command(
 
 async fn cmd_list(config: &AppConfig, json: bool) -> Result<()> {
     let db = Database::init(config.database_path.clone()).context("Failed to open database")?;
-    let sessions = db.list_sessions(20).context("Failed to list sessions")?;
+    // The unified record (plan 2026-10-28 iter-A): one loader for the CLI,
+    // the session hub, and the gateway routes — RT-A closed here too.
+    let sessions = db
+        .list_sessions_rich(20)
+        .context("Failed to list sessions")?;
 
     if json {
         let items: Vec<serde_json::Value> = sessions
@@ -121,7 +125,8 @@ async fn cmd_list(config: &AppConfig, json: bool) -> Result<()> {
                     "index": i + 1,
                     "id": s.id,
                     "title": s.title.as_deref().unwrap_or("(untitled)"),
-                    "updated_at": s.updated_at,
+                    "updated_at": s.updated_at.to_rfc3339(),
+                    "employee_id": s.employee_id,
                     "message_count": s.message_count,
                 })
             })
@@ -136,10 +141,10 @@ async fn cmd_list(config: &AppConfig, json: bool) -> Result<()> {
     }
 
     println!(
-        "{:<4} {:<36} {:<28} {:<20} {:>8}",
-        "#", "Session ID", "Title", "Updated At", "Messages"
+        "{:<4} {:<36} {:<28} {:<12} {:<20} {:>8}",
+        "#", "Session ID", "Title", "Employee", "Updated At", "Messages"
     );
-    println!("{}", "-".repeat(100));
+    println!("{}", "-".repeat(112));
 
     for (i, session) in sessions.iter().enumerate() {
         let title = session.title.as_deref().unwrap_or("(untitled)");
@@ -149,11 +154,12 @@ async fn cmd_list(config: &AppConfig, json: bool) -> Result<()> {
             title.to_string()
         };
         println!(
-            "{:<4} {:<36} {:<28} {:<20} {:>8}",
+            "{:<4} {:<36} {:<28} {:<12} {:<20} {:>8}",
             i + 1,
             session.id,
             display_title,
-            session.updated_at,
+            session.employee_id.as_deref().unwrap_or("-"),
+            session.updated_at.to_rfc3339(),
             session.message_count,
         );
     }
@@ -296,20 +302,13 @@ async fn cmd_export(
 async fn cmd_prune(config: &AppConfig, older_than_days: u64, force: bool) -> Result<()> {
     let db = Database::init(config.database_path.clone()).context("Failed to open database")?;
     let sessions = db
-        .list_sessions(10_000)
+        .list_sessions_rich(10_000)
         .context("Failed to list sessions")?;
 
     let cutoff = Utc::now() - chrono::Duration::days(older_than_days as i64);
 
-    let to_prune: Vec<&operant_core::database::DatabaseSession> = sessions
-        .iter()
-        .filter(|s| {
-            DateTime::parse_from_rfc3339(&s.updated_at)
-                .ok()
-                .map(|dt| dt.with_timezone(&Utc) < cutoff)
-                .unwrap_or(false)
-        })
-        .collect();
+    let to_prune: Vec<&operant_core::session::listing::SessionEntryV2> =
+        sessions.iter().filter(|s| s.updated_at < cutoff).collect();
 
     if to_prune.is_empty() {
         println!("No sessions older than {} days found.", older_than_days);
@@ -323,7 +322,12 @@ async fn cmd_prune(config: &AppConfig, older_than_days: u64, force: bool) -> Res
     );
     for s in &to_prune {
         let title = s.title.as_deref().unwrap_or("(untitled)");
-        println!("  • {} ({}) - last updated {}", s.id, title, s.updated_at);
+        println!(
+            "  • {} ({}) - last updated {}",
+            s.id,
+            title,
+            s.updated_at.to_rfc3339()
+        );
     }
 
     if !force {
@@ -359,7 +363,9 @@ async fn cmd_rename(config: &AppConfig, id: &str, title: &str) -> Result<()> {
 
 async fn cmd_browse(config: &AppConfig) -> Result<()> {
     let db = Database::init(config.database_path.clone()).context("Failed to open database")?;
-    let sessions = db.list_sessions(50).context("Failed to list sessions")?;
+    let sessions = db
+        .list_sessions_rich(50)
+        .context("Failed to list sessions")?;
 
     if sessions.is_empty() {
         println!("No sessions found.");

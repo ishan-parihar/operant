@@ -175,19 +175,28 @@ pub async fn build_turn_context(agent: &OperantAgent, user_query: &str) -> Resul
 
     // ── 5. DB session + user message persistence ─────────────────────
     // Save session first (must exist before messages can reference it)
+    let now = chrono::Utc::now().to_rfc3339();
     agent
         .database
-        .save_session(
-            &session_id,
-            None,
-            "agent",
-            &chrono::Utc::now().to_rfc3339(),
-            &chrono::Utc::now().to_rfc3339(),
-        )
+        .save_session(&session_id, None, "agent", &now, &now)
         .map_err(|e| {
             warn!(error = %e, "Failed to save session metadata");
             e
         })?;
+    // The operator's employee tag: stamp the seat on the row (plan
+    // 2026-10-28 iter-A). Personal mode leaves the column NULL. A separate
+    // UPDATE rather than a wider `save_session` signature: three other
+    // callers (llm_compressor, rewind forks' parent rows, tests) write
+    // session metadata without a seat and keep the 5-arg shape.
+    if let Some(seat) = agent.seat_id() {
+        agent
+            .database
+            .set_session_employee(&session_id, &seat)
+            .map_err(|e| {
+                warn!(error = %e, "Failed to stamp session employee tag");
+                e
+            })?;
+    }
 
     // Persist user message
     agent

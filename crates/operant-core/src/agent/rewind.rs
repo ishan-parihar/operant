@@ -161,6 +161,9 @@ impl OperantAgent {
             handoff_error: None,
             rewind_count: 1,
             archived: 0,
+            // A rewind fork inherits the seat — the same operator/employee
+            // is executing the branch (plan 2026-10-28 iter-A).
+            employee_id: self.seat_id(),
         };
         self.database
             .save_session_full(&session_data)

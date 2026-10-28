@@ -181,6 +181,70 @@ pub fn list_records() -> Vec<AsyncDelegationRecord> {
     records
 }
 
+/// The registry as `SessionEntryV2` subagent rows — the unified listing's
+/// join point for live delegations (plan 2026-10-28 iter-C). Pending rows
+/// first (the ones an operator would act on), then terminal records within
+/// the registry's own retention window.
+pub fn records_snapshot() -> Vec<crate::session::listing::SessionEntryV2> {
+    use crate::session::listing::{RowKind, RowStatus, SessionEntryV2};
+
+    list_records()
+        .into_iter()
+        .map(|r| {
+            let (status, updated_at) = match r.status {
+                AsyncDelegationStatus::Pending => (
+                    "pending",
+                    chrono::DateTime::from_timestamp(r.dispatch_time as i64, 0)
+                        .map(|dt| dt.with_timezone(&chrono::Utc))
+                        .unwrap_or_else(chrono::Utc::now),
+                ),
+                AsyncDelegationStatus::Completed => (
+                    "completed",
+                    chrono::DateTime::from_timestamp(
+                        r.completed_time.unwrap_or(r.dispatch_time) as i64,
+                        0,
+                    )
+                    .map(|dt| dt.with_timezone(&chrono::Utc))
+                    .unwrap_or_else(chrono::Utc::now),
+                ),
+                AsyncDelegationStatus::Failed => (
+                    "failed",
+                    chrono::DateTime::from_timestamp(
+                        r.completed_time.unwrap_or(r.dispatch_time) as i64,
+                        0,
+                    )
+                    .map(|dt| dt.with_timezone(&chrono::Utc))
+                    .unwrap_or_else(chrono::Utc::now),
+                ),
+            };
+            SessionEntryV2 {
+                id: r.delegation_id,
+                parent_id: None,
+                title: None,
+                updated_at,
+                employee_id: None,
+                source: "subagent".to_string(),
+                message_count: 0,
+                cost_usd: 0.0,
+                tokens: 0,
+                cwd: None,
+                // Same-process presence: a pending delegation IS live work.
+                status: if r.status == AsyncDelegationStatus::Pending {
+                    RowStatus::Live
+                } else {
+                    RowStatus::Idle
+                },
+                kind: RowKind::Subagent {
+                    goal: r.goal,
+                    model: r.model,
+                    dispatch_time: r.dispatch_time,
+                    status,
+                },
+            }
+        })
+        .collect()
+}
+
 /// Drop the oldest terminal records beyond the retention cap so a long-lived
 /// process doesn't accumulate unbounded delegation history (hermes
 /// `_MAX_RETAINED_COMPLETED = 50` parity).

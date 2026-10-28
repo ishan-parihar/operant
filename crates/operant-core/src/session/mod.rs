@@ -65,6 +65,11 @@ use crate::database::{Database, MessageData};
 /// `operant_core::session::autocompact`.
 pub mod autocompact;
 
+/// The unified listing record (`SessionEntryV2`) every session surface
+/// renders: the session hub, the CLI subcommands, and the gateway's
+/// read-only API routes (plan 2026-10-28, audit RT-A).
+pub mod listing;
+
 /// Default number of sessions held resident in memory.
 ///
 /// Measured: a full 128k-token window is ~500 KB of text, so 32 sessions is
