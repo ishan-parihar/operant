@@ -179,7 +179,10 @@ inject = "on_invoke"
 # [advisor] — always-on transcript watchdog (omp advisor/ parity).
 # Distinct from [moa]: MoA fans out per turn; the advisor reviews the
 # incremental transcript delta after each completed turn and surfaces short
-# notes of concern. Notes NEVER enter the acting agent's context.
+# notes of concern. One merged review delivers per turn: a note at/above
+# continue_severity continues the run on the advice (the batch enters the
+# model's context as a follow-up turn); lower severities stay visible
+# cards that ride the transcript into the next user turn.
 [advisor]
 enabled = false
 # Optional model overrides — empty = use the primary model's route.
@@ -189,6 +192,9 @@ enabled = false
 # api_key = ""
 # Freeform extra instructions for the advisor.
 # instructions = ""
+# Lowest severity that wakes an idle agent for one continuation:
+# "nit", "concern" (default), or "blocker".
+# continue_severity = "concern"
 # Consecutive-identical-note suppression streak (default 3).
 # suppress_streak = 3
 # Side-call timeout in seconds (default 120; a timeout is a skipped
@@ -325,8 +331,8 @@ max_help_lines = 60
 # [[cli.tools]]
 # name = "git"
 # description = "Version control"          # shows INSTEAD of the usage line when inject_help = "description"
-# global_args = ["--no-pager"]             # argv always prepended to every call
-# allow_subcommands = ["status", "diff"]   # empty = the whole CLI
+# global_args = ["--no-pager"]             # PHASE 2: argv to prepend to every call (stored, not yet enforced)
+# allow_subcommands = ["status", "diff"]   # PHASE 2: narrower grant than the whole CLI (stored, not yet enforced)
 # List the catalogue with install + grant status:
 #   operant context cli list
 

@@ -1224,26 +1224,34 @@ impl Default for McpSettings {
 pub struct CliToolSettings {
     /// The binary name as it appears on PATH (e.g. "git"). If it is not
     /// discoverable the entry reports unusable and is skipped.
+    ///
+    /// PHASE 1 NOTE: the surface is configuration-plus-measurement only —
+    /// there is no `cli_exec` and no `<cli_reference>` injection yet, so a
+    /// grant is recorded and costed, not invocable. The fields below that
+    /// describe invocation (`description`, `global_args`, `timeout_secs`,
+    /// `allow_subcommands`) are stored for phase 2 and read by nothing today.
     pub name: String,
     /// Whether the agent may invoke this CLI. Defaults to true so a newly
     /// added entry works without also flipping a switch.
     #[serde(default = "default_true")]
     pub enabled: bool,
     /// What this CLI is for, in the operator's words. Renders in the
-    /// `<cli_reference>` block, because the operator knows what they use it
-    /// for better than `--help` describes.
+    /// `<cli_reference>` block (phase 2), because the operator knows what
+    /// they use it for better than `--help` describes. Measured by
+    /// `context budget` in phase 1, when it replaces the raw usage line.
     pub description: Option<String>,
-    /// argv ALWAYS prepended to every invocation (a global `--no-pager`,
-    /// `-C /some/repo` for git). Lets one entry pin a working context
-    /// instead of every call repeating it.
+    /// argv to prepend to every invocation (a global `--no-pager`,
+    /// `-C /some/repo` for git). PHASE 2: parsed and round-tripped, with
+    /// zero production readers until `cli_exec` lands.
     #[serde(default)]
     pub global_args: Vec<String>,
     /// Hard per-call timeout in seconds. 0 means use the surface default
-    /// (`cli.default_timeout_secs`).
+    /// (`cli.default_timeout_secs`). PHASE 2: stored, not yet enforced.
     #[serde(default)]
     pub timeout_secs: u64,
     /// Subcommands the agent may invoke, when the operator wants a narrower
-    /// grant than the whole binary. Empty means the whole CLI.
+    /// grant than the whole binary. Empty means the whole CLI. PHASE 2:
+    /// stored, not yet enforced.
     #[serde(default)]
     pub allow_subcommands: Vec<String>,
 }
@@ -2807,6 +2815,17 @@ pub fn parse_config_str(raw: &str, source: &Path) -> Result<AppConfig> {
         })
         .map(|mut cfg: AppConfig| {
             cfg.config_path = Some(source.to_path_buf());
+            // The same file the struct records, the GLOBAL records too —
+            // `persist_config_key` writes only into the global, so a config
+            // parsed here could be read (and its `config_path` consulted) by
+            // a writer that then found nothing loaded and refused. That is
+            // not hypothetical: `context optimize --apply` calls
+            // `persist_config_key("cli.inject_help", ..)` and failed with
+            // "no config file is loaded in this process" for ANY `-c <path>`
+            // run, while the tool-state half of the same command worked.
+            if let Ok(mut slot) = LOADED_CONFIG_PATH.write() {
+                *slot = Some(source.to_path_buf());
+            }
             cfg
         })
 }

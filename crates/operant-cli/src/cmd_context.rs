@@ -130,6 +130,11 @@ pub enum CliSubcommand {
     /// it has a recipe for, so an arbitrary name would report unusable
     /// forever. Narrow a grant with --global-args / --allow-subcommands
     /// rather than inventing a name.
+    ///
+    /// PHASE 1: the entry is recorded, the budget measures it, and the agent
+    /// cannot invoke it (no `cli_exec`, no `<cli_reference>` injection).
+    /// `--global-args` and `--allow-subcommands` are stored for phase 2 and
+    /// read by nothing yet.
     Add {
         /// The binary name, e.g. "git"
         name: String,
@@ -139,11 +144,16 @@ pub enum CliSubcommand {
         #[arg(long)]
         description: Option<String>,
 
-        /// argv always prepended to every invocation of this CLI
+        /// argv to prepend to every invocation of this CLI. RECORDED for
+        /// phase 2 only: until `cli_exec` lands there is no invocation, so
+        /// these are written to the config and nothing reads them back.
+        /// Measured by an audit — zero production readers for `global_args`,
+        /// `allow_subcommands` and `timeout_secs` today.
         #[arg(long)]
         global_args: Vec<String>,
 
-        /// Subcommands the agent may use (empty = the whole CLI)
+        /// Subcommands the agent may use (empty = the whole CLI). Same phase-2
+        /// caveat as `global_args`: stored now, enforced when `cli_exec` lands.
         #[arg(long)]
         allow_subcommands: Vec<String>,
     },
@@ -850,6 +860,45 @@ fn set_cli_tool_enabled(text: &mut String, name: &str, next: bool) -> bool {
     true
 }
 
+/// Serialize a value as a TOML BASIC string with the escapes the format
+/// requires.
+///
+/// `format!("\"{value}\"")` — what `context cli add` used — writes operator
+/// text straight into a quoted string, so a single `"` produced
+/// `description = "the "quoted" tool"` and the config stopped parsing. Same
+/// for a backslash, a tab and a newline: four inputs, four broken files, and
+/// the command printed "Granted" and exited 0 each time.
+///
+/// Prefer `toml_edit`'s own value formatting when it is available; this
+/// exists for the append-only write path that builds text by hand.
+fn toml_basic_string(value: &str) -> String {
+    let mut out = String::with_capacity(value.len() + 2);
+    out.push('"');
+    for ch in value.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            // The other C0 controls have no short escape and a raw byte inside
+            // a quoted string is invalid TOML.
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04X}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// A TOML array of basic strings, for `global_args` / `allow_subcommands`.
+/// Rust's `{:?}` Debug output is close to TOML but NOT the same format — it
+/// leaves some sequences unescaped — so arrays go through the same escaper.
+fn toml_array(values: &[String]) -> String {
+    let items: Vec<String> = values.iter().map(|v| toml_basic_string(v)).collect();
+    format!("[{}]", items.join(", "))
+}
+
 /// Manage the granted CLI set. Mirrors `operant mcp` in shape and in the rule
 /// that adding something grants it explicitly, never implicitly.
 fn cli_command(config: &AppConfig, cmd: &CliSubcommand) -> Result<()> {
@@ -937,22 +986,38 @@ fn cli_command(config: &AppConfig, cmd: &CliSubcommand) -> Result<()> {
                 surface_enabled_by_us = true;
             }
             out.push_str(&format!(
-                "\n[[cli.tools]]\nname = \"{name}\"\nenabled = true\n{}{}{}",
+                "\n[[cli.tools]]\nname = {}\nenabled = true\n{}{}{}",
+                toml_basic_string(name),
                 description
                     .as_ref()
-                    .map(|d| format!("description = \"{d}\"\n"))
+                    .map(|d| format!("description = {}\n", toml_basic_string(d)))
                     .unwrap_or_default(),
                 if global_args.is_empty() {
                     String::new()
                 } else {
-                    format!("global_args = {global_args:?}\n")
+                    format!("global_args = {}\n", toml_array(&global_args[..]))
                 },
                 if allow_subcommands.is_empty() {
                     String::new()
                 } else {
-                    format!("allow_subcommands = {allow_subcommands:?}\n")
+                    format!(
+                        "allow_subcommands = {}\n",
+                        toml_array(&allow_subcommands[..])
+                    )
                 },
             ));
+            // Refuse to leave a broken file behind. `"{value}"` on operator
+            // text produced `description = "the "quoted" tool"` — invalid
+            // TOML — and the command still printed "Granted 'git'" and exited
+            // 0, so every later command on that config died on a parse error.
+            // Proved by four inputs: a double quote, a backslash, a tab, and a
+            // newline each bricked the file.
+            if let Err(err) = toml::from_str::<toml::Value>(&out) {
+                anyhow::bail!(
+                    "refusing to write {name}: the entry would not parse as TOML ({err}). \
+                     This is a bug in the entry's escaping, not in your values."
+                );
+            }
             std::fs::write(&cfg_path, out)
                 .with_context(|| format!("failed to write {}", cfg_path.display()))?;
             println!("Granted '{name}' in {}.", cfg_path.display());
@@ -1558,14 +1623,19 @@ mod tests {
             "database_path = \"__DB__\"\n\n# documented by hand\n[cli]\nenabled = true\ninject_help = \"usage\"\n",
         );
         let path = cfg.config_path.clone().expect("config path recorded");
-        // The exact string `optimize()` produces for a CLI surface.
+        // The exact string `optimize()` produces for a CLI surface. The
+        // surface text must be LARGE ENOUGH to exceed the target, or
+        // `optimize()` correctly returns nothing and this test passes without
+        // exercising the apply path at all. An earlier version used "- git"
+        // (1 token) against a 100-token target and was reported green while
+        // never having run the assertion it exists for.
         let action = operant_core::context_budget::optimize(&{
-            let mut b = operant_core::context_budget::ContextBudget::new(100);
+            let mut b = operant_core::context_budget::ContextBudget::new(10);
             b.push(operant_core::context_budget::SurfaceCost::new(
                 "cli:git",
                 "prompt-block",
                 1,
-                "- git",
+                &"- git (v): usage: git [opts] ".repeat(40),
             ));
             b
         });
@@ -1583,6 +1653,137 @@ mod tests {
             after.contains("inject_help"),
             "the move named the key it wrote: {after}"
         );
+    }
+
+    /// An operator's own words are NOT trusted input. `context cli add`
+    /// interpolated them straight into a quoted TOML string, so four
+    /// everyday characters each bricked the config: a double quote, a
+    /// backslash, a tab and a newline. The command printed "Granted 'git'"
+    /// and exited 0 in all four cases, and every later command on that config
+    /// died on a parse error.
+    #[test]
+    fn cli_add_escapes_the_operators_description() {
+        for hostile in [
+            "the \"quoted\" tool",
+            "a back\\slash",
+            "has\ttab",
+            "line1\nline2",
+        ] {
+            let cfg = test_config_with(
+                "iter1438_esc",
+                "database_path = \"__DB__\"\n\n# documented\n[cli]\nenabled = true\n",
+            );
+            let path = cfg.config_path.clone().expect("config path recorded");
+            cli_command(
+                &cfg,
+                &CliSubcommand::Add {
+                    name: "git".into(),
+                    description: Some(hostile.to_string()),
+                    global_args: Vec::new(),
+                    allow_subcommands: Vec::new(),
+                },
+            )
+            .unwrap_or_else(|e| panic!("adding git with {hostile:?} must succeed: {e}"));
+            let after = std::fs::read_to_string(&path).expect("config written");
+            toml::from_str::<toml::Value>(&after).unwrap_or_else(|e| {
+                panic!("{hostile:?} must still leave a parseable config: {e}\n{after}")
+            });
+            // The value must ROUND-TRIP, not merely parse: a set of escapes
+            // that parses but decodes to something else is still data loss.
+            let reparsed = operant_core::config::parse_config_str(&after, &path)
+                .expect("the edited config loads through the real loader");
+            assert_eq!(
+                reparsed.cli.tools[0].description.as_deref(),
+                Some(hostile),
+                "the operator's exact words must survive the round-trip"
+            );
+            assert!(
+                after.contains("# documented"),
+                "the add path still preserves comments: {after}"
+            );
+        }
+    }
+
+    /// The same hostiles in the array-valued fields. These reached a different
+    /// formatter (`{:?}`), so they are proved separately rather than assumed
+    /// to share the description's fate.
+    #[test]
+    fn cli_add_escapes_global_args_and_allow_subcommands() {
+        let cfg = test_config_with(
+            "iter1438_arr",
+            "database_path = \"__DB__\"\n\n[cli]\nenabled = true\n",
+        );
+        let path = cfg.config_path.clone().expect("config path recorded");
+        cli_command(
+            &cfg,
+            &CliSubcommand::Add {
+                name: "git".into(),
+                description: None,
+                global_args: vec!["--no-pager".into(), "-C /tmp/a\"b".into()],
+                allow_subcommands: vec!["status".into(), "log --oneline".into()],
+            },
+        )
+        .expect("adding git with hostile args must succeed");
+        let after = std::fs::read_to_string(&path).expect("config written");
+        toml::from_str::<toml::Value>(&after).expect("the array values parse");
+        let reparsed = operant_core::config::parse_config_str(&after, &path)
+            .expect("the edited config loads through the real loader");
+        assert_eq!(reparsed.cli.tools[0].global_args.len(), 2);
+        assert_eq!(
+            reparsed.cli.tools[0].global_args[1], "-C /tmp/a\"b",
+            "the embedded quote must survive: {after}"
+        );
+        assert_eq!(reparsed.cli.tools[0].allow_subcommands[1], "log --oneline");
+    }
+
+    /// Rust's `{:?}` and TOML agree on `\"`, `\\`, `\n` and `\t` — which is
+    /// why the array test above passes even when the escaper is reverted, and
+    /// why a value that escapes the same way under both proves nothing. They
+    /// DISAGREE on other C0 controls: Rust emits `\u{1}`, TOML requires
+    /// `\u0001`. This is the input that separates the two formatters.
+    #[test]
+    fn cli_add_array_values_must_not_use_rust_debug_escaping() {
+        let cfg = test_config_with(
+            "iter1438_ctrl",
+            "database_path = \"__DB__\"\n\n[cli]\nenabled = true\n",
+        );
+        let path = cfg.config_path.clone().expect("config path recorded");
+        cli_command(
+            &cfg,
+            &CliSubcommand::Add {
+                name: "git".into(),
+                description: None,
+                global_args: vec!["--bell\u{7}flag".into()],
+                allow_subcommands: Vec::new(),
+            },
+        )
+        .expect("adding git with a control char must succeed");
+        let after = std::fs::read_to_string(&path).expect("config written");
+        toml::from_str::<toml::Value>(&after).unwrap_or_else(|e| {
+            panic!("a control char in an array value must not break the config: {e}\n{after}")
+        });
+        assert!(
+            !after.contains("\\u{"),
+            "Rust's Debug escape for a control char is not valid TOML: {after}"
+        );
+    }
+
+    /// The guard itself, proved by mutating the escaper away.
+    #[test]
+    fn toml_basic_string_escapes_the_characters_that_break_basic_strings() {
+        assert_eq!(toml_basic_string("plain"), "\"plain\"");
+        assert_eq!(toml_basic_string("a\"b"), "\"a\\\"b\"");
+        assert_eq!(toml_basic_string("a\\b"), "\"a\\\\b\"");
+        assert_eq!(toml_basic_string("a\nb"), "\"a\\nb\"");
+        assert_eq!(toml_basic_string("a\tb"), "\"a\\tb\"");
+        // The dangerous property: every output must parse back to its input.
+        for value in ["a\"b", "a\\b", "a\nb", "a\tb", "a\rb", "\u{1}b"] {
+            let rendered = toml_basic_string(value);
+            let doc = format!("x = {rendered}\n");
+            let parsed: std::collections::HashMap<String, String> =
+                toml::from_str(&doc).expect("renders to valid TOML");
+            assert_eq!(parsed.get("x"), Some(&value.to_string()), "{value:?}");
+        }
     }
 
     fn test_config(tag: &str) -> operant_core::config::AppConfig {

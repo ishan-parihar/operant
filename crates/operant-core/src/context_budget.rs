@@ -56,12 +56,24 @@ impl SurfaceCost {
 }
 
 /// The whole bill, plus the target the loop is driving toward.
+///
+/// `total_tokens_per_request` is DERIVED from `surfaces` but serialized as its
+/// own field, because `--json` is the automation seam: a consumer reading the
+/// machine form had to re-sum every surface to learn the one number the
+/// command exists to report, and the human form prints it as `TOTAL`. A field
+/// that only exists in the pretty output is a field the loop's scripts cannot
+/// read.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ContextBudget {
     pub surfaces: Vec<SurfaceCost>,
     /// Operator's target in tokens per request. 0 means "no target set" and
     /// the report is informational only.
     pub target_tokens_per_request: usize,
+    /// The sum of every surface's cost, materialized for serialization.
+    /// Kept in step by [`ContextBudget::push`] so it can never disagree with
+    /// the surfaces it is derived from.
+    #[serde(default)]
+    pub total_tokens_per_request: usize,
 }
 
 impl ContextBudget {
@@ -69,16 +81,41 @@ impl ContextBudget {
         Self {
             surfaces: Vec::new(),
             target_tokens_per_request: target,
+            total_tokens_per_request: 0,
         }
     }
 
     pub fn push(&mut self, cost: SurfaceCost) {
+        // Maintain the materialized total in the SAME statement that appends,
+        // so a future edit to one cannot leave the other stale. `total()`
+        // reads this field rather than re-summing, which makes the two
+        // definitions of "total" impossible to disagree.
+        self.total_tokens_per_request += cost.tokens_per_request;
         self.surfaces.push(cost);
     }
 
     /// Total estimated tokens per request across every surface.
+    ///
+    /// Reads the materialized field rather than re-summing, so the value the
+    /// JSON consumer sees and the value the loop compares against the target
+    /// are the SAME number by construction. A deserialized document from
+    /// before this field existed carries `total_tokens_per_request: 0` with a
+    /// populated `surfaces` — `#[serde(default)]` fills the zero — so callers
+    /// that read `--json` back must run [`ContextBudget::reconcile_total`]
+    /// first, or a real bill reports as 0.
     pub fn total(&self) -> usize {
-        self.surfaces.iter().map(|s| s.tokens_per_request).sum()
+        self.total_tokens_per_request
+    }
+
+    /// Re-derive the materialized total from the surfaces after a
+    /// deserialize, so an older document (or a hand-edited one) cannot make
+    /// `total()` report 0 over a populated bill. Called by the command that
+    /// reads `--json` back, and by any future round-trip.
+    pub fn reconcile_total(&mut self) {
+        let summed: usize = self.surfaces.iter().map(|s| s.tokens_per_request).sum();
+        if summed != self.total_tokens_per_request {
+            self.total_tokens_per_request = summed;
+        }
     }
 
     /// True when a target is set and the current total exceeds it.
@@ -187,6 +224,67 @@ mod tests {
             items,
             tokens_per_request: tokens,
         }
+    }
+
+    /// The `--json` seam carries the headline number. The human form prints
+    /// `TOTAL 17790`; before this, the machine form carried only `surfaces`
+    /// and `target_tokens_per_request`, so an automation had to re-sum every
+    /// surface to learn the one number the command exists to report.
+    #[test]
+    fn the_json_budget_carries_the_total() {
+        let mut b = ContextBudget::new(1000);
+        b.push(surface("cli:git", "prompt-block", 1, 261));
+        b.push(surface("mcp:sourcehound", "tool-schemas", 23, 1600));
+        let json = serde_json::to_value(&b).expect("serializes");
+        assert_eq!(
+            json.get("total_tokens_per_request")
+                .and_then(|v| v.as_u64()),
+            Some(1861),
+            "the machine form must carry the total the human form prints: {json}"
+        );
+        // Round-trips: a consumer reading the document back gets the same
+        // number WITHOUT re-summing, which is the whole point of the field.
+        let raw = serde_json::to_string(&b).expect("serializes");
+        let mut back: ContextBudget = serde_json::from_str(&raw).expect("deserializes");
+        assert_eq!(back.total(), 1861);
+        back.reconcile_total();
+        assert_eq!(
+            back.total(),
+            1861,
+            "reconcile is a no-op on a fresh document"
+        );
+    }
+
+    /// A document written BEFORE the total field existed has
+    /// `total_tokens_per_request` defaulted to 0 over a populated `surfaces`.
+    /// Reading it back must not report a bill of zero for a real bill.
+    #[test]
+    fn a_document_without_the_total_reconciles_instead_of_reporting_zero() {
+        // The exact shape an older `--json` emitted: no total field.
+        let raw = r#"{"surfaces":[{"id":"cli:git","kind":"prompt-block","items":1,"tokens_per_request":261}],"target_tokens_per_request":1000}"#;
+        let mut b: ContextBudget = serde_json::from_str(raw).expect("old document deserializes");
+        assert_eq!(
+            b.total(),
+            0,
+            "the defaulted field is 0 until reconciled — this is the trap"
+        );
+        b.reconcile_total();
+        assert_eq!(b.total(), 261, "reconcile recovers the real bill");
+        // 261 is NOT over a 1000 target — stated so the assertion above cannot
+        // be satisfied by a budget that over-reports.
+        assert!(!b.over_target(), "261 must not read as over a 1000 target");
+    }
+
+    /// `push` maintains the total in the same breath, so the two cannot
+    /// drift. Proved by mutating the maintenance out.
+    #[test]
+    fn push_keeps_the_total_in_step() {
+        let mut b = ContextBudget::new(0);
+        b.push(surface("a", "tool-schemas", 1, 100));
+        b.push(surface("b", "tool-schemas", 1, 250));
+        assert_eq!(b.total(), 350);
+        let summed: usize = b.surfaces.iter().map(|s| s.tokens_per_request).sum();
+        assert_eq!(b.total(), summed, "materialized total equals the re-sum");
     }
 
     /// A budget with no target never proposes changes: the report is
