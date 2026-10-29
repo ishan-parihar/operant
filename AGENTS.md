@@ -899,15 +899,15 @@ never to hide new ones).
 **All hermes-agent gaps closed.** The operant project now has feature parity
 with hermes-agent's core functionality (excluding Python-specific plugins).
 
-### 1 minor CLI stub (not a bug, just an incomplete feature)
-- `operant cron run <id>` — with a real ID it marks the job triggered and
-  says "Manual execution via CLI is not yet implemented"; with a bad one it
-  says "Cron job '<id>' not found". The scheduler executes jobs on its tick;
-  a manual trigger that runs one OUT of band needs a scheduler handle the CLI
-  does not build (see BUGS.md RT-135).
-
-This is tracked and low-priority. Do not "fix" it unless explicitly asked —
-the user has accepted it as a documented gap.
+### 0 open CLI stubs (the last one closed iter-1474)
+- `operant cron run <id>` **runs the job** — `CronScheduler::run_job_now(id)`
+  rides the scheduler's own dispatch, ESTOP refuses while stopped, and the
+  row is marked from the attempt's real outcome. This was the repo's one
+  accepted stub for its whole life (AGENTS.md told every agent "Do not fix it
+  unless explicitly asked"); the 2026-10-29 remaining-gaps plan asked, it was
+  fixed, and that instruction is withdrawn here so the next agent does not
+  re-read it as still standing. A bad ID still says "Cron job '<id>' not
+  found" (see BUGS.md RT-135, CLOSED).
 
 `operant dashboard server --stop` / `--status` are NOT stubs any more
 (iter-1121): the server records its pid + URL in
@@ -947,7 +947,7 @@ outright because `kill(0, …)` addresses the caller's process group.
 
 ## What IS Working (verified functional — iter-68 audit)
 
-### CLI (52 command variants — real handlers, except the one accepted stub below)
+### CLI (52 command variants — real handlers; no stubs remain as of iter-1474)
 
 run, autonomous, tools, chat, test, config, sessions
 mcp, cookies, skills, model, completion, cron, pause
