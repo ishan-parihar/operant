@@ -472,9 +472,36 @@ fn render_preview(
                 "Enter switches to this session",
                 Style::default().fg(theme_colors::accent()),
             )));
-            // Report the bound back to the frame loop so the arrow keys
-            // clamp here rather than scrolling into blank space.
-            ctx.preview_max_scroll = Some((lines.len() as u16).saturating_sub(inner_height));
+            // The scroll bound must count WRAPPED rows, not source lines: the
+            // paragraph wraps below, so a 200-char message occupies three
+            // visual rows while `lines.len()` still sees one. Measuring the
+            // unwrapped count leaves the operator unable to reach the last
+            // message and makes the pane look like it scrolls "past" content
+            // (the right-pane glitch the operator reported).
+            //
+            // Only the FIRST span of each line decides the wrap (a row is one
+            // grammatical unit here: `N. label: text`), so measuring the
+            // joined spans is exact for every row this pane builds.
+            let width = inner.width.max(1) as usize;
+            let visual_rows: usize = lines
+                .iter()
+                .map(|line| {
+                    let text: String = line
+                        .spans
+                        .iter()
+                        .map(|s| s.content.as_ref())
+                        .collect::<Vec<_>>()
+                        .join("");
+                    if text.is_empty() {
+                        1
+                    } else {
+                        crate::tui::render::utils::balanced_wrap(&text, width)
+                            .len()
+                            .max(1)
+                    }
+                })
+                .sum();
+            ctx.preview_max_scroll = Some((visual_rows as u16).saturating_sub(inner_height));
             lines
         }
     };

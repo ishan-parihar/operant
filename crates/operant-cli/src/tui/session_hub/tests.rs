@@ -479,3 +479,106 @@ fn a_no_selection_selection_is_not_an_illegal_panic() {
     assert!(hub.preview.is_none());
     assert!(!hub.preview_needs_load());
 }
+
+// ---- (2026-10-29) the preview's scroll bound counts WRAPPED rows ----
+
+use ratatui::{Terminal, backend::TestBackend};
+
+/// Paint the hub into a real TestBackend frame and return the scroll bound the
+/// pane measured — the number that decides whether the arrow keys can reach
+/// the last message.
+fn preview_bound_for(messages: &[PreviewMessage], width: u16, height: u16) -> u16 {
+    use crate::tui::render::FrameCtx;
+    let mut hub = SessionHubState::new();
+    hub.visible = true;
+    hub.replace_rows(vec![row("s-1", Some("A session"), None)]);
+    assert!(hub.apply_preview("s-1", messages.to_vec(), 0));
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+    let mut ctx = FrameCtx {
+        size: ratatui::layout::Rect::new(0, 0, width, height),
+        preview_max_scroll: None,
+        stop: false,
+    };
+    terminal
+        .draw(|f| {
+            let area = ratatui::layout::Rect::new(0, 0, width, height);
+            super::render::render_session_hub(f, &hub, area, &mut ctx);
+        })
+        .unwrap();
+    ctx.preview_max_scroll.unwrap_or(0)
+}
+
+#[test]
+fn the_scroll_bound_accounts_for_wrapped_rows() {
+    // A 40-row pane with a narrow list splits ~60/40, so the preview holds
+    // roughly 36 inner rows. Each message renders as ONE source line whose
+    // text wraps to ~2 rows at that width, so a 30-message transcript needs
+    // far more than one screenful — the bound must exceed it.
+    let long = "word ".repeat(120);
+    let messages: Vec<PreviewMessage> = (0..30)
+        .map(|i| PreviewMessage {
+            role: if i % 2 == 0 { "user" } else { "assistant" }.to_string(),
+            content: long.clone(),
+            tool_calls: Vec::new(),
+        })
+        .collect();
+    let bound = preview_bound_for(&messages, 120, 40);
+    assert!(
+        bound >= 10,
+        "a wrapping pane must be scrollable past its first screenful — got {bound}"
+    );
+}
+
+#[test]
+fn the_bound_matches_the_wrapped_row_count_not_the_source_lines() {
+    // The exact defect: `lines.len()` counted 30 source lines; the paragraph
+    // wraps them into far more visual rows. The reported bound must be the
+    // WRAPPED count, which is strictly larger here.
+    let long = "word ".repeat(120);
+    let messages: Vec<PreviewMessage> = (0..30)
+        .map(|i| PreviewMessage {
+            role: if i % 2 == 0 { "user" } else { "assistant" }.to_string(),
+            content: long.clone(),
+            tool_calls: Vec::new(),
+        })
+        .collect();
+    let bound = preview_bound_for(&messages, 120, 40);
+    // The unwrapped count would be 30 source lines + chrome, which at
+    // inner_height ~38 scrolls 0. A wrapped count crosses the screen.
+    assert!(
+        bound > 30,
+        "the bound must reflect wrapped rows, which exceed the source-line count — got {bound}"
+    );
+}
+
+#[test]
+fn a_short_transcript_has_no_scroll_bound() {
+    // A pane whose content fits must not scroll into blank space.
+    let messages = vec![PreviewMessage {
+        role: "user".to_string(),
+        content: "hi".to_string(),
+        tool_calls: Vec::new(),
+    }];
+    let bound = preview_bound_for(&messages, 120, 40);
+    assert_eq!(bound, 0, "one short row in a 40-row pane is 0");
+}
+
+#[test]
+fn a_narrower_pane_measures_a_taller_preview() {
+    // Same content, half the width: the wrapped row count must roughly
+    // double. This is the regression the operator's glitch report pinned.
+    let long = "word ".repeat(120);
+    let messages: Vec<PreviewMessage> = (0..30)
+        .map(|i| PreviewMessage {
+            role: if i % 2 == 0 { "user" } else { "assistant" }.to_string(),
+            content: long.clone(),
+            tool_calls: Vec::new(),
+        })
+        .collect();
+    let wide = preview_bound_for(&messages, 120, 40);
+    let narrow = preview_bound_for(&messages, 60, 40);
+    assert!(
+        narrow > wide,
+        "a narrower pane wraps to more rows and must scroll further — wide={wide} narrow={narrow}"
+    );
+}
