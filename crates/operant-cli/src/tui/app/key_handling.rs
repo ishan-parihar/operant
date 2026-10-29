@@ -631,7 +631,7 @@ impl App {
         // (plan 2026-10-28 iter-B: jcode picker mechanics; the old 70x20
         // modal's rename arm moved to /rename <title> only).
         if self.session_hub.visible {
-            use crate::tui::session_hub::HubSelection;
+            use crate::tui::session_hub::{HubSelection, PaneFocus};
             // Search-edit mode swallows plain keys first (jcode's
             // search_active).
             if self.session_hub.search_active {
@@ -656,20 +656,23 @@ impl App {
             }
             match key.code {
                 KeyCode::Esc => self.session_hub.close(),
-                KeyCode::Up => self.session_hub.select_prev(),
-                KeyCode::Down => self.session_hub.select_next(),
-                KeyCode::Home => self.session_hub.select_first(),
-                KeyCode::End => self.session_hub.select_last(),
-                KeyCode::PageUp => {
-                    for _ in 0..8 {
-                        self.session_hub.select_prev();
-                    }
-                }
-                KeyCode::PageDown => {
-                    for _ in 0..8 {
-                        self.session_hub.select_next();
-                    }
-                }
+                // Tab: swap which pane the step keys act on (jcode's
+                // `PaneFocus` toggle). This is the key the operator reported
+                // dead — the hub had no focus model to toggle.
+                KeyCode::Tab => self.session_hub.toggle_focus(),
+                // jcode's `h` / `l` set focus explicitly (its Left/Right are
+                // taken here by the omp close-tap and the preview nudge).
+                KeyCode::Char('h') => self.session_hub.focus = PaneFocus::Sessions,
+                KeyCode::Char('l') => self.session_hub.focus = PaneFocus::Preview,
+                // The four step keys route to the FOCUSED pane: with focus
+                // in the list they move the selection, with focus in the
+                // preview they scroll it (jcode's `focus_*_step`).
+                KeyCode::Up | KeyCode::Char('k') => self.session_hub.focus_up(),
+                KeyCode::Down | KeyCode::Char('j') => self.session_hub.focus_down(),
+                KeyCode::PageUp | KeyCode::Char('K') => self.session_hub.focus_page_up(),
+                KeyCode::PageDown | KeyCode::Char('J') => self.session_hub.focus_page_down(),
+                KeyCode::Home => self.session_hub.focus_home(),
+                KeyCode::End => self.session_hub.focus_end(),
                 KeyCode::Left => {
                     // omp's close-tap: armed by the ←← opener, ONE further
                     // Left closes; a plain open takes two Lefts to close
@@ -681,11 +684,19 @@ impl App {
                     }
                 }
                 KeyCode::Right => {
-                    self.session_hub.scroll_preview(2);
+                    // No preview pane focused: Right nudges it open (the
+                    // discoverable way in for an operator who never presses
+                    // Tab).
+                    self.session_hub.focus = PaneFocus::Preview;
                 }
                 KeyCode::Char('/') if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                     self.session_hub.search_active = true;
                 }
+                // Reload the preview: the recovery arm for the state the
+                // render path names explicitly ("No transcript cached —
+                // press r to load"). Works in both panes — an operator
+                // parked in the preview is the one most likely to need it.
+                KeyCode::Char('r') => self.session_hub.request_preview_reload(),
                 KeyCode::Char('s') => self.session_hub.cycle_filter(),
                 // Enter: switch to the selected session (the existing
                 // pending_switch_session flow — run_pending_agent_actions
@@ -695,8 +706,18 @@ impl App {
                     match self.session_hub.confirm_selection() {
                         Some(HubSelection::SwitchSession(id)) => {
                             self.session_hub.close();
-                            self.pending_switch_session = Some(id);
-                            self.status_message = Some("Loading session…".to_string());
+                            self.pending_switch_session = Some(id.clone());
+                            // "Loading session…" stayed on screen for its
+                            // whole notice timeout, so a fast switch read as
+                            // a stuck load (the operator's report). The
+                            // switch fills the transcript in the SAME frame
+                            // loop pass, so name the outcome instead of the
+                            // intermediate step — and reserve the ⏳ for the
+                            // hub's own row load.
+                            self.status_message = Some(format!(
+                                "Switching to session {}…",
+                                id.chars().take(8).collect::<String>()
+                            ));
                         }
                         Some(HubSelection::FocusSubagent(_)) => {
                             // The hub renders the focus view itself; nothing

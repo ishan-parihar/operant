@@ -49,6 +49,11 @@ pub enum TuiEvent {
         count: usize,
         at: f64,
     },
+    /// The hub's per-row preview load landed (the right pane filled).
+    SessionPreview {
+        session_id: String,
+        at: f64,
+    },
 
     // ── TUI-internal ─────────────────────────────────────────────────
     SlashCommand {
@@ -109,6 +114,12 @@ impl TuiEvent {
                 format!("ModelFetch(ok={ok}, {count} models)")
             }
             Self::SessionList { count, .. } => format!("SessionList({count})"),
+            Self::SessionPreview { session_id, .. } => {
+                format!(
+                    "SessionPreview({})",
+                    session_id.chars().take(8).collect::<String>()
+                )
+            }
             Self::SlashCommand {
                 name, args_preview, ..
             } => {

@@ -242,3 +242,240 @@ fn edge_jumps_are_inert_on_an_empty_list() {
     hub.select_last();
     assert_eq!(hub.selected, 0, "no panic, no jump on an empty pane");
 }
+
+// ---- (2026-10-29 preview fix) the pane's three-state contract ----
+
+fn msg(role: &str, content: &str) -> PreviewMessage {
+    PreviewMessage {
+        role: role.to_string(),
+        content: content.to_string(),
+        tool_calls: Vec::new(),
+    }
+}
+
+#[test]
+fn window_messages_keeps_the_tail_and_counts_hidden_prompts() {
+    let mut all = Vec::new();
+    for i in 0..PREVIEW_MESSAGE_LIMIT + 2 {
+        all.push(msg("user", &format!("prompt {i}")));
+    }
+    all.insert(10, msg("assistant", "noise"));
+    let (windowed, hidden) = SessionHubState::window_messages(all);
+    assert_eq!(windowed.len(), PREVIEW_MESSAGE_LIMIT);
+    assert!(
+        hidden > 0,
+        "the prompts dropped off the head are counted, so the pane can number globally"
+    );
+}
+
+#[test]
+fn window_messages_is_identity_under_the_limit() {
+    let msgs = vec![msg("user", "one"), msg("assistant", "two")];
+    let (windowed, hidden) = SessionHubState::window_messages(msgs.clone());
+    assert_eq!(windowed.len(), 2);
+    assert_eq!(hidden, 0);
+}
+
+#[test]
+fn tab_routes_the_step_keys_between_the_two_panes() {
+    let mut hub = SessionHubState::new();
+    hub.replace_rows(vec![
+        row("s-1", None, None),
+        row("s-2", None, None),
+        row("s-3", None, None),
+    ]);
+    assert_eq!(hub.focus, PaneFocus::Sessions);
+    // With focus in the list, Down moves the selection.
+    hub.focus_down();
+    assert_eq!(hub.selected_row().map(|r| r.id.as_str()), Some("s-2"));
+    hub.toggle_focus();
+    assert_eq!(hub.focus, PaneFocus::Preview);
+    // With focus in the preview, the SAME key scrolls the pane instead —
+    // this is what the operator reported dead.
+    hub.set_preview_max_scroll(40);
+    hub.focus_down();
+    assert_eq!(
+        hub.preview_scroll, PREVIEW_SCROLL_STEP as u16,
+        "the preview scrolled"
+    );
+    assert_eq!(
+        hub.selected_row().map(|r| r.id.as_str()),
+        Some("s-2"),
+        "the list selection did NOT move while the preview had focus"
+    );
+}
+
+#[test]
+fn unpreviewed_rows_say_so_instead_of_claiming_to_load() {
+    let mut hub = SessionHubState::new();
+    hub.replace_rows(vec![row("s-1", None, None)]);
+    // No load in flight, nothing cached: this is a MISS, not a spinner.
+    assert!(!hub.preview_loading);
+    assert!(hub.preview.is_none());
+    assert!(
+        !hub.has_preview_content(),
+        "an empty preview is not content"
+    );
+    // and the frame loop re-asks, so the miss does not persist silently.
+    assert!(hub.preview_needs_load());
+}
+
+#[test]
+fn a_cached_preview_satisfies_needs_load() {
+    let mut hub = SessionHubState::new();
+    hub.replace_rows(vec![row("s-1", None, None)]);
+    assert!(hub.apply_preview("s-1", vec![msg("user", "hi")], 0));
+    assert!(!hub.preview_needs_load());
+    assert!(hub.has_preview_content());
+}
+
+#[test]
+fn the_load_key_forces_a_reload_of_the_selected_row() {
+    let mut hub = SessionHubState::new();
+    hub.replace_rows(vec![row("s-1", None, None)]);
+    assert!(hub.apply_preview("s-1", vec![msg("user", "hi")], 0));
+    hub.set_preview_max_scroll(20);
+    hub.preview_scroll = 12;
+    hub.request_preview_reload();
+    assert!(hub.preview.is_none(), "the cache is dropped for this row");
+    assert_eq!(hub.preview_scroll, 0, "the stale scroll offset goes too");
+    assert!(
+        hub.preview_needs_load(),
+        "the next frame re-asks for the load"
+    );
+}
+
+#[test]
+fn reload_clears_a_recorded_failure_for_the_selected_row() {
+    let mut hub = SessionHubState::new();
+    hub.replace_rows(vec![row("s-1", None, None), row("s-2", None, None)]);
+    hub.note_preview_failure("s-1");
+    assert!(
+        !hub.preview_needs_load(),
+        "a failed row is not retried every frame"
+    );
+    hub.request_preview_reload();
+    assert!(
+        hub.preview_needs_load(),
+        "r retries a row that previously failed"
+    );
+}
+
+#[test]
+fn preview_scroll_is_clamped_to_the_measured_bound() {
+    let mut hub = SessionHubState::new();
+    hub.replace_rows(vec![row("s-1", None, None)]);
+    hub.apply_preview("s-1", vec![msg("user", "hi")], 0);
+    // The stale-offset order the frame loop actually runs in: an old offset
+    // from a longer preview, then a fresh (smaller) measured bound.
+    hub.preview_scroll = 99;
+    hub.set_preview_max_scroll(6);
+    assert_eq!(
+        hub.preview_scroll, 6,
+        "the measured bound clamps a stale offset down"
+    );
+}
+
+#[test]
+fn preview_steps_never_pass_the_measured_bound() {
+    let mut hub = SessionHubState::new();
+    hub.replace_rows(vec![row("s-1", None, None)]);
+    hub.set_preview_max_scroll(4);
+    // jcode's step is 3 rows per j/Down, held down to grow the offset; the
+    // clamp is the only thing keeping it inside the rendered rows.
+    for _ in 0..20 {
+        hub.scroll_preview(PREVIEW_SCROLL_STEP);
+    }
+    assert_eq!(hub.preview_scroll, 4);
+}
+
+#[test]
+fn moving_the_selection_drops_the_previous_rows_preview() {
+    let mut hub = SessionHubState::new();
+    hub.replace_rows(vec![row("s-1", None, None), row("s-2", None, None)]);
+    assert!(hub.apply_preview("s-1", vec![msg("user", "hi")], 0));
+    hub.focus_down();
+    assert!(
+        hub.preview.is_none(),
+        "s-2's preview must not show s-1's transcript"
+    );
+    assert!(hub.preview_needs_load());
+}
+
+#[test]
+fn a_load_that_lands_for_a_deselected_row_is_dropped() {
+    let mut hub = SessionHubState::new();
+    hub.replace_rows(vec![row("s-1", None, None), row("s-2", None, None)]);
+    // s-1's load was in flight; the operator moved to s-2 before it landed.
+    hub.focus_down();
+    assert_ne!(hub.selected_row().map(|r| r.id.as_str()), Some("s-1"));
+    assert!(!hub.apply_preview("s-1", vec![msg("user", "hi")], 0));
+    assert!(hub.preview.is_none());
+}
+
+#[test]
+fn a_row_with_no_storable_content_is_not_a_preview_row() {
+    // A tool-only message whose JSON body and an empty content block: the
+    // preview collapses it rather than painting a blank line.
+    let blank = operant_core::database::MessageData {
+        id: 1,
+        session_id: "s".to_string(),
+        role: "assistant".to_string(),
+        content: Some(String::new()),
+        tool_call_id: None,
+        tool_calls: None,
+        tool_name: None,
+        timestamp: "now".to_string(),
+        ..Default::default()
+    };
+    assert!(preview_message_from_row(blank).is_none());
+}
+
+#[test]
+fn tool_call_json_is_summarized_not_printed() {
+    let row = operant_core::database::MessageData {
+        id: 2,
+        session_id: "s".to_string(),
+        role: "assistant".to_string(),
+        content: Some(String::new()),
+        tool_call_id: None,
+        tool_calls: Some(
+            r#"[{"name":"bash","arguments":{"command":"ls"}},{"name":"read_file"}]"#.to_string(),
+        ),
+        tool_name: None,
+        timestamp: "now".to_string(),
+        ..Default::default()
+    };
+    let pv = preview_message_from_row(row).expect("tool calls alone still render a row");
+    assert_eq!(pv.tool_calls, vec!["bash", "read_file"]);
+    assert!(pv.content.is_empty());
+}
+
+#[test]
+fn a_text_message_with_tool_calls_keeps_both() {
+    let row = operant_core::database::MessageData {
+        id: 3,
+        session_id: "s".to_string(),
+        role: "assistant".to_string(),
+        content: Some("Reading the tree".to_string()),
+        tool_call_id: None,
+        tool_calls: Some(r#"[{"name":"bash"}]"#.to_string()),
+        tool_name: None,
+        timestamp: "now".to_string(),
+        ..Default::default()
+    };
+    let pv = preview_message_from_row(row).expect("renders");
+    assert_eq!(pv.content, "Reading the tree");
+    assert_eq!(pv.tool_calls, vec!["bash"]);
+}
+
+#[test]
+fn a_no_selection_selection_is_not_an_illegal_panic() {
+    // `request_preview_reload` and the frame-loop spawn both index
+    // `selected_row()`; with no rows they must no-op.
+    let mut hub = SessionHubState::new();
+    hub.replace_rows(Vec::new());
+    hub.request_preview_reload();
+    assert!(hub.preview.is_none());
+    assert!(!hub.preview_needs_load());
+}

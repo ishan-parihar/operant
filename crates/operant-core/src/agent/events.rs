@@ -6,6 +6,18 @@ use tracing::{debug, warn};
 
 use super::*;
 
+/// Process-global turn-id counter.
+///
+/// Function-local at `record_user_turn` before the rewind-mark reseed
+/// (2026-10-29): a session switch re-derives this session's marks from its
+/// rehydrated conversation, and those marks need ids from the SAME counter
+/// so a fork's id stays unique across the process lifetime.
+static NEXT_TURN_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+fn next_turn_id() -> u64 {
+    NEXT_TURN_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
 impl OperantAgent {
     /// Send an event to the channel
     pub(crate) async fn emit(&self, event: AgentEvent) {
@@ -546,6 +558,52 @@ impl OperantAgent {
         self.client.rotate_credential_value(api_key);
     }
 
+    /// Rebuild the rewind marks for a freshly rehydrated conversation.
+    ///
+    /// `user_turns` is process-global and only ever grows — `record_user_turn`
+    /// pushes at turn time and nothing cleared it on a retarget. So a host
+    /// that loads an OLD session (the TUI's session switch, the cron path)
+    /// and then opens the rewind selector gets either an EMPTY mark list
+    /// (the turns happened before this process started) or a STRANGER's
+    /// (the marks of whichever session turned last). The selector's arrows
+    /// then move an index over nothing and every key reads as dead.
+    ///
+    /// RT-175 solved the narrower half of this for the gateway's `/undo`
+    /// with `conversation_rewind_marks` (a conversation-FILTER over the
+    /// process-global list). This closes the other half: the marks are
+    /// re-derived from the conversation the agent actually holds, so the
+    /// list is always exactly this session's turns, in order.
+    ///
+    /// Ids are re-derived rather than reused: `UserTurnMark::turn_id` is only
+    /// meaningful within the process (the fork writes it to the store, the
+    /// selector reads it back), and a rehydrated conversation has no ids
+    /// until the next rewind forks it. The conv_index is what the cut-point
+    /// math keys off, so that is the field that must be right.
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock recovery: the RwLock is only poisoned by a panic while it is held, and this write path holds no panic guards"
+    )]
+    fn reseed_user_turns_for_rehydration(&self, messages: &[Message]) {
+        let epoch = self.conv_epoch.load(std::sync::atomic::Ordering::Relaxed);
+        let marks: Vec<UserTurnMark> = messages
+            .iter()
+            .enumerate()
+            .filter(|(_, m)| m.role == crate::client::Role::User)
+            .filter(|(_, m)| !m.content.trim().is_empty())
+            .map(|(idx, m)| UserTurnMark {
+                turn_id: next_turn_id(),
+                conv_index: idx,
+                conv_epoch: epoch,
+                text: m.content.clone(),
+            })
+            .collect();
+        let mut turns = self
+            .user_turns
+            .write()
+            .expect("user_turns RwLock poisoned — programmer error");
+        *turns = marks;
+    }
+
     #[expect(
         clippy::expect_used,
         reason = "poisoned lock: panic is the intended recovery"
@@ -554,8 +612,7 @@ impl OperantAgent {
     /// turn id (also emitted as `AgentEvent::TurnStarted`). Called only from
     /// `build_turn_context`, so steer/nudge/continue messages never get one.
     pub fn record_user_turn(&self, text: String, conv_index: usize) -> u64 {
-        static NEXT_TURN_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-        let turn_id = NEXT_TURN_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let turn_id = next_turn_id();
         let epoch = self.conv_epoch.load(std::sync::atomic::Ordering::Relaxed);
         let mut turns = self
             .user_turns
@@ -765,6 +822,12 @@ impl OperantAgent {
             // id field still holds the outgoing value, so reading it here
             // would rehydrate the session we are leaving.
             let incoming = self.transcript_for(&new_id);
+            // The marks must describe the session we are loading, not the one
+            // we are leaving and not whatever turned last. Without this the
+            // rewind selector navigates an empty (or a stranger's) list.
+            // Read BEFORE the swap: `std::mem::replace` moves the transcript
+            // into the hot slot.
+            self.reseed_user_turns_for_rehydration(&incoming);
             let outgoing = std::mem::replace(
                 &mut *self
                     .conversation

@@ -424,13 +424,22 @@ mod tests {
         agent.add_message(Message::user("chat B question")).await;
         let b_turn = agent.record_user_turn("chat B question".to_string(), idx);
 
-        // The raw mark list carries BOTH chats' turns (that is the defect):
+        // The raw mark list now names ONLY session B's turn. Before the
+        // 2026-10-29 reseed it carried BOTH chats' turns (the defect quoted
+        // above): `set_session_id` re-derived the loaded conversation's
+        // marks from disk, so the process-global list and the loaded
+        // conversation can no longer disagree.
         let raw = agent.rewind_marks();
-        assert_eq!(raw.len(), 2, "marks are process-global across sessions");
+        assert_eq!(
+            raw.len(),
+            1,
+            "the raw list matches the loaded conversation after a retarget"
+        );
 
-        // The conversation-scoped list names ONLY session B's turn — B is
-        // the loaded conversation. Chat A's mark must not be rewindable
-        // from here.
+        // The conversation-scoped filter is still load-bearing: it is the
+        // gateway's `/undo` guard, and it must keep working now that the
+        // input it filters is already exact. Chat A's mark must not be
+        // rewindable from here.
         let scoped = agent.conversation_rewind_marks().await;
         assert_eq!(
             scoped.len(),
@@ -440,5 +449,87 @@ mod tests {
         assert_eq!(scoped[0].turn_id, b_turn);
         assert_ne!(scoped[0].turn_id, a_turn);
         assert_eq!(scoped[0].text, "chat B question");
+    }
+    /// (2026-10-29 D5) A session switched INTO has marks, even though this
+    /// process never recorded a turn in it. Before the reseed the mark list
+    /// was empty (the turns happened in an earlier process) or held a
+    /// stranger's (whichever session turned last), so the TUI selector's
+    /// arrows moved an index over the wrong list and every key read as
+    /// dead. `set_session_id` now re-derives them from the rehydrated
+    /// conversation.
+    #[tokio::test]
+    async fn switching_into_an_old_session_seeds_its_rewind_marks() {
+        let (agent, db) = agent();
+        // A session whose turns were recorded in an EARLIER process: the DB
+        // holds the transcript, this process holds no marks for it.
+        let sid = format!("sess_old_{}", uuid::Uuid::new_v4());
+        let now = chrono::Utc::now().to_rfc3339();
+        db.save_session(&sid, None, "agent", &now, &now)
+            .expect("session row");
+        for text in ["first prompt", "second prompt"] {
+            db.save_message(&sid, "user", text, &now)
+                .expect("user message");
+            db.save_message(&sid, "assistant", "reply", &now)
+                .expect("assistant reply");
+        }
+        // Nothing has turned in this process yet: the list is empty.
+        assert!(agent.rewind_marks().is_empty());
+        agent.set_session_id(sid.clone());
+        let marks = agent.rewind_marks();
+        assert_eq!(
+            marks.len(),
+            2,
+            "the loaded session's turns are rewindable without a turn in this process"
+        );
+        assert_eq!(marks[0].text, "first prompt");
+        assert_eq!(marks[1].text, "second prompt");
+        assert_eq!(
+            marks[0].conv_index, 0,
+            "conv_index addresses the rehydrated conversation, which is what the cut math keys off"
+        );
+        assert_eq!(
+            marks[1].conv_index, 2,
+            "the interleaved replies are counted"
+        );
+        // And the cut point resolves: the selector's preview would too.
+        let prefix = agent
+            .preview_rewind(marks[0].turn_id)
+            .await
+            .expect("preview works");
+        assert_eq!(
+            prefix.0.len(),
+            0,
+            "the first prompt rewinds to the empty prefix"
+        );
+    }
+
+    /// (2026-10-29 D5 companion) A turn recorded in the LIVE session
+    /// survives a later retarget into an old session: the live session's
+    /// own switch-out re-seeds from disk, and switching BACK re-seeds
+    /// again, so the list always names exactly one session.
+    #[tokio::test]
+    async fn reseeding_is_per_session_not_cumulative() {
+        let (agent, db) = agent();
+        let sid_a = format!("sess_a_{}", uuid::Uuid::new_v4());
+        let now = chrono::Utc::now().to_rfc3339();
+        db.save_session(&sid_a, None, "agent", &now, &now)
+            .expect("session A row");
+        agent.set_session_id(sid_a.clone());
+        agent.add_message(Message::user("live question")).await;
+        agent.record_user_turn("live question".to_string(), 0);
+
+        let sid_b = format!("sess_b_{}", uuid::Uuid::new_v4());
+        db.save_session(&sid_b, None, "agent", &now, &now)
+            .expect("session B row");
+        db.save_message(&sid_b, "user", "archived question", &now)
+            .expect("session B message");
+        agent.set_session_id(sid_b);
+
+        assert_eq!(
+            agent.rewind_marks().len(),
+            1,
+            "session B's list is B's, not A+B"
+        );
+        assert_eq!(agent.rewind_marks()[0].text, "archived question");
     }
 }

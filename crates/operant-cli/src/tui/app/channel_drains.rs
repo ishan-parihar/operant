@@ -183,6 +183,52 @@ impl App {
         }
     }
 
+    /// Drain the session-hub's per-row PREVIEW load into the pane.
+    ///
+    /// The load carries the session id it was started for, so a result that
+    /// lands after the operator moved the cursor is DROPPED rather than
+    /// painted over the newly selected row (jcode clears
+    /// `pending_preview_load` and re-requests; the id check is the cheap
+    /// equivalent of that handshake).
+    pub(super) fn drain_preview_load(&mut self) -> bool {
+        let Some(ref mut rx) = self.preview_rx else {
+            return false;
+        };
+        match rx.try_recv() {
+            Ok((session_id, Some((messages, hidden)))) => {
+                self.preview_rx = None;
+                if self
+                    .session_hub
+                    .apply_preview(&session_id, messages, hidden)
+                {
+                    self.debug_hub
+                        .publish(crate::tui::debug::TuiEvent::SessionPreview {
+                            session_id,
+                            at: crate::tui::debug::event_bus::now_secs(),
+                        });
+                }
+                // A dropped result (the cursor moved on) still has to clear
+                // the pane's in-flight flag, or the pane shows "loading"
+                // forever with no load running — the hub re-requests on the
+                // next frame because `preview_needs_load` sees no cache.
+                self.session_hub.set_preview_loading(false);
+                true
+            }
+            Ok((session_id, None)) => {
+                self.preview_rx = None;
+                self.session_hub.set_preview_loading(false);
+                self.session_hub.note_preview_failure(&session_id);
+                true
+            }
+            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                self.preview_rx = None;
+                self.session_hub.set_preview_loading(false);
+                false
+            }
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty) => false,
+        }
+    }
+
     /// Apply a connected provider's default model once its live list resolves. A
     /// dropped sender means the catalog was empty: say so, the model stays as it was.
     pub(super) fn drain_default_model(&mut self) -> bool {

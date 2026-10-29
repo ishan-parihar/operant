@@ -15,7 +15,7 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
 };
 
-use super::SessionHubState;
+use super::{PaneFocus, SessionHubState};
 use crate::tui::theme_colors;
 use operant_core::session::listing::{RowKind, RowStatus, SessionEntryV2};
 
@@ -101,10 +101,28 @@ fn highlight_spans(text: &str, tokens: &[String], base: Style, hl: Style) -> Vec
     spans
 }
 
+/// The preview renders one line per message, so a multi-paragraph message
+/// needs its first non-empty line (the operator is scanning shape, not reading
+/// the body — that is what Enter-switch is for). Blank bodies collapse to a
+/// single placeholder so a tool-only message still produces a row.
+fn first_line(content: &str) -> String {
+    let line = content
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or("(no text)");
+    line.chars().take(200).collect()
+}
+
 /// Render the hub full-frame. Callers gate on `state.visible` (the overlay
 /// guard table), so this renders INSTEAD of the chat frame — never both
 /// (the one-renderer rule).
-pub fn render_session_hub(frame: &mut Frame, state: &SessionHubState, area: ratatui::layout::Rect) {
+pub fn render_session_hub(
+    frame: &mut Frame,
+    state: &SessionHubState,
+    area: ratatui::layout::Rect,
+    ctx: &mut crate::tui::render::FrameCtx,
+) {
     let has_search = state.search_active || !state.search_query.is_empty();
     let mut v = Vec::new();
     if has_search {
@@ -150,7 +168,7 @@ pub fn render_session_hub(frame: &mut Frame, state: &SessionHubState, area: rata
         .split(body);
 
     render_list(frame, state, cols[0]);
-    render_preview(frame, state, cols[1]);
+    render_preview(frame, state, cols[1], ctx);
 }
 
 fn render_list(frame: &mut Frame, state: &SessionHubState, area: ratatui::layout::Rect) {
@@ -262,17 +280,42 @@ fn render_list(frame: &mut Frame, state: &SessionHubState, area: ratatui::layout
     );
 }
 
-fn render_preview(frame: &mut Frame, state: &SessionHubState, area: ratatui::layout::Rect) {
+fn render_preview(
+    frame: &mut Frame,
+    state: &SessionHubState,
+    area: ratatui::layout::Rect,
+    ctx: &mut crate::tui::render::FrameCtx,
+) {
+    let focused = state.preview_focused();
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme_colors::border()))
+        .border_style(Style::default().fg(if focused {
+            theme_colors::accent()
+        } else {
+            theme_colors::border()
+        }))
         .title(Span::styled(
-            " Preview ",
+            // jcode marks the focused pane in its title
+            // (session_picker.rs:1430) so a keyboard-only operator can see
+            // where Tab put them.
+            if focused {
+                format!(
+                    " Preview [focused — Tab to {}] ",
+                    PaneFocus::Sessions.label()
+                )
+            } else {
+                " Preview ".to_string()
+            },
             Style::default()
-                .fg(theme_colors::accent())
+                .fg(if focused {
+                    theme_colors::warning()
+                } else {
+                    theme_colors::accent()
+                })
                 .add_modifier(Modifier::BOLD),
         ));
     let inner = block.inner(area);
+    let inner_height = inner.height;
     frame.render_widget(block, area);
 
     let Some(row) = state.selected_row() else {
@@ -325,49 +368,115 @@ fn render_preview(frame: &mut Frame, state: &SessionHubState, area: ratatui::lay
                 )),
             ]
         }
-        _ => vec![
-            Line::from(Span::styled(
-                row_title(row),
-                Style::default()
-                    .fg(theme_colors::text())
-                    .add_modifier(Modifier::BOLD),
-            )),
-            Line::from(""),
-            Line::from(Span::styled(
-                format!("id: {}", row.id),
-                Style::default().fg(theme_colors::muted()),
-            )),
-            if let Some(e) = &row.employee_id {
+        _ => {
+            let mut lines: Vec<Line> = vec![
                 Line::from(Span::styled(
-                    format!("employee: {e}"),
-                    Style::default().fg(theme_colors::muted()),
-                ))
-            } else {
+                    row_title(row),
+                    Style::default()
+                        .fg(theme_colors::text())
+                        .add_modifier(Modifier::BOLD),
+                )),
                 Line::from(Span::styled(
-                    "employee: — (personal)",
+                    format!(
+                        "id: {} · {} · ${:.4} · {} msg",
+                        row.id,
+                        relative_time(row.updated_at),
+                        row.cost_usd,
+                        row.message_count
+                    ),
                     Style::default().fg(theme_colors::muted()),
-                ))
-            },
-            if let Some(c) = &row.cwd {
+                )),
                 Line::from(Span::styled(
-                    format!("cwd: {c}"),
+                    match &row.employee_id {
+                        Some(e) => format!("employee: {e}"),
+                        None => "employee: — (personal)".to_string(),
+                    },
                     Style::default().fg(theme_colors::muted()),
-                ))
-            } else {
-                Line::from("")
-            },
-            Line::from(Span::styled(
-                format!(
-                    "tokens: ~{} · cost: ${:.4} · messages: {}",
-                    row.tokens, row.cost_usd, row.message_count
-                ),
-                Style::default().fg(theme_colors::muted()),
-            )),
-            Line::from(Span::styled(
+                )),
+            ];
+            // The transcript itself (jcode's preview body). The load is
+            // asynchronous, so the pane shows an explicit state rather than
+            // silently looking empty — the two states that read as "the
+            // preview is broken" are "still loading" and "no content", and
+            // naming both is what makes a slow load legible.
+            match &state.preview {
+                Some((id, msgs, hidden)) if id == &row.id && !msgs.is_empty() => {
+                    if *hidden > 0 {
+                        lines.push(Line::from(Span::styled(
+                            format!("— {hidden} earlier prompt(s) not shown (tail window) —"),
+                            Style::default().fg(theme_colors::muted()),
+                        )));
+                    }
+                    lines.push(Line::from(""));
+                    for (i, msg) in msgs.iter().enumerate() {
+                        let (label, color) = match msg.role.as_str() {
+                            "user" => ("you", theme_colors::accent()),
+                            "assistant" => ("agent", theme_colors::success()),
+                            "system" => ("system", theme_colors::muted()),
+                            other => (other, theme_colors::muted()),
+                        };
+                        let mut spans = vec![Span::styled(
+                            format!(
+                                "{}. {label}: ",
+                                // Global prompt numbering: the hidden prompts
+                                // above offset the window's own index, so the
+                                // operator can match a preview row to the
+                                // prompt number they typed (jcode's
+                                // `hidden_prompts` reasoning).
+                                if msg.role == "user" {
+                                    *hidden
+                                        + msgs[..i].iter().filter(|m| m.role == "user").count()
+                                        + 1
+                                } else {
+                                    i + 1
+                                }
+                            ),
+                            Style::default().fg(color).add_modifier(Modifier::BOLD),
+                        )];
+                        for call in &msg.tool_calls {
+                            spans.push(Span::styled(
+                                format!("[{call}] "),
+                                Style::default().fg(theme_colors::warning()),
+                            ));
+                        }
+                        spans.push(Span::raw(first_line(&msg.content)));
+                        lines.push(Line::from(spans));
+                    }
+                }
+                Some((id, _, _)) if id == &row.id => {
+                    lines.push(Line::from(""));
+                    lines.push(Line::from(Span::styled(
+                        "No stored messages for this session.",
+                        Style::default().fg(theme_colors::muted()),
+                    )));
+                }
+                _ => {
+                    // jcode's third state: no preview cached yet and none in
+                    // flight. That is a MISS, not a load — writing "loading"
+                    // here is exactly the operator's stuck "Loading session…"
+                    // card. Name what the operator can do about it.
+                    lines.push(Line::from(""));
+                    lines.push(Line::from(Span::styled(
+                        if state.preview_loading {
+                            "⏳ Loading transcript…"
+                        } else if state.has_preview_content() {
+                            "Preview available."
+                        } else {
+                            "No transcript cached — press r to load."
+                        },
+                        Style::default().fg(theme_colors::muted()),
+                    )));
+                }
+            }
+            lines.push(Line::from(Span::styled(
                 "Enter switches to this session",
                 Style::default().fg(theme_colors::accent()),
-            )),
-        ],
+            )));
+            // Report the bound back to the frame loop so the arrow keys
+            // clamp here rather than scrolling into blank space.
+            ctx.preview_max_scroll = Some((lines.len() as u16).saturating_sub(inner_height));
+            lines
+        }
     };
 
     let paragraph = Paragraph::new(lines)

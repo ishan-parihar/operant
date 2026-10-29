@@ -23,6 +23,10 @@ pub(crate) mod utils;
 pub(crate) use selection::{
     apply_selection_highlight, cache_selectable_row_text, render_context_menu,
 };
+// The frame context is passed INTO surfaces that need to report a
+// measurement back (the session hub's preview scroll bound), so it is
+// re-exported crate-visible.
+pub(crate) use operant_overlays::FrameCtx;
 // The width seam, re-exported at `pub` so sibling modules can `pub use` it.
 pub use utils::{balanced_wrap, display_width, take_width};
 

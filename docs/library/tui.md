@@ -173,3 +173,65 @@ The regression tests for this family live in
 `tui/app/tests.rs::prompt_jump_tests`; the `streaming_esc_still_cancels_but_ctrl_esc_does_not`
 and `transcript_focus_esc_returns_focus_but_ctrl_esc_jumps` pair is
 what keeps a future refactor from re-widening any of the three arms.
+## The session hub's preview pane (iter-1476)
+
+`tui/session_hub/` is the hub's own module: `mod.rs` holds the state
+(`SessionHubState`), `render.rs` paints it, and the App side wires the
+background loads (`tui/app/mod.rs` + `key_handling.rs`). Two mechanisms
+carry their own rules.
+
+**The pane focus is what the step keys route on.** `PaneFocus`
+(List/Preview, jcode's `session_picker/navigation.rs:191-196` — the hub
+has 40/60 geometry but until iter-1476 it had no focus field, so Tab and
+PageUp were keys with nothing to act on). Tab toggles it, `h`/`l` set it
+explicitly, and Up/Down/j/k, PageUp/PageDown/K/J and Home/End each route
+to the FOCUSED pane: selection in the list, scroll in the preview.
+`Right` nudges the preview into focus as the discoverable way in for an
+operator who never presses Tab.
+
+**`Left` deliberately does NOT switch focus.** operant's Left is omp's
+close-tap (armed by the ←← opener, one further Left closes
+`agent-hub.ts:2460-2475`), where jcode uses Left/Right for pane focus.
+This is a recorded divergence, not an oversight — do not "fix" it into
+jcode's shape.
+
+**The preview's scroll bound is measured, then applied.** The paint path
+is read-only by design, so `render_preview` writes the lines-minus-
+pane-height bound into `FrameCtx::preview_max_scroll`, which
+`draw_operant_overlays` copies into `App::last_preview_max_scroll` (a
+`Cell`, the same interior-mutability seam the layout-publish block uses)
+and the frame loop applies by `set_preview_max_scroll` BEFORE any key
+step is taken. Without that order the arrow keys scroll past the last
+row into blank space, and a stale offset from a longer transcript
+persists.
+
+**Three states, never a lie.** With a cached transcript the pane renders
+it (one row per message: role label, flattened text, tool-call labels
+parsed off the stored JSON, and a placeholder row for a message with no
+visible text — `preview_message_from_row`); with nothing cached and
+nothing in flight it reads "No transcript cached — press r to load" (and
+`r` reloads in either pane); only a load that is genuinely running shows
+the ⏳. The replaced text ("Loading session…") was the operator's stuck
+report: it was emitted on a timeout the switch had already overtaken.
+
+**A late load is dropped, not painted.** The row id rides inside the
+channel message and `apply_preview` refuses a load whose id is no longer
+the selection, so moving the cursor while a preview is in flight cannot
+show the wrong transcript. The load owns its own channel
+(`App::preview_rx`) precisely so the list and pane loads are independent
+flights.
+
+### `user_turns` re-seeds on session switch (core, not TUI)
+
+`user_turns` is a process-global list that only ever grew
+(`record_user_turn` pushes, nothing cleared). Loading an OLD session —
+the TUI's session switch, the cron path — therefore left the rewind
+selector navigating either an EMPTY list (the turns happened in an
+earlier process) or a STRANGER's (whichever session turned last). Every
+key read as dead. `set_session_id` now calls
+`reseed_user_turns_for_rehydration`, which re-derives the marks from the
+rehydrated conversation (user-role, non-empty, index-ordered), so the raw
+`rewind_marks()` list and the gateway's conversation-filtered
+`conversation_rewind_marks()` can no longer disagree. The rewind fork
+benefits from the same rule: it persists its prefix before retargeting,
+so the post-fork mark list stays exact.

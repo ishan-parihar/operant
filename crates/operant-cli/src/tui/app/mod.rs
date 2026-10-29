@@ -63,6 +63,21 @@ use std::cell::{Cell, RefCell};
 use std::sync::Arc;
 use tracing::debug;
 
+/// The channel a session-hub PREVIEW load delivers on: the row it was
+/// for plus the windowed messages (and the count of prompts hidden above the
+/// window). The id rides inside the message because a load that lands after
+/// the operator moved on must be DROPPED, not painted (`apply_preview`'s
+/// stale-write guard). `None` inside means the load itself failed — kept
+/// distinct from an empty transcript, which is a legitimate result.
+///
+/// An alias rather than an inline type because the shape is four levels
+/// deep (`Option<Receiver<(String, Option<(Vec<_>, usize)>)>>`) and
+/// `clippy::type_complexity` is in this repo's gate.
+pub type PreviewLoadRx = tokio::sync::mpsc::Receiver<(
+    String,
+    Option<(Vec<crate::tui::session_hub::PreviewMessage>, usize)>,
+)>;
+
 // ---------------------------------------------------------------------------
 // App struct
 // ---------------------------------------------------------------------------
@@ -591,6 +606,16 @@ pub struct App {
     /// unified `SessionEntryV2` rows — DB list + delegation snapshot).
     pub session_list_rx:
         Option<tokio::sync::mpsc::Receiver<Vec<operant_core::session::listing::SessionEntryV2>>>,
+    /// Receiver for the hub's per-session PREVIEW load (the right pane's
+    /// transcript window). Separate from `session_list_rx` so the list load
+    /// and the pane load are independent flights: moving the cursor while
+    /// one preview is in flight does not cancel or corrupt the row load
+    /// (jcode's `pending_preview_load` is its own channel for this reason).
+    pub preview_rx: Option<PreviewLoadRx>,
+    /// The preview pane's measured scroll bound from the last painted frame
+    /// (wrapped lines minus pane inner height). `Cell` because the paint
+    /// path is read-only; the frame loop applies it back into the hub.
+    pub last_preview_max_scroll: Cell<u16>,
     /// Fuzzy file-suggestion tier (plan 2026-10-24 M3). Receiver for the
     /// walk running on the blocking pool; `drain_file_suggest` applies the
     /// result on the next frame when the `@` token it answered is still
@@ -1182,6 +1207,56 @@ impl App {
                     let _ = tx.send(rows).await;
                 });
             }
+
+            // Apply the preview pane's measured scroll bound so the arrow
+            // keys clamp against the real geometry (jcode's
+            // `preview_max_scroll`). The paint path is read-only by design,
+            // so the measurement rides the frame ctx back here.
+            self.session_hub
+                .set_preview_max_scroll(self.last_preview_max_scroll.get());
+
+            // Spawn a preview load for the selected row (jcode's
+            // `ensure_selected_preview_loading`). The load reads the
+            // session's own stored messages on a blocking thread, so the
+            // hub stays responsive: the list is interactive while the pane
+            // fills.
+            if self.session_hub.preview_needs_load() {
+                match self.session_hub.selected_row().map(|r| r.id.clone()) {
+                    Some(session_id) => {
+                        let (tx, rx) = tokio::sync::mpsc::channel(1);
+                        self.preview_rx = Some(rx);
+                        self.session_hub.set_preview_loading(true);
+                        let db_path = self.config.database_path.clone();
+                        let id_for_thread = session_id.clone();
+                        tokio::spawn(async move {
+                            let loaded = tokio::task::spawn_blocking(move || {
+                                let messages = operant_core::database::Database::init(db_path)
+                                    .and_then(|db| db.get_session_messages_full(&id_for_thread))
+                                    .unwrap_or_default()
+                                    .into_iter()
+                                    .filter_map(crate::tui::session_hub::preview_message_from_row)
+                                    .collect::<Vec<_>>();
+                                let (windowed, hidden) =
+                                    crate::tui::session_hub::SessionHubState::window_messages(
+                                        messages,
+                                    );
+                                Some((windowed, hidden))
+                            })
+                            .await
+                            .unwrap_or(None);
+                            let _ = tx.send((session_id, loaded)).await;
+                        });
+                    }
+                    // No selection means no row to load for — the pane shows
+                    // its own "no session selected" state rather than a
+                    // permanent spinner (the "stuck Loading session…" the
+                    // operator reported).
+                    None => {
+                        self.session_hub.note_preview_miss();
+                    }
+                }
+            }
+            self.drain_preview_load();
 
             // Drain user-question requests from the clarify tool.
             self.drain_user_questions();

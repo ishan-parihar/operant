@@ -232,6 +232,8 @@ impl App {
             rename_on_list_load: false,
             pending_title_save: None,
             session_list_rx: None,
+            preview_rx: None,
+            last_preview_max_scroll: Cell::new(0),
             file_suggest_rx: None,
             file_suggest_gen: 0,
             file_suggest_inflight: false,

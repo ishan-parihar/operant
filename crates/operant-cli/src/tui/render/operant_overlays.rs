@@ -114,6 +114,13 @@ impl Sink {
 pub(crate) struct FrameCtx {
     /// `frame.area()`, the whole viewport. The overlays size against this.
     pub size: Rect,
+    /// Measured by the session hub's preview pane each frame: the number of
+    /// wrapped lines minus the pane's inner height, i.e. the largest scroll
+    /// offset that still shows content. The frame loop writes it back into
+    /// the hub state so key steps clamp against the real geometry (jcode's
+    /// `preview_max_scroll`), which the paint path cannot do directly
+    /// because the paint fns take `&App`.
+    pub preview_max_scroll: Option<u16>,
     /// Set by the error-modal row. The one early exit in the frame: when it is
     /// set, `render_app` stops the ladder, runs the colour-substitution pass
     /// and returns, skipping the banner, the selection passes, the debug
@@ -530,12 +537,14 @@ fn paint_command_palette(frame: &mut Frame, app: &App, ctx: &mut FrameCtx) {
     render_dialog_select(frame, &app.command_palette, ctx.size);
 }
 
-fn paint_session_hub(frame: &mut Frame, app: &App, _ctx: &mut FrameCtx) {
+fn paint_session_hub(frame: &mut Frame, app: &App, ctx: &mut FrameCtx) {
     // Full-frame page (the journey_view pattern): renders INSTEAD of the
     // chat frame, never both (the one-renderer rule). `render_session_hub`
     // takes `&state` — ratatui's ListState is constructed locally from the
-    // selected index, so no interior mutability is needed.
-    crate::tui::session_hub::render_session_hub(frame, &app.session_hub, frame.area());
+    // selected index, so no interior mutability is needed. The one
+    // measurement that must flow back (the preview's scroll bound) rides
+    // `ctx.preview_max_scroll` for the frame loop to apply.
+    crate::tui::session_hub::render_session_hub(frame, &app.session_hub, frame.area(), ctx);
 }
 
 fn paint_export_dialog(frame: &mut Frame, app: &App, ctx: &mut FrameCtx) {
@@ -597,7 +606,11 @@ fn paint_debug_overlay(frame: &mut Frame, app: &App, ctx: &mut FrameCtx) {
 /// ported chrome runs it inside `operant_ui::draw`.
 pub(crate) fn draw_operant_overlays(frame: &mut Frame, app: &App) -> bool {
     let size = frame.area();
-    let mut ctx = FrameCtx { size, stop: false };
+    let mut ctx = FrameCtx {
+        size,
+        preview_max_scroll: None,
+        stop: false,
+    };
     for entry in OVERLAYS {
         if ctx.stop {
             break;
@@ -606,6 +619,13 @@ pub(crate) fn draw_operant_overlays(frame: &mut Frame, app: &App) -> bool {
             continue;
         }
         (entry.paint)(frame, app, &mut ctx);
+    }
+    // The preview pane's measured scroll bound rides back into the App cell
+    // (the paint fns are read-only by design). `App` is not shared mutable
+    // here — `Cell` is exactly the interior-mutability seam this needs, the
+    // same one the layout-publish block above uses.
+    if let Some(max) = ctx.preview_max_scroll {
+        app.last_preview_max_scroll.set(max);
     }
     ctx.stop
 }
