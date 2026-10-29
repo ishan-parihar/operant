@@ -6073,6 +6073,38 @@ fn new_composer_keys_do_what_they_say() {
         app.model_name, "m-one",
         "deduplicated two-model cycle wraps"
     );
+
+    // Ctrl+Tab is the jcode alias for the SAME cycle (TODO.md Pending row,
+    // audit 2026-10-28 gap 2): one arm, one function, no new cycle state.
+    // MUTATION PROOF: dropping the `KeyCode::Tab => CONTROL` arm fails this -
+    // the model stops moving and the second assert reads "m-one" after a
+    // first cycle that already wrapped.
+    let mut app = make_app();
+    app.config.agent.model = "m-one".to_string();
+    app.config.agent.fallback_models = vec!["m-two".to_string()];
+    app.model_name = "m-one".to_string();
+    app.handle_key_event(press_key(KeyCode::Tab, KeyModifiers::CONTROL));
+    assert_eq!(app.model_name, "m-two", "Ctrl+Tab cycles the model");
+    app.handle_key_event(press_key(KeyCode::Tab, KeyModifiers::CONTROL));
+    assert_eq!(
+        app.model_name, "m-one",
+        "the alias walks the same cycle the primary walks"
+    );
+
+    // The alias must not be a greedy Tab arm that swallows what the
+    // OTHER Tab-adjacent arms own. Asserted on BEHAVIOUR, not on
+    // handle_key_event's return value (plain Tab is consumed by another arm
+    // legitimately, so its bool is not this arm's contract): BackTab is what
+    // crossterm reports for shift+tab, and the composer's contract for it is
+    // pinned by `shift_tab_does_not_touch_permission_mode`.
+    let mut app = make_app();
+    use crate::tui::adapter_types::config::PermissionMode;
+    app.handle_key_event(press_key(KeyCode::BackTab, KeyModifiers::SHIFT));
+    assert_eq!(
+        app.settings.permission_mode,
+        PermissionMode::Default,
+        "BackTab must keep its own composer contract, not be stolen by the alias"
+    );
 }
 
 #[test]

@@ -1394,6 +1394,27 @@ impl App {
             KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::ALT) => {
                 self.cycle_configured_model();
             }
+            // Ctrl+Tab: the jcode muscle-memory alias for the SAME cycle
+            // (jcode model_switch_next = ctrl+tab; operant's is Alt+P, audit
+            // 2026-10-28 gap 2).
+            //
+            // Deliberately an ALIAS, not a second chord family: it calls the
+            // one existing cycle function and grows no new state (TODO.md's
+            // Pending instruction — "do NOT grow it a new cycle state").
+            // The REVERSE direction (jcode's ctrl+shift+tab /
+            // model_switch_prev) is NOT added, because a reverse needs the
+            // cycle itself to run backwards and this tree has only the
+            // forward order; adding it is a real feature, not an alias, and it
+            // stays un-scheduled.
+            //
+            // Reporting modes: under the kitty protocol Tab+CONTROL arrives as
+            // Tab with the CONTROL modifier, which is what this arm matches.
+            // Ctrl+Shift+Tab arrives as BackTab (crossterm folds the shift in),
+            // so it does NOT fall through to the effort-cycle arm — that arm
+            // requires plain SHIFT.
+            KeyCode::Tab if key.modifiers == KeyModifiers::CONTROL => {
+                self.cycle_configured_model();
+            }
             // F5 / Alt+R: retry — OMP semantics ("Retry last FAILED assistant
             // turn"): the composer keeps its text and resubmits it; an
             // EMPTY composer only refills from the failed-turn recovery slot,
