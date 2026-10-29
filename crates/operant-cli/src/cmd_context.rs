@@ -980,13 +980,24 @@ fn cli_command(config: &AppConfig, cmd: &CliSubcommand) -> Result<()> {
                 );
             }
             // Admit it into the roster so the catalogue stops being a
-            // compile-time list. A name already present refreshes rather
-            // than duplicating.
+            // compile-time list, and parse its `--help` for the
+            // subcommand capabilities it yields — one binary yields N
+            // capabilities, exactly as one MCP server yields N tools.
+            //
+            // The `--help` execution is BOUNDED (plan A0): it runs with
+            // `--help` and nothing else, through the one shared spawn
+            // primitive (`run_with_timeout`: stdin closed, piped output,
+            // hard deadline). A binary whose help cannot be read still
+            // contributes one capability — the binary itself.
             let roster_path = operant_core::tools::cli_roster::roster_path_from_config(config);
-            let was_new = operant_core::tools::cli_roster::admit(
+            let help_timeout =
+                std::time::Duration::from_secs(config.cli.default_timeout_secs.clamp(1, 30));
+            let capabilities = operant_core::tools::cli_roster::admit_by_help(name, help_timeout);
+            let was_new = operant_core::tools::cli_roster::admit_with_capabilities(
                 &roster_path,
                 name,
                 operant_core::tools::cli_discovery::CliCategory::Build,
+                Some(capabilities.clone()),
             )
             .with_context(|| {
                 format!(
@@ -1056,6 +1067,20 @@ fn cli_command(config: &AppConfig, cmd: &CliSubcommand) -> Result<()> {
                      not compiled in.",
                     roster_path.display()
                 );
+            }
+            println!(
+                "  '--help' yielded {} capabilit{}.",
+                capabilities.len(),
+                if capabilities.len() == 1 { "y" } else { "ies" }
+            );
+            for capability in capabilities.iter().take(10) {
+                match capability.description.as_deref() {
+                    Some(description) => println!("    {}  {}", capability.name, description),
+                    None => println!("    {}", capability.name),
+                }
+            }
+            if capabilities.len() > 10 {
+                println!("    ... and {} more", capabilities.len() - 10);
             }
             if surface_enabled_by_us {
                 println!(
@@ -2012,5 +2037,91 @@ mod tests {
                 result.err()
             );
         });
+    }
+
+    /// Plan Phase A2, PROVEN AT THE HANDLER: granting a CLI parses the
+    /// binary's `--help` and the roster records the resulting
+    /// capabilities. One binary yields N capabilities — the shape the
+    /// whole plan is about (an MCP server yields N tools).
+    ///
+    /// The handler, not the helper: the `--help` call lives in the
+    /// handler, so a helper-level test would pass even if the handler
+    /// never called it.
+    ///
+    /// Proven by mutation — replacing `admit_by_help(...)` with
+    /// `admit(...)` makes THIS test fail (the roster entry would carry
+    /// no parsed capabilities) while every roster/parser test stays
+    /// green.
+    #[test]
+    fn cli_add_via_the_handler_parses_help_into_capabilities() {
+        // A stand-in binary whose `--help` prints a git-shaped command
+        // list. A script rather than a real binary so the expectation is
+        // the same on every machine.
+        let dir = std::env::temp_dir().join(format!(
+            "operant_iter1481_helpcap_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let binary = dir.join("helpcap");
+        std::fs::write(
+            &binary,
+            "#!/bin/sh\n\
+             echo 'usage: helpcap [-v] [--help]'\n\
+             echo 'These are common Git commands used in various situations:'\n\
+             echo\n\
+             echo '   add                   Add file contents to the index'\n\
+             echo '   commit                Record changes to the repository'\n",
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        with_isolated_roster_home("iter1481_helpcap", |home| {
+            let cfg = config_in(home, "iter1481_helpcap");
+            let binary_name = binary.to_str().unwrap().to_string();
+            cli_command(
+                &cfg,
+                &CliSubcommand::Add {
+                    name: binary_name.clone(),
+                    description: None,
+                    global_args: Vec::new(),
+                    allow_subcommands: Vec::new(),
+                },
+            )
+            .expect("the stand-in binary is on PATH by absolute path, so the grant succeeds");
+
+            let roster_path = home.join("cli_roster.toml");
+            let roster = operant_core::tools::cli_roster::load_roster(&roster_path);
+            let entry = roster
+                .entries
+                .get(&binary_name)
+                .unwrap_or_else(|| panic!("the binary is admitted into the roster"));
+            let names: Vec<&str> = entry.capabilities.iter().map(|c| c.name.as_str()).collect();
+            assert!(
+                names.iter().any(|n| n.ends_with(":add")),
+                "the '--help' commands reached the roster: {names:?}"
+            );
+            assert!(
+                names.iter().any(|n| n.ends_with(":commit")),
+                "the '--help' commands reached the roster: {names:?}"
+            );
+            assert!(
+                entry.capabilities.len() > 1,
+                "one binary yielded N capabilities, not one: {names:?}"
+            );
+            // And the descriptions came with them.
+            assert!(
+                entry.capabilities.iter().any(|c| c.description.is_some()),
+                "the parsed capabilities carry descriptions"
+            );
+        });
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

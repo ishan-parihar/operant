@@ -43,6 +43,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
@@ -247,7 +248,8 @@ pub fn roster_or_seed(path: &Path) -> CliRoster {
     roster
 }
 
-/// Admit a binary into the roster at runtime.
+/// Admit a binary into the roster at runtime, and parse its `--help` for
+/// capabilities.
 ///
 /// This is the CLI half of the MCP parity: an MCP server is admitted at
 /// CONNECT (its tools arrive over `tools/list`), and a CLI binary is
@@ -259,22 +261,46 @@ pub fn roster_or_seed(path: &Path) -> CliRoster {
 /// not drop the other 16 from the catalogue. The admission is idempotent:
 /// re-admitting an existing name refreshes it rather than duplicating it.
 ///
+/// `capabilities` is what `admit_by_help` parsed; pass `None` to admit
+/// the binary WITHOUT re-executing `--help` (the roster's capabilities
+/// are then left as they were).
+///
 /// Returns whether the roster file was written.
-pub fn admit(path: &Path, name: &str, category: CliCategory) -> std::io::Result<bool> {
+pub fn admit_with_capabilities(
+    path: &Path,
+    name: &str,
+    category: CliCategory,
+    capabilities: Option<Vec<CliCapability>>,
+) -> std::io::Result<bool> {
     let mut roster = roster_or_seed(path);
     let already_present = roster.entries.contains_key(name);
+    let previous = roster
+        .entries
+        .get(name)
+        .map(|e| e.capabilities.clone())
+        .unwrap_or_default();
     roster.entries.insert(
         name.to_string(),
         RosterEntry {
             name: name.to_string(),
             version_args: vec!["--version".to_string()],
             category,
-            capabilities: Vec::new(),
+            capabilities: capabilities.unwrap_or(previous),
             admitted_at: Some(now_epoch_secs()),
         },
     );
     save_roster(path, &roster)?;
     Ok(!already_present)
+}
+
+/// Admit a binary into the roster at runtime, WITHOUT re-running `--help`.
+///
+/// The name is a candidate only; its capabilities stay empty until an
+/// admission parses them. Kept separate from
+/// [`admit_with_capabilities`] so the "record it" and "discover it"
+/// steps are not conflated.
+pub fn admit(path: &Path, name: &str, category: CliCategory) -> std::io::Result<bool> {
+    admit_with_capabilities(path, name, category, None)
 }
 
 /// Remove a binary from the roster.
@@ -285,6 +311,59 @@ pub fn remove(path: &Path, name: &str) -> std::io::Result<bool> {
     }
     save_roster(path, &roster)?;
     Ok(true)
+}
+
+/// Admit a binary at runtime by parsing its `--help`.
+///
+/// This is the CLI half of the MCP parity. An MCP server is admitted at
+/// CONNECT: the client calls `tools/list` and the server's tools arrive.
+/// A CLI binary is admitted here: the operator names it, its `--help` is
+/// executed, and its subcommands become capabilities. One binary yields N
+/// capabilities, exactly as one server yields N tools.
+///
+/// ## The bounds (plan 2026-10-28, A0)
+///
+/// `--help` introspection means EXECUTING a binary the operator named.
+/// That is the mechanism the operator asked for and it is not avoidable
+/// here, so it is bounded:
+///
+/// - the binary is run with `--help` and NOTHING ELSE — no argv from the
+///   roster or the config reaches the spawn;
+/// - the spawn is [`super::cli_discovery::run_with_timeout`], the ONE
+///   spawn primitive for this surface: stdin closed, stdout/stderr piped,
+///   a hard deadline. No second spawn primitive exists;
+/// - the output is DATA. Only lines matching the command grammar become
+///   capabilities, and a capability name is restricted to an identifier,
+///   so a hostile binary cannot inject a capability NAME. Descriptions
+///   are length-capped.
+///
+/// ## What a failure yields
+///
+/// A binary whose `--help` cannot be executed (missing, hangs, exits
+/// weirdly) still contributes ONE capability — the binary itself. That is
+/// the plan's degradation requirement: admission never fails because a
+/// binary is uncooperative.
+pub fn admit_by_help(binary: &str, timeout: Duration) -> Vec<CliCapability> {
+    let Some(output) = super::cli_discovery::run_with_timeout(binary, &["--help"], timeout) else {
+        return vec![super::cli_help_parser::whole_binary_capability(binary)];
+    };
+
+    // Some tools print help to stderr (git does when stdout is not a
+    // tty in some builds). Take whichever stream carries the text.
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let help_text = if stdout.trim().is_empty() {
+        stderr.as_ref()
+    } else {
+        stdout.as_ref()
+    };
+
+    let capabilities = super::cli_help_parser::parse_capabilities(binary, help_text);
+    if capabilities.is_empty() {
+        vec![super::cli_help_parser::whole_binary_capability(binary)]
+    } else {
+        capabilities
+    }
 }
 
 /// Epoch seconds, saturating at 0 if the clock is before the epoch.
@@ -475,5 +554,177 @@ mod tests {
         assert_eq!(entry.category, CliCategory::Productivity);
         assert!(entry.admitted_at.is_some(), "admission is timestamped");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn admitting_with_capabilities_records_them() {
+        let dir = scratch_dir("with-caps");
+        let path = roster_path_in(&dir);
+        let caps = vec![
+            CliCapability {
+                name: "git:commit".to_string(),
+                description: Some("Record changes".to_string()),
+            },
+            CliCapability {
+                name: "git:push".to_string(),
+                description: None,
+            },
+        ];
+        admit_with_capabilities(
+            &path,
+            "git",
+            CliCategory::VersionControl,
+            Some(caps.clone()),
+        )
+        .expect("admit");
+        let entry = load_roster(&path)
+            .entries
+            .get("git")
+            .cloned()
+            .expect("git is in the roster");
+        assert_eq!(entry.capabilities.len(), 2);
+        assert_eq!(entry.capabilities[0].name, "git:commit");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn admitting_without_capabilities_keeps_the_previous_ones() {
+        // A plain `admit` must not WIPE a capability set a prior
+        // `--help` admission recorded — otherwise a refresh would silently
+        // reduce a binary to one capability.
+        let dir = scratch_dir("keep-caps");
+        let path = roster_path_in(&dir);
+        let caps = vec![CliCapability {
+            name: "git:commit".to_string(),
+            description: None,
+        }];
+        admit_with_capabilities(&path, "git", CliCategory::VersionControl, Some(caps))
+            .expect("first admit");
+        admit(&path, "git", CliCategory::VersionControl).expect("second admit");
+        let entry = load_roster(&path)
+            .entries
+            .get("git")
+            .cloned()
+            .expect("git is in the roster");
+        assert_eq!(entry.capabilities.len(), 1, "the capabilities survived");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_binary_with_no_help_yields_one_capability_and_does_not_fail() {
+        // The plan's verification item 2: "a binary with a useless --help
+        // degrades to a single capability and does not crash admission".
+        // `/bin/true` prints a usage line with nothing parseable in it.
+        if !std::path::Path::new("/bin/true").exists() {
+            return;
+        }
+        let caps = admit_by_help("/bin/true", Duration::from_secs(5));
+        assert_eq!(caps.len(), 1, "{caps:?}");
+        assert_eq!(caps[0].name, "/bin/true");
+    }
+
+    #[test]
+    fn a_binary_that_does_not_exist_yields_one_capability_and_does_not_fail() {
+        let caps = admit_by_help("definitely-not-a-real-binary-xyzzy", Duration::from_secs(2));
+        assert_eq!(caps.len(), 1, "{caps:?}");
+        assert_eq!(caps[0].name, "definitely-not-a-real-binary-xyzzy");
+    }
+
+    #[test]
+    fn a_binary_that_hangs_yields_one_capability_after_the_deadline() {
+        // The A0 bound "a hostile binary hanging the agent": the deadline
+        // is enforced, and the outcome is a degraded single capability
+        // rather than a hang or a panic.
+        //
+        // `sleep` with `--help` exits immediately, so the hang is
+        // simulated by a binary that ignores its argument: a shell
+        // script that sleeps regardless.
+        let dir = scratch_dir("hang");
+        let script = dir.join("hangy");
+        std::fs::write(&script, "#!/bin/sh\nsleep 30\n").expect("write");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))
+                .expect("chmod");
+        }
+        let started = std::time::Instant::now();
+        let caps = admit_by_help(script.to_str().unwrap_or_default(), Duration::from_secs(1));
+        let elapsed = started.elapsed();
+        assert_eq!(caps.len(), 1, "{caps:?}");
+        assert!(
+            elapsed < Duration::from_secs(10),
+            "the deadline must bound the wait, took {elapsed:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_help_spawn_passes_no_arguments_but_help() {
+        // The A0 bound "arbitrary code execution at admission": the binary
+        // is executed ONLY with `--help`. A config field can name a
+        // binary, nothing else — no argv from the roster or the config
+        // reaches the spawn.
+        //
+        // Proven by a script that records its arguments: the only one
+        // that may appear is `--help`.
+        let dir = scratch_dir("argv");
+        let record = dir.join("argv.txt");
+        let script = dir.join("argvy");
+        std::fs::write(
+            &script,
+            format!("#!/bin/sh\nprintf '%s\\n' \"$@\" > {}\n", record.display()),
+        )
+        .expect("write");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))
+                .expect("chmod");
+        }
+        let caps = admit_by_help(script.to_str().unwrap_or_default(), Duration::from_secs(5));
+        assert_eq!(caps.len(), 1, "{caps:?}");
+        let recorded = std::fs::read_to_string(&record).unwrap_or_default();
+        assert_eq!(recorded.trim(), "--help", "only --help reaches the spawn");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn there_is_exactly_one_spawn_primitive_in_the_cli_surface() {
+        // The plan's A0 requirement: "No new spawn primitive may be
+        // written for this." The check is structural — the CLI surface
+        // modules must not contain a second `Command::new`.
+        //
+        // `cli_discovery.rs` is the one place allowed to spawn (it owns
+        // `run_with_timeout`); `cli_roster.rs` and `cli_help_parser.rs`
+        // must not spawn at all.
+        //
+        // The scan skips the `#[cfg(test)]` module: this test's own
+        // source contains the literal it searches for, so scanning the
+        // whole file would report itself.
+        let production_source = |file: &str| {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("src/tools")
+                .join(file);
+            let text = std::fs::read_to_string(path).expect("read the module source");
+            match text.find("#[cfg(test)]") {
+                Some(idx) => text[..idx].to_string(),
+                None => text,
+            }
+        };
+        for file in ["cli_roster.rs", "cli_help_parser.rs"] {
+            let text = production_source(file);
+            assert!(
+                !text.contains("Command::new"),
+                "{file} must not spawn — the one spawn primitive is run_with_timeout"
+            );
+        }
+        // And the primitive itself is in exactly one place.
+        let discovery = production_source("cli_discovery.rs");
+        assert_eq!(
+            discovery.matches("Command::new").count(),
+            1,
+            "cli_discovery owns the single spawn"
+        );
     }
 }

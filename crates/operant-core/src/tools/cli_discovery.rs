@@ -160,7 +160,16 @@ fn probe_cli(name: &str, version_args: &[&str], category: CliCategory) -> Option
 
 /// Run a command with stdin closed and a hard timeout.
 /// Returns `None` if it fails to spawn or does not exit in time.
-fn run_with_timeout(name: &str, args: &[&str], timeout: Duration) -> Option<Output> {
+///
+/// This is THE spawn primitive for the CLI surface, and the plan
+/// (2026-10-28, A0) requires that no second one be written: every
+/// execution of an operator-named binary goes through here, so the
+/// bounds — stdin closed, stdout/stderr piped, a hard deadline — are
+/// one implementation, not one per call site.
+///
+/// It is `pub` so the `--help` admission path can reuse it rather than
+/// growing its own spawn with its own (possibly weaker) bounds.
+pub fn run_with_timeout(name: &str, args: &[&str], timeout: Duration) -> Option<Output> {
     let mut child = Command::new(name)
         .args(args)
         .stdin(Stdio::null())
