@@ -180,12 +180,13 @@ what keeps a future refactor from re-widening any of the three arms.
 background loads (`tui/app/mod.rs` + `key_handling.rs`). Two mechanisms
 carry their own rules.
 
-**The pane focus is what the step keys route on.** `PaneFocus`
-(List/Preview, jcode's `session_picker/navigation.rs:191-196` — the hub
-has 40/60 geometry but until iter-1476 it had no focus field, so Tab and
-PageUp were keys with nothing to act on). Tab toggles it, `h`/`l` set it
-explicitly, and Up/Down/j/k, PageUp/PageDown/K/J and Home/End each route
-to the FOCUSED pane: selection in the list, scroll in the preview.
+**The pane focus is what the step keys route on.** `PaneFocus` (List/Preview,
+ported from jcode's session_picker navigation module, lines 191-196 of the
+jcode-tui-session-picker source — the hub has 40/60 geometry but until
+iter-1476 it had no focus field, so Tab and PageUp were keys with nothing to
+act on). Tab toggles it, `h`/`l` set it explicitly, and Up/Down/j/k,
+PageUp/PageDown/K/J and Home/End each route to the FOCUSED pane: selection in
+the list, scroll in the preview.
 `Right` nudges the preview into focus as the discoverable way in for an
 operator who never presses Tab.
 
