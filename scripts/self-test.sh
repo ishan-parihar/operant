@@ -110,6 +110,16 @@ run_test "Doc claims (scripts/check-doc-claims.sh)" "bash scripts/check-doc-clai
 # without anyone deciding what to do about it (RT-159).
 run_test "Config surface (scripts/audit-config-surface.py --check)" "python3 scripts/audit-config-surface.py --check 2>&1"
 
+# 4c-1. The audit ledger's index vs its own checkboxes (RG-016). The ledger
+# keeps each row's state in three places and closing a defect flips only the
+# checkbox, so the index table and the count prose go stale in BOTH
+# directions: a closed row still reading "OPEN" (RT-135 stayed an "accepted
+# stub" for the whole life of that wording, until iter-1474 closed it and
+# nothing re-derived the table) and an open row missing from the table
+# entirely (RT-136/RT-190/RT-197 were all absent on 2026-10-29). A hand-read
+# is what missed it; this is the set difference, run every time.
+run_test "Ledger index vs checkboxes (scripts/audit-ledger-index.py)" "python3 scripts/audit-ledger-index.py 2>&1"
+
 # 4c-2. The lint-suppression surface. rust-best-practices ch.2 says prefer
 # `#[expect]` over `#[allow]`, because an allow never expires while an expect
 # reports itself unfulfilled the moment the lint stops firing. A prose claim
