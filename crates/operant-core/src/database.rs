@@ -630,6 +630,15 @@ impl Database {
     // === Session Management ===
 
     /// Save or update a session with all Python-compatible fields.
+    ///
+    /// A `None` title means "leave whatever is there", NOT "erase it":
+    /// `turn_context` calls this on every turn with `None` (the title is
+    /// derived from the first user message, not passed in), and the old
+    /// unconditional `title = excluded.title` erased the title
+    /// `save_message` had just generated — 1,512 sessions on the live DB
+    /// carry a title-worthy first user message with no title because of it.
+    /// An explicitly empty string still clears (an operator can blank a
+    /// title deliberately).
     pub fn save_session(
         &self,
         id: &str,
@@ -643,7 +652,7 @@ impl Database {
             "INSERT INTO sessions (id, title, source, started_at, ended_at)
              VALUES (?1, ?2, ?3, ?4, ?5)
              ON CONFLICT(id) DO UPDATE SET
-                 title = excluded.title,
+                 title = CASE WHEN ?2 IS NULL THEN sessions.title ELSE ?2 END,
                  source = excluded.source,
                  ended_at = excluded.ended_at",
             params![id, title, source, created_at, updated_at],
@@ -709,7 +718,7 @@ impl Database {
                 cost_status = excluded.cost_status,
                 cost_source = excluded.cost_source,
                 pricing_version = excluded.pricing_version,
-                title = excluded.title,
+                title = CASE WHEN ?27 IS NULL THEN sessions.title ELSE ?27 END,
                 api_call_count = excluded.api_call_count,
                 handoff_state = excluded.handoff_state,
                 handoff_platform = excluded.handoff_platform,
@@ -1853,6 +1862,69 @@ impl Database {
         } else {
             Ok(None)
         }
+    }
+
+    /// Backfill titles for sessions the title-wipe bug left untitled.
+    ///
+    /// `save_session`'s upsert used to write `title = excluded.title`, and
+    /// `turn_context` calls it with `None` on every turn — so each turn
+    /// erased the title `save_message` had just generated. The write path is
+    /// fixed (a `None` argument now means "leave it"); this repairs what the
+    /// bug already destroyed.
+    ///
+    /// Idempotent: a session that already has a title is not matched by the
+    /// candidate query, and the same title is derived every run, so a second
+    /// pass repairs nothing. Returns how many rows were repaired.
+    ///
+    /// The title comes from the session's FIRST user message, run through the
+    /// SAME `generate_session_title` the live path uses (markdown stripping,
+    /// whitespace collapsing, the 60-char cap) — SQLite has none of that, and
+    /// a title that renders a whole code-fenced prompt is worse than none.
+    /// Sessions whose only messages are assistant/tool rows get no title:
+    /// inventing one from tool JSON would be a lie.
+    pub fn backfill_session_titles(&self) -> Result<usize> {
+        let conn = self.lock_conn()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT s.id, m.content
+                   FROM sessions s
+                   JOIN messages m ON m.id = (
+                       SELECT m2.id FROM messages m2
+                        WHERE m2.session_id = s.id
+                          AND m2.role = 'user'
+                          AND m2.content IS NOT NULL
+                          AND trim(m2.content) <> ''
+                        ORDER BY m2.id ASC LIMIT 1
+                   )
+                  WHERE s.title IS NULL OR trim(s.title) = ''",
+            )
+            .map_err(|e| Error::Agent(format!("Failed to prepare backfill: {}", e)))?;
+        let candidates: Vec<(String, String)> = stmt
+            .query_map([], |row| {
+                let id: String = row.get(0)?;
+                let content: String = row.get(1)?;
+                Ok((id, content))
+            })
+            .map_err(|e| Error::Agent(format!("Failed to read backfill candidates: {}", e)))?
+            .map(|r| r.map_err(|e| Error::Agent(format!("Failed to read backfill row: {}", e))))
+            .collect::<Result<Vec<_>>>()?;
+        drop(stmt);
+        let mut affected = 0usize;
+        for (id, content) in candidates {
+            let title = Self::generate_session_title(&content);
+            // Guarded UPDATE, not a plain one: a concurrent rename that lands
+            // while this loop runs must win (the rule
+            // `maybe_auto_title_session` enforces on the live path).
+            let n = conn
+                .execute(
+                    "UPDATE sessions SET title = ?1
+                      WHERE id = ?2 AND (title IS NULL OR trim(title) = '')",
+                    params![title, id],
+                )
+                .map_err(|e| Error::Agent(format!("Failed to backfill title for {}: {}", id, e)))?;
+            affected += n;
+        }
+        Ok(affected)
     }
 
     pub fn update_session_title(&self, session_id: &str, title: &str) -> Result<()> {
@@ -3736,6 +3808,193 @@ mod tests {
         let full = db.get_session_messages_full(id).unwrap();
         let full_contents: Vec<Option<&str>> = full.iter().map(|m| m.content.as_deref()).collect();
         assert_eq!(full_contents, vec![Some("q1"), Some("a1"), Some("q2")]);
+    }
+
+    /// (2026-10-29) The live auto-name defect. `turn_context` calls
+    /// `save_session(id, None, ...)` on EVERY turn, and the upsert wrote
+    /// `title = excluded.title` — so a `None` argument WIPED the title the
+    /// first turn's `save_message` had auto-generated. 1,512 sessions on the
+    /// live 105 MB DB carry a title-worthy first user message and no title
+    /// because of exactly this.
+    #[test]
+    fn a_later_save_session_with_no_title_does_not_wipe_the_generated_one() {
+        let db = test_db();
+        db.save_session("wipe-check", None, "local", "t1", "t1")
+            .unwrap();
+        db.save_message("wipe-check", "user", "Fix the flaky test suite", "t2")
+            .unwrap();
+        // The second turn's session upsert (what turn_context does each turn)
+        // must not erase the auto-generated title.
+        db.save_session("wipe-check", None, "local", "t2", "t3")
+            .unwrap();
+        let sessions = db.list_sessions(10).unwrap();
+        let s = sessions.iter().find(|s| s.id == "wipe-check").unwrap();
+        assert_eq!(
+            s.title.as_deref(),
+            Some("Fix the flaky test suite"),
+            "a None title argument is not an instruction to erase a generated one"
+        );
+    }
+
+    /// The same guard for `save_session_full`: the rewind fork's parent row
+    /// and the llm_compressor both write session metadata with `title: None`
+    /// after the session has been titled.
+    #[test]
+    fn save_session_full_with_no_title_does_not_wipe_the_generated_one() {
+        let db = test_db();
+        db.save_session("wipe-full", None, "local", "t1", "t1")
+            .unwrap();
+        db.save_message("wipe-full", "user", "Audit the retry backoff", "t2")
+            .unwrap();
+        db.save_session_full(&SessionData {
+            id: "wipe-full".to_string(),
+            title: None,
+            source: "agent".to_string(),
+            user_id: None,
+            model: None,
+            model_config: None,
+            system_prompt: None,
+            parent_session_id: None,
+            started_at: "t1".to_string(),
+            ended_at: Some("t3".to_string()),
+            end_reason: None,
+            message_count: 1,
+            tool_call_count: 0,
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_read_tokens: 0,
+            cache_write_tokens: 0,
+            reasoning_tokens: 0,
+            cwd: None,
+            billing_provider: None,
+            billing_base_url: None,
+            billing_mode: None,
+            estimated_cost_usd: None,
+            actual_cost_usd: None,
+            cost_status: None,
+            cost_source: None,
+            pricing_version: None,
+            api_call_count: 0,
+            handoff_state: None,
+            handoff_platform: None,
+            handoff_error: None,
+            rewind_count: 0,
+            archived: 0,
+            employee_id: None,
+        })
+        .unwrap();
+        let sessions = db.list_sessions(10).unwrap();
+        let s = sessions.iter().find(|s| s.id == "wipe-full").unwrap();
+        assert_eq!(
+            s.title.as_deref(),
+            Some("Audit the retry backoff"),
+            "save_session_full must also treat a None title as 'leave it'"
+        );
+    }
+
+    /// An empty string still clears — an operator can deliberately blank a
+    /// title, and "leave it" must not become "can never be cleared".
+    #[test]
+    fn an_empty_title_string_still_clears() {
+        let db = test_db();
+        db.save_session("clear-check", Some("A Real Title"), "local", "t1", "t1")
+            .unwrap();
+        db.save_session("clear-check", Some(""), "local", "t1", "t2")
+            .unwrap();
+        let sessions = db.list_sessions(10).unwrap();
+        let s = sessions.iter().find(|s| s.id == "clear-check").unwrap();
+        assert_ne!(
+            s.title.as_deref(),
+            Some("A Real Title"),
+            "an explicit empty string is a deliberate clear, not a None"
+        );
+    }
+
+    /// (2026-10-29) The backfill repairs what the OLD wipe bug destroyed. The
+    /// damage is modelled by hand (a session whose first user message is
+    /// present but whose title is NULL), because the current write path no
+    /// longer produces that state — this is the archival repair, not the live
+    /// guard (that is `a_later_save_session_with_no_title_does_not_wipe_...`).
+    #[test]
+    fn backfill_titles_untitled_sessions_and_is_idempotent() {
+        let db = test_db();
+        // Damage shaped like the live DB: 1,512 sessions had a title-worthy
+        // first user message and no title.
+        db.save_session("bf-1", None, "agent", "t1", "t1").unwrap();
+        db.save_message("bf-1", "user", "Repair the flaky webhook test", "t2")
+            .unwrap();
+        db.save_session("bf-2", None, "agent", "t1", "t1").unwrap();
+        db.save_message("bf-2", "user", "Audit the retry backoff curve", "t2")
+            .unwrap();
+        // Already titled — the backfill must not touch it.
+        db.save_session("bf-3", Some("Manual Keep"), "local", "t1", "t1")
+            .unwrap();
+        db.save_message("bf-3", "user", "A different question", "t2")
+            .unwrap();
+        // No user message at all — must stay untitled rather than be named
+        // from an assistant line or tool JSON.
+        db.save_session("bf-4", None, "local", "t1", "t1").unwrap();
+        db.save_message("bf-4", "assistant", "Only an assistant replied", "t2")
+            .unwrap();
+        // Wipe bf-1/bf-2's titles straight (the old bug's end state), so the
+        // backfill has real work: this is the only way to manufacture the
+        // damage now that the write path is fixed.
+        for id in ["bf-1", "bf-2"] {
+            db.update_session_title(id, "").expect("model the old wipe");
+        }
+
+        let repaired = db.backfill_session_titles().unwrap();
+        assert_eq!(
+            repaired, 2,
+            "two untitled sessions with a prompt — got {repaired}"
+        );
+
+        let sessions = db.list_sessions(10).unwrap();
+        let by = |id: &str| {
+            sessions
+                .iter()
+                .find(|s| s.id == id)
+                .and_then(|s| s.title.clone())
+        };
+        assert_eq!(by("bf-1").as_deref(), Some("Repair the flaky webhook test"));
+        assert_eq!(by("bf-2").as_deref(), Some("Audit the retry backoff curve"));
+        assert_eq!(by("bf-3").as_deref(), Some("Manual Keep"));
+        assert!(by("bf-4").is_none(), "no user message, no invented title");
+
+        assert_eq!(
+            db.backfill_session_titles().unwrap(),
+            0,
+            "a second pass repairs nothing"
+        );
+    }
+
+    /// The backfill's displayed title is the SAME string the live path
+    /// generates — not the raw prompt. The proof is structural: whatever
+    /// `generate_session_title` returns for a prompt, that is what the
+    /// backfilled row holds. (The generator's own fence/heading behaviour is
+    /// pinned separately by `generate_session_title_*`; this pins only that
+    /// the backfill delegates to it instead of inventing its own rule.)
+    #[test]
+    fn backfill_uses_the_same_title_generator_as_the_live_path() {
+        let db = test_db();
+        db.save_session("bf-md", None, "local", "t1", "t1").unwrap();
+        let prompt = "# Audit the memory wire boundary\nand the banks it touches";
+        db.save_message("bf-md", "user", prompt, "t2").unwrap();
+        db.update_session_title("bf-md", "")
+            .expect("model the old wipe");
+        db.backfill_session_titles().unwrap();
+        let sessions = db.list_sessions(10).unwrap();
+        let s = sessions.iter().find(|s| s.id == "bf-md").unwrap();
+        let expected = Database::generate_session_title(prompt);
+        assert_eq!(
+            s.title.as_deref(),
+            Some(expected.as_str()),
+            "the backfilled title is literally the live generator's output"
+        );
+        assert!(
+            expected.len() <= 61,
+            "and it is capped, so a long prompt cannot become a wall of text"
+        );
     }
 
     #[test]
