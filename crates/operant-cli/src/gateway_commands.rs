@@ -1728,9 +1728,23 @@ pub fn handle_command(cmd_name: &str, _args: &str, ctx: &CommandContext<'_>) -> 
 
         "profile" => {
             let model = &ctx.config.agent.model;
+            // G4 (plan 2026-10-29): the TUI and the channel must not describe
+            // the operator's reasoning setting differently. This printed the
+            // raw `[agent] show_reasoning` BOOL, which answers "is it on?"
+            // but not "which mode?" — the TUI's contract is three-state
+            // (Off / Current / Full, config_shim::ReasoningDisplayMode) and
+            // `Full` is unreachable from the config key, so the bool could not
+            // say it.
+            //
+            // Resolve through the SAME shim the TUI boot bridged
+            // (main.rs:3254 sets the override on BOTH the TUI and the
+            // `gateway run` paths), so the channel reports the mode actually
+            // in force rather than a second opinion about it.
+            use crate::tui::operant_app::config_shim;
+            let reasoning = config_shim::config().display.reasoning_display();
             format!(
                 "*Active Profile:*\n• Model: `{}`\n• Max iterations: `{}`\n• Reasoning: `{}`\n\nUse CLI `operant profile` for full profile management.",
-                model, ctx.config.agent.max_iterations, ctx.config.agent.show_reasoning
+                model, ctx.config.agent.max_iterations, reasoning.label()
             )
         }
 
@@ -2811,6 +2825,46 @@ mod tests {
         let cfg = AppConfig::default();
         let ctx = CommandContext::new(None, &cfg, true, "test", "telegram", "123");
         assert!(handle_command("nonexistent", "", &ctx).is_none());
+    }
+
+    /// G4 (plan 2026-10-29): `/profile` must report the reasoning MODE the
+    /// TUI is actually in, not the raw `[agent] show_reasoning` bool.
+    ///
+    /// The bool can only say on/off, and the TUI's contract is three-state
+    /// (`config_shim::ReasoningDisplayMode`: Off / Current / Full) — so a
+    /// `Full` session reported `true`, which is a different word for a
+    /// different state. MUTATION PROOF: restoring
+    /// `ctx.config.agent.show_reasoning` as the third format arg makes this
+    /// fail, because the fixture sets the mode to `Full` while the bool is
+    /// `false`.
+    ///
+    /// Serialised on the shim's own guard: the reasoning cell is a
+    /// process-global and a parallel test's write would land mid-read (the
+    /// same flake `config_shim`'s own tests guard against).
+    #[test]
+    fn profile_reports_the_reasoning_mode_not_the_show_reasoning_bool() {
+        use crate::tui::operant_app::config_shim::{self, ReasoningDisplayMode};
+        let _guard = config_shim::reasoning_override_test_guard();
+
+        // The operator's config says OFF, but the session is displaying FULL
+        // (/thinking-display full). A bool reader prints `false` here and
+        // contradicts the screen. The bool is set explicitly because the
+        // shipped default is `true` (config.rs:865) — the fixture must
+        // manufacture the disagreement, not hope for it.
+        let mut cfg = AppConfig::default();
+        cfg.agent.show_reasoning = false;
+        config_shim::set_reasoning_display_override(Some(ReasoningDisplayMode::Full));
+        assert!(!cfg.agent.show_reasoning, "fixture: the bool must disagree");
+        let ctx = CommandContext::new(None, &cfg, true, "test", "telegram", "123");
+        let reply = handle_command("profile", "", &ctx).expect("a reply");
+        assert!(
+            reply.contains("• Reasoning: `Full`"),
+            "the channel must name the mode in force (Full), got: {reply}"
+        );
+        assert!(
+            !reply.contains("Reasoning: `false`"),
+            "a raw bool leaked into the operator-facing reply: {reply}"
+        );
     }
 
     #[test]
