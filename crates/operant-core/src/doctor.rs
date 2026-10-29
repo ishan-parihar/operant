@@ -85,7 +85,7 @@ pub fn diagnose(config: &AppConfig) -> Vec<CheckResult> {
     check_memory_provider(config, &mut items);
     check_data_root(&mut items);
     check_environment(&mut items);
-    check_cli_tools(&mut items);
+    check_cli_tools(config, &mut items);
     items
 }
 
@@ -509,10 +509,11 @@ fn check_environment(items: &mut Vec<CheckResult>) {
 
 // ── CLI tool discovery ─────────────────────────────────────────────
 
-fn check_cli_tools(items: &mut Vec<CheckResult>) {
+fn check_cli_tools(config: &AppConfig, items: &mut Vec<CheckResult>) {
     let cat = "cli-tools";
 
-    let discovered = crate::tools::cli_discovery::discover_cli_tools(&[], &[]);
+    let roster_path = crate::tools::cli_roster::roster_path_from_config(config);
+    let discovered = crate::tools::cli_discovery::discover_cli_tools(&roster_path, &[], &[]);
 
     if discovered.is_empty() {
         items.push(CheckResult::warn(cat, "No CLI tools found in PATH"));

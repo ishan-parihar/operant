@@ -126,15 +126,16 @@ pub enum CliSubcommand {
 
     /// Grant a CLI to the agent by appending a `[[cli.tools]]` entry.
     ///
-    /// Refuses a name outside the catalogue: discovery only probes binaries
-    /// it has a recipe for, so an arbitrary name would report unusable
-    /// forever. Narrow a grant with --global-args / --allow-subcommands
-    /// rather than inventing a name.
+    /// A binary that is on PATH is ADMITTED at runtime: it is added to the
+    /// CLI roster and its `--help` is parsed for subcommand capabilities,
+    /// exactly the way an MCP server is admitted at connect via `tools/list`.
+    /// One binary yields N capabilities, so one server yields N tools.
     ///
-    /// PHASE 1: the entry is recorded, the budget measures it, and the agent
-    /// cannot invoke it (no `cli_exec`, no `<cli_reference>` injection).
-    /// `--global-args` and `--allow-subcommands` are stored for phase 2 and
-    /// read by nothing yet.
+    /// A name that is NOT on PATH is refused with a clear message — there is
+    /// no point granting a binary this machine cannot run.
+    ///
+    /// Narrow a grant with --global-args / --allow-subcommands rather than
+    /// inventing a name.
     ///
     /// This WRITES the config file directly (your comments are preserved),
     /// unlike `operant mcp add`, which only tests the connection and prints
@@ -148,16 +149,15 @@ pub enum CliSubcommand {
         #[arg(long)]
         description: Option<String>,
 
-        /// argv to prepend to every invocation of this CLI. RECORDED for
-        /// phase 2 only: until `cli_exec` lands there is no invocation, so
-        /// these are written to the config and nothing reads them back.
-        /// Measured by an audit — zero production readers for `global_args`,
-        /// `allow_subcommands` and `timeout_secs` today.
+        /// argv to prepend to every invocation of this CLI. ENFORCED by
+        /// `cli_exec`: these are prepended to every call, so a grant can
+        /// pin a `--no-pager` or a working directory for the whole binary.
         #[arg(long)]
         global_args: Vec<String>,
 
-        /// Subcommands the agent may use (empty = the whole CLI). Same phase-2
-        /// caveat as `global_args`: stored now, enforced when `cli_exec` lands.
+        /// Subcommands the agent may use (empty = the whole CLI). ENFORCED
+        /// by `cli_exec`: a non-empty list is a default-deny allowlist —
+        /// a subcommand outside it is refused.
         #[arg(long)]
         allow_subcommands: Vec<String>,
     },
@@ -908,13 +908,14 @@ fn toml_array(values: &[String]) -> String {
 fn cli_command(config: &AppConfig, cmd: &CliSubcommand) -> Result<()> {
     match cmd {
         CliSubcommand::List => {
-            let catalogue = operant_core::tools::cli_discovery::known_cli_names();
+            let roster_path = operant_core::tools::cli_roster::roster_path_from_config(config);
+            let catalogue = operant_core::tools::cli_discovery::known_cli_names(&roster_path);
             if catalogue.is_empty() {
                 println!("The CLI catalogue is empty.");
                 return Ok(());
             }
             let installed: std::collections::HashSet<String> =
-                operant_core::tools::cli_discovery::discover_cli_tools(&[], &[])
+                operant_core::tools::cli_discovery::discover_cli_tools(&roster_path, &[], &[])
                     .into_iter()
                     .map(|c| c.name)
                     .collect();
@@ -960,15 +961,39 @@ fn cli_command(config: &AppConfig, cmd: &CliSubcommand) -> Result<()> {
             global_args,
             allow_subcommands,
         } => {
-            let catalogue = operant_core::tools::cli_discovery::known_cli_names();
-            if !catalogue.iter().any(|c| c == name) {
+            // Plan 2026-10-28 Phase A1: the catalogue is a RUNTIME roster,
+            // not a compile-time const. A binary the shipped binary had
+            // never heard of is admitted here if it exists on PATH — the
+            // plan's verification item 1 says the old "not in the CLI
+            // catalogue" string must stop being reachable for a binary
+            // that IS installed.
+            //
+            // The refusal that remains is the honest one: a name that is
+            // NOT on this machine cannot be granted, because granting it
+            // would record a grant that could never run.
+            let installed = operant_core::tools::cli_discovery::is_installed(name);
+            if !installed {
                 anyhow::bail!(
-                    "'{name}' is not in the CLI catalogue — discovery only probes binaries it \
-                     has a recipe for, so an unknown name would report unusable forever. \
-                     Check `operant context cli list` for the choices; narrow a grant with \
-                     --global-args / --allow-subcommands rather than inventing a name."
+                    "'{name}' is not on this machine's PATH, so there is nothing to grant. \
+                     Check the name, or install it first. (The CLI roster is a runtime \
+                     catalogue — any binary on PATH can be admitted.)"
                 );
             }
+            // Admit it into the roster so the catalogue stops being a
+            // compile-time list. A name already present refreshes rather
+            // than duplicating.
+            let roster_path = operant_core::tools::cli_roster::roster_path_from_config(config);
+            let was_new = operant_core::tools::cli_roster::admit(
+                &roster_path,
+                name,
+                operant_core::tools::cli_discovery::CliCategory::Build,
+            )
+            .with_context(|| {
+                format!(
+                    "failed to write the CLI roster at {}",
+                    roster_path.display()
+                )
+            })?;
             if config.cli.tools.iter().any(|t| &t.name == name) {
                 println!("'{name}' already has an entry. Use: operant context cli toggle {name}");
                 return Ok(());
@@ -1025,6 +1050,13 @@ fn cli_command(config: &AppConfig, cmd: &CliSubcommand) -> Result<()> {
             std::fs::write(&cfg_path, out)
                 .with_context(|| format!("failed to write {}", cfg_path.display()))?;
             println!("Granted '{name}' in {}.", cfg_path.display());
+            if was_new {
+                println!(
+                    "  admitted '{name}' into the CLI roster ({}) — the catalogue is runtime, \
+                     not compiled in.",
+                    roster_path.display()
+                );
+            }
             if surface_enabled_by_us {
                 println!(
                     "  also turned on [cli] — the surface was off, so this grant would have done nothing."
@@ -1051,7 +1083,29 @@ fn cli_command(config: &AppConfig, cmd: &CliSubcommand) -> Result<()> {
                 println!("No [[cli.tools]] entry named '{name}'.");
                 return Ok(());
             }
+            // The grant and the roster entry are two halves of one thing:
+            // the roster says "this binary exists", the config says "the
+            // agent may have it". Removing the grant while leaving the
+            // roster entry would keep the binary in the catalogue — which
+            // is defensible (it still exists) but surprising after a
+            // `remove`. Report it so the operator knows which half moved.
+            let roster_path = operant_core::tools::cli_roster::roster_path_from_config(config);
+            let dropped = operant_core::tools::cli_roster::remove(&roster_path, name)
+                .with_context(|| {
+                    format!(
+                        "failed to write the CLI roster at {}",
+                        roster_path.display()
+                    )
+                })?;
             println!("Removed the '{name}' grant from {}.", cfg_path.display());
+            if dropped {
+                println!("  also dropped '{name}' from the CLI roster.");
+            } else {
+                println!(
+                    "  '{name}' stays in the CLI roster (it still exists on this machine) — \
+                     remove it from the catalogue only if you want it gone."
+                );
+            }
         }
         CliSubcommand::Toggle { name, enabled } => {
             let cfg_path = config.config_path.clone().with_context(|| {
@@ -1812,5 +1866,151 @@ mod tests {
         );
         std::fs::write(&path, &content).unwrap();
         operant_core::config::parse_config_str(&content, &path).expect("a minimal config parses")
+    }
+
+    /// The CLI roster lives next to the CONFIG's database, so a test that
+    /// names its own database path already isolates its roster — no env
+    /// var, no global lock.
+    ///
+    /// The earlier version of this helper set `HERMES_HOME`, which is
+    /// process-global: in a parallel test binary, one test's roster landed
+    /// in another test's home, and the roster path could point at a
+    /// directory that did not exist. Deriving the path from the config
+    /// removed both failure modes and the lock.
+    fn with_isolated_roster_home<T>(tag: &str, f: impl FnOnce(&std::path::Path) -> T) -> T {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "operant_{tag}_home_{}_{}",
+            std::process::id(),
+            nanos
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let result = f(&dir);
+        let _ = std::fs::remove_dir_all(&dir);
+        result
+    }
+
+    /// A config whose database lives in `dir`, so the roster for that
+    /// config lands in `dir` too.
+    fn config_in(dir: &std::path::Path, tag: &str) -> operant_core::config::AppConfig {
+        let content = format!(
+            "database_path = \"{}\"\n\n[cli]\nenabled = true\n",
+            dir.join("test.db").display()
+        );
+        let path = dir.join(format!("{tag}.toml"));
+        std::fs::write(&path, &content).unwrap();
+        operant_core::config::parse_config_str(&content, &path).expect("the test config parses")
+    }
+
+    /// Plan verification item 1, PROVEN AT THE HANDLER: a binary the
+    /// shipped binary had never heard of can be granted. The old handler
+    /// refused any name outside the compile-time catalogue, so
+    /// `context cli add ssh` printed "not in the CLI catalogue" — and ssh
+    /// is installed on most machines.
+    ///
+    /// The handler, not the helper: the catalogue check lived in the
+    /// handler, so a helper-level test would not have caught its removal.
+    /// Proven by mutation — restoring the old `known_cli_names()` guard
+    /// makes THIS test fail while every roster test stays green.
+    #[test]
+    fn cli_add_via_the_handler_admits_a_binary_the_catalogue_never_had() {
+        if !operant_core::tools::cli_discovery::is_installed("ssh") {
+            return; // ssh absent on this machine — nothing to assert
+        }
+        with_isolated_roster_home("iter1480_add_e2e", |home| {
+            let cfg = config_in(home, "iter1480_add_e2e");
+            let path = cfg.config_path.clone().expect("config path recorded");
+            cli_command(
+                &cfg,
+                &CliSubcommand::Add {
+                    name: "ssh".into(),
+                    description: None,
+                    global_args: Vec::new(),
+                    allow_subcommands: Vec::new(),
+                },
+            )
+            .expect("ssh is installed, so the grant must succeed");
+
+            let after = std::fs::read_to_string(&path).expect("config written");
+            assert!(
+                after.contains("name = \"ssh\""),
+                "the grant is in the config: {after}"
+            );
+            // And the binary is in the RUNTIME roster — that is the point:
+            // the catalogue is no longer compiled in.
+            let roster_path = home.join("cli_roster.toml");
+            let roster = operant_core::tools::cli_roster::load_roster(&roster_path);
+            assert!(
+                roster.entries.contains_key("ssh"),
+                "ssh is admitted into the runtime roster"
+            );
+            // The seed survives the admission — the catalogue did not
+            // become "just ssh".
+            assert!(
+                roster.entries.contains_key("git"),
+                "the seeded catalogue survives a runtime admission"
+            );
+        });
+    }
+
+    /// The refusal that REMAINS is the honest one: a binary that is not
+    /// on this machine cannot be granted. Before this change the refusal
+    /// was about the COMPILE-TIME catalogue, which was the wrong question.
+    #[test]
+    fn cli_add_via_the_handler_refuses_a_binary_that_is_not_installed() {
+        let cfg = test_config_with(
+            "iter1480_add_missing",
+            "database_path = \"__DB__\"\n\n[cli]\nenabled = true\n",
+        );
+        let err = cli_command(
+            &cfg,
+            &CliSubcommand::Add {
+                name: "definitely-not-a-real-binary-xyzzy".into(),
+                description: None,
+                global_args: Vec::new(),
+                allow_subcommands: Vec::new(),
+            },
+        )
+        .expect_err("a binary that is not installed cannot be granted");
+        let message = err.to_string();
+        assert!(
+            message.contains("not on this machine's PATH"),
+            "the refusal names the real reason: {message}"
+        );
+        assert!(
+            !message.contains("not in the CLI catalogue"),
+            "the old compile-time-catalogue refusal must be unreachable: {message}"
+        );
+    }
+
+    /// The old string must not be reachable ANYWHERE for an installed
+    /// binary — the plan names it as the exact observable to retire.
+    #[test]
+    fn the_compile_time_catalogue_refusal_is_unreachable() {
+        if !operant_core::tools::cli_discovery::is_installed("ssh") {
+            return;
+        }
+        with_isolated_roster_home("iter1480_no_old_string", |home| {
+            let cfg = config_in(home, "iter1480_no_old_string");
+            // Success is the point: the handler no longer refuses an
+            // installed binary at all.
+            let result = cli_command(
+                &cfg,
+                &CliSubcommand::Add {
+                    name: "ssh".into(),
+                    description: None,
+                    global_args: Vec::new(),
+                    allow_subcommands: Vec::new(),
+                },
+            );
+            assert!(
+                result.is_ok(),
+                "an installed binary must be admissible: {:?}",
+                result.err()
+            );
+        });
     }
 }

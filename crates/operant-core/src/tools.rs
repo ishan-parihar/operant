@@ -20,6 +20,7 @@ pub mod cdp_utils;
 pub mod checkpoint_tool;
 pub mod clarify_tool;
 pub mod cli_discovery;
+pub mod cli_roster;
 pub mod code_execution;
 pub mod config_tool;
 pub mod cron_tool;

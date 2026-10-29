@@ -2,7 +2,7 @@
 //! Zero external dependencies (uses `std::process::Command` + `std::env`).
 
 use std::io::Read;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
@@ -12,12 +12,17 @@ const WHICH_TIMEOUT: Duration = Duration::from_secs(2);
 const VERSION_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// Category of a discovered CLI tool.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+///
+/// The default variant is `Build` — the same default the hand-written
+/// `impl Default` had, so a roster entry that omits its category parses
+/// to the same value it did before.
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum CliCategory {
     VersionControl,
     Language,
     PackageManager,
     Container,
+    #[default]
     Build,
     Cloud,
     AiAgent,
@@ -48,106 +53,58 @@ pub struct DiscoveredCli {
     pub category: CliCategory,
 }
 
-/// Known CLI tools to scan for.
-struct KnownCli {
-    name: &'static str,
-    version_args: &'static [&'static str],
-    category: CliCategory,
+/// The runtime catalogue of CLI tools to scan for.
+///
+/// Plan 2026-10-28, Phase A1: this used to be `const KNOWN_CLIS` — 16
+/// entries compiled into the binary. The operator's requirement forbids
+/// that ("nothing of CLI/MCP may be compile time"), and a const cannot
+/// describe a binary installed after the build. The catalogue now lives in
+/// a roster file next to the config, seeded with the same 16 entries so
+/// nothing regresses.
+///
+/// See [`super::cli_roster`] for the storage and the seed.
+fn roster_entries(roster_path: &Path) -> Vec<super::cli_roster::RosterEntry> {
+    super::cli_roster::roster_or_seed(roster_path)
+        .entries
+        .into_values()
+        .collect()
 }
 
-const KNOWN_CLIS: &[KnownCli] = &[
-    KnownCli {
-        name: "git",
-        version_args: &["--version"],
-        category: CliCategory::VersionControl,
-    },
-    KnownCli {
-        name: "python",
-        version_args: &["--version"],
-        category: CliCategory::Language,
-    },
-    KnownCli {
-        name: "python3",
-        version_args: &["--version"],
-        category: CliCategory::Language,
-    },
-    KnownCli {
-        name: "node",
-        version_args: &["--version"],
-        category: CliCategory::Language,
-    },
-    KnownCli {
-        name: "npm",
-        version_args: &["--version"],
-        category: CliCategory::PackageManager,
-    },
-    KnownCli {
-        name: "pip",
-        version_args: &["--version"],
-        category: CliCategory::PackageManager,
-    },
-    KnownCli {
-        name: "pip3",
-        version_args: &["--version"],
-        category: CliCategory::PackageManager,
-    },
-    KnownCli {
-        name: "docker",
-        version_args: &["--version"],
-        category: CliCategory::Container,
-    },
-    KnownCli {
-        name: "cargo",
-        version_args: &["--version"],
-        category: CliCategory::Build,
-    },
-    KnownCli {
-        name: "make",
-        version_args: &["--version"],
-        category: CliCategory::Build,
-    },
-    KnownCli {
-        name: "kubectl",
-        version_args: &["version", "--client", "--short"],
-        category: CliCategory::Cloud,
-    },
-    KnownCli {
-        name: "rustc",
-        version_args: &["--version"],
-        category: CliCategory::Language,
-    },
-    KnownCli {
-        name: "claude",
-        version_args: &["--version"],
-        category: CliCategory::AiAgent,
-    },
-    KnownCli {
-        name: "gemini",
-        version_args: &["--version"],
-        category: CliCategory::AiAgent,
-    },
-    KnownCli {
-        name: "kilo",
-        version_args: &["--version"],
-        category: CliCategory::AiAgent,
-    },
-    KnownCli {
-        name: "gws",
-        version_args: &["--version"],
-        category: CliCategory::Productivity,
-    },
-];
+/// Whether a binary exists on PATH.
+///
+/// This is the existence check SEPARATE from the version probe: the two
+/// answer different questions, and coupling them produced a lie. `ssh
+/// --version` prints "unknown option -- -" and exits non-zero, so a
+/// version-driven check would report ssh as not installed — while ssh is
+/// exactly the binary the plan's verification item 1 names ("`context cli
+/// add ssh` must stop being reachable for a binary that exists on PATH").
+pub fn is_installed(name: &str) -> bool {
+    find_executable(name).is_some()
+}
 
 /// Discover available CLI tools on the system.
 /// Scans PATH for known tools and returns metadata for each found.
-pub fn discover_cli_tools(additional: &[String], excluded: &[String]) -> Vec<DiscoveredCli> {
+///
+/// `roster_path` is where the RUNTIME catalogue lives; the roster
+/// supplies the recipes, and `additional` names binaries to probe that
+/// the catalogue does not carry yet.
+pub fn discover_cli_tools(
+    roster_path: &Path,
+    additional: &[String],
+    excluded: &[String],
+) -> Vec<DiscoveredCli> {
     let mut results = Vec::new();
 
-    for known in KNOWN_CLIS {
-        if excluded.iter().any(|e| e == known.name) {
+    for known in roster_entries(roster_path) {
+        if excluded.iter().any(|e| e == &known.name) {
             continue;
         }
-        if let Some(cli) = probe_cli(known.name, known.version_args, known.category.clone()) {
+        let version_args: Vec<&str> = if known.version_args.is_empty() {
+            vec!["--version"]
+        } else {
+            known.version_args.iter().map(|a| a.as_str()).collect()
+        };
+        if let Some(cli) = probe_cli(&known.name, &version_args, known.category.clone()) {
             results.push(cli);
         }
     }
@@ -179,8 +136,10 @@ pub fn discover_cli_tools(additional: &[String], excluded: &[String]) -> Vec<Dis
 ///
 /// Deliberately does NOT grant anything: listing a CLI here means it is a
 /// candidate, and the `[[cli.tools]]` entries decide what is active.
-pub fn known_cli_names() -> Vec<String> {
-    KNOWN_CLIS.iter().map(|k| k.name.to_string()).collect()
+///
+/// Plan 2026-10-28 Phase A1: the source is the runtime roster, not a const.
+pub fn known_cli_names(roster_path: &Path) -> Vec<String> {
+    super::cli_roster::catalogue_names(roster_path)
 }
 
 /// Probe a single CLI tool: check if it exists and get its version.
@@ -283,20 +242,42 @@ fn get_version(name: &str, args: &[&str]) -> Option<String> {
     // Extract first line only
     let first_line = version_text.lines().next()?.trim().to_string();
     if first_line.is_empty() {
-        None
-    } else {
-        Some(first_line)
+        return None;
     }
+    // A version line carries a number. "unknown option -- -" (what `ssh
+    // --version` prints) does not, and storing it as the version would be
+    // a lie the operator sees in `operant context cli list`. A tool whose
+    // version probe is not `--version` simply reports no version.
+    if !first_line.chars().any(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    Some(first_line)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// A scratch directory for a test's roster file, so a test never
+    /// reads or writes the OPERATOR's live roster.
+    fn scratch_dir(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "operant-cli-discovery-{tag}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create scratch dir");
+        dir
+    }
+
     #[test]
     fn discover_returns_vec() {
         // Just verify it runs without panic
-        let results = discover_cli_tools(&[], &[]);
+        let results = discover_cli_tools(
+            &crate::tools::cli_roster::roster_path_in(&scratch_dir("discover")),
+            &[],
+            &[],
+        );
         // We can't assert specific tools exist in CI, but structure is valid
         for cli in &results {
             assert!(!cli.name.is_empty());
@@ -305,8 +286,40 @@ mod tests {
 
     #[test]
     fn excluded_tools_are_skipped() {
-        let results = discover_cli_tools(&[], &["git".to_string()]);
+        let results = discover_cli_tools(
+            &crate::tools::cli_roster::roster_path_in(&scratch_dir("excluded")),
+            &[],
+            &["git".to_string()],
+        );
         assert!(!results.iter().any(|r| r.name == "git"));
+    }
+
+    #[test]
+    fn a_version_probe_that_is_not_a_version_reports_no_version() {
+        // `ssh --version` prints "unknown option -- -" and exits non-zero.
+        // Storing that as the version would put a lie in `operant context
+        // cli list`, so a version line must carry a digit.
+        assert!(get_version("ssh", &["--version"]).is_none());
+    }
+
+    #[test]
+    fn existence_does_not_depend_on_the_version_probe() {
+        // The plan's verification item 1 names ssh: `context cli add ssh`
+        // must succeed for a binary that IS on PATH. If existence were
+        // derived from the version probe, ssh (whose flag is `-V`) would
+        // report as not installed.
+        if !is_installed("ssh") {
+            return; // ssh absent on this machine — nothing to assert
+        }
+        assert!(is_installed("ssh"));
+        // The probe and the existence check are independent: ssh exists
+        // even though its `--version` probe yields nothing usable.
+        assert!(get_version("ssh", &["--version"]).is_none());
+    }
+
+    #[test]
+    fn a_binary_that_is_not_installed_is_not_installed() {
+        assert!(!is_installed("definitely-not-a-real-binary-xyzzy"));
     }
 
     #[test]

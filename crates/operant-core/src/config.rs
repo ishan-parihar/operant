@@ -1211,13 +1211,15 @@ impl Default for McpSettings {
 /// Not every binary on PATH is a tool an agent should hold, so the grant is
 /// per-entry: a binary that is on PATH but absent from `[[cli.tools]]` is
 /// invisible to the agent, exactly as an unlisted MCP server is never
-/// connected. `cli_discovery`'s `KNOWN_CLIS` roster is the catalogue the
-/// operator chooses from, not an automatic grant.
+/// connected. The CLI roster (a runtime catalogue next to the config) is
+/// the set the operator chooses from, not an automatic grant.
 ///
-/// STATUS (2026-10-27): this records the grant and `operant context budget`
-/// measures its cost, but the agent-facing half is NOT wired — `cli_exec` and
-/// the `<cli_reference>` prompt injection are the next phase. Nothing in the
-/// runtime reads this list yet, so a granted CLI is configured but not
+/// STATUS (2026-10-29, plan 2026-10-28 Phase A1): this records the grant
+/// and `operant context budget` measures its cost. The CATALOGUE is now
+/// runtime — a binary on PATH can be admitted without being compiled in —
+/// but the agent-facing half is still not wired: `cli_exec` and the
+/// `<cli_reference>` prompt injection are the plan's Phase C. Nothing in
+/// the runtime reads this list yet, so a granted CLI is configured but not
 /// invocable. The doc comment would otherwise promise the finished feature.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -1225,33 +1227,37 @@ pub struct CliToolSettings {
     /// The binary name as it appears on PATH (e.g. "git"). If it is not
     /// discoverable the entry reports unusable and is skipped.
     ///
-    /// PHASE 1 NOTE: the surface is configuration-plus-measurement only —
-    /// there is no `cli_exec` and no `<cli_reference>` injection yet, so a
-    /// grant is recorded and costed, not invocable. The fields below that
-    /// describe invocation (`description`, `global_args`, `timeout_secs`,
-    /// `allow_subcommands`) are stored for phase 2 and read by nothing today.
+    /// The catalogue a name must appear in is now the RUNTIME roster
+    /// (Phase A1), not a compile-time list: `operant context cli add`
+    /// admits any binary on PATH.
+    ///
+    /// NOTE: the surface is configuration-plus-measurement only — there is
+    /// no `cli_exec` and no `<cli_reference>` injection yet, so a grant is
+    /// recorded and costed, not invocable. The fields below that describe
+    /// invocation (`description`, `global_args`, `timeout_secs`,
+    /// `allow_subcommands`) are read by nothing today; the plan's Phase C
+    /// is what makes them load-bearing.
     pub name: String,
     /// Whether the agent may invoke this CLI. Defaults to true so a newly
     /// added entry works without also flipping a switch.
     #[serde(default = "default_true")]
     pub enabled: bool,
     /// What this CLI is for, in the operator's words. Renders in the
-    /// `<cli_reference>` block (phase 2), because the operator knows what
-    /// they use it for better than `--help` describes. Measured by
-    /// `context budget` in phase 1, when it replaces the raw usage line.
+    /// `<cli_reference>` block (the plan's Phase C), because the operator
+    /// knows what they use it for better than `--help` describes.
     pub description: Option<String>,
     /// argv to prepend to every invocation (a global `--no-pager`,
-    /// `-C /some/repo` for git). PHASE 2: parsed and round-tripped, with
-    /// zero production readers until `cli_exec` lands.
+    /// `-C /some/repo` for git). Stored and round-tripped; the plan's
+    /// Phase C is what enforces it on every call.
     #[serde(default)]
     pub global_args: Vec<String>,
     /// Hard per-call timeout in seconds. 0 means use the surface default
-    /// (`cli.default_timeout_secs`). PHASE 2: stored, not yet enforced.
+    /// (`cli.default_timeout_secs`). Stored; enforced by the plan's Phase C.
     #[serde(default)]
     pub timeout_secs: u64,
     /// Subcommands the agent may invoke, when the operator wants a narrower
-    /// grant than the whole binary. Empty means the whole CLI. PHASE 2:
-    /// stored, not yet enforced.
+    /// grant than the whole binary. Empty means the whole CLI. Stored;
+    /// enforced by the plan's Phase C as a default-deny allowlist.
     #[serde(default)]
     pub allow_subcommands: Vec<String>,
 }
