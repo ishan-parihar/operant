@@ -14,8 +14,8 @@ Source: `crates/operant-core/src/session/` (mod, autocompact),
 `crates/operant-core/src/tools/checkpoint_tool.rs`,
 `crates/operant-cli/src/cmd_sessions.rs`,
 `crates/operant-cli/src/cmd_checkpoints.rs`,
-`crates/operant-cli/src/tui/session_browser.rs` +
-`session_branching.rs`.
+`crates/operant-cli/src/tui/session_hub/` (mod.rs + render.rs — the
+full-frame picker that replaced the 70x20 `session_browser` modal).
 
 ## The retargetable conversation
 
@@ -29,9 +29,13 @@ session's history without rebuilding the agent — the session substrate
 ## Branching
 
 Each branch is an independent copy of the conversation from a chosen
-message point forward (`tui/session_branching.rs`) — the TUI's
-`/branch`; the gateway's session store supports switching, resume and
-branch on the same substrate.
+message point forward (`agent/rewind.rs`) — forking happens through `/rewind`,
+which is also what the gateway's session store uses for switch/resume/branch on
+the same substrate. The hub shows the resulting tree as `parent_id` +
+`RowKind::Branch` (branch rows render with the ↳ prefix), and `/branch` (or
+Ctrl+B) opens the hub on the `CurrentBranch` filter — the live session's root
+and its forks (iter-1467 retired the old `session_branching` overlay and
+`cmd_gateway.rs` prints those rows as bindings, not as a second browser).
 
 ## Rewind is a FORK, not a deletion (`agent/rewind.rs`)
 
