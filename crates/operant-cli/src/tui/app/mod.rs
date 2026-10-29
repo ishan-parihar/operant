@@ -95,6 +95,11 @@ pub struct App {
     /// once `frame_count` reaches this, so a scenario that never stops
     /// streaming can't hang the test suite. `None` = no cap (interactive).
     pub simulation_max_frames: Option<u64>,
+    /// Headless runs wait until this instant (see the drain block in `run`) for
+    /// background work to land before exiting, so an async load is visible in
+    /// the dumped frame instead of being cut off mid-flight. `None` until the
+    /// first drain pass after the scripted events run out.
+    sim_drain_deadline: Option<std::time::Instant>,
     /// (plan 01) `--frame-per-event`: the sim drains ONE scripted event per
     /// loop pass so every inter-event state paints a frame.
     pub simulation_one_event_per_frame: bool,
@@ -911,6 +916,22 @@ impl SynchronizedUpdate for ratatui::backend::TestBackend {
     }
 }
 
+/// How long a headless run keeps waiting, after its scripted events are
+/// drained, for background work (the hub's session rows and preview, the
+/// model list, the word predictor) to land.
+///
+/// Chosen from a measurement, not a guess: the hub's row load is a blocking
+/// DB read behind a `spawn_blocking`, and on the operator's 105 MB database
+/// `list_sessions_rich(500)` takes ~250 ms of real time. Five seconds covers
+/// that plus the preview read (a 14,103-message session) with room to spare,
+/// and the wait ENDS THE MOMENT nothing is in flight — a run with no async
+/// work pays for one extra loop pass and no wall-clock time at all.
+const SIM_DRAIN_BUDGET: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Poll granularity of the drain wait. Small enough that the load's arrival
+/// repaints promptly, large enough not to spin.
+const SIM_DRAIN_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(16);
+
 impl App {
     // -------------------------------------------------------------------
     // Main run loop
@@ -1140,7 +1161,39 @@ impl App {
                 && self.simulated_mouse.is_empty()
                 && !self.is_streaming
             {
-                self.should_exit = true;
+                // Background work must LAND before the run ends, or every
+                // scenario that triggers an async load (the session hub's
+                // rows and preview, the model list, the word predictor) is
+                // dumped in its interim state — which is why the hub scenario
+                // could only ever assert the "Loading sessions…" banner and
+                // never the loaded body.
+                //
+                // This is a TIME deadline, not a frame count: the simulated
+                // loop has no sleep, so N iterations elapse in microseconds
+                // while the spawn_blocking DB read takes ~250 ms of real
+                // time on the operator's 105 MB database. Waiting on frames
+                // exits before the load exists. The wait ends the moment
+                // nothing is in flight, so a run with no async work costs
+                // one extra pass and no real time.
+                let in_flight = self.session_list_rx.is_some()
+                    || self.preview_rx.is_some()
+                    || self.session_hub.loading
+                    || self.session_hub.preview_loading;
+                if !in_flight {
+                    self.should_exit = true;
+                } else if self.sim_drain_deadline.is_none() {
+                    self.sim_drain_deadline = Some(std::time::Instant::now() + SIM_DRAIN_BUDGET);
+                } else if std::time::Instant::now()
+                    >= self.sim_drain_deadline.expect("deadline set above")
+                {
+                    self.should_exit = true;
+                } else {
+                    // `run` is a sync fn: the spawn_blocking worker runs on
+                    // tokio's blocking pool and its channel send needs no
+                    // polling from here, so a plain sleep yields the CPU so
+                    // the OS can schedule that thread to completion.
+                    std::thread::sleep(SIM_DRAIN_POLL_INTERVAL);
+                }
             }
             // Frame-cap guard: a headless scenario that never stops streaming
             // (e.g. a real agent that hangs) can't spin the loop forever.

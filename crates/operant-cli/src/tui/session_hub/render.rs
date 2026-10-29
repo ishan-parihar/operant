@@ -65,6 +65,24 @@ fn row_title(row: &SessionEntryV2) -> String {
     }
 }
 
+/// Compact token count for the row's meta line: a 14,103-message session's
+/// token total is seven digits, which at a 40%-width list would push the
+/// session id off the row entirely. `k`/`M` keeps the identifier visible.
+fn tokens_suffix(tokens: u64) -> String {
+    const K: f64 = 1_000.0;
+    const M: f64 = 1_000_000.0;
+    let t = tokens as f64;
+    if tokens == 0 {
+        String::new()
+    } else if t >= M {
+        format!(" · {:.1}M tok", t / M)
+    } else if t >= K {
+        format!(" · {:.1}k tok", t / K)
+    } else {
+        format!(" · {tokens} tok")
+    }
+}
+
 /// Per-char search highlight, jcode's `highlight_spans` semantics: tokens
 /// matched independently (OR), overlapping/adjacent merged.
 fn highlight_spans(text: &str, tokens: &[String], base: Style, hl: Style) -> Vec<Span<'static>> {
@@ -236,22 +254,59 @@ fn render_list(frame: &mut Frame, state: &SessionHubState, area: ratatui::layout
                         .fg(theme_colors::warning())
                         .add_modifier(Modifier::BOLD),
                 ));
-                // meta: employee tag + age + cost (jcode's compact row tail).
+                // (2026-10-29) The operator could not see the session's ID,
+                // employee, message count or tokens: the meta was ONE appended
+                // span, and the list is 40% of the frame, so a 100+ column
+                // overflow truncated it to "age · count · $". jcode's picker
+                // renders a title row plus a dedicated subtitle row
+                // (`session_picker.rs`'s ListItem of two lines); the second
+                // line is what carries the identifiers.
+                //
+                // ID and employee are DIFFERENT things and both are shown:
+                // the id is the handle for /resume and `sessions show`, the
+                // employee is who is executing (and it is the branch/anchor
+                // key when the operator filters by employee).
+                // An employee session's id IS the employee id
+                // (`emp-cron_fa1e44c`), so print the pair once: showing both
+                // doubled a row and pushed the metrics off a 40%-width pane.
                 let emp = row
                     .employee_id
                     .as_deref()
-                    .map(|e| format!(" 🪪{e}"))
+                    .filter(|e| *e != row.id)
+                    .map(|e| format!("  🪪 {e}"))
                     .unwrap_or_default();
-                spans.push(Span::styled(
-                    format!(
-                        "{emp}  {} · {} · ${:.4}",
-                        relative_time(row.updated_at),
-                        row.message_count,
-                        row.cost_usd
+                // 12 chars fits `#emp-cron_fa1e4` and `#sess_87b7abb9-`
+                // inside a 40%-width pane alongside the metrics; the operator
+                // resolves the full id from /resume's completion or
+                // `sessions list --json` when they need the whole string.
+                let short_id: String = row.id.chars().take(12).collect();
+                let token_span = tokens_suffix(row.tokens);
+                let meta_line = Line::from(vec![
+                    // ID first: it is the row's handle, and the one thing an
+                    // operator is never otherwise shown on screen.
+                    Span::styled(
+                        format!("#{short_id}"),
+                        Style::default().fg(theme_colors::muted()),
                     ),
-                    Style::default().fg(theme_colors::muted()),
-                ));
-                ListItem::new(Line::from(spans))
+                    Span::styled(emp, Style::default().fg(theme_colors::muted())),
+                    Span::styled(
+                        format!("  {} msg{token_span}", row.message_count),
+                        Style::default().fg(theme_colors::muted()),
+                    ),
+                    Span::styled(
+                        format!("  {}", relative_time(row.updated_at)),
+                        Style::default().fg(theme_colors::muted()),
+                    ),
+                    Span::styled(
+                        format!("  ${:.4}", row.cost_usd),
+                        Style::default().fg(theme_colors::muted()),
+                    ),
+                ]);
+                // ONE ListItem holding BOTH lines, not two items: the
+                // selection index must stay 1:1 with `visible_idx`, and a
+                // second item per session would drift Up/Down onto the meta
+                // row. ratatui's List supports a multi-line item body.
+                ListItem::new(vec![Line::from(spans), meta_line])
             })
             .collect()
     };
