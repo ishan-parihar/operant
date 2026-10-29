@@ -11,6 +11,7 @@ use anyhow::{Context, Result};
 use clap::Subcommand;
 use operant_core::config::AppConfig;
 use operant_core::cronjobs::CronDb;
+use operant_core::mcp::McpManager;
 
 /// Manage cron jobs
 #[derive(Debug, Clone, Subcommand)]
@@ -535,40 +536,88 @@ async fn cmd_resume(config: &AppConfig, id: &str) -> Result<()> {
 }
 
 async fn cmd_run(config: &AppConfig, id: &str) -> Result<()> {
-    let db = CronDb::init(cron_db_path(config)).context("Failed to open cron database")?;
+    // Global emergency stop (hermes estop parity): while engaged, the manual
+    // run path refuses to dispatch — mirroring CronScheduler::tick() and
+    // CronScheduler::run_job_now(). (iter-170 established the CLI-side check.)
+    if operant_core::estop::is_engaged() {
+        println!("⏸️ Operant is paused — cron dispatch is suspended.");
+        println!("   Resume with `operant resume`.");
+        return Ok(());
+    }
 
+    // RT-135: this used to mark the job "triggered_manually" and print
+    // "Manual execution via CLI is not yet implemented" — a bookkeeping write
+    // standing in for a run, so an operator testing a job saw nothing happen
+    // until the next tick. Worse, the row was marked BEFORE the run, so a
+    // failed attempt still left a trigger behind.
+    //
+    // It now runs the job. Two things make that safe rather than a feature
+    // fork, and both are load-bearing:
+    //
+    // 1. `CronScheduler::run_job_now` rides the scheduler's OWN `run_job`, so
+    //    the budget gate, the script-vs-agent arms, the outcome row, the run
+    //    history, delivery and the transient-retry backoff apply to a manual
+    //    run exactly as they do to a scheduled one. A manual run is not a
+    //    special case.
+    // 2. The job's row is marked by `run_job` AFTER the attempt, from the
+    //    attempt's real outcome.
+    let db = CronDb::init(cron_db_path(config)).context("Failed to open cron database")?;
     let job = db
         .get_job(id)
         .context("Failed to get cron job")?
         .ok_or_else(|| anyhow::anyhow!("Cron job '{}' not found.", id))?;
 
-    // Mark the job as "triggered" (not "success") — actual execution requires
-    // the cron scheduler or the gateway. Previously this marked the job as
-    // "ran successfully" without executing anything, which was misleading.
-    db.mark_job_run(
-        id,
-        false,
-        Some("triggered_manually".to_string()),
-        None,
-        None,
-    )
-    .context("Failed to mark cron job run")?;
-
-    println!("Cron job '{}' triggered.", job.name);
+    println!("Running cron job '{}' now.", job.name);
     println!("  Prompt: {}", job.prompt);
     println!("  Schedule: {}", job.schedule_display);
     if let Some(ref script) = job.script {
         println!("  Script: {}", script);
     }
-    println!();
-    println!("  Note: Manual execution via CLI is not yet implemented.");
-    println!(
-        "  The job has been marked as 'triggered' and will execute on the next scheduler tick."
+
+    // The scheduler needs a live agent for agent-backed jobs. The construction
+    // mirrors `autonomous`'s executor (autonomous.rs:224): a plain agent over
+    // the configured model with no event channel, which is what a
+    // foreground, one-shot CLI run wants.
+    let mcp_manager = McpManager::new();
+    let agent =
+        crate::create_agent_without_events(config, None, &mcp_manager, &config.skills.root_dir)
+            .await
+            .context("Failed to build the agent for the manual cron run")?;
+
+    let scheduler = operant_core::cronjobs::CronScheduler::new(
+        std::sync::Arc::new(db),
+        std::sync::Arc::new(agent),
     );
-    println!(
-        "  To run the prompt now, use: operant run --query \"{}\"",
-        job.prompt
-    );
+
+    scheduler.run_job_now(id).await.context("Cron job failed")?;
+
+    // Read the row back so the CLI reports what was RECORDED, not what the
+    // run felt like. A second miss here (the row is gone) means a concurrent
+    // deletion — reported, not silently passed.
+    let db = CronDb::init(cron_db_path(config)).context("Failed to reopen cron database")?;
+    let refreshed = db
+        .get_job(id)
+        .context("Failed to read the job back after the run")?;
+    match refreshed {
+        Some(j) => {
+            let status = j.last_status.as_deref().unwrap_or("(none)");
+            println!("Cron job '{}' ran — status: {}.", j.name, status);
+            // The scheduler's vocabulary is "ok" / "error" (cronjobs/db.rs
+            // mark_job_run writes them literally), not "success". Comparing
+            // against the wrong word would print the error block after every
+            // successful run.
+            if status != "ok" {
+                if let Some(err) = j.last_error.as_deref() {
+                    println!("  Error: {}", err);
+                }
+                println!("  History: `operant cron history {}`", id);
+            }
+        }
+        None => println!(
+            "Cron job '{}' ran, but its row is gone (deleted concurrently).",
+            job.name
+        ),
+    }
     Ok(())
 }
 

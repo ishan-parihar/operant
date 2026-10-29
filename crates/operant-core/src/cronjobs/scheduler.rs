@@ -229,6 +229,41 @@ impl CronScheduler {
         }
     }
 
+    /// Run ONE job now, by id, out of band from its schedule.
+    ///
+    /// The CLI's `operant cron run <id>` needs this. Before it, the command
+    /// found the job, wrote "triggered_manually", and printed
+    /// "Manual execution via CLI is not yet implemented" — a bookkeeping write
+    /// standing in for a run, so an operator testing a job saw nothing happen
+    /// until the next tick (RT-135).
+    ///
+    /// It rides `run_job` rather than reimplementing a dispatch: budget gate,
+    /// script vs agent arms, the outcome row, the run history, the delivery
+    /// and the transient-retry backoff all apply to a manual run exactly as
+    /// they do to a scheduled one. A manual run is not a special case.
+    ///
+    /// ESTOP parity: an engaged estop refuses the manual run the same way
+    /// `tick` refuses a scheduled one.
+    ///
+    /// ORDERING, which is the load-bearing half: the job's row is marked by
+    /// `run_job` AFTER the attempt, from the attempt's real outcome. A manual
+    /// trigger therefore never records a run that did not happen — the
+    /// previous CLI arm marked "triggered" first, so a failed manual run
+    /// still left a trigger behind.
+    pub async fn run_job_now(&self, job_id: &str) -> Result<(), Error> {
+        if crate::estop::is_engaged() {
+            return Err(Error::Agent(
+                "Cron is in emergency stop — re-arm with `operant cron resume` before running a job."
+                    .to_string(),
+            ));
+        }
+        let job = self
+            .db
+            .get_job(job_id)?
+            .ok_or_else(|| Error::Agent(format!("Cron job '{}' not found.", job_id)))?;
+        self.run_job(&job).await
+    }
+
     pub async fn tick(&self) -> Result<(), Error> {
         // Global emergency stop (hermes estop parity): while engaged, skip
         // dispatching NEW due jobs. In-flight work is never interrupted —
@@ -1718,5 +1753,156 @@ mod tests {
             "the row stays queued for the next armed tick"
         );
         assert_eq!(rows[0].attempts, 0, "no handoff was counted");
+    }
+
+    // ── RT-135: `operant cron run <id>` — run_job_now ──
+
+    /// A real scheduler over a real (uninvoked) agent. The agent is never
+    /// called in these tests: the script arm shells out to `sh`, and the
+    /// not-found arm returns before any dispatch.
+    fn scheduler_for_manual_run(
+        dir: &std::path::Path,
+    ) -> (super::CronScheduler, Arc<super::CronDb>) {
+        let db = Arc::new(crate::database::Database::init(dir.join("agent.sqlite")).expect("db"));
+        let agent = Arc::new(crate::agent::OperantAgent::new(
+            crate::agent::AgentConfig::default(),
+            Box::new(crate::agent::clients::openai::OpenAIModelClient::new(
+                crate::client::OpenAIClient::new(crate::client::ClientConfig::default()),
+            )),
+            crate::tools::ToolRegistry::new(std::time::Duration::from_secs(1)),
+            db,
+        ));
+        let cron_db = Arc::new(super::CronDb::init(dir.join("cron.sqlite")).expect("cron db"));
+        (
+            super::CronScheduler::new(Arc::clone(&cron_db), agent),
+            cron_db,
+        )
+    }
+
+    fn script_job_params(script: String) -> crate::cronjobs::db::CreateJobParams {
+        crate::cronjobs::db::CreateJobParams {
+            name: "manual probe".to_string(),
+            prompt: "unused for a script job".to_string(),
+            schedule: "0 0 31 2 *".to_string(),
+            schedule_display: "never (a date that does not recur)".to_string(),
+            repeat_times: None,
+            deliver: "none".to_string(),
+            origin_platform: None,
+            origin_chat_id: None,
+            origin_thread_id: None,
+            skill: None,
+            skills: None,
+            model: None,
+            provider: None,
+            base_url: None,
+            script: Some(script),
+            context_from: None,
+            enabled_toolsets: None,
+            workdir: None,
+            no_agent: true,
+        }
+    }
+
+    /// RT-135's whole defect: the CLI marked the job "triggered manually"
+    /// and printed "not implemented", so the row recorded a run that never
+    /// happened. This is the proof that `run_job_now` ACTUALLY runs: the
+    /// script's side effect lands, and the row's status comes from the
+    /// attempt's real outcome rather than a pre-written "triggered".
+    #[tokio::test]
+    async fn run_job_now_executes_the_script_and_marks_the_real_outcome() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let marker = dir.path().join("ran.txt");
+        let (scheduler, cron_db) = scheduler_for_manual_run(dir.path());
+
+        let id = cron_db
+            .create_job(script_job_params(format!(
+                "printf ran > {}",
+                marker.display()
+            )))
+            .expect("create job");
+
+        // The schedule is a no-recur date, so the scheduler would never fire
+        // this on its own — the ONLY way it runs is the manual arm.
+        assert!(
+            cron_db.get_due_jobs().expect("due scan").is_empty(),
+            "fixture: the job must not be due on its own"
+        );
+
+        scheduler.run_job_now(&id).await.expect("manual run");
+
+        assert!(
+            marker.exists(),
+            "the script must have EXECUTED — a marker file is the whole point"
+        );
+        let job = cron_db.get_job(&id).expect("read").expect("row");
+        assert_eq!(
+            job.last_status.as_deref(),
+            Some("ok"),
+            "the status must come from the attempt's outcome, not a pre-written 'triggered_manually'"
+        );
+        assert_eq!(
+            job.last_error.as_deref(),
+            None,
+            "a successful manual run records no error"
+        );
+    }
+
+    /// RT-135's second half: the manual arm must refuse the same way `tick`
+    /// does, because an emergency stop is the operator's "pause new work"
+    /// switch and a CLI back door around it would be the defect.
+    ///
+    /// Scoped estop root (the RT-177 discipline): a test never touches the
+    /// operator's real sentinel.
+    #[tokio::test]
+    async fn run_job_now_refuses_while_estop_is_engaged() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let marker = dir.path().join("must-not-run.txt");
+        let (scheduler, cron_db) = scheduler_for_manual_run(dir.path());
+
+        let id = cron_db
+            .create_job(script_job_params(format!(
+                "printf ran > {}",
+                marker.display()
+            )))
+            .expect("create job");
+
+        let _guard = crate::estop::scoped_root_for_tests(dir.path());
+        crate::estop::engage(Some("test: manual run must refuse")).expect("engage estop");
+        let err = scheduler
+            .run_job_now(&id)
+            .await
+            .expect_err("an engaged estop must refuse the manual run");
+        crate::estop::disengage().expect("release estop");
+
+        assert!(
+            !marker.exists(),
+            "nothing may run while stopped — the script's side effect must be absent"
+        );
+        assert!(
+            format!("{err}").contains("emergency stop"),
+            "the refusal must name the reason so the operator knows what to do: {err}"
+        );
+        let job = cron_db.get_job(&id).expect("read").expect("row");
+        assert_eq!(
+            job.last_status.as_deref(),
+            None,
+            "a refused manual run records nothing — the pre-mark bug this arm closes"
+        );
+    }
+
+    /// An unknown id is an error that names the id, not a silent success and
+    /// not a bookkeeping write about a job that does not exist.
+    #[tokio::test]
+    async fn run_job_now_names_an_unknown_job() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (scheduler, _cron_db) = scheduler_for_manual_run(dir.path());
+        let err = scheduler
+            .run_job_now("no-such-job")
+            .await
+            .expect_err("an unknown id must fail");
+        assert!(
+            format!("{err}").contains("no-such-job"),
+            "the error names the missing id: {err}"
+        );
     }
 }
