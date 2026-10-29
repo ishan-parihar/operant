@@ -80,6 +80,11 @@ pub enum SessionsSubcommand {
         /// Session ID to resume
         id: String,
     },
+    /// Backfill titles for sessions left untitled by the auto-name wipe bug
+    /// (iter-1485). One-shot and idempotent: each repaired session is named
+    /// from its first user message through the same generator the live path
+    /// uses, and a second run repairs nothing.
+    FixTitles,
 }
 
 /// Dispatch a sessions subcommand.
@@ -105,6 +110,7 @@ pub async fn handle_sessions_command(
         SessionsSubcommand::Search { query, limit } => cmd_search(config, &query, limit).await,
         SessionsSubcommand::Recap { id } => cmd_recap(config, id.as_deref()).await,
         SessionsSubcommand::Resume { id } => cmd_resume(config, &id).await,
+        SessionsSubcommand::FixTitles => cmd_fix_titles(config).await,
     }
 }
 
@@ -358,6 +364,31 @@ async fn cmd_rename(config: &AppConfig, id: &str, title: &str) -> Result<()> {
     db.update_session_title(id, title)
         .with_context(|| format!("Failed to rename session '{}'", id))?;
     println!("Session '{}' renamed to '{}'", id, title);
+    Ok(())
+}
+
+/// Repair the titles the iter-1485 auto-name wipe destroyed.
+///
+/// Destructive is exactly what this is not: every write is guarded by
+/// `title IS NULL OR trim(title) = ''`, so a session the operator renamed by
+/// hand is never overwritten, and the command is safe to run any number of
+/// times. It prints how many rows it repaired so a second run showing `0` is
+/// proof the earlier one worked rather than a silent failure.
+async fn cmd_fix_titles(config: &AppConfig) -> Result<()> {
+    let db = Database::init(config.database_path.clone()).context("Failed to open database")?;
+    let repaired = db
+        .backfill_session_titles()
+        .context("Failed to backfill session titles")?;
+    if repaired == 0 {
+        println!(
+            "No untitled sessions needed a title (every session is named or has no user message)."
+        );
+    } else {
+        println!(
+            "Named {} session(s) from their first user message. Re-running repairs nothing.",
+            repaired
+        );
+    }
     Ok(())
 }
 
