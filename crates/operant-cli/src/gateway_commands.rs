@@ -3497,8 +3497,11 @@ mod subagents_command_tests {
     };
 
     // Two of these tests seed the process-global registry and one of them
-    // reads it, so serialise: a concurrent read could otherwise observe a
-    // half-seeded registry and no reading test would know why it was flaky.
+    // reads it, so EVERY participant takes this lock — the seeders so they do
+    // not interleave with each other, and the reader so it cannot observe a
+    // registry a sibling is mid-way through seeding. The lock is only as good
+    // as the tests that honour it: a reader that skips it turns the guarantee
+    // into an intermittent failure that passes when run alone.
     static SUBAGENTS_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     fn ctx(cfg: &AppConfig) -> CommandContext<'_> {
@@ -3515,6 +3518,15 @@ mod subagents_command_tests {
 
     #[test]
     fn an_empty_registry_names_whose_subagents_are_missing() {
+        // The reader takes the SAME lock the two seeding tests take. The
+        // serialisation the comment above promises is only real if every
+        // participant honours it, and this test originally did not: it read
+        // the process-global registry unlocked, so a seeded sibling could
+        // land mid-read and the reply could carry the list wording neither
+        // branch asserts. That is the intermittent failure this closes —
+        // observed once across four runs, passing alone and passing with the
+        // module, which is the signature of a race rather than a logic error.
+        let _guard = SUBAGENTS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // The registry has no public clear, so this test cannot FORCE the
         // empty branch by draining. Instead it asserts the wording contract
         // that must hold in BOTH arms, and proves the empty arm's sentence
