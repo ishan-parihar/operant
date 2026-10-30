@@ -42,7 +42,7 @@ Ordered by value-per-line. Every row is sized; "LOC" is the self-contained unit.
 
 | # | Mechanism | Codex source | LOC | Effort | Why |
 |---|---|---|---|---|---|
-| 1 | **`ToolExposure` as a defaulted trait method** | `tools/src/tool_executor.rs:51-86` | ~36 | S | operant decides deferral by **string prefix** (`mcp_`, `cli_`, 23 sourcehound names). codex makes it a **6-state enum on the executor trait**. Same effect, no string matching, per-tool overridable. |
+| 1 | **`ToolExposure` as a defaulted trait method** | `tools/src/tool_executor.rs:51-86` | ~36 | M | operant decides deferral by **string prefix** (`mcp_`, `cli_`, 23 sourcehound names). codex makes it a **6-state enum on the executor trait**. Same effect, no string matching, per-tool overridable. M not S because `assemble_tools` takes `Vec<ToolSchema>`, which loses the registry association.
 | 2 | **`get_context_remaining` tool** | `core/src/tools/handlers/get_context_remaining.rs:1` + `..._spec.rs:1` | 148 | M | operant evicts **silently** — the model never learns its budget shrank. codex gives the model a live self-budget signal. |
 | 3 | **Tool call trace** | `core/src/tools/tool_dispatch_trace.rs:1` | 128 | S | operant has **no** tool-call tracing at all. codex's is 128 lines. |
 | 4 | **Prefix-rule execution policy** | `execpolicy/src/rule.rs` + `policy.rs` + `decision.rs` | 745 | M | operant's 47 regex patterns are **hardcoded in Rust**. codex's are a **data file** the operator writes. The `Decision` enum (27 LOC) and `PrefixPattern` (58 LOC) are directly liftable; the Starlark parser is not. |

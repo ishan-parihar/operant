@@ -148,7 +148,7 @@ decision survives the next reader.
 | Import | Codex LOC | Expected operant diff | Effort |
 |---|---|---|---|
 | 1. `ToolExposure` | ~36 | ~120 | M |
-| 2. `get_context_remaining` | 148 | ~150 | S |
+| 2. `get_context_remaining` | 148 | ~150 | M |
 | 3. dispatch trace | 271 | ~120 | S |
 | 4. relevance ranking | 221 | ~60 (15-line score) | S |
 | 5. prefix-rule policy | 745 portable | ~400 | M |
@@ -165,6 +165,6 @@ that iter-1484 proposed and the **277,000+ LOC** that a literal port would have 
 2. **B** (the MCP schema cap) — small, and it needs the observer seam from 3.
 3. **3** (dispatch trace) — establishes the observer variant that B reports through.
 4. **4** (relevance ranking) — independent, small, and fixes a correctness gap.
-5. **2** (`get_context_remaining`) — independent, small, closes a real capability gap.
+5. **2** (`get_context_remaining`) — independent, and it closes a real capability gap. M, not S: `ToolContext` carries only `metadata` and `session_id`, so reaching a live token count needs a small plumbing addition (`estimate_total_tokens` over the assembled messages already exists at `context_management.rs:85`).
 6. **1** (`ToolExposure`) — the largest of the five; do it once the others have landed.
 7. **5** (prefix-rule policy) — the largest; last, and only with the operator's agreement on the TOML shape.

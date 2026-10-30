@@ -14,7 +14,7 @@ found, what context it receives, and what is recorded about it.
 - **Size:** the enum + predicates are ~36 lines inside a 139-LOC file.
 - **Operant today:** `crates/operant-core/src/tools/tool_search.rs:84` — `pub fn is_deferrable(name: &str) -> bool { name.starts_with("mcp_") || is_sourcehound_composite(name) || name.starts_with("cli_") }`. The `OperantTool` trait at `crates/operant-core/src/tools.rs:270` has **no** exposure method.
 - **Verdict:** `IMPORT-DIRECT`
-- **Effort:** S
+- **Effort:** M (S for the enum alone; see the caveat below for why the full change is M)
 - **Value:** the single highest value-per-line row in this ledger.
 
 **Why it matters.** Operant decides deferral by **string prefix**. That has three costs:
