@@ -15,7 +15,22 @@
 use std::process::Command;
 
 fn holon_repo() -> Option<std::path::PathBuf> {
-    std::env::var_os("HOLON_REPO").map(std::path::PathBuf::from)
+    // S7 (2026-10-26 two-repo audit): `HOLON_REPO` unset made these guards print
+    // "SKIPPED" and report ok, which is how a duplicated `holon_submit` and an
+    // unstaffed events fixture both hid in a green suite — there is no CI on this
+    // private monorepo to set the variable, so "unset" was the DEFAULT state, not
+    // a foreign machine. The fallback is the same sibling checkout `api.rs` uses,
+    // and it is only honoured when a real kernel is there (`repo_present`): a path
+    // that does not name one yields None and the skip stays loud.
+    let chosen = match std::env::var_os("HOLON_REPO") {
+        Some(p) => Some(std::path::PathBuf::from(p)),
+        None => Some(std::path::PathBuf::from("../../../../../my-projects/holon")),
+    };
+    chosen.filter(|p| repo_present(p))
+}
+
+fn repo_present(repo: &std::path::Path) -> bool {
+    repo.join("holon").join("core").join("db.py").exists()
 }
 
 /// Seed a scratch org exactly the way the kernel's own test harness does
