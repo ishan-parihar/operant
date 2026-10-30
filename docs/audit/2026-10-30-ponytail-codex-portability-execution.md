@@ -61,7 +61,7 @@ mechanism that rides the BUILT list:
 
 - `crates/operant-core/src/agent/run.rs:2721` — `let mut estimated_tokens = self.estimate_current_tokens(&messages) + turn_context_tokens;`
 - `crates/operant-core/src/agent/run.rs:2717` — `let effective_budget = budget.saturating_sub(reserve).saturating_sub(turn_context_tokens);`
-- `crates/operant-core/src/agent/run.rs:2970` — the `<turn_context>` attach site, in the **same scope** (verified by normalized brace-depth: both at depth 2).
+- `crates/operant-core/src/agent/run.rs:2965-2978` — the `<turn_context>` attach site, **nested inside** the block that declares them (that block opens before `:2696` and closes at `:2997`; the attach site sits at depth 4 within it), so both values are in scope at the attach line. **The first proof here was wrong and is corrected:** I claimed "same scope, both at depth 2" from a normalized brace count, and the count was right only because it stopped at 2970; at the real attach line (2973) the depth is 4. The conclusion held, the evidence did not — tracked because a wrong proof that reaches a right answer teaches the reader to trust the wrong proof.
 
 So the operant answer is a few lines appended to the existing `turn_context` string, from
 values already computed — not a new tool, not `ToolContext` plumbing, not `get_context_remaining`.
