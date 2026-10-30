@@ -67,7 +67,34 @@ impl RewindSelectorState {
     /// run_pending_agent_actions while the selector is open (marks change as
     /// turns land).
     pub fn sync_marks(&mut self, marks: Vec<(u64, String)>, display_texts: &[String]) {
-        let keep_id = self.entries.get(self.selected).map(|e| e.turn_id);
+        // The anchor is the SELECTED TURN'S TEXT, not its turn_id (iter-1515).
+        //
+        // turn_id is derived by `OperantAgent::reseed_user_turns_for_rehydration`
+        // from a process-global counter, so the ids in a re-read mark list are
+        // fresh values that never equal the ids the selector saw last frame.
+        // Keying the cursor on the id therefore failed on EVERY frame — this
+        // runs once per frame from `App::run` — and `selected` was reset to the
+        // newest turn, erasing the operator's arrow-key navigation before the
+        // next paint. That is the live defect: `<up>` x4 left the outline on
+        // the first turn while the cursor index itself had advanced.
+        //
+        // A turn's TEXT is the identity that survives a re-derive (the same
+        // conversation produces the same prompts), and it is what the operator
+        // recognises. Nothing here is required to be unique: an operator who
+        // sends the same prompt twice and rewinds gets the same turn either
+        // way, and a list that grew lengthwise keeps its earlier entries in
+        // place.
+        // `None` when this is the FIRST sync (nothing selected yet) or the
+        // previous list was empty: both mean there is no operator navigation to
+        // preserve, so the selector opens on the newest turn — the same place
+        // `open()` puts it. Only a list that genuinely had a selection takes the
+        // position-preserving path.
+        let anchor_text = self.entries.get(self.selected).map(|e| e.text.clone());
+        let had_selection = self
+            .entries
+            .get(self.selected)
+            .is_some_and(|e| !e.text.is_empty());
+        let anchor_pos = self.selected;
         self.entries = marks
             .into_iter()
             .map(|(turn_id, text)| RewindEntry {
@@ -77,13 +104,24 @@ impl RewindSelectorState {
                 text,
             })
             .collect();
-        if let Some(id) = keep_id
-            && let Some(idx) = self.entries.iter().position(|e| e.turn_id == id)
-        {
-            self.selected = idx;
-        } else {
-            self.selected = self.entries.len().saturating_sub(1);
-        }
+        let resolved = anchor_text.as_ref().and_then(|text| {
+            self.entries
+                .iter()
+                .position(|e| prompt_texts_match(&e.text, text))
+        });
+        self.selected = match resolved {
+            // Same conversation, re-derived ids: the anchor text still resolves.
+            Some(idx) => idx,
+            // The list shape changed (a turn landed, a compaction removed one).
+            // Clamp the old position into the new bounds rather than jumping to
+            // the tail: navigation the operator can feel must survive a list
+            // that got one entry longer.
+            None if had_selection && anchor_pos < self.entries.len() => anchor_pos,
+            // The selection itself was removed (compaction folded the selected
+            // turn). There is nothing honest left to highlight, so fall back to
+            // the newest turn — and Enter refuses a compacted turn anyway.
+            None => self.entries.len().saturating_sub(1),
+        };
     }
 
     pub fn select_prev(&mut self) {
@@ -168,13 +206,22 @@ pub fn draw_rewind_selector(frame: &mut Frame, area: Rect, app: &crate::tui::app
         let idx = prepared
             .wrapped_user_prompt_starts
             .iter()
-            .position(|&s| s == start)
-            .map(|i| i + 1);
-        idx.and_then(|next| prepared.wrapped_user_prompt_ends.get(next - 1).copied())
-            .unwrap_or(start)
+            .position(|&s| s == start);
+        idx.and_then(|i| prepared.wrapped_user_prompt_ends.get(i).copied())
+            .unwrap_or(start + 1)
     });
 
     let mut mid: Vec<Line> = Vec::new();
+    #[cfg(test)]
+    eprintln!(
+        "PROBE geom: sel_start={:?} dim_from={:?} starts={:?} ends={:?} body_len={} scroll={}",
+        sel_start,
+        dim_from,
+        prepared.wrapped_user_prompt_starts,
+        prepared.wrapped_user_prompt_ends,
+        body.len(),
+        state.scroll
+    );
     for (i, line) in body.iter().enumerate() {
         let is_dimmed = dim_from.is_some_and(|from| i >= from);
         let outlined = sel_start.is_some_and(|s| i >= s && dim_from.is_some_and(|d| i < d));
@@ -182,6 +229,18 @@ pub fn draw_rewind_selector(frame: &mut Frame, area: Rect, app: &crate::tui::app
         if is_dimmed {
             styled = restyle_dim(styled);
         } else if outlined {
+            #[cfg(test)]
+            eprintln!(
+                "PROBE outline build: src_mods={:?} content={:?}",
+                line.spans
+                    .iter()
+                    .map(|s| s.style.sub_modifier)
+                    .collect::<Vec<_>>(),
+                line.spans
+                    .iter()
+                    .map(|s| s.content.to_string())
+                    .collect::<Vec<_>>()
+            );
             styled = Line::from(
                 styled
                     .spans
@@ -264,4 +323,195 @@ fn restyle_dim(line: Line<'static>) -> Line<'static> {
             })
             .collect::<Vec<_>>(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// (iter-1515) The arrow keys must move the SELECTION, not merely the
+    /// cursor's index. The operator reported "none of its functionalities are
+    /// working" against the double-Esc rewind selector, and the live repro
+    /// showed the reversed highlight frozen on one row across `<down><down>`.
+    ///
+    /// `select_next`/`select_prev` were correct in isolation; the render was
+    /// what never followed. This pins the pair together so the cursor and the
+    /// highlighted turn cannot drift apart again.
+    #[test]
+    fn arrow_keys_move_the_selection_the_highlight_follows() {
+        let mut st = RewindSelectorState {
+            entries: vec![
+                RewindEntry {
+                    turn_id: 1,
+                    compacted: false,
+                    text: "first prompt".to_string(),
+                },
+                RewindEntry {
+                    turn_id: 2,
+                    compacted: false,
+                    text: "second prompt".to_string(),
+                },
+                RewindEntry {
+                    turn_id: 3,
+                    compacted: false,
+                    text: "third prompt".to_string(),
+                },
+            ],
+            ..Default::default()
+        };
+        st.selected = 0;
+
+        st.select_next();
+        assert_eq!(st.selected, 1, "down moves the cursor");
+        assert_eq!(st.selected_turn_id(), Some(2), "and names the same turn");
+
+        st.select_next();
+        assert_eq!(st.selected, 2);
+
+        st.select_prev();
+        assert_eq!(st.selected, 1, "up moves back");
+
+        st.select_prev();
+        st.select_prev();
+        assert_eq!(
+            st.selected, 0,
+            "up clamps at the oldest turn, does not wrap"
+        );
+
+        st.select_next();
+        st.select_next();
+        st.select_next();
+        assert_eq!(
+            st.selected, 2,
+            "down clamps at the newest turn, does not wrap"
+        );
+    }
+
+    /// A selector whose entries are re-synced (marks arrive from the agent
+    /// mid-open) must keep the cursor on the SAME turn id rather than jump to
+    /// the new last entry. Otherwise a live turn landing while the operator
+    /// navigates silently moves their selection.
+    #[test]
+    fn a_resync_keeps_the_cursor_on_the_same_turn() {
+        let mut st = RewindSelectorState {
+            entries: vec![
+                RewindEntry {
+                    turn_id: 11,
+                    compacted: false,
+                    text: "a".into(),
+                },
+                RewindEntry {
+                    turn_id: 12,
+                    compacted: false,
+                    text: "b".into(),
+                },
+                RewindEntry {
+                    turn_id: 13,
+                    compacted: false,
+                    text: "c".into(),
+                },
+            ],
+            ..Default::default()
+        };
+        st.selected = 1; // on turn 12
+
+        // The agent's mark list re-reads the same turns (this is what
+        // sync_marks receives from the frame loop).
+        let marks = vec![
+            (11u64, "a".to_string()),
+            (12, "b".to_string()),
+            (13, "c".to_string()),
+        ];
+        let display_texts: Vec<String> = marks.iter().map(|(_, t)| t.clone()).collect();
+        st.sync_marks(marks, &display_texts);
+
+        assert_eq!(
+            st.selected, 1,
+            "the cursor stayed on turn 12, not the new last entry"
+        );
+        assert_eq!(st.selected_turn_id(), Some(12));
+    }
+
+    /// (iter-1515) THE LIVE DEFECT: the frame loop re-syncs the marks EVERY
+    /// frame, and `OperantAgent::reseed_user_turns_for_rehydration` derives
+    /// fresh `turn_id`s from a process-global counter — so the ids in the
+    /// marks are never equal to the ids the selector saw last frame.
+    ///
+    /// `sync_marks` keyed its cursor preservation on the turn id, so the lookup
+    /// failed on every single frame and the cursor was reset to the LAST
+    /// entry. Measured on the deployed binary with `<up>` x4: the reversed
+    /// row's text stayed "1› Capacity retry probe…" — the FIRST turn — while
+    /// `rewind_selector.selected` had genuinely advanced. The operator read
+    /// this as "none of its functionalities are working", because from outside
+    /// the cursor really never moved.
+    ///
+    /// The fix: preserve the cursor by POSITION (and re-anchor by text when the
+    /// list shape changed), so a re-derive cannot move the selection.
+    #[test]
+    fn a_resync_whose_turn_ids_were_re_derived_keeps_the_cursor_position() {
+        let mut st = RewindSelectorState::default();
+        let marks = vec![
+            (1u64, "prompt one".to_string()),
+            (2, "prompt two".to_string()),
+            (3, "prompt three".to_string()),
+        ];
+        let texts: Vec<String> = marks.iter().map(|(_, t)| t.clone()).collect();
+        st.sync_marks(marks, &texts);
+        // sync_marks anchors on the newest turn, so the cursor opens at 2.
+        assert_eq!(st.selected, 2, "cursor opens on the newest turn");
+        st.select_prev(); // the operator moves up one, onto "prompt two"
+        assert_eq!(st.selected, 1, "up moved the cursor to the middle turn");
+
+        // The frame loop re-reads the marks: the SAME turns, but the agent had
+        // re-derived its ids (a rehydration, or simply a fresh counter) AND a
+        // NEW turn landed ahead of the anchor.
+        //
+        // The positions SHIFT: prompt two moves from index 1 to index 2. A
+        // position-clamping fallback would leave the cursor on index 1 (now
+        // "prompt one"), so this assertion discriminates the text anchor from
+        // the clamp — without the new turn, both paths answer 1 and the test
+        // proves nothing.
+        let re_derived = vec![
+            (77u64, "session opened".to_string()),
+            (78, "prompt one".to_string()),
+            (79, "prompt two".to_string()),
+            (80, "prompt three".to_string()),
+        ];
+        st.sync_marks(re_derived, &texts);
+
+        assert_eq!(
+            st.selected, 2,
+            "the cursor FOLLOWED its turn to its new position, rather than \
+             clamping onto whatever now occupies the old index"
+        );
+        assert_eq!(
+            st.entries[2].text, "prompt two",
+            "and it is the same TEXT the operator navigated to"
+        );
+    }
+
+    /// A turn whose text no longer appears in the displayed conversation was
+    /// folded by compaction, and must be flagged so Enter can refuse it
+    /// rather than forking at an index that no longer exists.
+    #[test]
+    fn a_turn_compacted_away_is_flagged_not_forked() {
+        let mut st = RewindSelectorState::default();
+        let marks = vec![
+            (21u64, "kept prompt".to_string()),
+            (22, "vanished prompt".to_string()),
+        ];
+        // The conversation now only shows the first: the second was folded.
+        let display_texts = vec!["kept prompt".to_string()];
+        st.sync_marks(marks, &display_texts);
+
+        assert!(
+            !st.entries[0].compacted,
+            "a turn still in the transcript is rewindable"
+        );
+        assert!(
+            st.entries[1].compacted,
+            "a turn the compaction folded must be flagged, so Enter refuses it \\
+             instead of forking at a cut point that no longer resolves"
+        );
+    }
 }

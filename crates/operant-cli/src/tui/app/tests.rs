@@ -7667,6 +7667,186 @@ mod prompt_jump_tests {
         )));
     }
 
+    /// (iter-1515) The red-team finding behind "none of its [the double-Esc
+    /// rewind selector's] functionalities are working": the live screen froze
+    /// the reversed highlight on ONE row across `<down><down>` — measured on
+    /// the deployed binary with `--dump-style`, where the only `/r@` (reversed)
+    /// cells stayed on screen row 14 while `rewind_selector.selected` had
+    /// advanced. `select_next` and the key handler were both correct; what was
+    /// never pinned is that the RENDERED selection follows the cursor, which
+    /// is the half the operator actually sees.
+    ///
+    /// The reversed cells are the selection's footprint, so their row set
+    /// before and after a Down is the assertion. The marks describe exactly the
+    /// prompts in `app.messages`, which is the correspondence the render
+    /// resolves against — and it is built from the messages rather than a
+    /// seeded frame because this target's `prepare_body` rebuilds under
+    /// `cfg!(test)`, so a seeded LAST_CHAT_FRAME would simply be ignored.
+    #[test]
+    fn the_rewind_selection_highlight_follows_the_arrow_key() {
+        use crate::tui::adapter_types::types::{Message, MessageContent, Role};
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let mut app = make_app();
+        // A settled transcript of three turns: each prompt followed by its
+        // answer, so each prompt occupies its own row band.
+        for (i, prompt) in ["prompt one", "prompt two", "prompt three"]
+            .iter()
+            .enumerate()
+        {
+            app.messages.push(Message {
+                role: Role::User,
+                content: MessageContent::Text(prompt.to_string()),
+            });
+            app.messages.push(Message {
+                role: Role::Assistant,
+                content: MessageContent::Text(format!("answer {i}")),
+            });
+        }
+        app.open_rewind_selector();
+        assert!(app.rewind_selector.visible, "the selector opened");
+
+        // Marks name the same three prompts, in the same order.
+        let marks = vec![
+            (1u64, "prompt one".to_string()),
+            (2, "prompt two".to_string()),
+            (3, "prompt three".to_string()),
+        ];
+        let display_texts: Vec<String> = marks.iter().map(|(_, t)| t.clone()).collect();
+        app.rewind_selector.sync_marks(marks, &display_texts);
+        assert_eq!(app.rewind_selector.entries.len(), 3, "three turns listed");
+
+        // SECOND CONTROL: the exact shape the selector builds — a cloned Line
+        // whose spans are rebuilt via Span::styled(text, style.add_modifier()).
+        // If THIS loses the modifier the selector can never highlight anything,
+        // and a "no reversed cells" reading is a harness artefact rather than a
+        // defect. Proven deliberately, so the assertion below is falsifiable.
+        {
+            let backend = TestBackend::new(30, 1);
+            let mut t = Terminal::new(backend).expect("t");
+            let original = ratatui::text::Line::from("clone me please");
+            let rebuilt = ratatui::text::Line::from(
+                original
+                    .spans
+                    .iter()
+                    .map(|sp| {
+                        ratatui::text::Span::styled(
+                            sp.content.to_string(),
+                            sp.style.add_modifier(ratatui::style::Modifier::REVERSED),
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+            );
+            t.draw(|f| {
+                f.render_widget(
+                    ratatui::widgets::Paragraph::new(rebuilt),
+                    ratatui::layout::Rect::new(0, 0, 30, 1),
+                );
+            })
+            .expect("draw");
+            let dump = crate::tui::debug::debug_hub::buffer_style_dump(t.backend().buffer());
+            let line = dump.lines().nth(1).unwrap_or_default();
+            eprintln!("PROBE clone-shape: {line}");
+            // THIRD CONTROL: same span, but through Paragraph with .scroll(0).
+            // If Paragraph's scroll path drops span styles, the selector's
+            // body render is the defect, not the span construction.
+            let backend2 = TestBackend::new(30, 1);
+            let mut t2 = Terminal::new(backend2).expect("t2");
+            let l2 = ratatui::text::Line::from(vec![ratatui::text::Span::styled(
+                "scrolled line XX",
+                ratatui::style::Style::default().add_modifier(ratatui::style::Modifier::REVERSED),
+            )]);
+            t2.draw(|f| {
+                f.render_widget(
+                    ratatui::widgets::Paragraph::new(l2).scroll((0u16, 0)),
+                    ratatui::layout::Rect::new(0, 0, 30, 1),
+                );
+            })
+            .expect("draw2");
+            let d2 = crate::tui::debug::debug_hub::buffer_style_dump(t2.backend().buffer());
+            let l2out = d2.lines().nth(1).unwrap_or_default();
+            eprintln!("PROBE scrolled-shape: {l2out}");
+            assert!(
+                line.split(' ').any(|t| t.contains("/r@")),
+                "the harness must see REVERSED on a rebuilt span — otherwise \
+                 every 'no highlighted row' reading is unfalsifiable"
+            );
+        }
+
+        fn outlined_rows(app: &crate::tui::app::App) -> Vec<usize> {
+            // The AUTHORITATIVE check, and the same projection the live
+            // red-team run used (`operant tui debug simulate --dump-style`):
+            // a per-cell grid where `r` in the mods field is REVERSED. Reading
+            // the ratatui modifier straight off the buffer is NOT equivalent —
+            // it is layout-offset sensitive and a Paragraph's line styling
+            // does not always surface as a sub_modifier, which is how this
+            // defect hid for months.
+            use crate::tui::debug::debug_hub::buffer_style_dump;
+            let backend = TestBackend::new(120, 40);
+            let mut terminal = Terminal::new(backend).expect("terminal");
+            terminal
+                .draw(|frame| {
+                    let area = frame.area();
+                    crate::tui::rewind_selector::draw_rewind_selector(frame, area, app);
+                })
+                .expect("draw");
+            let dump = buffer_style_dump(terminal.backend().buffer());
+            let mut rows = Vec::new();
+            for (y, line) in dump.lines().skip(1).enumerate() {
+                // A cell token is `<fg>/<bg>/<mods>@<sym>`; `r` is REVERSED.
+                // `<fg>/<bg>/<mods>@<sym>` — split off the symbol FIRST, then the
+                // three style fields. Splitting on '/' alone leaves the symbol
+                // glued to the last field (`r@3`), which is why an earlier
+                // version of this check reported "no reversed rows" while the
+                // frame plainly outlined the row.
+                let reversed_here = line.split(' ').any(|tok| {
+                    tok.split_once('@').is_some_and(|(style, _sym)| {
+                        let parts: Vec<&str> = style.split('/').collect();
+                        parts.get(2).is_some_and(|m| m.split('+').any(|f| f == "r"))
+                    })
+                });
+                if reversed_here {
+                    rows.push(y);
+                }
+            }
+            rows
+        }
+
+        // The cursor opens on the newest turn.
+        let at_newest = outlined_rows(&app);
+        assert!(
+            !at_newest.is_empty(),
+            "the selection IS visibly outlined — three prompts in the \
+             transcript, cursor on the last"
+        );
+
+        // Down at the newest turn cannot move anything.
+        app.rewind_selector.select_next();
+        assert_eq!(
+            outlined_rows(&app),
+            at_newest,
+            "down at the newest turn is a bound, not a wrap"
+        );
+
+        // Up MUST move the outlined band. This is the assertion the live
+        // failure dies on.
+        app.rewind_selector.select_prev();
+        let one_up = outlined_rows(&app);
+        assert_ne!(
+            one_up, at_newest,
+            "up moves the OUTLINED ROWS, not just the index — the half that \
+             was broken (the highlight stayed put while the cursor moved)"
+        );
+
+        app.rewind_selector.select_prev();
+        assert_ne!(
+            outlined_rows(&app),
+            one_up,
+            "and it moves again on the next press"
+        );
+    }
+
     #[test]
     fn prev_jump_from_tail_lands_on_most_recent_prompt() {
         let mut app = make_app();
