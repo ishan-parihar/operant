@@ -3492,9 +3492,7 @@ mod tests {
 #[cfg(test)]
 mod subagents_command_tests {
     use super::*;
-    use operant_core::tools::async_delegation::{
-        create_record, list_records, mark_completed, mark_failed,
-    };
+    use operant_core::tools::async_delegation::{create_record, mark_completed, mark_failed};
 
     // Two of these tests seed the process-global registry and one of them
     // reads it, so EVERY participant takes this lock — the seeders so they do
