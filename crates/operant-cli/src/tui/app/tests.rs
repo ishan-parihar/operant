@@ -1136,6 +1136,96 @@ fn the_rewind_selector_syncs_its_marks_from_the_frame_loop() {
     );
 }
 
+/// (iter-1489) The defect behind "session management is slow / it won't
+/// navigate": the simulator applied a scripted key the instant it was queued,
+/// while the hub's rows were still being read off a blocking DB thread. The
+/// key landed on a hub with NO ROWS, so `select_next` found `visible_idx`
+/// empty and silently did nothing — the actor was dropped, not delayed. A live
+/// operator cannot press a key inside the ~250 ms the load takes (measured on
+/// the operator's 105 MB database), so holding the pump until the load lands
+/// is what makes the harness faithful to the interaction it claims to test.
+///
+/// Drives the real `App::run` loop: frame 1 proves the held key is NOT applied
+/// to an empty list, and the frame after the rows land applies it.
+/// Three session rows for the hub's list, the minimum a navigation test needs.
+fn hub_rows(n: usize) -> Vec<operant_core::session::listing::SessionEntryV2> {
+    use operant_core::session::listing::SessionEntryV2;
+    use operant_core::session::listing::{RowKind, RowStatus};
+    (0..n)
+        .map(|i| SessionEntryV2 {
+            id: format!("sess_{i}"),
+            parent_id: None,
+            title: Some(format!("session {i}")),
+            updated_at: chrono::Utc::now(),
+            employee_id: None,
+            source: "local".to_string(),
+            message_count: 1,
+            cost_usd: 0.0,
+            tokens: 0,
+            cwd: None,
+            status: RowStatus::Idle,
+            kind: RowKind::Session,
+        })
+        .collect()
+}
+
+/// (iter-1489) The defect behind "session management won't navigate": the
+/// simulator applied a scripted key the instant it was queued, while the hub's
+/// rows were still being read off a blocking DB thread. The key landed on a hub
+/// with NO ROWS, so `select_next` found `visible_idx` empty and silently did
+/// nothing — the actor was dropped, not delayed. Measured: a live operator
+/// cannot press a key inside the ~250 ms `list_sessions_rich(500)` takes on the
+/// operator's 105 MB database, so holding the pump until the load lands is what
+/// makes the harness faithful to the interaction it claims to test.
+///
+/// The rows are delivered from a spawned task AFTER a short delay, so the load
+/// is genuinely IN FLIGHT while the first passes run — that is the state a live
+/// run is in, and the one the old harness could not represent.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_hub_navigation_key_waits_for_the_row_load_to_land() {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    let backend = TestBackend::new(120, 40);
+    let mut terminal = Terminal::new(backend).unwrap();
+    let mut app = make_app();
+    app.is_simulating = true;
+
+    // Open the hub, then clear the load request: otherwise the frame loop spawns
+    // its own DB read on the first pass and replaces the receiver seeded here.
+    app.handle_tui_command("session", "");
+    assert!(app.session_hub.visible, "the hub opens on /session");
+    app.session_list_pending = false;
+    let (tx, rx) = tokio::sync::mpsc::channel::<Vec<_>>(1);
+    app.session_list_rx = Some(rx);
+    // Deliver the rows a few frames late, exactly like the real blocking load.
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let _ = tx.send(hub_rows(3)).await;
+    });
+
+    app.simulated_keys = vec![press_key(KeyCode::Down, KeyModifiers::NONE)];
+
+    // The run ends when the load has landed AND the keys are consumed: the
+    // pump held the key while the load was in flight, applied it once the rows
+    // existed, and only then found nothing left to do.
+    let outcome = app.run(&mut terminal).expect("loop runs");
+    assert!(outcome.is_none(), "the scenario never submits a prompt");
+
+    assert!(
+        app.session_hub.selected_row().is_some(),
+        "the rows landed in the hub"
+    );
+    assert!(
+        app.simulated_keys.is_empty(),
+        "the held key was applied, not dropped"
+    );
+    assert_eq!(
+        app.session_hub.selected, 1,
+        "the navigation key applies once the rows exist"
+    );
+}
+
 // ---- (plan 2026-10-28 iter-D, G5) the ←← session-hub gesture ----
 //
 // omp agent-hub.ts: a second ← within [40ms, 500ms) on an empty composer
@@ -7645,5 +7735,94 @@ mod prompt_jump_tests {
             app.scroll_memory.pending_resize.is_none(),
             "the jump must consume the pending resize anchor"
         );
+    }
+}
+
+// ---- (red-team audit 2026-10-30) runtime probes, not to be committed as-is ----
+#[cfg(test)]
+mod redteam_repro {
+    use super::*;
+
+    fn buf_text(buf: &ratatui::buffer::Buffer) -> String {
+        let a = buf.area;
+        let mut out = String::new();
+        for y in 0..a.height {
+            for x in 0..a.width {
+                out.push_str(buf[(x, y)].symbol());
+            }
+            out.push('\n');
+        }
+        out
+    }
+
+    fn row(id: &str, title: &str) -> operant_core::session::listing::SessionEntryV2 {
+        use operant_core::session::listing::{RowKind, RowStatus};
+        operant_core::session::listing::SessionEntryV2 {
+            id: id.to_string(),
+            parent_id: None,
+            title: Some(title.to_string()),
+            updated_at: chrono::Utc::now(),
+            employee_id: None,
+            source: "local".to_string(),
+            message_count: 1,
+            cost_usd: 0.0,
+            tokens: 0,
+            cwd: None,
+            status: RowStatus::Idle,
+            kind: RowKind::Session,
+        }
+    }
+
+    fn srow(id: &str, goal: &str) -> operant_core::session::listing::SessionEntryV2 {
+        use operant_core::session::listing::{RowKind, RowStatus};
+        operant_core::session::listing::SessionEntryV2 {
+            id: id.to_string(),
+            parent_id: None,
+            title: None,
+            updated_at: chrono::Utc::now(),
+            employee_id: None,
+            source: "local".to_string(),
+            message_count: 0,
+            cost_usd: 0.0,
+            tokens: 0,
+            cwd: None,
+            status: RowStatus::Live,
+            kind: RowKind::Subagent {
+                goal: goal.to_string(),
+                model: "sonnet".to_string(),
+                dispatch_time: 0,
+                status: "running",
+            },
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn redteam_hub_open_and_animation() {
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 40)).unwrap();
+        let mut app = make_app();
+        app.is_simulating = true;
+        app.session_list_pending = false;
+
+        let _ = app.run(&mut terminal).expect("frame closed");
+        let closed = buf_text(terminal.backend().buffer());
+        let closed_has_sessions = closed.contains("Sessions");
+
+        app.session_hub.replace_rows(vec![row("sess-a", "alpha"), srow("sub-1", "do research")]);
+        app.session_hub.open(None);
+        let _ = app.run(&mut terminal).expect("frame open");
+        let open = buf_text(terminal.backend().buffer());
+
+        eprintln!("closed_has_sessions={closed_has_sessions}");
+        eprintln!("open_has_sessions={}", open.contains("Sessions"));
+        eprintln!("open_robot_count={}", open.matches("🤖").count());
+        eprintln!("open_identical_to_closed={}", open.trim() == closed.trim());
+        // Print the list band rows so duplication is visible.
+        for line in open.lines().filter(|l| l.contains("🤖") || l.contains("alpha")) {
+            eprintln!("ROW: {line}");
+        }
+        let _ = app.session_hub.close();
+        let _ = app.run(&mut terminal).expect("frame after close");
+        let after = buf_text(terminal.backend().buffer());
+        eprintln!("after_has_sessions={}", after.contains("Sessions"));
     }
 }

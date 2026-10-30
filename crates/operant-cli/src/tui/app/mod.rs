@@ -100,6 +100,11 @@ pub struct App {
     /// the dumped frame instead of being cut off mid-flight. `None` until the
     /// first drain pass after the scripted events run out.
     sim_drain_deadline: Option<std::time::Instant>,
+    /// Passes a headless run has spent waiting for scripted keys to be applied
+    /// with no async load outstanding (see the drain block in `run`). Reset by
+    /// nothing: it only ever gates the run's end, and a scenario that spans
+    /// both regimes (a load, then tail keys) still has plenty of budget.
+    sim_key_drain_passes: u32,
     /// (plan 01) `--frame-per-event`: the sim drains ONE scripted event per
     /// loop pass so every inter-event state paints a frame.
     pub simulation_one_event_per_frame: bool,
@@ -939,9 +944,19 @@ impl SynchronizedUpdate for ratatui::backend::TestBackend {
 /// work pays for one extra loop pass and no wall-clock time at all.
 const SIM_DRAIN_BUDGET: std::time::Duration = std::time::Duration::from_secs(5);
 
+/**/
 /// Poll granularity of the drain wait. Small enough that the load's arrival
 /// repaints promptly, large enough not to spin.
 const SIM_DRAIN_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(16);
+
+/// How many loop passes a headless run waits for scripted keys to be applied
+/// when there is no async load left to wait for (iter-1489).
+///
+/// A scenario's keys are applied one per pass; a script that ends on an arrow
+/// (rather than an Enter) never drains on its own, so without this bound the
+/// loop would spin forever with nothing to sleep on. Three passes applies any
+/// queued key; more would only mask a scenario that forgot its Enter.
+const SIM_KEY_DRAIN_PASSES: u32 = 3;
 
 impl App {
     // -------------------------------------------------------------------
@@ -1186,12 +1201,37 @@ impl App {
                 // exits before the load exists. The wait ends the moment
                 // nothing is in flight, so a run with no async work costs
                 // one extra pass and no real time.
+                //
+                // One more condition (iter-1489): keys still queued BEHIND the
+                // load. The drain exists so the DUMPED FRAME is right, but a
+                // script that continues after the async work —
+                // `/session<enter>j`, the hub's navigation over an
+                // asynchronously loaded list — would exit with those keys
+                // unread, because "nothing is in flight" says nothing about
+                // whether the script is finished. Apply the keys first; the
+                // drain only ends the run once BOTH the scripts are empty and
+                // nothing is in flight.
+                let keys_pending =
+                    !self.simulated_keys.is_empty() || !self.simulated_mouse.is_empty();
                 let in_flight = self.session_list_rx.is_some()
                     || self.preview_rx.is_some()
                     || self.session_hub.loading
                     || self.session_hub.preview_loading;
-                if !in_flight {
+                if !in_flight && !keys_pending {
                     self.should_exit = true;
+                } else if !in_flight && keys_pending {
+                    // Keys left but no load to wait for: the pump above will
+                    // apply them next pass. A script whose keys never submit
+                    // (an arrow on a settled surface) would otherwise spin this
+                    // loop with nothing to sleep on, so bound the number of
+                    // passes and end the run — the keys have been applied by
+                    // then, or the scenario never intended them to land.
+                    self.sim_key_drain_passes += 1;
+                    if self.sim_key_drain_passes >= SIM_KEY_DRAIN_PASSES {
+                        self.should_exit = true;
+                    } else {
+                        std::thread::sleep(SIM_DRAIN_POLL_INTERVAL);
+                    }
                 } else if self.sim_drain_deadline.is_none() {
                     self.sim_drain_deadline = Some(std::time::Instant::now() + SIM_DRAIN_BUDGET);
                 } else if self
@@ -1496,6 +1536,19 @@ impl App {
             let pending = self.pending_key.take();
             let has_simulated_key = !self.simulated_keys.is_empty();
             let has_simulated_mouse = !self.simulated_mouse.is_empty();
+            // A scripted key that arrives while the hub's row load is still in
+            // flight is applied to a hub with NO ROWS (iter-1489): a live
+            // operator takes tens of milliseconds to press the next key while
+            // the load takes hundreds, but the simulator applies its whole
+            // script back-to-back at machine speed. Holding the pump until the
+            // load lands is what makes a scenario like
+            // `/session<enter>j` exercise the real interaction (navigate a
+            // LOADED list) instead of a dropped keypress on an empty one —
+            // which is exactly why the corpus's hub scenario could only ever
+            // assert the loading banner.
+            let sim_loads_pending = self.is_simulating && self.session_list_rx.is_some();
+            let has_simulated_key = has_simulated_key && !sim_loads_pending;
+            let has_simulated_mouse = has_simulated_mouse && !sim_loads_pending;
 
             // Poll for events with an adaptive timeout based on performance tier and
             // activity state. This reduces CPU usage by 5-10x on idle terminals.
