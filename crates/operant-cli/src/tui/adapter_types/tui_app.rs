@@ -242,6 +242,19 @@ impl TuiApp {
             // task can ensure the agentmemory backend is up before
             // connecting its MCP server (fast reconnect).
             self.app.core_memory_provider = agent.memory_provider();
+            // (iter-1489) Read-only rewind-mark source. The rewind selector is a
+            // fullscreen overlay, so the async drain that normally feeds it
+            // (`run_pending_agent_actions`) never runs while it is open;
+            // `App::run` mirrors this on every frame instead. At creation the
+            // session id is `None` until the first turn mints one, which offers
+            // no marks — the honest state before anything has happened.
+            self.app.core_rewind_marks = Some(std::sync::Arc::new(
+                crate::tui::rewind_marks::RewindMarksSource::new(
+                    agent.rewind_marks_source(),
+                    agent.session_id(),
+                    Vec::new(),
+                ),
+            ));
         }
 
         // Create the user-question channel and register the sender with
@@ -751,6 +764,16 @@ impl TuiApp {
             // task can ensure the agentmemory backend is up before
             // connecting its MCP server (fast reconnect).
             self.app.core_memory_provider = agent.memory_provider();
+            // (iter-1489) The same read-only rewind-mark source the interactive
+            // path holds, so the headless simulator drives the selector's real
+            // sync path instead of a mock of it.
+            self.app.core_rewind_marks = Some(std::sync::Arc::new(
+                crate::tui::rewind_marks::RewindMarksSource::new(
+                    agent.rewind_marks_source(),
+                    agent.session_id(),
+                    Vec::new(),
+                ),
+            ));
         }
 
         // Skip the network models.dev fetch on the deterministic mock path.
@@ -1015,6 +1038,16 @@ impl TuiApp {
         if (app.rewind_selector.visible || app.pending_rewind_confirm.is_some())
             && let Some(agent) = agent
         {
+            // (iter-1489) Keep the frame-loop's mirror in step with the agent's
+            // own list. The selector syncs from `core_rewind_marks` every frame
+            // (it cannot await this drain — see the field's doc), so a mark
+            // recorded since the last drain must be pushed here or the overlay
+            // would lag one turn behind.
+            if let Some(source) = app.core_rewind_marks.as_ref() {
+                source.set_marks(agent.rewind_marks_source());
+                source.set_session(agent.session_id());
+                source.set_conversation(app.user_prompt_texts_for_filter());
+            }
             let marks: Vec<(u64, String)> = agent
                 .rewind_marks()
                 .into_iter()

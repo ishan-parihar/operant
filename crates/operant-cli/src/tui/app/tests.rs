@@ -1042,6 +1042,100 @@ fn double_escape_opens_rewind_selector() {
     );
 }
 
+/// (iter-1489) The defect the operator reported as "none of its functionality
+/// works": the selector opened EMPTY and stayed empty, because its only mark
+/// source was `run_pending_agent_actions` — an async drain that lives on the
+/// OUTER side of the fullscreen overlay's whole lifetime and therefore never
+/// runs while the overlay is open.
+///
+/// This drives the real inner loop (`App::run`, one `run` pass per key) so the
+/// assertion is about the LIVE frame sync, not a re-implementation of it.
+#[test]
+fn the_rewind_selector_syncs_its_marks_from_the_frame_loop() {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    let backend = TestBackend::new(120, 40);
+    let mut terminal = Terminal::new(backend).unwrap();
+    let mut app = make_app();
+    app.is_simulating = true;
+
+    // A conversation already on screen: the relocation set that decides which
+    // marks belong to THIS session (RT-175).
+    app.messages
+        .push(crate::tui::adapter_types::types::Message {
+            role: crate::tui::adapter_types::types::Role::User,
+            content: MessageContent::Text("what is 2+2?".to_string()),
+        });
+    app.messages
+        .push(crate::tui::adapter_types::types::Message {
+            role: crate::tui::adapter_types::types::Role::Assistant,
+            content: MessageContent::Text("4".to_string()),
+        });
+    app.messages
+        .push(crate::tui::adapter_types::types::Message {
+            role: crate::tui::adapter_types::types::Role::User,
+            content: MessageContent::Text("and 3+3?".to_string()),
+        });
+
+    // The marks the agent holds. `turn_context` records one per real prompt,
+    // so the live selector must show exactly these two.
+    app.core_rewind_marks = Some(std::sync::Arc::new(
+        crate::tui::rewind_marks::RewindMarksSource::new(
+            vec![
+                operant_core::agent::UserTurnMark {
+                    turn_id: 11,
+                    conv_index: 0,
+                    conv_epoch: 1,
+                    text: "what is 2+2?".to_string(),
+                },
+                operant_core::agent::UserTurnMark {
+                    turn_id: 12,
+                    conv_index: 2,
+                    conv_epoch: 1,
+                    text: "and 3+3?".to_string(),
+                },
+            ],
+            Some("sess_live".to_string()),
+            Vec::new(),
+        ),
+    ));
+
+    // Double-Esc opens the selector through the real key path.
+    app.simulated_keys = vec![
+        press_key(KeyCode::Esc, KeyModifiers::NONE),
+        press_key(KeyCode::Esc, KeyModifiers::NONE),
+    ];
+    while !app.simulated_keys.is_empty() && !app.should_exit {
+        let _ = app.run(&mut terminal).expect("loop runs");
+    }
+    assert!(
+        app.rewind_selector.visible,
+        "double-Esc opened the selector"
+    );
+
+    // The frame sync — NOT the drain, which never runs inside the overlay —
+    // populated the rows. One further loop pass is all it takes.
+    app.simulated_keys = vec![press_key(KeyCode::Down, KeyModifiers::NONE)];
+    while !app.simulated_keys.is_empty() && !app.should_exit {
+        let _ = app.run(&mut terminal).expect("loop runs");
+    }
+
+    assert_eq!(
+        app.rewind_selector.entries.len(),
+        2,
+        "the selector lists THIS session's prompts, synced from the frame loop"
+    );
+    assert_eq!(
+        app.rewind_selector.entries[0].text, "what is 2+2?",
+        "oldest first, the selector's mark order"
+    );
+    assert!(
+        !app.rewind_selector.entries.iter().any(|e| e.compacted),
+        "a prompt still on screen is not a compacted turn"
+    );
+}
+
 // ---- (plan 2026-10-28 iter-D, G5) the ←← session-hub gesture ----
 //
 // omp agent-hub.ts: a second ← within [40ms, 500ms) on an empty composer

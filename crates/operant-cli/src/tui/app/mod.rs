@@ -470,6 +470,17 @@ pub struct App {
     /// (iter-326 — native agent-memory lifecycle management.)
     pub core_memory_provider:
         Option<std::sync::Arc<dyn operant_core::memory_provider::MemoryProvider>>,
+    /// Live rewind-mark source, cloned from the agent (iter-1489).
+    ///
+    /// The rewind selector needs the agent's `user_turns` list, but it is a
+    /// FULLSCREEN overlay: every key it consumes is handled inside `App::run`,
+    /// whose outer `TuiApp::run` iteration only resumes once the user submits a
+    /// prompt or quits. The selector therefore cannot wait for
+    /// `run_pending_agent_actions` — that async drain would never fire while
+    /// the overlay is open, which is exactly why the selector opened empty and
+    /// every key read as dead. `user_turns()` is a synchronous `RwLock` read,
+    /// so the overlay syncs it from here on every frame with no await.
+    pub core_rewind_marks: Option<std::sync::Arc<crate::tui::rewind_marks::RewindMarksSource>>,
     /// Agent steer queue handle. Set by TuiApp::run after create_runtime_agent.
     /// When the user types while a turn is streaming, the input is pushed here
     /// so the agent sees it as a steer directive at the next iteration boundary.
@@ -1183,8 +1194,9 @@ impl App {
                     self.should_exit = true;
                 } else if self.sim_drain_deadline.is_none() {
                     self.sim_drain_deadline = Some(std::time::Instant::now() + SIM_DRAIN_BUDGET);
-                } else if std::time::Instant::now()
-                    >= self.sim_drain_deadline.expect("deadline set above")
+                } else if self
+                    .sim_drain_deadline
+                    .is_some_and(|deadline| std::time::Instant::now() >= deadline)
                 {
                     self.should_exit = true;
                 } else {
@@ -1202,6 +1214,32 @@ impl App {
                 && self.frame_count >= max
             {
                 self.should_exit = true;
+            }
+            // (iter-1489) The rewind selector is a FULLSCREEN overlay: every
+            // key it consumes is handled inside this loop, so the outer
+            // `TuiApp::run` iteration — and with it `run_pending_agent_actions`,
+            // the drain that used to feed the selector — cannot run again until
+            // the user submits a prompt or quits. The selector therefore synced
+            // nothing at all and opened empty with every key reading as dead.
+            // `user_turns` is a synchronous `RwLock` read, so mirroring it here
+            // costs one clone per frame and needs no await. Gated on
+            // `visible` so an idle TUI pays nothing.
+            if self.rewind_selector.visible
+                && let Some(source) = self.core_rewind_marks.as_ref()
+            {
+                // The relocation set: which marks belong to THIS session. The
+                // display is the authority (the agent's conversation is the
+                // same source), and pushing it here is what makes the overlay
+                // self-sufficient — the drain that also refreshes it cannot
+                // run while the overlay owns the keyboard.
+                source.set_conversation(self.user_prompt_texts_for_filter());
+                let marks: Vec<(u64, String)> = source
+                    .marks()
+                    .into_iter()
+                    .map(|m| (m.turn_id, m.text))
+                    .collect();
+                let display_texts = self.user_prompt_texts_for_filter();
+                self.rewind_selector.sync_marks(marks, &display_texts);
             }
             if self.should_exit {
                 // A simulated run's screen/style dump must reflect the LAST

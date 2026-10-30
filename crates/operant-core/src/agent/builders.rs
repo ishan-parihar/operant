@@ -135,6 +135,9 @@ impl OperantAgent {
             user_turns: Arc::new(std::sync::RwLock::new(Vec::new())),
             conv_epoch: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             skill_manager: Arc::new(std::sync::RwLock::new(None)),
+            capability_manager: Arc::new(std::sync::RwLock::new(
+                None::<crate::tools::cli_discovery::CapabilityManager>,
+            )),
             database,
             session_id: Arc::new(std::sync::RwLock::new(None)),
             seat_id: Arc::new(std::sync::RwLock::new(None)),
@@ -228,6 +231,7 @@ impl OperantAgent {
             user_turns: Arc::new(std::sync::RwLock::new(Vec::new())),
             conv_epoch: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             skill_manager: Arc::new(std::sync::RwLock::new(None)),
+            capability_manager: Arc::new(std::sync::RwLock::new(None)),
             database,
             session_id: Arc::new(std::sync::RwLock::new(None)),
             seat_id: Arc::new(std::sync::RwLock::new(None)),
@@ -575,6 +579,24 @@ impl OperantAgent {
 
     pub fn steer_queue_handle(&self) -> Arc<tokio::sync::Mutex<Vec<String>>> {
         Arc::clone(&self.steer_queue)
+    }
+
+    /// A read-only, clonable handle over the agent's rewind marks (iter-1489).
+    ///
+    /// The rewind selector is a fullscreen overlay whose whole lifetime is
+    /// spent inside `App::run`'s inner loop, so the async drain that normally
+    /// feeds it (`run_pending_agent_actions`) never gets to run while it is
+    /// open — the selector was therefore stuck on an empty list with every
+    /// key reading as dead. `OperantAgent::user_turns` is a synchronous
+    /// `RwLock` read, so a host can mirror it into a handle the App polls
+    /// every frame with no await.
+    ///
+    /// The returned value is a SNAPSHOT, not a live view: the caller must
+    /// refresh it (or rebuild it) after the agent reseeds the list — which
+    /// happens on every `set_session_id` retarget. The CLI wires this at agent
+    /// creation and refreshes it on session switches.
+    pub fn rewind_marks_source(&self) -> Vec<UserTurnMark> {
+        self.user_turns()
     }
 
     /// Attach the always-on advisor watchdog (omp `coding-agent/src/advisor/`

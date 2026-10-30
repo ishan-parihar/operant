@@ -184,6 +184,7 @@ impl App {
             core_mcp_manager: None,
             core_tool_registry: None,
             core_memory_provider: None,
+            core_rewind_marks: None,
             mcp_reconnect_rx: None,
             steer_queue_handle: None,
             pending_mcp_reconnect: false,
