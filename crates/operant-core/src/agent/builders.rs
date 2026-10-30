@@ -181,6 +181,7 @@ impl OperantAgent {
             last_prompt_tokens: std::sync::atomic::AtomicUsize::new(0),
             moa_guidance: Arc::new(std::sync::Mutex::new(None)),
             stream_emitted_tool_starts: std::sync::Mutex::new(std::collections::HashSet::new()),
+            tool_durations_by_call: std::sync::Mutex::new(std::collections::HashMap::new()),
         }
     }
 
@@ -275,6 +276,7 @@ impl OperantAgent {
             last_prompt_tokens: std::sync::atomic::AtomicUsize::new(0),
             moa_guidance: Arc::new(std::sync::Mutex::new(None)),
             stream_emitted_tool_starts: std::sync::Mutex::new(std::collections::HashSet::new()),
+            tool_durations_by_call: std::sync::Mutex::new(std::collections::HashMap::new()),
         }
     }
 

@@ -382,6 +382,10 @@ impl OperantAgent {
         if let Ok(mut set) = self.stream_emitted_tool_starts.lock() {
             set.clear();
         }
+        // And the per-turn tool-duration map (iter-1505), for the same reason
+        // plus a memory one: without this a long-lived agent accumulates one
+        // entry per tool call for its whole life.
+        self.clear_tool_durations();
 
         let mut messages = turn_ctx.messages;
 
@@ -2202,7 +2206,7 @@ impl OperantAgent {
                         if let Some(ref obs) = self.observer {
                             obs.record_event(&ObserverEvent::ToolCall {
                                 tool: result.name.clone(),
-                                duration: Duration::from_millis(0),
+                                duration: self.tool_duration_for(&result.tool_call_id),
                                 success: result.success,
                             });
                         }

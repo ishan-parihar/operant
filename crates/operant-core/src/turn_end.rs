@@ -472,9 +472,16 @@ mod tests {
         // The timings producer is the tool executor, and nothing else.
         // All three execute_tools branches time their call: single,
         // serialized-interfering-batch, and the concurrent pool.
+        //
+        // Counted on the qualified call `bus.record_tool_duration(`, not the bare
+        // name: iter-1505 added a sibling recorder on the agent
+        // (`self.record_tool_duration(`) for the observer, and a bare-name count
+        // then read 8 and failed on a designer mismatch rather than a missing
+        // timing. The per-call recorder has its own contract test in
+        // `tests/tool_call_duration_is_real.rs`.
         let stream_rs = include_str!("agent/stream.rs");
         assert_eq!(
-            stream_rs.matches("record_tool_duration").count(),
+            stream_rs.matches("bus.record_tool_duration(").count(),
             3,
             "every execute_tools branch (single + sequential + concurrent) must time its tool call"
         );

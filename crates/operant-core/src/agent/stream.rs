@@ -32,6 +32,41 @@ impl OperantAgent {
         ctx
     }
 
+    /// Record one completed tool call's wall-clock duration under its call ID
+    /// (iter-1505). Feeds the `ObserverEvent::ToolCall` emit in `run.rs`, which
+    /// pairs one tool name with one duration and so cannot use
+    /// `TurnEndBus::tool_durations_ms` — that is a name-less `Vec<u64>` in
+    /// completion order.
+    ///
+    /// Silently does nothing when the lock is poisoned, matching
+    /// `TurnEndBus::record_tool_duration`: a lost timing must never fail a
+    /// turn that otherwise succeeded.
+    pub(crate) fn record_tool_duration(&self, tool_call_id: &str, ms: u64) {
+        if let Ok(mut map) = self.tool_durations_by_call.lock() {
+            map.insert(tool_call_id.to_string(), ms);
+        }
+    }
+
+    /// The recorded duration for one tool call, or `Duration::ZERO` when the
+    /// call was never timed (an early-return path that skipped the executor).
+    pub(crate) fn tool_duration_for(&self, tool_call_id: &str) -> Duration {
+        self.tool_durations_by_call
+            .lock()
+            .ok()
+            .and_then(|map| map.get(tool_call_id).copied())
+            .map(Duration::from_millis)
+            .unwrap_or(Duration::ZERO)
+    }
+
+    /// Drop the per-turn tool-duration map (iter-1505). Called at the start of
+    /// `run()` alongside `stream_emitted_tool_starts`, so a long-lived agent
+    /// does not accumulate one entry per tool call for its whole life.
+    pub(crate) fn clear_tool_durations(&self) {
+        if let Ok(mut map) = self.tool_durations_by_call.lock() {
+            map.clear();
+        }
+    }
+
     /// Process streaming response with early tool detection
     pub(crate) async fn process_stream(
         &self,
@@ -1573,6 +1608,7 @@ impl OperantAgent {
             if let Some(ref bus) = self.turn_end_bus {
                 bus.record_tool_duration(tool_started.elapsed().as_millis() as u64);
             }
+            self.record_tool_duration(&tool_call.id, tool_started.elapsed().as_millis() as u64);
             early_results[idx] = Some(match result {
                 Ok(Ok(r)) => r,
                 Ok(Err(e)) => ToolResult::error(&tool_call.id, e.to_string()),
@@ -1611,6 +1647,7 @@ impl OperantAgent {
                 if let Some(ref bus) = self.turn_end_bus {
                     bus.record_tool_duration(tool_started.elapsed().as_millis() as u64);
                 }
+                self.record_tool_duration(&tool_call.id, tool_started.elapsed().as_millis() as u64);
                 early_results[idx] = Some(match result {
                     Ok(Ok(r)) => r,
                     Ok(Err(e)) => ToolResult::error(&tool_call.id, e.to_string()),
@@ -1697,6 +1734,10 @@ impl OperantAgent {
                         if let Some(ref bus) = self.turn_end_bus {
                             bus.record_tool_duration(exec_started.elapsed().as_millis() as u64);
                         }
+                        self.record_tool_duration(
+                            &tool_call.id,
+                            exec_started.elapsed().as_millis() as u64,
+                        );
 
                         (
                             idx,

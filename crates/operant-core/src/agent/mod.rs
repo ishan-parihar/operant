@@ -739,6 +739,23 @@ pub struct OperantAgent {
     /// streaming (not after the turn finishes), enabling chronological message
     /// splitting. Cleared at the start of each `run()`.
     stream_emitted_tool_starts: std::sync::Mutex<std::collections::HashSet<String>>,
+    /// Wall-clock duration in milliseconds of each completed tool call, keyed
+    /// by tool-call ID. Filled by `execute_tools` at the same sites that feed
+    /// `TurnEndBus::record_tool_duration` (single, serialized-interfering, and
+    /// the concurrent pool), and read back by the `ObserverEvent::ToolCall`
+    /// emit in `run.rs`.
+    ///
+    /// The observer needs the ID because its variant pairs one tool name with
+    /// one duration: `TurnEndBus::tool_durations_ms` is a `Vec<u64>` in
+    /// completion order that deliberately discards the name, so it cannot
+    /// supply that pairing without an index-to-tool map that would go stale the
+    /// moment a call was dropped or reordered.
+    ///
+    /// Before this field the observer emitted `Duration::from_millis(0)` for
+    /// every call — the timing was already being measured at all three sites,
+    /// and then thrown away on the path to the observer, so
+    /// `ConsoleObserver`'s `duration_ms` was structurally always zero.
+    tool_durations_by_call: std::sync::Mutex<std::collections::HashMap<String, u64>>,
 }
 
 /// Strip `<memory-context>` / `<long_term_memory>` XML tags from streaming
