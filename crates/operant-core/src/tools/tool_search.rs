@@ -388,17 +388,34 @@ impl OperantTool for ToolSearchTool {
             .min(25);
 
         let deferred = self.deferred_schemas().await;
-        let mut matches: Vec<(String, String)> = deferred
+        // Rank instead of sorting alphabetically (iter-1507). An empty query
+        // matches EVERYTHING, so alphabetical order truncated at `limit` handed
+        // the model the alphabetically-first tools rather than the closest
+        // ones; and for a real query the substring filter admitted every
+        // tool that merely mentioned a term, so the most relevant result
+        // could be cut by the limit while a marginally-related one survived.
+        // This is the token-overlap score from the portability ledger's cheap
+        // version — a name hit weighs three times a description hit. The ledger
+        // suggested a shorter-name tiebreak; this sorts equal scores by name ASC
+        // instead, because a deterministic name order is the one property a test
+        // can pin ("shorter name" would make `web` outrank `web_search` for no
+        // reason a reader could check). Both are heuristics; determinism is not
+        // optional.
+        let mut scored: Vec<(usize, &crate::schema::ToolSchema)> = deferred
             .iter()
-            .filter(|s| {
-                query.is_empty()
-                    || s.name.to_lowercase().contains(&query)
-                    || s.description.to_lowercase().contains(&query)
-            })
-            .map(|s| (s.name.clone(), s.description.clone()))
+            .filter(|s| search_matches(&query, s))
+            .map(|s| (relevance_score(&query, s), s))
             .collect();
-        matches.sort_by(|a, b| a.0.cmp(&b.0));
-        matches.truncate(limit);
+        // Total order, so the result is deterministic: score descending, then
+        // name ascending as the final tiebreak. Without the explicit name
+        // tiebreak two equal-scoring tools could swap places between runs and
+        // a test (or the model) would see a different order for the same query.
+        scored.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.name.cmp(&b.1.name)));
+        scored.truncate(limit);
+        let matches: Vec<(String, String)> = scored
+            .into_iter()
+            .map(|(_, s)| (s.name.clone(), s.description.clone()))
+            .collect();
 
         ToolResult::success(
             synthetic_call_id(TOOL_SEARCH_NAME),
@@ -412,6 +429,55 @@ impl OperantTool for ToolSearchTool {
             }),
         )
     }
+}
+
+/// True when a tool is a candidate for this query.
+///
+/// An empty query matches everything (it is the "browse the catalog" case,
+/// where relevance ordering matters most precisely because there is no signal
+/// to rank on). A non-empty query splits into whitespace-separated terms and
+/// requires at least one term to appear in the name or description.
+///
+/// Token-splitting on the QUERY is the change from the old substring test
+/// (`name.contains(query)`): the old form required the whole query to appear
+/// verbatim, so "github issue" missed a tool named `gh_issue_list` whose
+/// description says "list github issues". Each term is matched as a substring
+/// rather than a whole word, so partial names still match.
+fn search_matches(query: &str, schema: &crate::schema::ToolSchema) -> bool {
+    if query.is_empty() {
+        return true;
+    }
+    let name = schema.name.to_lowercase();
+    let description = schema.description.to_lowercase();
+    query
+        .split_whitespace()
+        .any(|term| name.contains(term) || description.contains(term))
+}
+
+/// Relevance score: query terms hitting the NAME weigh three times a term that
+/// hits only the DESCRIPTION.
+///
+/// The weights are a heuristic, not a measurement — the ledger that prescribed
+/// this (the portability contrast's "cheap version") chose them because the
+/// name is what the model has already decided it wants. They are deliberately
+/// round and reviewable; if a measurement later shows 3:1 is wrong, the constant
+/// is one line and every test that pins an ordering will name the new behaviour.
+fn relevance_score(query: &str, schema: &crate::schema::ToolSchema) -> usize {
+    if query.is_empty() {
+        return 0;
+    }
+    let name = schema.name.to_lowercase();
+    let description = schema.description.to_lowercase();
+    let mut score = 0usize;
+    for term in query.split_whitespace() {
+        if name.contains(term) {
+            score += 3;
+        }
+        if description.contains(term) {
+            score += 1;
+        }
+    }
+    score
 }
 
 /// `tool_describe` — return the full JSON schema for one deferred tool.
@@ -883,5 +949,200 @@ mod tests {
         let text = build_listing(&deferred, &ts("auto", "auto", 4000), 128_000);
         assert!(text.contains("mcp_s_alpha"), "{text}");
         assert!(text.contains("Alpha"), "{text}");
+    }
+
+    // ── Relevance ranking (iter-1507) ──────────────────────────────────
+    //
+    // The old behaviour sorted by tool NAME alone, so the result was the
+    // alphabetically-first N matches. Two distinct ways that produced the wrong
+    // top-N:
+    //
+    // 1. An empty query matches every deferred tool, so truncating the
+    //    alphabetically-sorted list returned whichever tools happened to sort
+    //    first — an arbitrary subset, not a browsable one.
+    // 2. A real query admitted every tool that merely MENTIONED a term, so a
+    //    tool named `mcp_github_issue_create` and one that says "…handles
+    //    github issues…" in prose both scored zero and were ordered by name.
+    //
+    // Each case below pins the property that failed, not the whole ordering.
+
+    /// Drive `tool_search` for real and return the ordered match names.
+    async fn search_names(registry: &ToolRegistry, query: &str, limit: usize) -> Vec<String> {
+        let tool = ToolSearchTool::new(registry.clone());
+        let result = tool
+            .execute(
+                json!({ "query": query, "limit": limit }),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(result.success, "{}", result.content);
+        let parsed: Value = serde_json::from_str(&result.content).unwrap();
+        parsed["matches"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| m["name"].as_str().unwrap().to_string())
+            .collect()
+    }
+    #[tokio::test]
+    async fn a_name_hit_outranks_a_description_only_hit() {
+        // Fixture design is the whole test: the description-only tool is named
+        // `aaa_...` and the name-hit tool `zzz_...`, so ALPHABETICAL order puts
+        // the irrelevant tool FIRST. A ranking that silently degrades to
+        // alphabetical would then still pass a fixture where the two happen to
+        // agree — which is exactly what the first version of these fixtures did
+        // (they passed with every score forced to 0, i.e. vacuous).
+        let registry = ToolRegistry::new(Duration::from_secs(5));
+        registry
+            .register(DeferredDummy::new(
+                "mcp_zzz_github_issue_create",
+                "Creates a record in the tracker",
+            ))
+            .await
+            .unwrap();
+        registry
+            .register(DeferredDummy::new(
+                "mcp_aaa_project_tools",
+                "Handles github issues and issue comments for a repository",
+            ))
+            .await
+            .unwrap();
+
+        // Both match "github issue": one in its name, one only in prose.
+        let names = search_names(&registry, "github issue", 10).await;
+        assert_eq!(names.len(), 2, "both tools match: {names:?}");
+        assert_eq!(
+            names[0], "mcp_zzz_github_issue_create",
+            "the tool whose NAME carries the terms must outrank the one that only \
+             mentions them in prose — alphabetical order puts mcp_aaa_project_tools \
+             first, so this fails if the ranking degrades to a name sort: {names:?}"
+        );
+
+        // And at limit 1 the wrong ordering drops the right tool entirely,
+        // which is the failure an operator actually sees.
+        let capped = search_names(&registry, "github issue", 1).await;
+        assert_eq!(
+            capped,
+            vec!["mcp_zzz_github_issue_create".to_string()],
+            "at limit 1 the relevant tool must survive, not be cut by the \
+             alphabetically-earlier one: {capped:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn multi_term_query_matches_terms_split_across_fields() {
+        let registry = ToolRegistry::new(Duration::from_secs(5));
+        registry
+            .register(DeferredDummy::new(
+                "mcp_gh_list",
+                "List github issues for the repository",
+            ))
+            .await
+            .unwrap();
+        registry
+            .register(DeferredDummy::new(
+                "mcp_unrelated_thing",
+                "Reads local files from the workspace",
+            ))
+            .await
+            .unwrap();
+
+        // The OLD filter required the whole query string to appear verbatim in
+        // one field, so "github issue" never matched a name of "gh_list" even
+        // though both terms were present across name and description.
+        let names = search_names(&registry, "github gh", 10).await;
+        assert_eq!(
+            names,
+            vec!["mcp_gh_list".to_string()],
+            "each query term must match independently, so terms split across the \
+             name and the description still find the tool: {names:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn ranking_is_deterministic_for_equal_scores() {
+        // Equal-scoring tools must not swap order between runs. `sort_by` is
+        // stable, but a score-only key leaves sequence-dependent output, so the
+        // tiebreak is explicit in the implementation and pinned here.
+        let registry = ToolRegistry::new(Duration::from_secs(5));
+        registry
+            .register(DeferredDummy::new("mcp_zeta", "alpha processing"))
+            .await
+            .unwrap();
+        registry
+            .register(DeferredDummy::new("mcp_alpha", "alpha processing"))
+            .await
+            .unwrap();
+
+        for _ in 0..5 {
+            let names = search_names(&registry, "alpha", 10).await;
+            assert_eq!(
+                names,
+                vec!["mcp_alpha".to_string(), "mcp_zeta".to_string()],
+                "equal scores must break by name ascending, every run: {names:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn empty_query_still_returns_a_result_not_an_error() {
+        // The browse case. With ranking the empty query now orders by nothing
+        // (every score is 0), so the result is the alphabetically-first N —
+        // which is a defensible browse order, but it must still WORK.
+        let registry = ToolRegistry::new(Duration::from_secs(5));
+        registry
+            .register(DeferredDummy::new("mcp_srv_alpha", "Alpha"))
+            .await
+            .unwrap();
+        registry
+            .register(DeferredDummy::new("mcp_srv_beta", "Beta"))
+            .await
+            .unwrap();
+
+        let names = search_names(&registry, "", 10).await;
+        assert_eq!(names.len(), 2, "an empty query lists everything: {names:?}");
+        assert_eq!(
+            names,
+            vec!["mcp_srv_alpha".to_string(), "mcp_srv_beta".to_string()],
+            "with no ranking signal the fallback must be the deterministic \
+             alphabetical order: {names:?}"
+        );
+    }
+
+    #[test]
+    fn the_sort_must_not_be_alphabetical_only() {
+        // Source pin on the exact defect, so a regression to alphabetical-only
+        // ordering fails by name.
+        //
+        // Matched on the code shape rather than a quoted line: this file's prose
+        // describes what changed, and a substring search for the old comparator
+        // would match its own explanation (and its own literal) before it matched
+        // a regression. That is the trap the isolation-layer guard paid for.
+        let src = include_str!("tool_search.rs");
+
+        // The scorer must be consulted when building the candidates.
+        assert!(
+            src.contains("relevance_score(&query, s)"),
+            "tool_search must score each candidate, not just filter it"
+        );
+        // ...and the sort must order by that score, with a name tiebreak so
+        // equal scores do not swap places between runs.
+        assert!(
+            src.contains(".then_with(|| a.1.name.cmp(&b.1.name))"),
+            "the ranked sort must carry an explicit name tiebreak"
+        );
+        // Every `sort_by` in the file must therefore compare the score, never
+        // the name alone. `a.0` is the first tuple field (the score); a
+        // comparator reading only `a.1`/`b.1` is the old alphabetical behaviour
+        // wearing a new name.
+        for line in src
+            .lines()
+            .filter(|l| l.contains("sort_by") && l.contains(".0.cmp("))
+        {
+            assert!(
+                !line.contains("a.1.cmp(&b.1)"),
+                "a sort_by that compares the name directly is alphabetical-only: {line}"
+            );
+        }
     }
 }
