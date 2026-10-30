@@ -287,6 +287,14 @@ pub static COMMAND_REGISTRY: &[CommandDef] = &[
         admin_only: false,
     },
     CommandDef {
+        name: "subagents",
+        description: "List background subagents this gateway dispatched",
+        aliases: &["subagent"],
+        category: "Session",
+        args_hint: "",
+        admin_only: false,
+    },
+    CommandDef {
         name: "steer",
         description: "Steer conversation direction",
         aliases: &[],
@@ -1491,6 +1499,109 @@ pub fn handle_command(cmd_name: &str, _args: &str, ctx: &CommandContext<'_>) -> 
                 lines.push("• Gateway not connected.".to_string());
             }
             lines.join("\n")
+        }
+
+        "subagents" => {
+            // This is a DIFFERENT registry from /agents: /agents lists the
+            // gateway's PLATFORM sessions (a telegram chat, a discord
+            // channel), while this lists BACKGROUND DELEGATIONS — the
+            // subagents this process dispatched via the async delegation
+            // tool. The two never overlap, which is why /agents alone left
+            // the operator with no view of a running subagent at all.
+            //
+            // Same-process scope, stated not implied: the registry is a
+            // process-local `OnceLock<Mutex<HashMap>>`, so a gateway process
+            // that dispatched nothing reports an empty list. That is the
+            // truth about this process, not a global "no subagents".
+            let a = _args.trim();
+            match a {
+                "list" | "" => {
+                    let records = operant_core::tools::async_delegation::list_records();
+                    if records.is_empty() {
+                        "*Subagents:* none dispatched by this gateway process.\n\
+                         Background delegations are per-process: a subagent \
+                         dispatched by the TUI or another `operant run` is not \
+                         in this list.\n\
+                         `/agents` lists this gateway's platform sessions."
+                            .into()
+                    } else {
+                        let mut lines = vec![format!(
+                            "*Subagents:* {} record{}",
+                            records.len(),
+                            if records.len() == 1 { "" } else { "s" }
+                        )];
+                        // Elapsed is measured HERE rather than asked of the
+                        // registry: core keeps `now_secs` private and its
+                        // records carry dispatch_time/completed_time, so the
+                        // duration belongs to this display layer.
+                        let now = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_secs())
+                            .unwrap_or(0);
+                        for r in &records {
+                            let (glyph, label) = match r.status {
+                                operant_core::tools::async_delegation::AsyncDelegationStatus::Pending => {
+                                    ("⏳", "running")
+                                }
+                                operant_core::tools::async_delegation::AsyncDelegationStatus::Completed => {
+                                    ("✅", "completed")
+                                }
+                                operant_core::tools::async_delegation::AsyncDelegationStatus::Failed => {
+                                    ("❌", "failed")
+                                }
+                            };
+                            let elapsed = now.saturating_sub(r.dispatch_time);
+                            let mins = elapsed / 60;
+                            let when = if mins < 1 {
+                                format!("{}s ago", elapsed)
+                            } else if mins < 60 {
+                                format!("{}m ago", mins)
+                            } else {
+                                format!("{}h{}m ago", mins / 60, mins % 60)
+                            };
+                            // The goal first and untruncated-by-accident: a
+                            // delegation the operator cannot recognise is a row
+                            // they must go re-dispatch to understand. It is
+                            // squashed to one line so a multi-line prompt does
+                            // not break the list layout.
+                            let goal: String = r
+                                .goal
+                                .chars()
+                                .take(80)
+                                .collect::<String>()
+                                .replace('\n', " ");
+                            let detail = match (&r.result, &r.error) {
+                                (Some(res), _) if !res.is_empty() => {
+                                    let snippet: String = res.chars().take(120).collect();
+                                    format!(" — {}", snippet.replace('\n', " "))
+                                }
+                                (_, Some(err)) if !err.is_empty() => {
+                                    let snippet: String = err.chars().take(120).collect();
+                                    format!(" — {}", snippet.replace('\n', " "))
+                                }
+                                _ => String::new(),
+                            };
+                            lines.push(format!(
+                                "{} `{}` — {} · {} · {} · {}{}",
+                                glyph,
+                                r.delegation_id,
+                                goal,
+                                label,
+                                r.model,
+                                when,
+                                detail
+                            ));
+                        }
+                        lines.join("\n")
+                    }
+                }
+                other => {
+                    format!(
+                        "Usage: `/subagents` — lists the background delegations this gateway process dispatched.\n\
+                         Unknown subcommand `{other}`. There is no per-record view yet: `/subagents` is a list only."
+                    )
+                }
+            }
         }
 
         "steer" => {
@@ -3366,6 +3477,168 @@ mod tests {
         let mut personal = org_config(dir.path());
         personal.holon.enabled = false;
         assert!(unknown_org_employee(&personal, "hrmaster").is_none());
+    }
+}
+
+/// `/subagents` — the delegation registry's gateway surface.
+///
+/// The defect this pins: `/agents` listed the gateway's PLATFORM sessions
+/// (a telegram chat, a discord channel) and the background DELEGATION
+/// registry had no reader in the gateway at all, so an operator on a chat
+/// platform could not see a running subagent by any means. The registry is
+/// a process-global with no public clear, so these tests assert against the
+/// rows THEY create (tagged with a unique marker) rather than assuming an
+/// empty registry, and serialise on a module lock because two of them seed it.
+#[cfg(test)]
+mod subagents_command_tests {
+    use super::*;
+    use operant_core::tools::async_delegation::{
+        create_record, list_records, mark_completed, mark_failed,
+    };
+
+    // Two of these tests seed the process-global registry and one of them
+    // reads it, so serialise: a concurrent read could otherwise observe a
+    // half-seeded registry and no reading test would know why it was flaky.
+    static SUBAGENTS_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn ctx(cfg: &AppConfig) -> CommandContext<'_> {
+        CommandContext::new(None, cfg, true, "op-1", "telegram", "chan-1")
+    }
+
+    /// A per-test-unique goal marker, so `list_records()` rows from other
+    /// tests (or earlier in this process) can never satisfy an assertion.
+    fn marker(test: &str) -> String {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static N: AtomicU64 = AtomicU64::new(0);
+        format!("marker-{test}-{}", N.fetch_add(1, Ordering::SeqCst))
+    }
+
+    #[test]
+    fn an_empty_registry_names_whose_subagents_are_missing() {
+        // The registry has no public clear, so this test cannot FORCE the
+        // empty branch by draining. Instead it asserts the wording contract
+        // that must hold in BOTH arms, and proves the empty arm's sentence
+        // exists in the source by the only means available here: when the
+        // process really has no records, the reply must be the scope
+        // sentence. When it does have terminal history, the reply must be the
+        // list — and the list must never claim a global "no subagents".
+        let cfg = AppConfig::default();
+        let resp = handle_command("subagents", "", &ctx(&cfg)).expect("handled");
+        if resp.contains("records") {
+            assert!(
+                !resp.contains("none dispatched by this gateway process"),
+                "a non-empty list must not claim the process dispatched nothing: {resp}"
+            );
+        } else {
+            assert!(
+                resp.contains("per-process") && resp.contains("/agents"),
+                "the empty arm must state WHOSE subagents are missing and \
+                 cross-link the other list: {resp}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_pending_delegation_is_named_running_and_shows_its_id_model_and_goal() {
+        let _guard = SUBAGENTS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let goal = marker("pending");
+        let id = create_record(&goal, "gpt-4.1");
+        let cfg = AppConfig::default();
+
+        let resp = handle_command("subagents", "list", &ctx(&cfg)).expect("handled");
+        // Assert on the ROW this test created, by its unique id and goal.
+        assert!(
+            resp.contains(&id),
+            "the dispatch handle must be shown: {resp}"
+        );
+        assert!(resp.contains(&goal), "the goal must show: {resp}");
+        assert!(
+            resp.contains("gpt-4.1"),
+            "the model must show on the row: {resp}"
+        );
+        assert!(
+            resp.contains("running"),
+            "a Pending record is live work, not a past-tense row: {resp}"
+        );
+
+        mark_completed(&id, "done by test");
+    }
+
+    #[test]
+    fn a_completed_delegation_shows_its_result_and_a_failed_one_its_error() {
+        let _guard = SUBAGENTS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let ok_goal = marker("ok");
+        let ok = create_record(&ok_goal, "m");
+        mark_completed(&ok, "the audit found four gaps");
+        let bad_goal = marker("bad");
+        let bad = create_record(&bad_goal, "m");
+        mark_failed(&bad, "child timed out");
+        let cfg = AppConfig::default();
+
+        let resp = handle_command("subagents", "", &ctx(&cfg)).expect("handled");
+        // The result/error strings are the unique markers here.
+        assert!(
+            resp.contains("the audit found four gaps"),
+            "a finished subagent's answer is the question the operator has: {resp}"
+        );
+        assert!(
+            resp.contains("completed"),
+            "the status label must be past-tense for a finished row: {resp}"
+        );
+        assert!(
+            resp.contains("child timed out"),
+            "a failure must surface its reason, not just the fact: {resp}"
+        );
+    }
+
+    #[test]
+    fn the_alias_and_an_unknown_subcommand_both_resolve() {
+        let cfg = AppConfig::default();
+        let via_alias = handle_command("subagent", "", &ctx(&cfg)).expect("the alias must resolve");
+        assert!(
+            via_alias.contains("Subagents") || via_alias.contains("per-process"),
+            "the alias must reach the same arm: {via_alias}"
+        );
+
+        let bogus = handle_command("subagents", "show 3", &ctx(&cfg)).expect("handled");
+        assert!(
+            bogus.contains("Unknown subcommand"),
+            "a subcommand that does not exist must say so rather than silently \
+             listing everything: {bogus}"
+        );
+        assert!(
+            bogus.contains("/agents") || bogus.contains("list only"),
+            "the refusal must name what the command actually does: {bogus}"
+        );
+    }
+
+    #[test]
+    fn subagents_and_agents_are_registered_as_distinct_commands() {
+        let names: Vec<&str> = COMMAND_REGISTRY.iter().map(|d| d.name).collect();
+        assert!(
+            names.contains(&"agents") && names.contains(&"subagents"),
+            "both lists must be reachable; they answer different questions"
+        );
+        // The registry's uniqueness guard is the one that would catch a name
+        // clash, but assert the resolution directly so the intent is legible
+        // at the call site: each text must land on its OWN command.
+        let agents = resolve_command("/agents");
+        let subagents = resolve_command("/subagents");
+        assert!(
+            matches!(agents, CommandMatch::Found(d, _) if d.name == "agents"),
+            "/agents must resolve to the agents command"
+        );
+        assert!(
+            matches!(subagents, CommandMatch::Found(d, _) if d.name == "subagents"),
+            "/subagents must resolve to the subagents command"
+        );
+        assert_ne!(agents, subagents, "the two lists must not collapse");
+        // The alias must land on the same definition as the long form.
+        let via_alias = resolve_command("/subagent");
+        assert_eq!(
+            subagents, via_alias,
+            "/subagent is an alias for /subagents, not a separate command"
+        );
     }
 }
 
