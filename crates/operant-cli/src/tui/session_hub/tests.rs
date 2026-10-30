@@ -582,3 +582,78 @@ fn a_narrower_pane_measures_a_taller_preview() {
         "a narrower pane wraps to more rows and must scroll further — wide={wide} narrow={narrow}"
     );
 }
+
+// ---- (2026-10-30, iter-1491) the preview names its not-loaded state ----
+
+/// Paint the hub with NO rows loaded and return the rows the right pane painted,
+/// so a test can assert the pane says something rather than repainting an
+/// empty box.
+fn right_pane_rows_without_selection(loading: bool) -> Vec<String> {
+    use crate::tui::render::FrameCtx;
+    let mut hub = SessionHubState::new();
+    hub.visible = true;
+    hub.loading = loading;
+    let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+    let mut ctx = FrameCtx {
+        size: ratatui::layout::Rect::new(0, 0, 120, 40),
+        preview_max_scroll: None,
+        stop: false,
+    };
+    terminal
+        .draw(|f| {
+            super::render::render_session_hub(f, &hub, f.area(), &mut ctx);
+        })
+        .unwrap();
+    // Isolate the RIGHT pane by finding the second border column: taking the
+    // whole screen would let the LEFT pane's own "Loading sessions…" banner
+    // satisfy the assertion, which is a false pass — the defect is precisely
+    // that the right pane says nothing. The two vertical borders mark the
+    // split, so everything right of the second `│` belongs to the preview.
+    let rows = crate::tui::debug::debug_hub::buffer_rows(terminal.backend().buffer());
+    rows.iter()
+        .map(|row| {
+            // `│` is three bytes, so every index below comes from
+            // `char_indices` — a byte index into the middle of the glyph
+            // panics, which is exactly how this helper was written first.
+            //
+            // Two borders per screen row: the left pane's right edge and the
+            // right pane's left edge. Everything after the second belongs to
+            // the preview, which is the pane under test.
+            let mut borders = row
+                .char_indices()
+                .filter(|(_, c)| *c == '\u{2502}')
+                .map(|(i, _)| i);
+            borders.next();
+            let Some(second) = borders.next() else {
+                return String::new();
+            };
+            row[second + 3..].trim_end_matches('\u{2502}').to_string()
+        })
+        .filter(|row| !row.trim().is_empty())
+        .collect()
+}
+
+/// The defect the operator called the "right-pane glitch": while the row load
+/// was in flight the LEFT pane painted its "Loading sessions…" banner and the
+/// RIGHT pane painted NOTHING AT ALL — an empty bordered box for four frames,
+/// then the transcript popped in. Two phases of nothing, no explanation.
+#[test]
+fn the_right_pane_names_its_loading_state_instead_of_painting_nothing() {
+    let rows = right_pane_rows_without_selection(true);
+    assert!(
+        rows.iter().any(|r| r.contains("Loading sessions")),
+        "the right pane must say the same thing the left pane says while the \
+         rows load — an empty box is the glitch: {rows:?}"
+    );
+}
+
+/// The other half: rows loaded, but nothing is selected (an empty database, a
+/// filter that matches nothing). Saying so beats an empty box.
+#[test]
+fn the_right_pane_names_an_empty_list_rather_than_painting_nothing() {
+    let rows = right_pane_rows_without_selection(false);
+    assert!(
+        rows.iter().any(|r| r.contains("No sessions")),
+        "an empty list must be named on BOTH panes: {rows:?}"
+    );
+}

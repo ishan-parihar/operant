@@ -374,6 +374,23 @@ fn render_preview(
     frame.render_widget(block, area);
 
     let Some(row) = state.selected_row() else {
+        // The rows have not loaded yet. Painting an empty box here is the
+        // "right-pane glitch" the operator reported: the left pane honestly
+        // shows its loading banner, the right pane shows NOTHING — not the
+        // banner, not a spinner, not the session id — so the overlay reads as
+        // a pane that is broken for the handful of frames between opening the
+        // hub and the row load landing. Naming the state costs one line and
+        // makes the two panes legible together.
+        let placeholder = Paragraph::new(Line::from(Span::styled(
+            if state.loading {
+                "Loading sessions…"
+            } else {
+                "No sessions to show."
+            },
+            Style::default().fg(theme_colors::muted()),
+        )))
+        .wrap(Wrap { trim: false });
+        frame.render_widget(placeholder, inner);
         return;
     };
 
