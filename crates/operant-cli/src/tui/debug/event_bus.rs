@@ -49,6 +49,10 @@ pub enum TuiEvent {
         count: usize,
         at: f64,
     },
+    /// One or more of the open hub's subagent rows changed delegation status
+    /// (a pending delegation finished while the operator watched). Throttled,
+    /// so this fires at most once a second and only when a row actually moved.
+    SubagentRefresh,
     /// The hub's per-row preview load landed (the right pane filled).
     SessionPreview {
         session_id: String,
@@ -114,6 +118,7 @@ impl TuiEvent {
                 format!("ModelFetch(ok={ok}, {count} models)")
             }
             Self::SessionList { count, .. } => format!("SessionList({count})"),
+            Self::SubagentRefresh => "SubagentRefresh".to_string(),
             Self::SessionPreview { session_id, .. } => {
                 format!(
                     "SessionPreview({})",

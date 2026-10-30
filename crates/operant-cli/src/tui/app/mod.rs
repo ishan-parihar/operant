@@ -234,6 +234,11 @@ pub struct App {
     /// `[40ms, 500ms)` (agent-hub.ts): a second ← inside the window opens
     /// the session hub; a burst < 40ms apart never fires.
     pub last_left_tap_at: Option<std::time::Instant>,
+    /// When the open session hub last re-read the delegation registry for its
+    /// subagent rows. `None` means "not yet this hub session", so the first
+    /// tick after opening fires immediately and the rest land on the 1s
+    /// throttle. Without it the hub's rows would be frozen while open.
+    pub subagent_refresh_at: Option<std::time::Instant>,
     /// (plan 05) `/rewind <n>` awaiting y/n confirmation in the status
     /// line; the number is the prompt to rewind before.
     pub pending_rewind_confirm: Option<usize>,
@@ -1310,6 +1315,30 @@ impl App {
 
             // Drain background session-list results.
             self.drain_session_list();
+
+            // The hub's subagent rows are loaded when it OPENS. While the
+            // operator keeps it open, a delegation that finishes must follow
+            // its row — otherwise the row reads `pending` indefinitely, which
+            // is the lie this closes (audit 2026-10-30: the live tail has
+            // always existed one band away in `background_tasks`, refreshed
+            // every frame; the hub was simply never connected to it).
+            //
+            // Throttled to once a second rather than per frame: the read takes
+            // the process-wide delegation Mutex and clones its map, which is
+            // cheap but not free, and a row's status changes on a human
+            // timescale. Keyed off the same Instant pattern as
+            // `last_left_tap_at`.
+            if self.session_hub.visible
+                && self
+                    .subagent_refresh_at
+                    .is_none_or(|t| t.elapsed() >= std::time::Duration::from_millis(1000))
+            {
+                if self.session_hub.refresh_subagent_rows() {
+                    self.debug_hub
+                        .publish(crate::tui::debug::TuiEvent::SubagentRefresh);
+                }
+                self.subagent_refresh_at = Some(std::time::Instant::now());
+            }
 
             // Fuzzy file-suggestion tier (plan 2026-10-24 M3): apply the
             // finished walk when its token is still live.

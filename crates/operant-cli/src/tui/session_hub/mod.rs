@@ -23,6 +23,32 @@ use operant_core::session::listing::{RowKind, RowStatus, SessionEntryV2};
 mod render;
 pub use render::render_session_hub;
 
+/// N idle session rows for hosts and tests that need a populated hub list
+/// without a database (iter-1503).
+///
+/// The hub's keyboard behaviour is only reachable once rows exist, and every
+/// host that drives it headlessly had to hand-build this list — so it is a
+/// module API, not a test fixture. Idle `RowKind::Session` rows with no
+/// employee and no usage: the neutral case a caller overrides.
+pub fn probe_rows(n: usize) -> Vec<SessionEntryV2> {
+    (0..n)
+        .map(|i| SessionEntryV2 {
+            id: format!("sess_{i}"),
+            parent_id: None,
+            title: Some(format!("session {i}")),
+            updated_at: chrono::Utc::now(),
+            employee_id: None,
+            source: "local".to_string(),
+            message_count: 1,
+            cost_usd: 0.0,
+            tokens: 0,
+            cwd: None,
+            status: RowStatus::Idle,
+            kind: RowKind::Session,
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests;
 
@@ -213,6 +239,77 @@ impl SessionHubState {
         self.visible = false;
         self.focused_subagent = None;
         self.armed_close_tap = None;
+    }
+
+    /// Push the current delegation-registry state into the rows ALREADY in
+    /// the open hub, for the subagent rows only.
+    ///
+    /// The defect this closes (audit 2026-10-30, the Wave-3 false premise):
+    /// the hub's rows are loaded when it OPENS, so while the operator sits
+    /// watching it a row keeps reading `pending` no matter how long ago the
+    /// delegation finished. The live tail sits one band away
+    /// (`background_tasks.rs`, refreshed every frame) and is correct the
+    /// whole time — the two were never connected.
+    ///
+    /// Deliberately narrow. DB rows are never touched (a re-read would move
+    /// them under the operator's cursor), rows the registry does not mention
+    /// are left exactly as they are, and the selection, scroll offset and
+    /// `rebuild_visible` inventory are all preserved. Only a row whose
+    /// delegation ACTUALLY changed status is rewritten, so a settled hub
+    /// costs a lock read and nothing else.
+    ///
+    /// Returns true when a row visibly changed, which is the caller's cue
+    /// that the frame repainted new information.
+    pub fn refresh_subagent_rows(&mut self) -> bool {
+        if self.rows.is_empty() {
+            return false;
+        }
+        // `updated_at` is the field the age/preview path reads; status and
+        // RowStatus are what the row line draws. A terminal delegation's
+        // `completed_time` is its `updated_at`, so an age read from it is
+        // correct rather than "time since dispatch" for a finished row.
+        let live = operant_core::tools::async_delegation::list_records();
+        let mut changed = false;
+        for row in self.rows.iter_mut() {
+            let RowKind::Subagent {
+                status,
+                dispatch_time,
+                ..
+            } = &mut row.kind
+            else {
+                continue;
+            };
+            let Some(rec) = live.iter().find(|r| r.delegation_id == row.id) else {
+                continue;
+            };
+            let (next, row_status, updated) = match rec.status {
+                operant_core::tools::async_delegation::AsyncDelegationStatus::Pending => {
+                    ("pending", RowStatus::Live, None)
+                }
+                operant_core::tools::async_delegation::AsyncDelegationStatus::Completed => {
+                    ("completed", RowStatus::Idle, rec.completed_time)
+                }
+                operant_core::tools::async_delegation::AsyncDelegationStatus::Failed => {
+                    ("failed", RowStatus::Idle, rec.completed_time)
+                }
+            };
+            let settled_at = updated.unwrap_or(rec.dispatch_time);
+            if *status == next && row.updated_at.timestamp() as u64 == settled_at {
+                continue;
+            }
+            *status = next;
+            row.status = row_status;
+            row.updated_at = chrono::DateTime::from_timestamp(settled_at as i64, 0)
+                .unwrap_or_else(chrono::Utc::now);
+            *dispatch_time = rec.dispatch_time;
+            changed = true;
+        }
+        if changed {
+            // Sort unaffected: id-keyed rows keep their order; only the
+            // rendered status/age move, and the selection is by row id.
+            self.rebuild_visible();
+        }
+        changed
     }
 
     /// Replace the backing rows (background load landed) and keep the

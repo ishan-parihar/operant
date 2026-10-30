@@ -845,3 +845,213 @@ fn an_ordinary_session_row_keeps_its_real_usage_numbers() {
         "the session's real cost must survive (the helper sets 0.01): {session_meta:?}"
     );
 }
+
+// ── the live refresh (audit 2026-10-30, the Wave-3 false premise) ─────────
+//
+// The hub's rows are loaded when it OPENS, so while the operator watches it
+// a subagent row kept reading `pending` however long ago the delegation
+// finished. These pin `refresh_subagent_rows`: it must move a row whose
+// delegation changed, and must NOT move anything else — the DB rows, the
+// cursor, or a row the registry does not mention.
+//
+// The registry is a process-global, so serialise and assert on rows the
+// test itself created (tagged with a unique goal), exactly as the gateway
+// `subagents` tests do.
+
+mod refresh_liveness_tests {
+    use super::*;
+    use operant_core::tools::async_delegation::{
+        create_record, list_records, mark_completed, mark_failed,
+    };
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static REFRESH_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn unique(tag: &str) -> String {
+        static N: AtomicU64 = AtomicU64::new(0);
+        format!("lively-{tag}-{}", N.fetch_add(1, Ordering::SeqCst))
+    }
+
+    /// Everything a refresh is allowed to touch, as a comparable tuple.
+    /// `SessionEntryV2` is not `PartialEq` in core, and making it one just
+    /// for a test would widen a public type's surface for none.
+    fn fingerprint(r: &SessionEntryV2) -> (String, String, i64, String) {
+        let status = match &r.kind {
+            RowKind::Subagent { status, .. } => (*status).to_string(),
+            _ => "(not a subagent)".to_string(),
+        };
+        (
+            r.id.clone(),
+            status,
+            r.updated_at.timestamp(),
+            r.title.clone().unwrap_or_default(),
+        )
+    }
+
+    fn hub_holding(rows: Vec<SessionEntryV2>) -> SessionHubState {
+        let mut hub = SessionHubState::new();
+        hub.replace_rows(rows);
+        hub.visible = true;
+        hub
+    }
+
+    /// The hub is OPEN. A delegation that was pending when it opened finishes.
+    /// The row must follow it without the hub being closed and reopened.
+    #[test]
+    fn a_pending_row_follows_its_delegation_finishing_while_the_hub_is_open() {
+        let _guard = REFRESH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let goal = unique("follow");
+        let id = create_record(&goal, "test-model");
+        let mut hub = hub_holding(vec![subagent_row(&id, &goal, "pending")]);
+        // Precondition: the row really does say pending before the refresh.
+        assert!(
+            matches!(
+                hub.rows[0].kind,
+                RowKind::Subagent { status, .. } if status == "pending"
+            ),
+            "precondition: the row opens as pending"
+        );
+
+        mark_completed(&id, "the answer");
+        assert!(
+            hub.refresh_subagent_rows(),
+            "a delegation that finished MUST move the open row: {id}"
+        );
+        let RowKind::Subagent { status, .. } = &hub.rows[0].kind else {
+            panic!("the row must still be a subagent row");
+        };
+        assert_eq!(*status, "completed", "the row must now say completed");
+        assert!(
+            !matches!(hub.rows[0].status, RowStatus::Live),
+            "a finished delegation is not live work: {:?}",
+            hub.rows[0].status
+        );
+    }
+
+    /// A failure must reach the row too — and must not be conflated with
+    /// success, which is the whole reason iter-1496 surfaced status here.
+    #[test]
+    fn a_failed_delegation_reaches_the_row_as_failed() {
+        let _guard = REFRESH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let goal = unique("fail");
+        let id = create_record(&goal, "test-model");
+        let mut hub = hub_holding(vec![subagent_row(&id, &goal, "pending")]);
+
+        mark_failed(&id, "child timed out");
+        assert!(hub.refresh_subagent_rows(), "a failure must move the row");
+        let RowKind::Subagent { status, .. } = &hub.rows[0].kind else {
+            panic!("expected a subagent row");
+        };
+        assert_eq!(*status, "failed");
+    }
+
+    /// The narrow half, and the half that makes the feature safe: nothing
+    /// except the changed subagent row may move. A DB session row must come
+    /// back byte-identical, or the refresh would reorder the operator's list
+    /// under their cursor.
+    #[test]
+    fn a_refresh_leaves_ordinary_session_rows_and_the_selection_untouched() {
+        let _guard = REFRESH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let goal = unique("narrow");
+        let id = create_record(&goal, "test-model");
+        let mut hub = hub_holding(vec![
+            row("s-db-1", Some("a real session"), Some("premiere")),
+            subagent_row(&id, &goal, "pending"),
+            row("s-db-2", Some("another session"), None),
+        ]);
+        // Put the cursor on the LAST row and record the whole view.
+        hub.selected = 2;
+        let before_ids: Vec<String> = hub.visible_rows().iter().map(|r| r.id.clone()).collect();
+        let before_session = fingerprint(&hub.rows[0]);
+
+        mark_completed(&id, "done");
+        assert!(hub.refresh_subagent_rows());
+
+        let after_ids: Vec<String> = hub.visible_rows().iter().map(|r| r.id.clone()).collect();
+        assert_eq!(before_ids, after_ids, "row order must not change");
+        assert_eq!(
+            fingerprint(&hub.rows[0]),
+            before_session,
+            "an ordinary DB row must be untouched by a subagent refresh"
+        );
+        assert_eq!(hub.selected, 2, "the selection must not move");
+        // And the subagent row is the only one that changed.
+        let RowKind::Subagent { status, .. } = &hub.rows[1].kind else {
+            panic!("expected the subagent row at index 1");
+        };
+        assert_eq!(*status, "completed");
+    }
+
+    /// A row the registry does not mention is left exactly as it is. This is
+    /// what keeps a stale-but-unrelated row from being blanked by a registry
+    /// that has since pruned it past the retention window.
+    #[test]
+    fn a_row_the_registry_does_not_mention_is_left_alone() {
+        let _guard = REFRESH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut hub = hub_holding(vec![subagent_row(
+            "dlg-not-in-registry",
+            "old job",
+            "pending",
+        )]);
+        let before = fingerprint(&hub.rows[0]);
+
+        assert!(
+            !hub.refresh_subagent_rows(),
+            "an unknown row is not a change; claiming one forces a needless repaint"
+        );
+        assert_eq!(
+            fingerprint(&hub.rows[0]),
+            before,
+            "the unknown row must be untouched"
+        );
+    }
+
+    /// A settled hub costs one lock read and reports no change, so the frame
+    /// loop can skip work. Without this, every frame while the hub is open
+    /// would rewrite rows and burn repaints for nothing.
+    #[test]
+    fn an_already_current_row_reports_no_change() {
+        let _guard = REFRESH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let goal = unique("settled");
+        let id = create_record(&goal, "test-model");
+        let mut hub = hub_holding(vec![subagent_row(&id, &goal, "pending")]);
+
+        assert!(
+            !hub.refresh_subagent_rows(),
+            "a pending row matching a pending record is already current"
+        );
+        mark_completed(&id, "done");
+        assert!(
+            hub.refresh_subagent_rows(),
+            "the transition must be seen the first time"
+        );
+        assert!(
+            !hub.refresh_subagent_rows(),
+            "the SECOND refresh must report no change — the row already says it"
+        );
+    }
+
+    /// The registry's own retention cap prunes terminal records. A row that
+    /// survives in the hub for a pruned delegation must still render (a
+    /// missing row is a UI crash in the caller's `unwrap`).
+    #[test]
+    fn pruning_a_record_does_not_remove_the_hub_row() {
+        let _guard = REFRESH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let goal = unique("pruned");
+        let id = create_record(&goal, "test-model");
+        let mut hub = hub_holding(vec![subagent_row(&id, &goal, "pending")]);
+        mark_completed(&id, "done");
+        assert!(hub.refresh_subagent_rows());
+        // The row must remain addressable and render the settled state.
+        let live: Vec<String> = list_records()
+            .iter()
+            .map(|r| r.delegation_id.clone())
+            .collect();
+        assert!(
+            !hub.rows.is_empty(),
+            "a refresh must never delete a row the operator is looking at \
+             (registry holds {} records)",
+            live.len()
+        );
+    }
+}

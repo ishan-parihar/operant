@@ -307,6 +307,7 @@ impl App {
             pending_rewind_preview: false,
             last_esc_at: None,
             last_left_tap_at: None,
+            subagent_refresh_at: None,
             pending_rewind_confirm: None,
             double_escape_action: "rewind".to_string(),
             overlay_alt_active: false,
