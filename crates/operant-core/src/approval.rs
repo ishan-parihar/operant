@@ -652,9 +652,10 @@ pub fn check_tool_approval(
     // policy with three layers, not a fourth policy.
     //
     // Defense in depth, NOT a sandbox: it reads command text. See
-    // `crate::blast_radius` for what it does not model, and
-    // `operant_runtime`'s landlock/bubblewrap/firejail/docker backends for
-    // real isolation.
+    // `crate::blast_radius` for what it does not model. An earlier version of
+    // this comment pointed at a deleted crate's sandbox backends for real
+    // isolation — that crate is gone and no such backend exists, so this text
+    // gate plus the approval gate is the whole enforcement story here.
     if matches!(existing, ApprovalVerdict::Allowed) && approval_mode != ApprovalMode::Off {
         let justification = justification_from_args(args);
         let home = std::env::var("HOME").ok();

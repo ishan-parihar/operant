@@ -22,8 +22,13 @@
 //! an interpreter (`sh -c`, `python -c`), a variable expanded at runtime, a
 //! binary whose behavior is not in `VerbKind`. It raises the cost of a
 //! careless `rm -rf /`; it does not make destructive commands impossible.
-//! Real isolation lives in `operant-runtime`'s sandbox backends (landlock,
-//! bubblewrap, firejail, docker, sandbox-exec — `SandboxBackend`).
+//! **There is no OS-level sandbox in operant, and there never was one here.**
+//! An earlier version of this comment named `operant-runtime`'s sandbox
+//! backends as real isolation. That crate was deleted and no such backend
+//! exists anywhere in this workspace — `SandboxBackend` is not a type here.
+//! What protects a deployment is this text gate plus the approval gate plus
+//! the operator's own environment, not kernel-enforced isolation. Do not tell
+//! a reader otherwise.
 //!
 //! Enforcement is in [`crate::approval::check_tool_approval`], the same entry
 //! point every tool call already passes through, so this adds a layer to the
