@@ -36,6 +36,9 @@ fn seed_org(home: &std::path::Path, repo: &std::path::Path, workdir: &std::path:
              '[grading]\\nnovelty_min_verified = 0\\n[autonomy]\\nverify_sample_rate = 0\\n')\n\
          k = Kernel(home)\n\
          k.org.create_dept('eng', 'Engineering', 'Build and fix things')\n\
+         k.org.hire(name='events-fixture', title='Event taker', dept='eng',\n\
+                    job_description='Takes the events this fixture fires', driver='generic-shell',\n\
+                    reason='the staffing gate needs a body to claim a fast lane', slot='maker')\n\
          a = k.add_routine('Watch for redpills', 'Summarise each one', dept='eng',\n\
                            event='event:redpill', lane='fast', why='each needs judgement',\n\
                            workdir=sys.argv[2])\n\
