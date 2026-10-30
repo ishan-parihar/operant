@@ -657,3 +657,95 @@ fn the_right_pane_names_an_empty_list_rather_than_painting_nothing() {
         "an empty list must be named on BOTH panes: {rows:?}"
     );
 }
+
+// ---- (2026-10-30) the subagent badge renders exactly once ----
+
+/// Render the hub and return the buffer rows, one `String` per screen line.
+///
+/// The list and preview panes are side by side, so one screen line holds both:
+/// whole-line matching cannot tell "the list badged the row" from "the preview
+/// badged it too". The hub splits 40/60, and the list pane's own border closes
+/// at column 47 for a 120-wide frame — measured from the drawn buffer, not
+/// assumed. `LIST_PANE_END` is that boundary.
+const FRAME_WIDTH: u16 = 120;
+const LIST_PANE_END: usize = 47;
+
+fn hub_rows(rows: Vec<SessionEntryV2>) -> (Vec<String>, Vec<String>) {
+    use crate::tui::debug::debug_hub::buffer_rows;
+    use crate::tui::render::FrameCtx;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+    let mut hub = SessionHubState::new();
+    hub.visible = true;
+    hub.loading = false;
+    hub.replace_rows(rows);
+    let mut terminal = Terminal::new(TestBackend::new(FRAME_WIDTH, 40)).unwrap();
+    let mut ctx = FrameCtx {
+        size: ratatui::layout::Rect::new(0, 0, FRAME_WIDTH, 40),
+        preview_max_scroll: None,
+        stop: false,
+    };
+    terminal
+        .draw(|f| {
+            super::render::render_session_hub(f, &hub, f.area(), &mut ctx);
+        })
+        .unwrap();
+    buffer_rows(terminal.backend().buffer())
+        .into_iter()
+        .map(|line| {
+            let list = line.chars().take(LIST_PANE_END).collect::<String>();
+            let preview = line.chars().skip(LIST_PANE_END).collect::<String>();
+            (list, preview)
+        })
+        .unzip()
+}
+
+/// The defect: `row_title` already prefixes a subagent row with "🤖 ", and a
+/// second badge span was added in the list renderer, so the row drew
+/// "⚡ 🤖 🤖 <goal>" — two badges and a stutter between them, proven on the
+/// drawn buffer rather than inferred from the source. MUTATION-PROVEN: putting
+/// the second span back turns this red with `left: 2, right: 1` and the drawn
+/// row quoted in the failure.
+#[test]
+fn a_subagent_row_draws_exactly_one_badge() {
+    let (list, _preview) = hub_rows(vec![subagent_row("dlg-9", "audit the tests", "pending")]);
+    let badge_rows: Vec<&String> = list.iter().filter(|r| r.contains('🤖')).collect();
+    assert_eq!(
+        badge_rows.len(),
+        1,
+        "the subagent row must appear in exactly one list row: {list:?}"
+    );
+    let badges = badge_rows[0].matches('🤖').count();
+    assert_eq!(
+        badges, 1,
+        "the subagent badge must be drawn ONCE in the list — a second span \
+         produced \"🤖 🤖\" on the screen: {badge_rows:?}"
+    );
+}
+
+/// The other half of the contract: the badge is the subagent row's, so an
+/// ordinary session row must not grow one, and the branch prefix is not the
+/// same thing as the badge.
+#[test]
+fn an_ordinary_session_row_draws_no_badge() {
+    let (list, _preview) = hub_rows(vec![
+        row("sess-a", Some("alpha"), None),
+        subagent_row("dlg-9", "audit the tests", "pending"),
+    ]);
+    let alpha = list
+        .iter()
+        .find(|r| r.contains("alpha"))
+        .unwrap_or_else(|| panic!("the session row must render: {list:?}"));
+    assert!(
+        !alpha.contains('🤖'),
+        "an ordinary session must not carry the subagent badge: {alpha:?}"
+    );
+    let sub = list
+        .iter()
+        .find(|r| r.contains("audit the tests"))
+        .unwrap_or_else(|| panic!("the subagent row must render: {list:?}"));
+    assert!(
+        sub.contains('🤖'),
+        "a subagent row must still carry its badge: {sub:?}"
+    );
+}

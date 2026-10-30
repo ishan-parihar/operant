@@ -2586,7 +2586,7 @@ fn draw_inner(frame: &mut Frame, app: &dyn TuiState) {
     // OnboardingWelcomeKind/LoginImport* type stratum (tui_state.rs).
     // Operant's onboarding is its own connect-dialog flow.
 
-    let show_animation = idle_animation_active(app);
+    let show_animation = should_reserve_idle_animation(app);
     let animation_height: u16 = idle_animation_reserved_height(show_animation, input_height);
     let notification_height =
         input_ui::notification_height(app, chat_area.width).min(chat_area.height.saturating_sub(4));
@@ -3147,6 +3147,16 @@ fn has_started_conversation(state: &dyn TuiState) -> bool {
         .any(|m| matches!(m.role.as_str(), "user" | "assistant" | "tool" | "reasoning"))
 }
 
+/// The vendored policy without the hub gate. Split out so the hub-supression
+/// test can compare "what the policy wants" against "what the gate says" and
+/// prove the suppression is exactly the hub's and nothing more.
+pub(crate) fn idle_animation_active_with_policy_pub(
+    state: &dyn TuiState,
+    policy: &crate::tui::operant_app::perf::TuiPerfPolicy,
+) -> bool {
+    idle_animation_active_with_policy(state, policy)
+}
+
 fn idle_animation_active_with_policy(
     state: &dyn TuiState,
     policy: &crate::tui::operant_app::perf::TuiPerfPolicy,
@@ -3180,4 +3190,19 @@ fn idle_animation_active_with_policy(
 pub(crate) fn idle_animation_active(state: &dyn TuiState) -> bool {
     let policy = crate::tui::operant_app::perf::tui_policy();
     idle_animation_active_with_policy(state, &policy)
+}
+
+/// Whether the decorative idle animation band should be reserved and painted
+/// on this frame.
+///
+/// [operant extension] One operant-specific gate layered on the vendored
+/// policy: the session hub suppresses it. The hub is a full-frame page the
+/// overlay ladder paints OVER the already-drawn chrome, so with the hub open
+/// the animation is (a) never visible and (b) costing a 14-row layout
+/// reservation and a full 3D sample per frame. Named rather than inlined at
+/// the `draw_inner` call so the suppression is assertable in a test — an
+/// inline `&& !app.session_hub_visible()` reads identically to a reviewer and
+/// passes identically when deleted.
+pub(crate) fn should_reserve_idle_animation(state: &dyn TuiState) -> bool {
+    idle_animation_active(state) && !state.session_hub_visible()
 }

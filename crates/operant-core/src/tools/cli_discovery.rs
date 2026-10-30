@@ -343,3 +343,54 @@ mod tests {
         assert_eq!(CliCategory::Productivity.to_string(), "Productivity");
     }
 }
+
+/// Runtime capability manager providing `<available_capabilities>` block
+/// for the frozen prefix. Mirrors `SkillManager` interface for the CLI
+/// capabilities surface — names + short descriptions parsed from the
+/// active `[[cli.tools]]` config at admission time. Frozen-prefix snapshot:
+/// never re-reads the config at call time; the listing is a stable byte
+/// sequence for prompt-cache hits.
+#[derive(Debug, Clone, Default)]
+pub struct CapabilityManager {
+    /// Entries from the active `[[cli.tools]]` config section, names
+    /// restricted to `[A-Za-z0-9_-]` with descriptions capped at 200 chars.
+    entries: Vec<(String, String)>,
+}
+
+impl CapabilityManager {
+    /// Build a `CapabilityManager` from the operator's configured
+    /// `[[cli.tools]]` entries, parsed from `--help` at admission time.
+    ///
+    /// Never delegates to the binary at call time — the listing is a
+    /// frozen-prefix snapshot.
+    pub fn new(entries: Vec<(String, String)>) -> Self {
+        Self { entries }
+    }
+
+    /// List all CLI capabilities as `(name, description)` pairs,
+    /// mirroring `skill_manager.list()` for `<available_capabilities>`
+    /// in the frozen prefix. Names are restricted to `[A-Za-z0-9_-]`
+    /// descriptions capped at 200 chars.
+    ///
+    /// Returns the entries from the active `[[cli.tools]]` config entries,
+    /// parsed from `--help` at admission time. Never delegates to the
+    /// binary at call time — the listing is a frozen-prefix snapshot.
+    pub fn list_cli_capabilities(&self) -> Vec<(String, String)> {
+        self.entries
+            .iter()
+            .map(|(name, description)| {
+                // Ensure name matches [A-Za-z0-9_-] — if it doesn't, sanitize it
+                let sanitized_name: String = name
+                    .chars()
+                    .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
+                    .collect();
+                let desc = if description.len() > 200 {
+                    format!("{}...", &description[..197])
+                } else {
+                    description.clone()
+                };
+                (sanitized_name, desc)
+            })
+            .collect()
+    }
+}

@@ -301,6 +301,23 @@ pub trait TuiState {
     fn current_session_id(&self) -> Option<String>;
     /// Session display name (memorable short name like "fox" or "oak")
     fn session_display_name(&self) -> Option<String>;
+    /// Whether the unified session hub is open (the full-frame session picker
+    /// that `/session`, `/resume` and the `←←` gesture route to).
+    ///
+    /// [operant extension] Default `false` so non-App implementors (test
+    /// doubles, headless shims) compile unchanged. `App` implements it as
+    /// `self.session_hub.visible`.
+    ///
+    /// Why the render layer needs this: `render_app` paints the chrome
+    /// (including the decorative idle animation band) and THEN the overlay
+    /// ladder paints the hub over the whole frame. The animation is therefore
+    /// never visible under the hub — it is wasted work on every frame the hub
+    /// is open, and the layout reserved 14 rows for it. Zeroing the animation
+    /// when the hub is visible is the fix; suppressing the draw calls inside
+    /// the animation module is not (the reservation happens in the layout).
+    fn session_hub_visible(&self) -> bool {
+        false
+    }
     /// Server display name (modifier like "running" or "blazing") - only set in remote mode
     fn server_display_name(&self) -> Option<String>;
     /// Server icon (e.g., "🔥", "🌫️") - only set in remote mode

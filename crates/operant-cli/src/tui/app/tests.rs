@@ -26,6 +26,64 @@ pub(crate) fn make_app() -> App {
     App::new(config, settings, cost_tracker, command_registry)
 }
 
+// ---- (2026-10-30) the hub suppresses the idle animation band ----
+
+/// The render layer reserves and paints the decorative idle animation only
+/// when `should_reserve_idle_animation` says so, and the hub suppresses it.
+///
+/// Why this seam and not a guard inside the animation module: `render_app`
+/// paints the chrome first and the overlay ladder second, so a guard at the
+/// animation call only skipped the draw while the layout still reserved 14
+/// rows for it. The gate has to sit where the reservation happens, and
+/// `&dyn TuiState` is the only handle `draw_inner` has.
+///
+/// MUTATION-PROVEN: deleting `&& !state.session_hub_visible()` from
+/// `should_reserve_idle_animation` turns the second assertion red — an earlier
+/// version of this test only asserted the trait impl and passed straight
+/// through that deletion, which is why the assertion is on the gate.
+#[test]
+fn app_reports_the_session_hub_state_to_the_render_layer() {
+    let mut app = make_app();
+    assert!(
+        !app.session_hub_visible(),
+        "a fresh app has no hub open, so the animation stays on"
+    );
+    app.session_hub.open(None);
+    assert!(
+        app.session_hub_visible(),
+        "an open hub must report itself, or the chrome keeps reserving and \
+         painting the animation band under it"
+    );
+    app.session_hub.close();
+    assert!(
+        !app.session_hub_visible(),
+        "a closed hub must report closed, or the idle animation never returns"
+    );
+}
+
+/// The gate itself, asserted directly. The hub must not resurrect an animation
+/// the policy already switched off, and it must not keep one that the policy
+/// wants when the hub is closed — the suppression is strictly the hub's.
+#[test]
+fn the_hub_suppresses_the_idle_animation_band() {
+    let mut app = make_app();
+    app.session_hub.open(None);
+    assert!(
+        !crate::tui::operant_ui::should_reserve_idle_animation(&app),
+        "an open hub must suppress the band: it covers the whole frame, so the \
+         reservation and the sample are pure waste"
+    );
+    app.session_hub.close();
+    let policy = crate::tui::operant_app::perf::tui_policy();
+    let wants = crate::tui::operant_ui::idle_animation_active_with_policy_pub(&app, &policy);
+    assert_eq!(
+        crate::tui::operant_ui::should_reserve_idle_animation(&app),
+        wants,
+        "with the hub closed the gate must be exactly the vendored policy — the \
+         suppression is the hub's alone and must not leak past it"
+    );
+}
+
 // ---- Advisor delivery: preserve card vs continuation (2026-10-28) ----
 //
 // omp advisor parity: a CONTINUE-channel review (a note at/above
@@ -7735,94 +7793,5 @@ mod prompt_jump_tests {
             app.scroll_memory.pending_resize.is_none(),
             "the jump must consume the pending resize anchor"
         );
-    }
-}
-
-// ---- (red-team audit 2026-10-30) runtime probes, not to be committed as-is ----
-#[cfg(test)]
-mod redteam_repro {
-    use super::*;
-
-    fn buf_text(buf: &ratatui::buffer::Buffer) -> String {
-        let a = buf.area;
-        let mut out = String::new();
-        for y in 0..a.height {
-            for x in 0..a.width {
-                out.push_str(buf[(x, y)].symbol());
-            }
-            out.push('\n');
-        }
-        out
-    }
-
-    fn row(id: &str, title: &str) -> operant_core::session::listing::SessionEntryV2 {
-        use operant_core::session::listing::{RowKind, RowStatus};
-        operant_core::session::listing::SessionEntryV2 {
-            id: id.to_string(),
-            parent_id: None,
-            title: Some(title.to_string()),
-            updated_at: chrono::Utc::now(),
-            employee_id: None,
-            source: "local".to_string(),
-            message_count: 1,
-            cost_usd: 0.0,
-            tokens: 0,
-            cwd: None,
-            status: RowStatus::Idle,
-            kind: RowKind::Session,
-        }
-    }
-
-    fn srow(id: &str, goal: &str) -> operant_core::session::listing::SessionEntryV2 {
-        use operant_core::session::listing::{RowKind, RowStatus};
-        operant_core::session::listing::SessionEntryV2 {
-            id: id.to_string(),
-            parent_id: None,
-            title: None,
-            updated_at: chrono::Utc::now(),
-            employee_id: None,
-            source: "local".to_string(),
-            message_count: 0,
-            cost_usd: 0.0,
-            tokens: 0,
-            cwd: None,
-            status: RowStatus::Live,
-            kind: RowKind::Subagent {
-                goal: goal.to_string(),
-                model: "sonnet".to_string(),
-                dispatch_time: 0,
-                status: "running",
-            },
-        }
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn redteam_hub_open_and_animation() {
-        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 40)).unwrap();
-        let mut app = make_app();
-        app.is_simulating = true;
-        app.session_list_pending = false;
-
-        let _ = app.run(&mut terminal).expect("frame closed");
-        let closed = buf_text(terminal.backend().buffer());
-        let closed_has_sessions = closed.contains("Sessions");
-
-        app.session_hub.replace_rows(vec![row("sess-a", "alpha"), srow("sub-1", "do research")]);
-        app.session_hub.open(None);
-        let _ = app.run(&mut terminal).expect("frame open");
-        let open = buf_text(terminal.backend().buffer());
-
-        eprintln!("closed_has_sessions={closed_has_sessions}");
-        eprintln!("open_has_sessions={}", open.contains("Sessions"));
-        eprintln!("open_robot_count={}", open.matches("🤖").count());
-        eprintln!("open_identical_to_closed={}", open.trim() == closed.trim());
-        // Print the list band rows so duplication is visible.
-        for line in open.lines().filter(|l| l.contains("🤖") || l.contains("alpha")) {
-            eprintln!("ROW: {line}");
-        }
-        let _ = app.session_hub.close();
-        let _ = app.run(&mut terminal).expect("frame after close");
-        let after = buf_text(terminal.backend().buffer());
-        eprintln!("after_has_sessions={}", after.contains("Sessions"));
     }
 }

@@ -242,6 +242,12 @@ pub(crate) fn idle_animation_reserved_height(show_animation: bool, input_height:
 }
 
 pub(super) fn draw_idle_animation(frame: &mut Frame, app: &dyn TuiState, area: Rect) {
+    // No session-hub guard here. The layout already zeroes `animation_height`
+    // while the hub is open (draw_inner gates on `app.session_hub_visible()`),
+    // so this is only reached when the band is genuinely reserved for the
+    // animation. A guard at the call was tried and removed: it suppressed the
+    // draw while the layout still reserved 14 rows for it, so it fixed neither
+    // the wasted work nor the frame the operator saw.
     // Remember the animated rows so the run loop can repaint only them between
     // full frames. Sizes the animation rejects are recorded as "no animation".
     record_idle_animation_area((area.width >= 4 && area.height >= 2).then_some(area));
@@ -630,5 +636,23 @@ mod tests {
     #[test]
     fn signal_fits_small_viewports_without_touching_border() {
         assert_idle_sampler_stays_off_border_on_small_viewports("signal", sample_signal);
+    }
+
+    /// The layout gate: the reserved band is `show_animation ? height : 0`, so
+    /// the ONE condition that matters for the hub is that `show_animation` is
+    /// false while it is open. Pin both directions — the hub must zero it, and
+    /// a closed hub must not (the animation is the idle screen's whole point).
+    #[test]
+    fn a_closed_session_hub_leaves_the_animation_band_reserved() {
+        assert_eq!(
+            idle_animation_reserved_height(true, 1),
+            14,
+            "the band is reserved when the animation is otherwise active"
+        );
+        assert_eq!(
+            idle_animation_reserved_height(false, 1),
+            0,
+            "no band when the animation is off — this is the shape the hub must produce"
+        );
     }
 }

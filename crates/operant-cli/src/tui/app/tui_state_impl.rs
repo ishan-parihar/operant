@@ -553,6 +553,15 @@ impl TuiState for App {
         self.session_title.clone()
     }
 
+    fn session_hub_visible(&self) -> bool {
+        // The one field the render layer needs from the hub, so the chrome can
+        // stop reserving and painting the idle animation band while the hub
+        // covers the whole frame. See the trait doc for why suppressing the
+        // animation draw calls alone is not enough (the layout reservation is
+        // the bigger half).
+        self.session_hub.visible
+    }
+
     fn server_display_name(&self) -> Option<String> {
         // No remote mode, so no server name. See `is_remote_mode`.
         None

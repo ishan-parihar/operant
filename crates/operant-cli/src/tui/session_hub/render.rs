@@ -231,13 +231,6 @@ fn render_list(frame: &mut Frame, state: &SessionHubState, area: ratatui::layout
             .enumerate()
             .map(|(i, row)| {
                 let selected = i == state.selected;
-                let title_style = if selected {
-                    Style::default()
-                        .fg(theme_colors::accent())
-                        .add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default().fg(theme_colors::text())
-                };
                 let mut spans = vec![Span::styled(
                     format!(" {} ", status_glyph(row.status)),
                     Style::default().fg(if matches!(row.status, RowStatus::Live) {
@@ -246,6 +239,23 @@ fn render_list(frame: &mut Frame, state: &SessionHubState, area: ratatui::layout
                         theme_colors::muted()
                     }),
                 )];
+                // (2026-10-30) Subagent rows already carry their badge in
+                // `row_title` ("🤖 <goal>", the branch prefix is "↳ " there
+                // for the same reason). A second badge span here rendered
+                // "⚡ 🤖 🤖 do research" — proven on the drawn buffer, not
+                // inferred from the source. What the row was actually missing
+                // is COLOR, so give the title the accent color a subagent row
+                // never had and leave the single glyph where it belongs.
+                let subagent_row = matches!(row.kind, RowKind::Subagent { .. });
+                let title_style = match (selected, subagent_row) {
+                    (true, _) => Style::default()
+                        .fg(theme_colors::accent())
+                        .add_modifier(Modifier::BOLD),
+                    (false, true) => Style::default()
+                        .fg(theme_colors::accent())
+                        .add_modifier(Modifier::BOLD),
+                    (false, false) => Style::default().fg(theme_colors::text()),
+                };
                 spans.extend(highlight_spans(
                     &row_title(row),
                     &tokens,
