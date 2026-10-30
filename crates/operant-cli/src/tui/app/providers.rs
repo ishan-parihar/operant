@@ -135,12 +135,36 @@ impl App {
             e.is_current = e.name == current;
         }
 
+        // (plan 2026-10-30) One row per ASSIGNED model slot, pinned to the
+        // TOP, so the operator sees the role vocabulary before the endpoint's
+        // catalogue. These carry the slot's name as the row label and the
+        // slot's own model as the detail, and they resolve through the SAME
+        // `model_roles` seam the gateway's `/model` uses — so `/model smol`
+        // in a channel and Enter on this row mean one thing.
+        //
+        // An unassigned slot is NOT listed: an empty row invites a press
+        // that either fails or silently no-ops, which is the phantom surface
+        // `config.rs::unused_setting_warnings` exists to prevent.
+        let current = self.config.agent.model.clone();
+        for row in self.slot_role_rows() {
+            entries.insert(0, row);
+        }
+        // Flag the conversation row AFTER the prepend, so the live model is
+        // highlighted wherever it landed.
+        for e in &mut entries {
+            e.is_current = e.name == current;
+        }
+
         let (tx, rx) = tokio::sync::mpsc::channel(1);
+        // (plan 2026-10-30) the fetch is in flight: tell the renderer to say
+        // "listing models…" instead of presenting the one configured row as
+        // the whole catalogue.
+        let fetching = tokio::runtime::Handle::try_current().is_ok();
         self.model_fetch_rx = Some(rx);
         self.model_picker_fetch_pending = false;
         // Headless callers (tests, non-runtime contexts) have no reactor —
         // the configured rows are already in place, so skip the fetch.
-        if tokio::runtime::Handle::try_current().is_ok() {
+        if fetching {
             let rows_for_spawn = entries.clone();
             tokio::spawn(async move {
                 let fetched = fetch_endpoint_models(&base_url, api_key.as_deref())
@@ -166,6 +190,7 @@ impl App {
             selected,
             column: 0,
             filter: String::new(),
+            loading: fetching,
             preview: false,
         });
     }
@@ -458,6 +483,159 @@ impl App {
     }
 }
 
+/// (plan 2026-10-30) One inline picker row per ASSIGNED model slot.
+///
+/// The row's LABEL is the slot's name (`default`, `smol`, `slow`, …) and its
+/// detail is the model that slot currently holds, so the operator reads the
+/// role vocabulary and its assignments in one list. Enter routes through
+/// [`PickerAction::ModelSlot`], which sets that slot — the same
+/// `operant_core::model_roles` seam the gateway's `/model` resolves.
+///
+/// A slot with no assignment is omitted, and so is `Conversation`: it is
+/// already the endpoint rows the caller merges, and a duplicate row for the
+/// live model would make the picker claim two things about one selection.
+pub(super) fn slot_role_rows(
+    cfg: &operant_core::config::AppConfig,
+) -> Vec<crate::tui::operant_app::tui_fns::PickerEntry> {
+    use crate::tui::operant_app::tui_fns::{PickerAction, PickerEntry, PickerOption};
+    operant_core::model_roles::slot_summaries(cfg)
+        .into_iter()
+        .filter(|summary| summary.slot != operant_core::model_roles::ModelSlot::Conversation)
+        .map(|summary| PickerEntry {
+            name: summary.slot.name().to_string(),
+            options: vec![PickerOption {
+                provider: summary.models.join(", "),
+                api_method: if summary.switches_conversation {
+                    "switches conversation"
+                } else {
+                    "assignment only"
+                }
+                .to_string(),
+                available: true,
+                // The detail names the CONSUMER, so a role a config sets but
+                // nothing routes to is visible as such.
+                detail: summary.slot.description().to_string(),
+                estimated_reference_cost_micros: None,
+            }],
+            action: PickerAction::ModelSlot(summary.slot),
+            selected_option: 0,
+            is_current: false,
+            is_default: false,
+            is_favorite: false,
+            recommended: false,
+            recommendation_rank: 0,
+            usage_score: 0,
+            old: false,
+            created_date: None,
+            // The role row has no effort of its own; the level stays on the
+            // /effort picker rather than being smuggled through a slot row.
+            effort: None,
+        })
+        .collect()
+}
+
+impl super::App {
+    /// (plan 2026-10-30) The picker's role rows for THIS app's config.
+    pub(super) fn slot_role_rows(&self) -> Vec<crate::tui::operant_app::tui_fns::PickerEntry> {
+        slot_role_rows(&self.config)
+    }
+
+    /// (plan 2026-10-30) The model id on the highlighted picker row, if the
+    /// picker is open and a row is highlighted. Both the favourite toggle and
+    /// the default setter need exactly this, and getting it right twice is how
+    /// the two drift apart.
+    fn highlighted_model(&self) -> Option<String> {
+        self.inline_interactive
+            .as_ref()
+            .and_then(|picker| picker.filtered.get(picker.selected).copied())
+            .and_then(|idx| {
+                self.inline_interactive
+                    .as_ref()
+                    .map(|p| p.entries[idx].name.clone())
+            })
+    }
+
+    /// (plan 2026-10-30) `Ctrl+N` in the picker: star/unstar the highlighted
+    /// row's model. Persisted so a favourite a restart forgot is not a lie
+    /// the picker keeps rendering.
+    pub(super) fn toggle_favorite_model(&mut self) {
+        let Some(model) = self.highlighted_model() else {
+            return;
+        };
+        if let Some(pos) = self.model_favorites.iter().position(|m| m == &model) {
+            self.model_favorites.remove(pos);
+            self.set_status_notice(format!("Removed favourite: {model}"));
+        } else {
+            self.model_favorites.push(model.clone());
+            self.set_status_notice(format!("Added favourite: {model}"));
+        }
+        self.persist_model_prefs();
+        self.refresh_favorite_marks();
+    }
+
+    /// (plan 2026-10-30) `Ctrl+O` in the picker: make the highlighted row's
+    /// model the one `/model` opens on next time.
+    pub(super) fn set_default_model(&mut self) {
+        let Some(model) = self.highlighted_model() else {
+            return;
+        };
+        self.model_default = Some(model.clone());
+        self.persist_model_prefs();
+        self.set_status_notice(format!("Default model: {model}"));
+    }
+
+    /// (plan 2026-10-30) `Shift+Tab` in the picker: switch to the next
+    /// favourite without leaving the picker, so the operator can compare two
+    /// starred models without a modal per switch.
+    pub(super) fn cycle_favorite_model(&mut self) {
+        if self.model_favorites.is_empty() {
+            self.set_status_notice("No favourites yet — Ctrl+N on a row to add one.".to_string());
+            return;
+        }
+        let current = self.model_name.clone();
+        let next = match self.model_favorites.iter().position(|m| *m == current) {
+            Some(pos) => self.model_favorites[(pos + 1) % self.model_favorites.len()].clone(),
+            None => self.model_favorites[0].clone(),
+        };
+        self.pending_model = Some(next.clone());
+        self.set_status_notice(format!("Model: {next} (applying…)"));
+    }
+
+    /// Re-mark the open picker's rows against the current favourite set, so
+    /// `Ctrl+N` shows its effect on the very next frame.
+    fn refresh_favorite_marks(&mut self) {
+        let favorites = self.model_favorites.clone();
+        if let Some(picker) = self.inline_interactive.as_mut() {
+            for entry in &mut picker.entries {
+                entry.is_favorite = favorites.iter().any(|f| f == &entry.name);
+            }
+        }
+    }
+
+    /// Write the two preferences through the same surgical writer every other
+    /// config edit uses, so a comment-filled user file keeps its shape.
+    fn persist_model_prefs(&mut self) {
+        let favorites = tomlish_array(&self.model_favorites);
+        if let Err(e) = operant_core::config::persist_config_key("tui.model_favorites", &favorites)
+        {
+            tracing::warn!(error = %e, "model favourites not persisted");
+            self.set_status_notice(format!("Favourites not saved: {e}"));
+        }
+        // `None` clears the key rather than leaving a stale value behind, so
+        // "no default" is a real state the reload can see.
+        let default = self.model_default.clone().unwrap_or_default();
+        if let Err(e) = operant_core::config::persist_config_key("tui.model_default", &default) {
+            tracing::warn!(error = %e, "default model not persisted");
+        }
+    }
+}
+
+/// Render `models` as the TOML array literal `persist_config_key` accepts.
+fn tomlish_array(models: &[String]) -> String {
+    let quoted: Vec<String> = models.iter().map(|m| format!("{m:?}")).collect();
+    format!("[{}]", quoted.join(", "))
+}
+
 /// (plan 05B) One inline picker row for a model id.
 pub(super) fn inline_model_row(
     id: &str,
@@ -541,6 +719,8 @@ impl super::App {
             selected,
             column: 0,
             filter: String::new(),
+            // Effort levels are a fixed local list: nothing is loading.
+            loading: false,
             preview: false,
         });
     }

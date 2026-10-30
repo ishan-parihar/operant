@@ -1065,6 +1065,18 @@ pub struct TuiSettings {
     /// (default 0.15). Lower shows more ghosts, higher fewer.
     #[serde(default)]
     pub word_completion_threshold: Option<f64>,
+    /// (plan 2026-10-30) The picker's starred models (`Ctrl+N` toggles a
+    /// row). Empty by default. Persisted here rather than in settings.json
+    /// because every other operator-visible model choice already lives in
+    /// the config the `operant config` surface reads.
+    #[serde(default)]
+    pub model_favorites: Vec<String>,
+    /// (plan 2026-10-30) The model `/model` opens on (`Ctrl+O` sets it from
+    /// the highlighted row). Distinct from `[agent] model`, which is the live
+    /// session's model and changes on every switch — this is where a FRESH
+    /// session should land. Unset means "follow `[agent] model`".
+    #[serde(default)]
+    pub model_default: Option<String>,
 }
 
 fn default_word_completion() -> String {
@@ -1096,6 +1108,8 @@ impl Default for TuiSettings {
             double_escape_action: default_double_escape_action(),
             word_completion: default_word_completion(),
             word_completion_threshold: None,
+            model_favorites: Vec::new(),
+            model_default: None,
         }
     }
 }

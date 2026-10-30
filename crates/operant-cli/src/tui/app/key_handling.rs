@@ -2753,6 +2753,25 @@ impl App {
                 self.apply_inline_picker_entry(&entry);
                 true
             }
+            // (plan 2026-10-30) The three chords the picker's footer has
+            // always ADVERTISED and never wired. `Ctrl+O` must sit ABOVE the
+            // global tool-expansion arm that owns plain Ctrl+O, and both must
+            // sit above the plain-char branch, which would otherwise treat
+            // the letter as filter text.
+            KeyCode::Char('o') if modifiers.contains(KeyModifiers::CONTROL) => {
+                self.set_default_model();
+                true
+            }
+            KeyCode::Char('n') if modifiers.contains(KeyModifiers::CONTROL) => {
+                self.toggle_favorite_model();
+                true
+            }
+            // Shift+Tab arrives as BackTab — crossterm folds the shift in, so
+            // there is no separate Char arm to write.
+            KeyCode::BackTab => {
+                self.cycle_favorite_model();
+                true
+            }
             KeyCode::Char(c) if !modifiers.contains(KeyModifiers::CONTROL) => {
                 picker.filter.push(c);
                 Self::apply_inline_interactive_filter(picker);
@@ -2789,9 +2808,11 @@ impl App {
         }
     }
 
-    /// The apply step for the ONE action the picker carries today: a Model
-    /// row routes through plan 05A's `pending_model`/`pending_effort`
-    /// drain — the agent switches and the config persists from there.
+    /// The apply step. A `Model` row switches the conversation through
+    /// plan 05A's `pending_model`/`pending_effort` drain — the agent applies
+    /// it and the config persists from there. A `ModelSlot` row ASSIGNS that
+    /// slot's model (a role row never moves the conversation): it persists the
+    /// slot's config key and reports, exactly the oh-my-pi rule.
     fn apply_inline_picker_entry(&mut self, entry: &crate::tui::operant_app::tui_fns::PickerEntry) {
         use crate::tui::operant_app::tui_fns::PickerAction;
         match entry.action {
@@ -2802,8 +2823,92 @@ impl App {
                 }
                 self.set_status_notice(format!("Model: {} (applying…)", entry.name));
             }
+            PickerAction::ModelSlot(slot) => {
+                // Two list-shaped slots cannot be represented by one
+                // persisted scalar. `MoaReference` appends, and `Fallback`
+                // replaces its single entry — both handled below, and neither
+                // is silently written as a broken key.
+                let model = self
+                    .slot_role_rows()
+                    .into_iter()
+                    .find(|row| matches!(row.action, PickerAction::ModelSlot(s) if s == slot))
+                    .and_then(|row| row.options.into_iter().next())
+                    .map(|option| option.provider)
+                    .unwrap_or_default();
+                if model.is_empty() {
+                    self.set_status_notice(format!(
+                        "{} slot has no model assigned — set it in operant.toml.",
+                        slot.name()
+                    ));
+                    return;
+                }
+                // The first entry is the assignment the slot will use; the
+                // picker assigns the FIRST model of a list-shaped slot, which
+                // is exactly what its own consumer reads.
+                let head = model.split(',').next().unwrap_or("").trim().to_string();
+                let outcome =
+                    match operant_core::config::persist_config_key(slot.persist_key(), &head) {
+                        Ok(path) => {
+                            self.apply_slot_to_config(slot, &head);
+                            format!("model: {head} (persisted to {})", path.display())
+                        }
+                        Err(e) => format!("model: {head} (persist failed: {e})"),
+                    };
+                self.set_status_notice(format!("{} slot → {}", slot.name(), outcome));
+            }
             _ => {
                 self.set_status_notice(format!("{} — no action in this picker", entry.name));
+            }
+        }
+    }
+
+    /// Write a slot's newly assigned model into this process's `AppConfig`, so
+    /// the picker's own re-open and every reader see it without a restart.
+    /// The config file is the durable copy; this is the live one.
+    fn apply_slot_to_config(&mut self, slot: operant_core::model_roles::ModelSlot, model: &str) {
+        use operant_core::config::AuxiliaryModelConfig;
+        match slot {
+            operant_core::model_roles::ModelSlot::Conversation => {
+                self.pending_model = Some(model.to_string());
+            }
+            operant_core::model_roles::ModelSlot::Fallback => {
+                self.config.agent.fallback_models = vec![model.to_string()];
+            }
+            operant_core::model_roles::ModelSlot::Recap => {
+                self.config.recap.model = AuxiliaryModelConfig {
+                    model: Some(model.to_string()),
+                    ..Default::default()
+                };
+            }
+            operant_core::model_roles::ModelSlot::Vision => {
+                self.config.auxiliary_models.vision = Some(AuxiliaryModelConfig {
+                    model: Some(model.to_string()),
+                    ..Default::default()
+                });
+            }
+            operant_core::model_roles::ModelSlot::Compression => {
+                self.config.auxiliary_models.compression = Some(AuxiliaryModelConfig {
+                    model: Some(model.to_string()),
+                    ..Default::default()
+                });
+            }
+            operant_core::model_roles::ModelSlot::Memory => {
+                self.config.auxiliary_models.memory = Some(AuxiliaryModelConfig {
+                    model: Some(model.to_string()),
+                    ..Default::default()
+                });
+            }
+            operant_core::model_roles::ModelSlot::MoaAggregator => {
+                self.config.moa.aggregator = Some(AuxiliaryModelConfig {
+                    model: Some(model.to_string()),
+                    ..Default::default()
+                });
+            }
+            operant_core::model_roles::ModelSlot::MoaReference => {
+                self.config.moa.references.push(AuxiliaryModelConfig {
+                    model: Some(model.to_string()),
+                    ..Default::default()
+                });
             }
         }
     }

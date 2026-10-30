@@ -278,8 +278,19 @@ impl App {
                     for e in &mut picker.entries {
                         e.is_current = e.name == current;
                     }
-                    picker.filter.clear();
+                    // The operator's filter SURVIVES the fetch. This used to
+                    // `filter.clear()` — which means typing `glm` during the
+                    // 1-2 second endpoint fetch silently discarded the
+                    // filter the moment the rows landed, leaving the
+                    // operator looking at an unfiltered list they believe is
+                    // filtered. Re-applying instead keeps the text AND the
+                    // narrowed rows, so the picker ends in the state the
+                    // operator asked for.
                     crate::tui::app::App::apply_inline_interactive_filter(picker);
+                }
+                // The rows landed: the loading indicator is stale.
+                if let Some(picker) = self.inline_interactive.as_mut() {
+                    picker.loading = false;
                 }
                 self.model_fetch_rx = None;
                 self.model_picker_fetch_pending = false;
@@ -288,6 +299,9 @@ impl App {
             Ok(Err(reason)) => {
                 self.model_fetch_rx = None;
                 self.model_picker_fetch_pending = false;
+                if let Some(picker) = self.inline_interactive.as_mut() {
+                    picker.loading = false;
+                }
                 self.set_status_notice(format!(
                     "Could not list models ({reason}). Showing configured models only."
                 ));
@@ -296,6 +310,9 @@ impl App {
             Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
                 self.model_fetch_rx = None;
                 self.model_picker_fetch_pending = false;
+                if let Some(picker) = self.inline_interactive.as_mut() {
+                    picker.loading = false;
+                }
                 self.status_message =
                     Some("Model fetch task disconnected unexpectedly.".to_string());
                 true

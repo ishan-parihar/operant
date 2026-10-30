@@ -614,6 +614,17 @@ pub struct App {
     /// When `true`, the main event loop should spawn an async task to fetch
     /// the model list from the current provider's `list_models()` API.
     pub model_picker_fetch_pending: bool,
+    /// (plan 2026-10-30) The picker's starred models (`Ctrl+N` toggles).
+    /// Persisted under `[tui] model_favorites` so a favourite survives a
+    /// restart, because a star the operator set and the app forgot is worse
+    /// than no star at all.
+    pub model_favorites: Vec<String>,
+    /// (plan 2026-10-30) The model `/model` opens on (`Ctrl+O` sets it).
+    /// Distinct from `config.agent.model`: the default is the operator's
+    /// CHOICE of where a fresh session starts, while `agent.model` is the
+    /// live session's model and changes on every switch. Persisted under
+    /// `[tui] model_default`.
+    pub model_default: Option<String>,
     /// The provider ID that the model picker was opened for (used when the
     /// fetch is triggered from /connect before the provider is activated).
     /// When `true`, the main event loop should spawn an async task to load

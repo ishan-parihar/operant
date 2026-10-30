@@ -79,6 +79,10 @@ impl App {
         // P5-2: read before `config` moves into the struct literal.
         let terminal_scroll_mode = config.tui.terminal_scroll_mode;
         let show_tool_calls = config.tui.show_tool_calls;
+        // (plan 2026-10-30) same reason: the picker's favourites and default
+        // are config values the struct literal must not re-borrow.
+        let model_favorites = config.tui.model_favorites.clone();
+        let model_default = config.tui.model_default.clone();
         let app = Self {
             config,
             settings,
@@ -231,6 +235,8 @@ impl App {
             free_mode_dialog: crate::tui::free_mode_dialog::FreeModeDialogState::new(),
             default_model_rx: None,
             model_picker_fetch_pending: false,
+            model_favorites,
+            model_default,
             session_list_pending: false,
             rename_on_list_load: false,
             pending_title_save: None,

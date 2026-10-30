@@ -182,6 +182,7 @@ fn selected_route_notice_text(
 
 fn model_picker_top_hint(
     picker: &crate::tui::operant_app::tui_fns::InlineInteractiveState,
+    width: usize,
 ) -> Option<&'static str> {
     let is_swarm_agent_model_picker = picker.kind
         == crate::tui::operant_app::tui_fns::PickerKind::Model
@@ -213,9 +214,20 @@ fn model_picker_top_hint(
             )
         });
     if is_runtime_model_picker {
-        Some(
-            " keys: Ctrl+O set default · Ctrl+N favorite · Shift+Tab switch active model to next favorite",
-        )
+        // The chords are optional chrome. An 80-column terminal clipped the
+        // 95-character line mid-word ("Ctrl+N favorite · S"), which is
+        // worse than not advertising them — it looks like a broken binding.
+        // Below the full width the picker names only the primary chord; below
+        // that, nothing, and Enter/Esc stay legitimately discoverable.
+        if width >= 96 {
+            Some(
+                " keys: Ctrl+O set default · Ctrl+N favorite · Shift+Tab switch active model to next favorite",
+            )
+        } else if width >= 62 {
+            Some(" keys: Ctrl+O default · Ctrl+N favorite · Shift+Tab cycle")
+        } else {
+            None
+        }
     } else {
         None
     }
@@ -381,6 +393,7 @@ fn fuzzy_match_positions(pattern: &str, text: &str) -> Vec<usize> {
 pub(super) fn model_suggestion_lines(
     picker: &crate::tui::operant_app::tui_fns::InlineInteractiveState,
     available_rows: usize,
+    width: usize,
 ) -> Vec<Line<'static>> {
     if available_rows == 0 {
         return Vec::new();
@@ -397,7 +410,7 @@ pub(super) fn model_suggestion_lines(
     let selected = picker.selected.min(picker.filtered.len() - 1);
     let selected_entry = &picker.entries[picker.filtered[selected]];
     let notice = selected_route_notice_text(picker, selected_entry.active_option());
-    let hint = model_picker_top_hint(picker);
+    let hint = model_picker_top_hint(picker, width);
     let hint_rows = usize::from(available_rows > 1);
     let notice_rows = usize::from(notice.is_some() && available_rows > hint_rows + 1);
     let visible = crate::tui::operant_app::app::COMMAND_SUGGESTION_VISIBLE_LIMIT
@@ -500,6 +513,14 @@ pub(super) fn model_suggestion_lines(
         } else {
             String::new()
         };
+        // While the endpoint catalogue is still arriving, name it. A one-row
+        // list presented as the whole catalogue is a lie the operator acts on
+        // by picking the only row they can see.
+        let loading = if picker.loading {
+            "listing models… · "
+        } else {
+            ""
+        };
         let navigation = if !picker.preview && picker.column > 0 {
             "↑↓ route · ←→ column · Enter select · Esc cancel"
         } else {
@@ -509,7 +530,7 @@ pub(super) fn model_suggestion_lines(
             .map(|hint| format!(" ·{}", hint.trim_start_matches(" keys:")))
             .unwrap_or_default();
         lines.push(Line::from(Span::styled(
-            format!("{filter}{navigation}{shortcuts}"),
+            format!("{loading}{filter}{navigation}{shortcuts}"),
             dim,
         )));
     }
@@ -574,7 +595,7 @@ pub(super) fn draw_inline_interactive(frame: &mut Frame, app: &dyn TuiState, are
 
     // Hotkey hint sits ABOVE the picker box (outside its border) so the
     // shortcuts are always visible without competing with the column headers.
-    let keybind_hint = model_picker_top_hint(picker);
+    let keybind_hint = model_picker_top_hint(picker, width);
     let hint_rows: u16 = if keybind_hint.is_some() && area.height > 3 {
         1
     } else {
@@ -1059,6 +1080,7 @@ mod tests {
             selected: 0,
             column: 0,
             filter: String::new(),
+            loading: false,
             preview: false,
             entries: vec![crate::tui::operant_app::tui_fns::PickerEntry {
                 name: "gpt-5.4".to_string(),
@@ -1084,6 +1106,14 @@ mod tests {
         }
     }
 
+/// Flatten one rendered line's spans into the text a terminal would show.
+fn line_text(line: &ratatui::text::Line<'_>) -> String {
+    line.spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect()
+}
+
     #[test]
     fn model_suggestions_align_provider_and_method_columns() {
         let mut picker = sample_picker();
@@ -1100,7 +1130,7 @@ mod tests {
         picker.filtered.push(1);
         for preview in [false, true] {
             picker.preview = preview;
-            let lines = model_suggestion_lines(&picker, 3);
+            let lines = model_suggestion_lines(&picker, 3, 120);
             let texts: Vec<String> = lines
                 .iter()
                 .take(2)
@@ -1128,9 +1158,9 @@ mod tests {
         hidden.name = "x".repeat(200);
         hidden.options[0].provider = "y".repeat(200);
         picker.entries.push(hidden);
-        let baseline = model_suggestion_lines(&picker, 1);
+        let baseline = model_suggestion_lines(&picker, 1, 120);
         picker.filtered.push(1);
-        let lines = model_suggestion_lines(&picker, 1);
+        let lines = model_suggestion_lines(&picker, 1, 120);
         // The only difference is the remaining-results indicator.
         assert_eq!(
             lines[0].spans[..lines[0].spans.len() - 1],
@@ -1138,12 +1168,12 @@ mod tests {
         );
         picker.filtered = vec![1, 0];
         picker.selected = 1;
-        let scrolled = model_suggestion_lines(&picker, 1);
+        let scrolled = model_suggestion_lines(&picker, 1, 120);
         assert_eq!(
             scrolled[0].spans[..scrolled[0].spans.len() - 1],
             baseline[0].spans
         );
-        assert!(model_suggestion_lines(&picker, 0).is_empty());
+        assert!(model_suggestion_lines(&picker, 0, 120).is_empty());
     }
 
     fn sample_account_picker(
@@ -1211,6 +1241,7 @@ mod tests {
             selected: 0,
             column: 0,
             filter: String::new(),
+            loading: false,
             preview: false,
             entries: models,
         }
@@ -1223,6 +1254,7 @@ mod tests {
             selected: 0,
             column: 0,
             filter: String::new(),
+            loading: false,
             preview: false,
             entries: vec![crate::tui::operant_app::tui_fns::PickerEntry {
                 name: "Swarm / subagent".to_string(),
@@ -1398,10 +1430,65 @@ mod tests {
     #[test]
     fn model_picker_keybind_hint_mentions_default_and_favorites() {
         let picker = sample_picker();
-        let hint = model_picker_top_hint(&picker).expect("active model picker should show hint");
+        // A wide terminal, so the hint is asserted at its full length and not
+        // against a width that would clip it.
+        let hint =
+            model_picker_top_hint(&picker, 200).expect("active model picker should show hint");
 
         assert!(hint.contains("Ctrl+O set default"));
         assert!(hint.contains("Ctrl+N favorite"));
+    }
+
+    #[test]
+    fn the_hint_says_models_are_loading_only_while_the_fetch_is_in_flight() {
+        let mut picker = sample_picker();
+        picker.loading = true;
+        let rows = model_suggestion_lines(&picker, 8, 200);
+        let text: String = rows
+            .iter()
+            .map(|l| line_text(l))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("listing models"), "hint text: {text}");
+
+        picker.loading = false;
+        let settled = model_suggestion_lines(&picker, 8, 200);
+        let text: String = settled
+            .iter()
+            .map(|l| line_text(l))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!text.contains("listing models"), "hint text: {text}");
+    }
+
+    #[test]
+    fn the_hint_truncates_at_narrow_width_instead_of_running_past_the_frame() {
+        // The top/keybind hint is the line that clipped at 80 columns.
+        let picker = sample_picker();
+        assert!(model_picker_top_hint(&picker, 40).is_none());
+        assert!(model_picker_top_hint(&picker, 61).is_none());
+        // Each tier fits its own width, so the renderer never clips mid-word.
+        let wide = model_picker_top_hint(&picker, 200).expect("wide picker shows a hint");
+        assert_eq!(wide.chars().count(), 92);
+        let mid = model_picker_top_hint(&picker, 62).expect("62-col picker shows a hint");
+        assert!(mid.chars().count() <= 62, "mid hint over budget: {mid}");
+        assert!(mid.contains("Ctrl+O"));
+    }
+
+    #[test]
+    fn the_typed_filter_is_shown_in_the_hint() {
+        let mut picker = sample_picker();
+        picker.filter = "gpt".to_string();
+        picker.loading = true;
+        let rows = model_suggestion_lines(&picker, 8, 200);
+        let text: String = rows
+            .iter()
+            .map(|l| line_text(l))
+            .collect::<Vec<_>>()
+            .join("\n");
+        // The filter is preserved while a fetch in flight drains its rows,
+        // so an operator typing during the fetch still sees what they typed.
+        assert!(text.contains("Filter: gpt"), "hint text: {text}");
     }
 
     #[test]
@@ -1414,7 +1501,8 @@ mod tests {
             };
         }
 
-        let hint = model_picker_top_hint(&picker).expect("swarm picker should show prompt hint");
+        let hint =
+            model_picker_top_hint(&picker, 200).expect("swarm picker should show prompt hint");
         assert!(hint.contains("prompt file"));
         assert!(hint.contains("configured by a prompt"));
     }

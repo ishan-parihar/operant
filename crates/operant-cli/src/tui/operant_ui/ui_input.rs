@@ -246,7 +246,11 @@ pub(super) fn draw_command_suggestions_overlay(frame: &mut Frame, app: &dyn TuiS
         // Keep it above the composer and size the window before building rows
         // so the selected model remains visible even on short terminals.
         let height = area.y.saturating_sub(frame.area().y);
-        let lines = super::inline_interactive_ui::model_suggestion_lines(picker, height as usize);
+        let lines = super::inline_interactive_ui::model_suggestion_lines(
+            picker,
+            height as usize,
+            area.width as usize,
+        );
         if !lines.is_empty() && area.width > 0 {
             let rect = Rect::new(
                 area.x,

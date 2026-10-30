@@ -9,6 +9,43 @@ use operant_core::config::{AppConfig, ToolProgressMode};
 use operant_core::gateway::Gateway;
 use operant_core::interrupt::InterruptFlag;
 
+/// Split a `/model` argument into `(model_or_role, provider)`.
+///
+/// `--provider <name>` was declared in the command's `args_hint` from the day
+/// the command was written and was never parsed — the whole trimmed argument
+/// became the model id, so `--provider` was passed to the endpoint as part of a
+/// model name. This is the parse it was always advertising.
+///
+/// `--provider` is recognised in any position and `--provider=name` is accepted
+/// too, because an operator on a phone types whichever form they remember.
+/// The model half keeps its internal spaces (`gpt 4o` is a model name, not
+/// two); only the flag is removed.
+pub fn split_model_args(args: &str) -> (&str, Option<&str>) {
+    let args = args.trim();
+    if let Some(rest) = args.strip_prefix("--provider") {
+        let rest = rest.trim_start();
+        if let Some(value) = rest.strip_prefix('=') {
+            return ("", Some(value.trim()));
+        }
+        return ("", rest.split_whitespace().next());
+    }
+    // A trailing flag: everything before it is the model, the word after it
+    // is the provider.
+    if let Some(pos) = args.find("--provider") {
+        let (model, rest) = args.split_at(pos);
+        let rest = rest["--provider".len()..].trim_start();
+        let provider = rest
+            .strip_prefix('=')
+            .unwrap_or(rest)
+            .split_whitespace()
+            .next()
+            .unwrap_or("");
+        (model.trim(), Some(provider))
+    } else {
+        (args, None)
+    }
+}
+
 /// Runtime context passed to command handlers for stateful operations.
 ///
 /// Provides handlers access to the gateway, configuration, and other
@@ -1784,30 +1821,94 @@ pub fn handle_command(cmd_name: &str, _args: &str, ctx: &CommandContext<'_>) -> 
         }
 
         "model" => {
-            let a = _args.trim();
-            let current_model = &ctx.config.agent.model;
+            // (plan 2026-10-30) The role vocabulary from operant-core's
+            // `model_roles` -- ONE resolver shared with the TUI's picker, so
+            // `/model smol` on Telegram means exactly what Enter on the
+            // `smol` row means in the TUI. Three subforms:
+            //
+            //   /model                  -> the catalogue (which slots exist,
+            //                            which model each holds, and whether
+            //                            it also switches the conversation)
+            //   /model <role>           -> resolve the role's model and use it.
+            //                            `smol` and `slow` are operant's
+            //                            documented aliases for [recap] and
+            //                            [auxiliary_models.memory].
+            //   /model <id> [--provider]
+            //                          -> a direct id override for the
+            //                            conversation slot.
+            //
+            // The session row is created when missing (the RT-175
+            // create-or-find `/goal` got): without it a first-message
+            // `/model` is a silent no-op whose reply still promises a
+            // switch.
+            let (a, provider) = crate::gateway_commands::split_model_args(_args);
             if a.is_empty() {
-                let mut msg = format!("🤖 Current model: `{}`", current_model);
+                let mut msg = String::from("🤖 *Model roles*\n");
+                msg.push_str(&operant_core::model_roles::describe_slots(ctx.config));
+
                 if let Some(gateway) = ctx.gateway {
                     let store = gateway.get_session_store();
-                    if let Some(session) = store.find_session(ctx.platform, ctx.user_id, ctx.channel_id)
-                        && let Some(override_model) = session.metadata.get("model_override") {
-                            msg.push_str(&format!("\nSession override: `{}`", override_model));
-                        }
+                    if let Some(session) =
+                        store.find_session(ctx.platform, ctx.user_id, ctx.channel_id)
+                        && let Some(override_model) = session.metadata.get("model_override")
+                    {
+                        msg.push_str(&format!("\nSession override: `{}`", override_model));
+                    }
                 }
-                msg.push_str("\nUsage: `/model <name> [--provider name]`");
+                msg.push_str(&format!(
+                    "\n\nUsage: `/model <role>` · `/model <provider/model> [--provider name]`\nConfigured: `{}`",
+                    ctx.config.agent.model
+                ));
                 msg
             } else {
-                if let Some(gateway) = ctx.gateway {
-                    let store = gateway.get_session_store();
-                    store.update_session_metadata(ctx.platform, ctx.user_id, ctx.channel_id, &[
-                        ("model_override".to_string(), a.to_string()),
-                    ]);
+                // Resolve the role BEFORE touching the store, so an unknown
+                // word never writes an override the agent would then act on
+                // as a typo'd model id.
+                match operant_core::model_roles::resolve_selection(
+                    a,
+                    ctx.config,
+                    operant_core::model_roles::EffortRef::Unspecified,
+                ) {
+                    Err(err) => format!("🤖 {err}"),
+                    Ok(selection) => {
+                        let slot = selection.slot;
+                        let mut model = selection.model.clone();
+                        if let Some(p) = provider {
+                            let p = p.trim();
+                            if !p.is_empty() && !model.contains('/') {
+                                model = format!("{}/{}", p, model);
+                            }
+                        }
+                        if let Some(gateway) = ctx.gateway {
+                            let store = gateway.get_session_store();
+                            // RT-175: create-or-find, exactly /goal's shape.
+                            if store.find_session(ctx.platform, ctx.user_id, ctx.channel_id).is_none() {
+                                let _ =
+                                    store.create_session(ctx.platform, ctx.user_id, ctx.channel_id);
+                            }
+                            store.update_session_metadata(ctx.platform, ctx.user_id, ctx.channel_id, &[
+                                ("model_override".to_string(), model.clone()),
+                            ]);
+                        }
+                        // A non-conversation slot is an ASSIGNMENT, not a
+                        // live switch -- oh-my-pi's rule, stated in the reply
+                        // so the operator does not read the confirmation as
+                        // "the session model changed now".
+                        if slot.switches_conversation() {
+                            format!(
+                                "🤖 Model switch requested: `{}`\nCurrent model: `{}`\nModel override applied for this session.",
+                                model, ctx.config.agent.model
+                            )
+                        } else {
+                            format!(
+                                "🤖 `{}` slot set to `{}` for this session.\nThe conversation keeps running on `{}` -- this slot's own consumer uses the new model.",
+                                slot.name(),
+                                model,
+                                ctx.config.agent.model
+                            )
+                        }
+                    }
                 }
-                format!(
-                    "🤖 Model switch requested: `{}`\nCurrent model: `{}`\nModel override applied for this session.",
-                    a, current_model
-                )
             }
         }
 
@@ -3874,5 +3975,144 @@ mod rt179_search_tests {
                 "{label} /search must not report a result it never computed, got: {reply}"
             );
         }
+    }
+}
+
+/// `/model` role resolution (plan 2026-10-30). The gateway arm must resolve
+/// through the SAME `operant_core::model_roles` seam the TUI picker calls, so
+/// a role name typed on Telegram and Enter on a picker row cannot drift.
+#[cfg(test)]
+mod model_role_tests {
+    use super::*;
+
+    fn ctx(cfg: &AppConfig) -> CommandContext<'_> {
+        CommandContext::new(None, cfg, true, "op-1", "telegram", "chan-1")
+    }
+
+    #[test]
+    fn split_model_args_separates_the_provider_flag() {
+        // The flag was advertised in args_hint for the whole life of the
+        // command and never parsed — this is the parse it promised.
+        assert_eq!(split_model_args("gpt-4o"), ("gpt-4o", None));
+        assert_eq!(
+            split_model_args("gpt-4o --provider openai"),
+            ("gpt-4o", Some("openai"))
+        );
+        assert_eq!(split_model_args("--provider openai"), ("", Some("openai")));
+        assert_eq!(split_model_args("--provider=openai"), ("", Some("openai")));
+        assert_eq!(
+            split_model_args("gpt-4o --provider=openai"),
+            ("gpt-4o", Some("openai"))
+        );
+        // A model id keeps its internal spaces; only the flag is removed.
+        assert_eq!(
+            split_model_args("  gpt 4o --provider openai  "),
+            ("gpt 4o", Some("openai"))
+        );
+    }
+
+    #[test]
+    fn a_bare_model_command_lists_the_configured_slots() {
+        let cfg = AppConfig::default();
+        let reply = handle_command("model", "", &ctx(&cfg)).expect("a reply");
+        // The catalogue names the roles, not just the current model — the
+        // old reply printed one line and left the operator to guess ids.
+        assert!(
+            reply.contains("default") && reply.contains("Model roles"),
+            "the catalogue must name the slots: {reply}"
+        );
+        assert!(reply.contains("Usage:"), "{reply}");
+    }
+
+    /// The one case the resolver still refuses: a ROLE NAME with no slot set.
+    /// `/model vision` on a config with no `[auxiliary_models.vision]` must not
+    /// silently switch the conversation to the literal word `vision`.
+    #[test]
+    fn a_known_role_with_an_empty_slot_is_refused_not_hijacked() {
+        let cfg = AppConfig::default();
+        let reply = handle_command("model", "vision", &ctx(&cfg)).expect("a reply");
+        assert!(
+            reply.contains("not set in this config"),
+            "an unset slot must be refused with a reason: {reply}"
+        );
+        assert!(
+            !reply.contains("Model switch requested"),
+            "a refused role must never confirm a switch: {reply}"
+        );
+        assert!(
+            reply.contains("vision tool"),
+            "the reply must name the consumer so the operator knows what to set: {reply}"
+        );
+    }
+
+    /// An unrecognised word is NOT refused — it is the command's main use, a
+    /// direct id the operator wants. Guarded here so a future resolver change
+    /// that starts rejecting unknown words cannot silently break
+    /// `/model gpt-4o`.
+    #[test]
+    fn an_unknown_word_is_treated_as_a_direct_model_id() {
+        let cfg = AppConfig::default();
+        let reply = handle_command("model", "some-new-model", &ctx(&cfg)).expect("a reply");
+        assert!(
+            reply.contains("Model switch requested"),
+            "a direct id must confirm the switch: {reply}"
+        );
+    }
+
+    #[test]
+    fn a_resolved_non_conversation_slot_is_announced_as_an_assignment() {
+        let mut cfg = AppConfig::default();
+        cfg.agent.model = "conversation-model".into();
+        cfg.auxiliary_models.vision = Some(operant_core::config::AuxiliaryModelConfig {
+            model: Some("vision-model".to_string()),
+            ..Default::default()
+        });
+        let reply = handle_command("model", "vision", &ctx(&cfg)).expect("a reply");
+        assert!(
+            reply.contains("`vision` slot set to"),
+            "a non-conversation slot must be described as an assignment: {reply}"
+        );
+        // oh-my-pi's rule made explicit: the conversation did NOT move.
+        assert!(
+            reply.contains("conversation keeps running on"),
+            "the reply must say the conversation is unchanged: {reply}"
+        );
+        assert!(!reply.contains("Model switch requested"), "{reply}");
+    }
+
+    #[test]
+    fn the_omp_smol_alias_reaches_operants_recap_slot() {
+        let mut cfg = AppConfig::default();
+        cfg.agent.model = "conversation-model".into();
+        cfg.recap.model = operant_core::config::AuxiliaryModelConfig {
+            model: Some("cheap-model".to_string()),
+            ..Default::default()
+        };
+        let reply = handle_command("model", "smol", &ctx(&cfg)).expect("a reply");
+        assert!(reply.contains("`smol` slot set to"), "{reply}");
+        assert!(reply.contains("cheap-model"), "{reply}");
+    }
+
+    #[test]
+    fn a_direct_model_id_still_switches_the_conversation() {
+        let cfg = AppConfig::default();
+        let reply = handle_command("model", "gpt-4o", &ctx(&cfg)).expect("a reply");
+        // An exact id is not a role name; it resolves to the conversation slot.
+        assert!(
+            reply.contains("Model switch requested"),
+            "a direct id must confirm the switch: {reply}"
+        );
+        assert!(reply.contains("gpt-4o"), "{reply}");
+    }
+
+    #[test]
+    fn a_provider_flag_qualifies_an_unqualified_model() {
+        let cfg = AppConfig::default();
+        let reply =
+            handle_command("model", "my-model --provider openai", &ctx(&cfg)).expect("a reply");
+        assert!(
+            reply.contains("openai/my-model"),
+            "the provider flag must qualify the id: {reply}"
+        );
     }
 }

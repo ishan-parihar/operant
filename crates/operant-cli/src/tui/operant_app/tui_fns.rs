@@ -408,6 +408,11 @@ pub enum AgentModelTarget {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PickerAction {
     Model,
+    /// (plan 2026-10-30) A MODEL SLOT role row: Entering it sets that slot's
+    /// model rather than switching the conversation. `slot` is the
+    /// `operant_core::model_roles::ModelSlot` the row names, so the apply arm
+    /// routes through the same vocabulary the gateway's `/model` uses.
+    ModelSlot(operant_core::model_roles::ModelSlot),
     Account(AccountPickerAction),
     // [port-excision] Login(LoginProviderDescriptor) — operant-provider-metadata
     // cascade not ported; no ported renderer constructs this variant.
@@ -449,6 +454,10 @@ pub struct InlineInteractiveState {
     pub column: usize,
     /// Filter text applied to the picker kind's searchable text.
     pub filter: String,
+    /// (plan 2026-10-30) True while a background fetch is still filling the
+    /// rows, so the renderer can say "loading…" instead of presenting a
+    /// one-row list as the whole catalogue.
+    pub loading: bool,
     /// Preview mode: picker is visible but input stays in main text box
     pub preview: bool,
 }
