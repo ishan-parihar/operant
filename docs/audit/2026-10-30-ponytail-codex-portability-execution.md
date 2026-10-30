@@ -72,7 +72,7 @@ discover, and it costs zero on the prompt cache because the tail is already vola
 
 Verified the three mechanisms really are separate
 (`session/autocompact.rs:3-20` names them), and the 4,000-token floor is real
-(`autocompact.rs:21-33`). The missing mode is genuinely a small addition, so this row's
+(`COMPACTION_FLOOR_TOKENS` at `autocompact.rs:167`, rationale at `:29-33`). The missing mode is genuinely a small addition, so this row's
 estimate was right and my initial suspicion it was overstated was wrong.
 
 ---

@@ -74,11 +74,23 @@ model without touching the frozen prefix or the prompt cache.
 `ToolContext`** — that is the shape the ledger's own "needs plumbing" caveat steered toward,
 and the measurement says the plumbing is unnecessary.
 
-**Acceptance:** the built `<turn_context>` block carries the remaining-budget figure (and
-whether the preflight ladder evicted this turn, from `EvictionOutcome` at
-`context_management.rs:802`); a test asserts the frozen system prefix stays byte-identical
-across two turns with different budgets (`agent/mod.rs:2069` already pins that shape for
-MoA guidance — copy it).
+**The two values to read, both already in scope at the attach line (verified, not assumed):**
+- `estimated_tokens` (`run.rs:2721`) and `effective_budget` (`run.rs:2717`) — declared in the
+  same block that closes at `:2997`, with the attach site nested inside it.
+- `ladder_fired` (`run.rs:2723`) — the preflight ladder's own boolean, already read at
+  `:2923` and `:2988`, i.e. two lines *after* the attach site. It is the "did operant evict
+  this turn" signal and no plumbing creates it.
+
+**Do NOT read `EvictionOutcome` (`context_management.rs:802`) for this.** It exists and is
+accurate, but the agent path calls `manage_context` (`context_management.rs`, the wrapper that
+discards the outcome and returns only the list) at `agent/compress.rs:380,386,411` — never
+`manage_context_reporting`. `EvictionOutcome` is reachable only by changing that call, which
+is plumbing this row does not need. `ladder_fired` is the same information, already computed.
+
+**Acceptance:** the built `<turn_context>` block carries the remaining-budget figure and
+whether the ladder evicted this turn; a test asserts the frozen system prefix stays
+byte-identical across two turns with different budgets (`agent/mod.rs:2069` already pins that
+shape for MoA guidance — copy it).
 **Mutation guard:** strip the budget line from the tail and the test must fail.
 
 ### 3. Row 01-3 — dispatch trace **payload** (extend the existing variant; ~8 lines)
@@ -97,10 +109,16 @@ guards against a regression of the same class.
 
 ### 4. Row 04-2 — MCP schema byte budget (one constant + truncation)
 
-`rg -n "MAX_SCHEMA|schema_max_bytes|SCHEMA_BYTES" crates/` → nothing (verified at plan time),
-so the cap is genuinely absent. The one place a deferred tool's schema reaches the model is
-the deferred materialisation path in `tools/tool_search.rs` (`deferred_schemas` at `:353`,
-materialisation via `deferred.rs::materialise_for_turn`).
+**Verified absent at plan time, with the trap named:** the byte cap does not exist, but a naive
+grep is misleading in BOTH directions. `rg -n "MAX_SCHEMA\|schema_max_bytes\|SCHEMA_BYTES"
+crates/` returns 6 hits — every one of them `MAX_SCHEMA_RETRIES` (`tools.rs:102`,
+`tools/delegation_output_schema.rs:21`, `tools/sub_agent_tool.rs:44,599,604,606`), which is a
+**schema-validation retry count, not a byte budget**. So the honest search is for the cap's
+*purpose*: a bound on how many bytes of one tool's schema reach the model. That is the deferred
+materialisation path in `tools/tool_search.rs` (`deferred_schemas` at `:353`, materialisation
+(`deferred.rs::materialise_for_turn` at `:125`, the inject loop `materialise` at `:142`, and
+`tool_search.rs:353`'s `deferred_schemas` feeding it), and it has no bound of any kind today.
+The cap belongs at the inject loop, where one schema's `parameters` size is known.
 
 **Effort:** S (~22 lines, 0 deps). Take codex's *cap design*, not its `McpHandlerCache` (its
 weak-reference cache solves a problem operant does not have — its MCP manager is per-process).
@@ -112,7 +130,7 @@ the operator can see what was cut (the `metadata_metrics` half of the row).
 
 Verified: operant's three compaction mechanisms are genuinely separate
 (`session/autocompact.rs:3-20` names them) and the 4,000-token floor is real
-(`autocompact.rs:21-33`). The missing piece is a **mode that evicts hard and never summarises**,
+(`COMPACTION_FLOOR_TOKENS` at `autocompact.rs:167`, rationale at `:29-33`). The missing piece is a **mode that evicts hard and never summarises**,
 used when the history is already a summary of a summary. Existing knob naming sits at
 `config.rs:629-638` (`context_compression`, `..._threshold`, `..._summary_max_chars`).
 
