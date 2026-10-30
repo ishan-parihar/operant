@@ -144,6 +144,28 @@ length) would beat alphabetical sorting for ~15 lines. Prefer that over adding t
 `bm25` dependency unless measurement shows the simple score is inadequate. **Ponytail:
 take the 15-line version first.**
 
+**OUTCOME — iter-1510 (RT-200, CLOSED).** The 15-line token-overlap
+version shipped exactly as prescribed; `bm25` was NOT taken. Code is
+`relevance_score` and `search_matches` in
+`crates/operant-core/src/tools/tool_search.rs` (name hit 3,
+description hit 1, score-descending sort with an explicit name
+tiebreak; query split on whitespace with ANY-term matching, which also
+fixes the verbatim-substring gap named in Row 4's opening).
+Guard: five tests in `tool_search::tests`.
+
+**Mutation lesson — the fixtures were vacuous before they were green.**
+The first `a_name_hit_outranks_a_description_only_hit` used
+`mcp_github_issue_create` vs `mcp_project_tools` and passed with every
+score forced to 0, because alphabetical and relevance order agreed. It
+was rewritten so they DISAGREE (`mcp_zzz_github_issue_create` vs
+`mcp_aaa_project_tools`, the relevant tool sorting LAST), plus a
+limit-1 case. Forcing scores to 0 now fails exactly that test by name.
+Two traps worth checking before writing another fixture here:
+`is_deferrable` (`tool_search.rs:80-82`) only admits `mcp_*` and
+sourcehound-composite names, so a non-`mcp_` fixture is silently
+filtered out and the test sees 0 matches; and a source-pin assertion
+whose own literal is the search string matches itself.
+
 ---
 
 ## Row 5 — tool invocation context
