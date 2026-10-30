@@ -255,6 +255,22 @@ impl TuiApp {
                     Vec::new(),
                 ),
             ));
+            // (iter-1503) Read-only session-switch source, same shape and for
+            // the same reason: the hub's Enter runs inside `App::run`, so the
+            // outer async drain cannot apply the retarget it sets until the
+            // operator's next submit. Two closures over the agent this loop
+            // already holds — no await anywhere on the frame-loop path.
+            let agent_for_switch = std::sync::Arc::clone(agent);
+            let agent_for_snapshot = std::sync::Arc::clone(agent);
+            self.app.core_session_switch = Some(std::sync::Arc::new(
+                crate::tui::session_switch::SessionSwitchSource::new(
+                    move |session_id| {
+                        agent_for_switch.set_session_id(session_id);
+                        agent_for_switch.notify_session_switch(session_id, "", false);
+                    },
+                    move || agent_for_snapshot.conversation_snapshot(),
+                ),
+            ));
         }
 
         // Create the user-question channel and register the sender with
@@ -772,6 +788,22 @@ impl TuiApp {
                     agent.rewind_marks_source(),
                     agent.session_id(),
                     Vec::new(),
+                ),
+            ));
+            // (iter-1503) Read-only session-switch source, same shape and for
+            // the same reason: the hub's Enter runs inside `App::run`, so the
+            // outer async drain cannot apply the retarget it sets until the
+            // operator's next submit. Two closures over the agent this loop
+            // already holds — no await anywhere on the frame-loop path.
+            let agent_for_switch = std::sync::Arc::clone(agent);
+            let agent_for_snapshot = std::sync::Arc::clone(agent);
+            self.app.core_session_switch = Some(std::sync::Arc::new(
+                crate::tui::session_switch::SessionSwitchSource::new(
+                    move |session_id| {
+                        agent_for_switch.set_session_id(session_id);
+                        agent_for_switch.notify_session_switch(session_id, "", false);
+                    },
+                    move || agent_for_snapshot.conversation_snapshot(),
                 ),
             ));
         }

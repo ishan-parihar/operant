@@ -26,10 +26,13 @@ pub use render::render_session_hub;
 /// N idle session rows for hosts and tests that need a populated hub list
 /// without a database (iter-1503).
 ///
-/// The hub's keyboard behaviour is only reachable once rows exist, and every
-/// host that drives it headlessly had to hand-build this list — so it is a
-/// module API, not a test fixture. Idle `RowKind::Session` rows with no
-/// employee and no usage: the neutral case a caller overrides.
+/// Idle `RowKind::Session` rows with no employee and no usage: the neutral
+/// case a caller overrides. Gated to `#[cfg(test)]` because nothing in the
+/// shipped binary calls it yet — when a real caller appears (the dashboard's
+/// session pane, a CLI that previews the hub headlessly), the gate widens to
+/// `#[cfg(any(test, feature = "test-fixtures"))]` in that same change. Until
+/// then the release binary must not carry an unused constructor.
+#[cfg(test)]
 pub fn probe_rows(n: usize) -> Vec<SessionEntryV2> {
     (0..n)
         .map(|i| SessionEntryV2 {

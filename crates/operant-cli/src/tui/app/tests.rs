@@ -1268,6 +1268,15 @@ async fn the_hub_navigation_key_waits_for_the_row_load_to_land() {
     // pump held the key while the load was in flight, applied it once the rows
     // existed, and only then found nothing left to do.
     let outcome = app.run(&mut terminal).expect("loop runs");
+    eprintln!(
+        "DBG hub.visible={} pending={:?} status={:?} msgs={} keys_left={}",
+        app.session_hub.visible,
+        app.pending_switch_session,
+        app.status_message,
+        app.messages.len(),
+        app.simulated_keys.len()
+    );
+    let outcome: Option<String> = outcome;
     assert!(outcome.is_none(), "the scenario never submits a prompt");
 
     assert!(
@@ -1281,6 +1290,69 @@ async fn the_hub_navigation_key_waits_for_the_row_load_to_land() {
     assert_eq!(
         app.session_hub.selected, 1,
         "the navigation key applies once the rows exist"
+    );
+}
+
+/// (iter-1503) The defect behind "switching session gives a blank
+/// screen": Enter in the hub set `pending_switch_session` and closed the hub,
+/// handing the keyboard back to the composer INSIDE the loop; the drain that
+/// would have applied the retarget lives on its outer side and could not run
+/// until the user's next submit. Result: neither session in `App::messages`.
+///
+/// Here the switch is driven with NO switch handle (a host that has no agent),
+/// which must report the reason rather than silently abandoning the switch:
+/// the operator's screen cannot sit blank with no explanation.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_hub_enter_switches_session_and_rebuilds_the_display_in_frame() {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    let backend = TestBackend::new(120, 40);
+    let mut terminal = Terminal::new(backend).unwrap();
+    let mut app = make_app();
+    app.is_simulating = true;
+
+    // Enter the hub and seed a row load that is ALREADY satisfied, so the
+    // Enter that follows is not held behind it.
+    app.handle_tui_command("session", "");
+    assert!(app.session_hub.visible, "the hub opens on /session");
+    app.session_list_pending = false;
+    let (tx, rx) = tokio::sync::mpsc::channel::<Vec<_>>(1);
+    app.session_list_rx = Some(rx);
+    tx.send(crate::tui::session_hub::probe_rows(2))
+        .await
+        .expect("the seeded rows survive the channel");
+
+    // No switch handle: the frame loop must report the reason for the
+    // failed switch, never leave the operator with a blank screen.
+    app.core_session_switch = None;
+
+    app.simulated_keys = vec![press_key(KeyCode::Enter, KeyModifiers::NONE)];
+
+    let outcome = app.run(&mut terminal).expect("loop runs");
+    assert!(outcome.is_none(), "the scenario never submits a prompt");
+    assert!(
+        !app.session_hub.visible,
+        "Enter closes the hub, so the frame loop must have processed the switch \
+         (if the loop had returned before that, the switch would have been \
+         applied by the outer drain instead)"
+    );
+    assert_eq!(
+        app.status_message.as_deref(),
+        Some("No agent attached — cannot switch session."),
+        "the frame loop ran in lieu of the outer drain, and named what failed"
+    );
+    assert_eq!(
+        app.pending_switch_session.as_deref(),
+        Some("sess_0"),
+        "with no handle the flag is put BACK, not dropped: the outer drain \
+         still owns the retarget and must find it armed"
+    );
+    assert_eq!(
+        app.messages.len(),
+        0,
+        "no conversation was fabricated: the display stays honest about \
+         holding nothing rather than showing the wrong transcript"
     );
 }
 

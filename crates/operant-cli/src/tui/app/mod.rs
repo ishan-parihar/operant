@@ -238,7 +238,6 @@ pub struct App {
     /// subagent rows. `None` means "not yet this hub session", so the first
     /// tick after opening fires immediately and the rest land on the 1s
     /// throttle. Without it the hub's rows would be frozen while open.
-    pub subagent_refresh_at: Option<std::time::Instant>,
     /// (plan 05) `/rewind <n>` awaiting y/n confirmation in the status
     /// line; the number is the prompt to rewind before.
     pub pending_rewind_confirm: Option<usize>,
@@ -491,6 +490,21 @@ pub struct App {
     /// every key read as dead. `user_turns()` is a synchronous `RwLock` read,
     /// so the overlay syncs it from here on every frame with no await.
     pub core_rewind_marks: Option<std::sync::Arc<crate::tui::rewind_marks::RewindMarksSource>>,
+    /// (iter-1500) Throttle clock for the hub's live subagent-row refresh
+    /// (a delegation that finishes must follow its row, not read `pending`
+    /// forever). Keyed off the same Instant pattern as `last_left_tap_at`.
+    pub subagent_refresh_at: Option<std::time::Instant>,
+    /// Live session-switch source, cloned from the agent (iter-1503).
+    ///
+    /// The hub's Enter has to retarget the agent and rebuild the transcript in
+    /// the SAME frame loop pass, or the operator watches a blank screen until
+    /// their next keystroke: `pending_switch_session` is drained by
+    /// `run_pending_agent_actions`, which runs only after `App::run` returns —
+    /// and Enter closes the hub WITHOUT returning, so the switch sat armed and
+    /// unapplied. This handle is the frame-loop-side of it, read-only by
+    /// construction so a render path cannot reach a mutation.
+    pub core_session_switch:
+        Option<std::sync::Arc<crate::tui::session_switch::SessionSwitchSource>>,
     /// Agent steer queue handle. Set by TuiApp::run after create_runtime_agent.
     /// When the user types while a turn is streaming, the input is pushed here
     /// so the agent sees it as a steer directive at the next iteration boundary.
@@ -1182,6 +1196,43 @@ impl App {
             .release_all(crate::tui::background_tasks::now_unix_secs());
     }
 
+    /// Rebuild the display from a conversation the agent now holds
+    /// (iter-1503: the hub's Enter, applied from the frame loop).
+    ///
+    /// The frame-loop twin of `TuiApp::rebuild_display_from_agent`, kept beside
+    /// the frame loop so the two paths cannot drift: every field the outer
+    /// drain clears when it retargets is cleared here too, because a host that
+    /// switches session through the frame loop and then /clears through the
+    /// drain must end in the same state either way.
+    fn apply_session_conversation(
+        &mut self,
+        conv: Vec<operant_core::client::Message>,
+        session_id: &str,
+    ) {
+        self.messages.clear();
+        use crate::tui::adapter_types::types::{Message, MessageContent, Role};
+        for m in conv {
+            let role = match m.role {
+                operant_core::client::Role::User => Role::User,
+                operant_core::client::Role::Assistant => Role::Assistant,
+                operant_core::client::Role::System => Role::System,
+                operant_core::client::Role::Tool => Role::System,
+            };
+            self.messages.push(Message {
+                role,
+                content: MessageContent::Text(m.content),
+            });
+        }
+        self.clear_tool_blocks();
+        self.system_annotations.clear();
+        // TUI-2: the previous session's title must not label the new one.
+        self.session_title = None;
+        self.request_native_replay();
+        self.invalidate_transcript();
+        let short: String = session_id.chars().take(8).collect();
+        self.set_status_notice(format!("Switched to session {short}"));
+    }
+
     /// Run the TUI event loop. Returns `Some(input)` when the user submits
     /// a message, or `None` when the user quits.
     ///
@@ -1296,6 +1347,33 @@ impl App {
                     .collect();
                 let display_texts = self.user_prompt_texts_for_filter();
                 self.rewind_selector.sync_marks(marks, &display_texts);
+            }
+            // (iter-1503) The session hub's Enter — same structural shape as the
+            // rewind selector above: it sets `pending_switch_session` and closes
+            // the hub, handing the keyboard back to the composer INSIDE this
+            // loop. The async drain that would normally apply it lives on the
+            // outer side and cannot run until the user submits a prompt, so the
+            // screen sat blank with neither session's transcript in it. Apply it
+            // here, in the same pass, through the read-only handle — no await,
+            // no agent reference on the App.
+            //
+            // While streaming the flag is left armed on purpose: the outer drain
+            // owns every retarget that could race a live turn, and its
+            // `Option::take` still finds it.
+            if !self.is_streaming
+                && let Some(session_id) = self.pending_switch_session.take()
+            {
+                if let Some(source) = self.core_session_switch.as_ref() {
+                    let conv = source.switch_to(&session_id);
+                    self.apply_session_conversation(conv, &session_id);
+                } else {
+                    // No handle (a host without an agent): put the flag back so
+                    // the outer drain can still try, and say why it is not done.
+                    self.pending_switch_session = Some(session_id);
+                    self.set_status_notice(
+                        "No agent attached — cannot switch session.".to_string(),
+                    );
+                }
             }
             if self.should_exit {
                 // A simulated run's screen/style dump must reflect the LAST

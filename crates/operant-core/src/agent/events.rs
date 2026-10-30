@@ -880,6 +880,25 @@ impl OperantAgent {
             .expect("session_id RwLock poisoned — programmer error") = Some(new_id);
     }
 
+    /// A non-blocking snapshot of the conversation the agent currently holds
+    /// (iter-1503).
+    ///
+    /// `conversation` is a synchronous `RwLock<Vec<Message>>` and
+    /// `set_session_id` swaps it wholesale on a retarget, so the frame-loop
+    /// host that drives a session switch needs to read the slot right after the
+    /// swap — from code that CANNOT await (`App::run`'s frame loop, a render
+    /// path). `try_read` gives a clone of the current contents or an empty vec
+    /// under contention, which is the honest degradation: a contended read
+    /// means a turn is writing, and the outer async drain still owns that case
+    /// (the switch is applied there instead, because the frame-loop drain
+    /// refuses to run while streaming).
+    pub fn conversation_snapshot(&self) -> Vec<Message> {
+        self.conversation
+            .try_read()
+            .map(|guard| guard.clone())
+            .unwrap_or_default()
+    }
+
     /// Drop the LLM compressor's summary state on a session retarget.
     ///
     /// A non-blocking companion to `clear_history`'s reset, for the retarget
