@@ -388,7 +388,7 @@ impl OperantTool for ToolSearchTool {
             .min(25);
 
         let deferred = self.deferred_schemas().await;
-        // Rank instead of sorting alphabetically (iter-1507). An empty query
+        // Rank instead of sorting alphabetically (iter-1510). An empty query
         // matches EVERYTHING, so alphabetical order truncated at `limit` handed
         // the model the alphabetically-first tools rather than the closest
         // ones; and for a real query the substring filter admitted every
@@ -951,7 +951,7 @@ mod tests {
         assert!(text.contains("Alpha"), "{text}");
     }
 
-    // ── Relevance ranking (iter-1507) ──────────────────────────────────
+    // ── Relevance ranking (iter-1510) ──────────────────────────────────
     //
     // The old behaviour sorted by tool NAME alone, so the result was the
     // alphabetically-first N matches. Two distinct ways that produced the wrong

@@ -41,6 +41,8 @@
 //! sourcehound release that adds a parameter or changes a default does not
 //! silently desynchronise the model's view from the tool's behaviour.
 
+use std::sync::LazyLock;
+
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -124,288 +126,291 @@ fn spec(
 /// are that server's `inputSchema`. A sourcehound release that renames a
 /// composite or changes a contract must update this table, and
 /// [`composites_match_the_live_server`] is the test that catches the drift.
-pub fn composite_specs() -> Vec<&'static CompositeSpec> {
-    vec![
-        // ── research / academic ────────────────────────────────────────────
-        spec(
-            "papers.search",
-            "Search academic papers across arXiv, Semantic Scholar, OpenAlex, and more.",
-            json!({
-                "type": "object",
-                "required": ["query"],
-                "properties": {
-                    "query": {"type": "string"},
-                    "limit": {"type": ["integer", "null"]},
-                    "year": {"type": ["string", "null"]},
-                    "sort": {"type": ["string", "null"]}
-                }
-            }),
-        ),
-        spec(
-            "papers.get",
-            "Fetch one paper's details and citations (id arxiv:XXXX.XXXXX | semantic_scholar:... | openalex:...).",
-            json!({
-                "type": "object",
-                "required": ["id"],
-                "properties": { "id": {"type": "string"} }
-            }),
-        ),
-        // ── news / social / video ──────────────────────────────────────────
-        spec(
-            "news.fetch",
-            "Fetch news from configured sources. Filter by pools, countries, keywords. depth='deep' runs the full pipeline.",
-            json!({
-                "type": "object",
-                "properties": {
-                    "pools": {"type": ["array", "null"], "items": {"type": "string"}},
-                    "countries": {"type": ["array", "null"], "items": {"type": "string"}},
-                    "keywords": {"type": ["string", "array", "null"]},
-                    "limit": {"type": ["integer", "null"]},
-                    "depth": {"type": ["string", "null"]}
-                }
-            }),
-        ),
-        spec(
-            "news.search",
-            "Query-driven news from anywhere (not just the catalog): Google News RSS.",
-            json!({
-                "type": "object",
-                "required": ["query"],
-                "properties": {
-                    "query": {"type": "string"},
-                    "limit": {"type": ["integer", "null"]}
-                }
-            }),
-        ),
-        spec(
-            "social.search",
-            "Search Reddit, Hacker News, and YouTube in one call (X/Twitter only when configured).",
-            json!({
-                "type": "object",
-                "required": ["query"],
-                "properties": {
-                    "query": {"type": "string"},
-                    "sites": {"type": ["array", "null"], "items": {"type": "string"}},
-                    "limit": {"type": ["integer", "null"]}
-                }
-            }),
-        ),
-        spec(
-            "social.feed",
-            "Read a subreddit (or a user's post history with u/<name>).",
-            json!({
-                "type": "object",
-                "required": ["subreddit"],
-                "properties": {
-                    "subreddit": {"type": "string"},
-                    "limit": {"type": ["integer", "null"]},
-                    "sort": {"type": ["string", "null"]}
-                }
-            }),
-        ),
-        spec(
-            "video.transcript",
-            "YouTube metadata and/or captions in one call: mode=metadata|transcript.",
-            json!({
-                "type": "object",
-                "required": ["mode"],
-                "properties": {
-                    "mode": {"type": "string"},
-                    "url": {"type": ["string", "null"]},
-                    "id": {"type": ["string", "null"]}
-                }
-            }),
-        ),
-        // ── datasets / public records ─────────────────────────────────────
-        spec(
-            "data.query",
-            "Keyless public datasets: open-meteo (forecast by lat,lon or place), climate_history, worldbank, trials, quotes, crypto, who_gho.",
-            json!({
-                "type": "object",
-                "required": ["dataset", "query"],
-                "properties": {
-                    "dataset": {"type": "string"},
-                    "query": {"type": "string"}
-                }
-            }),
-        ),
-        spec(
-            "gov.search",
-            "Search US government sources: kind=bills|regulations|cases|campaign_finance.",
-            json!({
-                "type": "object",
-                "required": ["kind", "query"],
-                "properties": {
-                    "kind": {"type": "string"},
-                    "query": {"type": "string"}
-                }
-            }),
-        ),
-        spec(
-            "patents.search",
-            "Search USPTO patents via Google Patents (keyless), falling back to PatentsView.",
-            json!({
-                "type": "object",
-                "required": ["query"],
-                "properties": {
-                    "query": {"type": "string"},
-                    "limit": {"type": ["integer", "null"]}
-                }
-            }),
-        ),
-        spec(
-            "company.lookup",
-            "Keyless company fundamentals via SEC EDGAR: ticker/CIK/name resolution, exchanges, and recent filings.",
-            json!({
-                "type": "object",
-                "required": ["query"],
-                "properties": {
-                    "query": {"type": "string"},
-                    "limit": {"type": ["integer", "null"]}
-                }
-            }),
-        ),
-        spec(
-            "security.vuln",
-            "Search vulnerabilities across NVD and GitHub Security Advisories in one call.",
-            json!({
-                "type": "object",
-                "required": ["query"],
-                "properties": {
-                    "query": {"type": "string"},
-                    "limit": {"type": ["integer", "null"]}
-                }
-            }),
-        ),
-        spec(
-            "recon.target",
-            "Profile a domain or IP in one call: RDAP registrar, DNS (A/NS/MX), crt.sh certificates, and ports.",
-            json!({
-                "type": "object",
-                "required": ["target"],
-                "properties": {
-                    "target": {"type": "string"},
-                    "limit": {"type": ["integer", "null"]}
-                }
-            }),
-        ),
-        spec(
-            "archive",
-            "Wayback Machine lookup for a URL: closest snapshot, or the CDX history with snapshots=true.",
-            json!({
-                "type": "object",
-                "required": ["url"],
-                "properties": {
-                    "url": {"type": "string"},
-                    "snapshots": {"type": ["boolean", "null"]},
-                    "from": {"type": ["string", "null"]},
-                    "to": {"type": ["string", "null"]}
-                }
-            }),
-        ),
-        // ── catalog / index / stored results ──────────────────────────────
-        spec(
-            "catalog.list",
-            "List catalog metadata: what=pools|sources|countries|cities|domains|parsers.",
-            json!({
-                "type": "object",
-                "properties": {
-                    "what": {"type": ["string", "null"]},
-                    "pool": {"type": ["string", "null"]},
-                    "active_only": {"type": ["boolean", "null"]}
-                }
-            }),
-        ),
-        spec(
-            "data.catalog",
-            "Catalog metadata for picking a pool: per-pool source counts, global totals, and top-host concentration.",
-            json!({ "type": "object", "properties": {} }),
-        ),
-        spec(
-            "index.query",
-            "Query the persisted insight and semantic indices: mode=semantic|entity|trending|connections|stats.",
-            json!({
-                "type": "object",
-                "required": ["mode"],
-                "properties": {
-                    "mode": {"type": "string"},
-                    "query": {"type": ["string", "null"]},
-                    "entity": {"type": ["string", "null"]},
-                    "limit": {"type": ["integer", "null"]}
-                }
-            }),
-        ),
-        spec(
-            "results.get",
-            "Read back a stored result handle (`rid`) from a previous tool call.",
-            json!({
-                "type": "object",
-                "required": ["rid"],
-                "properties": { "rid": {"type": "string"} }
-            }),
-        ),
-        spec(
-            "workflow.run",
-            "Run a multi-step intelligence workflow (same engine as sop.execute).",
-            json!({
-                "type": "object",
-                "required": ["workflow"],
-                "properties": { "workflow": {"type": "string"} }
-            }),
-        ),
-        // ── general-purpose reads (v2 spellings of the v1 web tools) ───────
-        spec(
-            "search",
-            "Search the web, code, images, or news in one call. kind=web|images|code|news.",
-            json!({
-                "type": "object",
-                "required": ["query"],
-                "properties": {
-                    "query": {"type": "string"},
-                    "kind": {"type": ["string", "null"]},
-                    "limit": {"type": ["integer", "null"]}
-                }
-            }),
-        ),
-        spec(
-            "read",
-            "Read a page: article text (mode=extract) or structured data (mode=page).",
-            json!({
-                "type": "object",
-                "required": ["mode"],
-                "properties": {
-                    "mode": {"type": "string"},
-                    "url": {"type": ["string", "null"]}
-                }
-            }),
-        ),
-        spec(
-            "crawl",
-            "Map or crawl a site: mode=map lists pages; mode=crawl fetches their content BFS-style.",
-            json!({
-                "type": "object",
-                "required": ["url"],
-                "properties": {
-                    "url": {"type": "string"},
-                    "mode": {"type": ["string", "null"]},
-                    "limit": {"type": ["integer", "null"]}
-                }
-            }),
-        ),
-        // ── the browser/automation dispatcher ─────────────────────────────
-        spec(
-            "cloakctl.call",
-            "Drive any cloakctl verb through one tool: tool=open|snapshot|act|read|grep|exec|run|screenshot|cookies_import|wf_run (58 verbs).",
-            json!({
-                "type": "object",
-                "required": ["tool"],
-                "properties": {
-                    "tool": {"type": "string"},
-                    "args": {"type": ["object", "null"]}
-                }
-            }),
-        ),
-    ]
+pub fn composite_specs() -> &'static [&'static CompositeSpec] {
+    static SPECS: LazyLock<Vec<&'static CompositeSpec>> = LazyLock::new(|| {
+        vec![
+            // ── research / academic ────────────────────────────────────────────
+            spec(
+                "papers.search",
+                "Search academic papers across arXiv, Semantic Scholar, OpenAlex, and more.",
+                json!({
+                    "type": "object",
+                    "required": ["query"],
+                    "properties": {
+                        "query": {"type": "string"},
+                        "limit": {"type": ["integer", "null"]},
+                        "year": {"type": ["string", "null"]},
+                        "sort": {"type": ["string", "null"]}
+                    }
+                }),
+            ),
+            spec(
+                "papers.get",
+                "Fetch one paper's details and citations (id arxiv:XXXX.XXXXX | semantic_scholar:... | openalex:...).",
+                json!({
+                    "type": "object",
+                    "required": ["id"],
+                    "properties": { "id": {"type": "string"} }
+                }),
+            ),
+            // ── news / social / video ──────────────────────────────────────────
+            spec(
+                "news.fetch",
+                "Fetch news from configured sources. Filter by pools, countries, keywords. depth='deep' runs the full pipeline.",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "pools": {"type": ["array", "null"], "items": {"type": "string"}},
+                        "countries": {"type": ["array", "null"], "items": {"type": "string"}},
+                        "keywords": {"type": ["string", "array", "null"]},
+                        "limit": {"type": ["integer", "null"]},
+                        "depth": {"type": ["string", "null"]}
+                    }
+                }),
+            ),
+            spec(
+                "news.search",
+                "Query-driven news from anywhere (not just the catalog): Google News RSS.",
+                json!({
+                    "type": "object",
+                    "required": ["query"],
+                    "properties": {
+                        "query": {"type": "string"},
+                        "limit": {"type": ["integer", "null"]}
+                    }
+                }),
+            ),
+            spec(
+                "social.search",
+                "Search Reddit, Hacker News, and YouTube in one call (X/Twitter only when configured).",
+                json!({
+                    "type": "object",
+                    "required": ["query"],
+                    "properties": {
+                        "query": {"type": "string"},
+                        "sites": {"type": ["array", "null"], "items": {"type": "string"}},
+                        "limit": {"type": ["integer", "null"]}
+                    }
+                }),
+            ),
+            spec(
+                "social.feed",
+                "Read a subreddit (or a user's post history with u/<name>).",
+                json!({
+                    "type": "object",
+                    "required": ["subreddit"],
+                    "properties": {
+                        "subreddit": {"type": "string"},
+                        "limit": {"type": ["integer", "null"]},
+                        "sort": {"type": ["string", "null"]}
+                    }
+                }),
+            ),
+            spec(
+                "video.transcript",
+                "YouTube metadata and/or captions in one call: mode=metadata|transcript.",
+                json!({
+                    "type": "object",
+                    "required": ["mode"],
+                    "properties": {
+                        "mode": {"type": "string"},
+                        "url": {"type": ["string", "null"]},
+                        "id": {"type": ["string", "null"]}
+                    }
+                }),
+            ),
+            // ── datasets / public records ─────────────────────────────────────
+            spec(
+                "data.query",
+                "Keyless public datasets: open-meteo (forecast by lat,lon or place), climate_history, worldbank, trials, quotes, crypto, who_gho.",
+                json!({
+                    "type": "object",
+                    "required": ["dataset", "query"],
+                    "properties": {
+                        "dataset": {"type": "string"},
+                        "query": {"type": "string"}
+                    }
+                }),
+            ),
+            spec(
+                "gov.search",
+                "Search US government sources: kind=bills|regulations|cases|campaign_finance.",
+                json!({
+                    "type": "object",
+                    "required": ["kind", "query"],
+                    "properties": {
+                        "kind": {"type": "string"},
+                        "query": {"type": "string"}
+                    }
+                }),
+            ),
+            spec(
+                "patents.search",
+                "Search USPTO patents via Google Patents (keyless), falling back to PatentsView.",
+                json!({
+                    "type": "object",
+                    "required": ["query"],
+                    "properties": {
+                        "query": {"type": "string"},
+                        "limit": {"type": ["integer", "null"]}
+                    }
+                }),
+            ),
+            spec(
+                "company.lookup",
+                "Keyless company fundamentals via SEC EDGAR: ticker/CIK/name resolution, exchanges, and recent filings.",
+                json!({
+                    "type": "object",
+                    "required": ["query"],
+                    "properties": {
+                        "query": {"type": "string"},
+                        "limit": {"type": ["integer", "null"]}
+                    }
+                }),
+            ),
+            spec(
+                "security.vuln",
+                "Search vulnerabilities across NVD and GitHub Security Advisories in one call.",
+                json!({
+                    "type": "object",
+                    "required": ["query"],
+                    "properties": {
+                        "query": {"type": "string"},
+                        "limit": {"type": ["integer", "null"]}
+                    }
+                }),
+            ),
+            spec(
+                "recon.target",
+                "Profile a domain or IP in one call: RDAP registrar, DNS (A/NS/MX), crt.sh certificates, and ports.",
+                json!({
+                    "type": "object",
+                    "required": ["target"],
+                    "properties": {
+                        "target": {"type": "string"},
+                        "limit": {"type": ["integer", "null"]}
+                    }
+                }),
+            ),
+            spec(
+                "archive",
+                "Wayback Machine lookup for a URL: closest snapshot, or the CDX history with snapshots=true.",
+                json!({
+                    "type": "object",
+                    "required": ["url"],
+                    "properties": {
+                        "url": {"type": "string"},
+                        "snapshots": {"type": ["boolean", "null"]},
+                        "from": {"type": ["string", "null"]},
+                        "to": {"type": ["string", "null"]}
+                    }
+                }),
+            ),
+            // ── catalog / index / stored results ──────────────────────────────
+            spec(
+                "catalog.list",
+                "List catalog metadata: what=pools|sources|countries|cities|domains|parsers.",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "what": {"type": ["string", "null"]},
+                        "pool": {"type": ["string", "null"]},
+                        "active_only": {"type": ["boolean", "null"]}
+                    }
+                }),
+            ),
+            spec(
+                "data.catalog",
+                "Catalog metadata for picking a pool: per-pool source counts, global totals, and top-host concentration.",
+                json!({ "type": "object", "properties": {} }),
+            ),
+            spec(
+                "index.query",
+                "Query the persisted insight and semantic indices: mode=semantic|entity|trending|connections|stats.",
+                json!({
+                    "type": "object",
+                    "required": ["mode"],
+                    "properties": {
+                        "mode": {"type": "string"},
+                        "query": {"type": ["string", "null"]},
+                        "entity": {"type": ["string", "null"]},
+                        "limit": {"type": ["integer", "null"]}
+                    }
+                }),
+            ),
+            spec(
+                "results.get",
+                "Read back a stored result handle (`rid`) from a previous tool call.",
+                json!({
+                    "type": "object",
+                    "required": ["rid"],
+                    "properties": { "rid": {"type": "string"} }
+                }),
+            ),
+            spec(
+                "workflow.run",
+                "Run a multi-step intelligence workflow (same engine as sop.execute).",
+                json!({
+                    "type": "object",
+                    "required": ["workflow"],
+                    "properties": { "workflow": {"type": "string"} }
+                }),
+            ),
+            // ── general-purpose reads (v2 spellings of the v1 web tools) ───────
+            spec(
+                "search",
+                "Search the web, code, images, or news in one call. kind=web|images|code|news.",
+                json!({
+                    "type": "object",
+                    "required": ["query"],
+                    "properties": {
+                        "query": {"type": "string"},
+                        "kind": {"type": ["string", "null"]},
+                        "limit": {"type": ["integer", "null"]}
+                    }
+                }),
+            ),
+            spec(
+                "read",
+                "Read a page: article text (mode=extract) or structured data (mode=page).",
+                json!({
+                    "type": "object",
+                    "required": ["mode"],
+                    "properties": {
+                        "mode": {"type": "string"},
+                        "url": {"type": ["string", "null"]}
+                    }
+                }),
+            ),
+            spec(
+                "crawl",
+                "Map or crawl a site: mode=map lists pages; mode=crawl fetches their content BFS-style.",
+                json!({
+                    "type": "object",
+                    "required": ["url"],
+                    "properties": {
+                        "url": {"type": "string"},
+                        "mode": {"type": ["string", "null"]},
+                        "limit": {"type": ["integer", "null"]}
+                    }
+                }),
+            ),
+            // ── the browser/automation dispatcher ─────────────────────────────
+            spec(
+                "cloakctl.call",
+                "Drive any cloakctl verb through one tool: tool=open|snapshot|act|read|grep|exec|run|screenshot|cookies_import|wf_run (58 verbs).",
+                json!({
+                    "type": "object",
+                    "required": ["tool"],
+                    "properties": {
+                        "tool": {"type": "string"},
+                        "args": {"type": ["object", "null"]}
+                    }
+                }),
+            ),
+        ]
+    });
+    &SPECS
 }
 
 /// The args this tool accepts: the composite's own arguments, verbatim.
@@ -524,7 +529,7 @@ pub async fn register_composites(registry: &crate::tools::ToolRegistry) -> usize
 /// cannot drift apart: a composite the table stops naming disappears from both.
 pub fn composite_names() -> Vec<&'static str> {
     composite_specs()
-        .into_iter()
+        .iter()
         .map(|spec| spec.tool_name)
         .collect()
 }
@@ -712,7 +717,7 @@ for line in sys.stdin:
     async fn execute_forwards_the_wire_name_and_forces_json() {
         let (engine, _dir) = mock_engine();
         let spec = composite_specs()
-            .into_iter()
+            .iter()
             .find(|s| s.composite == "papers.search")
             .expect("papers.search in the table");
         let tool = SourcehoundCompositeTool { spec, engine };
