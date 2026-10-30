@@ -78,11 +78,34 @@ pub mod listing;
 /// department's active seats stay warm.
 pub const DEFAULT_WARM_CAPACITY: usize = 32;
 
-/// Number of trailing messages rehydrated when loading a session from disk.
+/// Message-count backstop for a cold load's window.
 ///
-/// Matches the gateway's existing reload window, so adopting this store does
-/// not silently change what a returning session sees.
-pub const REHYDRATE_TAIL: usize = 20;
+/// Raised from 20 to 2000 at iter-1510 after the operator reported that a
+/// resumed session "only shows the last message". The 20 was a stale default
+/// from the gateway's reload window (iter-548) that nothing re-derived: the
+/// hub's preview pane and `operant sessions show` both load a session's FULL
+/// transcript, so switching into a session showed 10 turns where the pane
+/// beside it showed 2686 — the pane promised history the switch then truncated.
+///
+/// This is now only the backstop. The real bound is
+/// [`REHYDRATE_BYTES_BUDGET`] below, because a message COUNT is a bad proxy
+/// for memory: measured on the operator's 102 MB database, messages average
+/// 703 bytes but the largest session (`emp-cron_cast_id`, 14103 messages) is
+/// 14.3 MB of raw text — a count-only window would let one session blow the
+/// whole resident budget.
+pub const REHYDRATE_TAIL: usize = 2000;
+
+/// Default per-session byte budget for a cold load's window.
+///
+/// Measured: 2 MB is roughly 2800 messages at the operator's 703 B average,
+/// and the whole 14.3 MB `emp-cron_cast_id` transcript fits in 8 of these.
+/// At [`DEFAULT_WARM_CAPACITY`] = 32 resident sessions the worst case is
+/// 64 MB, which replaces the old ~15.6 MB estimate — a deliberate trade: the
+/// old figure was drawn from a single full-context WINDOW (~500 KB), not from
+/// the transcripts the cache actually holds, and a session that cannot see its
+/// own history is the more expensive failure. The estimate is stated here so
+/// it can be re-measured rather than inherited.
+pub const REHYDRATE_BYTES_BUDGET: usize = 2 * 1024 * 1024;
 
 /// Identity of one durable session.
 ///
@@ -139,7 +162,20 @@ pub struct SessionStoreConfig {
     /// How many sessions stay resident in memory.
     pub warm_capacity: usize,
     /// How many trailing messages a cold load rehydrates.
+    ///
+    /// The message-count BACKSTOP only (iter-1510). See
+    /// [`crate::session::REHYDRATE_TAIL`] for why a count alone is the wrong
+    /// bound, and [`Self::rehydrate_bytes`] for the one that actually bites.
     pub rehydrate_tail: usize,
+    /// Byte budget a cold load fills before it stops taking messages.
+    ///
+    /// A byte budget rather than a count, because the operator's sessions
+    /// range from 2 to 14103 messages and from ~1 KB to 14.3 MB of text — a
+    /// count predicts memory badly and a byte budget predicts it exactly. The
+    /// window is taken from the END (newest), and a message that would cross
+    /// the budget is taken whole rather than split: a half-loaded tool call is
+    /// worse than one fewer turn.
+    pub rehydrate_bytes: usize,
 }
 
 impl Default for SessionStoreConfig {
@@ -147,6 +183,7 @@ impl Default for SessionStoreConfig {
         Self {
             warm_capacity: DEFAULT_WARM_CAPACITY,
             rehydrate_tail: REHYDRATE_TAIL,
+            rehydrate_bytes: REHYDRATE_BYTES_BUDGET,
         }
     }
 }
@@ -400,20 +437,80 @@ impl SessionStore {
     }
 
     /// Read the trailing transcript for `key` from disk.
+    ///
+    /// The window is the NEWEST messages, bounded by BOTH a message count and
+    /// a byte budget (iter-1510). The byte bound is the one that actually
+    /// bites: measured on the operator's database, sessions span 2 to 14103
+    /// messages and ~1 KB to 14.3 MB of text, so a count alone cannot say what
+    /// a load will cost. A message that would cross the budget is taken
+    /// WHOLE rather than split, so the transcript is never cut mid-turn.
+    ///
+    /// `skip` is then one arithmetic step off the smaller bound, so a
+    /// session that fits under both costs nothing extra.
     fn load_from_db(&self, key: &SessionKey) -> Vec<Message> {
-        let tail = self.config.rehydrate_tail;
         let Ok(rows) = self.db.get_session_messages_full(key.id()) else {
             // A cold session with no readable transcript is simply empty; that
             // is a normal first-run state, not an error worth propagating into
             // the agent loop.
             return Vec::new();
         };
-        let skip = rows.len().saturating_sub(tail);
+        let count_bound = self.config.rehydrate_tail;
+        let byte_bound = self.config.rehydrate_bytes;
+        // MIN, not max: the window is whichever bound allows FEWER messages.
+        // A byte budget that loses to a count bound makes no sense — the point
+        // of the byte walk is to cut a session the count bound would wave
+        // through (14 MB of cron turns under a 2000-message count).
+        let kept = count_bound.min(self.count_that_fits_byte_budget(&rows, byte_bound));
+        let start = rows.len().saturating_sub(kept);
         rows.into_iter()
-            .skip(skip)
+            .skip(start)
             .filter_map(row_to_message)
             .collect()
     }
+
+    /// How many trailing rows of `rows` fit inside `byte_bound`.
+    ///
+    /// Walks BACKWARD from the newest and stops at the first message that
+    /// would cross the budget, which is why it costs O(window) rather than
+    /// O(session) for a session far over the budget. Every row in the window
+    /// is counted whole, so a load is always a whole number of messages.
+    ///
+    /// A session whose transcript fits entirely returns its own length, which
+    /// makes this a no-op bound for the ordinary case — only the operator's
+    /// cron sessions (thousands of turns) get genuinely truncated.
+    fn count_that_fits_byte_budget(&self, rows: &[MessageData], byte_bound: usize) -> usize {
+        let mut bytes = 0usize;
+        let mut taken = 0usize;
+        for row in rows.iter().rev() {
+            let size = message_row_bytes(row);
+            if taken > 0 && bytes + size > byte_bound {
+                break;
+            }
+            bytes += size;
+            taken += 1;
+        }
+        taken
+    }
+}
+
+/// Bytes a persisted row will occupy once it is a [`Message`].
+///
+/// Counts the text a human or a model can actually see — content, the tool
+/// call names and arguments, and reasoning — and excludes the bookkeeping
+/// columns (ids, timestamps, token counts), which are the difference between
+/// "what the operator sees" and "what the process holds".
+fn message_row_bytes(row: &MessageData) -> usize {
+    let mut bytes = row.content.as_deref().map(str::len).unwrap_or_default();
+    if let Some(tool_calls) = row.tool_calls.as_deref() {
+        bytes += tool_calls.len();
+    }
+    if let Some(reasoning) = row.reasoning.as_deref() {
+        bytes += reasoning.len();
+    }
+    if let Some(name) = row.tool_name.as_deref() {
+        bytes += name.len();
+    }
+    bytes
 }
 
 /// Convert a persisted row back into a client [`Message`].
@@ -455,13 +552,24 @@ mod tests {
     /// Unique per call: tests run in parallel, so a shared file name would
     /// let one test's `remove_file` truncate another test's seeded rows.
     fn store_with(capacity: usize) -> (std::sync::Arc<Database>, SessionStore) {
+        store_with_window(capacity, REHYDRATE_TAIL, REHYDRATE_BYTES_BUDGET)
+    }
+
+    /// The same store with an explicit window, for the tests that measure the
+    /// bound itself rather than trusting the default.
+    fn store_with_window(
+        capacity: usize,
+        tail: usize,
+        bytes: usize,
+    ) -> (std::sync::Arc<Database>, SessionStore) {
         use std::sync::atomic::{AtomicUsize, Ordering};
         static N: AtomicUsize = AtomicUsize::new(0);
         let n = N.fetch_add(1, Ordering::Relaxed);
         let dir = std::env::temp_dir().join(format!(
-            "operant-session-store-{}-{}-{}",
+            "operant-session-store-{}-{}-{}-{}",
             std::process::id(),
             capacity,
+            tail,
             n
         ));
         std::fs::create_dir_all(&dir).ok();
@@ -471,7 +579,8 @@ mod tests {
             std::sync::Arc::clone(&db),
             SessionStoreConfig {
                 warm_capacity: capacity,
-                rehydrate_tail: REHYDRATE_TAIL,
+                rehydrate_tail: tail,
+                rehydrate_bytes: bytes,
             },
         );
         (db, store)
@@ -607,5 +716,217 @@ mod tests {
 
         assert_eq!(store.stats().cold_loads, 1, "second acquire is a warm hit");
         assert_eq!(store.stats().warm_hits, 2);
+    }
+
+    /// (iter-1510) The defect behind the operator's "session only shows the
+    /// last message": `REHYDRATE_TAIL` was 20, so a cold load of the
+    /// operator's 2686-message `emp-cron_fa1e44c` produced 20 messages while
+    /// the hub's preview pane beside it was rendering all 2686. The pane
+    /// promised history the switch then truncated.
+    ///
+    /// The default must now carry a whole ordinary session: the operator's own
+    /// database has 60 personal sessions averaging 4-7 messages, and the
+    /// smallest cron employee holds 1330.
+    #[test]
+    fn the_default_window_carries_a_whole_ordinary_session() {
+        // Read through `Default::default()` rather than asserting on the consts:
+        // clippy::assertions_on_constants is right that a bare const check is
+        // compile-time dead weight, and the DEFAULT is what production actually
+        // loads through — the constant is the constant, the config is the
+        // contract.
+        let window = SessionStoreConfig::default();
+        assert!(
+            window.rehydrate_tail >= 1000,
+            "the default tail must carry a whole ordinary session, not 10 \
+             turns — measured on the operator's database: personal sessions \
+             run 2-57 messages and the smallest cron employee holds 1330"
+        );
+        assert!(
+            window.rehydrate_bytes >= 1024 * 1024,
+            "the default byte budget must hold a full session's text, not a \
+             window of it — measured avg 703 B/message, so 1 MiB is ~1500 turns"
+        );
+    }
+
+    /// And the default must actually BEHAVE that way, not merely claim it: a
+    /// session of the operator's real shape (seven turns, the measured personal
+    /// average) loads whole through the default config.
+    #[test]
+    fn the_default_config_loads_a_session_of_the_measured_shape_whole() {
+        let (db, store) = store_with(8);
+        let key = SessionKey::new("ordinary");
+        seed(
+            &db,
+            key.id(),
+            &[
+                "turn 1", "turn 2", "turn 3", "turn 4", "turn 5", "turn 6", "turn 7",
+            ],
+        );
+
+        assert_eq!(
+            store.acquire(&key),
+            7,
+            "a seven-turn session must load whole through the DEFAULT window"
+        );
+        assert_eq!(
+            store.peek(&key).first().map(|m| m.content.as_str()),
+            Some("turn 1"),
+            "and the FIRST turn of it, which the old 20-message window also \
+             carried but the hub's preview showed in full"
+        );
+    }
+
+    /// A session that fits under BOTH bounds rehydrates whole — the byte walk
+    /// is a no-op for every session that is not a multi-thousand-turn cron
+    /// log, which is what makes this an ordinary case rather than a new
+    /// failure mode.
+    #[test]
+    fn a_session_that_fits_both_bounds_rehydrates_whole() {
+        let (db, store) = store_with_window(8, 100, 64 * 1024);
+        let key = SessionKey::new("small");
+        seed(&db, key.id(), &["a", "b", "c", "d", "e"]);
+
+        assert_eq!(store.acquire(&key), 5, "no truncation when it fits");
+        assert_eq!(
+            store.peek(&key)[0].content,
+            "a",
+            "the FIRST message survived"
+        );
+    }
+
+    /// The byte bound is the one that bites: a 2000-message count bound waves a
+    /// 14 MB cron log through, and the byte budget cuts it to a whole number of
+    /// messages whose visible text fits. Measured against the operator's real
+    /// distribution (avg 703 B/message), not a synthetic uniform fixture.
+    #[test]
+    fn the_byte_bound_truncates_a_session_the_count_bound_would_wave_through() {
+        // 40 messages of 1 KiB each = ~41 KB. Count bound 2000 (huge), byte
+        // bound 8 KiB (small) — only the byte bound can restrict this.
+        let (db, store) = store_with_window(8, 2000, 8 * 1024);
+        let key = SessionKey::new("fat");
+        let big = "x".repeat(1024);
+        let contents: Vec<String> = (0..40).map(|i| format!("{big}{i}")).collect();
+        seed(
+            &db,
+            key.id(),
+            &contents.iter().map(String::as_str).collect::<Vec<_>>(),
+        );
+
+        let loaded = store.acquire(&key);
+        assert!(
+            loaded < 40,
+            "the byte budget must cut a session the count bound waves through \
+             (loaded {loaded} of 40)"
+        );
+        assert!(
+            loaded >= 7,
+            "8 KiB of budget must still carry several messages, not one \
+             (loaded {loaded})"
+        );
+        assert!(
+            loaded * 1024 <= 9 * 1024,
+            "the window must not wildly overshoot the budget (loaded \
+             {loaded} x 1 KiB)"
+        );
+    }
+
+    /// The window is the NEWEST messages, not the oldest: a truncated session
+    /// must end at its latest turn, because that is the state the operator was
+    /// last working in.
+    #[test]
+    fn the_truncated_window_keeps_the_newest_messages() {
+        let (db, store) = store_with_window(8, 2, 64 * 1024);
+        let key = SessionKey::new("tail");
+        seed(&db, key.id(), &["oldest", "middle", "newest"]);
+
+        // acquire, not peek: peek is a warm-cache read and returns empty for a
+        // cold session by design (the doc on `SessionStore::peek` says so), so
+        // the load has to be driven first or the test measures nothing.
+        assert_eq!(store.acquire(&key), 2, "count bound is 2");
+        let kept = store.peek(&key);
+        assert_eq!(kept.len(), 2, "the load made it resident");
+        assert_eq!(
+            kept[0].content, "middle",
+            "the window is the NEWEST messages — the oldest is what goes"
+        );
+        assert_eq!(kept[1].content, "newest", "the latest turn is the last row");
+    }
+
+    /// A message that would cross the budget is taken WHOLE, never split: a
+    /// half-loaded tool call is worse than one fewer turn, and a count that
+    /// lands mid-turn cannot be reconstructed by the renderer.
+    #[test]
+    fn the_window_never_cuts_a_message_in_half() {
+        // Three messages: two tiny (10 B) and one fat (5 KiB). Budget 5 KiB.
+        // The fat message MUST be taken whole — so the load is 2 or 3, and
+        // every message it does carry is complete.
+        let (db, store) = store_with_window(8, 100, 5 * 1024);
+        let key = SessionKey::new("whole");
+        let fat = "y".repeat(5 * 1024);
+        seed(&db, key.id(), &["tiny-01", &fat, "tiny-02"]);
+
+        // Backward walk: "tiny-02" (7 B) is taken, then the fat message (5 KiB)
+        // is the FIRST row the `taken > 0` guard lets overshoot, so it is taken
+        // whole and the walk stops — tiny-01 never enters the window at all.
+        store.acquire(&key);
+        let kept = store.peek(&key);
+        assert!(!kept.is_empty(), "the window carries something");
+        for m in &kept {
+            let len = m.content.len();
+            // "tiny-02" is 7 bytes and "tiny-01" is 8; the fat one is 5 KiB.
+            // The point is that no length BETWEEN them ever appears.
+            assert!(
+                len == 7 || len == 8 || len == 5 * 1024,
+                "every surviving message is whole — got {len} bytes, which is \
+                 neither a seeded length nor a cut of one"
+            );
+        }
+        assert_eq!(
+            kept.len(),
+            1,
+            "the fat message is EXCLUDED rather than split: taking it would \
+             mean 5127 bytes inside a 5120 budget, and the walk refuses to cut \
+             it — one fewer whole turn beats a truncated one"
+        );
+    }
+
+    /// The `taken > 0` guard lets the FIRST row of a window overshoot the
+    /// budget: a session whose newest message alone is bigger than the budget
+    /// must still load it whole, or the operator switches in and sees nothing.
+    #[test]
+    fn the_newest_message_is_always_taken_whole_even_over_budget() {
+        let (db, store) = store_with_window(8, 100, 512);
+        let key = SessionKey::new("oversize");
+        let fat = "z".repeat(4096);
+        seed(&db, key.id(), &["small", &fat]);
+
+        assert_eq!(
+            store.acquire(&key),
+            1,
+            "the fat newest message is carried whole even though it is 8x the \
+             budget — an empty transcript reads as a broken switch"
+        );
+        assert_eq!(
+            store.peek(&key)[0].content.len(),
+            4096,
+            "and it is whole, not clipped to the budget"
+        );
+    }
+
+    /// A byte budget of zero still yields at least one message: a session the
+    /// operator switches into must show SOMETHING. `taken > 0 &&` in the walk
+    /// is the guard, and this is the test that keeps it.
+    #[test]
+    fn a_tiny_budget_still_yields_one_whole_message() {
+        let (db, store) = store_with_window(8, 100, 0);
+        let key = SessionKey::new("zero");
+        seed(&db, key.id(), &["only", "visible", "message"]);
+
+        assert_eq!(
+            store.acquire(&key),
+            1,
+            "a zero byte budget still carries one whole message — an empty \
+             transcript reads as a broken switch, not a bounded one"
+        );
     }
 }

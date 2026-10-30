@@ -49,6 +49,10 @@ impl Fixture {
                 // Long enough that a seeded transcript is rehydrated whole, so
                 // the store's own tail window is not what these tests measure.
                 rehydrate_tail: 1000,
+                // …and the byte budget is off entirely, for the same reason:
+                // these tests seed small transcripts on purpose and must not be
+                // gated by a window that nothing in them exercises.
+                rehydrate_bytes: usize::MAX,
             },
         ));
         let compactor =
