@@ -79,11 +79,16 @@ This is a genuine capability gap, not a cosmetic one: a model that knows it is n
 its limit can summarise early, split work, or stop asking for more context. Operant's
 model cannot.
 
-**Why M and not S:** the tool is small, but it needs a live token count from
-operant's context manager at call time. Codex has `WorldState` and a
-`TokenBudgetRemainingContext` fragment type; operant has the eviction machinery but
-exposes no budget accessor. The port is: add a budget accessor to
-`context_management.rs`, register the tool in `builtin.rs`, and render the result.
+**Why M and not S:** the tool file is small, but the hard part is upstream of it.
+operant **already has** the arithmetic — `estimate_total_tokens` (`context_management.rs:85`)
+and `manage_context_reporting` (`context_management.rs:1283`) are both `pub` — so the
+gap is not a missing accessor. The gap is that no tool can *reach* the live count:
+`execute_tools(&self, tool_calls)` (`agent/stream.rs:679`) is called as
+`self.execute_tools(tool_calls)` from `agent/run.rs:1813` while `messages` is a **local**
+there, and `ToolContext` (`tools.rs:287-298`) carries only `session_id` + `metadata`. So the
+port means threading the budget through `execute_tools`/`tool_context` (or a shared cell
+updated on `CompactionCompleted`), then writing the tool and registering it in `builtin.rs`.
+See the same blocker named for turn-diff tracking in `03-session-and-turn.md` Row 4.
 
 ---
 

@@ -51,18 +51,32 @@ uses it when the history is already lossy. That is a config flag and a branch.
 - **Codex:** `core/src/tools/handlers/get_context_remaining.rs:1` (109 LOC) + `..._spec.rs:1` (39 LOC). The output type carries `tokens_left: Option<i64>` and renders a `TokenBudgetRemainingContext` fragment (`get_context_remaining.rs:15-33`).
 - **Operant today:** the accessors **exist** but nothing exposes them to the model. `crates/operant-core/src/context_management.rs:85` — `pub fn estimate_total_tokens(messages: &[Message]) -> usize`; `context_management.rs:1283` — `manage_context_reporting(...) -> (Vec<Message>, EvictionOutcome)` with an `EvictionOutcome` struct (`context_management.rs:802`). `rg -n "remaining" crates/operant-core/src/agent/` finds only retry-budget and cooldown timers — **nothing** about the context budget reaching the model.
 - **Verdict:** `IMPORT-DIRECT`
-- **Effort:** S (not M as recorded in `01-tool-surface.md` — see below)
+- **Effort:** M (see the re-grade below)
 - **Value:** operant's eviction is silent, and operant already has the arithmetic.
 
-**Re-graded effort.** `01-tool-surface.md` Row 2 rated this M on the grounds that
-operant "exposes no budget accessor". That was wrong: `estimate_total_tokens` and
-`manage_context_reporting` are both `pub`. The port is: compute the remaining budget,
-expose it as a tool, register it in `builtin.rs`. **S**, not M.
+**Re-graded effort — this row was wrong the first time.** Both docs recorded an
+effort for this row on incomplete evidence, and doc 03 asserted **S** while `01-tool-surface.md`
+said **M**. Neither checked the call path. The ground truth:
+
+- `agent/stream.rs:679` — `pub(crate) async fn execute_tools(&self, tool_calls: Vec<ToolCall>) -> Result<Vec<ToolResult>>`. **`messages` is not a parameter.**
+- `agent/stream.rs:24` — `fn tool_context(&self) -> ToolContext` builds from `self`, and `ToolContext` (`crates/operant-core/src/tools.rs:287-298`) carries only `session_id` + `metadata`. There is **no message list** on it.
+- `agent/run.rs:1813` calls `self.execute_tools(tool_calls)`, while `messages` is a **local variable** in `run.rs` at that point (evicted at `run.rs:2880`). It is not on `self`.
+
+So `estimate_total_tokens` being `pub` is necessary but **not sufficient**: the tool cannot
+reach the live messages today. Closing the gap needs either a `remaining_tokens` value
+threaded into `execute_tools`/`tool_context`, or a shared budget cell the agent updates
+after each compaction event. That is new plumbing, not just a new tool file. **M is
+correct; the earlier "S, operant already has the number" was overconfident and is
+withdrawn.**
 
 **Why it matters.** See `01-tool-surface.md` Row 2. The model cannot tell that operant
 dropped its context, so it cannot compensate. This is the highest value-per-line row in
-the session family precisely because operant already has the number and only lacks the
-channel.
+the session family precisely because operant already has the arithmetic and only lacks
+the channel.
+
+**Same blocker as Row 4 below.** Both this row and Row 4 (turn diff tracking) are blocked
+on the same thing: a `ToolContext` that carries live per-turn state. If one enrichment is
+done, do it once and unblock both — see Row 4's note on why a global would be worse.
 
 ---
 
@@ -213,7 +227,7 @@ Adding a KV store because codex has one is exactly the complexity ponytail forbi
 | Row | Mechanism | Codex LOC | Verdict | Effort |
 |---|---|---|---|---|
 | 1 | token-budget compaction (no model call) | 69 | IMPORT-PATTERN | S |
-| 2 | model's own context budget | 148 | IMPORT-DIRECT | **S** |
+| 2 | model's own context budget | 148 | IMPORT-DIRECT | **M** (re-graded: needs plumbing) |
 | 3 | turn metadata | 626 | SKIP | — |
 | 4 | turn diff tracking | 403 | IMPORT-PATTERN (blocked on ToolContext) | L |
 | 5 | executed tool-call records | 758 | SKIP | — |
