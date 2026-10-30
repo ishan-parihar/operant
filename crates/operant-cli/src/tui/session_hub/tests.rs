@@ -749,3 +749,99 @@ fn an_ordinary_session_row_draws_no_badge() {
         "a subagent row must still carry its badge: {sub:?}"
     );
 }
+
+// ---- (2026-10-30) subagent rows say "usage —" and name their delegation status ----
+
+/// The defect: `records_snapshot()` in async_delegation.rs hardcodes
+/// message_count 0, cost 0.0 and tokens 0 because the delegation registry holds
+/// no usage counters, so a subagent row rendered "$0.0000 · 0 msg · 0.000k tok"
+/// — asserting it had measured and found nothing. omp's roster rules say
+/// "missing data appears as `usage —` rather than an estimate"
+/// (agent-hub.md:36), and a dash is the honest shape: not measured, not zero.
+#[test]
+fn a_subagent_row_says_usage_is_unmeasured_rather_than_printing_zeros() {
+    let (list, _preview) = hub_rows(vec![subagent_row("dlg-9", "audit the tests", "pending")]);
+    let row = list
+        .iter()
+        .find(|r| r.contains("dlg-9"))
+        .unwrap_or_else(|| panic!("the row must render: {list:?}"));
+    assert!(
+        row.contains("usage —"),
+        "a subagent row must say usage — because the registry measures none: {row:?}"
+    );
+    assert!(
+        !row.contains("$0.0000"),
+        "a fabricated cost is a claim, not a placeholder: {row:?}"
+    );
+    assert!(
+        !row.contains("0 msg"),
+        "a fabricated message count is a claim, not a placeholder: {row:?}"
+    );
+}
+
+/// The other half (audit Gap B): the delegation STATUS is what told the two
+/// terminal states apart, and it existed only in the focused preview — so a
+/// Completed and a Failed subagent were indistinguishable in the list. Both
+/// states now name themselves on the row.
+#[test]
+fn a_subagent_row_names_its_delegation_status_without_focusing_it() {
+    let (list, _preview) = hub_rows(vec![
+        subagent_row("dlg-1", "audit the tests", "pending"),
+        subagent_row("dlg-2", "done work", "completed"),
+        subagent_row("dlg-3", "broken work", "failed"),
+    ]);
+    let pending = list
+        .iter()
+        .find(|r| r.contains("dlg-1"))
+        .unwrap_or_else(|| panic!("the pending row must render: {list:?}"));
+    let completed = list
+        .iter()
+        .find(|r| r.contains("dlg-2"))
+        .unwrap_or_else(|| panic!("the completed row must render: {list:?}"));
+    let failed = list
+        .iter()
+        .find(|r| r.contains("dlg-3"))
+        .unwrap_or_else(|| panic!("the failed row must render: {list:?}"));
+    assert!(pending.contains("pending"), "pending row: {pending:?}");
+    assert!(
+        completed.contains("completed"),
+        "completed row: {completed:?}"
+    );
+    assert!(failed.contains("failed"), "failed row: {failed:?}");
+    assert_ne!(
+        completed, failed,
+        "Completed and Failed must not draw as the same row"
+    );
+}
+
+/// The fix must not leak: an ordinary session row keeps its REAL numbers,
+/// because for sessions those are measured and true.
+///
+/// The row is TWO lines (title + meta, one multi-line ListItem) and the meta
+/// is the line carrying the numbers, so the assertion targets the line that
+/// holds the row's id. An earlier version joined the whole list buffer and
+/// failed on a *correct* frame: "usage —" was present, in the subagent row two
+/// rows down. Per-row matching is the fix, not a looser assertion.
+#[test]
+fn an_ordinary_session_row_keeps_its_real_usage_numbers() {
+    let (list, _preview) = hub_rows(vec![
+        row("sess-a", Some("alpha"), None),
+        subagent_row("dlg-9", "audit the tests", "pending"),
+    ]);
+    let session_meta = list
+        .iter()
+        .find(|r| r.contains("sess-a"))
+        .unwrap_or_else(|| panic!("the session's meta row must render: {list:?}"));
+    assert!(
+        !session_meta.contains("usage —"),
+        "a session's usage IS measured — it must not print the dash: {session_meta:?}"
+    );
+    assert!(
+        session_meta.contains("3 msg"),
+        "the session's real message count must survive (the helper sets 3): {session_meta:?}"
+    );
+    assert!(
+        session_meta.contains("$0.0100"),
+        "the session's real cost must survive (the helper sets 0.01): {session_meta:?}"
+    );
+}

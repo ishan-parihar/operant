@@ -290,8 +290,43 @@ fn render_list(frame: &mut Frame, state: &SessionHubState, area: ratatui::layout
                 // resolves the full id from /resume's completion or
                 // `sessions list --json` when they need the whole string.
                 let short_id: String = row.id.chars().take(12).collect();
-                let token_span = tokens_suffix(row.tokens);
-                let meta_line = Line::from(vec![
+                // (2026-10-30) A subagent row printed "$0.0000 · 0 msg · 0.000k
+                // tok" and asserted a fact it did not have: `records_snapshot`
+                // in async_delegation.rs hardcodes message_count 0, cost 0.0
+                // and tokens 0, because the delegation registry holds no usage
+                // counters. omp's roster rules state "missing data appears as
+                // `usage —` rather than an estimate" (agent-hub.md:36) and that
+                // is the honest shape here — a dash says "not measured", a
+                // zero says "dispatched and consumed nothing", which for a
+                // `Pending` delegation is simply false.
+                //
+                // The row's real gap was the delegation STATUS: a Completed and
+                // a Failed subagent looked identical unless focused. Both live
+                // on `RowKind::Subagent.status`, so print it here.
+                let (usage_span, status_span) = match &row.kind {
+                    RowKind::Subagent { status, .. } => (
+                        Span::styled("  usage —", Style::default().fg(theme_colors::muted())),
+                        Some(Span::styled(
+                            format!("  {status}"),
+                            Style::default().fg(match *status {
+                                "pending" => theme_colors::success(),
+                                "failed" => theme_colors::error(),
+                                _ => theme_colors::muted(),
+                            }),
+                        )),
+                    ),
+                    _ => {
+                        let token_span = tokens_suffix(row.tokens);
+                        (
+                            Span::styled(
+                                format!("  {} msg{token_span}", row.message_count),
+                                Style::default().fg(theme_colors::muted()),
+                            ),
+                            None,
+                        )
+                    }
+                };
+                let mut meta_spans = vec![
                     // ID first: it is the row's handle, and the one thing an
                     // operator is never otherwise shown on screen.
                     Span::styled(
@@ -299,19 +334,22 @@ fn render_list(frame: &mut Frame, state: &SessionHubState, area: ratatui::layout
                         Style::default().fg(theme_colors::muted()),
                     ),
                     Span::styled(emp, Style::default().fg(theme_colors::muted())),
-                    Span::styled(
-                        format!("  {} msg{token_span}", row.message_count),
-                        Style::default().fg(theme_colors::muted()),
-                    ),
-                    Span::styled(
-                        format!("  {}", relative_time(row.updated_at)),
-                        Style::default().fg(theme_colors::muted()),
-                    ),
-                    Span::styled(
+                    usage_span,
+                ];
+                if let Some(status_span) = status_span {
+                    meta_spans.push(status_span);
+                }
+                meta_spans.push(Span::styled(
+                    format!("  {}", relative_time(row.updated_at)),
+                    Style::default().fg(theme_colors::muted()),
+                ));
+                if !matches!(row.kind, RowKind::Subagent { .. }) {
+                    meta_spans.push(Span::styled(
                         format!("  ${:.4}", row.cost_usd),
                         Style::default().fg(theme_colors::muted()),
-                    ),
-                ]);
+                    ));
+                }
+                let meta_line = Line::from(meta_spans);
                 // ONE ListItem holding BOTH lines, not two items: the
                 // selection index must stay 1:1 with `visible_idx`, and a
                 // second item per session would drift Up/Down onto the meta

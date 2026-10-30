@@ -526,6 +526,13 @@ pub struct OperantAgent {
     /// prefix re-reads it on every build (no memoization), so a swap lands
     /// on the very next request.
     skill_manager: Arc<std::sync::RwLock<Option<SkillManager>>>,
+    /// Plan 2026-10-28 Phase B — capability manager provides the
+    /// `<available_capabilities>` block in the frozen prefix. Swapped at
+    /// runtime via `set_capability_manager`, mirroring the skill manager
+    /// pattern. The frozen prefix re-reads it on every build (no
+    /// memoization), so a swap lands on the very next request.
+    capability_manager:
+        Arc<std::sync::RwLock<Option<crate::tools::cli_discovery::CapabilityManager>>>,
     database: Arc<Database>,
     /// Memory provider for long-term memory hooks. When set, the agent
     /// calls `sync_turn(user, assistant)` after each completed turn so

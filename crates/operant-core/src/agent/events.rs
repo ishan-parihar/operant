@@ -514,6 +514,29 @@ impl OperantAgent {
             .unwrap_or_else(std::sync::PoisonError::into_inner) = skill_manager;
     }
 
+    /// Plan 2026-10-28 Phase B — capability manager provides the
+    /// `<available_capabilities>` block in the frozen prefix. Swapped at
+    /// runtime via `set_capability_manager`, mirroring the skill manager
+    /// pattern. The frozen prefix re-reads it on every build (no
+    /// memoization), so a swap lands on the very next request.
+    pub fn set_capability_manager(
+        &self,
+        capability_manager: Option<crate::tools::cli_discovery::CapabilityManager>,
+    ) {
+        let count = capability_manager
+            .as_ref()
+            .map(|m| m.list_cli_capabilities().len())
+            .unwrap_or(0);
+        tracing::info!(
+            capabilities = count,
+            "Agent capability manager swapped at runtime"
+        );
+        *self
+            .capability_manager
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = capability_manager;
+    }
+
     /// Retarget the agent's model client at another OpenAI-compatible
     /// endpoint at runtime (`/connect`). Takes `&self` like [`Self::set_model`].
     /// Without this the client built at startup keeps hitting the original
@@ -964,6 +987,28 @@ impl OperantAgent {
             // frozen prefix so the background-review fork inherits them
             // for free (byte-stable => prompt cache hits preserved).
             frozen.push_str(SKILLS_GUIDANCE);
+        }
+        // Capabilities block mirrors <available_skills> for CLI tools
+        // that surface only behind the bridge. Readiness check against
+        // the tool registry's CLI catalog, not the skill manager — keeping
+        // the two surfaces strictly separated so cache bytes stay stable.
+        let cap_manager_guard = self
+            .capability_manager
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(cap_manager) = cap_manager_guard.as_ref() {
+            let caps = cap_manager.list_cli_capabilities();
+            if !caps.is_empty() {
+                frozen.push_str("\n\n<available_capabilities>\n");
+                for (name, description) in &caps {
+                    frozen.push_str(&format!(
+                        "  <capability name=\"{}\">{}</capability>\n",
+                        escape_xml_text(name),
+                        escape_xml_text(description)
+                    ));
+                }
+                frozen.push_str("</available_capabilities>");
+            }
         }
         // Ponytail phase 4: the always-on posture block. Sits AFTER the
         // skills guidance, gated on [agent.ponytail] enabled+always_on
