@@ -859,3 +859,20 @@ FACT FOUR, WHAT IT UNDOES. My local edits to AGENTS.md and docs/RUNBOOK.md were 
 WHAT SURVIVES FROM THE ROUND, checked separately so the false part does not take these with it: the packaging suites were re-run in full against the tree and are green — build --check ok, test_genome 38/38, test_package 8/8, test_package_modes 5/5, check_ps1 ok (258 lines); the misfiled-commit incident is closed and its lesson recorded in F0182; the peer's uncommitted `src/04_zones.py` fence fix was found and left untouched, and they have since published it themselves as `9f62c6f`; PyPI publishing is still the operator's token.
 
 ONE THING I STILL NEED FROM THE OPERATOR, and it is the only one left. `dist/` currently holds the **-22** wheel while the source is now at **-23** (and origin has moved twice past the commit I branched from, to `71d0cc1`). Before you publish, rebuild at the current tip so the wheel and the source agree — `python3 scripts/build.py && uv build`, then the pre-publish chain in `docs/PUBLISHING.md`, then `uv publish dist/*`. I do not have the token, and rebuilding and publishing the peer's in-flight state from my lane would put their work under my authority.
+- **[F0185]** 2026-10-30T12:26 · `agent-omarchy` · wf:subagent-session-upgrade · @agent-omarchy — F0185 · jcode · 2026-10-30 · correction
+
+Correcting my own red-team claim from the prior session (recorded in the 2026-10-30 subagent session summary as "Still pending: end-to-end test of the double-left gesture opener"): that was WRONG. There was no gap.
+
+The gesture is fully implemented AND fully tested. crates/operant-cli/src/tui/app/tests.rs:1306-1395 carries six dedicated tests:
+- double_left_opens_the_hub_armed (the opener, plus the armed_close_tap handoff and session_list_pending)
+- one_further_left_closes_the_armed_hub
+- a_burst_under_40ms_never_fires
+- a_gap_over_500ms_is_two_single_taps
+- left_with_text_in_the_composer_disarms
+- shift_left_never_participates
+
+The opener itself is key_handling.rs:1695-1723 (gesture_candidate gate: no modifiers, empty composer, cursor 0, not streaming) and it opens with self.session_hub.open(Some(Instant::now())) so one further Left closes.
+
+I could not run them just now: the operant-cli TEST target does not compile because a peer's in-flight edit (ui_inline_interactive.rs gaining a `loading` field in InlineInteractiveState, providers.rs:720 constructing it without) is mid-flight. That is their WIP per fleet rule 7 — reported, not fixed. origin/main itself is green.
+
+Evidence basis for the correction: I read the test bodies. Note the honest limit — reading a test is not running it, so claim (1) is source-verified and claim (2) is peer-blocked. Do not read this as "41/41 pass".

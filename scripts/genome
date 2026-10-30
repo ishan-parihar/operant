@@ -1483,8 +1483,28 @@ def misplaced_paths(cfg) -> list[str]:
             continue
         if derived and not name.lower().endswith((".md", ".markdown")):
             continue
+        if is_tombstone(cfg.root / f):
+            continue    # `genome archive` leaves a pointer at the source's ORIGINAL
+                        # path so the old path stays findable. It is the tool's own
+                        # artefact and it points into a role-owned directory, so
+                        # flagging it as misplaced is a false positive: the only
+                        # way to silence it was to commit the pointer into
+                        # docs/archive/, i.e. to archive the pointer to the
+                        # archive (observed 2026-10-30: archiving a root plan
+                        # produced a permanent E306 on its own tombstone).
         out.append(f)
     return sorted(out)
+
+
+def is_tombstone(path) -> bool:
+    """True for a `genome archive` tombstone pointer (5-line stub with a target)."""
+    try:
+        body = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    if TOMBSTONE.search(body):
+        return True
+    return body.startswith("# ") and "<!-- kb: tombstone target=" in body
 
 
 def legal_root_files(cfg) -> set[str]:
