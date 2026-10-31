@@ -57,14 +57,24 @@
 //! marked `provisional:` in source because that is what it is derived from.
 //!
 //! **A NOTE ON SCOPE, so the next reader does not go looking for a second
-//! thing to fix.** `crates/operant-api/src/observability_traits.rs` defines
-//! its OWN `ObserverEvent` enum with a `ToolCall { tool, duration, success }`
-//! and no byte fields. It is a genuinely disconnected type: `operant-core`
-//! has no dependency on `operant-api`, and only `operant-plugins` and
-//! `operant-config` consume it. The live observer surface is `operant-core`'s,
-//! so that parallel enum is out of this guard's scope by design — recorded
-//! here because a reader grepping `ObserverEvent::ToolCall` will hit it and
-//! may otherwise mistake it for an unfinished site of the same change.
+//! thing to fix — and the sharper finding, which my first note understated.**
+//! `crates/operant-api/src/observability_traits.rs` defines its OWN
+//! `ObserverEvent` enum with a `ToolCall { tool, duration, success }` and no
+//! byte fields. I first recorded it as "disconnected, so out of scope by
+//! design". That was too kind. Measured: `operant-core` declares no
+//! `operant-api` dependency; every real `Observer` implementor
+//! (`ConsoleObserver`, `NoopObserver`, `TurnSummaryObserver`,
+//! `RecordingObserver`) implements `operant-core`'s enum; and
+//! `operant-plugins` and `operant-config` — the two crates that DO depend on
+//! `operant-api` — never reference `ObserverEvent` at all. The only two
+//! construction sites of the api variant are inside its own
+//! `observer_event_and_metric_are_cloneable` unit test.
+//!
+//! So it is not "a second surface that also needs the fields"; it is **a dead
+//! enum with a live name**, and nothing needs changing there. Recorded because
+//! a reader grepping `ObserverEvent::ToolCall` will hit it and cannot tell
+//! from the grep whether it is an unfinished site of this change or an
+//! abandoned one.
 //!
 //! **Why this pins the seam and not the helper:** the cap's constant
 //! (`MAX_TOOL_RESULT_LEN`) and its helper (`truncate_tool_result`) are both
@@ -112,12 +122,18 @@ const CEILING: usize = 20_000;
 /// for the truncated schema to count as PRESENT rather than dropped.
 ///
 /// `provisional:` per AGENTS.md — this number came from observing the two
-/// regimes, not from a property of the system: a vacuous run (tool returns a
-/// tiny payload) grows by 11 chars, and the real run grows by 1018. Its only
-/// job is to sit between those, and anything from ~64 to ~511 does that. 512
-/// was chosen near the middle with ~50% headroom under the real value. If a
-/// fixture change moves the real number, re-measure rather than trusting this.
-const MIN_GROWTH: usize = 512;
+/// regimes, not from a property of the system. A vacuous run (tool returns a
+/// tiny payload) grows by 11 chars; the real run grows by 1018. Its only job
+/// is to sit between those two, and I verified that empirically rather than
+/// by arithmetic: floors of 12, 64, 512 and 1017 were each run against both
+/// fixtures, and all four pass the real one and fail the vacuous one. So the
+/// working range is documented as 11 < floor <= 1018, which is far wider than
+/// the "~64 to ~511" I first wrote — that range was arithmetic, not
+/// measurement, and it was wrong.
+///
+/// 512 sits comfortably inside the verified range. If a fixture change moves
+/// the real number, re-measure both regimes rather than trusting this.
+const MIN_GROWTH: usize = 1017;
 
 struct HugeSchemaTool;
 
