@@ -365,6 +365,19 @@ pub struct App {
     pub todos_card_payload: String,
     /// /todos toggle: hide the pinned todo card band.
     pub todos_band_hidden: bool,
+    /// The session id the live todo tick re-reads. The `todo` tool defaults
+    /// to `"default"` when the model passes no `session_id`, so the tick reads
+    /// the same store the tool writes unless the session is known.
+    pub todos_session_id: String,
+    /// Throttle clock for the live todo tick. The tick re-reads the persisted
+    /// list at most once per second and only rewrites the card payload when
+    /// the list actually changed, so a subagent's writes reach the operator's
+    /// card without a disk read per frame.
+    pub todos_tick_at: Option<std::time::Instant>,
+    /// Fingerprint of the list the card payload was last built from. Changing
+    /// it is what makes the tick rebuild; keeping it lets the tick skip the
+    /// payload rebuild entirely when nothing moved.
+    pub todos_fingerprint: String,
     /// (iter-1211) Set while the pinned todo card is showing its WHOLE
     /// list rather than the band-budgeted prefix. The band renders
     /// `… +N more (todo)` when the card is taller than its budget
@@ -1017,10 +1030,128 @@ const SIM_DRAIN_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_m
 /// queued key; more would only mask a scenario that forgot its Enter.
 const SIM_KEY_DRAIN_PASSES: u32 = 3;
 
+/// Fingerprint the todo list the card was last built from.
+///
+/// A per-item `id/status/content/lane` fold, not a hash of the serialized
+/// list: the tick runs once a second against a list bounded by
+/// `MAX_TODO_ITEMS` (256), so a direct comparison is cheaper than building a
+/// 256-item JSON string to hash, and it is exact — a hash collision would
+/// silently freeze the card on a stale list.
+fn todos_fingerprint(items: &[crate::tui::operant_app::todo::TodoItem]) -> String {
+    let mut fp = String::with_capacity(items.len() * 24);
+    for item in items {
+        fp.push_str(&item.id);
+        fp.push('\u{1}');
+        fp.push_str(&item.status);
+        fp.push('\u{1}');
+        fp.push_str(&item.content);
+        fp.push('\u{1}');
+        if let Some(lane) = &item.group {
+            fp.push_str(lane);
+        }
+        fp.push('\u{1}');
+    }
+    fp
+}
+
 impl App {
     // -------------------------------------------------------------------
     // Main run loop
     // -------------------------------------------------------------------
+
+    /// Re-read the persisted todo list at most once a second and rebuild the
+    /// card payload when it moved.
+    ///
+    /// [port-jcode] jcode's `refresh_pinned_todos_if_needed`
+    /// (`../external-repos/jcode/crates/jcode-tui/src/tui/app/todos_view.rs:97`)
+    /// is what makes the todo card a VIEW rather than a one-shot record: the
+    /// store is file-backed, so the truth lives on disk, and a card fed only
+    /// by `AgentEvent::ToolComplete` shows the parent's own write and nothing
+    /// else. That left two producers invisible here — a subagent's list (its
+    /// events are deliberately not forwarded to the parent,
+    /// `sub_agent_tool.rs:660`) and a session restored after a restart (the
+    /// store reads through from disk, so the data was there to show).
+    ///
+    /// Throttled + fingerprinted rather than per-frame: the read takes the
+    /// store's global mutex and may hit the filesystem, and a list changes on
+    /// a human timescale. When the fingerprint matches, the payload is left
+    /// untouched so the render cache is not invalidated either.
+    pub(super) fn refresh_todos_if_needed(&mut self) -> bool {
+        const REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_millis(1000);
+        if self
+            .todos_tick_at
+            .is_some_and(|t| t.elapsed() < REFRESH_INTERVAL)
+        {
+            return false;
+        }
+        self.todos_tick_at = Some(std::time::Instant::now());
+        let items = operant_core::tools::todo_list_for_session(&self.todos_session_id)
+            .into_iter()
+            .map(crate::tui::operant_app::todo::TodoItem::from)
+            .collect::<Vec<_>>();
+        let fingerprint = todos_fingerprint(&items);
+        if fingerprint == self.todos_fingerprint {
+            return false;
+        }
+        self.todos_fingerprint = fingerprint;
+        self.todos = items;
+        self.rebuild_todos_card_payload();
+        self.invalidate_transcript();
+        true
+    }
+
+    /// Build `todos_card_payload` from the live list.
+    ///
+    /// The one shape the card renderer's `TodoCardPayload::Current` arm reads
+    /// (`ui_messages.rs:924-934`), so an empty list clears the band instead of
+    /// rendering the legacy fallback's placeholder forever.
+    pub(super) fn rebuild_todos_card_payload(&mut self) {
+        if self.todos.is_empty() {
+            self.todos_card_payload = String::new();
+            return;
+        }
+        // Ids a live subagent is executing. The `todo` tool's wire schema
+        // carries `assigned_to` (todo_tool.rs:219) and the model names the
+        // delegation handle the dispatch returned, so the join is exact on
+        // `delegation_id` — no content fuzzying, which would mis-attribute a
+        // sibling task with a similar title.
+        let live: Vec<String> = self.subagent_live_todo_ids();
+        let card = serde_json::json!({ "todos": self.todos, "live_ids": live });
+        self.todos_card_payload = serde_json::to_string(&card).unwrap_or_default();
+    }
+
+    /// Todo ids whose `assigned_to` names a delegation that is still pending.
+    ///
+    /// Reads the same process-wide registry `session_hub` already reads every
+    /// second (`async_delegation::list_records`, session_hub/mod.rs:276), so
+    /// the card and the hub agree on what is live by construction — a
+    /// completed delegation clears the accent here and its row's status there
+    /// in the same event.
+    ///
+    /// Synonymous with oh-my-pi's `isActiveTodo` pending-branch (its
+    /// `packages/tui/src/tools/todo.ts:131`): the status stays `pending`, the
+    /// display treats it as current work.
+    pub(super) fn subagent_live_todo_ids(&self) -> Vec<String> {
+        let pendings = operant_core::tools::async_delegation::list_records()
+            .into_iter()
+            .filter(|rec| {
+                rec.status == operant_core::tools::async_delegation::AsyncDelegationStatus::Pending
+            })
+            .map(|rec| rec.delegation_id)
+            .collect::<std::collections::HashSet<_>>();
+        if pendings.is_empty() {
+            return Vec::new();
+        }
+        self.todos
+            .iter()
+            .filter(|todo| {
+                todo.assigned_to
+                    .as_deref()
+                    .is_some_and(|assigned| pendings.contains(assigned))
+            })
+            .map(|todo| todo.id.clone())
+            .collect()
+    }
 
     /// Spawn the /mcp reconnect task: re-add all enabled servers by
     /// transport (HTTP/streamable-HTTP via `add_server`, stdio via
@@ -1422,6 +1553,13 @@ impl App {
 
             // Drain background session-list results.
             self.drain_session_list();
+
+            // Live todo tick (iter-1588): re-read the persisted list so a
+            // producer the parent's event stream never sees — a subagent's
+            // write, a session restored after a restart — still reaches the
+            // card. Throttled and fingerprinted inside, so this is a no-op
+            // on nearly every frame.
+            self.refresh_todos_if_needed();
 
             // The hub's subagent rows are loaded when it OPENS. While the
             // operator keeps it open, a delegation that finishes must follow

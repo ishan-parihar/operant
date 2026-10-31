@@ -249,9 +249,15 @@ impl App {
                         Vec<crate::tui::operant_app::todo::TodoItem>,
                     >(items.clone())
                 {
-                    let card = serde_json::json!({ "todos": parsed });
-                    self.todos_card_payload = serde_json::to_string(&card).unwrap_or_default();
+                    // Route through the same rebuild the 1s live tick uses,
+                    // and re-stamp the fingerprint with the result's own list:
+                    // the tool result is authoritative NOW, while the tick may
+                    // have been throttled for up to a second and could still
+                    // be reading the pre-write file. Sharing the rebuild keeps
+                    // the payload's shape in one place.
                     self.todos = parsed;
+                    self.rebuild_todos_card_payload();
+                    self.todos_fingerprint = todos_fingerprint(&self.todos);
                     self.invalidate_transcript();
                 }
                 // (iter-209: refresh_turn_diff_from_history removed)

@@ -324,6 +324,40 @@ pub struct TodoItem {
     pub assigned_to: Option<String>,
 }
 
+/// Bridge from the store's wire struct to this render struct.
+///
+/// Two types exist rather than one because the card is a vendored render type
+/// (`operant_task_types`) and the store is the tool's (`todo_tool`): the card
+/// carries the eleven semantic-state enums the tool writes never set, and the
+/// tool carries `lane` where the card reads `group`. The TUI-side `alias`es
+/// already accept `lane`, so a field-wise map is exact — and a serde round
+/// trip through this impl's shape would pay for parsing to avoid writing a
+/// diagonal.
+///
+/// `assigned_to` and `blocked_by` travel: they are the fields the card's
+/// subagent-live accent and blocked glyph read, so dropping them here would
+/// break the link this file's callers now feed (`App::todos_fingerprint`,
+/// `subagent_live_todo_ids`).
+impl From<operant_core::tools::todo_tool::TodoItem> for TodoItem {
+    fn from(value: operant_core::tools::todo_tool::TodoItem) -> Self {
+        Self {
+            content: value.content,
+            status: value.status,
+            priority: value.priority.unwrap_or_else(|| "medium".to_string()),
+            id: value.id,
+            group: value.lane,
+            phase: value.phase,
+            // The store's wire schema sets neither; the card's confidence
+            // surfaces stay empty rather than inventing an assessment.
+            confidence: None,
+            completion_confidence: None,
+            confidence_history: Vec::new(),
+            blocked_by: value.blocked_by,
+            assigned_to: value.assigned_to,
+        }
+    }
+}
+
 /// Plan-level understanding of what the user actually wants, covering the
 /// whole todo list rather than one group.
 ///

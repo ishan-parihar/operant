@@ -125,6 +125,14 @@ pub use transcription_tool::TranscriptionTool;
 pub use tts_command_provider::CommandProvider;
 pub use tts_provider::{AudioFormat, TtsError, TtsProvider};
 pub use tts_registry::TtsPluginRegistry;
+// The store is file-backed and its data is the operator's, so a non-agent
+// reader (the TUI's todo band) must be able to ask for it directly instead of
+// waiting to observe a tool result — see `todo_tool::todo_list_for_session`.
+// The compression-path readers keep their fully-qualified paths
+// (`agent/compress.rs`) and are not re-exported here.
+#[cfg(any(test, feature = "test-support"))]
+pub use todo_tool::set_todo_dir_for_tests;
+pub use todo_tool::{todo_counts_for_session, todo_list_for_session};
 pub use verification_tool::VerifyTaskTool;
 
 use std::collections::{HashMap, HashSet};

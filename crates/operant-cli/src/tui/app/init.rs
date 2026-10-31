@@ -152,6 +152,9 @@ impl App {
             todos: Vec::new(),
             todos_card_payload: String::new(),
             todos_band_hidden: false,
+            todos_session_id: "default".to_string(),
+            todos_tick_at: None,
+            todos_fingerprint: String::new(),
             pinned_todos_expanded: false,
             thinking_display_on: crate::tui::operant_app::config_shim::config()
                 .display

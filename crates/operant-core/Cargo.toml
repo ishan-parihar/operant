@@ -110,6 +110,11 @@ memory-wire = { git = "https://github.com/ishan-parihar/memory-wire", branch = "
 [features]
 default = []
 anthropic = []
+# Test seams other crates' integration tests need. The core's own unit tests
+# see them through the ordinary `cfg(test)` path; an integration test in
+# `operant-cli` compiles the core as a plain dependency, so `cfg(test)` would
+# configure them out and the caller would have no seam at all.
+test-support = []
 
 [build-dependencies]
 cc = "1.0"

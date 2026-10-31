@@ -929,6 +929,19 @@ enum TodoCardPayload {
         plan: crate::tui::operant_app::todo::TodoPlan,
         #[serde(default)]
         goals: Vec<crate::tui::operant_app::todo::TodoGoal>,
+        /// Ids of todos a live subagent is executing (`assigned_to` matches a
+        /// still-pending delegation). Rendered in the accent colour the
+        /// `in_progress` row uses, so the card distinguishes "claimed but not
+        /// started" from "nobody is on this" without the model having to
+        /// flip a status it is not maintaining. [port-omp] oh-my-pi's #5873
+        /// `isActiveTodo` treats a subagent-matched pending task as current
+        /// work; the match set rides the payload because the card renderer is
+        /// a pure function of `(msg, width)` with no handle back to App.
+        ///
+        /// `#[serde(default)]` keeps a payload written without it (every
+        /// pre-iter-1588 App) deserializing as a no-subagent-match card.
+        #[serde(default)]
+        live_ids: Vec<String>,
     },
     Legacy(Vec<crate::tui::operant_app::todo::TodoItem>),
 }
@@ -965,6 +978,13 @@ fn todo_confidence_color() -> Color {
     rgb(135, 155, 180)
 }
 
+/// Accent for a todo a live subagent is executing. Warm rather than the info
+/// palette's cool end so it reads as "in motion" next to a `blocked_by`
+/// glyph's amber without being the same warning colour.
+fn todo_live_color() -> Color {
+    rgb(215, 190, 120)
+}
+
 impl TodoCardPayload {
     fn into_parts(
         self,
@@ -972,12 +992,19 @@ impl TodoCardPayload {
         Vec<crate::tui::operant_app::todo::TodoItem>,
         crate::tui::operant_app::todo::TodoPlan,
         Vec<crate::tui::operant_app::todo::TodoGoal>,
+        Vec<String>,
     ) {
         match self {
-            Self::Current { todos, plan, goals } => (todos, plan, goals),
+            Self::Current {
+                todos,
+                plan,
+                goals,
+                live_ids,
+            } => (todos, plan, goals, live_ids),
             Self::Legacy(todos) => (
                 todos,
                 crate::tui::operant_app::todo::TodoPlan::default(),
+                Vec::new(),
                 Vec::new(),
             ),
         }
@@ -1115,7 +1142,7 @@ pub(crate) fn render_todos_message(
     let Ok(payload) = serde_json::from_str::<TodoCardPayload>(&msg.content) else {
         return render_system_message(msg, width, diff_mode);
     };
-    let (todos, plan, goals) = payload.into_parts();
+    let (todos, plan, goals, live_ids) = payload.into_parts();
 
     let centered = markdown::center_code_blocks();
     let meta_style = Style::default().fg(todo_meta_color());
@@ -1179,7 +1206,12 @@ pub(crate) fn render_todos_message(
                 ));
                 push_todo_goal_details(&mut lines, goal, base_indent, inner_width, compact_details);
                 for todo in items {
-                    lines.push(render_todo_card_item_line(todo, base_indent, inner_width));
+                    lines.push(render_todo_card_item_line(
+                        todo,
+                        base_indent,
+                        inner_width,
+                        live_ids.as_slice(),
+                    ));
                 }
             }
         } else {
@@ -1193,7 +1225,12 @@ pub(crate) fn render_todos_message(
                 push_todo_goal_details(&mut lines, goal, base_indent, inner_width, compact_details);
             }
             for todo in &todos {
-                lines.push(render_todo_card_item_line(todo, base_indent, inner_width));
+                lines.push(render_todo_card_item_line(
+                    todo,
+                    base_indent,
+                    inner_width,
+                    live_ids.as_slice(),
+                ));
             }
         }
     }
@@ -2114,6 +2151,7 @@ fn render_todo_card_item_line(
     todo: &crate::tui::operant_app::todo::TodoItem,
     base_indent: &str,
     inner_width: usize,
+    live_ids: &[String],
 ) -> Line<'static> {
     let blocked = !todo.blocked_by.is_empty() && todo.status != "completed";
     let (glyph, glyph_color) = if blocked {
@@ -2121,10 +2159,18 @@ fn render_todo_card_item_line(
     } else {
         todo_pip_glyph(todo)
     };
+    // A pending todo a live subagent is executing reads as active work, the
+    // same accent `in_progress` uses ([port-omp] oh-my-pi #5873: the card and
+    // any collapsed view must agree on what "current" means, so a claim made
+    // by `assigned_to` is visible without the model also flipping `status`).
+    // Only pending rows light up: a completed or cancelled row is settled, and
+    // re-accenting it would undo the status the card already communicates.
+    let subagent_live = todo.status == "pending" && live_ids.iter().any(|id| id == &todo.id);
     let text_color = match todo.status.as_str() {
         "completed" => rgb(135, 150, 145),
         "cancelled" => rgb(145, 130, 135),
         "in_progress" => rgb(225, 232, 240),
+        _ if subagent_live => todo_live_color(),
         _ => rgb(195, 202, 212),
     };
     let mut spans = vec![
@@ -2136,6 +2182,14 @@ fn render_todo_card_item_line(
         spans.push(Span::styled(
             format!(" · {}", label),
             Style::default().fg(todo_confidence_color()),
+        ));
+    }
+    // The claim itself: without the delegation id the accent colour is a
+    // signal the operator cannot interpret.
+    if subagent_live && let Some(assigned) = todo.assigned_to.as_deref() {
+        spans.push(Span::styled(
+            format!(" · subagent {}", compact_run_id(assigned)),
+            Style::default().fg(todo_live_color()),
         ));
     }
     todo_card_line(spans, base_indent, inner_width)

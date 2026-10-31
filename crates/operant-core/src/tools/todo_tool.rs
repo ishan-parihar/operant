@@ -78,10 +78,16 @@ static TODO_DIR_OVERRIDE: std::sync::RwLock<Option<std::path::PathBuf>> =
 /// one so the caller can restore it. Production never calls this; the
 /// default is `operant_home()/todos`, resolved through the one-home
 /// resolver.
-#[cfg(test)]
-pub(crate) fn set_todo_dir_for_tests(
-    dir: Option<std::path::PathBuf>,
-) -> Option<std::path::PathBuf> {
+///
+/// `pub` (not `pub(crate)`) so an integration test in another crate can
+/// redirect the store instead of setting `HERMES_HOME`. `operant_home()`
+/// reads that variable directly, and `cmd_setup` resolves a config path
+/// through it without holding the crate-wide env lock, so a concurrent
+/// `HERMES_HOME` mutation decides which file that test loads — observed
+/// 2026-10-31 as `wizard_persist_writes_arrays_as_arrays` failing only when
+/// a todo test ran beside it. The store's own cell is the narrow mutation.
+#[cfg(any(test, feature = "test-support"))]
+pub fn set_todo_dir_for_tests(dir: Option<std::path::PathBuf>) -> Option<std::path::PathBuf> {
     let mut cell = TODO_DIR_OVERRIDE.write().unwrap_or_else(|e| e.into_inner());
     let previous = cell.clone();
     *cell = dir;
@@ -453,6 +459,36 @@ impl OperantTool for TodoTool {
             }),
         )
     }
+}
+
+/// A session's full todo list, as persisted.
+///
+/// The one public read accessor, and the reason the TUI can refresh its todo
+/// card without waiting for a tool result. Before this the only way to obtain
+/// a list was to observe a `todo` tool result, which meant a card whose
+/// producer was anything other than the parent's own `todo` write (a
+/// subagent's list, a restart, a rewind) was invisible. The store is
+/// file-backed and read-through on first access (`load_session`), so this
+/// returns the persisted truth of the named session and an unknown session
+/// yields an empty list rather than an error.
+pub fn todo_list_for_session(session_id: &str) -> Vec<TodoItem> {
+    load_session(session_id)
+}
+
+/// Counts `(total, completed, in_progress)` for a session's persisted list.
+///
+/// Reads the same store as [`todo_list_for_session`] but counts, so a status
+/// line or a compact counter can be refreshed at frame rate without cloning
+/// the whole list.
+pub fn todo_counts_for_session(session_id: &str) -> (usize, usize, usize) {
+    let items = load_session(session_id);
+    items
+        .iter()
+        .fold((items.len(), 0, 0), |(total, done, active), item| {
+            let done = done + usize::from(item.status == "completed");
+            let active = active + usize::from(item.status == "in_progress");
+            (total, done, active)
+        })
 }
 
 /// Render the active todo list (pending/in_progress only) for re-injection

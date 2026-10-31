@@ -9215,3 +9215,224 @@ mod rewind_preview_zones {
         );
     }
 }
+
+// ---- (2026-10-31, iter-1588) the live todo tick and the subagent-live accent ----
+//
+// Both halves close a renderer-only defect: the card was fed from exactly one
+// `AgentEvent::ToolComplete`, so a producer the parent's stream never sees (a
+// subagent's write, a list persisted before a restart) produced no visible
+// change. The audit is
+// docs/audit/2026-10-31-todo-card-and-subagent-preview-are-renderer-only.md.
+//
+// The store is redirected with `set_todo_dir_for_tests`, NOT `HERMES_HOME`:
+// `operant_home()` reads that variable directly and `cmd_setup` resolves a
+// config path through it without holding the crate-wide env lock, so a
+// concurrent env mutation decides which file that unrelated test loads
+// (observed as `wizard_persist_writes_arrays_as_arrays` failing only when a
+// todo test ran beside it).
+
+/// Redirect the todo store to a sandbox and restore it on scope exit.
+struct TodoStoreGuard {
+    dir: std::path::PathBuf,
+    previous_dir: Option<std::path::PathBuf>,
+}
+
+impl TodoStoreGuard {
+    fn new(tag: &str) -> Self {
+        let dir =
+            std::env::temp_dir().join(format!("operant-todo-tick-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::create_dir_all(&dir);
+        let previous_dir = operant_core::tools::set_todo_dir_for_tests(Some(dir.clone()));
+        Self { dir, previous_dir }
+    }
+}
+
+impl Drop for TodoStoreGuard {
+    fn drop(&mut self) {
+        operant_core::tools::set_todo_dir_for_tests(self.previous_dir.take());
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+/// A distinct session id per test, so the process-global `LOADED_SESSIONS`
+/// cache cannot serve one test another test's `default` list.
+fn unique_session(tag: &str) -> String {
+    format!("tick-{tag}-{}", std::process::id())
+}
+
+/// The tick must pick up a list the parent's event stream never carried.
+///
+/// This is the operator's report in one assertion: a subagent writes the list
+/// (its `ToolComplete` is deliberately not forwarded to the parent,
+/// sub_agent_tool.rs:660), and the card showed nothing until the model happened
+/// to call `todo` again. Writing through the tool and calling
+/// `refresh_todos_if_needed` directly is the seam the run loop drives.
+#[test]
+fn the_live_tick_picks_up_a_list_only_a_subagent_wrote() {
+    let _store = TodoStoreGuard::new("subagent-write");
+    let session = unique_session("subagent-write");
+
+    let mut app = make_app();
+    assert!(
+        app.todos_card_payload.is_empty(),
+        "a fresh app has no card to show"
+    );
+    app.todos_session_id = session.clone();
+
+    // The subagent's write: the tool persists, and emits nothing to the parent.
+    let write = serde_json::json!({
+        "sessionId": session,
+        "todos": [
+            { "id": "s1", "content": "child wrote this", "status": "pending",
+              "assignedTo": "dlg-101" }
+        ]
+    });
+    let written = futures::executor::block_on(operant_core::tools::OperantTool::execute(
+        &operant_core::tools::TodoTool,
+        write,
+        operant_core::tools::ToolContext::default(),
+    ));
+    assert!(written.success, "the child's write lands in the store");
+
+    // A tick within 0ms of a previous one would be throttled, so clear the
+    // clock exactly as a real second would.
+    app.todos_tick_at = None;
+    assert!(
+        app.refresh_todos_if_needed(),
+        "the tick must adopt a list no parent event carried"
+    );
+    assert_eq!(app.todos.len(), 1, "the list lands on App");
+    assert!(
+        app.todos_card_payload.contains("child wrote this"),
+        "and the card payload carries it: {}",
+        app.todos_card_payload
+    );
+    assert_eq!(
+        app.todos[0].assigned_to.as_deref(),
+        Some("dlg-101"),
+        "the `assignedTo` write survives the wire-to-card map"
+    );
+}
+
+/// The second consecutive tick is a no-op, and the fingerprint is why.
+///
+/// Without the fingerprint the tick would rebuild the payload every second,
+/// which invalidates the render cache and re-runs the card renderer for a list
+/// that did not change.
+#[test]
+fn an_unchanged_list_does_not_rebuild_the_card_payload() {
+    let _store = TodoStoreGuard::new("unchanged");
+    let session = unique_session("unchanged");
+
+    let mut app = make_app();
+    app.todos_session_id = session.clone();
+    let write = serde_json::json!({
+        "sessionId": session,
+        "todos": [{ "id": "u1", "content": "steady", "status": "pending" }]
+    });
+    let written = futures::executor::block_on(operant_core::tools::OperantTool::execute(
+        &operant_core::tools::TodoTool,
+        write,
+        operant_core::tools::ToolContext::default(),
+    ));
+    assert!(written.success);
+
+    app.todos_tick_at = None;
+    assert!(app.refresh_todos_if_needed(), "first tick builds");
+    let frozen = app.todos_card_payload.clone();
+
+    app.todos_tick_at = None;
+    assert!(
+        !app.refresh_todos_if_needed(),
+        "an unchanged list must not report a change"
+    );
+    assert_eq!(
+        app.todos_card_payload, frozen,
+        "nor rebuild the payload the render cache keys on"
+    );
+}
+
+/// A completed delegation stops lighting its todo.
+///
+/// The accent reads "a live subagent is on this", so it has to clear when the
+/// delegation is no longer live — otherwise a finished worker keeps a
+/// `pending` row coloured as current work.
+#[test]
+fn a_settled_delegation_stops_lighting_its_todo() {
+    let _drain = operant_core::tools::async_delegation::RegistryDrain::new();
+    let delegation_id =
+        operant_core::tools::async_delegation::create_record("audit the tests", "gpt-5.4");
+
+    let mut app = make_app();
+    app.todos = vec![crate::tui::operant_app::todo::TodoItem {
+        content: "the delegated todo".to_string(),
+        status: "pending".to_string(),
+        priority: "medium".to_string(),
+        id: "l1".to_string(),
+        group: None,
+        phase: None,
+        confidence: None,
+        completion_confidence: None,
+        confidence_history: Vec::new(),
+        blocked_by: Vec::new(),
+        assigned_to: Some(delegation_id.clone()),
+    }];
+
+    let live = app.subagent_live_todo_ids();
+    assert_eq!(
+        live,
+        vec!["l1".to_string()],
+        "a pending delegation lights the todo it names"
+    );
+
+    app.rebuild_todos_card_payload();
+    assert!(
+        app.todos_card_payload.contains("live_ids")
+            && !app.todos_card_payload.contains("\"live_ids\":[]"),
+        "the live id rides the payload: {}",
+        app.todos_card_payload
+    );
+
+    // The worker finishes: the row must stop reading as current work.
+    operant_core::tools::async_delegation::mark_completed(&delegation_id, "done");
+    assert!(
+        app.subagent_live_todo_ids().is_empty(),
+        "a settled delegation lights nothing"
+    );
+    app.rebuild_todos_card_payload();
+    assert!(
+        app.todos_card_payload.contains("\"live_ids\":[]"),
+        "the empty match set rides instead of a stale id: {}",
+        app.todos_card_payload
+    );
+}
+
+/// A row whose `assigned_to` names nothing live must not be accented.
+///
+/// Guards the join's direction: rather than accenting every row with an
+/// `assigned_to`, only a delegation id the registry still lists as pending
+/// lights the row.
+#[test]
+fn a_claim_on_a_delegation_that_never_existed_lights_nothing() {
+    let _drain = operant_core::tools::async_delegation::RegistryDrain::new();
+
+    let mut app = make_app();
+    app.todos = vec![crate::tui::operant_app::todo::TodoItem {
+        content: "claimed by nobody".to_string(),
+        status: "pending".to_string(),
+        priority: "medium".to_string(),
+        id: "p1".to_string(),
+        group: None,
+        phase: None,
+        confidence: None,
+        completion_confidence: None,
+        confidence_history: Vec::new(),
+        blocked_by: Vec::new(),
+        assigned_to: Some("dlg-does-not-exist".to_string()),
+    }];
+    assert!(
+        app.subagent_live_todo_ids().is_empty(),
+        "an unresolvable claim is not a live subagent"
+    );
+}

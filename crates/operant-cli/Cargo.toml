@@ -110,6 +110,12 @@ anthropic = ["operant-core/anthropic"]  # cfg-gate for AnthropicModelClient impo
 
 [dev-dependencies]
 serial_test = "3.2"
+# The core's test seams are a feature, not `cfg(test)`, because this crate's
+# integration tests compile the core as an ordinary dependency. Without it
+# `operant_core::tools::set_todo_dir_for_tests` resolves to nothing and a
+# store-driven test has to fall back on mutating `HERMES_HOME`, which races
+# every other test resolving a path under the operant home.
+operant-core = { path = "../operant-core", features = ["test-support"] }
 
 [lints]
 workspace = true
