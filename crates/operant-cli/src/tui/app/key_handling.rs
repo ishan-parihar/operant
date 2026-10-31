@@ -1352,9 +1352,12 @@ impl App {
             // its `CurrentBranch` filter: one pane, one loader, one switch
             // path. Enter on any row switches through the same flow.
             KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                // None = let replace_rows anchor on the live row when the
-                // load lands (the App has no agent handle here to ask).
-                self.session_hub.branch_root = None;
+                // RT-206: anchor on the App's OWN session id — the one fact
+                // that names "this branch". Passing it here rather than
+                // relying on `replace_rows` finding a `RowStatus::Live` row
+                // is the whole fix: `Live` is only ever a pending subagent
+                // delegation in production, never the operator's session.
+                self.session_hub.branch_root = self.current_session.clone();
                 self.session_hub.filter_mode =
                     crate::tui::session_hub::HubFilterMode::CurrentBranch;
                 self.session_hub.open(None);

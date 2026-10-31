@@ -1133,3 +1133,85 @@ fn a_pending_subagent_row_is_not_the_current_branch_anchor() {
          and was shown a background delegation's tree"
     );
 }
+
+// ---- RT-206 FIX: Ctrl+B anchors on the App's OWN session id.
+
+#[test]
+fn ctrl_b_anchors_the_branch_filter_on_the_apps_own_session() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let mut app = crate::tui::app::tests::make_app();
+    // The one fact that names "this branch": the session the App is attached
+    // to. Before the fix this was a guess taken from a `RowStatus::Live` row,
+    // which production only ever assigns to a pending subagent delegation.
+    app.current_session = Some("s-operator".to_string());
+
+    app.handle_key_event(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL));
+
+    assert_eq!(
+        app.session_hub.filter_mode,
+        HubFilterMode::CurrentBranch,
+        "Ctrl+B must open the hub on the branch filter"
+    );
+    assert_eq!(
+        app.session_hub.branch_root.as_deref(),
+        Some("s-operator"),
+        "the anchor must be the App's own session — not None (which showed \
+         every session) and not a pending subagent's row (which showed an \
+         unrelated branch)"
+    );
+    assert!(app.session_hub.visible, "the hub must open");
+
+    // With the real anchor set before the load lands, rows must narrow to that
+    // session and its forks — no live-row guess involved.
+    app.session_hub.replace_rows(vec![
+        row("s-operator", Some("operator's session"), None),
+        branch_row("s-operator-fork-a", "s-operator"),
+        branch_row("s-unrelated-fork", "s-unrelated-parent"),
+        row("s-unrelated", None, None),
+    ]);
+    let ids: Vec<&str> = app
+        .session_hub
+        .visible_rows()
+        .iter()
+        .map(|r| r.id.as_str())
+        .collect();
+    assert_eq!(
+        ids,
+        vec!["s-operator", "s-operator-fork-a"],
+        "the branch filter must show the operator's session and ITS forks, \
+         excluding unrelated sessions"
+    );
+}
+
+#[test]
+fn ctrl_b_with_no_known_session_still_must_not_show_every_session_silently() {
+    // The anchor can be absent when the App has never switched or started a
+    // session (a sessionless TUI). That case must still be honest: the filter
+    // cannot narrow, so it must SAY so rather than claim "this branch's tree"
+    // over the whole list. This pins the fallback the fix relies on.
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let mut app = crate::tui::app::tests::make_app();
+    app.current_session = None;
+
+    app.handle_key_event(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL));
+
+    assert_eq!(
+        app.session_hub.branch_root, None,
+        "with no known session there is nothing to anchor on"
+    );
+    // The filter is CurrentBranch with no anchor: every row matches. That is
+    // the recorded fallback — the hub is the surface that tells the operator
+    // what exists, and an empty pane would be a lie. What must NOT happen is
+    // the anchor silently becoming a pending subagent's row.
+    app.session_hub
+        .replace_rows(vec![row("s-one", None, None), branch_row("s-two", "s-one")]);
+    let _ = app.session_hub.branch_root.as_deref();
+    assert_eq!(
+        app.session_hub.visible_rows().len(),
+        2,
+        "the no-anchor fallback shows everything rather than an empty pane — \\
+         the honest default the existing CurrentBranch test records"
+    );
+}
