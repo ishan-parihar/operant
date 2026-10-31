@@ -50,6 +50,8 @@ impl OperantTool for EnvProbeTool {
                 },
                 "required": []
             }),
+            // A native tool: eagerly offered every turn (the trait default).
+            exposure: crate::tools::ToolExposure::Direct,
         }
     }
 

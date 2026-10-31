@@ -266,6 +266,40 @@ impl ToolResult {
     }
 }
 
+/// How a tool is exposed to the model.
+///
+/// The decision lives on **the type that owns the tool**, not on the tool's name.
+/// It used to be a string test (`is_deferrable` answering `mcp_` prefix + a table
+/// scan), which deferred a tool because of what it happened to be *called*: any
+/// tool named `mcp_*` was deferred whether or not it came from an MCP server, and
+/// an operator could not make a tool "registered but not discoverable" at all.
+///
+/// Three states, not codex's six — operant has no code-mode runtime and no
+/// model-only split, so the variants it would earn are the ones it does not have.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum ToolExposure {
+    /// Offered directly in the tools array on every turn.
+    #[default]
+    Direct,
+    /// Hidden behind the `tool_search` bridge; reachable through search then
+    /// `tool_describe` / `tool_call`.
+    Deferred,
+    /// Registered and callable but never offered to the model.
+    Hidden,
+}
+
+impl ToolExposure {
+    /// Whether the tool is offered directly in the tools array.
+    pub fn is_direct(self) -> bool {
+        matches!(self, ToolExposure::Direct)
+    }
+
+    /// Whether the tool is reachable only through the deferred bridge.
+    pub fn is_deferred(self) -> bool {
+        matches!(self, ToolExposure::Deferred)
+    }
+}
+
 #[async_trait]
 pub trait OperantTool: Send + Sync {
     fn name(&self) -> &str;
@@ -273,6 +307,16 @@ pub trait OperantTool: Send + Sync {
     fn description(&self) -> &str;
 
     fn schema(&self) -> ToolSchema;
+
+    /// How this tool is exposed to the model. Defaults to [`ToolExposure::Direct`],
+    /// so an existing tool keeps its behaviour without changing.
+    ///
+    /// Tools whose set is unbounded (MCP servers) or measured to be expensive
+    /// when eagerly described (sourcehound composites) opt into
+    /// [`ToolExposure::Deferred`].
+    fn exposure(&self) -> ToolExposure {
+        ToolExposure::Direct
+    }
 
     fn toolset(&self) -> &str {
         "builtin"
@@ -594,7 +638,7 @@ impl ToolRegistry {
         tools
             .values()
             .filter(|t| t.is_available())
-            .map(|t| t.schema().with_intent())
+            .map(|t| t.schema().with_intent().with_exposure(t.exposure()))
             .collect()
     }
 
@@ -614,7 +658,7 @@ impl ToolRegistry {
                     false
                 }
             })
-            .map(|t| t.schema().with_intent())
+            .map(|t| t.schema().with_intent().with_exposure(t.exposure()))
             .collect()
     }
 
@@ -653,7 +697,7 @@ impl ToolRegistry {
                 }
                 true
             })
-            .map(|t| t.schema().with_intent())
+            .map(|t| t.schema().with_intent().with_exposure(t.exposure()))
             .collect()
     }
 

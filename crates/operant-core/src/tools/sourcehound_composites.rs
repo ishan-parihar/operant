@@ -447,6 +447,13 @@ impl OperantTool for SourcehoundCompositeTool {
         self.spec.tool_name
     }
 
+    /// Measured: eagerly described the 23 composites cost ~4,738 tokens on EVERY
+    /// request, versus ~760 on the turn that actually researches (RT-194).
+    /// Deferred by **type**, not by a name-table scan.
+    fn exposure(&self) -> crate::tools::ToolExposure {
+        crate::tools::ToolExposure::Deferred
+    }
+
     fn description(&self) -> &str {
         self.spec.description
     }
@@ -815,12 +822,18 @@ for line in sys.stdin:
                 json!({ "type": "object" }),
             ),
         ];
+        // Stamp the exposure the registry stamps for this family
+        // (`impl OperantTool for SourcehoundCompositeTool` above returns
+        // `ToolExposure::Deferred`), so the fixture reaches `assemble_tools`
+        // in the shape production hands it. A hand-built `ToolSchema` defaults
+        // to `Direct`, which under the type-authoritative partition would put
+        // every composite in the eager set and fail this assertion — that is
+        // the test correctly noticing the fixture, not the code, drifting.
         for spec in composite_specs() {
-            all.push(ToolSchema::new(
-                spec.tool_name,
-                spec.description,
-                spec.parameters.clone(),
-            ));
+            all.push(
+                ToolSchema::new(spec.tool_name, spec.description, spec.parameters.clone())
+                    .with_exposure(crate::tools::ToolExposure::Deferred),
+            );
         }
 
         let settings = ToolSearchSettings::default();

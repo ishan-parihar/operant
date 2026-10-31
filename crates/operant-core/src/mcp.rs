@@ -2123,6 +2123,13 @@ impl OperantTool for McpNamespacedTool {
         &self.qualified_name
     }
 
+    /// An MCP server can advertise any number of tools with any names, so this
+    /// family is the unbounded one: eagerly described they would flood the tools
+    /// array. Deferred by **type**, not by the `mcp_` name prefix.
+    fn exposure(&self) -> crate::tools::ToolExposure {
+        crate::tools::ToolExposure::Deferred
+    }
+
     fn description(&self) -> &str {
         self.tool.description()
     }

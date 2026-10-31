@@ -271,3 +271,25 @@ strings are built) is a good model for any recursive structure operant might add
 structural weakness — the deferral decision currently lives in a **string-matching
 function** instead of on the **type that owns the tool** — and it is the one row whose
 benefit grows as operant's tool count grows.
+
+---
+
+**OUTCOME — iter-1539 (Row 1, `ToolExposure`).** The deferral decision now lives on the type
+that owns the tool. `ToolExposure { Direct, Deferred, Hidden }` at
+`crates/operant-core/src/tools.rs:279-303` with a defaulted `fn exposure()` on `OperantTool`;
+`ToolSchema` carries it (`schema.rs:154-184`, `with_exposure`); the registry stamps it at the
+three minting sites (`tools.rs:641,661,700`); `assemble_tools`
+(`tools/tool_search.rs:107-171`) partitions by the stamped exposure. `McpNamespacedTool`
+(`mcp.rs:2126`) and `SourcehoundCompositeTool` (`sourcehound_composites.rs:450`) return
+`Deferred`. Five tests guard it, mutation-proven by reverting `assemble_tools` to
+`is_deferrable`, which fails exactly the three new ones by name.
+
+**The trap that cost the most time, recorded because it will cost it again:** fixtures must
+reach `assemble_tools` in PRODUCTION'S shape. A hand-built `ToolSchema::new` defaults to
+`Direct`, so a fixture that never stamps looks like the code is broken. That is how
+`registered_composites_ride_the_bridge_not_the_request`
+(`sourcehound_composites.rs:841`) failed 5/5 in isolation — and how the "parallel load flake"
+diagnosed as **RT-203 in iter-1523 was WRONG**: it was this defect, deterministic, and that
+earlier "delta-proven not mine" compared the wrong thing (the touched modules passed in
+isolation; only the whole-file suite surfaced the break). RT-203 is closed with the
+correction named in its own row.

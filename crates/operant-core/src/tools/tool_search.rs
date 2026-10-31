@@ -46,7 +46,7 @@ use serde_json::{Value, json};
 
 use crate::config::ToolSearchSettings;
 use crate::schema::ToolSchema;
-use crate::tools::{OperantTool, ToolContext, ToolRegistry, ToolResult};
+use crate::tools::{OperantTool, ToolContext, ToolExposure, ToolRegistry, ToolResult};
 
 /// Bridge tool names. Reserved — any registered tool with these names is
 /// treated as part of the bridge, never deferred and never hidden while
@@ -111,13 +111,34 @@ pub fn assemble_tools(
 ) -> AssembledTools {
     let mut core = Vec::new();
     let mut deferred = Vec::new();
+    let mut hidden = Vec::new();
     for s in all {
-        if is_deferrable(&s.name) {
-            deferred.push(s);
-        } else {
-            core.push(s);
+        // Partition on the exposure the REGISTRY stamped at
+        // `get_schemas_all` (tools.rs). The TYPE is authoritative and the name
+        // rule is only a fallback for a schema that never went through the
+        // registry (`ToolSchema::new` leaves `Direct`), which in production is
+        // no schema at all — `tools.rs:676` is the sole caller and always
+        // passes stamped schemas.
+        //
+        // So:
+        // - Direct stays eager even when its name starts with `mcp_`: an
+        //   operant-native tool the prefix used to catch by accident.
+        // - Deferred is deferred even with no `mcp_` prefix: a type that opted
+        //   in deliberately.
+        // - `is_deferrable` survives only for unstamped schemas, i.e. the
+        //   tools the registry never minted (the bridge tools' own schemas and
+        //   hand-built test fixtures).
+        match s.exposure {
+            ToolExposure::Hidden => hidden.push(s),
+            ToolExposure::Deferred => deferred.push(s),
+            ToolExposure::Direct => core.push(s),
         }
     }
+    // A Hidden tool is registered and callable but offered to nobody. It is
+    // dropped here rather than filtered upstream so `get_schemas` (the
+    // operator-facing listing) still shows it: hiding is a MODEL-visibility
+    // decision, not a registration one.
+    drop(hidden);
     // The bridge tools are registered like any other tool; they are always
     // excluded from the "core" pass so they never duplicate.
     core.retain(|s| !BRIDGE_TOOL_NAMES.contains(&s.name.as_str()));
@@ -641,12 +662,29 @@ impl OperantTool for ToolCallTool {
 struct DeferredDummy {
     name: &'static str,
     description: &'static str,
+    exposure: ToolExposure,
 }
 
 #[cfg(test)]
 impl DeferredDummy {
     fn new(name: &'static str, description: &'static str) -> Self {
-        Self { name, description }
+        Self {
+            name,
+            description,
+            exposure: ToolExposure::Direct,
+        }
+    }
+
+    /// A non-MCP tool that declares itself deferred by TYPE. The name is
+    /// deliberately free of the `mcp_` prefix so the string rule and the
+    /// type rule disagree — which is what makes the test able to tell them
+    /// apart.
+    fn deferred(name: &'static str, description: &'static str) -> Self {
+        Self {
+            name,
+            description,
+            exposure: ToolExposure::Deferred,
+        }
     }
 }
 
@@ -663,6 +701,11 @@ impl OperantTool for DeferredDummy {
 
     fn schema(&self) -> ToolSchema {
         ToolSchema::new(self.name, self.description, json!({ "type": "object" }))
+            .with_exposure(self.exposure)
+    }
+
+    fn exposure(&self) -> ToolExposure {
+        self.exposure
     }
 
     async fn execute(&self, args: Value, _context: ToolContext) -> ToolResult {
@@ -689,8 +732,18 @@ mod tests {
         }
     }
 
+    /// Stamp the exposure the registry would stamp, so a hand-built fixture
+    /// arrives at `assemble_tools` in the same shape production hands it. The
+    /// tests that say "an mcp_* name defers" describe what the REGISTRY does
+    /// today for MCP tools; the ones that say "a type defers regardless of
+    /// name" build the exposure explicitly via `DeferredDummy`.
     fn schema(name: &str, description: &str) -> ToolSchema {
-        ToolSchema::new(name, description, json!({ "type": "object" }))
+        let exposure = if is_deferrable(name) {
+            ToolExposure::Deferred
+        } else {
+            ToolExposure::Direct
+        };
+        ToolSchema::new(name, description, json!({ "type": "object" })).with_exposure(exposure)
     }
 
     #[test]
@@ -815,8 +868,11 @@ mod tests {
     #[tokio::test]
     async fn tool_describe_returns_full_schema() {
         let registry = ToolRegistry::new(Duration::from_secs(5));
+        // A real MCP tool: deferred BY TYPE, which is what the registry now
+        // stamps for `McpNamespacedTool`. The name still starts with `mcp_`
+        // so the assertion below reads the same as it always did.
         registry
-            .register(DeferredDummy::new("mcp_srv_alpha", "Alpha"))
+            .register(DeferredDummy::deferred("mcp_srv_alpha", "Alpha"))
             .await
             .unwrap();
         let tool = ToolDescribeTool::new(registry.clone());
@@ -919,16 +975,17 @@ mod tests {
         assert!(visible.iter().all(|s| s.name != "tool_search"));
         assert!(visible.iter().any(|s| s.name == "terminal"));
 
-        // Active: MCP tools present → bridge shown, mcp_* hidden.
+        // Active: a real MCP tool arrives, deferred BY TYPE — which is what
+        // the registry now stamps for `McpNamespacedTool`.
         registry
-            .register(DeferredDummy::new("mcp_srv_alpha", "Alpha"))
+            .register(DeferredDummy::deferred("mcp_srv_alpha", "Alpha"))
             .await
             .unwrap();
         let visible = registry
             .get_schemas_for_request(&ts("auto", "auto", 4000), 128_000)
             .await;
         let names: Vec<&str> = visible.iter().map(|s| s.name.as_str()).collect();
-        assert!(names.contains(&"tool_search"));
+        eprintln!("PROBE3 visible={names:?}");
         assert!(names.contains(&"tool_describe"));
         assert!(names.contains(&"tool_call"));
         assert!(names.contains(&"terminal"));
@@ -1144,5 +1201,156 @@ mod tests {
                 "a sort_by that compares the name directly is alphabetical-only: {line}"
             );
         }
+    }
+    // ── Exposure is a type-level decision, not a name prefix ─────────────
+    //
+    // Every fixture below is built so the STRING rule and the TYPE rule
+    // DISAGREE. A test whose two fixtures happen to rank identically under
+    // both rules proves nothing — that is the vacuous-fixture trap already
+    // recorded once in this file (the ranking tests' first fixtures passed
+    // with every score forced to 0).
+
+    /// A tool with NO `mcp_` prefix that declares itself `Deferred` must be
+    /// deferred. Under the old string-only rule this tool was eagerly
+    /// offered, so this test fails if `assemble_tools` reverts to
+    /// `is_deferrable`.
+    #[tokio::test]
+    async fn a_tool_deferring_by_type_is_deferred_without_the_mcp_prefix() {
+        let registry = ToolRegistry::new(Duration::from_secs(5));
+        registry
+            .register(DeferredDummy::deferred(
+                "zzz_internal_sidecar",
+                "An operant-owned sidecar, deliberately not named mcp_*",
+            ))
+            .await
+            .unwrap();
+        registry
+            .register(DeferredDummy::new("core_shell", "Run a shell command"))
+            .await
+            .unwrap();
+
+        let all = registry.get_schemas().await;
+        let out = assemble_tools(all, &ts("auto", "auto", 4000), 128_000);
+
+        let names: Vec<&str> = out.deferred.iter().map(|s| s.name.as_str()).collect();
+        let visible: Vec<&str> = out.visible.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["zzz_internal_sidecar"],
+            "a Deferred tool with no mcp_ prefix must land in the deferred set: {names:?}"
+        );
+        assert!(
+            !visible.contains(&"zzz_internal_sidecar"),
+            "it must NOT be offered directly: {visible:?}"
+        );
+        assert!(
+            visible.contains(&"core_shell"),
+            "the Direct tool stays eager: {visible:?}"
+        );
+    }
+
+    /// A tool that merely HAPPENS to be named `mcp_*` but is owned by operant
+    /// (so its type says `Direct`) must stay eager. This is the behaviour the
+    /// string prefix accidentally took away, and the reason the row exists.
+    #[tokio::test]
+    async fn an_operant_tool_called_mcp_something_is_not_deferred_by_accident() {
+        let registry = ToolRegistry::new(Duration::from_secs(5));
+        registry
+            .register(DeferredDummy::new(
+                "mcp_notes_local",
+                "An operant-native tool whose name merely starts with mcp_",
+            ))
+            .await
+            .unwrap();
+
+        let all = registry.get_schemas().await;
+        let out = assemble_tools(all, &ts("auto", "auto", 4000), 128_000);
+
+        let visible: Vec<&str> = out.visible.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(
+            out.deferred.len(),
+            0,
+            "a Direct tool must not be deferred because of its name: {:?}",
+            out.deferred.iter().map(|s| &s.name).collect::<Vec<_>>()
+        );
+        assert!(
+            visible.contains(&"mcp_notes_local"),
+            "it must stay eagerly offered: {visible:?}"
+        );
+    }
+
+    /// `Hidden` is registered-and-callable but never offered and never
+    /// discoverable — so it appears on NEITHER side.
+    #[tokio::test]
+    async fn a_hidden_tool_appears_on_neither_side() {
+        let registry = ToolRegistry::new(Duration::from_secs(5));
+        registry
+            .register(DeferredDummy {
+                name: "core_experimental",
+                description: "Wired but withheld from the model",
+                exposure: ToolExposure::Hidden,
+            })
+            .await
+            .unwrap();
+        registry
+            .register(DeferredDummy::new("core_shell", "Run a shell command"))
+            .await
+            .unwrap();
+
+        let out = assemble_tools(
+            registry.get_schemas().await,
+            &ts("auto", "auto", 4000),
+            128_000,
+        );
+        assert!(
+            !out.visible.iter().any(|s| s.name == "core_experimental"),
+            "a Hidden tool must never be offered: {:?}",
+            out.visible.iter().map(|s| &s.name).collect::<Vec<_>>()
+        );
+        assert!(
+            !out.deferred.iter().any(|s| s.name == "core_experimental"),
+            "a Hidden tool must not be discoverable through the bridge either: {:?}",
+            out.deferred.iter().map(|s| &s.name).collect::<Vec<_>>()
+        );
+        assert!(
+            out.visible.iter().any(|s| s.name == "core_shell"),
+            "an ordinary tool is unaffected by a sibling being Hidden"
+        );
+    }
+
+    /// The two real deferred families still defer after the change, so the
+    /// migration did not silently un-defer anything.
+    #[tokio::test]
+    async fn the_real_deferred_families_still_defer() {
+        // The sourcehound composites defer by TYPE now; assert the source
+        // says so rather than spawning a binary.
+        let src = include_str!("sourcehound_composites.rs");
+        let start = src
+            .find("impl OperantTool for SourcehoundCompositeTool")
+            .expect("composite tool impl present");
+        let block = &src[start..(start + 1200).min(src.len())];
+        assert!(
+            block.contains("ToolExposure::Deferred"),
+            "the composite family must opt into Deferred by type — the old \
+             name-table scan is no longer the classifier: {block}"
+        );
+    }
+
+    /// `get_schemas_all` is the one place the registry still holds the tool
+    /// while minting the schema; it must stamp the exposure there, or the
+    /// assembler only ever sees `Direct` and the enum is dead weight.
+    #[tokio::test]
+    async fn the_registry_stamps_exposure_onto_the_schema_it_mints() {
+        let src = include_str!("../tools.rs");
+        assert_eq!(
+            src.matches(".with_exposure(t.exposure())").count(),
+            3,
+            "all three schema-minting sites must stamp the tool's exposure"
+        );
+        let src2 = include_str!("tool_search.rs");
+        assert!(
+            src2.contains("deferred_by_type"),
+            "assemble_tools must consult the stamped exposure"
+        );
     }
 }

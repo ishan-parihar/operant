@@ -76,6 +76,8 @@ impl OperantTool for LearningMutationTool {
                 },
                 "required": ["action", "node_id"]
             }),
+            // A native tool: eagerly offered every turn (the trait default).
+            exposure: crate::tools::ToolExposure::Direct,
         }
     }
 

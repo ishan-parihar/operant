@@ -155,6 +155,15 @@ pub struct ToolSchema {
     pub name: String,
     pub description: String,
     pub parameters: Value,
+    /// How the model sees this tool. Carried on the SCHEMA because the
+    /// assembler receives `Vec<ToolSchema>` and cannot reach the owning tool;
+    /// the registry stamps it where the association still exists
+    /// (`ToolRegistry::get_schemas_all`).
+    ///
+    /// `Direct` is the serde default, so a schema written before this field
+    /// existed still deserialises as an eagerly-offered tool.
+    #[serde(default)]
+    pub exposure: crate::tools::ToolExposure,
 }
 
 impl ToolSchema {
@@ -163,7 +172,15 @@ impl ToolSchema {
             name: sanitize_tool_name(&name.into()),
             description: description.into(),
             parameters,
+            exposure: crate::tools::ToolExposure::Direct,
         }
+    }
+
+    /// Stamp the exposure; the one place the registry's tool association meets
+    /// the schema. Mirrors [`ToolSchema::with_intent`].
+    pub fn with_exposure(mut self, exposure: crate::tools::ToolExposure) -> Self {
+        self.exposure = exposure;
+        self
     }
 
     pub fn from_type<T: JsonSchema>(
@@ -183,6 +200,7 @@ impl ToolSchema {
             name: sanitize_tool_name(&name.into()),
             description: description.into(),
             parameters: parameters_value,
+            exposure: crate::tools::ToolExposure::Direct,
         }
     }
 
