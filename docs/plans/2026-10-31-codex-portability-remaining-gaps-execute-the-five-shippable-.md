@@ -167,6 +167,48 @@ weak-reference cache solves a problem operant does not have — its MCP manager 
 the operator can see what was cut (the `metadata_metrics` half of the row).
 **Mutation guard:** raise the constant above the fixture schema and the truncation test must fail.
 
+**OUTCOME (2026-10-31): REFUTED — the cap already exists, one hop later. Nothing built.**
+
+I could not build this row, because measuring it showed the row's premise was wrong about
+operant's behaviour rather than merely imprecise. Two corrections to the brief:
+
+**1. The premise measured TRUE of `tool_describe` and FALSE of operant.** `tool_describe`
+(`tool_search.rs:521-537`) really does return `s.parameters` uncapped, exactly as the ledger
+and F0176 said. But a tool result is bounded **after** the tool returns, before it joins the
+LLM-bound message list, at `agent/run.rs`: the SPEND GUARD `guard_tool_output_spend`
+(`compress.rs:587-639`, called at `:2130`) and then the ABSOLUTE CAP `truncate_tool_result`
+(`mod.rs:1116`, called at `:2101`). So the import was a duplicate mechanism, not a missing
+one — a second cap one hop earlier would have to be justified on its own, not on the
+"nothing bounds this" claim.
+
+**2. The scale was overstated, and I measured it rather than argue it.** With a 2,000-field
+schema (~495 KB of parameters) fed through the real seam:
+
+```text
+tool's own parameters  : 494,922 bytes
+tool_describe payload  : 494,974 bytes
+bytes reaching the model: 4,132  (the absolute cap)
+request carrying it     : 18,259 / 18,921 / 19,277 chars
+```
+
+**Guard (instead of a build):** `crates/operant-core/tests/oversized_schema_cannot_reach_the_model.rs`
+drives a real `OperantAgent::run` with a huge-schema tool and reads the request the model
+client is actually handed. Mutation-proven RED by disabling `guard_tool_output_spend`
+(~19 KB -> ~22.4 KB, marker flips to `[truncated`); restored is green.
+
+**What I got wrong FIRST, and what the mutation found.** My first draft's header asserted the
+test pinned the 4 KB absolute cap. It does not: disabling `truncate_tool_result` moves the
+request 19,277 -> 19,284 chars and the test still passes, because at this fixture's
+8,000-token window the spend guard fires first and the absolute cap is never the binding
+bound. The header now records both results, including the one that disproves my claim. That
+is the difference between a guard and a decoration: I only know which bound is load-bearing
+because I tried removing each one.
+
+**No new cap was needed, so use the existing two.** If a future row wants a per-schema cap at
+`tool_describe` itself, the honest argument is "cut it before it is even produced, to save the
+work of serialising 495 KB", not "the model would otherwise receive all of it" — that second
+claim is false and this note is the record of why.
+
 ### 5. Row 03-1 — token-budget compaction without a model call (config flag + branch)
 
 Verified: operant's three compaction mechanisms are genuinely separate
