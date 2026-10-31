@@ -1055,3 +1055,81 @@ mod refresh_liveness_tests {
         );
     }
 }
+
+// ---- (RT-206) The `CurrentBranch` filter's auto-anchor has no real anchor in
+// production. Ctrl+B sets `branch_root = None` and relies on `replace_rows`
+// taking "the live row", but the ONLY assignment of `RowStatus::Live` outside
+// these tests is `async_delegation.rs` for a PENDING SUBAGENT delegation. The
+// operator's own current session row is built by
+// `Database::list_sessions_rich`, which never marks anything Live. So the
+// anchor is either a pending subagent (an unrelated branch) or absent.
+
+#[test]
+fn ctrl_b_with_no_live_row_lets_the_branch_filter_show_every_session() {
+    // The exact production shape: the hub opens by Ctrl+B before the load
+    // lands, and the load lands with NO pending-subagent row.
+    let mut hub = SessionHubState::new();
+    hub.filter_mode = HubFilterMode::CurrentBranch;
+    hub.branch_root = None; // what Ctrl+B does
+    hub.replace_rows(vec![
+        row("s-current", Some("idle"), None),
+        branch_row("s-current-fork", "s-current"),
+        row("s-unrelated", None, None),
+    ]);
+
+    assert_eq!(
+        hub.branch_root, None,
+        "no row is Live, so the auto-anchor finds nothing - the anchor cannot \
+         come from the operator's own session in production"
+    );
+    let ids: Vec<&str> = hub.visible_rows().iter().map(|r| r.id.as_str()).collect();
+    assert_eq!(
+        ids.len(),
+        3,
+        "DEFECT (RT-206): the filter titled \"{label}\" showed every session \
+         ({ids:?}) because an unanchored CurrentBranch falls back to \
+         `None => true`. The operator pressed Ctrl+B to see THIS branch and \
+         was shown the whole hub.",
+        label = HubFilterMode::CurrentBranch.label()
+    );
+}
+
+#[test]
+fn a_pending_subagent_row_is_not_the_current_branch_anchor() {
+    // If any row carries `Live`, the auto-anchor takes it - and in production
+    // that row is a PENDING SUBAGENT DELEGATION, which lives under its own
+    // subagent session, not the operator's conversation.
+    let mut hub = SessionHubState::new();
+    hub.filter_mode = HubFilterMode::CurrentBranch;
+    hub.branch_root = None;
+
+    let mut subagent = row("sub-1", None, None);
+    subagent.status = RowStatus::Live;
+    subagent.kind = RowKind::Subagent {
+        goal: "background work".to_string(),
+        model: "small-stack".to_string(),
+        dispatch_time: 0,
+        status: "pending",
+    };
+    hub.replace_rows(vec![
+        row("s-current", Some("idle"), None),
+        branch_row("s-current-fork", "s-current"),
+        subagent,
+        row("sub-1-other", None, None),
+    ]);
+
+    assert_eq!(
+        hub.branch_root.as_deref(),
+        Some("sub-1"),
+        "the auto-anchor takes the pending subagent, because that is the only \
+         row Live in production"
+    );
+    let ids: Vec<&str> = hub.visible_rows().iter().map(|r| r.id.as_str()).collect();
+    assert_eq!(
+        ids,
+        vec!["sub-1"],
+        "DEFECT (RT-206): the filter narrowed to the SUBAGENT's branch instead \
+         of the operator's - the operator pressed Ctrl+B in their own session \
+         and was shown a background delegation's tree"
+    );
+}
