@@ -3979,3 +3979,135 @@ fn render_empty_todo_tool_result_collapses_to_compact_line() {
     assert!(!plain.contains("No tasks yet"), "{plain}");
     assert!(plain.contains("no tasks"), "{plain}");
 }
+
+// ---- (2026-10-31, iter-1588) a live subagent lights its todo on the card ----
+//
+// The card renderer is a pure function of (msg, width), so the "which todos a
+// live subagent is on" set must ride the payload. These pin that contract and
+// the accent it produces, which is the half the operator sees.
+
+/// A payload carrying `live_ids` renders the matched pending row in the
+/// accent colour and names its delegation id.
+///
+/// Before iter-1588 `assigned_to` was carried through the whole round trip and
+/// read by nothing: the model could claim a todo for a worker and the operator
+/// saw an ordinary pending row.
+#[test]
+fn a_subagent_live_todo_renders_in_the_accent_with_its_delegation_id() {
+    let todos = vec![
+        crate::tui::operant_app::todo::TodoItem {
+            id: "a".to_string(),
+            content: "claimed work".to_string(),
+            status: "pending".to_string(),
+            priority: "medium".to_string(),
+            group: None,
+            phase: None,
+            confidence: None,
+            completion_confidence: None,
+            confidence_history: Vec::new(),
+            blocked_by: Vec::new(),
+            assigned_to: Some("dlg-live".to_string()),
+        },
+        crate::tui::operant_app::todo::TodoItem {
+            id: "b".to_string(),
+            content: "unclaimed work".to_string(),
+            status: "pending".to_string(),
+            priority: "medium".to_string(),
+            group: None,
+            phase: None,
+            confidence: None,
+            completion_confidence: None,
+            confidence_history: Vec::new(),
+            blocked_by: Vec::new(),
+            assigned_to: None,
+        },
+    ];
+    let payload = serde_json::json!({
+        "todos": todos,
+        "live_ids": ["a"],
+    });
+    let msg = DisplayMessage::todos(serde_json::to_string(&payload).unwrap());
+    let lines = render_todos_message(
+        &msg,
+        100,
+        crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+    );
+    let plain = lines
+        .iter()
+        .map(extract_line_text)
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(
+        plain.contains("claimed work") && plain.contains("subagent dlg-live"),
+        "the matched row must name the delegation: {plain}"
+    );
+    // The accent is a colour, which the plain-text dump drops. Assert on the
+    // styled spans instead, so this cannot pass with the accent removed.
+    let claimed = lines
+        .iter()
+        .find(|line| extract_line_text(line).contains("claimed work"))
+        .expect("the claimed row must render");
+    let live_colored = claimed
+        .spans
+        .iter()
+        .filter(|span| span.style.fg == Some(rgb(215, 190, 120)))
+        .count();
+    assert!(
+        live_colored >= 2,
+        "the text AND the subagent label must both carry the live accent: {live_colored} spans"
+    );
+    let unclaimed = lines
+        .iter()
+        .find(|line| extract_line_text(line).contains("unclaimed work"))
+        .expect("the unclaimed row must render");
+    assert!(
+        !unclaimed
+            .spans
+            .iter()
+            .any(|span| span.style.fg == Some(rgb(215, 190, 120))),
+        "an unmatched pending row must keep the ordinary colour"
+    );
+}
+
+/// A payload with no `live_ids` must render exactly as before.
+///
+/// `#[serde(default)]` on the field is what makes an old payload (one written
+/// by an App before the tick existed) a no-match card rather than a parse
+/// failure that falls back to the system renderer.
+#[test]
+fn a_payload_without_live_ids_renders_unchanged() {
+    let todos = vec![crate::tui::operant_app::todo::TodoItem {
+        id: "a".to_string(),
+        content: "legacy row".to_string(),
+        status: "pending".to_string(),
+        priority: "medium".to_string(),
+        group: None,
+        phase: None,
+        confidence: None,
+        completion_confidence: None,
+        confidence_history: Vec::new(),
+        blocked_by: Vec::new(),
+        assigned_to: None,
+    }];
+    let old_payload = serde_json::json!({ "todos": todos });
+    let msg = DisplayMessage::todos(serde_json::to_string(&old_payload).unwrap());
+    let lines = render_todos_message(
+        &msg,
+        100,
+        crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+    );
+    let plain = lines
+        .iter()
+        .map(extract_line_text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        plain.contains("legacy row"),
+        "an old payload still renders its list: {plain}"
+    );
+    assert!(
+        !plain.contains("subagent"),
+        "and no unmatched row invents a subagent: {plain}"
+    );
+}
