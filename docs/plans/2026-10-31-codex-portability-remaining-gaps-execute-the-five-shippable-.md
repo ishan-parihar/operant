@@ -237,7 +237,7 @@ the implementation is stronger than what the brief asked for:
   replaces the middle: at or under `COMPACTION_FLOOR_TOKENS` (`:167`) it returns
   `SkippedByFloor` with the transcript untouched.
 
-So the brief's mutation guard is **unbuildable as written**: "make the mode fall back to the LLM
+So the brief's own mutation guard is **unbuildable as written**: "make the mode fall back to the LLM
 summariser" would have to be ADDED, not flipped. What I shipped instead pins the two properties
 so a future mode flag cannot quietly make the default summarising —
 `crates/operant-core/tests/session_autocompact.rs`:
@@ -246,6 +246,17 @@ so a future mode flag cannot quietly make the default summarising —
   the marker through a stub that names `ModelClient` in `compact()`'s body: fails BY NAME while
   the signature and behaviour are unchanged.
 - `the_no_model_path_refuses_below_the_floor_rather_than_compounding_loss`.
+
+**THE SOURCE PIN'S REACH, MEASURED AND NARROWER THAN I FIRST CLAIMED.** It greps
+`compact()`'s body for the literals `ModelClient` and `client`. I probed that deliberately:
+rewriting the body to reach a summary through `std::env::var("OPERANT_SUMMARY_HELPER")` — no
+grepped literal, a summary nonetheless — the source pin **stays green**. What caught it was the
+pre-existing behavioural test `a_session_above_the_floor_is_compacted`
+(fn at `session_autocompact.rs:240`, the `!summarised` assertion at `:264`, whose message is
+"the deterministic path replaces the middle with a marker, not a summary"). So the pin catches the *signature/plumbing* regression it was built for and does NOT
+catch an arbitrary new summary path. That is worth knowing: the real defence against this class
+is the behavioural assertion, and the source pin is a supplement to it, not a substitute. Recorded
+here rather than left as an overclaim.
 
 **MY OWN TEST WAS WRONG FIRST, and the tree corrected me.** I asserted an immediate second
 `compact()` would be refused by `SkippedByFloor`. It is refused by `SkippedNothingToCompact`

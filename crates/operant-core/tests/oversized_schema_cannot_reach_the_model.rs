@@ -44,6 +44,27 @@
 //!   fixture is not where that is observable. Do not read this file as
 //!   proving the 4 KB cap is load-bearing here.
 //!
+//! **AND WHY IT IS NOT VACUOUS — the third mutation, found by probing for it
+//! rather than waiting for someone to point it out.** A CEILING check alone
+//! would pass just as happily if the agent DROPPED the result entirely: I
+//! swapped the fixture so the tool returns a tiny payload and the test still
+//! passed, because the second request was 18,270 chars against the ceiling of
+//! 20,000 — nothing bounded, nothing missing, nothing observed. The growth
+//! assertion below (>= 512 chars) closes that: with the real fixture the
+//! request grows 18,259 -> 18,921 (+662, the truncated schema), and with the
+//! vacuity mutant 18,259 -> 18,270 (+11, just a tool name). Both directions
+//! now fail by name.
+//!
+//! **A NOTE ON SCOPE, so the next reader does not go looking for a second
+//! thing to fix.** `crates/operant-api/src/observability_traits.rs` defines
+//! its OWN `ObserverEvent` enum with a `ToolCall { tool, duration, success }`
+//! and no byte fields. It is a genuinely disconnected type: `operant-core`
+//! has no dependency on `operant-api`, and only `operant-plugins` and
+//! `operant-config` consume it. The live observer surface is `operant-core`'s,
+//! so that parallel enum is out of this guard's scope by design — recorded
+//! here because a reader grepping `ObserverEvent::ToolCall` will hit it and
+//! may otherwise mistake it for an unfinished site of the same change.
+//!
 //! **Why this pins the seam and not the helper:** the cap's constant
 //! (`MAX_TOOL_RESULT_LEN`) and its helper (`truncate_tool_result`) are both
 //! private to the `agent` module, and a unit test of a private helper would
@@ -316,16 +337,23 @@ async fn an_oversized_tool_schema_is_cut_before_it_reaches_the_model() {
         sizes[0]
     );
 
-    // The discriminating assertion. The tool returned a ~495 KB payload, so
-    // the request that carries it must be materially bigger than the one
-    // that did not — otherwise this test would pass on an agent that quietly
-    // dropped the result entirely, which is also a defect.
+    // The discriminating assertion, and the reason this test is not vacuous.
+    // A CEILING check alone would pass just as happily if the agent dropped the
+    // result entirely (18259 vs 18270 is an 11-char difference that proves
+    // nothing). So require the growth to be MATERIAL: the ~4 KB truncated
+    // payload really must be in that request, not just some tool name.
+    //
+    // Measured with the real fixture: 18,259 -> 18,921 (+662), driven by the
+    // truncated schema. Measured with the vacuity mutant (tool returns a tiny
+    // result): 18,259 -> 18,270 (+11) — far below this floor.
+    let growth = with_result - sizes[0];
     assert!(
-        with_result > sizes[0],
-        "the request carrying the tool result ({with_result}) was not larger \
-         than the first request ({}) — the ~495 KB schema was dropped rather \
-         than bounded. Silently discarding a tool result is a different bug \
-         from leaking it, and this guard must not be satisfied by it",
+        growth >= 512,
+        "the request carrying the tool result grew by only {growth} chars over \
+         the first request ({} -> {with_result}). The ~495 KB schema was either \
+         dropped or never truncated into a bounded payload. A CEILING check alone \
+         cannot tell those apart from a real bounded result, which is exactly how \
+         this test passed vacuously until this floor was added",
         sizes[0]
     );
 }
