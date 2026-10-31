@@ -1,4 +1,4 @@
-<!-- genome:zone records sha=e7bdc02481e5 -->
+<!-- genome:zone records sha=e2a09eabe0dd -->
 **Decisions** (42)
 
 | ID | Title | Status | Description |
@@ -46,7 +46,7 @@
 | AD-041 | The PDF decompression bound covers the load path and the whole document, so AD-039's claim is now true | Active | AD-039 published 'the decompression bomb is now bounded', but only the extraction path was bounded: Document::load_mem uses LoadOptions::default(), whose max_decompressed_size is None, so the object a |
 | AD-042 | The webhook subscription family is INBOUND (R1): the subscription claims a route, the agent answers, and the answer is delivered to the target | Active | The webhook subscription family is INBOUND (R1): the subscription claims a route, the agent answers, and the answer is delivered to the target |
 
-**Regressions** (13)
+**Regressions** (14)
 
 | ID | Title | Severity | Description |
 |---|---|---|---|
@@ -63,6 +63,7 @@
 | RG-014 | the iteration label is read then computed, so two agents on one repo can publish the same number | High | the iteration label is read then computed, so two agents on one repo can publish the same number |
 | RG-015 | an uncommitted peer edit can leave the shared tree red, and a red tree is not evidence my change broke it | High | an uncommitted peer edit can leave the shared tree red, and a red tree is not evidence my change broke it |
 | RG-016 | The owner ledger's own index table went stale in both directions, and its own count prose named five closed rows as open | High | docs/audit/2026-06-19-BUGS.md's 'What is OPEN right now' table is the index the file itself calls 'the authority on what stands'. On 2026-10-29 it named RT-135 as an 'accepted stub' after iter-1474 cl |
+| RG-017 | a green test summary can be served from cache while the crate is red | High | a green test summary can be served from cache while the crate is red |
 <!-- genome:end records -->
 
 <!-- genome:zone idmap sha=2a03e30bd9bd -->
