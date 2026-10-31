@@ -127,6 +127,56 @@ impl App {
         self.rewind_selector.open();
     }
 
+    /// (2026-10-31, omp parity) Close the rewind selector and hand back any
+    /// draft the open lifted out of the composer.
+    ///
+    /// Every route out goes through here — the Esc-cancel arm, the successful
+    /// rewind, and any future close — because a draft that is parked on the
+    /// way IN and only restored on ONE of three exits is a draft that gets
+    /// silently eaten by the other two. The restore is conditional so the
+    /// successful-rewind path (which sets the composer to the rewound prompt
+    /// a moment later) is not fought over by a stale slot: that path clears
+    /// the slot itself before calling this.
+    ///
+    /// `cursor` is restored with the text, not clamped to the end: the
+    /// operator parked mid-draft and gets the caret back where it was, which
+    /// is the whole point of parking rather than clearing.
+    pub fn close_rewind_selector(&mut self) {
+        if let Some((text, cursor)) = self.rewind_draft_held.take() {
+            self.restore_rewind_draft(text, cursor);
+        }
+        self.rewind_selector.close();
+    }
+
+    /// Put a parked composer draft back, clamped to a character boundary and
+    /// to the end of the text. Split from the close so the rewind-success
+    /// path can discard the held draft WITHOUT writing it to the composer
+    /// (the rewound prompt replaces it instead).
+    pub(crate) fn restore_rewind_draft(&mut self, text: String, cursor: usize) {
+        self.prompt_input.replace_text(text);
+        self.prompt_input.cursor = cursor.min(self.prompt_input.text.len());
+        // A parked draft may have been left mid-UTF-8 only by an external
+        // edit; `normalize` walks the caret back to a boundary.
+        self.prompt_input.normalize();
+        self.refresh_prompt_input();
+    }
+
+    /// Park the composer's contents so the rewind selector can open over a
+    /// draft. Returns `false` when there is nothing to park, which is the
+    /// signal the caller uses to leave `rewind_draft_held` as `None` (nothing
+    /// to restore on the way out).
+    pub(crate) fn park_composer_for_rewind(&mut self) -> bool {
+        if self.prompt_input.is_empty() {
+            return false;
+        }
+        let cursor = self.prompt_input.cursor;
+        let text = std::mem::take(&mut self.prompt_input.text);
+        self.prompt_input.cursor = 0;
+        self.refresh_prompt_input();
+        self.rewind_draft_held = Some((text, cursor));
+        true
+    }
+
     // -------------------------------------------------------------------
     // Event handling
     // -------------------------------------------------------------------

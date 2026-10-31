@@ -1,0 +1,17 @@
+{
+  "name": "double-escape-over-a-draft",
+  "surface": "crates/operant-cli/src/tui/app/key_handling.rs::handle_key_event (the double-Esc arm)",
+  "opens_with": "(esc esc over a typed draft opens the selector)",
+  "keys": "half a draft<esc><esc>",
+  "size": "120x40",
+  "assert": [
+    "any_modal_open == true"
+  ],
+  "assert_screen": [
+    "contains:Rewind to a previous prompt",
+    "contains:No rewindable turns yet"
+  ],
+  "baseline": "double-escape-over-a-draft.txt",
+  "style_baseline": "double-escape-over-a-draft.style.txt",
+  "notes": "2026-10-31: THE live-reported defect. The arm required prompt_input.is_empty(), so Esc Esc over a half-written draft opened nothing — the selector is 'go back a turn', and the operator who needs it is holding text they are about to abandon anyway. The fix parks the draft (App::rewind_draft_held) for the selector's lifetime and hands it back on every exit. This golden pins the OPEN: the draft is staged in the composer, the two Ecs land inside the 500 ms window, and the selector renders. The unit test double_escape_over_a_draft_opens_the_selector_and_cancel_restores_it pins the park and the restore; this scenario pins the gesture surviving the real key handler and the real render path. Divergence from oh-my-pi noted there: omp requires the empty editor (input-controller.ts:628-630) and parks nothing."
+}

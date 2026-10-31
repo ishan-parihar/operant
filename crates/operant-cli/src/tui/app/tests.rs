@@ -1057,9 +1057,11 @@ fn rewind_selector_open_filter_and_escape() {
     assert!(!app.rewind_selector.visible);
 }
 
-/// 2026-10-14 batch, plan 05: double-Esc on an empty composer opens the
-/// selector (within 500 ms, not streaming); a single Esc does not; while
-/// streaming it does not.
+/// 2026-10-14 batch, plan 05: double-Esc opens the selector (within 500 ms,
+/// not streaming); a single Esc does not; while streaming it does not.
+///
+/// (2026-10-31) The composer-state gate is gone: the draft is parked instead
+/// of blocking the gesture. See `double_escape_over_a_draft_opens_the_selector_and_cancel_restores_it`.
 #[test]
 fn double_escape_opens_rewind_selector() {
     let mut app = make_app();
@@ -1072,7 +1074,7 @@ fn double_escape_opens_rewind_selector() {
         app.rewind_selector.visible,
         "the second Esc within 500 ms opens the selector"
     );
-    app.rewind_selector.close();
+    app.close_rewind_selector();
 
     // While streaming, Esc cancels the turn instead (plan 04) — never the
     // selector.
@@ -1097,6 +1099,100 @@ fn double_escape_opens_rewind_selector() {
     assert!(
         !app.rewind_selector.visible,
         "double_escape_action = \"none\" leaves Esc inert"
+    );
+}
+
+/// (2026-10-31) THE reported defect, live-reproduced in tmux before the fix:
+/// the second Esc over a half-written draft opened nothing, because the arm
+/// required `prompt_input.is_empty()`. The one operator who needs "go back a
+/// turn" is the one holding text they are about to abandon, so the gesture was
+/// dead precisely where it matters.
+///
+/// This drives the real key handler twice with a draft in place and asserts
+/// three things: the selector opens, the composer is emptied for it, and Esc
+/// inside the selector hands the draft back verbatim with its cursor.
+#[test]
+fn double_escape_over_a_draft_opens_the_selector_and_cancel_restores_it() {
+    let mut app = make_app();
+    app.prompt_input
+        .replace_text("half a thought about the cache bug".to_string());
+    app.prompt_input.cursor = 6;
+    app.refresh_prompt_input();
+    assert!(
+        !app.prompt_input.is_empty(),
+        "the reproduction needs a draft in the composer"
+    );
+
+    // First Esc arms only — the single-Esc meaning is unchanged.
+    app.handle_key_event(press_key(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(
+        !app.rewind_selector.visible,
+        "a single Esc still opens nothing"
+    );
+    assert!(
+        !app.prompt_input.is_empty(),
+        "a single Esc must never touch the draft (omp's arm-only semantics)"
+    );
+
+    // Second Esc inside the window opens it, draft notwithstanding.
+    app.handle_key_event(press_key(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(
+        app.rewind_selector.visible,
+        "the second Esc opens the selector over a draft — this is the fix"
+    );
+    assert!(
+        app.prompt_input.is_empty(),
+        "the draft is parked, not left in the composer the selector covers"
+    );
+    assert!(
+        app.rewind_draft_held.is_some(),
+        "the parked draft is held, so cancel has something to hand back"
+    );
+
+    // Esc inside the selector is an explicit cancel: everything comes back.
+    app.handle_key_event(press_key(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(!app.rewind_selector.visible, "Esc cancels the selector");
+    assert_eq!(
+        app.prompt_input.text, "half a thought about the cache bug",
+        "cancel restores the draft verbatim"
+    );
+    assert_eq!(
+        app.prompt_input.cursor, 6,
+        "cancel restores the caret where the operator left it"
+    );
+    assert!(
+        app.rewind_draft_held.is_none(),
+        "the slot is emptied by the restore — a later rewind cannot resurrect this draft"
+    );
+}
+
+/// (2026-10-31) The OTHER exit: a committed rewind must NOT hand the parked
+/// draft back, because the rewound prompt takes the composer. The bug this
+/// pins is the draft surviving a rewind and clobbering the prompt the operator
+/// asked to go back to.
+#[test]
+fn a_committed_rewind_discards_the_parked_draft() {
+    let mut app = make_app();
+    app.prompt_input
+        .replace_text("unrelated half a thought".to_string());
+    app.refresh_prompt_input();
+    app.handle_key_event(press_key(KeyCode::Esc, KeyModifiers::NONE));
+    app.handle_key_event(press_key(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(app.rewind_selector.visible, "the selector opened");
+
+    // Simulate the drain's success branch: the selector closes and the
+    // rewound prompt replaces the composer.
+    app.rewind_selector.close();
+    app.rewind_draft_held = None;
+    app.set_prompt_text("the prompt we rewound to".to_string());
+
+    assert_eq!(
+        app.prompt_input.text, "the prompt we rewound to",
+        "the rewound prompt wins the composer"
+    );
+    assert!(
+        app.rewind_draft_held.is_none(),
+        "the parked draft is discarded by the commit"
     );
 }
 

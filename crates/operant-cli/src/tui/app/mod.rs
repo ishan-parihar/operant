@@ -229,6 +229,23 @@ pub struct App {
     /// (plan 05) Timestamp of the last bare Esc — the double-Esc window
     /// (500 ms) for opening the rewind selector.
     pub last_esc_at: Option<std::time::Instant>,
+    /// (2026-10-31, omp parity) The composer's `(text, cursor)` parked while
+    /// the rewind selector is open, so a double-Esc over a half-written draft
+    /// neither loses the draft nor refuses to open. oh-my-pi's `onEscape`
+    /// ladder requires an EMPTY editor before the double-Esc action fires
+    /// (input-controller.ts:628-630 — "Esc must not destroy an in-progress
+    /// draft"), which makes the gesture unusable for exactly the operator who
+    /// has something to say but wants to go back a turn first. This is a
+    /// deliberate divergence in the operator's favour: the draft is lifted
+    /// OUT of the composer into this slot on the way in, and handed back on
+    /// every route out.
+    ///
+    /// `None` means "the composer was empty, restore nothing" — that is the
+    /// `/rewind` and `/undo` paths, which must not resurrect a stale draft.
+    /// It is a dedicated slot, not the Ctrl+S stash: that one is a
+    /// user-facing feature with its own "bring it back" chord, and sharing it
+    /// would let a rewind cancel steal a park the user made two turns ago.
+    pub rewind_draft_held: Option<(String, usize)>,
     /// (plan 2026-10-28 iter-D) Timestamp of the last bare ← that landed on
     /// an empty composer at column 0 — the omp double-tap window
     /// `[40ms, 500ms)` (agent-hub.ts): a second ← inside the window opens
@@ -262,6 +279,18 @@ pub struct App {
     /// makes one). Applied by `run_pending_agent_actions` (`set_session_id` +
     /// display rebuild), the plan-03 pattern.
     pub pending_switch_session: Option<String>,
+
+    /// The session this App is currently attached to, retained from the
+    /// agent's own identity rather than re-derived from the hub's rows.
+    ///
+    /// RT-206: Ctrl+B's `CurrentBranch` filter anchored on `RowStatus::Live`,
+    /// which in production is assigned ONLY to a pending subagent delegation
+    /// (`async_delegation.rs`), never to the operator's own session
+    /// (`Database::list_sessions_rich` builds `RowStatus::Idle`). So the
+    /// filter either showed EVERY session under a "this branch's tree" header
+    /// or narrowed to an unrelated subagent's branch. Retaining the real id and
+    /// passing it as the anchor replaces that guess with a fact.
+    pub current_session: Option<String>,
 
     /// A queued advisor continuation (2026-10-28, omp advisor parity):
     /// set by the `BackgroundReview` handler when an advisor review's

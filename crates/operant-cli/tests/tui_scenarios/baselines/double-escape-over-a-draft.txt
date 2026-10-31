@@ -1,0 +1,40 @@
+  Rewind to a previous prompt · Enter to rewind · f filter · Esc cancel
+
+  No rewindable turns yet — send a prompt first.
+
+
+
+
+
+
+
+
+
+
+ operant · replay
+ operant
+ /model to switch · Offline Capture
+ v0.3.0
+ /login to add provider
+ ● anthropic(key)
+ ~
+
+
+1>
+                                                                                               ~ API key Offline Capture
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  …

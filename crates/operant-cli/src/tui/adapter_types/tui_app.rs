@@ -1164,6 +1164,14 @@ impl TuiApp {
                     let conv = agent.conversation().await;
                     Self::rebuild_display_from_agent(app, conv);
                     app.rewind_selector.close();
+                    // (2026-10-31) A parked draft is DISCARDED, not restored:
+                    // the operator committed to the rewind, and the rewound
+                    // prompt takes the composer a line below. Restoring the
+                    // draft here would let a half-written sentence clobber the
+                    // prompt the rewind is about to hand back. The draft was
+                    // lifted for the selector's lifetime only; a rewind is a
+                    // decision, not a cancel.
+                    app.rewind_draft_held = None;
                     // oh-my-pi behaviour: the rewound prompt comes back to
                     // the composer, ready to edit and resend.
                     app.set_prompt_text(outcome.prompt_text.clone());
@@ -1236,6 +1244,9 @@ impl TuiApp {
                 let fresh = operant_core::agent::rewind::new_session_id();
                 agent.set_session_id(fresh.clone());
                 agent.notify_session_switch(&fresh, &old, false);
+                // RT-206: retain the real session id, so Ctrl+B can anchor
+                // `CurrentBranch` on a fact rather than on a `Live`-row guess.
+                app.current_session = Some(fresh.clone());
                 let conv = agent.conversation().await;
                 Self::rebuild_display_from_agent(app, conv);
                 app.clear_tool_blocks();
@@ -1267,6 +1278,8 @@ impl TuiApp {
                 let old = agent.session_id().unwrap_or_default();
                 agent.set_session_id(session_id.clone());
                 agent.notify_session_switch(&session_id, &old, false);
+                // RT-206: keep the retained id in step with the switch.
+                app.current_session = Some(session_id.clone());
                 let conv = agent.conversation().await;
                 Self::rebuild_display_from_agent(app, conv);
                 app.clear_tool_blocks();
@@ -1301,6 +1314,11 @@ impl TuiApp {
                             app.system_annotations.clear();
                             app.request_native_replay();
                             app.invalidate_transcript();
+                            // Same rule as the selector's rewind above: the
+                            // composer is about to receive the rewound prompt,
+                            // so a parked draft is dropped rather than left to
+                            // resurrect into someone else's turn.
+                            app.rewind_draft_held = None;
                             if retry_after_undo {
                                 app.pending_retry_query = Some(outcome.prompt_text.clone());
                                 app.set_status_notice("Retrying last message…".to_string());

@@ -280,9 +280,12 @@ external_editor = ""
 # use the alternate screen while open. Default off until live-verified.
 # terminal_scroll_mode = false
 
-# What a DOUBLE Esc on an empty composer does when no turn is streaming:
-# "rewind" opens the fullscreen rewind selector (default), "none" leaves
-# Esc with its single-press meanings only.
+# What a DOUBLE Esc does when no turn is streaming: "rewind" opens the
+# fullscreen rewind selector (default), "none" leaves Esc with its
+# single-press meanings only. A half-written draft does not block the
+# gesture: it is parked while the selector is open and handed back on
+# cancel (a committed rewind discards it — the rewound prompt takes the
+# composer instead).
 # double_escape_action = "rewind"
 [mcp]
 autoload = true

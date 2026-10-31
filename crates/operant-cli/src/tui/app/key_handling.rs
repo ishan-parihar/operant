@@ -1202,10 +1202,30 @@ impl App {
                 return false;
             }
 
-            // ---- Double-Esc on an empty composer → rewind selector ----
-            // (plan 05) A second Esc within 500 ms, not streaming, composer
-            // empty: open the fullscreen rewind selector. A single Esc keeps
-            // all of its current meanings.
+            // ---- Double-Esc on any composer state → rewind selector ----
+            // (plan 05) A second Esc within 500 ms, not streaming: open the
+            // fullscreen rewind selector. A single Esc keeps all of its
+            // current meanings.
+            //
+            // (2026-10-31, omp parity) The `prompt_input.is_empty()` gate that
+            // used to sit here was the reported defect: the selector is for
+            // "go back a turn", and the operator who most needs it is the one
+            // holding a half-written draft they are about to discard anyway.
+            // Requiring an empty composer made the gesture dead in exactly
+            // that state, with no advertised way forward — the live repro
+            // pressed Esc Esc over a draft and nothing opened.
+            //
+            // oh-my-pi requires the empty editor too (input-controller.ts:
+            // 628-630, "Esc must not destroy an in-progress draft"), so this
+            // is a deliberate divergence in the operator's favour: rather than
+            // refuse, we PARK the draft for the selector's lifetime and hand
+            // it back on every exit. Nothing is destroyed, and the gesture
+            // works in the one state where it is most useful.
+            //
+            // A single Esc over a non-empty draft still does nothing but arm
+            // the clock (omp's arm-only semantics), so this changes no live
+            // single-Esc behaviour — only what the SECOND Esc does.
+            //
             // NONE-guard: Esc+CONTROL is Ctrl+[ as kitty reports it (the
             // prompt-jump arm below) and must not arm the double-tap clock
             // or anything else.
@@ -1215,8 +1235,9 @@ impl App {
                     .last_esc_at
                     .is_some_and(|t| now.duration_since(t) < std::time::Duration::from_millis(500));
                 self.last_esc_at = Some(now);
-                if double && self.prompt_input.is_empty() && self.double_escape_action == "rewind" {
+                if double && self.double_escape_action == "rewind" {
                     self.last_esc_at = None;
+                    self.park_composer_for_rewind();
                     self.open_rewind_selector();
                     return false;
                 }
@@ -2501,7 +2522,12 @@ impl App {
         }
         match key.code {
             KeyCode::Esc => {
-                self.rewind_selector.close();
+                // (2026-10-31) Cancel hands back any draft the double-Esc
+                // parked on the way in — Esc here is an explicit "never mind",
+                // so the operator lands exactly where they started, draft
+                // and all, rather than with an empty composer and no idea
+                // where their text went.
+                self.close_rewind_selector();
             }
             KeyCode::Up | KeyCode::Char('k') => {
                 self.rewind_selector.select_prev();
