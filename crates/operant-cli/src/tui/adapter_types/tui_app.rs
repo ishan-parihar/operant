@@ -242,6 +242,14 @@ impl TuiApp {
             // task can ensure the agentmemory backend is up before
             // connecting its MCP server (fast reconnect).
             self.app.core_memory_provider = agent.memory_provider();
+            // RT-206: the anchor for Ctrl+B's `CurrentBranch` filter comes from
+            // the agent's LIVE session id (see the third closure on
+            // `SessionSwitchSource` below), NOT from a remembered field.
+            // MEASURED LIVE: `agent.session_id()` is `None` at adapter
+            // construction — the id is minted on the first turn — so a field
+            // seeded here stays `None` for a plain `operant chat` start, and
+            // the filter that claims "this branch's tree" then lists every
+            // session in the store (`[all]` = 19, identical ids).
             // (iter-1489) Read-only rewind-mark source. The rewind selector is a
             // fullscreen overlay, so the async drain that normally feeds it
             // (`run_pending_agent_actions`) never runs while it is open;
@@ -267,6 +275,7 @@ impl TuiApp {
             // already holds — no await anywhere on the frame-loop path.
             let agent_for_switch = std::sync::Arc::clone(agent);
             let agent_for_snapshot = std::sync::Arc::clone(agent);
+            let agent_for_id = std::sync::Arc::clone(agent);
             self.app.core_session_switch = Some(std::sync::Arc::new(
                 crate::tui::session_switch::SessionSwitchSource::new(
                     move |session_id| {
@@ -274,6 +283,11 @@ impl TuiApp {
                         agent_for_switch.notify_session_switch(session_id, "", false);
                     },
                     move || agent_for_snapshot.conversation_snapshot(),
+                    // (RT-206) the agent is the only authority on which session
+                    // the operator is attached to. Read when Ctrl+B is pressed,
+                    // not at construction: before the first turn there IS no id,
+                    // and reading early is what left the remembered field empty.
+                    move || agent_for_id.session_id(),
                 ),
             ));
         }
@@ -825,6 +839,13 @@ impl TuiApp {
             // task can ensure the agentmemory backend is up before
             // connecting its MCP server (fast reconnect).
             self.app.core_memory_provider = agent.memory_provider();
+            // RT-206: the same seeding the interactive path does — the
+            // simulator drives the real Ctrl+B path, so its anchor must be
+            // real too. Without it every headless scenario of the hub would
+            // pass with an empty anchor, which is exactly the defect.
+            if self.app.current_session.is_none() {
+                self.app.current_session = agent.session_id();
+            }
             // (iter-1489) The same read-only rewind-mark source the interactive
             // path holds, so the headless simulator drives the selector's real
             // sync path instead of a mock of it.
@@ -847,6 +868,7 @@ impl TuiApp {
             // already holds — no await anywhere on the frame-loop path.
             let agent_for_switch = std::sync::Arc::clone(agent);
             let agent_for_snapshot = std::sync::Arc::clone(agent);
+            let agent_for_id = std::sync::Arc::clone(agent);
             self.app.core_session_switch = Some(std::sync::Arc::new(
                 crate::tui::session_switch::SessionSwitchSource::new(
                     move |session_id| {
@@ -854,6 +876,11 @@ impl TuiApp {
                         agent_for_switch.notify_session_switch(session_id, "", false);
                     },
                     move || agent_for_snapshot.conversation_snapshot(),
+                    // (RT-206) the agent is the only authority on which session
+                    // the operator is attached to. Read when Ctrl+B is pressed,
+                    // not at construction: before the first turn there IS no id,
+                    // and reading early is what left the remembered field empty.
+                    move || agent_for_id.session_id(),
                 ),
             ));
         }

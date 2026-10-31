@@ -51,19 +51,38 @@ pub struct SessionSwitchSource {
     switch: std::sync::Arc<dyn Fn(&str) + Send + Sync>,
     /// Snapshot of the agent's current conversation (the hot slot).
     conversation: std::sync::Arc<dyn Fn() -> Vec<Message> + Send + Sync>,
+    /// The session id the AGENT is currently attached to, or `None` before
+    /// the first turn mints one.
+    ///
+    /// (RT-206) Why this lives here rather than in the App: Ctrl+B's
+    /// `CurrentBranch` filter needs the operator's own session id as its
+    /// anchor, and the ONLY authoritative reader for it is the agent. Before
+    /// this, the App tried to remember the id itself, which failed for a
+    /// plain `operant chat` start: MEASURED LIVE, `agent.session_id()` is
+    /// `None` at adapter construction (the id is minted on the first turn),
+    /// so the remembered field stayed `None` and the filter that claims
+    /// "this branch's tree" listed every session in the store.
+    session_id: std::sync::Arc<dyn Fn() -> Option<String> + Send + Sync>,
 }
 
 impl SessionSwitchSource {
-    /// Assemble the source from two closures. The CLI builds these once at
+    /// Assemble the source from three closures. The CLI builds these once at
     /// agent creation, capturing the `Arc<OperantAgent>` it already owns.
     pub fn new(
         switch: impl Fn(&str) + Send + Sync + 'static,
         conversation: impl Fn() -> Vec<Message> + Send + Sync + 'static,
+        session_id: impl Fn() -> Option<String> + Send + Sync + 'static,
     ) -> Self {
         Self {
             switch: std::sync::Arc::new(switch),
             conversation: std::sync::Arc::new(conversation),
+            session_id: std::sync::Arc::new(session_id),
         }
+    }
+
+    /// The agent's own session id, or `None` before the first turn.
+    pub fn session_id(&self) -> Option<String> {
+        (self.session_id)()
     }
 
     /// Retarget the agent at `session_id` and return the conversation that
@@ -93,6 +112,7 @@ mod tests {
                     .push(id.to_string());
             },
             || vec![operant_core::client::Message::user("only message")],
+            || Some("sess-now".to_string()),
         );
 
         let conv = src.switch_to("sess-b");
@@ -123,6 +143,7 @@ mod tests {
             // turbofish names it — a closure would only restate the return
             // type clippy already warns about.
             || -> Vec<Message> { Vec::new() },
+            || -> Option<String> { None },
         );
         src.switch_to("a");
         src.switch_to("b");

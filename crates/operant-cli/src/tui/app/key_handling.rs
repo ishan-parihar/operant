@@ -1357,7 +1357,20 @@ impl App {
                 // relying on `replace_rows` finding a `RowStatus::Live` row
                 // is the whole fix: `Live` is only ever a pending subagent
                 // delegation in production, never the operator's session.
-                self.session_hub.branch_root = self.current_session.clone();
+                //
+                // The anchor is read LIVE from the agent through
+                // `core_session_switch`, because a remembered field cannot
+                // work: MEASURED LIVE on `operant chat`, `agent.session_id()`
+                // is `None` until the first turn mints one, so any field
+                // seeded at construction stayed `None` and the filter labeled
+                // "this branch's tree" listed every session in the store
+                // (`[all]` = 19 and `[this branch's tree]` = the identical 19,
+                // same ids).
+                self.session_hub.branch_root = self
+                    .core_session_switch
+                    .as_ref()
+                    .and_then(|s| s.session_id())
+                    .or_else(|| self.current_session.clone());
                 self.session_hub.filter_mode =
                     crate::tui::session_hub::HubFilterMode::CurrentBranch;
                 self.session_hub.open(None);

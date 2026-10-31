@@ -1215,3 +1215,61 @@ fn ctrl_b_with_no_known_session_still_must_not_show_every_session_silently() {
          the honest default the existing CurrentBranch test records"
     );
 }
+
+/// RT-206, the piece that makes the fix real in production: Ctrl+B must read
+/// the anchor from the AGENT'S live session id, not from a field the App
+/// remembered at construction.
+///
+/// MEASURED LIVE on `operant chat` (2026-10-31, freshly-built debug binary,
+/// real `~/.operant/database.db`): `agent.session_id()` is `None` at adapter
+/// construction — the id is minted on the first turn — so a field seeded at
+/// construction stays `None` and Ctrl+B anchors on nothing. The filter labeled
+/// "this branch's tree" then showed all 19 sessions (the identical ids as
+/// `[all]`). Reading the agent's id at the moment of the keypress fixed it:
+/// after one turn, "this branch's tree" showed exactly 1 row and `[all]` 19.
+#[test]
+fn ctrl_b_reads_the_anchor_from_the_agents_live_session_id() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use std::sync::Arc;
+
+    let mut app = crate::tui::app::tests::make_app();
+    // The production shape that broke: nothing has remembered a session yet.
+    app.current_session = None;
+    // But the agent has one, because a turn already ran. This is the ONLY
+    // authoritative source — stand in for the real agent's closure.
+    app.core_session_switch = Some(Arc::new(
+        crate::tui::session_switch::SessionSwitchSource::new(
+            |_| {},
+            || Vec::new(),
+            || Some("sess-live-from-agent".to_string()),
+        ),
+    ));
+
+    app.handle_key_event(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL));
+
+    assert_eq!(
+        app.session_hub.branch_root.as_deref(),
+        Some("sess-live-from-agent"),
+        "Ctrl+B must anchor on the AGENT's live session id even when the App \
+         remembered none — a construction-time field cannot work, because \
+         agent.session_id() is None until the first turn mints one"
+    );
+
+    // And the anchor still narrows: the operator's row plus its forks only.
+    app.session_hub.replace_rows(vec![
+        row("sess-live-from-agent", Some("the real session"), None),
+        branch_row("sess-live-from-agent-fork", "sess-live-from-agent"),
+        row("sess-someone-else", None, None),
+    ]);
+    let ids: Vec<&str> = app
+        .session_hub
+        .visible_rows()
+        .iter()
+        .map(|r| r.id.as_str())
+        .collect();
+    assert_eq!(
+        ids,
+        vec!["sess-live-from-agent", "sess-live-from-agent-fork"],
+        "the agent-sourced anchor must narrow the same way a remembered one does"
+    );
+}
