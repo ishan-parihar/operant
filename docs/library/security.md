@@ -40,6 +40,27 @@ returns a rating, never touches a terminal/filesystem/env/clock — so the
 whole taxonomy is exhaustively testable without a shell. The
 classification is STRUCTURAL, not a table of exact strings.
 
+The module doc names one boundary it deliberately does **not** model:
+indirection through a script or an interpreter (`sh -c`, `python -c`)
+and runtime variable expansion. The consequence is measurable —
+`bash -c "rm -rf /etc"` is rated `None`, because the verb `segments()`
+(`crates/operant-core/src/blast_radius.rs:596-624`) sees is `bash`. codex
+closes exactly this hole by unwrapping the interpreter before
+classifying, then skipping `sudo` / `env` / `trap` wrappers to the verb
+beneath them; the fix recorded for operant is ~34 lines of string work
+with zero new dependencies, not a tree-sitter parser.
+
+Note the asymmetry with `approval.rs`: its hardline blocklist matches
+literal strings (so `rm -fr /etc` misses that layer), while
+`blast_radius` has the same flag-cluster logic codex has
+(`has_short_flag`, `crates/operant-core/src/blast_radius.rs:200-205`) and
+`screen()` is called from `crates/operant-core/src/approval.rs:662` — so the
+flag-permutation hole is already closed and the interpreter boundary is the
+one that is not.
+
+Row: `docs/audit/2026-10-31-codex-architecture-deepen/02-command-safety.md`,
+`docs/plans/2026-10-31-codex-portability-the-twelve-rows-the-deep-dive-adds.md` §1.
+
 ## Justification substance (`justification.rs`)
 
 The destructive-command justification gate must not be satisfiable by

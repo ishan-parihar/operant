@@ -67,6 +67,22 @@ description, steps). The same files the agent's `sop` tool reads
 (iter-1126) — `operant sop list` shows exactly what the agent can
 follow.
 
+## Availability gating — and the one gap the codex contrast named
+
+`SkillFrontmatter` (`crates/operant-core/src/skills.rs:18-27`) declares
+`prerequisites_env` and `prerequisites_commands`; `is_available` (`:218-245`) refuses a
+skill whose platform, env vars, or required commands are missing.
+
+**There is no `prerequisites_tools` field.** A skill cannot declare "this needs
+`web_search` to work". The 2026-10-31 codex contrast found the equivalent in the
+codex tree's skills model (a 15-LOC struct) and recorded it as the one row in that
+family worth importing — wired to the tool `is_available()` the registry already has
+(`crates/operant-core/src/tools.rs:325`, called at `:640`, `:655`, `:686`, `:728`), so
+no new mechanism is needed, only the declaration and the check.
+
+Row: `docs/audit/2026-10-31-codex-architecture-deepen/03-skills.md` and
+`docs/plans/2026-10-31-codex-portability-the-twelve-rows-the-deep-dive-adds.md` §7.
+
 ## Intention
 
 Skills are how the agent gets *cheaper* at recurring work: a skill is
