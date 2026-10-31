@@ -124,7 +124,7 @@ Shipped at the 4 sites the brief assumed, not 2:
   args' length at the `ToolCallStart` emit (`:915`), `tool_input_bytes_for` reads it back by
   call id, `clear_tool_durations` clears it too (a long-lived agent would otherwise grow one
   entry per call).
-- `crates/operant-core/src/observer.rs:49-61` — the two `usize` fields on the variant.
+- `crates/operant-core/src/observer.rs:50-61` — the two `usize` fields on the variant (`:58`, `:60`).
 - `crates/operant-core/src/observer.rs:305-318` — the `ConsoleObserver` arm binds them into
   the `tracing::debug!` line (the brief's "renders them").
 - `crates/operant-core/src/agent/run.rs:2211-2212` — the completed-call emit.
@@ -173,7 +173,7 @@ I could not build this row, because measuring it showed the row's premise was wr
 operant's behaviour rather than merely imprecise. Two corrections to the brief:
 
 **1. The premise measured TRUE of `tool_describe` and FALSE of operant.** `tool_describe`
-(`tool_search.rs:521-537`) really does return `s.parameters` uncapped, exactly as the ledger
+(`tool_search.rs:488-545`, struct at `:484`) really does return `s.parameters` uncapped, exactly as the ledger
 and F0176 said. But a tool result is bounded **after** the tool returns, before it joins the
 LLM-bound message list, at `agent/run.rs`: the SPEND GUARD `guard_tool_output_spend`
 (`compress.rs:587-639`, called at `:2130`) and then the ABSOLUTE CAP `truncate_tool_result`
@@ -223,6 +223,36 @@ client is never invoked — that is the whole value), and it is refused below th
 than compounding loss.
 **Mutation guard:** make the mode fall back to the LLM summariser and the "no model call"
 assertion must fail.
+
+**OUTCOME (2026-10-31): REFUTED — the mode already exists as a separate function, not a flag.**
+
+The brief priced this at ~35 lines plus a config flag. Both acceptance criteria were already met, and
+the implementation is stronger than what the brief asked for:
+
+- **"zero model calls"** is a SIGNATURE, not a branch. [`Autocompactor::compact`]
+  (`session/autocompact.rs:429`) takes `&SessionKey` and nothing else — there is no client
+  parameter, so no caller can make it summarise. The summarising path is a separate
+  `async fn compact_summarising` (`:448`) taking `&mut LlmCompressor` + `&Arc<dyn ModelClient>`.
+- **"refused below the floor"** is in `preflight` (`:498-507`), before any decision about what
+  replaces the middle: at or under `COMPACTION_FLOOR_TOKENS` (`:167`) it returns
+  `SkippedByFloor` with the transcript untouched.
+
+So the brief's mutation guard is **unbuildable as written**: "make the mode fall back to the LLM
+summariser" would have to be ADDED, not flipped. What I shipped instead pins the two properties
+so a future mode flag cannot quietly make the default summarising —
+`crates/operant-core/tests/session_autocompact.rs`:
+
+- `the_no_model_path_cannot_reach_a_model_client` — source pin. **Mutation-proven** by routing
+  the marker through a stub that names `ModelClient` in `compact()`'s body: fails BY NAME while
+  the signature and behaviour are unchanged.
+- `the_no_model_path_refuses_below_the_floor_rather_than_compounding_loss`.
+
+**MY OWN TEST WAS WRONG FIRST, and the tree corrected me.** I asserted an immediate second
+`compact()` would be refused by `SkippedByFloor`. It is refused by `SkippedNothingToCompact`
+("32 msgs are all head/tail protected") — after one pass there is no middle left to drop, which is
+an even stronger non-compounding guarantee than the one I assumed. A separate mutation (adding a
+client parameter to `compact`) is caught as a COMPILE error, not a test failure — recorded as
+such rather than counted as a test proof.
 
 ---
 

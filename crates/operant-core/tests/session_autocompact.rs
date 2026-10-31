@@ -721,3 +721,117 @@ fn compaction_does_not_cross_sessions() {
 fn messages_contents(messages: &[Message]) -> Vec<String> {
     messages.iter().map(|m| m.content.clone()).collect()
 }
+
+/// ---------------------------------------------------------------------------
+/// The no-model mode is a SIGNATURE, not a branch (2026-10-31)
+///
+/// Row 5 of the 2026-10-31 codex-portability plan asked for a "mode that
+/// evicts hard and never summarises ... installs a fresh window with zero
+/// model calls", priced at ~35 lines with a new config flag. It already
+/// exists, and it is stronger than a flag: the non-summarising path IS a
+/// different function that has no client parameter at all.
+///
+/// `compact()` (autocompact.rs:429) takes `&SessionKey` and nothing else. The
+/// summarising path is a separate `async fn compact_summarising()`
+/// (autocompact.rs:448) that takes a `&mut LlmCompressor` and an
+/// `&Arc<dyn ModelClient>`. So there is no mode to fall back to the LLM from —
+/// a caller that has no client simply cannot reach the summariser. The plan's
+/// mutation guard ("make the mode fall back to the LLM summariser and the
+/// no-model-call assertion must fail") is unbuildable, because the fallback
+/// would have to be added, not flipped.
+///
+/// The floor refusal the plan also asked for is in `preflight`
+/// (autocompact.rs:498-507), before any decision about what replaces the
+/// middle: a session at or under `COMPACTION_FLOOR_TOKENS` returns
+/// `SkippedByFloor` with its transcript untouched, on BOTH paths.
+///
+/// These tests pin the two properties the plan's acceptance named, so a future
+/// change that does add a mode cannot quietly make the default summarising.
+/// ---------------------------------------------------------------------------
+
+#[test]
+fn the_no_model_path_cannot_reach_a_model_client() {
+    // The structural pin: the non-summarising entry point's parameter list
+    // contains no client, so no caller can accidentally make it summarise.
+    let src = include_str!("../src/session/autocompact.rs");
+    let start = src
+        .find("pub fn compact(&self, key: &SessionKey)")
+        .expect("the non-summarising entry point must exist under that name");
+    let end = src[start..]
+        .find("\n    }\n")
+        .map(|i| start + i)
+        .expect("the function must terminate");
+    let body = &src[start..end];
+
+    assert!(
+        !body.contains("ModelClient") && !body.contains("client"),
+        "the non-summarising compaction path grew a model client: {:?}",
+        &body[..body.len().min(200)]
+    );
+
+    // ...and the summarising path stays a SEPARATE function, so the two cannot
+    // be confused at a call site.
+    assert!(
+        src.contains("pub async fn compact_summarising("),
+        "the summarising variant must remain a distinct entry point — a mode \
+         flag would let a caller without a client reach the LLM"
+    );
+}
+
+#[test]
+fn the_no_model_path_refuses_below_the_floor_rather_than_compounding_loss() {
+    let f = Fixture::new();
+    // A short session: under the floor, so nothing may be rewritten.
+    let key = f.seed("emp-short", &long_transcript(2, 50));
+
+    let outcome = f.compactor.compact(&key);
+    assert!(
+        matches!(outcome, CompactionOutcome::SkippedByFloor { .. }),
+        "a session under the floor must be refused, not compacted — got {}",
+        outcome.describe()
+    );
+    assert!(
+        !f.contents(&key)
+            .iter()
+            .any(|c| c.contains(COMPACTION_MARKER)),
+        "a below-floor session gained a compaction marker anyway"
+    );
+
+    // Compaction must not compound. Measured, not assumed: after one pass the
+    // session is back under the floor, so an IMMEDIATE second pass is refused
+    // outright. That is the strongest available form of "does not stack a
+    // summary on a summary", because there is no second pass at all.
+    //
+    // The case where the session grows past the floor AGAIN is already covered
+    // by `a_session_that_grows_again_compacts_again_and_keeps_the_earlier_record`
+    // (which asserts the marker count stays at 1). This pins the immediate
+    // re-run, which is what a scheduled job firing twice actually produces.
+    let big = f.seed("emp-big", &long_transcript(20, 300));
+    assert!(f.compactor.compact(&big).compacted(), "first pass compacts");
+
+    let second = f.compactor.compact(&big);
+    assert!(
+        !second.compacted(),
+        "an immediate second pass must not compact again — got {}. Compacting \
+         again would replace a marker with another marker and lose the record \
+         of the first pass, and a mode that summarised every pass would \
+         compound a summary on a summary",
+        second.describe()
+    );
+    // Which refusal it is, measured rather than assumed: after one compaction
+    // the surviving messages are all inside the protected head and tail, so
+    // there is no middle left to drop. `SkippedByFloor` would mean the
+    // transcript came in under the floor; that is not what happens here, and
+    // asserting it would have passed only by luck.
+    assert!(
+        matches!(second, CompactionOutcome::SkippedNothingToCompact { .. }),
+        "expected the head/tail protection to refuse the second pass — got {}",
+        second.describe()
+    );
+    let markers = f
+        .contents(&big)
+        .iter()
+        .filter(|c| c.contains(COMPACTION_MARKER))
+        .count();
+    assert_eq!(markers, 1, "exactly one compaction record survives");
+}
