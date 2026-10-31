@@ -54,6 +54,7 @@ mod gateway_api;
 mod gateway_commands;
 mod gateway_platforms;
 mod gateway_runner;
+mod hardening;
 mod mcp_serve;
 mod memory_provider_tools;
 #[cfg(feature = "plugins-wasm")]
@@ -3124,6 +3125,21 @@ fn restore_default_sigpipe_disposition() {
 
 fn main() -> Result<()> {
     restore_default_sigpipe_disposition();
+
+    // Process hardening runs FIRST, before config, before the runtime, before
+    // any daemon spawns: the point of RLIMIT_CORE=0 and PR_SET_DUMPABLE=0 is
+    // that they hold for the entire life of the process, and a dump written
+    // while loading `.env` is exactly the credential leak they prevent.
+    //
+    // Unlike codex (process-hardening/src/lib.rs:99-115), a refused hardening
+    // step LOGS and carries on — see the module docs for why refusing to start
+    // over a non-security failure is the worse outcome.
+    for (step, err) in hardening::harden_process() {
+        eprintln!(
+            "Warning: process hardening step {step} was refused by this kernel ({err}). \
+             Continuing, but this process may dump core on a crash."
+        );
+    }
 
     let cli = Cli::parse();
 
