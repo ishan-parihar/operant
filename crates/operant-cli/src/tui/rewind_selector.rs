@@ -109,11 +109,6 @@ impl RewindSelectorState {
                 .iter()
                 .position(|e| prompt_texts_match(&e.text, text))
         });
-        #[cfg(test)]
-        eprintln!(
-            "PROBE sync: sel_before={} anchor={:?} had_sel={} resolved={:?} newlen={}",
-            self.selected, anchor_text, had_selection, resolved, self.entries.len()
-        );
         self.selected = match resolved {
             // Same conversation, re-derived ids: the anchor text still resolves.
             Some(idx) => idx,

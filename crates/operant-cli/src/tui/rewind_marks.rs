@@ -184,6 +184,42 @@ mod tests {
     /// selector gets marks at all. Reverting the handle wiring (or leaving
     /// `marks()` unfiltered-and-empty) turns this red.
     #[test]
+    /// (iter-1544) THE OPERATOR'S LIVE DEFECT, pinned.
+    ///
+    /// A real TUI run sent three prompts. The agent recorded three turn marks,
+    /// but the model merged two of them into ONE committed user message with no
+    /// separator (`"REWINDPROBE bravo promptREWINDPROBE charlie prompt"`), so
+    /// the conversation carried two prompts where the marks carried three.
+    /// Exact-equality filtering dropped the two marks that had been merged, the
+    /// rewind selector listed ONE entry, and the arrow keys had nothing to move
+    /// through — the operator's "up/down navigation is not working".
+    ///
+    /// This test pins the DEFECT's mechanism, not a fix. It documents that the
+    /// exact-match rule loses a mark whose prompt was merged into another
+    /// message, which is the state that must change.
+    #[test]
+    fn a_mark_whose_prompt_was_merged_into_another_message_is_lost() {
+        let src = RewindMarksSource::new(
+            vec![
+                mark(11, "REWINDPROBE alpha prompt"),
+                mark(12, "REWINDPROBE bravo prompt"),
+                mark(13, "REWINDPROBE charlie prompt"),
+            ],
+            Some("sess_live".to_string()),
+            vec![
+                "REWINDPROBE alpha prompt".to_string(),
+                "REWINDPROBE bravo promptREWINDPROBE charlie prompt".to_string(),
+            ],
+        );
+        let texts: Vec<String> = src.marks().into_iter().map(|m| m.text).collect();
+        assert_eq!(
+            texts,
+            vec!["REWINDPROBE alpha prompt".to_string()],
+            "the two merged prompts are dropped by exact equality — this is the \
+             live defect, and the assertion is the record of it"
+        );
+    }
+
     fn marks_are_offered_for_the_loaded_session() {
         let src = source(Some("sess_a"), &["alpha", "beta", "gamma"]);
         let ids: Vec<u64> = src.marks().into_iter().map(|m| m.turn_id).collect();
