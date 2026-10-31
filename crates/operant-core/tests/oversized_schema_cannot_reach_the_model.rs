@@ -177,17 +177,29 @@ const CEILING: usize = 20_000;
 /// * floor 623 against the vacuous fixture **PASSES** (623 >= 623), so 623 is
 ///   NOT valid even though it equals the vacuous measurement — the check is
 ///   `>=`, so the boundary value itself is accepted.
-/// * floor 624 against vacuous **FAILS** and against real **PASSES**.
+/// * floors 624 and 625 against the vacuous fixture **PASS** — and this line was
+///   WRONG once already. I originally wrote "floor 624 against vacuous FAILS",
+///   carried over from the 387-era probe without re-measuring after the fixture
+///   changed. Re-probed against `VacuousSchemaTool`: 624 passes, 625 passes.
+///   Both are also above the real regime's own boundary check, so what excludes
+///   623 is only the const assertion `MIN_GROWTH > VACUOUS_GROWTH` — a COMPILE
+///   error, not a test failure. (This is the same carry-forward error as the
+///   three vacuous numbers, arriving in the prose about the range rather than in
+///   the number itself.)
 /// * floor 1018 against real **PASSES** (1018 >= 1018), so the upper bound is
 ///   INCLUSIVE, not exclusive.
-/// * floor 1019 against real **FAILS** with "grew by only 1018 chars".
+/// * floor 1019 against real **FAILS at compile time** (E0080, `assert!
+///   (MIN_GROWTH <= REAL_GROWTH)`), not with a test message — I first wrote
+///   "fails with 'grew by only 1018 chars'", which is what the RUNTIME
+///   assertion would say, but the const assertion fires first and the binary
+///   never builds.
 ///
-/// The measured working range is therefore **624 <= floor <= 1018**. I first
-/// published `387 <= floor <= 1018` — both ends wrong, the lower one by
-/// including the case that fails to discriminate and the upper one by
-/// implying an exclusive bound that is inclusive. Writing a range down from
-/// two measurements without probing the endpoints is how a bound gets named
-/// that does not hold at its own edge.
+/// The measured working range is therefore **624 <= floor <= 1018**, where the
+/// lower bound is enforced by a const assertion (compile) and the upper bound
+/// by the same. Both are pinned in `const _: () = assert!(...)` below, and both
+/// were re-probed against the CURRENT fixtures after the fixture change in
+/// iter-1576 — which is the step whose omission produced the wrong sentence
+/// above.
 ///
 /// **THREE DISTINCT VACUOUS MEASUREMENTS, and the distinction is the point.**
 /// This constant's vacuous figure has been 11, then 387, now 623, and each was
