@@ -51,9 +51,10 @@
 //! passed, because the second request was 18,270 chars against the ceiling of
 //! 20,000 — nothing bounded, nothing missing, nothing observed. The growth
 //! assertion below (>= 512 chars) closes that: with the real fixture the
-//! request grows 18,259 -> 18,921 (+662, the truncated schema), and with the
+//! request grows 18,259 -> 19,277 (+1018, the truncated schema), and with the
 //! vacuity mutant 18,259 -> 18,270 (+11, just a tool name). Both directions
-//! now fail by name.
+//! now fail by name. The floor sits between those regimes (~100x apart) and is
+//! marked `provisional:` in source because that is what it is derived from.
 //!
 //! **A NOTE ON SCOPE, so the next reader does not go looking for a second
 //! thing to fix.** `crates/operant-api/src/observability_traits.rs` defines
@@ -101,7 +102,22 @@ const FIELDS: usize = 2000;
 /// asserts the BOUND EXISTS and is far below the input, not that the operator
 /// picked a particular number. 4 KB of schema plus room for the JSON envelope
 /// and a truncation marker.
+/// The ceiling on what may reach the model. Generous on purpose: this test
+/// asserts the BOUND EXISTS and is far below the input, not that the operator
+/// picked a particular number. 4 KB of schema plus room for the JSON envelope
+/// and a truncation marker.
 const CEILING: usize = 20_000;
+
+/// The minimum growth between the pre-tool request and the post-tool request,
+/// for the truncated schema to count as PRESENT rather than dropped.
+///
+/// `provisional:` per AGENTS.md — this number came from observing the two
+/// regimes, not from a property of the system: a vacuous run (tool returns a
+/// tiny payload) grows by 11 chars, and the real run grows by 1018. Its only
+/// job is to sit between those, and anything from ~64 to ~511 does that. 512
+/// was chosen near the middle with ~50% headroom under the real value. If a
+/// fixture change moves the real number, re-measure rather than trusting this.
+const MIN_GROWTH: usize = 512;
 
 struct HugeSchemaTool;
 
@@ -343,12 +359,12 @@ async fn an_oversized_tool_schema_is_cut_before_it_reaches_the_model() {
     // nothing). So require the growth to be MATERIAL: the ~4 KB truncated
     // payload really must be in that request, not just some tool name.
     //
-    // Measured with the real fixture: 18,259 -> 18,921 (+662), driven by the
+    // Measured with the real fixture: 18,259 -> 19,277 (+1018), driven by the
     // truncated schema. Measured with the vacuity mutant (tool returns a tiny
     // result): 18,259 -> 18,270 (+11) — far below this floor.
     let growth = with_result - sizes[0];
     assert!(
-        growth >= 512,
+        growth >= MIN_GROWTH,
         "the request carrying the tool result grew by only {growth} chars over \
          the first request ({} -> {with_result}). The ~495 KB schema was either \
          dropped or never truncated into a bounded payload. A CEILING check alone \
