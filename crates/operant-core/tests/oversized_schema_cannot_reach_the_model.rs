@@ -183,10 +183,29 @@ const CEILING: usize = 20_000;
 ///
 /// 1017 sits inside the pinned range. (Its earlier values were 512 and, before
 /// that, an arithmetic guess; those are this constant's history, not its
-/// current state.) If a fixture change moves either regime, re-pin the bounds
-/// by probing the endpoints — run with `--nocapture` for the figures, then set
-/// the floor to each boundary value and confirm one passes and the other
-/// fails — rather than trusting either bound in this comment.
+/// current state.)
+///
+/// **HOW DRIFT-PROOF THE RANGE ACTUALLY IS, measured rather than assumed.**
+/// The advice here used to say "if a fixture change moves either regime,
+/// re-measure", which implied the real regime moves with the fixture. Two
+/// probes say it does not, and the second one corrected the first:
+///
+/// * Doubling the per-field schema text (200 -> 400 chars) leaves the growth at
+///   **exactly 1018**. So the regime is not driven by schema size.
+/// * Doubling `MAX_TOOL_RESULT_LEN` (4,096 -> 8,192, `agent/mod.rs:1114`) ALSO
+///   leaves it at exactly 1018. So the regime is not anchored to that cap either
+///   — my first reading of those two results was wrong, and this bullet is the
+///   correction.
+///
+/// What actually binds is the **spend guard** at `agent/compress.rs:587`, whose
+/// limit is `(context_window - RESPONSE_RESERVE_TOKENS) * max_tool_result_share`
+/// — computed from the token budget, not from either char cap. That is why both
+/// char-cap mutations were no-ops: the payload was already inside the guard's
+/// token limit and neither char cap was the binding bound.
+///
+/// So: if the numbers change, suspect `context_window`, `max_tool_result_share`,
+/// or `RESPONSE_RESERVE_TOKENS`. Re-pin by probing the endpoints rather than by
+/// adjusting the prose.
 const MIN_GROWTH: usize = 1017;
 
 struct HugeSchemaTool;
