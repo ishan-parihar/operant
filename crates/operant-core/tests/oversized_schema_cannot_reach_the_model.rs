@@ -49,12 +49,24 @@
 //! would pass just as happily if the agent DROPPED the result entirely: I
 //! swapped the fixture so the tool returns a tiny payload and the test still
 //! passed, because the second request was 18,270 chars against the ceiling of
-//! 20,000 — nothing bounded, nothing missing, nothing observed. The growth
-//! assertion below (>= 512 chars) closes that: with the real fixture the
-//! request grows 18,259 -> 19,277 (+1018, the truncated schema), and with the
-//! vacuity mutant 18,259 -> 18,270 (+11, just a tool name). Both directions
-//! now fail by name. The floor sits between those regimes (~100x apart) and is
-//! marked `provisional:` in source because that is what it is derived from.
+//! 20,000 — nothing bounded, nothing missing, nothing observed.
+//!
+//! The growth assertion below (>= 1017 chars) closes that. Both directions now
+//! fail by name, and BOTH figures are measured and printed by the test itself
+//! (`--nocapture`, the `[growth]` line) so neither is a remembered number:
+//!
+//! * real fixture:       18,259 -> 19,277  (**+1018**, the truncated schema)
+//! * vacuous fixture:    18,259 -> 18,646  (**+387**, schema shrunk to one
+//!   field so it no longer dominates the request)
+//!
+//! **A CORRECTION ON THE VACUOUS FIGURE.** This file previously published the
+//! vacuous growth as `18,270 (+11, just a tool name)`. That number is real but
+//! it belongs to a DIFFERENT probe — the tiny-tool-result one described in the
+//! paragraph above. The probe the floor is actually verified against is the
+//! shrunk-schema one, which measures **+387**, and `+11` was carried forward
+//! into the range `11 < floor` without re-measurement after the probe changed.
+//! The floor sits between the two MEASURED regimes and is marked `provisional:`
+//! in source because that is what it is derived from.
 //!
 //! **A NOTE ON SCOPE, so the next reader does not go looking for a second
 //! thing to fix — and the sharper finding, which my first note understated.**
@@ -122,20 +134,36 @@ const CEILING: usize = 20_000;
 /// for the truncated schema to count as PRESENT rather than dropped.
 ///
 /// `provisional:` per AGENTS.md — this number came from observing the two
-/// regimes, not from a property of the system. A vacuous run (tool returns a
-/// tiny payload) grows by 11 chars; the real run grows by 1018. Its only job
-/// is to sit between those two, and I verified that empirically rather than
-/// by arithmetic: floors of 12, 64, 512 and 1017 were each run against both
-/// fixtures, and all four pass the real one and fail the vacuous one. So the
-/// working range is documented as 11 < floor <= 1018, which is far wider than
-/// the "~64 to ~511" I first wrote — that range was arithmetic, not
-/// measurement, and it was wrong.
+/// regimes, not from a property of the system.
 ///
-/// 1017 sits inside the verified range, one char below the real growth it
-/// must not exceed. (It was 512 before I narrowed the range by measuring;
-/// that line is corrected here rather than left claiming a number this
-/// constant does not hold.) If a fixture change moves the real number,
-/// re-measure both regimes rather than trusting this.
+/// The regimes, re-measured 2026-10-31 and printed by the test itself
+/// (`--nocapture` shows `[growth] pre-tool=... post-tool=... delta=...`) so the
+/// figures below are checkable rather than merely asserted:
+///
+/// * **real fixture**: 18,259 -> 19,277, **+1018**, deterministic across runs.
+/// * **vacuous fixture** (schema shrunk to a single field so it no longer
+///   dominates the request): 18,259 -> 18,646, **+387**, also deterministic.
+///
+/// So its only job is to sit between 387 and 1018, and the working range is
+/// therefore **387 <= floor <= 1018**, not the `11 < floor <= 1018` I first
+/// published.
+///
+/// **CORRECTION, recorded because the earlier number was wrong and it was
+/// wrong twice.** I first published a vacuous growth of 11 chars
+/// (18,259 -> 18,270) and derived the loose bound `11 < floor` from it. That
+/// figure came from a DIFFERENT vacuity probe — the one where the tool returned
+/// a tiny payload — and I carried it forward after changing the probe to
+/// shrinking the schema, without re-measuring. I then "corrected" the bound
+/// once already, narrowing the upper end from an arithmetic guess to the
+/// measured 1018, and left the lower end asserting 11. Both ends are now
+/// measured: 387 below, 1018 above.
+///
+/// 1017 sits inside the verified range, one char below the real growth it must
+/// not exceed. (It was 512 before I narrowed the range by measuring; those two
+/// earlier values are this constant's history, not its current state.) If a
+/// fixture change moves the real number, re-measure BOTH regimes — run the test
+/// with `--nocapture`, then probe the vacuous direction again — rather than
+/// trusting either bound in this comment.
 const MIN_GROWTH: usize = 1017;
 
 struct HugeSchemaTool;
@@ -379,9 +407,17 @@ async fn an_oversized_tool_schema_is_cut_before_it_reaches_the_model() {
     // payload really must be in that request, not just some tool name.
     //
     // Measured with the real fixture: 18,259 -> 19,277 (+1018), driven by the
-    // truncated schema. Measured with the vacuity mutant (tool returns a tiny
-    // result): 18,259 -> 18,270 (+11) — far below this floor.
+    // truncated schema. Measured with the vacuity fixture (FIELDS shrunk to 1 so
+    // the schema no longer dominates): 18,259 -> 18,646 (+387).
+    //
+    // Printed below rather than only asserted, because the doc comment on
+    // MIN_GROWTH publishes these figures and a published number nothing emits
+    // cannot be re-checked without editing the source. `--nocapture` shows them.
     let growth = with_result - sizes[0];
+    eprintln!(
+        "[growth] pre-tool={} post-tool={with_result} delta={growth} (floor={MIN_GROWTH})",
+        sizes[0]
+    );
     assert!(
         growth >= MIN_GROWTH,
         "the request carrying the tool result grew by only {growth} chars over \
