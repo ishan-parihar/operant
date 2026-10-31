@@ -19,9 +19,9 @@
 //! This module operates on command *text*. A determined or confused caller
 //! can still reach a destructive command through a form this parser does not
 //! model — shell metacharacter nesting, indirection through a script file or
-//! an interpreter (`sh -c`, `python -c`), a variable expanded at runtime, a
-//! binary whose behavior is not in `VerbKind`. It raises the cost of a
-//! careless `rm -rf /`; it does not make destructive commands impossible.
+//! an interpreter, a variable expanded at runtime, a binary whose behavior is
+//! not in `VerbKind`. It raises the cost of a careless `rm -rf /`; it does not
+//! make destructive commands impossible.
 //! **There is no OS-level sandbox in operant, and there never was one here.**
 //! An earlier version of this comment named `operant-runtime`'s sandbox
 //! backends as real isolation. That crate was deleted and no such backend
@@ -29,6 +29,29 @@
 //! What protects a deployment is this text gate plus the approval gate plus
 //! the operator's own environment, not kernel-enforced isolation. Do not tell
 //! a reader otherwise.
+//!
+//! ## The interpreter boundary (added 2026-10-31, codex-deepen Row 1)
+//!
+//! The common case of interpreter indirection IS now unwrapped: a segment
+//! headed by an interpreter or a wrapper (`bash -c`, `sh -lc`, `sudo`, `env`,
+//! `timeout`, …) is followed into the script or command it actually runs, and
+//! THAT is classified. `bash -c "rm -rf /etc"` rated `None` before — the verb
+//! the classifier saw was `bash` — and rates `Unbounded` now.
+//!
+//! The unwrap **fails closed rather than open**: an interpreter whose script
+//! cannot be extracted becomes the sentinel [`UNRESOLVED_INTERPRETER`], rated
+//! `Scoped`, so it is always visible to the operator. `Scoped` and not
+//! `Unbounded` because an unresolvable shape is suspicious rather than proven
+//! destructive, and gating every oddly-shaped `sh -c` on a justification would
+//! train operators to write worse justifications.
+//!
+//! What is still deliberately NOT modelled, because modelling it costs more
+//! than it is worth and tree-sitter is three dependencies for a boundary
+//! string work already covers: `docker run`, `ssh host`, `crontab -l`
+//! (a script read from a file), command substitution inside a
+//! single-quoted string, and variable expansion. Nested interpreters beyond
+//! one level are not followed either. `shlex` was considered and refused — see
+//! the plan row's DO-NOT note.
 //!
 //! Enforcement is in [`crate::approval::check_tool_approval`], the same entry
 //! point every tool call already passes through, so this adds a layer to the
@@ -470,6 +493,13 @@ fn worst(a: Boundedness, b: Boundedness) -> Boundedness {
 }
 
 fn rate_segment(seg: &str) -> (BlastRadius, Vec<String>) {
+    // The fail-closed sentinel: an interpreter whose inner script we could
+    // not extract. Rated `Scoped` so it is always VISIBLE to the operator
+    // (never `None`, which is how this family slipped through for so long)
+    // without putting an `Unbounded` gate on every oddly-shaped `sh -c`.
+    if seg == UNRESOLVED_INTERPRETER {
+        return (BlastRadius::Scoped, Vec::new());
+    }
     if let Some(c) = sql_class(seg) {
         return (c, Vec::new());
     }
@@ -586,14 +616,16 @@ fn rate_segment(seg: &str) -> (BlastRadius, Vec<String>) {
 /// segments. Pure — no I/O, no terminal, no filesystem.
 pub fn classify(command: &str) -> BlastRadius {
     let mut class = BlastRadius::None;
-    for seg in segments(command) {
+    for seg in segments_full(command) {
         class = class.max(rate_segment(&seg).0);
     }
     class
 }
 
-/// Split on shell separators. Indirection through a script or an interpreter
-/// is deliberately not modelled — see the module docs.
+/// Split on shell separators only — the raw tokenizer, no interpretation.
+///
+/// Kept as the primitive so [`segments_full`] can build on it and so a test
+/// can pin the splitter's behaviour independently of the unwrap.
 fn segments(command: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut cur = String::new();
@@ -621,10 +653,255 @@ fn segments(command: &str) -> Vec<String> {
     out
 }
 
+/// Interpreters and wrappers whose whole job is to run something else.
+///
+/// A segment headed by one of these is not the command that does the work —
+/// `bash -c "rm -rf /etc"` is a `rm`, and rating it as `bash` rated it as
+/// nothing. This list is the smallest set that covers how a model or a
+/// playwright actually reaches an inner command; it deliberately does NOT
+/// try to model:`docker run`, `ssh host`, `sudo -u user` (a privilege change
+/// with no command), or `crontab -l` (reads its script from a file).
+const INTERPRETER_VERBS: &[&str] = &[
+    "bash", "sh", "zsh", "dash", "ksh", "csh", "tcsh", "fish", "ash", "env", "sudo", "doas",
+    "nice", "nohup", "timeout", "setsid", "stdbuf", "ionice", "trap",
+];
+
+/// The inner script a segment's interpreter verb was asked to run, if any.
+///
+/// Handles the two shapes that matter: `-c <script>` (and the glued
+/// `-c<script>`, which `shlex`-free string work can still see) and the bare
+/// positional form `<interp> <file>`, which is a script path rather than a
+/// command.
+///
+/// Three-valued on purpose:
+///
+/// - `Some(script)` — followed: classify that script.
+/// - `Some("")` — an interpreter we FOUND but could not follow (`bash -c`
+///   with no argument). The caller turns this into the fail-closed sentinel.
+/// - `None` — not an interpreter-headed segment at all.
+///
+/// Collapsing the middle case into `None` was a real bug: `bash -c` rated
+/// `None` and slipped the gate entirely. The test
+/// `an_interpreter_that_cannot_be_unwrapped_fails_closed` pins it.
+fn interpreter_script(seg: &str) -> Option<String> {
+    let toks = tokens(seg);
+    let head = toks.first()?;
+    let head_base = basename(head).to_ascii_lowercase();
+    if !INTERPRETER_VERBS.contains(&head_base.as_str()) {
+        return None;
+    }
+    // Wrappers that take a leading numeric parameter of their OWN before the
+    // command they run (`timeout 30 cmd`, `nice -n 10 cmd`). That token is the
+    // wrapper's config, not the command — skipping it is what lets
+    // `timeout 30 rm -rf /etc` still reach `rm`.
+    const LEADING_PARAM_WRAPPERS: &[&str] = &["timeout", "nice", "ionice", "stdbuf"];
+    let skip_leading_params = LEADING_PARAM_WRAPPERS.contains(&head_base.as_str());
+
+    let mut i = 1usize;
+    while i < toks.len() {
+        let tok = toks[i].trim();
+        // A short-flag cluster whose LAST letter is `c` — `-c`, `-lc`, `-ec` —
+        // means "the next non-flag token is the script". Matching only the
+        // exact `-c` missed `sh -lc`, which is a login shell and one of the
+        // shapes that actually appears.
+        if tok.starts_with('-') && !tok.starts_with("--") && tok.ends_with('c') {
+            if let Some(glued) = glued_script(tok) {
+                return Some(glued);
+            }
+            // `bash -c` with nothing after it: interpreter-shaped but
+            // unfollowable. `Some("")` (not `None`) so the caller emits the
+            // fail-closed sentinel instead of treating this as "not an
+            // interpreter" and rating it `None`.
+            return toks.get(i + 1).cloned().or_else(|| Some(String::new()));
+        }
+        // `--command=` long form, and `--` ending our flag scan.
+        if let Some(rest) = tok.strip_prefix("--command=") {
+            return Some(rest.to_string());
+        }
+        if tok == "--" {
+            return toks.get(i + 1).cloned().or_else(|| Some(String::new()));
+        }
+        if skip_leading_params && !tok.starts_with('-') && is_all_digits(tok) {
+            i += 1;
+            continue;
+        }
+        // `sudo`/`doas` take a `-u <user>` / `-g <group>` argument that is the
+        // wrapper's config, not the command. Skipping the VALUE is what lets
+        // `sudo -u root rm -rf /etc` reach `rm` instead of rating `root`.
+        if (head_base == "sudo" || head_base == "doas")
+            && matches!(tok, "-u" | "-g" | "-p" | "-C" | "-h")
+        {
+            i += 2;
+            continue;
+        }
+        // `VAR=value` env assignments belong to `env`/`sudo`/`nice` — skip
+        // them so `env FOO=bar rm -rf /etc` still reaches `rm`.
+        if !tok.starts_with('-') && !is_env_assignment(tok) {
+            // A bare positional after the interpreter is a script FILE for
+            // `bash`, or the COMMAND for the wrapper family (`sudo`, `env`,
+            // `nice`, `timeout`, `trap`, `nohup`). Either way it is what must
+            // be classified, so hand back the WHOLE remaining tail — one token
+            // would drop the command's own flags and target, which is how
+            // `timeout 30 rm -rf /etc` came out `Scoped` instead of
+            // `Unbounded` (the return was the bare verb `rm`).
+            return Some(rejoin_tail(&toks, i));
+        }
+        i += 1;
+    }
+    // Reached the end with a flag-only tail: an interpreter we could not
+    // follow. `Some("")`, not `None` — see the `-c` arm above.
+    Some(String::new())
+}
+
+/// The script glued onto a short-flag cluster's `c`, when there is one:
+/// `-cscript` or `-lcscript`. Returns `None` for a bare `-c`/`-lc`, where the
+/// script is the NEXT token instead.
+fn glued_script(flag: &str) -> Option<String> {
+    let pos = flag.rfind('c')?;
+    let rest = &flag[pos + 1..];
+    if rest.is_empty() {
+        None
+    } else {
+        Some(rest.to_string())
+    }
+}
+
+/// Rebuild the tokens from `start` onward into one string, re-quoting any
+/// token that would not survive a round-trip through [`tokens`].
+///
+/// Needed because [`interpreter_script`] hands the *remainder* of a wrapper
+/// segment to [`segments`], and a token containing a space (`bash -c 'a b'`)
+/// would otherwise split into two.
+fn rejoin_tail(toks: &[String], start: usize) -> String {
+    toks[start..]
+        .iter()
+        .map(|t| {
+            if t.is_empty() || t.chars().any(char::is_whitespace) {
+                format!("'{}'", t.replace('\'', "'\\''"))
+            } else {
+                t.clone()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// True for a bare non-negative number, the one leading-parameter shape a
+/// wrapper swallows (`timeout 30`). Kept narrow on purpose: widening it to
+/// "anything not a flag" would swallow the command in `env FOO cmd`.
+fn is_all_digits(tok: &str) -> bool {
+    !tok.is_empty() && tok.chars().all(|c| c.is_ascii_digit())
+}
+
+fn is_env_assignment(tok: &str) -> bool {
+    match tok.split_once('=') {
+        Some((name, _)) => {
+            !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        }
+        None => false,
+    }
+}
+
+/// Quote-aware whitespace tokenizer.
+///
+/// [`segments`] splits on operators; this splits a single segment into words
+/// while honouring `'…'` and `"…"` so a script path with a space survives.
+/// Backslash escapes are honoured inside double quotes only, which is where
+/// they matter for the arguments the unwrap reads.
+fn tokens(seg: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut quote: Option<char> = None;
+    let mut in_token = false;
+    let mut chars = seg.chars().peekable();
+    while let Some(c) = chars.next() {
+        match quote {
+            Some(q) => {
+                if c == '\\' && q == '"' && chars.peek() == Some(&'"') {
+                    cur.push('"');
+                    chars.next();
+                } else if c == q {
+                    quote = None;
+                    in_token = true;
+                } else {
+                    cur.push(c);
+                }
+            }
+            None => match c {
+                '\'' | '"' => {
+                    quote = Some(c);
+                    in_token = true;
+                }
+                c if c.is_whitespace() => {
+                    if in_token {
+                        out.push(std::mem::take(&mut cur));
+                        in_token = false;
+                    }
+                }
+                c => {
+                    cur.push(c);
+                    in_token = true;
+                }
+            },
+        }
+    }
+    if in_token {
+        out.push(cur);
+    }
+    out
+}
+
+/// Segments with interpreter indirection unwrapped, one level deep.
+///
+/// This is the segmenter the classifier uses. For every raw segment it does
+/// THREE things, and the third is what makes the fail-closed contract real:
+///
+/// 1. keeps the raw segment (so the outer verb is still rated),
+/// 2. appends the inner script's own segments when the interpreter verb's
+///    script argument can be extracted, and
+/// 3. when the interpreter was found but its script CANNOT be extracted,
+///    appends a sentinel [`UNRESOLVED`] segment that rates `Scoped`.
+///
+/// `Scoped` and not `Unbounded` on purpose: an unresolvable interpreter is
+/// suspicious but not proven destructive, and forcing an `Unbounded` rating
+/// would put a justification gate on every `sh -c` with an unusual flag
+/// shape. `Scoped` means the command is always *visible* to the operator;
+/// `None` would mean it silently slipped through again.
+fn segments_full(command: &str) -> Vec<String> {
+    let raw = segments(command);
+    let mut out: Vec<String> = Vec::with_capacity(raw.len() * 2);
+    for seg in raw {
+        let seg = seg.trim().to_string();
+        if seg.is_empty() {
+            continue;
+        }
+        // `Some("")` means an interpreter we found but could not
+        // follow; `None` means the head verb is not an interpreter at all and
+        // the segment is classified as written. The sentinel is what makes the
+        // first case observable instead of silently `None`.
+        match interpreter_script(&seg) {
+            Some(script) if !script.trim().is_empty() => {
+                out.push(seg.clone());
+                out.extend(segments(&script));
+            }
+            Some(_) => {
+                out.push(seg.clone());
+                out.push(UNRESOLVED_INTERPRETER.to_string());
+            }
+            None => out.push(seg),
+        }
+    }
+    out
+}
+
+/// The sentinel a segment becomes when it names an interpreter whose inner
+/// script could not be extracted. Rate at the call site, never execute.
+const UNRESOLVED_INTERPRETER: &str = "<unresolved-interpreter>";
+
 /// Every target a destructive verb or a redirect can reach, for path denial.
 pub fn destructive_targets(command: &str) -> Vec<String> {
     let mut out = Vec::new();
-    for seg in segments(command) {
+    for seg in segments_full(command) {
         if sql_class(&seg).is_some() {
             continue;
         }
@@ -639,7 +916,7 @@ pub fn destructive_targets(command: &str) -> Vec<String> {
 /// A one-phrase description of the first unbounded thing the command touches,
 /// for the model-facing refusal message.
 pub fn unbounded_detail(command: &str) -> String {
-    for seg in segments(command) {
+    for seg in segments_full(command) {
         if sql_class(&seg).is_some() {
             return format!("destructive SQL statement in `{seg}`");
         }
@@ -994,5 +1271,143 @@ mod tests {
     fn multi_segment_commands_take_the_worst_segment() {
         assert_eq!(classify("ls -la && rm -rf /"), BlastRadius::Unbounded);
         assert_eq!(classify("rm -f ./a.txt; echo done"), BlastRadius::Scoped);
+    }
+}
+
+// ============================================================================
+// The interpreter boundary (codex-deepen Row 1, 2026-10-31)
+// ============================================================================
+
+#[cfg(test)]
+mod interpreter_boundary_tests {
+    use super::*;
+
+    #[test]
+    fn bash_c_is_unwrapped_and_the_inner_command_is_classified() {
+        // The whole point of the row. Before the unwrap, the verb the
+        // classifier saw was `bash`, which no arm knows, so this rated `None`
+        // and `screen()` waved it through.
+        assert_eq!(classify("bash -c 'rm -rf /etc'"), BlastRadius::Unbounded);
+        assert_eq!(
+            classify("bash -c \"rm -rf /etc\""),
+            BlastRadius::Unbounded,
+            "double-quoted inner script must unwrap too"
+        );
+        // `sh` and its login-shell form behave the same way.
+        assert_eq!(classify("sh -c 'rm -rf /etc'"), BlastRadius::Unbounded);
+        assert_eq!(classify("sh -lc 'rm -rf /etc'"), BlastRadius::Unbounded);
+    }
+
+    #[test]
+    fn benign_interpreter_use_is_not_penalised() {
+        // The guard that keeps the row from blocking every `sh -c` in the
+        // repo: benign interpreter use must stay `None`.
+        assert_eq!(classify("bash -c 'echo hi'"), BlastRadius::None);
+        assert_eq!(classify("sh -c 'ls -la'"), BlastRadius::None);
+        assert_eq!(classify("bash -c 'grep -r foo .'"), BlastRadius::None);
+    }
+
+    #[test]
+    fn wrapper_verbs_are_skipped_to_the_command_beneath_them() {
+        // `sudo`/`env`/`timeout` are wrappers: the verb that does the work is
+        // the one after them.
+        assert_eq!(classify("sudo rm -rf /etc"), BlastRadius::Unbounded);
+        assert_eq!(classify("env FOO=bar rm -rf /etc"), BlastRadius::Unbounded);
+        assert_eq!(classify("timeout 30 rm -rf /etc"), BlastRadius::Unbounded);
+        assert_eq!(classify("nice rm -rf /etc"), BlastRadius::Unbounded);
+        // And a benign wrapped command stays benign.
+        assert_eq!(classify("sudo ls -la"), BlastRadius::None);
+        assert_eq!(classify("env FOO=bar ls -la"), BlastRadius::None);
+    }
+
+    #[test]
+    fn an_interpreter_that_cannot_be_unwrapped_fails_closed() {
+        // `bash -c` with no script argument at all is interpreter-shaped but
+        // unextractable: it must NOT be `None`. This is the fail-closed arm —
+        // the value that makes the unwrap a safety improvement rather than a
+        // parser that can still be walked around.
+        let c = classify("bash -c");
+        assert_ne!(c, BlastRadius::None, "a lone `bash -c` must fail closed");
+        assert_eq!(c, BlastRadius::Scoped);
+        // A wrapper given no command either.
+        assert_eq!(classify("sudo -u root"), BlastRadius::Scoped);
+    }
+
+    #[test]
+    fn the_direct_path_is_not_regressed_by_the_unwrap() {
+        // Every row must prove it did not break what already worked.
+        assert_eq!(classify("rm -rf /etc"), BlastRadius::Unbounded);
+        assert_eq!(classify("rm -rf /"), BlastRadius::Unbounded);
+        assert_eq!(classify("rm -rf ./target/debug"), BlastRadius::Scoped);
+        assert_eq!(classify("ls -la"), BlastRadius::None);
+        assert_eq!(classify("git status"), BlastRadius::None);
+    }
+
+    #[test]
+    fn the_unwrap_reaches_through_a_pipeline_and_a_separator() {
+        // The inner command must be found whether the interpreter is alone or
+        // chained.
+        assert_eq!(
+            classify("ls && bash -c 'rm -rf /etc'"),
+            BlastRadius::Unbounded
+        );
+        assert_eq!(
+            classify("bash -c 'echo hi'; rm -rf /etc"),
+            BlastRadius::Unbounded
+        );
+        assert_eq!(
+            classify("bash -c 'echo hi' && bash -c 'rm -rf /etc'"),
+            BlastRadius::Unbounded
+        );
+    }
+
+    #[test]
+    fn a_scoped_inner_command_stays_scoped_not_unbounded() {
+        // Unwrapping must not inflate: `bash -c 'rm -rf ./build'` is scoped.
+        assert_eq!(classify("bash -c 'rm -rf ./build'"), BlastRadius::Scoped);
+        // And it must deny the same paths the direct path denies.
+        let home = Some("/home/agent");
+        let refusal = screen("bash -c 'rm -rf /'", None, home);
+        assert!(
+            matches!(refusal, Some(Refusal::DeniedPath(_))),
+            "the unwrapped command must keep the path-deny layer, got {refusal:?}"
+        );
+    }
+
+    /// The mutation guard from the plan, stated as an executable test.
+    ///
+    /// It re-derives the OLD behaviour (split only, never follow) and asserts
+    /// the difference is observable — so reverting `segments_full` to the raw
+    /// splitter makes this fail, which is what "mutation-proven" means.
+    #[test]
+    fn reverting_the_unwrap_changes_the_rating_from_unbounded_to_none() {
+        let command = "bash -c 'rm -rf /etc'";
+        // Rated through the unwrap.
+        assert_eq!(classify(command), BlastRadius::Unbounded);
+        // Rated the old way: raw segments only.
+        let old_way = segments(command)
+            .iter()
+            .map(|seg| rate_segment(seg).0)
+            .max()
+            .unwrap_or(BlastRadius::None);
+        assert_eq!(
+            old_way,
+            BlastRadius::None,
+            "the pre-unwrap rating must have been None — if this fails the \
+             baseline this row closes has itself moved and the row's premise \
+             needs re-measuring"
+        );
+        assert_ne!(
+            classify(command),
+            old_way,
+            "the unwrap must change the observable rating"
+        );
+    }
+
+    #[test]
+    fn the_tokenizer_honours_quotes_so_a_spaced_path_survives() {
+        // A quoted script path with a space is one token, not two.
+        let toks = tokens("bash -c '/tmp/my script.sh'");
+        assert_eq!(toks, vec!["bash", "-c", "/tmp/my script.sh"]);
     }
 }
