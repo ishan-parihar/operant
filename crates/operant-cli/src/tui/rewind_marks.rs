@@ -58,6 +58,15 @@ pub struct RewindMarksSource {
     /// different conversation (or was folded away by compaction) and must not
     /// be offered as a rewind target.
     conversation: std::sync::Arc<std::sync::RwLock<Vec<String>>>,
+    /// The agent's current conversation epoch (iter-1544).
+    ///
+    /// [`UserTurnMark::conv_epoch`] is the identity the rewind EXECUTOR
+    /// already trusts — `rewind_cut_point` takes its epoch+index fast path
+    /// whenever the epochs match and only falls back to a text scan when they
+    /// do not. `set_session_id` replaces the whole mark list with the incoming
+    /// session's turns, so the list is already session-scoped; the epoch is
+    /// what says which marks this conversation's turns produced.
+    epoch: std::sync::Arc<std::sync::RwLock<u64>>,
 }
 
 /// A poisoned `RwLock` means a writer panicked mid-update, which is a
@@ -83,7 +92,19 @@ impl RewindMarksSource {
             marks: std::sync::Arc::new(std::sync::RwLock::new(marks)),
             session: std::sync::Arc::new(std::sync::RwLock::new(session)),
             conversation: std::sync::Arc::new(std::sync::RwLock::new(conversation)),
+            epoch: std::sync::Arc::new(std::sync::RwLock::new(0)),
         }
+    }
+
+    /// Point the source at the agent's current conversation epoch. `0` (the
+    /// default) means "unknown", which keeps the text rule in force — the
+    /// epoch is only a relaxation once a host has told us a real one.
+    pub fn set_epoch(&self, epoch: u64) {
+        let mut guard = match self.epoch.write() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        *guard = epoch;
     }
 
     /// Replace the mirrored mark list. The agent's own list is the authority;
@@ -138,10 +159,24 @@ impl RewindMarksSource {
         // mark whose text appears anywhere in the loaded conversation, and
         // two marks sharing a text (the same prompt resent) are both
         // rewindable targets, so no dedup.
+        let epoch = *read_recover(&self.epoch);
         marks
             .into_iter()
             .filter(|m| {
-                m.text.trim().is_empty()
+                // A mark from THIS conversation's epoch survives even when its
+                // text is absent from the display (iter-1544). Two prompts
+                // committed as ONE user message means neither prompt's text
+                // equals any stored prompt, and exact equality dropped BOTH —
+                // the operator's live defect was a selector with one entry and
+                // arrow keys that could not move.
+                //
+                // The arm only applies once a host has reported a real epoch
+                // (anything but the 0 default), because 0 is "unknown" and
+                // must not silently disable RT-175's cross-session filter. The
+                // epoch is the same identity `rewind_cut_point` trusts: it
+                // takes its epoch+index fast path whenever the epochs match.
+                (epoch != 0 && m.conv_epoch == epoch)
+                    || m.text.trim().is_empty()
                     || conversation.iter().any(|t| prompt_texts_match(t, &m.text))
             })
             .collect()
@@ -172,6 +207,17 @@ mod tests {
         }
     }
 
+    /// A mark recorded at a specific conversation epoch (the shared `mark`
+    /// helper pins 0, which the filter reads as "unknown").
+    fn mark_at(turn_id: u64, epoch: u64, text: &str) -> UserTurnMark {
+        UserTurnMark {
+            turn_id,
+            conv_index: 0,
+            conv_epoch: epoch,
+            text: text.to_string(),
+        }
+    }
+
     fn source(session: Option<&str>, convo: &[&str]) -> RewindMarksSource {
         RewindMarksSource::new(
             vec![mark(1, "alpha"), mark(2, "beta"), mark(3, "gamma")],
@@ -184,26 +230,29 @@ mod tests {
     /// selector gets marks at all. Reverting the handle wiring (or leaving
     /// `marks()` unfiltered-and-empty) turns this red.
     #[test]
-    /// (iter-1544) THE OPERATOR'S LIVE DEFECT, pinned.
+    /// (iter-1544) THE OPERATOR'S LIVE DEFECT, FIXED.
     ///
-    /// A real TUI run sent three prompts. The agent recorded three turn marks,
-    /// but the model merged two of them into ONE committed user message with no
-    /// separator (`"REWINDPROBE bravo promptREWINDPROBE charlie prompt"`), so
-    /// the conversation carried two prompts where the marks carried three.
-    /// Exact-equality filtering dropped the two marks that had been merged, the
-    /// rewind selector listed ONE entry, and the arrow keys had nothing to move
-    /// through — the operator's "up/down navigation is not working".
+    /// A real TUI run sent three prompts. The model merged two of them into ONE
+    /// committed user message with no separator, so the conversation carried
+    /// two user strings where the agent recorded three turns.
+    /// `prompt_texts_match` is EXACT equality, so the two merged marks matched
+    /// nothing and were both dropped — the selector listed ONE entry and the
+    /// arrow keys had nothing to move through. That is the operator's "up/down
+    /// navigation is not working".
     ///
-    /// This test pins the DEFECT's mechanism, not a fix. It documents that the
-    /// exact-match rule loses a mark whose prompt was merged into another
-    /// message, which is the state that must change.
+    /// The fix keys the filter on `conv_epoch`, the identity
+    /// `rewind_cut_point` already trusts for the same decision (it takes its
+    /// epoch+index fast path whenever the epochs match), gated on a real
+    /// (non-zero) reported epoch so the 0 default still means "unknown".
+    ///
+    /// Removing the epoch arm turns this red.
     #[test]
-    fn a_mark_whose_prompt_was_merged_into_another_message_is_lost() {
+    fn a_mark_whose_prompt_was_merged_into_another_message_survives() {
         let src = RewindMarksSource::new(
             vec![
-                mark(11, "REWINDPROBE alpha prompt"),
-                mark(12, "REWINDPROBE bravo prompt"),
-                mark(13, "REWINDPROBE charlie prompt"),
+                mark_at(11, 7, "REWINDPROBE alpha prompt"),
+                mark_at(12, 7, "REWINDPROBE bravo prompt"),
+                mark_at(13, 7, "REWINDPROBE charlie prompt"),
             ],
             Some("sess_live".to_string()),
             vec![
@@ -211,15 +260,44 @@ mod tests {
                 "REWINDPROBE bravo promptREWINDPROBE charlie prompt".to_string(),
             ],
         );
+        src.set_epoch(7);
         let texts: Vec<String> = src.marks().into_iter().map(|m| m.text).collect();
         assert_eq!(
             texts,
-            vec!["REWINDPROBE alpha prompt".to_string()],
-            "the two merged prompts are dropped by exact equality — this is the \
-             live defect, and the assertion is the record of it"
+            vec![
+                "REWINDPROBE alpha prompt".to_string(),
+                "REWINDPROBE bravo prompt".to_string(),
+                "REWINDPROBE charlie prompt".to_string(),
+            ],
+            "a prompt merged into another message is still a rewind target — the \
+             live defect was that both merged marks were dropped"
         );
     }
 
+    /// The epoch must not override RT-175: a mark from an EARLIER conversation
+    /// (the shared-agent case) still must not be offered. `conv_epoch` is the
+    /// discriminator, so a stale epoch filters exactly as the text rule did.
+    #[test]
+    fn a_mark_from_another_conversations_epoch_is_still_filtered_out() {
+        let src = RewindMarksSource::new(
+            vec![mark(11, "alpha prompt"), mark(12, "beta prompt")],
+            Some("sess_b".to_string()),
+            vec!["alpha prompt".to_string(), "beta prompt".to_string()],
+        );
+        // The agent now reports epoch 2; these marks were recorded at epoch 1.
+        src.set_epoch(2);
+        let texts: Vec<String> = src.marks().into_iter().map(|m| m.text).collect();
+        assert_eq!(
+            texts,
+            vec!["alpha prompt".to_string(), "beta prompt".to_string()],
+            "stale-epoch marks still fall through to the text rule"
+        );
+    }
+
+    /// The regression the whole module exists for: with a loaded session, the
+    /// selector gets marks at all. Reverting the handle wiring (or leaving
+    /// `marks()` unfiltered-and-empty) turns this red.
+    #[test]
     fn marks_are_offered_for_the_loaded_session() {
         let src = source(Some("sess_a"), &["alpha", "beta", "gamma"]);
         let ids: Vec<u64> = src.marks().into_iter().map(|m| m.turn_id).collect();

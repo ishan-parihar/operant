@@ -248,13 +248,18 @@ impl TuiApp {
             // `App::run` mirrors this on every frame instead. At creation the
             // session id is `None` until the first turn mints one, which offers
             // no marks — the honest state before anything has happened.
-            self.app.core_rewind_marks = Some(std::sync::Arc::new(
-                crate::tui::rewind_marks::RewindMarksSource::new(
+            let rewind_source =
+                std::sync::Arc::new(crate::tui::rewind_marks::RewindMarksSource::new(
                     agent.rewind_marks_source(),
                     agent.session_id(),
                     Vec::new(),
-                ),
-            ));
+                ));
+            // (iter-1544) The epoch the selector's filter keys on. Seeded at
+            // construction so the rule is in force from the first frame rather
+            // than only after the drain happens to fire, and refreshed by the
+            // drain on every pass.
+            rewind_source.set_epoch(agent.conv_epoch());
+            self.app.core_rewind_marks = Some(rewind_source);
             // (iter-1503) Read-only session-switch source, same shape and for
             // the same reason: the hub's Enter runs inside `App::run`, so the
             // outer async drain cannot apply the retarget it sets until the
@@ -800,13 +805,16 @@ impl TuiApp {
         // empty list, and the conversation refreshes from the display each
         // frame.
         if is_mock {
-            self.app.core_rewind_marks = Some(std::sync::Arc::new(
-                crate::tui::rewind_marks::RewindMarksSource::new(
+            // The mock's turns are all one conversation, so epoch 1 is the
+            // honest value and the merged-prompt case stays exercised.
+            let rewind_source =
+                std::sync::Arc::new(crate::tui::rewind_marks::RewindMarksSource::new(
                     std::mem::take(&mut mock_marks),
                     Some("sess_mock_sim".to_string()),
                     Vec::new(),
-                ),
-            ));
+                ));
+            rewind_source.set_epoch(1);
+            self.app.core_rewind_marks = Some(rewind_source);
         }
         if let Some(ref agent) = agent {
             self.app.steer_queue_handle = Some(agent.steer_queue_handle());
@@ -820,13 +828,18 @@ impl TuiApp {
             // (iter-1489) The same read-only rewind-mark source the interactive
             // path holds, so the headless simulator drives the selector's real
             // sync path instead of a mock of it.
-            self.app.core_rewind_marks = Some(std::sync::Arc::new(
-                crate::tui::rewind_marks::RewindMarksSource::new(
+            let rewind_source =
+                std::sync::Arc::new(crate::tui::rewind_marks::RewindMarksSource::new(
                     agent.rewind_marks_source(),
                     agent.session_id(),
                     Vec::new(),
-                ),
-            ));
+                ));
+            // (iter-1544) The epoch the selector's filter keys on. Seeded at
+            // construction so the rule is in force from the first frame rather
+            // than only after the drain happens to fire, and refreshed by the
+            // drain on every pass.
+            rewind_source.set_epoch(agent.conv_epoch());
+            self.app.core_rewind_marks = Some(rewind_source);
             // (iter-1503) Read-only session-switch source, same shape and for
             // the same reason: the hub's Enter runs inside `App::run`, so the
             // outer async drain cannot apply the retarget it sets until the
@@ -1116,6 +1129,7 @@ impl TuiApp {
                 source.set_marks(agent.rewind_marks_source());
                 source.set_session(agent.session_id());
                 source.set_conversation(app.user_prompt_texts_for_filter());
+                source.set_epoch(agent.conv_epoch());
             }
             let marks: Vec<(u64, String)> = agent
                 .rewind_marks()
