@@ -13,7 +13,11 @@ Immutable once numbered: a correction is a new record that supersedes this one.
 
 ## Symptom
 
-A `git stash push -- <paths>` run while trying to A/B a test suite did not save only the named paths. It swept **eight peer files I never listed** — `Cargo.lock`, three TUI files, `sourcehound_composites.rs`, `tool_search.rs`, `BUGS.md`, `feed.md` — because they were dirty in the same working tree, and removed all of them from the tree at once. Nothing announced this: the command succeeded and reported nothing about the files it took beyond my list.
+A `git stash push -- <paths>` run while trying to A/B a test suite did not save only the named paths. On my contemporaneous record the entry held **eight files I never passed** — `Cargo.lock`, three TUI files, `sourcehound_composites.rs`, `tool_search.rs`, `BUGS.md`, `feed.md` — and they were removed from the tree at once. **Two limits on that sentence, stated rather than glossed.** (1) The original entry was resolved and dropped, and it is no longer in `git stash list`, so the eight-file count rests on my own record of the event and NOT on a stash I can re-inspect — I cannot now re-derive it. (2) **I first wrote that the extra files entered "because they were dirty in the same tree". That mechanism is DISPROVEN by a controlled reproduction (see Root cause) — a pathspec does scope the capture.** So the symptom is that the entry held more than I passed, while the explanation for how is NOT established by this record.
+
+What is certain, because it is mechanical rather than remembered: **nothing announced the surplus.** The command succeeded and reported nothing about the files it took beyond my list. A pathspec failure mode is detection-blind at the moment of the capture, which is why the law below is a pre-flight `git stash show --stat` and not a better command.
+
+(That same silent-batch shape recurred later the same day when a peer commit absorbed my staged index — WORKLOG 2026-10-31T12:31. It is a different operation and is recorded there, not as evidence for this record.)
 
 The consequences were silent and compounding. Later `git stash pop` resolution with `--ours`/`--theirs` **silently took the HEAD side** — `tests.rs` showed as `-468` lines, i.e. a peer's tests gone from the working tree while the command reported a successful pop with conflicts. A shell loop of `git show stash@{0}:$f > $f` was correctly refused by the destructive gate, for exactly the reason that made it dangerous.
 
