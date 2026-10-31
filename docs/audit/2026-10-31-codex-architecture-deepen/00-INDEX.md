@@ -108,7 +108,7 @@ import.
 
 | # | Defect | Where | Severity | Note |
 |---|---|---|---|---|
-| D1 | `content.replace()` rewrites **every** occurrence of `find`, with no count check or occurrence index, so a model asking for one edit can rewrite five | `tools/patch_tool.rs:172-186` | med | the `exact_count` is computed, then used only as a boolean |
+| D1 | `content.replace()` rewrites **every** occurrence of `find`, with no count check or occurrence index, so a model asking for one edit can rewrite five | `tools/patch_tool.rs:172-186` | med | the `exact_count` is computed, then used only as a boolean. **2026-10-31 execution-pass headnote — corrected by AD-043:** the count is NOT invisible: `execute` returns it as `"replacements"` in the tool result (`:172-176`, `:199-207`), so the model sees `replacements: 3` and can tell the edit landed in three places. D1 is a missing occurrence guard in the contract, not silent corruption. Severity unchanged (`med`); the fix and its regression test are reframed in [the execution outline](../plans/2026-10-31-codex-architecture-deepen-execution-outline.md). |
 | D2 | a no-op branch that does nothing | `tools/patch_tool.rs:95-99` | low | `if replace.is_empty() { if !result_lines.is_empty() \|\| i > 0 { /* already handled */ } }` |
 | D3 | the mermaid gate is a permanently-false function, so the entire deferred/registration apparatus is dead code that still looks live | `markdown_mermaid_fallback.rs:41`, `mod.rs:167-171` | med | 4 `RenderResult::Error` sites unreachable, `pinned_images` has no producer |
 | D4 | the hardline blocklist's `rm` rules are literal strings, so a flag permutation misses layer 1 | `approval.rs:209` | low | **already mitigated** by blast_radius's token classifier at `approval.rs:662` |

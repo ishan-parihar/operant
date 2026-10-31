@@ -2672,6 +2672,16 @@ mod tests {
     #[tokio::test]
     async fn model_pick_drain_switches_the_agent_and_persists() {
         let dir = tempfile::tempdir().expect("tempdir");
+        // RT-208: `persist_config_key` writes into the PROCESS-GLOBAL
+        // `LOADED_CONFIG_PATH`, which every `load_app_config` overwrites. In
+        // parallel a sibling test's load can replace it between this test's
+        // load and its write, and the surgical writer then writes THIS test's
+        // `model = "small-stack"` into the REAL `~/.operant/operant.toml`.
+        // That happened: the operator's live config came back with
+        // `model = "new-model"` and every turn failed until it was restored.
+        // The guard holds the global for this test's whole load-and-persist
+        // window, so the write cannot land on anyone else's file.
+        let _cfg_guard = operant_core::config::config_path_test_guard();
         // A real config file so persist_config_key has a target.
         let cfg_path = dir.path().join("operant.toml");
         std::fs::write(

@@ -2563,8 +2563,12 @@ pub fn load_app_config(explicit: Option<&Path>) -> Result<LoadedConfig> {
     // `persist_config_key` writes into. Without it, every writer guessed
     // `~/.operant/operant.toml` and `operant -c <path>` runs wrote the
     // wrong file.
-    if let Ok(mut slot) = LOADED_CONFIG_PATH.write() {
-        *slot = source.clone();
+    //
+    // RT-208: `parse_config_str` (called above) already recorded the same path
+    // through `record_loaded_config_path`; record it once more here for the
+    // no-file / OPERANT_CONFIG_DIR cases, which never reach that helper.
+    if let Some(src) = source.as_deref() {
+        record_loaded_config_path(src);
     }
 
     Ok(LoadedConfig { config, source })
@@ -2575,6 +2579,104 @@ pub fn load_app_config(explicit: Option<&Path>) -> Result<LoadedConfig> {
 /// callers must surface instead of guessing a path.
 static LOADED_CONFIG_PATH: std::sync::LazyLock<RwLock<Option<PathBuf>>> =
     std::sync::LazyLock::new(|| RwLock::new(None));
+
+/// Serialises the recorded-config-path swap. TEST-ONLY on purpose.
+///
+/// `LOADED_CONFIG_PATH` is process-global and every call to `load_app_config`
+/// overwrites it. Two tests loading their own temp config in parallel therefore
+/// race: the loser's `persist_config_key` writes into whichever path won.
+///
+/// That is not a hypothetical flake. `tui::app::commands::tests`
+/// `model_pick_drain_switches_the_agent_and_persists` writes a temp
+/// `operant.toml` with `model = "old-model"`, and the real damage was observed
+/// live: at 17:59 the operator's `~/.operant/operant.toml` came back with
+/// `model = "new-model"` (the test's value), which disabled every turn until
+/// it was restored. A test whose stated target is a tempfile must never be
+/// able to write the operator's live config.
+///
+/// Taking this lock around the two halves of a test's load-and-persist window
+/// makes the swap atomic against other tests: while one test holds it, no
+/// other test can replace the global, so `persist_config_key` keeps writing
+/// into that test's own file. It does NOT serialise production code (the lock
+/// is taken only in the guarded test helper), so runtime behaviour is
+/// unchanged.
+static CONFIG_PATH_TEST_LOCK: std::sync::LazyLock<std::sync::Mutex<()>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(()));
+
+/// A held `CONFIG_PATH_TEST_LOCK`.
+///
+/// A NAMED struct, not `impl Deref`, on purpose: `let _g = guard();` with an
+/// opaque return type is a TEMPORARY that Rust drops at the end of the
+/// statement, so the lock is released immediately and the guard grants
+/// nothing. A named struct bound with `let _g = ...` lives for the block.
+pub struct ConfigPathTestGuard<'a> {
+    _lock: std::sync::MutexGuard<'a, ()>,
+}
+
+impl Drop for ConfigPathTestGuard<'_> {
+    fn drop(&mut self) {
+        holds_config_path_guard(false);
+    }
+}
+
+thread_local! {
+    /// Whether THIS thread holds `CONFIG_PATH_TEST_LOCK`.
+    ///
+    /// A `Mutex` has no reentrancy, so a thread that holds the lock cannot
+    /// re-take it to record its OWN load. Without this marker the guarded
+    /// test's own `load_app_config` would be deferred too, leaving the global
+    /// pointing at whatever a previous test left — and the guarded
+    /// `persist_config_key` would then write into THAT file. The marker lets
+    /// the holder record itself while still deferring every other thread.
+    static CONFIG_PATH_HELD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+fn holds_config_path_guard(value: bool) {
+    CONFIG_PATH_HELD.with(|cell| cell.set(value));
+}
+
+/// Guard a test's whole load-then-persist window over the recorded config
+/// path. Held for the duration of a test that drives `persist_config_key`.
+pub fn config_path_test_guard() -> ConfigPathTestGuard<'static> {
+    let _lock = CONFIG_PATH_TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    holds_config_path_guard(true);
+    ConfigPathTestGuard { _lock }
+}
+
+/// Record the file this process actually loaded — the one (and only one)
+/// `persist_config_key` writes into.
+///
+/// RT-208: `LOADED_CONFIG_PATH` is process-global and every
+/// `load_app_config`/`parse_config_str` overwrites it, so two tests loading
+/// their own temp configs race and the loser's `persist_config_key` writes
+/// into whichever path won. In the observed incident, a TUI test's
+/// `model = "new-model"` landed in the operator's live
+/// `~/.operant/operant.toml` and every turn failed until it was restored.
+///
+/// A test that loads its own temp config and then drives `persist_config_key`
+/// holds `CONFIG_PATH_TEST_LOCK` (see `config_path_test_guard`) for its whole
+/// window. While that guard is held, a concurrent load must NOT install its
+/// own path, so this defers. Production never takes the guard, so a
+/// production load is unaffected.
+fn record_loaded_config_path(source: &Path) {
+    // Defer only for OTHER threads: the holder must still be able to record
+    // its own load (the marker above is per-thread, and the Mutex itself is
+    // not reentrant — `try_lock` from the holder would fail and we would
+    // never distinguish "held by me" from "held by a peer").
+    let this_thread_holds = CONFIG_PATH_HELD.with(std::cell::Cell::get);
+    if !this_thread_holds && CONFIG_PATH_TEST_LOCK.try_lock().is_err() {
+        // A test is inside its own load-then-persist window on another thread:
+        // do not displace the path it recorded. It still gets its own
+        // `LoadedConfig` back with its own `config_path`, which is what its
+        // caller asked for.
+        return;
+    }
+    if let Ok(mut slot) = LOADED_CONFIG_PATH.write() {
+        *slot = Some(source.to_path_buf());
+    }
+}
 
 /// The config file the current process loaded — the one (and only one)
 /// `persist_config_key` writes into.
@@ -2853,9 +2955,13 @@ pub fn parse_config_str(raw: &str, source: &Path) -> Result<AppConfig> {
             // `persist_config_key("cli.inject_help", ..)` and failed with
             // "no config file is loaded in this process" for ANY `-c <path>`
             // run, while the tool-state half of the same command worked.
-            if let Ok(mut slot) = LOADED_CONFIG_PATH.write() {
-                *slot = Some(source.to_path_buf());
-            }
+            //
+            // RT-208: this is the OTHER writer of the global, and it runs
+            // INSIDE `load_app_config` before that function's own record
+            // below — so guarding only the one in `load_app_config` left the
+            // hole open and a concurrent test's load still won. One helper,
+            // one deferral rule, both call sites.
+            record_loaded_config_path(source);
             cfg
         })
 }
@@ -3364,6 +3470,12 @@ model = "anthropic/claude-opus-4-20250514"
     #[serial]
     fn persist_config_key_keeps_comments_and_other_keys_byte_for_byte() {
         let dir = tempfile::tempdir().expect("tempdir");
+        // RT-208: hold the recorded-config-path global for this test's whole
+        // window. `#[serial]` only serialises inside THIS test binary; the
+        // damaging race was against `operant-cli`'s own tests in the same
+        // process, which `#[serial]` cannot see.
+        let _cfg_guard = config_path_test_guard();
+
         let path = write_plan09_fixture(dir.path());
         let loaded = load_app_config(Some(&path)).expect("load fixture");
         install_runtime_config(loaded.config);
@@ -3408,6 +3520,12 @@ model = "anthropic/claude-opus-4-20250514"
     #[serial]
     fn persist_config_key_never_writes_secrets_that_were_never_in_the_file() {
         let dir = tempfile::tempdir().expect("tempdir");
+        // RT-208: hold the recorded-config-path global for this test's whole
+        // window. `#[serial]` only serialises inside THIS test binary; the
+        // damaging race was against `operant-cli`'s own tests in the same
+        // process, which `#[serial]` cannot see.
+        let _cfg_guard = config_path_test_guard();
+
         let path = write_plan09_fixture(dir.path());
         let loaded = load_app_config(Some(&path)).expect("load fixture");
         // Simulate an env-sourced secret in the RUNTIME config (the old
@@ -3433,6 +3551,12 @@ model = "anthropic/claude-opus-4-20250514"
     #[serial]
     fn persist_config_key_creates_intermediate_tables_and_coerces_scalars() {
         let dir = tempfile::tempdir().expect("tempdir");
+        // RT-208: hold the recorded-config-path global for this test's whole
+        // window. `#[serial]` only serialises inside THIS test binary; the
+        // damaging race was against `operant-cli`'s own tests in the same
+        // process, which `#[serial]` cannot see.
+        let _cfg_guard = config_path_test_guard();
+
         let path = write_plan09_fixture(dir.path());
         let loaded = load_app_config(Some(&path)).expect("load fixture");
         install_runtime_config(loaded.config);
@@ -3454,6 +3578,12 @@ model = "anthropic/claude-opus-4-20250514"
     #[serial]
     fn persist_config_key_rejects_a_broken_leaf_and_leaves_the_file_unchanged() {
         let dir = tempfile::tempdir().expect("tempdir");
+        // RT-208: hold the recorded-config-path global for this test's whole
+        // window. `#[serial]` only serialises inside THIS test binary; the
+        // damaging race was against `operant-cli`'s own tests in the same
+        // process, which `#[serial]` cannot see.
+        let _cfg_guard = config_path_test_guard();
+
         let path = write_plan09_fixture(dir.path());
         let before = std::fs::read_to_string(&path).expect("read before");
         let loaded = load_app_config(Some(&path)).expect("load fixture");
@@ -4505,5 +4635,88 @@ mod keybindings_tests {
             recorded.iter().any(|k| k == "HERMES_MODEL"),
             "the overridden key must be reported: {recorded:?}"
         );
+    }
+}
+
+/// RT-208, the regression guard for the incident that damaged the operator's
+/// live config.
+///
+/// The mechanism: `persist_config_key` writes into whatever `LOADED_CONFIG_PATH`
+/// holds, and every `load_app_config` overwrites that global. In the incident, a
+/// `model = "new-model"` value from a TUI test appeared in the operator's real
+/// `~/.operant/operant.toml` at 17:59 and every turn failed with "no available
+/// keys" until it was restored.
+///
+/// The property that must hold, and that `#[serial]` cannot give across test
+/// binaries in one process: WHILE a guard is held, another thread's
+/// `load_app_config` must not be able to install its own path as the write
+/// target. If it can, that thread's later `persist_config_key` writes into MY
+/// file (or mine into theirs) — which is how a test's tempfile value reached
+/// the operator's live config.
+///
+/// This measures that on a real second thread with the guard held by the first.
+#[test]
+fn a_held_config_path_guard_stops_a_second_threads_load_from_stealing_the_write_target() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mine = dir.path().join("mine.toml");
+    std::fs::write(&mine, "[agent]\nmodel = \"my-model\"\n").expect("write mine");
+    let theirs = dir.path().join("theirs.toml");
+    std::fs::write(&theirs, "[agent]\nmodel = \"their-model\"\n").expect("write theirs");
+
+    // Record MY path first, without the guard, so a write target exists.
+    let _loaded = load_app_config(Some(&mine)).expect("load mine");
+    let target_before = loaded_config_path().expect("a path is recorded");
+
+    // Hold the guard, then load THEIR config on a SECOND thread. The
+    // loader takes the same guard, so it blocks until I release: it cannot
+    // become the write target while I am inside my window.
+    let _guard = config_path_test_guard();
+    let (tx, rx) = std::sync::mpsc::channel::<(bool, Option<std::path::PathBuf>)>();
+    let theirs_clone = theirs.clone();
+    let handle = std::thread::spawn(move || {
+        let (installed, current) = match load_app_config(Some(&theirs_clone)) {
+            Ok(_) => (
+                loaded_config_path().as_deref() == Some(&theirs_clone),
+                loaded_config_path(),
+            ),
+            Err(_) => (false, loaded_config_path()),
+        };
+        tx.send((installed, current)).expect("send the observation");
+    });
+
+    let (installed, current) = rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("the second load completed");
+    handle.join().expect("thread joins");
+
+    assert_eq!(
+        current,
+        Some(target_before.clone()),
+        "a second thread's load must not replace the recorded config path \
+             while this test holds the guard"
+    );
+    assert!(
+        !installed,
+        "the second thread's load must not become the write target while \
+             the guard is held (it reported installed={installed}); if it does, \
+             its persist writes into MY file — the RT-208 incident"
+    );
+
+    // My own write, inside the window, lands in MY file.
+    persist_config_key("agent.model", "\"written-model\"").expect("persist");
+    let mine_after = std::fs::read_to_string(&mine).expect("re-read mine");
+    assert!(
+        mine_after.contains("written-model"),
+        "the guarded write must land in my file — got: {mine_after}"
+    );
+    let theirs_after = std::fs::read_to_string(&theirs).expect("re-read theirs");
+    assert!(
+        !theirs_after.contains("written-model"),
+        "the write must never land in the other file — theirs reads: {theirs_after}"
+    );
+
+    // Leave the global clean for later tests.
+    if let Ok(mut slot) = LOADED_CONFIG_PATH.write() {
+        *slot = None;
     }
 }
