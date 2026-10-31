@@ -193,32 +193,86 @@ pub fn draw_rewind_selector(frame: &mut Frame, area: Rect, app: &crate::tui::app
     let prepared = prepare_body_for_overlay(app, width);
     let body = &prepared.wrapped_lines;
 
-    let sel_start = user_prompt_range(&prepared, app).or_else(|| {
-        let sel_text = state.entries.get(state.selected)?.text.clone();
-        let idx = prepared.user_prompt_texts.iter().position(|t| {
-            let a: String = t.chars().take(64).collect();
-            let b: String = sel_text.chars().take(64).collect();
-            a == b
-        })?;
-        prepared.wrapped_user_prompt_starts.get(idx).copied()
-    });
-    let dim_from = sel_start.map(|start| {
-        let idx = prepared
+    // Resolve the selection to a row in the prepared body. Preferred path is
+    // position (`wrapped_user_prompt_starts[selected]`); the text fallback
+    // covers a mark list whose ids were re-derived between frames.
+    let sel_prompt_idx = user_prompt_index(&prepared, app);
+    let sel_start =
+        sel_prompt_idx.and_then(|idx| prepared.wrapped_user_prompt_starts.get(idx).copied());
+
+    // THE THREE ZONES (oh-my-pi `#markRun`, rewind-selector.ts:1066-1075).
+    //
+    // A TURN is the prompt plus everything the session produced in response:
+    // the assistant's prose, its tool calls, and their results. Its block
+    // therefore runs from its prompt row to the NEXT prompt's row (or the end
+    // of the body for the newest turn).
+    //
+    // The defect this replaces: the block used to end at
+    // `wrapped_user_prompt_ends[selected]` — the end of the PROMPT ROW alone.
+    // So the outlined zone was one row, and the selected turn's own answer,
+    // tool call and tool result all fell on the DIM side, painted as content
+    // the rewind would drop. The operator read that as a broken preview: the
+    // turn they picked looked empty, and the pane below was all "dropped".
+    //
+    //   [0, sel_start)        normal   — kept by the rewind
+    //   [sel_start, sel_end)  PICK     — the outlined turn, whole block
+    //   [sel_end, ∞)          DROP     — what the rewind removes
+    let sel_end = sel_start.map(|start| {
+        let next = prepared
             .wrapped_user_prompt_starts
             .iter()
-            .position(|&s| s == start);
-        idx.and_then(|i| prepared.wrapped_user_prompt_ends.get(i).copied())
-            .unwrap_or(start + 1)
+            .copied()
+            .find(|&s| s > start);
+        next.unwrap_or(body.len())
     });
 
     let mut mid: Vec<Line> = Vec::new();
+
+    // omp puts a caption directly over the picked turn naming what Enter does
+    // and how many turns it drops. Without it the selector shows the outline
+    // but never says the draft returns to the composer, which is the one
+    // behaviour the operator cannot guess from a highlighted row.
+    //
+    // Always the same two rows when a turn is resolved, which keeps the offset
+    // a constant instead of a per-frame computation the zone check re-derives.
+    const CAPTION_ROWS: usize = 2;
+    if let Some(end) = sel_end {
+        let below = prepared
+            .wrapped_user_prompt_starts
+            .iter()
+            .filter(|&&s| s >= end)
+            .count();
+        let tail = if below > 0 {
+            format!(
+                "{below} turn{} below dropped",
+                if below == 1 { "" } else { "s" }
+            )
+        } else {
+            "nothing below to drop".to_string()
+        };
+        mid.push(Line::from(vec![Span::styled(
+            format!("  ⏪ Rewind to here · the prompt returns to the composer · {tail}"),
+            Style::default()
+                .fg(theme::accent_color())
+                .add_modifier(Modifier::BOLD),
+        )]));
+        // A blank rule row, so the caption never reads as transcript content.
+        mid.push(Line::from(""));
+    }
+    let sel_start = sel_start.map(|s| s + CAPTION_ROWS);
+    let sel_end = sel_end.map(|e| e + CAPTION_ROWS);
+
     for (i, line) in body.iter().enumerate() {
-        let is_dimmed = dim_from.is_some_and(|from| i >= from);
-        let outlined = sel_start.is_some_and(|s| i >= s && dim_from.is_some_and(|d| i < d));
+        let row = i + CAPTION_ROWS;
+        // Drop zone: everything from the end of the picked turn onward.
+        let is_dimmed = sel_end.is_some_and(|from| row >= from);
+        // Pick zone: the whole turn block, not just its prompt row.
+        let outlined = sel_start.is_some_and(|s| row >= s && sel_end.is_some_and(|e| row < e));
         let mut styled = line.clone();
-        if is_dimmed {
-            styled = restyle_dim(styled);
-        } else if outlined {
+        if outlined {
+            // REVERSED over the whole block: the operator sees exactly which
+            // rows Enter keeps. Dimming only the prompt row was the other half
+            // of the same defect.
             styled = Line::from(
                 styled
                     .spans
@@ -231,6 +285,8 @@ pub fn draw_rewind_selector(frame: &mut Frame, area: Rect, app: &crate::tui::app
                     })
                     .collect::<Vec<_>>(),
             );
+        } else if is_dimmed {
+            styled = restyle_dim(styled);
         }
         mid.push(styled);
     }
@@ -278,15 +334,29 @@ pub fn draw_rewind_selector(frame: &mut Frame, area: Rect, app: &crate::tui::app
     frame.render_widget(Paragraph::new(footer), chunks[2]);
 }
 
-/// The wrapped-line range of the selector's CURRENT cursor turn, resolved
-/// against the display prompts in order (marks and display prompts are both
-/// in conversation order, so position aligns while nothing is compacted).
-fn user_prompt_range(
+/// Which prepared user-prompt slot the selector's cursor points at.
+///
+/// `selected` is an index into the MARK list, and both lists are in
+/// conversation order, so position is the direct answer whenever the mark
+/// count matches the prompt count. The text fallback covers the one case where
+/// they cannot: a compaction that folded a prompt out of the display keeps the
+/// mark (so it can be refused) while removing its row, and the two lists
+/// desynchronise. Falling back by TEXT keeps the outline on the turn the
+/// operator can actually see rather than silently shifting it.
+fn user_prompt_index(
     prepared: &crate::tui::operant_model::PreparedMessages,
     app: &crate::tui::app::App,
 ) -> Option<usize> {
     let sel = app.rewind_selector.selected;
-    prepared.wrapped_user_prompt_starts.get(sel).copied()
+    if sel < prepared.user_prompt_texts.len() {
+        return Some(sel);
+    }
+    let sel_text = app.rewind_selector.entries.get(sel)?.text.clone();
+    prepared.user_prompt_texts.iter().position(|t| {
+        let a: String = t.chars().take(64).collect();
+        let b: String = sel_text.chars().take(64).collect();
+        a == b
+    })
 }
 
 fn restyle_dim(line: Line<'static>) -> Line<'static> {

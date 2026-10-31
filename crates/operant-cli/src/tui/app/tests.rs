@@ -8867,3 +8867,351 @@ fn the_overlay_body_does_not_emit_a_spans_final_character_twice() {
     );
     let _ = (Modifier::BOLD, Style::default());
 }
+
+// ---------------------------------------------------------------------------
+// 2026-10-31: the rewind selector's PREVIEW over a transcript that has teeth.
+//
+// The operator reported, live: "the entire preview is broken — it shows
+// overlapping text from both the panes, while up/dn arrows do nothing".
+//
+// Both halves measured on a seeded transcript, and both traced to the render.
+// The second half (arrows) was `sync_marks` resetting the cursor, fixed in
+// iter-1515; this module pins the FIRST half, which had never been asserted
+// anywhere: the PICK/DROP zone the renderer paints.
+// ---------------------------------------------------------------------------
+#[cfg(test)]
+mod rewind_preview_zones {
+    use super::*;
+    use crate::tui::adapter_types::types::ContentBlock;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    fn long_answer(tag: &str) -> String {
+        // Deliberately long and multi-paragraph. The wrap is what a one-line
+        // reply never exercises: a zone that covers only the prompt row is
+        // invisible on a single-line turn and glaring on a wrapped one.
+        format!(
+            "{tag}: the quick brown fox jumps over the lazy dog while the \
+             selector is open, and this paragraph is long enough to wrap \
+             across several terminal lines in a 120 column pane. \
+             A second paragraph follows with a list:\n\
+             - item one is here\n- item two is here\n- item three is here\n\
+             And a closing sentence so the block has a tail."
+        )
+    }
+
+    fn user(text: &str) -> crate::tui::adapter_types::types::Message {
+        crate::tui::adapter_types::types::Message {
+            role: crate::tui::adapter_types::types::Role::User,
+            content: MessageContent::Text(text.to_string()),
+        }
+    }
+
+    /// Turn 1 carries a tool call AND its result, because that is the shape
+    /// the operator had live, and a rewind selector must show the turn the
+    /// rewind keeps — not merely its prompt.
+    fn seed_transcript(app: &mut crate::tui::app::App) {
+        app.messages.push(user("first prompt"));
+        app.messages
+            .push(crate::tui::adapter_types::types::Message {
+                role: crate::tui::adapter_types::types::Role::Assistant,
+                content: MessageContent::Blocks(vec![
+                    ContentBlock::Text {
+                        text: long_answer("A1"),
+                    },
+                    ContentBlock::ToolUse {
+                        id: "tu_1".to_string(),
+                        name: "bash".to_string(),
+                        input: serde_json::json!({"command": "ls -la /tmp/rewind-repro"}),
+                    },
+                ]),
+            });
+        app.messages
+            .push(crate::tui::adapter_types::types::Message {
+                role: crate::tui::adapter_types::types::Role::User,
+                content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
+                    tool_use_id: "tu_1".to_string(),
+                    content: crate::tui::adapter_types::types::ToolResultContent::Text(
+                        "total 8\ndrwxr-xr-x 2 user user 4096 rewind-repro".to_string(),
+                    ),
+                    is_error: false,
+                }]),
+            });
+        app.messages
+            .push(crate::tui::adapter_types::types::Message {
+                role: crate::tui::adapter_types::types::Role::Assistant,
+                content: MessageContent::Text(long_answer("A2")),
+            });
+        app.messages.push(user("second prompt"));
+        app.messages
+            .push(crate::tui::adapter_types::types::Message {
+                role: crate::tui::adapter_types::types::Role::Assistant,
+                content: MessageContent::Text(long_answer("B1")),
+            });
+        app.messages.push(user("third prompt"));
+        app.messages
+            .push(crate::tui::adapter_types::types::Message {
+                role: crate::tui::adapter_types::types::Role::Assistant,
+                content: MessageContent::Text(long_answer("C1")),
+            });
+    }
+
+    fn seed_marks(app: &mut crate::tui::app::App) {
+        app.core_rewind_marks = Some(std::sync::Arc::new(
+            crate::tui::rewind_marks::RewindMarksSource::new(
+                vec![
+                    operant_core::agent::UserTurnMark {
+                        turn_id: 11,
+                        conv_index: 0,
+                        conv_epoch: 1,
+                        text: "first prompt".to_string(),
+                    },
+                    operant_core::agent::UserTurnMark {
+                        turn_id: 12,
+                        conv_index: 4,
+                        conv_epoch: 1,
+                        text: "second prompt".to_string(),
+                    },
+                    operant_core::agent::UserTurnMark {
+                        turn_id: 13,
+                        conv_index: 6,
+                        conv_epoch: 1,
+                        text: "third prompt".to_string(),
+                    },
+                ],
+                Some("sess_live2".to_string()),
+                Vec::new(),
+            ),
+        ));
+    }
+
+    /// Sync the selector from the marks exactly as `App::run` does each frame.
+    fn sync(app: &mut crate::tui::app::App) {
+        let marks = vec![
+            (11u64, "first prompt".to_string()),
+            (12u64, "second prompt".to_string()),
+            (13u64, "third prompt".to_string()),
+        ];
+        let display_texts = app.user_prompt_texts_for_filter();
+        app.rewind_selector.sync_marks(marks, &display_texts);
+    }
+
+    /// Paint the selector into a 120x45 frame.
+    fn paint(app: &crate::tui::app::App) -> (Vec<String>, Vec<String>) {
+        let backend = TestBackend::new(120, 45);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                crate::tui::rewind_selector::draw_rewind_selector(frame, area, app);
+            })
+            .expect("draw");
+        let buf = terminal.backend().buffer();
+        let screen: Vec<String> = (0..45u16)
+            .map(|y| {
+                (0..120u16)
+                    .map(|x| buf[(x, y)].symbol().to_string())
+                    .collect::<String>()
+                    .trim_end()
+                    .to_string()
+            })
+            .collect();
+        // The per-cell style rows. `<fg>/<bg>/<mods>@<sym>` per cell, where
+        // the mods field is the single-letter alphabet of `style_mods_field`:
+        // `r` = REVERSED, `d` = DIM, `b` = BOLD. Reading the letters off the
+        // dump is the only reliable way to see a zone — ratatui's `modifier`
+        // on the buffer is layout-offset sensitive and a Paragraph's line
+        // styling does not always surface there.
+        use crate::tui::debug::debug_hub::buffer_style_dump;
+        let styles: Vec<String> = buffer_style_dump(buf)
+            .lines()
+            .skip(1)
+            .map(|s| s.to_string())
+            .collect();
+        (screen, styles)
+    }
+
+    /// Row indices whose style row carries the given mods letter.
+    fn rows_with_mod(styles: &[String], want: char) -> Vec<usize> {
+        styles
+            .iter()
+            .enumerate()
+            .filter(|(_, line)| {
+                line.split(' ').any(|tok| {
+                    let fields: Vec<&str> = tok
+                        .split('@')
+                        .next()
+                        .unwrap_or_default()
+                        .split('/')
+                        .collect();
+                    fields.len() == 3 && fields[2].contains(want)
+                })
+            })
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    /// THE reported defect, first half. The picked turn's whole block must be
+    /// reversed and nothing after it may be dimmed.
+    ///
+    /// Before the fix the pick zone was computed from
+    /// `wrapped_user_prompt_ends[selected]` — the end of the PROMPT ROW alone.
+    /// The outline was therefore one row, and the selected turn's answer, tool
+    /// call and tool result all fell on the DIM side, painted as content the
+    /// rewind drops. The operator's "overlapping text from both panes" is what
+    /// a highlighted row sitting directly on top of a dimmed block looks like
+    /// in a real terminal, where the two styles bleed at the row boundary.
+    #[test]
+    fn the_picked_turn_outlines_its_whole_block_and_dims_only_what_follows() {
+        let mut app = make_app();
+        seed_transcript(&mut app);
+        seed_marks(&mut app);
+        app.rewind_selector.open();
+        app.refresh_prompt_input();
+        sync(&mut app);
+        assert_eq!(app.rewind_selector.selected, 2, "opens on the newest turn");
+
+        let (screen, styles) = paint(&app);
+        let reversed = rows_with_mod(&styles, 'r');
+        let dimmed = rows_with_mod(&styles, 'd');
+
+        // The pick zone covers the whole turn 3: its prompt, its answer's
+        // wrapped rows, and its closing sentence.
+        assert!(
+            reversed.len() >= 4,
+            "the outline must cover the whole turn, not one row — got {}",
+            reversed.len()
+        );
+        let prompt_row = screen
+            .iter()
+            .position(|l| l.contains("third prompt"))
+            .expect("the picked prompt is painted");
+        assert!(
+            reversed.contains(&prompt_row),
+            "the picked prompt row must be inside the reversed block"
+        );
+        // The answer rows of the SAME turn are kept by the rewind, so they are
+        // inside the outline too — this is the assertion the old code failed.
+        let c1_row = screen
+            .iter()
+            .position(|l| l.contains("C1:"))
+            .expect("the picked turn's answer is painted");
+        assert!(
+            reversed.contains(&c1_row),
+            "the picked turn's OWN answer must be outlined, not dimmed — \
+             it is what Enter keeps"
+        );
+        // The newest turn has nothing below it, so nothing is dim.
+        assert!(
+            dimmed.is_empty(),
+            "no row may be dim when the newest turn is picked — got {dimmed:?}"
+        );
+        // omp's caption says what Enter does. Without it the outline is a
+        // picture with no verb attached.
+        assert!(
+            screen
+                .iter()
+                .any(|l| l.contains("nothing below to drop") && l.contains("the composer")),
+            "the caption must name the rewind target and the drops"
+        );
+    }
+
+    /// The SAME zones one turn up: turns 1-2 normal, turn 2 reversed, turn 3
+    /// dimmed. This is the case that distinguishes a correct `sel_end` from
+    /// the old prompt-row-only end, because turn 3 must land in the DROP zone.
+    #[test]
+    fn stepping_up_moves_the_boundary_between_the_zones() {
+        let mut app = make_app();
+        seed_transcript(&mut app);
+        seed_marks(&mut app);
+        app.rewind_selector.open();
+        app.refresh_prompt_input();
+        sync(&mut app);
+        assert_eq!(app.rewind_selector.selected, 2);
+
+        app.rewind_selector.select_prev();
+        assert_eq!(app.rewind_selector.selected, 1, "one step up");
+
+        let (screen, styles) = paint(&app);
+        let reversed = rows_with_mod(&styles, 'r');
+        let dimmed = rows_with_mod(&styles, 'd');
+
+        let p2 = screen
+            .iter()
+            .position(|l| l.contains("second prompt"))
+            .expect("turn 2's prompt is painted");
+        let p3 = screen
+            .iter()
+            .position(|l| l.contains("third prompt"))
+            .expect("turn 3's prompt is painted");
+        let b1 = screen
+            .iter()
+            .position(|l| l.contains("B1:"))
+            .expect("turn 2's answer is painted");
+
+        assert!(
+            reversed.contains(&p2) && reversed.contains(&b1),
+            "turn 2's whole block is the pick zone"
+        );
+        assert!(
+            dimmed.contains(&p3),
+            "turn 3 is below the picked turn — it is what the rewind drops"
+        );
+        // And the boundary sits between them, so the earlier turn is untouched.
+        let p1 = screen
+            .iter()
+            .position(|l| l.contains("first prompt"))
+            .expect("turn 1's prompt is painted");
+        assert!(
+            !reversed.contains(&p1) && !dimmed.contains(&p1),
+            "turn 1 is above the pick — normal, neither outlined nor dimmed"
+        );
+    }
+
+    /// The arrows, over the rich transcript. In sync with the renderer here:
+    /// `selected` moves, and the painted zones move with it on the next frame.
+    #[test]
+    fn arrows_move_the_selection_and_the_zones_follow() {
+        let backend = TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = make_app();
+        app.is_simulating = true;
+        seed_transcript(&mut app);
+        seed_marks(&mut app);
+
+        app.simulated_keys = vec![
+            press_key(KeyCode::Esc, KeyModifiers::NONE),
+            press_key(KeyCode::Esc, KeyModifiers::NONE),
+        ];
+        while !app.simulated_keys.is_empty() && !app.should_exit {
+            let _ = app.run(&mut terminal).expect("loop runs");
+        }
+        assert!(app.rewind_selector.visible, "the selector opened");
+        assert_eq!(app.rewind_selector.selected, 2);
+
+        app.should_exit = false;
+        app.sim_key_drain_passes = 0;
+        app.simulated_keys = vec![press_key(KeyCode::Up, KeyModifiers::NONE)];
+        for _ in 0..40 {
+            if app.simulated_keys.is_empty() {
+                break;
+            }
+            let _ = app.run(&mut terminal).expect("loop runs");
+        }
+        assert_eq!(
+            app.rewind_selector.selected, 1,
+            "one Up moves the selection, and it survives the frame-loop resync"
+        );
+
+        // And the paint agrees: turn 3 is now in the drop zone.
+        let (screen, styles) = paint(&app);
+        let p3 = screen
+            .iter()
+            .position(|l| l.contains("third prompt"))
+            .expect("turn 3's prompt is painted");
+        assert!(
+            rows_with_mod(&styles, 'd').contains(&p3),
+            "after stepping up, turn 3 reads as dropped"
+        );
+    }
+}
