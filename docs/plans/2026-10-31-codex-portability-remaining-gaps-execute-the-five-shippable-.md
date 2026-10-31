@@ -115,6 +115,39 @@ a test proves a large tool result reports its real size rather than 0.
 test must fail by name — this is the same mutation that proved iter-1506, so reusing it
 guards against a regression of the same class.
 
+**OUTCOME (2026-10-31): DONE, with a correction to the brief.**
+
+Implemented by `Sisyphus` in `79f2bd5c` and repaired by `agent-omarchy` in `2cd1a0e2`.
+Shipped at the 4 sites the brief assumed, not 2:
+
+- `crates/operant-core/src/agent/stream.rs` — `record_tool_input_bytes` parks the rendered
+  args' length at the `ToolCallStart` emit (`:915`), `tool_input_bytes_for` reads it back by
+  call id, `clear_tool_durations` clears it too (a long-lived agent would otherwise grow one
+  entry per call).
+- `crates/operant-core/src/observer.rs:49-61` — the two `usize` fields on the variant.
+- `crates/operant-core/src/observer.rs:305-318` — the `ConsoleObserver` arm binds them into
+  the `tracing::debug!` line (the brief's "renders them").
+- `crates/operant-core/src/agent/run.rs:2211-2212` — the completed-call emit.
+
+**The brief under-specified one site.** `79f2bd5c` wrote the fields at the run.rs emit and in
+the observer.rs *test* only, never on the variant itself — so the tree was RED with two
+`E0559` errors and nothing in the workspace could compile or test. `2cd1a0e2` is that repair
+(+11 lines). Recorded on the feed as F0212.
+
+**Guard:** `crates/operant-core/tests/tool_call_duration_is_real.rs` (2 new tests)
+`the_observer_sees_the_real_byte_count_in_both_directions` and
+`neither_byte_count_is_a_hardcoded_zero`. 5/5 pass. Mutation-proven with the RT-199 shape:
+revert run.rs to `input_bytes: 0` and both fail by name; the fixture's input and output
+lengths differ on purpose so a swapped-field report fails too.
+
+**Also corrected:** I measured this row while a parallel attempt of my own was mid-flight in
+this tree. Comparing it against `79f2bd5c` showed byte-identical design decisions, so mine
+was discarded instead of pushed as a duplicate. Per the plan's own standing rule
+("never take a peer's claimed row"), I shipped only the repair their commit was missing —
+the 11 lines in `observer.rs`. Nothing of mine survives in the tree or in `git stash list`;
+that entry was restored into the working tree and dropped after checksum-verifying all 8
+peer files byte-identical against it.
+
 ### 4. Row 04-2 — MCP schema byte budget (one constant + truncation)
 
 **Verified absent at plan time, with the trap named:** the byte cap does not exist, but a naive
