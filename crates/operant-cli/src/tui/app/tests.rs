@@ -1194,6 +1194,158 @@ fn the_rewind_selector_syncs_its_marks_from_the_frame_loop() {
     );
 }
 
+/// (iter-1528) THE LIVE-FRAME VERSION of the re-derive defect.
+///
+/// The unit test `a_resync_whose_turn_ids_were_re_derived_…` proves the
+/// `sync_marks` fix, but it calls `sync_marks` directly. The live path is
+/// `App::run`'s frame loop, which calls it on EVERY frame — and it kept the
+/// deployed binary's navigation frozen even after the fix, so there is a second
+/// reset this nails down: what the frame loop does to the cursor between the
+/// keypress and the paint.
+///
+/// The harness runs several loop passes (several syncs, several paints), so a
+/// cursor that is reset anywhere in that window fails here. The marks use
+/// STABLE ids, and still re-synced every pass, which is what the live
+/// `RewindMarksSource::marks()` does between re-derives.
+#[test]
+fn an_arrow_key_in_the_rewind_selector_survives_repeated_frame_syncs() {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    let backend = TestBackend::new(120, 40);
+    let mut terminal = Terminal::new(backend).unwrap();
+    let mut app = make_app();
+    app.is_simulating = true;
+
+    app.messages
+        .push(crate::tui::adapter_types::types::Message {
+            role: crate::tui::adapter_types::types::Role::User,
+            content: MessageContent::Text("first prompt".to_string()),
+        });
+    app.messages
+        .push(crate::tui::adapter_types::types::Message {
+            role: crate::tui::adapter_types::types::Role::Assistant,
+            content: MessageContent::Text("answer one".to_string()),
+        });
+    app.messages
+        .push(crate::tui::adapter_types::types::Message {
+            role: crate::tui::adapter_types::types::Role::User,
+            content: MessageContent::Text("second prompt".to_string()),
+        });
+    app.messages
+        .push(crate::tui::adapter_types::types::Message {
+            role: crate::tui::adapter_types::types::Role::Assistant,
+            content: MessageContent::Text("answer two".to_string()),
+        });
+    app.messages
+        .push(crate::tui::adapter_types::types::Message {
+            role: crate::tui::adapter_types::types::Role::User,
+            content: MessageContent::Text("third prompt".to_string()),
+        });
+
+    app.core_rewind_marks = Some(std::sync::Arc::new(
+        crate::tui::rewind_marks::RewindMarksSource::new(
+            vec![
+                operant_core::agent::UserTurnMark {
+                    turn_id: 11,
+                    conv_index: 0,
+                    conv_epoch: 1,
+                    text: "first prompt".to_string(),
+                },
+                operant_core::agent::UserTurnMark {
+                    turn_id: 12,
+                    conv_index: 2,
+                    conv_epoch: 1,
+                    text: "second prompt".to_string(),
+                },
+                operant_core::agent::UserTurnMark {
+                    turn_id: 13,
+                    conv_index: 4,
+                    conv_epoch: 1,
+                    text: "third prompt".to_string(),
+                },
+            ],
+            Some("sess_live2".to_string()),
+            Vec::new(),
+        ),
+    ));
+
+    // Open the selector.
+    app.simulated_keys = vec![
+        press_key(KeyCode::Esc, KeyModifiers::NONE),
+        press_key(KeyCode::Esc, KeyModifiers::NONE),
+    ];
+    while !app.simulated_keys.is_empty() && !app.should_exit {
+        let _ = app.run(&mut terminal).expect("loop runs");
+    }
+    assert!(app.rewind_selector.visible, "the selector opened");
+    assert_eq!(app.rewind_selector.entries.len(), 3, "three turns listed");
+
+    // The cursor opens on the newest turn.
+    assert_eq!(
+        app.rewind_selector.selected, 2,
+        "the selector opens on the newest turn"
+    );
+
+    // One Up, then MANY more loop passes so the frame loop syncs repeatedly
+    // before the assertion. If any of those passes resets the cursor, this is
+    // where it dies — and that is exactly what the deployed binary does.
+    // The drain that opened the selector left `should_exit` set: the simulator
+    // exits once its script is spent and nothing is in flight, and `App::run`
+    // then returns immediately WITHOUT consuming another key. Clear it (and the
+    // pass counter that trips shortly after) so the next call is a real frame —
+    // the same reset a live run gets when the operator presses a key. This is
+    // the harness discipline the test needs; it is not the defect under test.
+    app.should_exit = false;
+    app.sim_key_drain_passes = 0;
+    app.simulated_keys = vec![press_key(KeyCode::Up, KeyModifiers::NONE)];
+    // A bounded loop, because the simulator's own SIM_KEY_DRAIN_PASSES=3 exits
+    // after three passes with the key unread.
+    for _ in 0..40 {
+        if app.simulated_keys.is_empty() {
+            break;
+        }
+        let _ = app.run(&mut terminal).expect("loop runs");
+        if app.should_exit {
+            break;
+        }
+    }
+    for _ in 0..5 {
+        let _ = app.run(&mut terminal).expect("loop runs");
+    }
+
+    assert_eq!(
+        app.rewind_selector.selected, 1,
+        "the Up survived the frame loop's re-syncs — the deployed binary \
+         reset it to the newest turn on the next paint"
+    );
+    assert_eq!(
+        app.rewind_selector.entries[app.rewind_selector.selected].text, "second prompt",
+        "and the selection is still the turn the operator moved to"
+    );
+
+    // And a second Up, same discipline.
+    app.should_exit = false;
+    app.sim_key_drain_passes = 0;
+    app.simulated_keys = vec![press_key(KeyCode::Up, KeyModifiers::NONE)];
+    for _ in 0..40 {
+        if app.simulated_keys.is_empty() {
+            break;
+        }
+        let _ = app.run(&mut terminal).expect("loop runs");
+        if app.should_exit {
+            break;
+        }
+    }
+    for _ in 0..5 {
+        let _ = app.run(&mut terminal).expect("loop runs");
+    }
+    assert_eq!(
+        app.rewind_selector.selected, 0,
+        "repeated navigation keeps working, not just the first press"
+    );
+}
+
 /// (iter-1489) The defect behind "session management is slow / it won't
 /// navigate": the simulator applied a scripted key the instant it was queued,
 /// while the hub's rows were still being read off a blocking DB thread. The
@@ -7747,10 +7899,15 @@ mod prompt_jump_tests {
             .expect("draw");
             let dump = crate::tui::debug::debug_hub::buffer_style_dump(t.backend().buffer());
             let line = dump.lines().nth(1).unwrap_or_default();
-            eprintln!("PROBE clone-shape: {line}");
-            // THIRD CONTROL: same span, but through Paragraph with .scroll(0).
-            // If Paragraph's scroll path drops span styles, the selector's
-            // body render is the defect, not the span construction.
+            assert!(
+                line.split(' ').any(|t| t.contains("/r@")),
+                "the harness must see REVERSED on a span rebuilt the way the \
+                 selector rebuilds it — otherwise every 'no highlighted row' \
+                 reading below is unfalsifiable"
+            );
+            // SECOND CONTROL: the same construction through Paragraph WITH
+            // .scroll(), which is how the selector paints its body. If that
+            // path dropped span styles the selector could never highlight.
             let backend2 = TestBackend::new(30, 1);
             let mut t2 = Terminal::new(backend2).expect("t2");
             let l2 = ratatui::text::Line::from(vec![ratatui::text::Span::styled(
@@ -7766,11 +7923,10 @@ mod prompt_jump_tests {
             .expect("draw2");
             let d2 = crate::tui::debug::debug_hub::buffer_style_dump(t2.backend().buffer());
             let l2out = d2.lines().nth(1).unwrap_or_default();
-            eprintln!("PROBE scrolled-shape: {l2out}");
             assert!(
-                line.split(' ').any(|t| t.contains("/r@")),
-                "the harness must see REVERSED on a rebuilt span — otherwise \
-                 every 'no highlighted row' reading is unfalsifiable"
+                l2out.split(' ').any(|t| t.contains("/r@")),
+                "and it must survive a scrolled Paragraph, or the selector's \
+                 body render cannot highlight at all"
             );
         }
 

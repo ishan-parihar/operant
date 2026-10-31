@@ -212,16 +212,6 @@ pub fn draw_rewind_selector(frame: &mut Frame, area: Rect, app: &crate::tui::app
     });
 
     let mut mid: Vec<Line> = Vec::new();
-    #[cfg(test)]
-    eprintln!(
-        "PROBE geom: sel_start={:?} dim_from={:?} starts={:?} ends={:?} body_len={} scroll={}",
-        sel_start,
-        dim_from,
-        prepared.wrapped_user_prompt_starts,
-        prepared.wrapped_user_prompt_ends,
-        body.len(),
-        state.scroll
-    );
     for (i, line) in body.iter().enumerate() {
         let is_dimmed = dim_from.is_some_and(|from| i >= from);
         let outlined = sel_start.is_some_and(|s| i >= s && dim_from.is_some_and(|d| i < d));
@@ -229,18 +219,6 @@ pub fn draw_rewind_selector(frame: &mut Frame, area: Rect, app: &crate::tui::app
         if is_dimmed {
             styled = restyle_dim(styled);
         } else if outlined {
-            #[cfg(test)]
-            eprintln!(
-                "PROBE outline build: src_mods={:?} content={:?}",
-                line.spans
-                    .iter()
-                    .map(|s| s.style.sub_modifier)
-                    .collect::<Vec<_>>(),
-                line.spans
-                    .iter()
-                    .map(|s| s.content.to_string())
-                    .collect::<Vec<_>>()
-            );
             styled = Line::from(
                 styled
                     .spans
@@ -339,26 +317,24 @@ mod tests {
     /// highlighted turn cannot drift apart again.
     #[test]
     fn arrow_keys_move_the_selection_the_highlight_follows() {
-        let mut st = RewindSelectorState {
-            entries: vec![
-                RewindEntry {
-                    turn_id: 1,
-                    compacted: false,
-                    text: "first prompt".to_string(),
-                },
-                RewindEntry {
-                    turn_id: 2,
-                    compacted: false,
-                    text: "second prompt".to_string(),
-                },
-                RewindEntry {
-                    turn_id: 3,
-                    compacted: false,
-                    text: "third prompt".to_string(),
-                },
-            ],
-            ..Default::default()
-        };
+        let mut st = RewindSelectorState::default();
+        st.entries = vec![
+            RewindEntry {
+                turn_id: 1,
+                compacted: false,
+                text: "first prompt".to_string(),
+            },
+            RewindEntry {
+                turn_id: 2,
+                compacted: false,
+                text: "second prompt".to_string(),
+            },
+            RewindEntry {
+                turn_id: 3,
+                compacted: false,
+                text: "third prompt".to_string(),
+            },
+        ];
         st.selected = 0;
 
         st.select_next();
@@ -393,26 +369,24 @@ mod tests {
     /// navigates silently moves their selection.
     #[test]
     fn a_resync_keeps_the_cursor_on_the_same_turn() {
-        let mut st = RewindSelectorState {
-            entries: vec![
-                RewindEntry {
-                    turn_id: 11,
-                    compacted: false,
-                    text: "a".into(),
-                },
-                RewindEntry {
-                    turn_id: 12,
-                    compacted: false,
-                    text: "b".into(),
-                },
-                RewindEntry {
-                    turn_id: 13,
-                    compacted: false,
-                    text: "c".into(),
-                },
-            ],
-            ..Default::default()
-        };
+        let mut st = RewindSelectorState::default();
+        st.entries = vec![
+            RewindEntry {
+                turn_id: 11,
+                compacted: false,
+                text: "a".into(),
+            },
+            RewindEntry {
+                turn_id: 12,
+                compacted: false,
+                text: "b".into(),
+            },
+            RewindEntry {
+                turn_id: 13,
+                compacted: false,
+                text: "c".into(),
+            },
+        ];
         st.selected = 1; // on turn 12
 
         // The agent's mark list re-reads the same turns (this is what
