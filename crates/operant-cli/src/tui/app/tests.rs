@@ -1346,6 +1346,252 @@ fn an_arrow_key_in_the_rewind_selector_survives_repeated_frame_syncs() {
     );
 }
 
+/// (iter-1538) THE LIVE-FRAME RENDER PATH for the rewind outline.
+///
+/// `the_rewind_selection_highlight_follows_the_arrow_key` calls
+/// `draw_rewind_selector` DIRECTLY, which proves the selector can outline a row
+/// but never touches `App::run`'s frame loop — the path the deployed binary
+/// actually paints. The operator's live repro (5 prompt turns, `<up>` x0..x4)
+/// showed the reversed highlight FROZEN on the first row in every case, even
+/// with no arrow pressed at all, so the outline never followed the cursor in
+/// the real render path either.
+///
+/// This drives the REAL loop: `App::run` paints the frame, and the assertion
+/// reads the reversed cells out of the frame the loop actually drew. It is the
+/// same projection the live red-team used (`tui debug simulate --dump-style`).
+#[test]
+fn the_outlined_band_follows_the_arrow_key_through_the_real_frame_loop() {
+    use crate::tui::adapter_types::types::{Message, MessageContent, Role};
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    let backend = TestBackend::new(120, 40);
+    let mut terminal = Terminal::new(backend).expect("terminal");
+
+    let mut app = make_app();
+    // The real loop reads events from `simulated_keys` instead of the terminal
+    // only when it is simulating; without this it tries to open the real input
+    // reader and the harness fails for a reason that has nothing to do with
+    // the defect under test.
+    app.is_simulating = true;
+    // Three turns, each prompt followed by its answer, so each prompt owns a
+    // row band in the body the selector renders.
+    for (i, prompt) in ["prompt one", "prompt two", "prompt three"]
+        .iter()
+        .enumerate()
+    {
+        app.messages.push(Message {
+            role: Role::User,
+            content: MessageContent::Text(prompt.to_string()),
+        });
+        app.messages.push(Message {
+            role: Role::Assistant,
+            content: MessageContent::Text(format!("answer {i}")),
+        });
+    }
+    app.core_rewind_marks = Some(std::sync::Arc::new(
+        crate::tui::rewind_marks::RewindMarksSource::new(
+            vec![
+                operant_core::agent::UserTurnMark {
+                    turn_id: 11,
+                    conv_index: 0,
+                    conv_epoch: 1,
+                    text: "prompt one".to_string(),
+                },
+                operant_core::agent::UserTurnMark {
+                    turn_id: 12,
+                    conv_index: 2,
+                    conv_epoch: 1,
+                    text: "prompt two".to_string(),
+                },
+                operant_core::agent::UserTurnMark {
+                    turn_id: 13,
+                    conv_index: 4,
+                    conv_epoch: 1,
+                    text: "prompt three".to_string(),
+                },
+            ],
+            Some("sess_live3".to_string()),
+            Vec::new(),
+        ),
+    ));
+
+    // The outline rows as the real loop paints them.
+    fn outlined_rows(terminal: &Terminal<TestBackend>) -> Vec<usize> {
+        use crate::tui::debug::debug_hub::buffer_style_dump;
+        let dump = buffer_style_dump(terminal.backend().buffer());
+        let mut rows = Vec::new();
+        for (y, line) in dump.lines().skip(1).enumerate() {
+            let reversed_here = line.split(' ').any(|tok| {
+                tok.split_once('@').is_some_and(|(style, _sym)| {
+                    let parts: Vec<&str> = style.split('/').collect();
+                    parts.get(2).is_some_and(|m| m.split('+').any(|f| f == "r"))
+                })
+            });
+            if reversed_here {
+                rows.push(y);
+            }
+        }
+        rows
+    }
+
+    // Drive a pass through the real loop: apply a key (if any), then paint and
+    // read the outline the frame actually drew.
+    let drive = |app: &mut App, terminal: &mut Terminal<TestBackend>, key: Option<KeyCode>| {
+        app.should_exit = false;
+        app.sim_key_drain_passes = 0;
+        if let Some(code) = key {
+            app.simulated_keys = vec![press_key(code, KeyModifiers::NONE)];
+        } else {
+            app.simulated_keys.clear();
+        }
+        for _ in 0..5 {
+            let _ = app.run(terminal).expect("loop runs");
+            if app.should_exit {
+                break;
+            }
+        }
+        outlined_rows(terminal)
+    };
+
+    // Open the selector via the real double-Esc key path. The drain exits once
+    // the script is spent, so clear its exit flag between batches — the same
+    // reset a live run gets.
+    app.should_exit = false;
+    app.sim_key_drain_passes = 0;
+    app.simulated_keys = vec![
+        press_key(KeyCode::Esc, KeyModifiers::NONE),
+        press_key(KeyCode::Esc, KeyModifiers::NONE),
+    ];
+    for _ in 0..20 {
+        let _ = app.run(&mut terminal).expect("loop runs");
+        if app.simulated_keys.is_empty() {
+            break;
+        }
+    }
+    assert!(
+        app.rewind_selector.visible,
+        "double-Esc opened the selector"
+    );
+    assert_eq!(app.rewind_selector.entries.len(), 3, "three turns listed");
+    assert_eq!(
+        app.rewind_selector.selected, 2,
+        "the cursor opens on the newest turn"
+    );
+
+    // A repaint with NO key press at all: the outline must sit on the newest
+    // turn (index 2). This is the control that kills a harness artifact — if
+    // the outline is already on row band 0 with nothing pressed, the render is
+    // pinning it there.
+    let at_newest = outlined_rows(&terminal);
+    assert!(
+        !at_newest.is_empty(),
+        "the newest turn IS outlined once the frame loop paints it"
+    );
+
+    // One Up MUST move the outlined band through the real loop.
+    let one_up = drive(&mut app, &mut terminal, Some(KeyCode::Up));
+    assert_ne!(
+        one_up, at_newest,
+        "up moves the OUTLINED ROWS in the real frame loop, not just the index"
+    );
+    assert_eq!(
+        app.rewind_selector.selected, 1,
+        "and the cursor itself moved to the middle turn"
+    );
+
+    // A second Up moves it again.
+    let two_up = drive(&mut app, &mut terminal, Some(KeyCode::Up));
+    assert_ne!(two_up, one_up, "and it moves again on the next press");
+    assert_eq!(
+        app.rewind_selector.selected, 0,
+        "walking up reaches the oldest turn"
+    );
+}
+
+/// (iter-1538) The headless-mock defect's mechanism, pinned at the unit level.
+///
+/// The live red-team found the rewind outline frozen on the first prompt for
+/// every `<up>`. An ungated probe proved the path: the mock sim constructs NO
+/// agent, so `core_rewind_marks` stayed `None`, the frame-loop sync is gated on
+/// it being `Some`, and the selector therefore opened with ZERO entries — and
+/// `open()` on an empty list sets `selected = 0`, which
+/// `user_prompt_range`'s `starts.get(0)` then outlines forever.
+///
+/// This pins the exact state the defect lived in: marks `None` → no entries →
+/// no navigation, no matter how many keys are pressed. The fix seeds the mock's
+/// marks (see `tui_app.rs`'s `is_mock` block), which is verified live in the
+/// commit body's recorded sweep (ups=0..3 walks CCC→BBB→AAA).
+#[test]
+fn a_none_marks_source_freezes_the_selector_at_the_first_turn() {
+    use crate::tui::adapter_types::types::{Message, MessageContent, Role};
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    let backend = TestBackend::new(120, 40);
+    let mut terminal = Terminal::new(backend).expect("terminal");
+
+    let mut app = make_app();
+    app.is_simulating = true;
+    // The transcript the mock script injects — three prompts, each followed by
+    // its answer, so each prompt owns a row band.
+    for prompt in ["AAA first prompt", "BBB second prompt", "CCC third prompt"] {
+        app.messages.push(Message {
+            role: Role::User,
+            content: MessageContent::Text(prompt.to_string()),
+        });
+    }
+    // The defect's state, exactly: the mock path left this `None`.
+    app.core_rewind_marks = None;
+
+    app.should_exit = false;
+    app.sim_key_drain_passes = 0;
+    app.simulated_keys = vec![
+        press_key(KeyCode::Esc, KeyModifiers::NONE),
+        press_key(KeyCode::Esc, KeyModifiers::NONE),
+    ];
+    for _ in 0..20 {
+        let _ = app.run(&mut terminal).expect("loop runs");
+        if app.simulated_keys.is_empty() {
+            break;
+        }
+    }
+    assert!(app.rewind_selector.visible, "the selector opened");
+    assert_eq!(
+        app.rewind_selector.entries.len(),
+        0,
+        "no marks source, no entries — the state the live binary was in"
+    );
+    assert_eq!(
+        app.rewind_selector.selected, 0,
+        "empty `open()` pins the cursor at 0, so the outline is stuck on the \
+         first prompt"
+    );
+
+    // Pressing Up cannot move anything: there is nothing to move through.
+    let drive = |app: &mut App, terminal: &mut Terminal<TestBackend>| {
+        app.should_exit = false;
+        app.sim_key_drain_passes = 0;
+        app.simulated_keys = vec![press_key(KeyCode::Up, KeyModifiers::NONE)];
+        for _ in 0..10 {
+            let _ = app.run(terminal).expect("loop runs");
+            if app.simulated_keys.is_empty() {
+                break;
+            }
+        }
+    };
+    drive(&mut app, &mut terminal);
+    assert_eq!(
+        app.rewind_selector.selected, 0,
+        "and the key is inert — THIS is the operator's frozen navigation"
+    );
+    drive(&mut app, &mut terminal);
+    assert_eq!(
+        app.rewind_selector.selected, 0,
+        "still frozen on the third pass"
+    );
+}
+
 /// (iter-1489) The defect behind "session management is slow / it won't
 /// navigate": the simulator applied a scripted key the instant it was queued,
 /// while the hub's rows were still being read off a blocking DB thread. The

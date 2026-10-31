@@ -670,6 +670,18 @@ impl TuiApp {
         let skills_dir = config.skills.root_dir.clone();
 
         let is_mock = agent_script.is_some();
+        // (iter-1538) The mock path has NO agent, so nothing ever fills
+        // `core_rewind_marks` — and with it None the frame-loop sync at
+        // `App::run`'s rewind branch never runs, so the selector opens with
+        // ZERO entries and the outline falls to `user_prompt_range`'s
+        // starts.get(0), the first prompt, with `selected` pinned at 0 by the
+        // empty-entries `open()`. Every `<up>` was then dead. Seeding the
+        // marks here is what makes the headless simulator drive the selector's
+        // REAL sync path instead of an empty mock of it: the operator's
+        // navigation complaint is only reproducible against the live binary if
+        // the live binary has marks to navigate.
+        let mut mock_marks: Vec<operant_core::agent::UserTurnMark> = Vec::new();
+        let mut next_mock_mark_id: u64 = 1;
         let agent: Option<std::sync::Arc<operant_core::agent::OperantAgent>> = if let Some(script) =
             agent_script
         {
@@ -689,8 +701,15 @@ impl TuiApp {
                         use crate::tui::adapter_types::types::{Message, MessageContent, Role};
                         self.app.messages.push(Message {
                             role: Role::User,
-                            content: MessageContent::Text(text),
+                            content: MessageContent::Text(text.clone()),
                         });
+                        mock_marks.push(operant_core::agent::UserTurnMark {
+                            turn_id: next_mock_mark_id,
+                            conv_index: 0,
+                            conv_epoch: 1,
+                            text: text.clone(),
+                        });
+                        next_mock_mark_id += 1;
                     }
                     crate::cmd_tui_debug::MockAgentEvent::PermissionRequest {
                         tool,
@@ -771,6 +790,24 @@ impl TuiApp {
         };
 
         self.app.core_mcp_manager = Some(std::sync::Arc::new(mcp_manager));
+        // (iter-1538) The mock path has NO agent, so the block below cannot
+        // seed its rewind source. Seed it from the marks the script's user
+        // events produced instead, so the selector's real frame-loop sync
+        // runs against marks the operator can navigate. Without this the
+        // selector opened with ZERO entries and every `<up>` was dead — the
+        // operator's navigation complaint reproduced exactly. The session id
+        // is a mock marker so `RewindMarksSource::marks()` does not refuse an
+        // empty list, and the conversation refreshes from the display each
+        // frame.
+        if is_mock {
+            self.app.core_rewind_marks = Some(std::sync::Arc::new(
+                crate::tui::rewind_marks::RewindMarksSource::new(
+                    std::mem::take(&mut mock_marks),
+                    Some("sess_mock_sim".to_string()),
+                    Vec::new(),
+                ),
+            ));
+        }
         if let Some(ref agent) = agent {
             self.app.steer_queue_handle = Some(agent.steer_queue_handle());
             // Clone of the agent's live registry so /mcp reconnect can
