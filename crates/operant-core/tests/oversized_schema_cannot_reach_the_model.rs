@@ -131,8 +131,11 @@ const CEILING: usize = 20_000;
 /// the "~64 to ~511" I first wrote — that range was arithmetic, not
 /// measurement, and it was wrong.
 ///
-/// 512 sits comfortably inside the verified range. If a fixture change moves
-/// the real number, re-measure both regimes rather than trusting this.
+/// 1017 sits inside the verified range, one char below the real growth it
+/// must not exceed. (It was 512 before I narrowed the range by measuring;
+/// that line is corrected here rather than left claiming a number this
+/// constant does not hold.) If a fixture change moves the real number,
+/// re-measure both regimes rather than trusting this.
 const MIN_GROWTH: usize = 1017;
 
 struct HugeSchemaTool;
