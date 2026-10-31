@@ -8378,6 +8378,90 @@ mod prompt_jump_tests {
         );
     }
 
+    /// The `f` filter has unit tests over `filtered_indices` but was never
+    /// driven through the KEY HANDLER. A filter that populates the right list
+    /// but is never reachable from the keyboard is unreachable in production,
+    /// so this drives the real `handle_rewind_selector_key` events.
+    #[test]
+    fn the_f_filter_is_reachable_and_moves_the_selection_to_the_first_match() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+        let mut app = make_app();
+        for prompt in ["prompt one", "prompt two", "prompt three"] {
+            app.messages.push(Message {
+                role: Role::User,
+                content: MessageContent::Text(prompt.to_string()),
+            });
+            app.messages.push(Message {
+                role: Role::Assistant,
+                content: MessageContent::Text(format!("answer {prompt}")),
+            });
+        }
+        app.open_rewind_selector();
+        let marks = vec![
+            (1u64, "prompt one".to_string()),
+            (2, "prompt two".to_string()),
+            (3, "prompt three".to_string()),
+        ];
+        let display_texts: Vec<String> = marks.iter().map(|(_, t)| t.clone()).collect();
+        app.rewind_selector.sync_marks(marks, &display_texts);
+        app.rewind_selector.selected = 0;
+
+        // Press `f` — the filter must OPEN.
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE));
+        assert!(
+            app.rewind_selector.filter_open,
+            "the f key must open the filter — if it does not, the filter is \
+             dead in production"
+        );
+
+        // Type "three" — live-jump must move the selection to that turn.
+        for c in ['t', 'h', 'r', 'e', 'e'] {
+            app.handle_key_event(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        assert_eq!(app.rewind_selector.filter, "three");
+        assert_eq!(
+            app.rewind_selector.selected, 2,
+            "typing the filter text must live-jump the selection to the \
+             first matching turn"
+        );
+        assert_eq!(
+            app.rewind_selector.filtered_indices(),
+            vec![2],
+            "the filter must list exactly the matching turn"
+        );
+
+        // Enter closes the filter and KEEPS the jumped-to selection.
+        app.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(
+            !app.rewind_selector.filter_open,
+            "Enter must close the filter"
+        );
+        assert_eq!(
+            app.rewind_selector.selected, 2,
+            "Enter must leave the selection on the match it jumped to"
+        );
+
+        // A filter matching nothing must not move the selection off-list.
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE));
+        for c in ['z', 'z', 'z'] {
+            app.handle_key_event(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        assert!(
+            app.rewind_selector.filtered_indices().is_empty(),
+            "a filter matching nothing must report an empty list"
+        );
+        assert_eq!(
+            app.rewind_selector.selected, 2,
+            "a no-match filter must leave the selection where it was rather \
+             than jumping somewhere meaningless"
+        );
+        // Esc closes the filter without clearing the typed text (it stays
+        // visible in the input, so a cancelled filter is recoverable).
+        app.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(!app.rewind_selector.filter_open, "Esc cancels the filter");
+    }
+
     #[test]
     fn prev_jump_from_tail_lands_on_most_recent_prompt() {
         let mut app = make_app();
