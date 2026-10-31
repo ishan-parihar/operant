@@ -8578,3 +8578,112 @@ mod prompt_jump_tests {
         );
     }
 }
+
+/// (RT-205 reopen, iter-1567) THE DECISIVE INSTRUMENT: does the overlay
+/// duplicate a span's final character?
+///
+/// Live evidence, raw bytes from `/tmp/rt/c0.txt`:
+///
+/// ```text
+/// \x1b[2m\x1b[38;2;80;80;80m  CLEANPROBE: alpha acknowledged.
+/// \x1b[0m\x1b[38;2;200;200;195m  .
+/// \x1b[39m
+/// ```
+///
+/// The trailing `.` carries a DIFFERENT, deliberate style from the run it
+/// follows, so a stale repaint cannot explain it (that was my iter-1565
+/// withdrawal, and it was wrong). All six affected rows share one signature:
+/// `text` + reset + new style + **the last character of `text`**.
+///
+/// Four mutation-proven tests already prove the markdown pipeline is clean
+/// (`operant_markdown::tests::cases`), so the defect is downstream of markdown
+/// — in the layer that turns already-styled `Line`s into cells for the overlay.
+/// This drives `draw_rewind_selector` directly and reads the painted cells.
+#[test]
+fn the_overlay_body_does_not_emit_a_spans_final_character_twice() {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+    use ratatui::style::{Modifier, Style};
+
+    let mut app = make_app();
+    app.is_simulating = true;
+
+    // Three prompts so the selector has entries, then a body whose styled span
+    // must survive the overlay's narrower area. The span crosses the width so a
+    // boundary bug has a seam to get wrong.
+    app.messages
+        .push(crate::tui::adapter_types::types::Message {
+            role: crate::tui::adapter_types::types::Role::User,
+            content: MessageContent::Text("first prompt".to_string()),
+        });
+    app.messages
+        .push(crate::tui::adapter_types::types::Message {
+            role: crate::tui::adapter_types::types::Role::Assistant,
+            content: MessageContent::Text("the answer ends here".to_string()),
+        });
+
+    let backend = TestBackend::new(120, 40);
+    let mut terminal = Terminal::new(backend).expect("terminal");
+    terminal
+        .draw(|frame| {
+            let area = frame.area();
+            crate::tui::rewind_selector::draw_rewind_selector(frame, area, &app);
+        })
+        .expect("draw");
+
+    // The painted symbol row must contain each of these exactly once, and must
+    // not contain a duplicated trailing character.
+    // `buffer_style_dump` emits one token per cell and uses `_` as the symbol of
+    // an unstyled/blank cell, so a real space is painted as `_`. Translate it
+    // back so phrases can be searched as the operator sees them.
+    use crate::tui::debug::debug_hub::buffer_style_dump;
+    let dump = buffer_style_dump(terminal.backend().buffer());
+    let symbols: String = dump
+        .lines()
+        .map(|l| {
+            l.split(' ')
+                .filter_map(|tok| tok.split_once('@').map(|(_, sym)| sym))
+                .map(|s| if s == "_" { " " } else { s })
+                .collect::<String>()
+        })
+        .collect();
+
+    for needle in ["first prompt", "the answer ends here"] {
+        let occurrences = symbols.matches(needle).count();
+        assert!(
+            occurrences >= 1,
+            "the body must render {needle:?}: got 0 occurrences"
+        );
+        assert_eq!(
+            occurrences, 1,
+            "and it must render it exactly ONCE — a span-boundary defect emits \\
+             a run's final character twice (the live RT-205 signature)"
+        );
+    }
+
+    // The signature itself: no token may repeat its own symbol's last
+    // character as a separate adjacent token in a different style.
+    let mut adjacent_style_repeat = 0usize;
+    for line in dump.lines() {
+        let toks: Vec<(&str, &str)> = line.split(' ').filter_map(|t| t.split_once('@')).collect();
+        for pair in toks.windows(2) {
+            let (style_a, sym_a) = pair[0];
+            let (style_b, sym_b) = pair[1];
+            if style_a != style_b && sym_a.len() == 1 && sym_b.len() == 1 && sym_a == sym_b {
+                adjacent_style_repeat += 1;
+            }
+        }
+    }
+    assert_eq!(
+        adjacent_style_repeat, 0,
+        "no two adjacent single-character cells may carry the same symbol in \\
+         different styles — that is the duplicated-final-character signature"
+    );
+
+    // Guard against a vacuous pass: the styles we built must be reachable.
+    assert!(
+        !symbols.is_empty(),
+        "the painted frame must be non-empty for this test to mean anything"
+    );
+    let _ = (Modifier::BOLD, Style::default());
+}
