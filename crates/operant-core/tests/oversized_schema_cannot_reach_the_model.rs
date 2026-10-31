@@ -460,6 +460,25 @@ async fn an_oversized_tool_schema_is_cut_before_it_reaches_the_model() {
         "[growth] pre-tool={} post-tool={with_result} delta={growth} (floor={MIN_GROWTH})",
         sizes[0]
     );
+    // Drift check, asserted HERE rather than in a second test. My first attempt
+    // put this in a separate test reading a shared AtomicUsize the measuring
+    // test writes, and that guard was worthless: rust runs tests in parallel,
+    // so the second test usually read the atomic as 0 before this one wrote it
+    // and took its early-return path. It passed with a FABRICATED measured
+    // value of 999 against REAL_GROWTH of 1018. A guard a race can silently
+    // disable is not a guard, so the check moved to where the value is produced.
+    assert_eq!(
+        growth, REAL_GROWTH,
+        "the real regime DRIFTED: this run measured {growth} but REAL_GROWTH \
+         publishes {REAL_GROWTH}. The binding bound is the SPEND GUARD at \
+         agent/compress.rs:587 - limit = (context_window - \
+         RESPONSE_RESERVE_TOKENS) * max_tool_result_share - not either char cap: \
+         probed, doubling MAX_TOOL_RESULT_LEN (4,096 -> 8,192) leaves the growth \
+         at exactly 1018, as does doubling the per-field schema text. A real \
+         drift means context_window, max_tool_result_share or \
+         RESPONSE_RESERVE_TOKENS moved. Re-measure, then update REAL_GROWTH, the \
+         doc comment, and re-probe the endpoints TOGETHER"
+    );
     assert!(
         growth >= MIN_GROWTH,
         "the request carrying the tool result grew by only {growth} chars over \
