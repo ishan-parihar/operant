@@ -3228,6 +3228,135 @@ fn test_usage_total_tokens_not_dropped() {
     );
 }
 
+/// (RT-205, iter-1562) The live-only duplication, attacked at the one
+/// thing every prior test did NOT do: grow the transcript incrementally.
+///
+/// The live operator captured mid-word duplication in the transcript body
+/// (`similarity.rly`, `The pattern seems to be::`, `thoughtt`, and each user
+/// prompt carrying a stray character: `1› …alpha` + `a`). I refuted, by
+/// measurement, the two obvious homes for it: the aroute provider sends
+/// genuine deltas with no overlap (iter-1561), and `agent_events.rs`'s
+/// accumulation is correct. The `App::run` frame loop renders a CLEAN body when
+/// every message is pushed before the first paint — which is what every
+/// existing test does.
+///
+/// The corruption was live-growing-transcript-only, so this drives the loop
+/// the way the agent does: append a message, paint, append the next, paint,
+/// then commit and paint again — and asserts each text appears exactly ONCE in
+/// the prepared body. A duplicated fragment at a message's own end is exactly
+/// the signature of an incremental re-stitch seam.
+#[test]
+fn an_incrementally_grown_transcript_renders_each_message_once() {
+    use crate::tui::adapter_types::types::{Message, MessageContent, Role};
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    let backend = TestBackend::new(120, 40);
+    let mut terminal = Terminal::new(backend).expect("terminal");
+    let mut app = make_app();
+    app.is_simulating = true;
+
+    // Grow the transcript the way the real loop does: one message per pass,
+    // painting between appends so any incremental/prefix-reuse path is taken.
+    let script: Vec<(Role, String)> = vec![
+        (Role::User, "first question about the sea".to_string()),
+        (
+            Role::Assistant,
+            "The sea stretches endlessly beneath the horizon.".to_string(),
+        ),
+        (Role::User, "second question about waves".to_string()),
+        (
+            Role::Assistant,
+            "Its waves whisper secrets to the shore.".to_string(),
+        ),
+    ];
+    for (role, text) in &script {
+        app.messages.push(Message {
+            role: role.clone(),
+            content: MessageContent::Text(text.clone()),
+        });
+        app.should_exit = false;
+        app.sim_key_drain_passes = 0;
+        app.simulated_keys.clear();
+        for _ in 0..3 {
+            let _ = app.run(&mut terminal).expect("loop runs");
+            if app.should_exit {
+                break;
+            }
+        }
+    }
+
+    // Now commit a streaming assistant message on top of the grown transcript,
+    // the way a live turn ends.
+    app.handle_agent_event(AgentEvent::Content {
+        text: "The tide answers twice.".to_string(),
+    });
+    app.handle_agent_event(AgentEvent::Done {
+        message: operant_core::client::Message {
+            role: operant_core::client::Role::Assistant,
+            content: String::new(),
+            reasoning: None,
+            name: None,
+            tool_call_id: None,
+            tool_calls: None,
+            extra_content: None,
+        },
+        reason: operant_core::agent::TurnExitReason::TextResponse,
+    });
+    app.should_exit = false;
+    app.sim_key_drain_passes = 0;
+    app.simulated_keys.clear();
+    for _ in 0..3 {
+        let _ = app.run(&mut terminal).expect("loop runs");
+        if app.should_exit {
+            break;
+        }
+    }
+
+    let prepared = crate::tui::operant_ui::prepare::prepare_body_for_overlay(&app, 120);
+    let body: Vec<String> = prepared
+        .wrapped_lines
+        .iter()
+        .map(|l| l.spans.iter().map(|s| s.content.to_string()).collect())
+        .collect();
+    let joined = body.join("\n");
+
+    for needle in [
+        "The sea stretches endlessly beneath the horizon.",
+        "first question about the sea",
+        "Its waves whisper secrets to the shore.",
+        "second question about waves",
+        "The tide answers twice.",
+    ] {
+        let occurrences = joined.matches(needle).count();
+        assert_eq!(
+            occurrences, 1,
+            "{needle:?} appears exactly once in an incrementally grown body, \
+             got {occurrences} — a duplicated fragment at a message's own end \
+             is the live RT-205 signature"
+        );
+    }
+
+    // And the body must not invent text that no message contains: the live
+    // corruption appended a stray character after each prompt.
+    for prompt in [
+        "first question about the sea",
+        "second question about waves",
+    ] {
+        let Some(row) = body.iter().find(|l| l.contains(prompt)) else {
+            panic!("the prompt row for {prompt:?} is missing from the body");
+        };
+        // The precise check: nothing may follow the prompt on its own row
+        // except the prompt itself and the line's own padding.
+        let after = &row[row.find(prompt).map(|i| i + prompt.len()).unwrap_or(0)..];
+        assert_eq!(
+            after.trim(),
+            "",
+            "a stray fragment must not follow the prompt on its own row: {row:?}"
+        );
+    }
+}
+
 #[test]
 fn retry_must_not_append_the_resurrected_stream_to_the_died_partial() {
     // 2026-10-09 live-audit P4-2.5: the provider stream died mid-response
