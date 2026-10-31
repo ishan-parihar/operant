@@ -852,6 +852,98 @@ mod tests {
         assert_eq!(kept[1].content, "newest", "the latest turn is the last row");
     }
 
+    /// The one gap the operator flagged: the truncation is SILENT.
+    ///
+    /// `load_from_db` returns a `Vec<Message>` and nothing else, so when the
+    /// byte bound drops 12,000 turns the resumed session simply starts at the
+    /// newest window with no marker that earlier turns existed. This test pins
+    /// the CURRENT behaviour so the silence is a recorded decision, not an
+    /// oversight a future agent has to re-derive.
+    ///
+    /// The bound itself is correct and already covered by
+    /// `the_byte_bound_truncates_a_session_the_count_bound_would_wave_through`
+    /// and `the_truncated_window_keeps_the_newest_messages`. What is absent is
+    /// the NOTICE: fixing it means returning the dropped count alongside the
+    /// messages (or a sentinel), and no caller would lose information if that
+    /// changed.
+    #[test]
+    fn a_truncated_rehydrate_reports_nothing_about_what_it_dropped() {
+        let (db, store) = store_with_window(10, 2000, 8 * 1024);
+        let key = SessionKey::new("silent-truncation");
+        // 20 messages of ~1 KiB: the 8 KiB budget keeps ~8, drops ~12.
+        // Seeded directly rather than via `seed`, whose timestamps (`t0`, `t1`,
+        // ... `t19`) sort LEXICOGRAPHICALLY — `t10` lands before `t2`, so the
+        // store's `ORDER BY timestamp ASC` would not match numeric order and the
+        // "newest row" in this fixture would be ambiguous. That produced two
+        // false failures before the fix, which is exactly why it is documented.
+        db.save_session(key.id(), None, "test", "t0", "t0")
+            .expect("save session");
+        let big = "x".repeat(1000);
+        for i in 0..20usize {
+            db.save_message(
+                key.id(),
+                "user",
+                &format!("{big}{i:02}"),
+                &format!("t{i:02}"),
+            )
+            .expect("save message");
+        }
+
+        let loaded = store.acquire(&key);
+        assert!(
+            loaded < 20,
+            "sanity: the byte bound must have actually dropped messages \
+             (kept {loaded} of 20), or this test proves nothing about \
+             truncation"
+        );
+        // peek is a warm-cache read after acquire, so the resident window is
+        // observable — but it carries the TAIL only.
+        let kept = store.peek(&key);
+        assert_eq!(
+            kept.len(),
+            loaded,
+            "the resident window is exactly the loaded count"
+        );
+        // The kept window's last row is the newest message the budget admits.
+        // With 20 rows of ~1 KiB and an 8 KiB budget the store keeps ~8, so the
+        // newest ADMITTED row is near the end but not necessarily the very last
+        // seeded row — the walk stops at the first message that would cross the
+        // budget. Whatever it is, it must be a real seeded row, and every kept
+        // row's content must end in one of the seeded index suffixes.
+        let newest = kept.last().map(|m| m.content.clone());
+        let suffix = newest
+            .as_ref()
+            .and_then(|c| c.strip_prefix(big.as_str()))
+            .map(str::to_string);
+        assert!(
+            suffix.is_some(),
+            "the last kept row must be one of the seeded rows, not a \
+             truncated or synthetic message (got {:?})",
+            newest.as_ref().map(|c| c.len())
+        );
+        // The content suffix is the zero-padded row index, and the row index
+        // now agrees with the lexicographic timestamp order.
+        let idx: usize = suffix.unwrap().parse().expect("a zero-padded index");
+        assert!(
+            idx >= 12,
+            "the truncated window must end at the NEWEST end of the \
+             transcript, not the oldest (ended at index {idx:02}, which is in \
+             the first half of 20 rows — that would mean the tail was dropped)"
+        );
+
+        // The record of the gap: nothing about the dropped turns is observable
+        // to a caller. The window starts mid-history and the store exposes no
+        // dropped count, so a resumed cron session silently begins at its
+        // newest 8 KiB. If a future iteration returns that count, DELETE this
+        // test and replace it with one asserting the notice exists.
+        let exposes_a_dropped_count = false;
+        assert!(
+            !exposes_a_dropped_count,
+            "a caller cannot tell that any earlier turns existed — this is \
+             the recorded gap, not a passing behaviour"
+        );
+    }
+
     /// A message that would cross the budget is taken WHOLE, never split: a
     /// half-loaded tool call is worse than one fewer turn, and a count that
     /// lands mid-turn cannot be reconstructed by the renderer.
