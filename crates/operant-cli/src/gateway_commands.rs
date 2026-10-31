@@ -3534,7 +3534,14 @@ mod subagents_command_tests {
         // list — and the list must never claim a global "no subagents".
         let cfg = AppConfig::default();
         let resp = handle_command("subagents", "", &ctx(&cfg)).expect("handled");
-        if resp.contains("records") {
+        // "record" not "records": the reply pluralises on the count
+        // (`"{} record{}"` with an empty suffix for 1), so a registry holding
+        // exactly ONE record emits the singular and a `contains("records")`
+        // arm test silently falls through to the empty branch. Proven
+        // deterministically: run one seeding test and then this reader with
+        // --test-threads=1 and it fails every time, no race required. The lock
+        // above only hides this by making that state hard to observe.
+        if resp.contains("record") {
             assert!(
                 !resp.contains("none dispatched by this gateway process"),
                 "a non-empty list must not claim the process dispatched nothing: {resp}"
