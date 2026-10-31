@@ -51,6 +51,13 @@ pub enum ObserverEvent {
         tool: String,
         duration: Duration,
         success: bool,
+        /// Byte length of the arguments the model sent for this call, as
+        /// rendered at the `ToolCallStart` emit site (`agent/stream.rs`).
+        /// 0 when the call never reached the executor (a guardrail skip), so
+        /// a reader must not treat 0 as "no arguments".
+        input_bytes: usize,
+        /// Byte length of the result content the tool returned.
+        output_bytes: usize,
     },
     /// The agent produced a final answer for the current user message.
     TurnComplete,
@@ -299,11 +306,15 @@ impl Observer for ConsoleObserver {
                 tool,
                 duration,
                 success,
+                input_bytes,
+                output_bytes,
             } => {
                 tracing::debug!(
                     tool,
                     duration_ms = duration.as_millis() as u64,
                     success,
+                    input_bytes,
+                    output_bytes,
                     "tool call completed"
                 );
             }
