@@ -1506,6 +1506,12 @@ mod tests {
     #[test]
     fn wizard_persist_is_surgical() {
         let _slot = path_slot_guard();
+        // RT-208: hold the recorded-config-path global for this test's whole
+        // window. PATH_SLOT_LOCK serialises the wizard's own tests against each
+        // other but knows nothing about the process-global the surgical WRITER
+        // reads, so an unguarded peer test's load can still displace the write
+        // target between this test's load and its persist.
+        let _cfg_guard = operant_core::config::config_path_test_guard();
         let dir = tempfile::tempdir().expect("tempdir");
         let cfg_path = dir.path().join("operant.toml");
         std::fs::write(
@@ -1544,6 +1550,9 @@ mod tests {
     #[test]
     fn wizard_persist_writes_arrays_as_arrays() {
         let _slot = path_slot_guard();
+        // RT-208: same reason as the surgical test above — this test's persist
+        // must read the path THIS test recorded, not one a peer test installed.
+        let _cfg_guard = operant_core::config::config_path_test_guard();
         let dir = tempfile::tempdir().expect("tempdir");
         let cfg_path = dir.path().join("operant.toml");
         std::fs::write(&cfg_path, "[agent]\nmodel = \"m\"\n").expect("write config");
