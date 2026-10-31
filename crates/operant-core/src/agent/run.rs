@@ -2620,7 +2620,7 @@ impl OperantAgent {
             volatile_suffix.push_str("\n\n");
             volatile_suffix.push_str(&guidance);
         }
-        let turn_context = volatile_suffix.trim().to_string();
+        let mut turn_context = volatile_suffix.trim().to_string();
         // The block is not in `messages` while the ladder runs, so its size
         // is charged against the budget explicitly.
         let turn_context_tokens = crate::context_management::estimate_tokens(&turn_context);
@@ -2960,6 +2960,51 @@ impl OperantAgent {
                 sanitizations = tool_sans,
                 "Sanitized tool calls for strict API"
             );
+        }
+
+        // ── Context budget disclosure (03-session Row 2 / 01-tool Row 2) ──
+        // Eviction is otherwise SILENT: the model observes that earlier turns
+        // vanished and cannot tell "the system dropped that" from "I never saw
+        // that". codex answers with a tool the model has to think to call; this
+        // appends one block to the tail that already rides every request, built
+        // from `estimated_tokens` / `effective_budget` the ladder above just
+        // computed — no new tool, no `ToolContext` plumbing, no extra measure.
+        //
+        // It rides the volatile tail and NEVER the frozen prefix: the figure
+        // changes every turn, and a changing value above the system prompt
+        // would break the prompt cache on every request. Nothing above the
+        // latest user message is touched.
+        {
+            let mut used = self.estimate_current_tokens(&messages) + turn_context_tokens;
+            let build = |used: usize| -> String {
+                let remaining = effective_budget.saturating_sub(used);
+                let mut block = String::from("<context_budget>");
+                block.push_str(&format!(
+                    "context window: {effective_budget} tokens; this request: ~{used} \
+                     used, ~{remaining} remaining"
+                ));
+                if ladder_fired {
+                    block.push_str(&format!(
+                        "\nnote: context was compacted this turn (threshold \
+                         {preflight_threshold} tokens) — earlier content may have \
+                         been summarised or evicted"
+                    ));
+                }
+                block.push_str("</context_budget>");
+                block
+            };
+
+            // The disclosure rides the request, so it is charged BEFORE the
+            // numbers are quoted: the figure the model reads must include the
+            // block it is reading. Build once to measure, add the size back,
+            // then build again for the record.
+            let measured = build(used);
+            let charged = crate::context_management::estimate_tokens(&measured);
+            used += charged;
+            let disclosure = build(used);
+
+            turn_context.push_str("\n\n");
+            turn_context.push_str(&disclosure);
         }
 
         // ── Turn context (volatile tail) ─────────────────────────────────

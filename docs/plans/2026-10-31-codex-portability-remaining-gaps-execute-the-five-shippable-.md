@@ -92,6 +92,14 @@ whether the ladder evicted this turn; a test asserts the frozen system prefix st
 byte-identical across two turns with different budgets (`agent/mod.rs:2069` already pins that
 shape for MoA guidance — copy it).
 **Mutation guard:** strip the budget line from the tail and the test must fail.
+**OUTCOME — iter-1545, SHIPPED as specified.** One block on the volatile
+`<turn_context>`, reading `estimated_tokens`, `effective_budget` and `ladder_fired` — all three
+already in scope at the attach line, so ~12 lines total and no plumbing. It charges itself
+before quoting its numbers (built once to measure, size added back to `used`, built again for
+the record): the first draft charged `turn_context_tokens` instead and the compiler warned it
+dead, because every read of that binding happens earlier in the function. Guard
+`the_tail_reports_the_context_budget_and_compaction_state`; mutation-proven RED by deleting the
+block. operant-core 2685/0, clippy clean.
 
 ### 3. Row 01-3 — dispatch trace **payload** (extend the existing variant; ~8 lines)
 

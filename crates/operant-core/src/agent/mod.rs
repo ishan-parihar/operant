@@ -1868,6 +1868,108 @@ mod tests {
         assert_eq!(render(&turn1[..i1]), render(&turn2[..i1]));
     }
 
+    /// The model is told its context budget and whether the ladder compacted
+    /// this turn (03-session Row 2 / 01-tool Row 2). The numbers come from the
+    /// ladder's own `estimated_tokens`/`effective_budget`, and the block rides
+    /// the volatile tail — so a turn whose budget differs must report a
+    /// different figure while the frozen prefix stays byte-identical.
+    #[serial]
+    #[tokio::test]
+    async fn the_tail_reports_the_context_budget_and_compaction_state() {
+        use crate::agent::clients::openai::OpenAIModelClient;
+        use crate::client::OpenAIClient;
+
+        let db =
+            Database::init(std::env::temp_dir().join("test_context_budget_tail.sqlite")).unwrap();
+        let agent = OperantAgent::new(
+            AgentConfig::default(),
+            Box::new(OpenAIModelClient::new(OpenAIClient::new(
+                crate::client::ClientConfig::default(),
+            ))),
+            ToolRegistry::new(Duration::from_secs(1)),
+            Arc::new(db),
+        );
+        agent.user_message("first question").await;
+        let turn1 = agent.build_messages("budget-test").await.unwrap();
+        agent
+            .add_message(crate::client::Message::assistant(
+                "a fairly long answer ".repeat(400),
+            ))
+            .await;
+        agent.user_message("second question").await;
+        let turn2 = agent.build_messages("budget-test").await.unwrap();
+
+        let last_user = |msgs: &[crate::client::Message]| {
+            msgs.iter().rposition(|m| m.role == Role::User).unwrap()
+        };
+        let (i1, i2) = (last_user(&turn1), last_user(&turn2));
+
+        // 1. The block is there and carries a real figure, not a placeholder.
+        let budget1 = turn1[i1]
+            .content
+            .split("<context_budget>")
+            .nth(1)
+            .unwrap_or_else(|| panic!("turn 1 must carry the budget block: {}", turn1[i1].content));
+        assert!(
+            budget1.contains("context window:") && budget1.contains("remaining"),
+            "the block must state the window and what is left: {budget1}"
+        );
+        // Both numbers are real: the window is configured, and `used` is
+        // measured, so neither can be 0 on a request that has a system prompt.
+        assert!(
+            !budget1.contains("~0 used"),
+            "used must be measured: {budget1}"
+        );
+
+        // 2. A bigger history reports a bigger `used` — the figure TRACKS state.
+        // Parse `this request: ~N used`. The ~WINDOW and ~REMAINING clauses also
+        // carry a `~`, so the number is taken by its trailing word rather than
+        // by position — a positional `.split('~')` reads "remaining" here and
+        // reports the opposite trend.
+        let used_of = |content: &str| -> usize {
+            let block = content
+                .split("<context_budget>")
+                .nth(1)
+                .expect("budget block present");
+            block
+                .split(';')
+                .nth(1)
+                .expect("the `this request: ...` clause")
+                .split("used")
+                .next()
+                .expect("text before the word `used`")
+                .rsplit('~')
+                .next()
+                .expect("the digits before `used`")
+                .trim()
+                .parse()
+                .expect("used is a number")
+        };
+        let (u1, u2) = (used_of(&turn1[i1].content), used_of(&turn2[i2].content));
+        assert!(
+            u2 > u1,
+            "a longer history must report a larger request: turn1={u1} turn2={u2}"
+        );
+
+        // 3. The disclosure rides the TAIL, never the frozen prefix: every
+        // system message in both turns is free of it, and turn 2's head is
+        // byte-identical to turn 1's.
+        assert!(
+            turn1
+                .iter()
+                .chain(&turn2)
+                .filter(|m| m.role == Role::System)
+                .all(|m| !m.content.contains("<context_budget>")),
+            "no budget disclosure in any system message"
+        );
+        let render = |msgs: &[crate::client::Message]| -> Vec<String> {
+            msgs.iter()
+                .map(|m| format!("{:?}|{}", m.role, m.content))
+                .collect()
+        };
+        assert_eq!(render(&turn1[..i1]), render(&turn2[..i1]));
+    }
+
     #[serial]
     #[tokio::test]
     async fn build_messages_injects_long_term_memory() {

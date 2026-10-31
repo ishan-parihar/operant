@@ -239,3 +239,26 @@ Adding a KV store because codex has one is exactly the complexity ponytail forbi
 (`estimate_total_tokens`, `context_management.rs:85`) and already has the eviction
 outcome (`EvictionOutcome`, `context_management.rs:802`). It lacks only the channel to
 the model. That is a ~150-line port that closes a real capability gap.
+
+---
+
+**OUTCOME — iter-1545 (Row 2, and 01-tool Row 2).** Shipped as a **tail line, not a tool**,
+exactly as the audit re-graded it. One block appended to the volatile `<turn_context>` at
+`crates/operant-core/src/agent/run.rs` immediately before the tail is attached
+(`run.rs`'s "Context budget disclosure" comment marks it), reading two values already in scope
+there — `estimated_tokens` (`run.rs:2721`) and `effective_budget` (`run.rs:2717`) — plus
+`ladder_fired` (`run.rs:2723`), which reports whether the preflight ladder compacted this turn.
+
+No `ToolContext` change, no `get_context_remaining` tool (the 148-LOC codex unit both ledger
+docs pointed at), no `manage_context_reporting`. The block **charges itself before quoting its
+numbers**: it is built once to measure, its own token size is added back to `used`, then built
+again for the record, so the figure the model reads includes the block it is reading. The
+first draft charged `turn_context_tokens` instead and the compiler warned it dead — every read
+of that binding happens earlier in the function (2641, 2719, 2721, 2796, 2806, 2837, 2895), so
+this turn could not observe it.
+
+Guard: `agent::tests::the_tail_reports_the_context_budget_and_compaction_state`
+(`agent/mod.rs`), which asserts the block is present and carries real numbers, that a larger
+history reports a larger `used`, and that the frozen prefix stays byte-identical across two
+turns with different budgets. **Mutation-proven RED:** deleting the disclosure block fails it by
+name. operant-core 2685/0, fmt + clippy clean (0 warnings), operant-cli compiles.
