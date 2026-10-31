@@ -52,30 +52,46 @@
 //! 20,000 — nothing bounded, nothing missing, nothing observed.
 //!
 //! The growth assertion below (>= 1017 chars) closes that. Both directions now
-//! fail by name, and BOTH figures are measured and printed by the test itself
-//! (`--nocapture`, the `[growth]` line) so neither is a remembered number:
+//! fail by name, and BOTH figures are measured by a test and printed
+//! (`--nocapture`: `[growth]` for the real fixture, `[vacuous]` for the vacuous
+//! one) so neither is a remembered number:
 //!
 //! * real fixture:       18,259 -> 19,277  (**+1018**, the truncated schema)
-//! * vacuous fixture:    18,259 -> 18,646  (**+387**, schema shrunk to one
-//!   field so it no longer dominates the request)
+//! * vacuous fixture:    18,259 -> 18,882  (**+623**, `VacuousSchemaTool` — an
+//!   enormous advertised schema but a tiny returned result)
 //!
-//! **A CORRECTION ON THE VACUOUS FIGURE.** This file previously published the
-//! vacuous growth as `18,270 (+11, just a tool name)`. That number is real but
-//! it belongs to a DIFFERENT probe — the tiny-tool-result one described in the
-//! paragraph above. The probe the floor is actually verified against is the
-//! shrunk-schema one, which measures **+387**, and `+11` was carried forward
-//! into the range `11 < floor` without re-measurement after the probe changed.
+//! **A CORRECTION ON THE VACUOUS FIGURE, and a second one on which figure is
+//! the figure.** This file has published three different vacuous numbers, and
+//! they are three different FIXTURES rather than three measurements of one
+//! thing:
 //!
-//! **AND A SECOND CORRECTION ON THE RANGE ITSELF, because "between the two
-//! regimes" was still wrong.** I then published `387 <= floor <= 1018`, which
-//! reads as though each regime's value were usable. It is not, at either end:
-//! floor 387 against the vacuous fixture PASSES (387 >= 387), so it fails to
-//! discriminate; and floor 1018 against the real fixture passes, which makes the
-//! upper end inclusive rather than the exclusive bound the phrasing implied.
-//! Probing the endpoints gives **388 <= floor <= 1018**. The floor is marked
+//! * `+11` (18,270) — the tool returned a tiny payload. Real, but it was never
+//!   a fixture in this file, and it was carried into the range `11 < floor`
+//!   after the probe was changed.
+//! * `+387` — `HugeSchemaTool` with `FIELDS` shrunk to 1, i.e. a SMALL SCHEMA
+//!   returned in full. Real, and the figure I probed the endpoints with, but a
+//!   hand-made probe rather than a fixture the suite runs.
+//! * `+623` — `VacuousSchemaTool`, now an actual fixture, which is why it is the
+//!   figure the range must use. It differs from +387 because the payload CONTENT
+//!   differs, which is precisely the kind of difference a constant cannot record
+//!   and a running fixture can.
+//!
+//! **AND A CORRECTION ON THE RANGE ITSELF.** I published
+//! `387 <= floor <= 1018`, which reads as though each regime's own value were
+//! usable. It is not, at either end: floor 623 against the vacuous fixture
+//! PASSES (623 >= 623), so it fails to discriminate; and floor 1018 against the
+//! real fixture passes, making the upper end inclusive rather than exclusive.
+//! Probing the endpoints gives **624 <= floor <= 1018**. The floor is marked
 //! `provisional:` in source because that is what it is derived from — and a
 //! range derived from two endpoints has to have those endpoints probed, not
 //! just named.
+//!
+//! **AND THE ASYMMETRY THAT LET ALL THREE DRIFT.** Until this iteration only the
+//! real regime was measured by a test; the vacuous figure was asserted against
+//! and never measured, so a plausible-but-wrong value (387 -> 200) passed every
+//! check in the file. Both regimes are now measured by a test that asserts its
+//! own value against the constants above, and that is the durable fix — not the
+//! corrected number, which is just this iteration's version of the same claim.
 //!
 //! **A NOTE ON SCOPE, so the next reader does not go looking for a second
 //! thing to fix — and the sharper finding, which my first note understated.**
@@ -145,32 +161,55 @@ const CEILING: usize = 20_000;
 /// `provisional:` per AGENTS.md — this number came from observing the two
 /// regimes, not from a property of the system.
 ///
-/// The regimes, re-measured 2026-10-31 and printed by the test itself
-/// (`--nocapture` shows `[growth] pre-tool=... post-tool=... delta=...`) so the
-/// figures below are checkable rather than merely asserted:
+/// The regimes, re-measured 2026-10-31 and printed by the tests themselves
+/// (`--nocapture` shows `[growth]` for the real fixture and `[vacuous]` for the
+/// vacuous one) so the figures below are checkable rather than asserted:
 ///
 /// * **real fixture**: 18,259 -> 19,277, **+1018**, deterministic across runs.
-/// * **vacuous fixture** (schema shrunk to a single field so it no longer
-///   dominates the request): 18,259 -> 18,646, **+387**, also deterministic.
+/// * **vacuous fixture** (`VacuousSchemaTool` — an enormous ADVERTISED schema
+///   but a tiny RESULT): 18,259 -> 18,882, **+623**, also deterministic, and
+///   measured by `the_vacuous_regime_is_measured_not_assumed`.
 ///
 /// So its only job is to sit strictly above the vacuous regime and at or below
-/// the real one. The bounds were then PINNED BY PROBING rather than deduced,
-/// because I got them wrong the first time I wrote them:
+/// the real one. The bounds were PINNED BY PROBING rather than deduced, because
+/// I got them wrong the first time I wrote them:
 ///
-/// * floor 387 against the vacuous fixture **PASSES** (387 >= 387), so 387 is
+/// * floor 623 against the vacuous fixture **PASSES** (623 >= 623), so 623 is
 ///   NOT valid even though it equals the vacuous measurement — the check is
 ///   `>=`, so the boundary value itself is accepted.
-/// * floor 388 against vacuous **FAILS** and against real **PASSES**.
+/// * floor 624 against vacuous **FAILS** and against real **PASSES**.
 /// * floor 1018 against real **PASSES** (1018 >= 1018), so the upper bound is
 ///   INCLUSIVE, not exclusive.
 /// * floor 1019 against real **FAILS** with "grew by only 1018 chars".
 ///
-/// The measured working range is therefore **388 <= floor <= 1018**. I first
+/// The measured working range is therefore **624 <= floor <= 1018**. I first
 /// published `387 <= floor <= 1018` — both ends wrong, the lower one by
 /// including the case that fails to discriminate and the upper one by
 /// implying an exclusive bound that is inclusive. Writing a range down from
 /// two measurements without probing the endpoints is how a bound gets named
 /// that does not hold at its own edge.
+///
+/// **THREE DISTINCT VACUOUS MEASUREMENTS, and the distinction is the point.**
+/// This constant's vacuous figure has been 11, then 387, now 623, and each was
+/// a DIFFERENT fixture rather than a corrected measurement of the same one:
+///
+/// * `+11` — the tool returned a tiny payload. Real, but not the fixture the
+///   suite runs.
+/// * `+387` — `HugeSchemaTool` with `FIELDS` shrunk to 1, so a small schema was
+///   returned in full. Real, and the one I probed the endpoints with, but it is
+///   a hand-made probe, not a fixture in the file.
+/// * `+623` — `VacuousSchemaTool`, which is now an actual fixture the suite runs
+///   every time, and is therefore the figure the range must use. It differs from
+///   +387 because the payload CONTENT differs (empty parameters vs a one-field
+///   schema), which is exactly the kind of difference a constant cannot capture
+///   and a running fixture can.
+///
+/// The lesson that produced the fixture: for several iterations the vacuous
+/// figure was asserted against and never measured. A plausible-but-wrong value
+/// (387 -> 200) passed every check in the file, because nothing ran the
+/// vacuous fixture. The real regime got a live drift check in iter-1574; the
+/// vacuous regime had none. That asymmetry is now gone — both regimes are
+/// measured by a test that asserts its own value against these constants.
 ///
 /// **AND AN EARLIER CORRECTION, kept because the chain is the lesson.** Before
 /// that I published the vacuous regime as 11 chars (18,259 -> 18,270) and the
@@ -207,6 +246,58 @@ const CEILING: usize = 20_000;
 /// or `RESPONSE_RESERVE_TOKENS`. Re-pin by probing the endpoints rather than by
 /// adjusting the prose.
 const MIN_GROWTH: usize = 1017;
+
+// The vacuous-fixture tool: an enormous ADVERTISED schema but a TINY actual
+// result. This is the regime whose growth MIN_GROWTH must exclude, and it
+// exists so the suite MEASURES that regime instead of trusting a constant.
+//
+// VACUOUS_GROWTH was a bare constant for several iterations - asserted against,
+// never measured. A plausible-but-wrong value (387 -> 200) passed every check
+// in the file, because nothing ran this fixture. The asymmetry was real: the
+// real regime got a live drift check in iter-1574 and the vacuous regime did
+// not, which is exactly how a floor's lower bound goes stale unnoticed.
+struct VacuousSchemaTool;
+
+const VACUOUS: &str = "mcp_vacuous_schema_probe";
+
+#[async_trait]
+impl OperantTool for VacuousSchemaTool {
+    fn name(&self) -> &str {
+        VACUOUS
+    }
+
+    fn description(&self) -> &str {
+        "Advertises an enormous schema but returns a tiny result."
+    }
+
+    fn schema(&self) -> operant_core::schema::ToolSchema {
+        // Enormous, so the advertised parameters are the same scale as the real
+        // fixture and any bound driven by schema size behaves identically.
+        let mut props = serde_json::Map::new();
+        for i in 0..FIELDS {
+            props.insert(
+                format!("field_{i}"),
+                serde_json::json!({"type": "string", "description": "x".repeat(200)}),
+            );
+        }
+        operant_core::schema::ToolSchema::new(
+            VACUOUS,
+            "Advertises an enormous schema but returns a tiny result.",
+            serde_json::json!({"type": "object", "properties": props}),
+        )
+    }
+
+    async fn execute(&self, _args: serde_json::Value, _context: ToolContext) -> ToolResult {
+        // TINY result - this is the whole point. The advertised schema never
+        // reaches the model, so the payload in the request carries no schema
+        // and the growth collapses to the tool name plus envelope. That is the
+        // "dropped entirely" case the floor exists to reject.
+        ToolResult::success(
+            VACUOUS,
+            serde_json::json!({"name": VACUOUS, "description": "tiny", "parameters": {}}),
+        )
+    }
+}
 
 struct HugeSchemaTool;
 
@@ -449,8 +540,11 @@ async fn an_oversized_tool_schema_is_cut_before_it_reaches_the_model() {
     // payload really must be in that request, not just some tool name.
     //
     // Measured with the real fixture: 18,259 -> 19,277 (+1018), driven by the
-    // truncated schema. Measured with the vacuity fixture (FIELDS shrunk to 1 so
-    // the schema no longer dominates): 18,259 -> 18,646 (+387).
+    // truncated schema. The vacuous side is measured by its OWN fixture and its
+    // OWN test (`the_vacuous_regime_is_measured_not_assumed`): 18,259 -> 18,882
+    // (+623). That fixture exists because this figure used to live only in this
+    // comment - asserted against, never measured - so a plausible-but-wrong value
+    // drifted three times without anything catching it.
     //
     // Printed below rather than only asserted, because the doc comment on
     // MIN_GROWTH publishes these figures and a published number nothing emits
@@ -491,6 +585,76 @@ async fn an_oversized_tool_schema_is_cut_before_it_reaches_the_model() {
 }
 
 // ---------------------------------------------------------------------------
+// The VACUOUS regime, measured rather than assumed.
+//
+// The real regime has had a live drift check since iter-1574: the measuring
+// test asserts its own value against REAL_GROWTH, so a drift fails the run.
+// The vacuous regime had no such check - VACUOUS_GROWTH was asserted against
+// (by the const assertions below) but never measured by anything, so a
+// plausible-but-wrong value passed silently. Proven: setting VACUOUS_GROWTH to
+// 200 left the whole file green, because 200 < MIN_GROWTH keeps every const
+// assertion satisfied and nothing ran the fixture to contradict it.
+//
+// This test runs the fixture and closes that hole, using the same
+// inside-the-measuring-test form that fixed the race in the real-regime check.
+#[tokio::test]
+async fn the_vacuous_regime_is_measured_not_assumed() {
+    let dir = tempfile::tempdir().unwrap();
+    let registry = ToolRegistry::new(Duration::from_secs(30));
+    registry.register(VacuousSchemaTool).await.unwrap();
+    let client = RecordingClient::new();
+
+    let agent = OperantAgent::new(
+        config(),
+        Box::new(RecClient(Arc::clone(&client))),
+        registry,
+        Arc::new(Database::init(dir.path().join("db.sqlite")).unwrap()),
+    );
+
+    agent
+        .run("use the probe tool".to_string())
+        .await
+        .expect("the turn must complete");
+
+    let sizes = client.seen.lock().unwrap().clone();
+    assert!(
+        sizes.len() >= 2,
+        "expected at least two requests so the tool result is in the last one \
+         - got {sizes:?}"
+    );
+
+    let vacuous_growth = sizes.last().unwrap() - sizes[0];
+    eprintln!(
+        "[vacuous] pre-tool={} post-tool={} delta={vacuous_growth} \
+         (VACUOUS_GROWTH={VACUOUS_GROWTH}, floor={MIN_GROWTH})",
+        sizes[0],
+        sizes.last().unwrap()
+    );
+
+    assert_eq!(
+        vacuous_growth, VACUOUS_GROWTH,
+        "the vacuous regime DRIFTED: this run measured {vacuous_growth} but \
+         VACUOUS_GROWTH publishes {VACUOUS_GROWTH}. This is the LOWER bound of \
+         the floor's range, so a drift here changes which floors still \
+         discriminate - and unlike the real regime, this one went unchecked for \
+         several iterations because nothing measured it. If this fixture can no \
+         longer express the vacuous case (the tool started returning its own \
+         schema, say), the honest move is to delete VACUOUS_GROWTH and the \
+         range derived from it, not to re-pin the number"
+    );
+
+    // And the point of measuring it: the floor must actually reject this regime.
+    // Without this, a vacuous fixture that grew above the floor would pass the
+    // main test's premise checks while demonstrating nothing.
+    assert!(
+        vacuous_growth < MIN_GROWTH,
+        "the vacuous fixture no longer falls below the floor: growth \
+         {vacuous_growth} >= MIN_GROWTH {MIN_GROWTH}, so the floor cannot \
+         distinguish 'bounded but present' from 'dropped entirely'"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // The floor's own range, pinned as executable facts rather than as prose.
 //
 // The doc comment above publishes a working range for MIN_GROWTH. A range in
@@ -503,12 +667,16 @@ async fn an_oversized_tool_schema_is_cut_before_it_reaches_the_model() {
 // one, this test stops compiling and names the bound that moved - which is the
 // point. Re-pin by re-measuring, then update these constants and the doc
 // comment together.
-///
-// Vacuous regime: schema shrunk to one field, so it no longer dominates the
-// request. Printed by the main test under `--nocapture`.
-const VACUOUS_GROWTH: usize = 387;
-///
-/// Real regime: the 2,000-field schema, truncated into the request.
+//
+// Vacuous regime: `VacuousSchemaTool` - an enormous ADVERTISED schema but a
+// tiny RESULT. Measured by `the_vacuous_regime_is_measured_not_assumed`, which
+// asserts its own value against this constant, so the figure cannot drift
+// silently. (It used to be described as "schema shrunk to one field", which was
+// a hand-made probe measuring 387, not a fixture the suite runs.)
+const VACUOUS_GROWTH: usize = 623;
+
+// Real regime: the 2,000-field schema, truncated into the request. Measured by
+// the main test, which likewise asserts its own value against this constant.
 const REAL_GROWTH: usize = 1018;
 
 /// The floor must sit strictly above the vacuous regime. It is compared with
