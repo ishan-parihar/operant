@@ -65,8 +65,17 @@
 //! paragraph above. The probe the floor is actually verified against is the
 //! shrunk-schema one, which measures **+387**, and `+11` was carried forward
 //! into the range `11 < floor` without re-measurement after the probe changed.
-//! The floor sits between the two MEASURED regimes and is marked `provisional:`
-//! in source because that is what it is derived from.
+//!
+//! **AND A SECOND CORRECTION ON THE RANGE ITSELF, because "between the two
+//! regimes" was still wrong.** I then published `387 <= floor <= 1018`, which
+//! reads as though each regime's value were usable. It is not, at either end:
+//! floor 387 against the vacuous fixture PASSES (387 >= 387), so it fails to
+//! discriminate; and floor 1018 against the real fixture passes, which makes the
+//! upper end inclusive rather than the exclusive bound the phrasing implied.
+//! Probing the endpoints gives **388 <= floor <= 1018**. The floor is marked
+//! `provisional:` in source because that is what it is derived from — and a
+//! range derived from two endpoints has to have those endpoints probed, not
+//! just named.
 //!
 //! **A NOTE ON SCOPE, so the next reader does not go looking for a second
 //! thing to fix — and the sharper finding, which my first note understated.**
@@ -144,26 +153,40 @@ const CEILING: usize = 20_000;
 /// * **vacuous fixture** (schema shrunk to a single field so it no longer
 ///   dominates the request): 18,259 -> 18,646, **+387**, also deterministic.
 ///
-/// So its only job is to sit between 387 and 1018, and the working range is
-/// therefore **387 <= floor <= 1018**, not the `11 < floor <= 1018` I first
-/// published.
+/// So its only job is to sit strictly above the vacuous regime and at or below
+/// the real one. The bounds were then PINNED BY PROBING rather than deduced,
+/// because I got them wrong the first time I wrote them:
 ///
-/// **CORRECTION, recorded because the earlier number was wrong and it was
-/// wrong twice.** I first published a vacuous growth of 11 chars
-/// (18,259 -> 18,270) and derived the loose bound `11 < floor` from it. That
-/// figure came from a DIFFERENT vacuity probe — the one where the tool returned
-/// a tiny payload — and I carried it forward after changing the probe to
-/// shrinking the schema, without re-measuring. I then "corrected" the bound
-/// once already, narrowing the upper end from an arithmetic guess to the
-/// measured 1018, and left the lower end asserting 11. Both ends are now
-/// measured: 387 below, 1018 above.
+/// * floor 387 against the vacuous fixture **PASSES** (387 >= 387), so 387 is
+///   NOT valid even though it equals the vacuous measurement — the check is
+///   `>=`, so the boundary value itself is accepted.
+/// * floor 388 against vacuous **FAILS** and against real **PASSES**.
+/// * floor 1018 against real **PASSES** (1018 >= 1018), so the upper bound is
+///   INCLUSIVE, not exclusive.
+/// * floor 1019 against real **FAILS** with "grew by only 1018 chars".
 ///
-/// 1017 sits inside the verified range, one char below the real growth it must
-/// not exceed. (It was 512 before I narrowed the range by measuring; those two
-/// earlier values are this constant's history, not its current state.) If a
-/// fixture change moves the real number, re-measure BOTH regimes — run the test
-/// with `--nocapture`, then probe the vacuous direction again — rather than
-/// trusting either bound in this comment.
+/// The measured working range is therefore **388 <= floor <= 1018**. I first
+/// published `387 <= floor <= 1018` — both ends wrong, the lower one by
+/// including the case that fails to discriminate and the upper one by
+/// implying an exclusive bound that is inclusive. Writing a range down from
+/// two measurements without probing the endpoints is how a bound gets named
+/// that does not hold at its own edge.
+///
+/// **AND AN EARLIER CORRECTION, kept because the chain is the lesson.** Before
+/// that I published the vacuous regime as 11 chars (18,259 -> 18,270) and the
+/// range as `11 < floor <= 1018`. The 11 was real but belonged to a DIFFERENT
+/// probe — the tiny-tool-result one — and was carried forward after I changed
+/// the probe to shrinking the schema. So this bound has now been wrong twice,
+/// and each time the fix corrected one thing while leaving another asserted
+/// from a stale number. Each correction below names the wrong figure rather
+/// than silently replacing it.
+///
+/// 1017 sits inside the pinned range. (Its earlier values were 512 and, before
+/// that, an arithmetic guess; those are this constant's history, not its
+/// current state.) If a fixture change moves either regime, re-pin the bounds
+/// by probing the endpoints — run with `--nocapture` for the figures, then set
+/// the floor to each boundary value and confirm one passes and the other
+/// fails — rather than trusting either bound in this comment.
 const MIN_GROWTH: usize = 1017;
 
 struct HugeSchemaTool;
@@ -426,5 +449,51 @@ async fn an_oversized_tool_schema_is_cut_before_it_reaches_the_model() {
          cannot tell those apart from a real bounded result, which is exactly how \
          this test passed vacuously until this floor was added",
         sizes[0]
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The floor's own range, pinned as executable facts rather than as prose.
+//
+// The doc comment above publishes a working range for MIN_GROWTH. A range in
+// prose is a claim; a range in a const assertion is a fact that fails to
+// compile when it stops being true. This is here because the range was wrong
+// TWICE while living only in prose, and both times the error survived a
+// "correction" pass that fixed one end and left the other.
+//
+// These numbers are the two measured regimes. If a fixture change moves either
+// one, this test stops compiling and names the bound that moved - which is the
+// point. Re-pin by re-measuring, then update these constants and the doc
+// comment together.
+///
+// Vacuous regime: schema shrunk to one field, so it no longer dominates the
+// request. Printed by the main test under `--nocapture`.
+const VACUOUS_GROWTH: usize = 387;
+///
+/// Real regime: the 2,000-field schema, truncated into the request.
+const REAL_GROWTH: usize = 1018;
+
+/// The floor must sit strictly above the vacuous regime. It is compared with
+/// `>=`, so a floor equal to the vacuous growth ACCEPTS the vacuous case - the
+/// exact off-by-one that made my first published range wrong.
+const _: () = assert!(MIN_GROWTH > VACUOUS_GROWTH);
+/// The floor must sit at or below the real growth, or it rejects the real case.
+const _: () = assert!(MIN_GROWTH <= REAL_GROWTH);
+/// And it must actually separate them, rather than both bounds being satisfied
+/// by some value that discriminates neither.
+const _: () = assert!(MIN_GROWTH > VACUOUS_GROWTH && MIN_GROWTH <= REAL_GROWTH);
+
+#[test]
+fn the_published_floor_range_matches_the_measured_regimes() {
+    // The same two facts, at runtime, with a message that names what to do. The
+    // const assertions above fail at compile time; this one explains itself.
+    assert!(
+        VACUOUS_GROWTH < MIN_GROWTH && MIN_GROWTH <= REAL_GROWTH,
+        "MIN_GROWTH ({MIN_GROWTH}) no longer sits between the measured regimes \
+         ({VACUOUS_GROWTH} < floor <= {REAL_GROWTH}). A fixture change moved one \
+         of them: re-measure both with `cargo test -p operant-core --test \
+         oversized_schema_cannot_reach_the_model -- --nocapture`, re-pin the \
+         endpoints by setting the floor to each boundary value, then update \
+         VACUOUS_GROWTH/REAL_GROWTH and the doc comment TOGETHER"
     );
 }
