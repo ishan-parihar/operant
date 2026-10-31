@@ -3516,22 +3516,25 @@ mod subagents_command_tests {
 
     #[test]
     fn an_empty_registry_names_whose_subagents_are_missing() {
-        // The reader takes the SAME lock the two seeding tests take. The
-        // serialisation the comment above promises is only real if every
-        // participant honours it, and this test originally did not: it read
-        // the process-global registry unlocked, so a seeded sibling could
-        // land mid-read and the reply could carry the list wording neither
-        // branch asserts. That is the intermittent failure this closes —
-        // observed once across four runs, passing alone and passing with the
-        // module, which is the signature of a race rather than a logic error.
+        // This lock is defensive hygiene, not the closure of an observed race.
+        // The reader reads a process-global registry that two seeding tests in
+        // this same module write, so serialising all three is cheap and removes
+        // one whole class of doubt. What it does NOT do is make either arm
+        // below safe: a seed landing mid-read cannot be observed, because
+        // list_records() is one atomic snapshot under the registry's own Mutex.
+        // The failure this was wrongly credited with closing was deterministic
+        // (a one-record reply is singular, so the old `contains("records")`
+        // arm test fell into the empty branch) — see the comment on the arm
+        // test below and iter-1543. Kept because it is free and honest to keep.
         let _guard = SUBAGENTS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // The registry has no public clear, so this test cannot FORCE the
         // empty branch by draining. Instead it asserts the wording contract
-        // that must hold in BOTH arms, and proves the empty arm's sentence
-        // exists in the source by the only means available here: when the
-        // process really has no records, the reply must be the scope
-        // sentence. When it does have terminal history, the reply must be the
-        // list — and the list must never claim a global "no subagents".
+        // for each arm as best the available states allow: when the process
+        // really has no records, the reply must be the scope sentence. When
+        // it does have terminal history, the reply must be the list — and the
+        // list must never claim a global "no subagents". Note this test cannot
+        // force the non-empty arm; the seeding siblings do that, which is why
+        // the arm test must handle a count of exactly one (see below).
         let cfg = AppConfig::default();
         let resp = handle_command("subagents", "", &ctx(&cfg)).expect("handled");
         // "record" not "records": the reply pluralises on the count
