@@ -3561,6 +3561,11 @@ mod subagents_command_tests {
     #[test]
     fn a_pending_delegation_is_named_running_and_shows_its_id_model_and_goal() {
         let _guard = SUBAGENTS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // RT-207: same leak as its sibling below — a pending record left in the
+        // process-global registry renders as a session-hub row for every later
+        // test, and `live_tails_render_once_while_a_tool_is_reserved` lost its
+        // own TEXTMARK row entirely (left: 0, right: 1) because of it.
+        let _registry_drain = operant_core::tools::async_delegation::RegistryDrain::new();
         let goal = marker("pending");
         let id = create_record(&goal, "gpt-4.1");
         let cfg = AppConfig::default();
@@ -3587,6 +3592,15 @@ mod subagents_command_tests {
     #[test]
     fn a_completed_delegation_shows_its_result_and_a_failed_one_its_error() {
         let _guard = SUBAGENTS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // RT-207: this test is the process-global registry's ONLY seeder with a
+        // completed and a failed record, and the registry has no public clear.
+        // Left behind, those two rows poison every later test that renders the
+        // session hub or the transcript body — the TUI's
+        // `highlight_covers_only_the_text_a_copy_carries` and
+        // `live_tails_render_once_while_a_tool_is_reserved` both panic on
+        // `unwrap()` because they cannot find their own text in the polluted
+        // frame. Drain on the way out; the guard is held for the whole test.
+        let _registry_drain = operant_core::tools::async_delegation::RegistryDrain::new();
         let ok_goal = marker("ok");
         let ok = create_record(&ok_goal, "m");
         mark_completed(&ok, "the audit found four gaps");

@@ -71,6 +71,63 @@ fn now_secs() -> u64 {
         .unwrap_or(0)
 }
 
+/// RAII drain of the process-global delegation registry.
+///
+/// The registry has no clear in production by design (a running gateway's
+/// delegations must survive), but a TEST that seeds it leaves records behind
+/// for the rest of the process. This guard empties the registry when it drops,
+/// which is what stops one test's seeded subagents from rendering into another
+/// test's frame. See `__test_reset_registry` for the RT-207 incident.
+///
+/// Construction does NOT clear — it clears on DROP — so the seeding test still
+/// sees its own records while it runs.
+pub struct RegistryDrain;
+
+impl Default for RegistryDrain {
+    fn default() -> Self {
+        Self
+    }
+}
+
+impl RegistryDrain {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Drop for RegistryDrain {
+    fn drop(&mut self) {
+        __test_reset_registry();
+    }
+}
+
+/// Empty the process-global registry. TEST-ONLY on purpose.
+///
+/// The registry is `OnceLock<Mutex<HashMap>>` with no clear in production, and
+/// tests that seed it leave records behind for the rest of the process. That is
+/// not a hypothetical: RT-207 was a real red tip in `operant-cli` where
+/// `gateway_commands::subagents_command_tests`
+/// (`a_completed_delegation_shows_its_result_and_a_failed_one_its_error` seeds
+/// two records via `mark_completed`/`mark_failed`) poisoned the TUI's
+/// `highlight_covers_only_the_text_a_copy_carries` and
+/// `live_tails_render_once_while_a_tool_is_reserved`, which both panic on
+/// `Option::unwrap()` after failing to find their own text in a frame polluted
+/// by the leaked subagent rows.
+///
+/// Mutation-proven: with the registry cleared before the reader, the minimal
+/// repro (that one seeding test + the reader) goes GREEN, and the same pair is
+/// RED without the clear.
+///
+/// `#[cfg(test)]` is NOT enough here — the polluting tests live in the
+/// `operant-cli` binary's test build, so this must be visible to a binary test
+/// target. Gated instead by name and by there being no production caller.
+#[doc(hidden)]
+pub fn __test_reset_registry() {
+    if let Ok(mut g) = registry().lock() {
+        g.clear();
+    }
+}
+
 fn new_id() -> String {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
