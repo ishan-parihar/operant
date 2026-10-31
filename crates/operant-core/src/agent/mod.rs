@@ -756,6 +756,13 @@ pub struct OperantAgent {
     /// and then thrown away on the path to the observer, so
     /// `ConsoleObserver`'s `duration_ms` was structurally always zero.
     tool_durations_by_call: std::sync::Mutex<std::collections::HashMap<String, u64>>,
+
+    /// Input payload size per in-flight tool call (iter-1551). The arguments
+    /// are rendered at the `ToolCallStart` emit site in `agent/stream.rs`, which
+    /// is the only place they exist as a string; `ToolResult` carries the
+    /// output but not the input, so the size is parked here and read where
+    /// `ObserverEvent::ToolCall` is emitted.
+    tool_input_bytes_by_call: std::sync::Mutex<std::collections::HashMap<String, usize>>,
 }
 
 /// Strip `<memory-context>` / `<long_term_memory>` XML tags from streaming

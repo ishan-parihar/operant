@@ -493,6 +493,8 @@ mod tests {
             tool: "shell".into(),
             duration: Duration::from_millis(10),
             success: true,
+            input_bytes: 12,
+            output_bytes: 34,
         };
         let cloned = event.clone();
         assert!(format!("{:?}", cloned).contains("shell"));

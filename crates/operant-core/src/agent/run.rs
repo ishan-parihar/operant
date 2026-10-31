@@ -2208,6 +2208,8 @@ impl OperantAgent {
                                 tool: result.name.clone(),
                                 duration: self.tool_duration_for(&result.tool_call_id),
                                 success: result.success,
+                                input_bytes: self.tool_input_bytes_for(&result.tool_call_id),
+                                output_bytes: result.content.len(),
                             });
                         }
 

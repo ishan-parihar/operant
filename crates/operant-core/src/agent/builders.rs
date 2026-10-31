@@ -182,6 +182,7 @@ impl OperantAgent {
             moa_guidance: Arc::new(std::sync::Mutex::new(None)),
             stream_emitted_tool_starts: std::sync::Mutex::new(std::collections::HashSet::new()),
             tool_durations_by_call: std::sync::Mutex::new(std::collections::HashMap::new()),
+            tool_input_bytes_by_call: std::sync::Mutex::new(std::collections::HashMap::new()),
         }
     }
 
@@ -277,6 +278,7 @@ impl OperantAgent {
             moa_guidance: Arc::new(std::sync::Mutex::new(None)),
             stream_emitted_tool_starts: std::sync::Mutex::new(std::collections::HashSet::new()),
             tool_durations_by_call: std::sync::Mutex::new(std::collections::HashMap::new()),
+            tool_input_bytes_by_call: std::sync::Mutex::new(std::collections::HashMap::new()),
         }
     }
 

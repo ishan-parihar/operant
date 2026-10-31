@@ -48,6 +48,7 @@ use operant_core::schema::ToolSchema;
 use operant_core::tools::{OperantTool, ToolContext, ToolRegistry, ToolResult};
 
 const SLEEPY: &str = "sleepy_probe";
+const SIZED: &str = "sized_probe";
 const QUICK: &str = "quick_probe";
 
 /// How long the slow tool sleeps. The assertion floor sits well below it (a
@@ -79,7 +80,26 @@ impl RecordingObserver {
                     tool,
                     duration,
                     success,
+                    ..
                 } => Some((tool.clone(), *duration, *success)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The payload sizes as reported for one tool (input bytes, output bytes).
+    fn byte_counts(&self, tool: &str) -> Vec<(usize, usize)> {
+        self.events
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|e| match e {
+                ObserverEvent::ToolCall {
+                    tool: name,
+                    input_bytes,
+                    output_bytes,
+                    ..
+                } if name == tool => Some((*input_bytes, *output_bytes)),
                 _ => None,
             })
             .collect()
@@ -166,7 +186,13 @@ struct ScriptedClient {
 
 impl ScriptedClient {
     fn new(tool_name: &str) -> Arc<Self> {
-        let responses = vec![tool_call_response(tool_name), text_response("done")];
+        Self::new_with(tool_name, tool_call_response)
+    }
+
+    /// Same as `new`, but the caller shapes the tool-call response (here, to
+    /// send arguments of a distinctive length).
+    fn new_with(tool_name: &str, first: impl FnOnce(&str) -> ChatResponse) -> Arc<Self> {
+        let responses = vec![first(tool_name), text_response("done")];
         Arc::new(Self {
             responses: Mutex::new(responses),
         })
@@ -183,6 +209,10 @@ impl ScriptedClient {
 }
 
 fn tool_call_response(tool_name: &str) -> ChatResponse {
+    tool_call_response_with_args(tool_name, "{}")
+}
+
+fn tool_call_response_with_args(tool_name: &str, args: &str) -> ChatResponse {
     ChatResponse {
         id: "resp".to_string(),
         object: "chat.completion".to_string(),
@@ -200,7 +230,7 @@ fn tool_call_response(tool_name: &str) -> ChatResponse {
                     call_type: Some("function".to_string()),
                     function: Some(ToolCallFunction {
                         name: tool_name.to_string(),
-                        arguments: "{}".to_string(),
+                        arguments: args.to_string(),
                     }),
                 }]),
             },
@@ -406,5 +436,155 @@ fn the_emit_site_must_not_be_fed_a_constant_zero() {
          beside each turn_end record — found {self_records}. A branch that records to \
          the bus but not per-call leaves the observer reading Duration::ZERO on that \
          path"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The payload sizes both directions (iter-1551)
+//
+// `ObserverEvent::ToolCall` grew `input_bytes`/`output_bytes`. They are only
+// worth having if they describe THIS call, so every assertion below compares
+// against a number derived from the fixture rather than a threshold:
+//
+// * `input_bytes` == the exact length of the arguments the scripted model
+//   sent. Those are rendered into a string at the `ToolCallStart` emit site
+//   (`stream.rs:915`) — the only place the raw text exists — so the size must
+//   be parked there and read back by call id at the completion emit
+//   (`run.rs:2207`).
+// * `output_bytes` == the exact length of the JSON the tool returned.
+//
+// The two are deliberately different lengths, so a swapped-field report
+// (input quoted as output) fails too — which a `> 0` assertion cannot detect.
+// ---------------------------------------------------------------------------
+
+/// The arguments the scripted model sends. Long enough that it cannot collide
+/// with the result's length by accident.
+const SIZED_ARGS: &str = r#"{"pad":"0123456789ABCDEF"}"#;
+
+fn sized_tool_call_response(tool_name: &str) -> ChatResponse {
+    tool_call_response_with_args(tool_name, SIZED_ARGS)
+}
+
+/// Returns a fixed, distinctive payload. Its serialized length is what
+/// `output_bytes` must equal.
+struct SizedTool;
+
+#[async_trait]
+impl OperantTool for SizedTool {
+    fn name(&self) -> &str {
+        SIZED
+    }
+
+    fn description(&self) -> &str {
+        "Returns a fixed payload of known length (drives the byte counts)."
+    }
+
+    fn schema(&self) -> ToolSchema {
+        ToolSchema::new(
+            SIZED,
+            "Returns a fixed payload of known length (drives the byte counts).",
+            serde_json::json!({"type": "object", "properties": {}}),
+        )
+    }
+
+    async fn execute(&self, _args: serde_json::Value, _context: ToolContext) -> ToolResult {
+        ToolResult::success(SIZED, serde_json::json!({"p": "abcdef"}))
+    }
+}
+
+async fn build_sized_agent(
+    observer: Arc<RecordingObserver>,
+    db_path: std::path::PathBuf,
+) -> OperantAgent {
+    let registry = ToolRegistry::new(Duration::from_secs(30));
+    registry.register_dyn(Arc::new(SizedTool)).await.unwrap();
+
+    OperantAgent::new(
+        test_config(),
+        Box::new(ScriptedClientHandle(ScriptedClient::new_with(
+            SIZED,
+            sized_tool_call_response,
+        ))),
+        registry,
+        Arc::new(Database::init(db_path).unwrap()),
+    )
+    .with_observer(observer)
+}
+
+#[tokio::test]
+async fn the_observer_sees_the_real_byte_count_in_both_directions() {
+    let dir = tempfile::tempdir().unwrap();
+    let observer = RecordingObserver::new();
+    let agent = build_sized_agent(observer.clone(), dir.path().join("db.sqlite")).await;
+
+    agent
+        .run("call the sized tool once".to_string())
+        .await
+        .expect("the turn must complete");
+
+    let calls = observer.tool_calls();
+    let sized: Vec<_> = calls.iter().filter(|(t, ..)| t == SIZED).collect();
+    assert_eq!(sized.len(), 1, "expected exactly one ToolCall for {SIZED}");
+    let (_, duration, success) = sized[0];
+    assert!(success, "the tool succeeded");
+    assert!(duration.as_millis() < 120, "the sized tool is instant");
+
+    let counts = observer.byte_counts(SIZED);
+    assert_eq!(counts.len(), 1, "one byte-count report for {SIZED}");
+    let in_out = counts[0];
+
+    assert_eq!(
+        in_out.0,
+        SIZED_ARGS.len(),
+        "input_bytes must be the byte length of the arguments the model sent \
+         ({SIZED_ARGS:?}) — got {}. A zero here means the size was never parked at the \
+         ToolCallStart site, or was parked under a different call id",
+        in_out.0
+    );
+    assert_eq!(
+        in_out.1,
+        serde_json::to_string(&serde_json::json!({"p": "abcdef"}))
+            .expect("the fixture serializes")
+            .len(),
+        "output_bytes must be the byte length of the JSON the tool returned — got {}",
+        in_out.1
+    );
+
+    assert_ne!(
+        in_out.0, in_out.1,
+        "the fixture's two lengths are different on purpose; a swapped report (the \
+         output length quoted as the input length) still passes a > 0 check"
+    );
+}
+
+#[test]
+fn neither_byte_count_is_a_hardcoded_zero() {
+    // The two failure modes this field can silently regress into: a literal in
+    // the initializer, or an input size read nowhere.
+    let run_rs = include_str!("../src/agent/run.rs");
+    assert!(
+        !run_rs.contains("input_bytes: 0"),
+        "run.rs is emitting a constant-zero input_bytes"
+    );
+    assert!(
+        run_rs.contains("self.tool_input_bytes_for(&result.tool_call_id)"),
+        "run.rs must read the parked input size for the call it is reporting"
+    );
+    assert!(
+        run_rs.contains("output_bytes: result.content.len()"),
+        "run.rs must report the result's own content length"
+    );
+
+    let stream_rs = include_str!("../src/agent/stream.rs");
+    let parked = stream_rs.matches("self.record_tool_input_bytes(").count();
+    assert!(
+        parked >= 1,
+        "stream.rs must park the input size where the arguments are rendered — \
+         found no record_tool_input_bytes call"
+    );
+    assert!(
+        stream_rs.contains("map.insert(tool_call_id.to_string(), bytes)"),
+        "the parked size must be keyed by tool call id, not appended to a list \
+         that goes stale when a call is dropped or reordered"
     );
 }

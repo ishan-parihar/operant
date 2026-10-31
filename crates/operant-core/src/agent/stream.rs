@@ -58,11 +58,37 @@ impl OperantAgent {
             .unwrap_or(Duration::ZERO)
     }
 
+    /// Park the rendered arguments' byte size for one in-flight call
+    /// (iter-1551). The arguments exist as a string only at the
+    /// `ToolCallStart` emit site, and `ToolResult` carries the output but not
+    /// the input, so the size is carried here until the call completes.
+    ///
+    /// Silent on a poisoned lock, matching `record_tool_duration`: a lost byte
+    /// count must never fail a turn that otherwise succeeded.
+    pub(crate) fn record_tool_input_bytes(&self, tool_call_id: &str, bytes: usize) {
+        if let Ok(mut map) = self.tool_input_bytes_by_call.lock() {
+            map.insert(tool_call_id.to_string(), bytes);
+        }
+    }
+
+    /// The parked input size for one call, or 0 when it was never recorded (an
+    /// early-return path that skipped the executor).
+    pub(crate) fn tool_input_bytes_for(&self, tool_call_id: &str) -> usize {
+        self.tool_input_bytes_by_call
+            .lock()
+            .ok()
+            .and_then(|map| map.get(tool_call_id).copied())
+            .unwrap_or(0)
+    }
+
     /// Drop the per-turn tool-duration map (iter-1505). Called at the start of
     /// `run()` alongside `stream_emitted_tool_starts`, so a long-lived agent
     /// does not accumulate one entry per tool call for its whole life.
     pub(crate) fn clear_tool_durations(&self) {
         if let Ok(mut map) = self.tool_durations_by_call.lock() {
+            map.clear();
+        }
+        if let Ok(mut map) = self.tool_input_bytes_by_call.lock() {
             map.clear();
         }
     }
@@ -900,6 +926,9 @@ impl OperantAgent {
                     tool: name.clone(),
                     arguments: Some(args_str.clone()),
                 });
+                // Park the input size for the completion emit, where
+                // `ObserverEvent::ToolCall` reports both ends of the payload.
+                self.record_tool_input_bytes(&tool_call.id, args_str.len());
             }
 
             // Skip emitting ToolStart if it was already emitted during
