@@ -1,4 +1,8 @@
-//! Exclusive per-turn attribution: OPEN. **This module has no caller.**
+//! Exclusive per-turn attribution. **LIVE as of iter-1631** on the `TurnEnd`
+//! seam: `TurnEnd::attribution` (`turn_end.rs`) carries a `TurnBreakdown` per
+//! completed turn, built by `OperantAgent::turn_attribution()`
+//! (`agent/run.rs`). **No surface renders it yet** -- that is the remaining
+//! half of RT-209, and the field exists for it.
 //!
 //! ## Read this before believing the RT-199 class is handled
 //!
@@ -9,13 +13,14 @@
 //! the same sites that feed `TurnEndBus::record_tool_duration`, and read back
 //! by the `ObserverEvent::ToolCall` emit in `agent/run.rs`. That is the fix.
 //!
-//! This module was written to close a DIFFERENT, still-open question and was
-//! never wired in: what the four mutually-exclusive spans of a turn are. It
-//! previously claimed to be the RT-199 fix in its own doc header, which is
-//! false, and that false claim is the reason this paragraph exists: an orphan
-//! that documents itself as live is worse than one that does not, because the
-//! next agent reads the header, believes the class is handled, and does not
-//! check.
+//! This module closes a DIFFERENT question: what the four mutually-exclusive
+//! spans of a turn are. It previously claimed to be the RT-199 fix in its own
+//! doc header, which is FALSE, and that false claim is why this paragraph
+//! survives: it was written when the module shipped as an orphan, and an
+//! orphan that documents itself as live is worse than one that does not,
+//! because the next agent reads the header, believes the class is handled,
+//! and does not check. The module is no longer an orphan; the false claim is
+//! still worth stating so nobody re-derives the wrong conclusion.
 //!
 //! ## Why the emission site is not a one-liner (measured 2026-11-01)
 //!
@@ -59,8 +64,15 @@
 //!    risk of breaking the frozen-prefix guarantee that iter-39 depends
 //!    on. This is the expensive option and it only buys prompt visibility.
 //!
-//! Recommendation is (1): it answers the question the numbers exist for,
+//! Recommendation was (1): it answers the question the numbers exist for,
 //! at a fraction of the risk, and it keeps the request path untouched.
+//! **iter-1631 implemented (1).** `TurnEnd` carries the `Option<TurnBreakdown>`
+//! (115 bytes, cloned per subscriber, bounded), `run()` folds every
+//! `llm_duration` into a per-turn accumulator and reads `turn_tool_duration()`
+//! for the tools span, and `user_wait` is honestly `Unmeasured` because
+//! nothing at that seam measures it. Option (2) was rejected on cost and on
+//! the frozen-prefix risk it names. **Rendering the breakdown is still open**
+//! (RT-209): the capture is live, no subscriber displays it.
 //!
 //! ## The bug this would close
 //!
