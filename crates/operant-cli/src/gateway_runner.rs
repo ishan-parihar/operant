@@ -324,6 +324,16 @@ fn tool_preview_line(name: &str, args: &str) -> String {
             .map(|intent| truncate_preview_value(intent, 120))
     });
     let technical = extract_tool_arg(name, args).map(|arg| truncate_preview_value(&arg, 120));
+    // The todo tool's payload is `{ todos: [ {id, content, status}, ... ],
+    // merge, sessionId }` — every key holds an array or a bool, so
+    // `extract_tool_arg`'s key lists have nothing to pull. Its FALLBACK
+    // ("show first string value from any key") then grabs whatever string is
+    // present, which on this payload is the model's own `intent` — a value
+    // already printed as the intent half of the line. So for the todo tool the
+    // summary must WIN rather than fill a gap: the counts are the only
+    // technical content the payload actually carries, and the item text is
+    // `/todos`' job (it reads the same store).
+    let technical = todo_progress_summary(name, args).or(technical);
     match (intent, technical) {
         (Some(intent), Some(arg)) if arg != intent => {
             format!("{} {} · {}: {}", emoji, name, intent, arg)
@@ -332,6 +342,66 @@ fn tool_preview_line(name: &str, args: &str) -> String {
         (None, Some(arg)) => format!("{} {}: {}", emoji, name, arg),
         (None, None) => format!("{} {}...", emoji, name),
     }
+}
+
+/// A one-glance count summary for the todo tool's progress line.
+///
+/// The todo tool's payload is `{ todos: [{id, content, status}, ...], merge,
+/// sessionId }`. `extract_tool_arg` exists to pull a STRING argument out of a
+/// payload, and every key here holds an array or a bool, so it can never
+/// surface anything — which is why a five-item plan printed as a bare
+/// `⏰ todo...`. Counts by status are the honest preview: the item text is
+/// `/todos`' job, and it reads the same store.
+///
+/// Returns `None` when there is nothing to summarise (no `todos` array, or an
+/// empty one), so the caller keeps its `⏰ todo...` fallback rather than
+/// printing `0 tasks` for a call that carried no list at all.
+///
+/// `name` gates the whole thing: a `todos` key on some other tool's payload
+/// must not be read as a plan, and the check is cheaper than the parse it
+/// guards.
+fn todo_progress_summary(name: &str, args: &str) -> Option<String> {
+    if name != "todo" {
+        return None;
+    }
+    let json = serde_json::from_str::<serde_json::Value>(args).ok()?;
+    let items = json.get("todos")?.as_array()?;
+    if items.is_empty() {
+        return None;
+    }
+    // `status` is normalised server-side (an unknown value becomes `pending`,
+    // see todo_tool.rs), so count the four states the tool actually emits
+    // and bucket anything else with `pending` rather than inventing a fifth.
+    let mut done = 0usize;
+    let mut active = 0usize;
+    let mut cancelled = 0usize;
+    for item in items {
+        match item
+            .get("status")
+            .and_then(|s| s.as_str())
+            .unwrap_or("pending")
+        {
+            "completed" => done += 1,
+            "in_progress" => active += 1,
+            "cancelled" => cancelled += 1,
+            _ => {}
+        }
+    }
+    let pending = items.len() - done - active - cancelled;
+    let mut parts = Vec::with_capacity(4);
+    if done > 0 {
+        parts.push(format!("{} done", done));
+    }
+    if active > 0 {
+        parts.push(format!("{} active", active));
+    }
+    if pending > 0 {
+        parts.push(format!("{} to do", pending));
+    }
+    if cancelled > 0 {
+        parts.push(format!("{} dropped", cancelled));
+    }
+    Some(format!("{} tasks · {}", items.len(), parts.join(" · ")))
 }
 
 /// Cap a tool preview's segment so a long command, path or intent cannot
@@ -6635,6 +6705,127 @@ mod tool_progress_tests {
             line.matches("cargo test").count(),
             1,
             "the value appears once: {line}"
+        );
+    }
+
+    /// The todo tool's payload is a JSON ARRAY of item objects, so
+    /// `extract_tool_arg` can never pull a string out of it and the line used
+    /// to read as a bare `⏰ todo...`. Counts by status are the preview, and
+    /// the item text stays `/todos`' job.
+    ///
+    /// MUTATION PROVEN: deleting the `.or_else(|| todo_progress_summary(args))`
+    /// term in `tool_preview_line` turns this test red — the line falls back
+    /// to `⏰ todo...` with nothing after it, exactly the reported gap.
+    #[test]
+    fn a_todo_call_previews_its_counts_not_a_bare_dots_line() {
+        let args = serde_json::json!({
+            "todos": [
+                { "id": "1", "content": "write tests", "status": "completed" },
+                { "id": "2", "content": "fix bug", "status": "in_progress" },
+                { "id": "3", "content": "ship", "status": "pending" },
+            ]
+        })
+        .to_string();
+        let line = tool_preview_line("todo", &args);
+        assert!(line.contains("3 tasks"), "the total must show: {line}");
+        assert!(line.contains("1 done"), "done count: {line}");
+        assert!(line.contains("1 active"), "active count: {line}");
+        assert!(line.contains("1 to do"), "pending count: {line}");
+        assert!(
+            !line.ends_with("..."),
+            "the fallback ellipsis must be replaced by real content: {line}"
+        );
+    }
+
+    /// An item with no `status` field counts as `pending`, which is what the
+    /// tool normalises it to anyway — not as an extra unlabelled bucket.
+    #[test]
+    fn a_statusless_todo_item_counts_as_pending() {
+        let args = serde_json::json!({
+            "todos": [{ "id": "1", "content": "no status here" }]
+        })
+        .to_string();
+        let line = tool_preview_line("todo", &args);
+        assert!(line.contains("1 to do"), "it is pending: {line}");
+        assert!(line.contains("1 tasks"), "and the total is still 1: {line}");
+    }
+
+    /// A cancelled item is counted on its own line rather than folded into
+    /// `pending`, because "1 dropped" tells the operator something `pending`
+    /// does not.
+    #[test]
+    fn a_cancelled_todo_item_is_counted_separately() {
+        let args = serde_json::json!({
+            "todos": [
+                { "id": "1", "content": "a", "status": "cancelled" },
+                { "id": "2", "content": "b", "status": "completed" },
+            ]
+        })
+        .to_string();
+        let line = tool_preview_line("todo", &args);
+        assert!(line.contains("1 dropped"), "cancelled shows: {line}");
+        assert!(
+            !line.contains("to do"),
+            "and is not miscounted as pending: {line}"
+        );
+    }
+
+    /// A call that clears the list (an empty `todos` array) has nothing to
+    /// summarise, so the line falls back to the ellipsis rather than claiming
+    /// `0 tasks` — which would be a lie, since the call is a WRITE.
+    #[test]
+    fn an_empty_todo_payload_keeps_the_fallback_line() {
+        let line = tool_preview_line("todo", r#"{"todos":[]}"#);
+        assert!(
+            line.ends_with("..."),
+            "nothing to count means nothing to claim: {line}"
+        );
+        assert!(!line.contains("0 tasks"), "nor a false zero: {line}");
+    }
+
+    /// A `todos` key on some OTHER tool's payload must not be read as a plan:
+    /// the summary is gated on the tool name, so an unrelated call keeps its
+    /// own argument unchanged.
+    #[test]
+    fn a_todos_key_on_another_tool_is_not_read_as_a_plan() {
+        let args = serde_json::json!({
+            "command": "ls",
+            "todos": [{ "id": "1", "content": "unrelated", "status": "pending" }]
+        })
+        .to_string();
+        let line = tool_preview_line("bash", &args);
+        assert!(line.contains("ls"), "the command still previews: {line}");
+        assert!(
+            !line.contains("tasks"),
+            "and the todo shape is not re-read here: {line}"
+        );
+    }
+
+    /// The model's display intent still leads the line when it supplied one:
+    /// the counts are the technical half, not a replacement for the intent.
+    ///
+    /// MUTATION PROVEN, and for the DIRECTION of the fix: written first as an
+    /// `.or_else` ("fill only a gap"), this test was red — the extractor's
+    /// "first string value" fallback had already returned the intent itself,
+    /// so the counts never reached the line. The summary must WIN.
+    #[test]
+    fn an_intent_still_leads_a_todo_line_with_counts() {
+        let args = serde_json::json!({
+            "intent": "plan the migration",
+            "todos": [
+                { "id": "1", "content": "a", "status": "pending" },
+                { "id": "2", "content": "b", "status": "completed" },
+            ]
+        })
+        .to_string();
+        let line = tool_preview_line("todo", &args);
+        assert!(
+            line.contains("plan the migration"),
+            "the intent must not be displaced: {line}"
+        );
+        assert!(
+            line.contains("2 tasks"),
+            "counts still show beside it: {line}"
         );
     }
 }
