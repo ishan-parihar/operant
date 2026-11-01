@@ -8781,204 +8781,247 @@ mod prompt_jump_tests {
 /// This drives `draw_rewind_selector` directly and reads the painted cells.
 #[test]
 fn the_overlay_body_does_not_emit_a_spans_final_character_twice() {
-    {
-        use ratatui::Terminal;
-        use ratatui::backend::TestBackend;
-        use ratatui::style::{Modifier, Style};
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
 
-        let mut app = make_app();
-        app.is_simulating = true;
+    let mut app = make_app();
+    app.is_simulating = true;
 
-        // WHY THIS INSTRUMENT WAS REWRITTEN — the original could not FAIL.
-        //
-        // The first version PASSED with the defect deliberately reintroduced into
-        // `restyle_dim` (measured, iter-1596). Two independent reasons:
-        //
-        //   1. Its two plain-text messages produced ONE span per body line, so the
-        //      span BOUNDARY where a duplicate would appear never existed.
-        //   2. With only two turns the PICK zone covered the whole body, so NO row
-        //      was dimmed — and `restyle_dim` only runs on a DIM row. The code under
-        //      test never executed.
-        //
-        // Both are fixed below: MARKDOWN bodies (multi-span lines) and turns that
-        // exist BELOW the pick (a DROP zone).
-        //
-        // THE COUNTING TRAP that this fixture is shaped to avoid: an earlier attempt
-        // seeded the SAME markdown phrase into four turns and then asserted the
-        // phrase appears once. It appeared four times — legitimately, once per turn
-        // — and I almost recorded that as the RT-205 signature reproducing. One
-        // phrase in one turn makes the assertion say what it means, and the
-        // neighbouring turns carry DIFFERENT text so a DROP zone still exists.
-        let mut marks = Vec::new();
-        marks.push((100u64, "prompt number zero".to_string()));
+    // WHY THIS INSTRUMENT WAS REWRITTEN — twice.
+    //
+    // The first version could not FAIL. It PASSED with the defect
+    // deliberately reintroduced into `restyle_dim` (measured, iter-1596).
+    // Two independent reasons, both of which had to be fixed:
+    //
+    //   1. Its two plain-text messages produced ONE span per body line, so
+    //      the span BOUNDARY where a duplicate would appear never existed.
+    //   2. With only two turns the PICK zone covered the whole body, so NO
+    //      row was dimmed — and `restyle_dim` only runs on a DIM row. The
+    //      code under test never executed at all.
+    //
+    // The SECOND version fixed both and went green on clean shipping code,
+    // but then ALSO survived the reintroduced defect. That failure is the
+    // reason for the fixture's shape below: every needle had been pointed at
+    // the PICK turn, which is REVERSED and never dimmed. Markdown — the only
+    // thing that makes span boundaries the defect duplicates across — has to
+    // sit in the DROP zone.
+    //
+    // THE COUNTING TRAP this fixture also avoids: an earlier attempt seeded
+    // the same markdown phrase into four turns and then asserted the phrase
+    // appears once. It appeared four times — legitimately, once per turn —
+    // and that was nearly recorded as the defect reproducing. One phrase in
+    // one turn makes the assertion say what it means.
+    let mut marks = Vec::new();
+    // Turn 100 is the PICK: plain prose, because a plain turned block keeps
+    // the frame's zone separation legible in any future failure dump.
+    marks.push((100u64, "prompt number zero".to_string()));
+    app.messages
+        .push(crate::tui::adapter_types::types::Message {
+            role: crate::tui::adapter_types::types::Role::User,
+            content: crate::tui::adapter_types::types::MessageContent::Text(
+                "prompt number zero".to_string(),
+            ),
+        });
+    app.messages
+        .push(crate::tui::adapter_types::types::Message {
+            role: crate::tui::adapter_types::types::Role::Assistant,
+            content: crate::tui::adapter_types::types::MessageContent::Text(
+                "picked turn prose: ordinary sentences, nothing unusual here".to_string(),
+            ),
+        });
+    // THE SIGNATURE LIVES IN A DROP-ZONE TURN (101), styled by `restyle_dim`.
+    let drop_prompt = "filler prompt one";
+    marks.push((101u64, drop_prompt.to_string()));
+    app.messages
+        .push(crate::tui::adapter_types::types::Message {
+            role: crate::tui::adapter_types::types::Role::User,
+            content: crate::tui::adapter_types::types::MessageContent::Text(
+                drop_prompt.to_string(),
+            ),
+        });
+    app.messages
+        .push(crate::tui::adapter_types::types::Message {
+            role: crate::tui::adapter_types::types::Role::Assistant,
+            content: crate::tui::adapter_types::types::MessageContent::Text(
+                "the *quick* **brown** _fox_ jumps over the lazy dog, with a \
+                 [link](http://example.com) and `inline code` too."
+                    .to_string(),
+            ),
+        });
+    // Two more plain DROP turns: they widen the DIM zone so `restyle_dim`
+    // has rows to run on, without contributing text that inflates counts.
+    for i in 2..4 {
+        let prompt = format!("filler prompt {i}");
         app.messages
             .push(crate::tui::adapter_types::types::Message {
                 role: crate::tui::adapter_types::types::Role::User,
-                content: crate::tui::adapter_types::types::MessageContent::Text(
-                    "prompt number zero".to_string(),
-                ),
+                content: crate::tui::adapter_types::types::MessageContent::Text(prompt.clone()),
             });
+        marks.push((100 + i as u64, prompt));
         app.messages
             .push(crate::tui::adapter_types::types::Message {
                 role: crate::tui::adapter_types::types::Role::Assistant,
-                content: crate::tui::adapter_types::types::MessageContent::Text(
-                    "the *quick* **brown** _fox_ jumps over the lazy dog, \
-                 with a [link](http://example.com) and `inline code` too."
-                        .to_string(),
-                ),
+                content: crate::tui::adapter_types::types::MessageContent::Text(format!(
+                    "filler answer {i}: plain prose, no emphasis markers in it"
+                )),
             });
-        // Distinct filler turns so the DROP zone has content to dim. Different
-        // text per turn, so nothing else can inflate the counts below.
-        for i in 1..4 {
-            let prompt = format!("filler prompt {i}");
-            app.messages
-                .push(crate::tui::adapter_types::types::Message {
-                    role: crate::tui::adapter_types::types::Role::User,
-                    content: crate::tui::adapter_types::types::MessageContent::Text(prompt.clone()),
-                });
-            marks.push((100 + i as u64, prompt));
-            app.messages
-                .push(crate::tui::adapter_types::types::Message {
-                    role: crate::tui::adapter_types::types::Role::Assistant,
-                    content: crate::tui::adapter_types::types::MessageContent::Text(format!(
-                        "filler answer {i}: ordinary prose with no emphasis markers in it at all"
-                    )),
-                });
-        }
-        app.core_rewind_marks = Some(std::sync::Arc::new(
-            crate::tui::rewind_marks::RewindMarksSource::new(
-                marks
-                    .into_iter()
-                    .map(|(turn_id, text)| operant_core::agent::UserTurnMark {
-                        turn_id,
-                        conv_index: 0,
-                        conv_epoch: 1,
-                        text,
-                    })
-                    .collect(),
-                Some("sess-rt205".to_string()),
-                Vec::new(),
-            ),
-        ));
-        // Mirror App::run's frame-loop sync: set_conversation first, then read the
-        // marks. Skipping it leaves the selector empty and the instrument blind.
-        {
-            let source = app.core_rewind_marks.as_ref().expect("marks").clone();
-            let display_texts = app.user_prompt_texts_for_filter();
-            source.set_conversation(display_texts.clone());
-            let collected: Vec<(u64, String)> = source
-                .marks()
+    }
+    app.core_rewind_marks = Some(std::sync::Arc::new(
+        crate::tui::rewind_marks::RewindMarksSource::new(
+            marks
                 .into_iter()
-                .map(|m| (m.turn_id, m.text))
-                .collect();
-            app.rewind_selector.sync_marks(collected, &display_texts);
-        }
-
-        // Open on the FIRST turn so the three filler turns fall in the DROP zone.
-        app.rewind_selector.open();
-        app.rewind_selector.selected = 0;
-
-        let paint = |app: &crate::tui::app::App| -> (String, String) {
-            let backend = TestBackend::new(120, 45);
-            let mut terminal = Terminal::new(backend).expect("terminal");
-            terminal
-                .draw(|frame| {
-                    let area = frame.area();
-                    crate::tui::rewind_selector::draw_rewind_selector(frame, area, app);
+                .map(|(turn_id, text)| operant_core::agent::UserTurnMark {
+                    turn_id,
+                    conv_index: 0,
+                    conv_epoch: 1,
+                    text,
                 })
-                .expect("draw");
-            let buf = terminal.backend().buffer();
-            use crate::tui::debug::debug_hub::buffer_style_dump;
-            let dump = buffer_style_dump(buf);
-            // The token is `fg/bg/mods@symbol`; `_` means a real space.
-            let symbols: String = dump
-                .lines()
-                .skip(1)
-                .map(|l| {
-                    l.split(' ')
-                        .filter_map(|tok| tok.split_once('@').map(|(_, sym)| sym))
-                        .map(|s| if s == "_" { " " } else { s })
-                        .collect::<String>()
-                })
-                .collect();
-            (dump, symbols)
-        };
+                .collect(),
+            Some("sess-rt205".to_string()),
+            Vec::new(),
+        ),
+    ));
+    // Mirror App::run's frame-loop sync: set_conversation first, then read
+    // the marks. Skipping it leaves the selector empty and blind.
+    {
+        let source = app.core_rewind_marks.as_ref().expect("marks").clone();
+        let display_texts = app.user_prompt_texts_for_filter();
+        source.set_conversation(display_texts.clone());
+        let collected: Vec<(u64, String)> = source
+            .marks()
+            .into_iter()
+            .map(|m| (m.turn_id, m.text))
+            .collect();
+        app.rewind_selector.sync_marks(collected, &display_texts);
+    }
 
-        let (dump, symbols) = paint(&app);
+    // Open on the FIRST turn so 101/102/103 fall in the DROP (dimmed) zone.
+    app.rewind_selector.open();
+    app.rewind_selector.selected = 0;
 
-        // GATE 1 — THE FIXTURE MUST REACH THE CODE UNDER TEST.
-        // A dim cell carries `d` in its mods field. No dim rows means
-        // `restyle_dim` never ran, so every assertion below would be vacuous.
-        let dim_rows = dump
-            .lines()
-            .skip(1)
-            .filter(|row| {
-                row.split(' ')
-                    .filter_map(|tok| tok.split_once('@'))
-                    .any(|(style, _)| style.split('/').nth(2).is_some_and(|m| m.contains('d')))
+    let paint = |app: &crate::tui::app::App| -> (String, String) {
+        let backend = TestBackend::new(120, 45);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                crate::tui::rewind_selector::draw_rewind_selector(frame, area, app);
             })
-            .count();
-        assert!(
-            dim_rows >= 3,
-            "the fixture must paint at least 3 DIM rows (got {dim_rows}) — without \
-         them `restyle_dim` never executes and this instrument proves nothing."
-        );
-
-        // GATE 2 — the painted frame must carry more than one style somewhere, or
-        // there is no span boundary for a duplicate to appear at.
-        let distinct_styles: std::collections::HashSet<&str> = dump
+            .expect("draw");
+        let buf = terminal.backend().buffer();
+        use crate::tui::debug::debug_hub::buffer_style_dump;
+        let dump = buffer_style_dump(buf);
+        // The token is `fg/bg/mods@symbol`; `_` means a real space.
+        //
+        // ROW BOUNDARIES ARE PRESERVED. An earlier sampler joined every row
+        // into one string so `matches` could count across a wrap, but that
+        // flattened the frame: a phrase that wraps lands in two rows and
+        // counts as zero, which is indistinguishable from a render bug.
+        // Counting per row keeps both true: the count is the total over the
+        // frame, and a wrapped phrase cannot vanish.
+        let row_symbols: Vec<String> = dump
             .lines()
             .skip(1)
-            .flat_map(|row| {
-                row.split(' ')
-                    .filter_map(|tok| tok.split_once('@'))
-                    .map(|(style, _)| style)
+            .map(|l| {
+                l.split(' ')
+                    .filter_map(|tok| tok.split_once('@').map(|(_, sym)| sym))
+                    .map(|s| if s == "_" { " " } else { s })
+                    .collect::<String>()
             })
             .collect();
-        assert!(
-            distinct_styles.len() > 4,
-            "the frame must carry several distinct styles (got {}); a flat frame \\
+        let symbols = row_symbols.join("\n");
+        (dump, symbols)
+    };
+
+    let (dump, symbols) = paint(&app);
+
+    // GATE 1 — THE FIXTURE MUST REACH THE CODE UNDER TEST.
+    // A dim cell carries `d` in its mods field. No dim rows means
+    // `restyle_dim` never ran, so every assertion below is vacuous.
+    let dim_rows = dump
+        .lines()
+        .skip(1)
+        .filter(|row| {
+            row.split(' ')
+                .filter_map(|tok| tok.split_once('@'))
+                .any(|(style, _)| style.split('/').nth(2).is_some_and(|m| m.contains('d')))
+        })
+        .count();
+    assert!(
+        dim_rows >= 3,
+        "the fixture must paint at least 3 DIM rows (got {dim_rows}) — without \
+         them `restyle_dim` never executes and this instrument proves nothing"
+    );
+
+    // GATE 2 — the painted frame must carry many distinct styles, or there
+    // is no span boundary for a duplicate to appear at.
+    let distinct_styles: std::collections::HashSet<&str> = dump
+        .lines()
+        .skip(1)
+        .flat_map(|row| {
+            row.split(' ')
+                .filter_map(|tok| tok.split_once('@'))
+                .map(|(style, _)| style)
+        })
+        .collect();
+    assert!(
+        distinct_styles.len() > 4,
+        "the frame must carry several distinct styles (got {}); a flat frame \
          has no span boundary for the duplicate signature",
-            distinct_styles.len()
+        distinct_styles.len()
+    );
+
+    // THE SIGNATURE — a run whose final character is emitted TWICE.
+    //
+    // The duplication is per CHARACTER, not per phrase: a span ending in `k`
+    // emits `k` then `k` again. So the detectable form is a doubled glyph.
+    // Matching the literal phrase `jumps over the lazy` can never work — the
+    // mutation breaks the phrase into `jumpss overr thee lazyy`, and a
+    // phrase-count assertion reports 0 for a frame that plainly shows the
+    // render bug. Measured: I lost a cycle to exactly that.
+    //
+    // `kk` is drawn from `*quick*`, which is emphasis-styled, so the run
+    // boundary sits right after the `k`. Unstyled text would make every run
+    // one span and leave the boundary unexercised.
+    //
+    // ONLY GLYPH PAIRS THE FIXTURE CANNOT SPELL BY ACCIDENT may be used here.
+    // `ll` was in the first list and cost a cycle: every "filler" prompt in
+    // this very fixture spells it, so the instrument failed on clean shipping
+    // code with `"ll" appears 5 times`. Measured, not assumed — the audit
+    // below is what the needle list must pass before it is allowed.
+    for doubled in ["kk", "nn", "xx", "ee", "rr", "ss"] {
+        let hits = symbols.matches(doubled).count();
+        assert_eq!(
+            hits, 0,
+            "{doubled:?} appears {hits} time(s): a span's final character is being \
+             emitted a second time under the next run's style — the RT-205 \
+             duplicated-final-character signature"
         );
+    }
 
-        // THE SIGNATURE. Only the picked turn carries these words, so each must
-        // appear exactly once over the whole frame.
-        for needle in ["quick", "brown", "fox", "jumps over the lazy"] {
-            let occurrences = symbols.matches(needle).count();
-            assert_eq!(
-                occurrences, 1,
-                "{needle:?} must render exactly ONCE; {occurrences} means the text \\
-             was painted again under another style — the RT-205 signature"
-            );
-        }
-
-        // A duplicate final character shows up as an adjacent pair of single-char
-        // cells that share a symbol but carry different styles.
-        let mut adjacent_style_repeat = 0usize;
-        for line in dump.lines() {
-            let toks: Vec<(&str, &str)> =
-                line.split(' ').filter_map(|t| t.split_once('@')).collect();
-            for pair in toks.windows(2) {
-                let (style_a, sym_a) = pair[0];
-                let (style_b, sym_b) = pair[1];
-                if style_a != style_b && sym_a.len() == 1 && sym_b.len() == 1 && sym_a == sym_b {
-                    adjacent_style_repeat += 1;
-                }
+    // A duplicate final character shows up as an adjacent pair of
+    // single-character cells that share a symbol but carry different styles.
+    let mut adjacent_style_repeat = 0usize;
+    for line in dump.lines() {
+        let toks: Vec<(&str, &str)> = line.split(' ').filter_map(|t| t.split_once('@')).collect();
+        for pair in toks.windows(2) {
+            let (style_a, sym_a) = pair[0];
+            let (style_b, sym_b) = pair[1];
+            if style_a != style_b && sym_a.len() == 1 && sym_b.len() == 1 && sym_a == sym_b {
+                adjacent_style_repeat += 1;
             }
         }
-        assert_eq!(
-            adjacent_style_repeat, 0,
-            "no two adjacent single-character cells may carry the same symbol in \\
-         different styles — that is the duplicated-final-character signature"
-        );
-
-        assert!(
-            !symbols.is_empty(),
-            "the painted frame must be non-empty for this test to mean anything"
-        );
-        let _ = (Modifier::BOLD, Style::default());
     }
+    assert_eq!(
+        adjacent_style_repeat, 0,
+        "no two adjacent single-character cells may carry the same symbol in \
+         different styles — that is the duplicated-final-character signature"
+    );
+
+    assert!(
+        !symbols.is_empty(),
+        "the painted frame must be non-empty for this test to mean anything"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -9613,6 +9656,175 @@ fn a_settled_delegation_stops_lighting_its_todo() {
         app.todos_card_payload.contains("\"live_ids\":[]"),
         "the empty match set rides instead of a stale id: {}",
         app.todos_card_payload
+    );
+}
+
+/// The gallery is fed by the delegation registry, and it was not fed at all
+/// before iter-1604: the four `TuiState` defaults returned nothing and nothing
+/// overrode them, so the strip, the band and the panel were dead renderers.
+///
+/// MUTATION PROVEN: reverting `tui_state_impl.rs`'s `inline_swarm_members` to
+/// the trait default (`Vec::new()`) turns this test red — the registry has the
+/// record, and the member list comes back empty.
+#[test]
+fn a_live_delegation_feeds_the_inline_swarm_gallery() {
+    let _drain = operant_core::tools::async_delegation::RegistryDrain::new();
+    let delegation_id =
+        operant_core::tools::async_delegation::create_record("audit the tests", "gpt-5.4");
+
+    let mut app = make_app();
+    // The model names the dispatch handle on the todo it delegated, which is
+    // the join this whole surface rests on.
+    app.todos = vec![crate::tui::operant_app::todo::TodoItem {
+        content: "the delegated todo".to_string(),
+        status: "pending".to_string(),
+        priority: "medium".to_string(),
+        id: "l1".to_string(),
+        group: None,
+        phase: None,
+        confidence: None,
+        completion_confidence: None,
+        confidence_history: Vec::new(),
+        blocked_by: Vec::new(),
+        assigned_to: Some(delegation_id.clone()),
+    }];
+
+    assert!(
+        app.inline_swarm_gallery_active(),
+        "a live delegation must make the gallery active"
+    );
+    let members = app.inline_swarm_members();
+    assert_eq!(members.len(), 1, "one record, one member");
+    let member = &members[0];
+    assert_eq!(member.session_id, delegation_id, "keyed by its dispatch handle");
+    assert_eq!(member.status, "running", "a pending record is live work");
+    assert_eq!(
+        member.task_label.as_deref(),
+        Some("audit the tests"),
+        "the stable label is the goal, not the transient detail"
+    );
+
+    // The counter that makes the row meaningful without opening a transcript:
+    // this child owns 1 item and has finished 0 of them.
+    assert_eq!(
+        member.todo_progress,
+        Some((0, 1)),
+        "todo_progress is scoped to THIS child's items"
+    );
+    assert_eq!(member.todo_items.len(), 1);
+    assert_eq!(member.todo_items[0].content, "the delegated todo");
+    assert_eq!(member.runtime.model.as_deref(), Some("gpt-5.4"));
+}
+
+/// Two children must never show each other's counts: the join is on
+/// `assigned_to`, so a sibling's todo is not this child's progress.
+#[test]
+fn gallery_counts_are_scoped_to_each_child() {
+    let _drain = operant_core::tools::async_delegation::RegistryDrain::new();
+    let first = operant_core::tools::async_delegation::create_record("first job", "m1");
+    let second = operant_core::tools::async_delegation::create_record("second job", "m2");
+
+    let mut app = make_app();
+    let mut make = |id: &str, assigned: &str, status: &str| {
+        crate::tui::operant_app::todo::TodoItem {
+            content: format!("{id} work"),
+            status: status.to_string(),
+            priority: "medium".to_string(),
+            id: id.to_string(),
+            group: None,
+            phase: None,
+            confidence: None,
+            completion_confidence: None,
+            confidence_history: Vec::new(),
+            blocked_by: Vec::new(),
+            assigned_to: Some(assigned.to_string()),
+        }
+    };
+    app.todos = vec![
+        make("a1", &first, "completed"),
+        make("a2", &first, "pending"),
+        make("b1", &second, "completed"),
+        make("b2", &second, "completed"),
+    ];
+
+    let members = app.inline_swarm_members();
+    let by_id = |id: &str| {
+        members
+            .iter()
+            .find(|m| m.session_id == id)
+            .expect("the record maps to a member")
+    };
+    assert_eq!(
+        by_id(&first).todo_progress,
+        Some((1, 2)),
+        "the first child's own 1-of-2"
+    );
+    assert_eq!(
+        by_id(&second).todo_progress,
+        Some((2, 2)),
+        "the second child's own 2-of-2, not the parent's total"
+    );
+}
+
+/// The strip answers "what is running NOW", so a finished delegation must
+/// leave it. The transcript cards still show it — `live_only` is what
+/// separates the two, and the difference is asserted rather than assumed.
+#[test]
+fn a_settled_delegation_leaves_the_strip_but_keeps_its_card() {
+    let _drain = operant_core::tools::async_delegation::RegistryDrain::new();
+    let delegation_id =
+        operant_core::tools::async_delegation::create_record("a job that finishes", "m3");
+
+    let app = make_app();
+    assert_eq!(
+        app.inline_swarm_members().len(),
+        1,
+        "precondition: a pending record is on the strip"
+    );
+    assert_eq!(
+        app.swarm_members_for_transcript().len(),
+        1,
+        "and it has a card"
+    );
+
+    operant_core::tools::async_delegation::mark_completed(&delegation_id, "the answer");
+    assert!(
+        !app.inline_swarm_gallery_active(),
+        "a settled child must not keep the strip up"
+    );
+    assert!(
+        app.inline_swarm_members().is_empty(),
+        "the live list is empty"
+    );
+
+    let cards = app.swarm_members_for_transcript();
+    assert_eq!(cards.len(), 1, "but the card survives for later reading");
+    assert_eq!(cards[0].status, "completed");
+    assert_eq!(
+        cards[0].detail.as_deref(),
+        Some("the answer"),
+        "the answer rides the card's transient half"
+    );
+}
+
+/// A child with no todos assigned must not fabricate a 0/0 counter: there is
+/// nothing to count yet, so the field stays `None` and the row renders
+/// without it.
+#[test]
+fn a_delegation_with_no_assigned_todos_has_no_counter() {
+    let _drain = operant_core::tools::async_delegation::RegistryDrain::new();
+    operant_core::tools::async_delegation::create_record("unplanned work", "m4");
+
+    let app = make_app();
+    let members = app.inline_swarm_members();
+    assert_eq!(members.len(), 1);
+    assert_eq!(
+        members[0].todo_progress, None,
+        "no items means no counter, not a false 0/0"
+    );
+    assert!(
+        members[0].todo_items.is_empty(),
+        "and no items to render"
     );
 }
 
