@@ -17,6 +17,51 @@
 //! next agent reads the header, believes the class is handled, and does not
 //! check.
 //!
+//! ## Why the emission site is not a one-liner (measured 2026-11-01)
+//!
+//! An attempt to wire this into the prompt found the blocker is
+//! ARCHITECTURAL, not plumbing. The obvious seat (the
+//! `<turn_context>` volatile tail where `<context_budget>` rides,
+//! `agent/run.rs` inside `build_messages`) is built EXACTLY ONCE PER TURN,
+//! BEFORE the loop starts:
+//!
+//! ```text
+//! run() -> turn_context::build_turn_context() (run.rs:337)
+//!        -> build_messages()            (turn_context.rs:219)
+//!           builds the volatile tail
+//!        -> returns Vec<Message>, which the loop only APPENDS to
+//! ```
+//!
+//! So at the moment the tail is written, no model call has been made and no
+//! tool has run: `turn_inference` and `turn_tools` are still zero and
+//! `saw_inference` is still false. A block emitted there would render
+//! `n/a` for every span on every turn, forever, which is the RT-199
+//! failure wearing a better label. Emitting it on the LAST iteration does
+//! not work either, because the frozen prefix and history must stay
+//! byte-stable across the turn's requests or the provider cache is
+//! invalidated on every tool iteration.
+//!
+//! Two honest options exist, and the choice is the operator's:
+//!
+//! 1. **Emit it ONCE at turn END, off the request path.** The numbers are
+//!    complete by then. The natural home is the existing `TurnEnd` event
+//!    (`turn_end.rs`), which already carries per-turn counters and
+//!    already reaches every subscriber (TUI, gateway, trajectory, logs).
+//!    Costs: extend `TurnEnd` with the four spans (bounded, no per-clone
+//!    cost beyond four `Duration`s), and add one more capture. It does
+//!    NOT put the block in the prompt, so the model would not see it --
+//!    which may be fine, since "why did this turn take 40s" is a question
+//!    the OPERATOR asks, and the operator reads `TurnEnd`.
+//! 2. **Thread the timings into the turn-context build.** Change
+//!    `build_messages` to take the span inputs, and have `run()` build the
+//!    tail on the LAST iteration from the accumulated values. Costs: one
+//!    new signature, a second build site for the tail only, and a real
+//!    risk of breaking the frozen-prefix guarantee that iter-39 depends
+//!    on. This is the expensive option and it only buys prompt visibility.
+//!
+//! Recommendation is (1): it answers the question the numbers exist for,
+//! at a fraction of the risk, and it keeps the request path untouched.
+//!
 //! ## The bug this would close
 //!
 //! operant already measures three things per turn: the LLM call duration

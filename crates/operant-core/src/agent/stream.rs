@@ -58,6 +58,29 @@ impl OperantAgent {
             .unwrap_or(Duration::ZERO)
     }
 
+    /// Total time this turn spent inside tools, or `None` when no tool call
+    /// was ever timed.
+    ///
+    /// Row 3 (RT-209). The per-call map is keyed by id so the observer can pair
+    /// ONE name with ONE duration; attribution needs the per-TURN total instead,
+    /// which is a sum, not a lookup. Returning `None` rather than
+    /// `Duration::ZERO` when nothing was timed is the whole point: "no tools ran"
+    /// and "tools took no time" are different answers, and the second is the RT-199
+    /// bug.
+    ///
+    /// Note the sum is of CONCURRENT executions: the 8-worker pool runs tools
+    /// in parallel, so a turn's tools span can exceed its wall clock. That is
+    /// correct (it is what the model waited on, roughly) but not exclusive, so
+    /// `TurnBreakdown::is_exclusive()` reports `false` for any turn with more
+    /// than one tool in it rather than pretending the arithmetic partitions.
+    pub(crate) fn turn_tool_duration(&self) -> Option<Duration> {
+        let map = self.tool_durations_by_call.lock().ok()?;
+        if map.is_empty() {
+            return None;
+        }
+        Some(Duration::from_millis(map.values().sum()))
+    }
+
     /// Park the rendered arguments' byte size for one in-flight call
     /// (iter-1551). The arguments exist as a string only at the
     /// `ToolCallStart` emit site, and `ToolResult` carries the output but not
