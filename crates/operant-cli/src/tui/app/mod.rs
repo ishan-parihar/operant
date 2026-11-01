@@ -1153,6 +1153,112 @@ impl App {
             .collect()
     }
 
+    /// The delegation registry as gallery members (Gap 3, iter-1607).
+    ///
+    /// `live_only` keeps only `Pending` records — the strip and the gallery
+    /// band answer "what is running NOW". Pass `false` for the transcript
+    /// cards, where a finished child is still the answer to "what did that
+    /// spawn run".
+    ///
+    /// WHY THIS MAP AND NOT A NEW PRODUCER: the delegation registry is already
+    /// the live source the session hub reads every refresh (`session_hub/mod.rs:274`),
+    /// and the link between a child and its work is already established — the
+    /// model writes `assigned_to` = the dispatch handle, which is the same join
+    /// `subagent_live_todo_ids` uses for the card's accent. So the gallery reads
+    /// one truth, and a fix in either place cannot drift from the other.
+    ///
+    /// `todo_progress` is the whole point of Gap 3: it is (completed, total)
+    /// over the items this delegation owns, scoped by `assigned_to`. That is
+    /// the counter jcode shows on the strip, and it is the only number that
+    /// makes a child's row mean something without opening its transcript.
+    pub(super) fn swarm_gallery_members(
+        &self,
+        live_only: bool,
+    ) -> impl Iterator<Item = crate::tui::operant_app::protocol::SwarmMemberStatus> + '_ {
+        use crate::tui::operant_app::protocol::{SwarmMemberRuntime, SwarmMemberStatus};
+
+        // `now_secs` is private to the registry module, and the age it would
+        // give is derived from the same dispatch_time the record carries — so
+        // read the clock here rather than exporting a second time source.
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+
+        operant_core::tools::async_delegation::list_records()
+            .into_iter()
+            .filter(move |rec| {
+                !live_only
+                    || rec.status
+                        == operant_core::tools::async_delegation::AsyncDelegationStatus::Pending
+            })
+            .map(move |rec| {
+                // Scope this child's slice of the plan by its own handle, so
+                // two children running sibling tasks never show each other's
+                // counts.
+                let mine: Vec<&crate::tui::operant_app::todo::TodoItem> = self
+                    .todos
+                    .iter()
+                    .filter(|todo| todo.assigned_to.as_deref() == Some(rec.delegation_id.as_str()))
+                    .collect();
+                let total = mine.len() as u32;
+                let completed = mine
+                    .iter()
+                    .filter(|todo| todo.status == "completed")
+                    .count() as u32;
+                let todo_items = mine
+                    .iter()
+                    .map(|todo| crate::tui::operant_app::protocol::SwarmTodoItem {
+                        content: todo.content.clone(),
+                        status: todo.status.clone(),
+                        // operant records no per-todo call trace, and inventing
+                        // one would be theater the card's renderer would draw.
+                        tool_intents: Vec::new(),
+                    })
+                    .collect();
+
+                let (status, detail) = match rec.status {
+                    operant_core::tools::async_delegation::AsyncDelegationStatus::Pending => {
+                        ("running".to_string(), None)
+                    }
+                    operant_core::tools::async_delegation::AsyncDelegationStatus::Completed => (
+                        "completed".to_string(),
+                        rec.result.as_ref().map(|text| text.replace('\n', " ")),
+                    ),
+                    operant_core::tools::async_delegation::AsyncDelegationStatus::Failed => (
+                        "failed".to_string(),
+                        rec.error.as_ref().map(|text| text.replace('\n', " ")),
+                    ),
+                };
+
+                SwarmMemberStatus {
+                    session_id: rec.delegation_id.clone(),
+                    friendly_name: Some(rec.delegation_id.clone()),
+                    status,
+                    detail,
+                    // The goal is what the operator asked for, so it is stable
+                    // across status transitions; `detail` above is the transient
+                    // half (the answer, or the error).
+                    task_label: Some(rec.goal.clone()),
+                    role: Some("agent".to_string()),
+                    is_headless: Some(true),
+                    live_attachments: None,
+                    status_age_secs: Some(now.saturating_sub(rec.dispatch_time)),
+                    output_tail: None,
+                    report_back_to_session_id: None,
+                    todo_progress: (total > 0).then_some((completed, total)),
+                    todo_items,
+                    runtime: SwarmMemberRuntime {
+                        model: Some(rec.model.clone()),
+                        provider: None,
+                        auth_method: None,
+                        effort: None,
+                        elapsed_secs: Some(now.saturating_sub(rec.dispatch_time)),
+                    },
+                }
+            })
+    }
+
     /// Spawn the /mcp reconnect task: re-add all enabled servers by
     /// transport (HTTP/streamable-HTTP via `add_server`, stdio via
     /// `add_stdio_server`), warm the agentmemory backend first so its MCP

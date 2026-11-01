@@ -9611,6 +9611,7 @@ fn a_non_default_todo_result_retargets_the_live_tick() {
 /// `pending` row coloured as current work.
 #[test]
 fn a_settled_delegation_stops_lighting_its_todo() {
+    let _registry = registry_lock();
     let _drain = operant_core::tools::async_delegation::RegistryDrain::new();
     let delegation_id =
         operant_core::tools::async_delegation::create_record("audit the tests", "gpt-5.4");
@@ -9660,7 +9661,7 @@ fn a_settled_delegation_stops_lighting_its_todo() {
 }
 
 /// The gallery is fed by the delegation registry, and it was not fed at all
-/// before iter-1604: the four `TuiState` defaults returned nothing and nothing
+/// before iter-1607: the four `TuiState` defaults returned nothing and nothing
 /// overrode them, so the strip, the band and the panel were dead renderers.
 ///
 /// MUTATION PROVEN: reverting `tui_state_impl.rs`'s `inline_swarm_members` to
@@ -9668,6 +9669,7 @@ fn a_settled_delegation_stops_lighting_its_todo() {
 /// record, and the member list comes back empty.
 #[test]
 fn a_live_delegation_feeds_the_inline_swarm_gallery() {
+    let _registry = registry_lock();
     let _drain = operant_core::tools::async_delegation::RegistryDrain::new();
     let delegation_id =
         operant_core::tools::async_delegation::create_record("audit the tests", "gpt-5.4");
@@ -9696,7 +9698,10 @@ fn a_live_delegation_feeds_the_inline_swarm_gallery() {
     let members = app.inline_swarm_members();
     assert_eq!(members.len(), 1, "one record, one member");
     let member = &members[0];
-    assert_eq!(member.session_id, delegation_id, "keyed by its dispatch handle");
+    assert_eq!(
+        member.session_id, delegation_id,
+        "keyed by its dispatch handle"
+    );
     assert_eq!(member.status, "running", "a pending record is live work");
     assert_eq!(
         member.task_label.as_deref(),
@@ -9720,25 +9725,24 @@ fn a_live_delegation_feeds_the_inline_swarm_gallery() {
 /// `assigned_to`, so a sibling's todo is not this child's progress.
 #[test]
 fn gallery_counts_are_scoped_to_each_child() {
+    let _registry = registry_lock();
     let _drain = operant_core::tools::async_delegation::RegistryDrain::new();
     let first = operant_core::tools::async_delegation::create_record("first job", "m1");
     let second = operant_core::tools::async_delegation::create_record("second job", "m2");
 
     let mut app = make_app();
-    let mut make = |id: &str, assigned: &str, status: &str| {
-        crate::tui::operant_app::todo::TodoItem {
-            content: format!("{id} work"),
-            status: status.to_string(),
-            priority: "medium".to_string(),
-            id: id.to_string(),
-            group: None,
-            phase: None,
-            confidence: None,
-            completion_confidence: None,
-            confidence_history: Vec::new(),
-            blocked_by: Vec::new(),
-            assigned_to: Some(assigned.to_string()),
-        }
+    let make = |id: &str, assigned: &str, status: &str| crate::tui::operant_app::todo::TodoItem {
+        content: format!("{id} work"),
+        status: status.to_string(),
+        priority: "medium".to_string(),
+        id: id.to_string(),
+        group: None,
+        phase: None,
+        confidence: None,
+        completion_confidence: None,
+        confidence_history: Vec::new(),
+        blocked_by: Vec::new(),
+        assigned_to: Some(assigned.to_string()),
     };
     app.todos = vec![
         make("a1", &first, "completed"),
@@ -9746,7 +9750,6 @@ fn gallery_counts_are_scoped_to_each_child() {
         make("b1", &second, "completed"),
         make("b2", &second, "completed"),
     ];
-
     let members = app.inline_swarm_members();
     let by_id = |id: &str| {
         members
@@ -9771,6 +9774,7 @@ fn gallery_counts_are_scoped_to_each_child() {
 /// separates the two, and the difference is asserted rather than assumed.
 #[test]
 fn a_settled_delegation_leaves_the_strip_but_keeps_its_card() {
+    let _registry = registry_lock();
     let _drain = operant_core::tools::async_delegation::RegistryDrain::new();
     let delegation_id =
         operant_core::tools::async_delegation::create_record("a job that finishes", "m3");
@@ -9812,6 +9816,7 @@ fn a_settled_delegation_leaves_the_strip_but_keeps_its_card() {
 /// without it.
 #[test]
 fn a_delegation_with_no_assigned_todos_has_no_counter() {
+    let _registry = registry_lock();
     let _drain = operant_core::tools::async_delegation::RegistryDrain::new();
     operant_core::tools::async_delegation::create_record("unplanned work", "m4");
 
@@ -9822,10 +9827,28 @@ fn a_delegation_with_no_assigned_todos_has_no_counter() {
         members[0].todo_progress, None,
         "no items means no counter, not a false 0/0"
     );
-    assert!(
-        members[0].todo_items.is_empty(),
-        "and no items to render"
-    );
+    assert!(members[0].todo_items.is_empty(), "and no items to render");
+}
+
+/// Serialises every test that touches the process-global delegation
+/// registry.
+///
+/// WHY A LOCK AND NOT JUST `RegistryDrain`: the drain empties the registry on
+/// DROP, so two registry tests running in parallel race — one test's drain
+/// wipes the record the other is still asserting on. Proven live on
+/// 2026-11-01: adding three registry tests to this module made the
+/// pre-existing `a_settled_delegation_stops_lighting_its_todo` fail with
+/// `left: []` (its record was gone) in the module run while passing alone.
+/// That is the RT-207 hazard `RegistryDrain`'s own doc names. Same discipline
+/// `gateway_commands.rs`'s `SUBAGENTS_LOCK` already uses for its registry tests.
+static DELEGATION_REGISTRY_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Guard for [`DELEGATION_REGISTRY_LOCK`]; take one at the top of any test that
+/// seeds or reads the delegation registry.
+fn registry_lock() -> std::sync::MutexGuard<'static, ()> {
+    DELEGATION_REGISTRY_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// A row whose `assigned_to` names nothing live must not be accented.
@@ -9835,6 +9858,7 @@ fn a_delegation_with_no_assigned_todos_has_no_counter() {
 /// lights the row.
 #[test]
 fn a_claim_on_a_delegation_that_never_existed_lights_nothing() {
+    let _registry = registry_lock();
     let _drain = operant_core::tools::async_delegation::RegistryDrain::new();
 
     let mut app = make_app();

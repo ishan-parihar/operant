@@ -36,6 +36,7 @@ use crate::tui::operant_app::config_shim::{
 };
 use crate::tui::operant_app::info_widget::{AuthMethod, InfoWidgetData};
 use crate::tui::operant_app::prompt::ContextInfo;
+use crate::tui::operant_app::protocol::SwarmMemberStatus;
 use crate::tui::operant_app::side_panel::SidePanelSnapshot;
 use crate::tui::operant_app::tui_fns::{BackgroundTaskRow, CacheTtlInfo, PromptHistorySearchView};
 use crate::tui::operant_app::tui_state::TuiState;
@@ -759,6 +760,46 @@ impl TuiState for App {
             ..Default::default()
         }
     }
+
+    // ---- Inline swarm gallery (Gap 3, iter-1607) ----
+    //
+    // The FOUR trait defaults these override had never been overridden, so the
+    // inline swarm strip, the gallery band and the focused panel were all
+    // wired to sources returning nothing — the renderers were dead code. That
+    // made the TUI's subagent preview the one surface of the operator's report
+    // with no producer at all (`/subagents` covers channels, the todo card
+    // covers the plan; nothing covered live children here).
+    //
+    // The producer is a mapping over sources that already exist, not new
+    // machinery: `async_delegation::list_records()` is the live process-wide
+    // registry, and this App's own todo list already joins a delegation to its
+    // work through `todo.assigned_to` (see `subagent_live_todo_ids`).
+
+    /// The gallery shows when there is at least one live delegation.
+    fn inline_swarm_gallery_active(&self) -> bool {
+        self.swarm_gallery_members(true).next().is_some()
+    }
+
+    fn inline_swarm_members(&self) -> Vec<SwarmMemberStatus> {
+        self.swarm_gallery_members(true).collect()
+    }
+
+    /// Cards under a swarm spawn tool call: the whole delegation tree, not only
+    /// the live ones — a finished child is still the answer to "what did that
+    /// spawn run".
+    fn swarm_members_for_transcript(&self) -> Vec<SwarmMemberStatus> {
+        self.swarm_gallery_members(false).collect()
+    }
+
+    // [port-decision] swarm_panel_focused / swarm_panel_full_page: deliberately
+    //   LEFT at their `false` defaults. There is no keybind and no overlay state
+    //   for a swarm panel anywhere in this tree (`keybind.rs` has no binding, and
+    //   no `swarm_panel*` state exists on `App`), so overriding them would mean
+    //   inventing a keyboard-driven full-page view the operator never asked for.
+    //   The strip and the band above are the PREVIEW the request names, and both
+    //   render from `swarm_panel_focused() == false` already (see the renderer's
+    //   `swarm_panel_focused() || !stands_down_for_dock()` gate at
+    //   `operant_ui/mod.rs:2496`). Wire the focus state first, then these two.
 
     // ---- Workspace ----
 

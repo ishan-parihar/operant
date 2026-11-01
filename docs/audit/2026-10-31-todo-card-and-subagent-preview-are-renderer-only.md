@@ -47,6 +47,55 @@
 > returned the model's own `intent` — already on the line. Six tests in
 > `tool_progress_tests` pin it, both directions mutation-proven.
 >
+> **AMENDED A FOURTH TIME 2026-11-01, retracting an overstated claim in the
+> THIRD amendment: "this audit has no open gaps" was WRONG.** That sentence
+> closed Gap 4's two items and then silently extended itself to Gap 3, which
+> was still open — and which is the **TUI subagent preview**, one of the two
+> surfaces the operator named. The closed claims stand (Gap 1, Gap 2, Gap 4
+> items 1 and 2 are genuinely fixed); the sweep does not.
+>
+> **Gap 3 is open and is larger than its section above states.** The section
+> frames it as "`todo_progress` / `todo_items` have no producer", but the
+> verified state (2026-11-01, re-read pass) is that the whole inline swarm
+> gallery is inert: four trait defaults in `tui_state.rs` return nothing and
+> **no `impl App` overrides any of them** —
+>
+> | Default | Line | Returns |
+> |---|---|---|
+> | `inline_swarm_gallery_active` | `tui_state.rs:407` | `false` — gates the entire strip and gallery |
+> | `inline_swarm_members` | `tui_state.rs:412` | `Vec::new()` — the gallery's only data source |
+> | `swarm_panel_focused` | `tui_state.rs:430` | `false` |
+> | `swarm_panel_full_page` | `tui_state.rs:434` | `false` |
+>
+> `swarm_members_for_transcript` (`tui_state.rs:420`) delegates to the empty
+> one, so the transcript cards are dead too. The renderers are all wired
+> (`operant_ui/mod.rs:2494` reads the strip gate, `:2498` and `:2836` read the
+> members) — it is purely a missing producer, which is the same defect class
+> this audit was written about.
+>
+> **The producer is cheap because the data already exists.**
+> `async_delegation::list_records()` is a live process-global registry and
+> `async_delegation::records_snapshot()` already maps it to the unified
+> listing's row shape. The TUI's own session hub reads exactly that
+> (`session_hub/mod.rs:274`), and `background_tasks.rs:184` syncs it. So the
+> gallery's source is a mapping over an existing source, not new machinery.
+>
+> **AMENDED A FIFTH TIME 2026-11-01 (iter-1607) — Gap 3 is now CLOSED.**
+> `swarm_gallery_members(live_only)` (`tui/app/mod.rs:1174`) maps the registry
+> to `SwarmMemberStatus`, and `tui/app/tui_state_impl.rs` overrides
+> `inline_swarm_gallery_active`, `inline_swarm_members` and
+> `swarm_members_for_transcript` to read it. The strip now shows live children
+> with a `C/T` counter scoped to each child's own `assigned_to` items.
+> Four tests pin it; reverting either override to the trait default turns all
+> four red.
+>
+> **What is deliberately NOT done, and recorded in the code as a
+> `[port-decision]`:** `swarm_panel_focused` and `swarm_panel_full_page` stay
+> at their `false` defaults. No keybind and no overlay state for a swarm panel
+> exists anywhere in the tree, so wiring them would mean inventing a
+> keyboard-driven full-page view the operator never asked for. The preview the
+> request names renders from the unfocused default already.
+>
 > **Label collision, noted per the numbering protocol:** two commits on
 > `origin/main` carry `iter-1597` — this audit's closure (`c8c34fbf`) and a
 > peer's process-hardening change (`5bf97977`). Both stay; history is
