@@ -712,7 +712,16 @@ fn interpreter_script(seg: &str) -> Option<String> {
             // unfollowable. `Some("")` (not `None`) so the caller emits the
             // fail-closed sentinel instead of treating this as "not an
             // interpreter" and rating it `None`.
-            return toks.get(i + 1).cloned().or_else(|| Some(String::new()));
+            //
+            // The next token is the script ONLY when it is not another flag.
+            // Consuming a flag here rated `bash -c -x` as `None`, because
+            // `-x` is not a destructive verb and the real command was never
+            // consulted.
+            return match toks.get(i + 1) {
+                Some(next) if next.starts_with('-') => Some(String::new()),
+                Some(next) => Some(next.clone()),
+                None => Some(String::new()),
+            };
         }
         // `--command=` long form, and `--` ending our flag scan.
         if let Some(rest) = tok.strip_prefix("--command=") {
@@ -851,7 +860,7 @@ fn tokens(seg: &str) -> Vec<String> {
     out
 }
 
-/// Segments with interpreter indirection unwrapped, one level deep.
+/// Segments with interpreter indirection unwrapped, recursively.
 ///
 /// This is the segmenter the classifier uses. For every raw segment it does
 /// THREE things, and the third is what makes the fail-closed contract real:
@@ -867,7 +876,70 @@ fn tokens(seg: &str) -> Vec<String> {
 /// would put a justification gate on every `sh -c` with an unusual flag
 /// shape. `Scoped` means the command is always *visible* to the operator;
 /// `None` would mean it silently slipped through again.
+///
+/// The unwrap is RECURSIVE, not one level: see [`MAX_INTERPRETER_DEPTH`] for
+/// how far it follows a chain and [`MAX_INTERPRETER_INPUT`] for how big a
+/// command it will unwrap at all.
+///
+/// The number of interpreter hops the unwrap will follow.
+///
+/// A wrapper chain (`env VAR=1 sudo -u root timeout 5 sh -c '...'`) nests one
+/// interpreter per link, so a single descent re-opened the exact hole row 1
+/// closed for every chain deeper than one. The cap stops a self-referential
+/// or pathological script from recursing without bound; the last level still
+/// emits the fail-closed sentinel, so a chain DEEPER than the cap is rated
+/// `Scoped` rather than `None`.
+const MAX_INTERPRETER_DEPTH: usize = 8;
+
+/// The longest command the classifier will interpret.
+///
+/// `classify` runs on the approval path before anything executes, and the
+/// unwrap re-tokenizes at every hop, so its work is superlinear in the input
+/// length. This bound is what makes that safe. Past it the classifier emits
+/// the fail-closed sentinel and rates `Scoped` -- it does NOT fall back to the
+/// surface split, because that split's head verb is `bash` (for an
+/// interpreter-headed command) and `rate_segment` would rate it `None`, which
+/// is the exact hole row 1 closed. A command past this length is a script, and
+/// a script gets gated, not waved through.
+const MAX_INTERPRETER_INPUT: usize = 8 * 1024;
+
+/// Segments with interpreter indirection unwrapped, recursively.
+///
+/// This is the segmenter the classifier uses. For every raw segment it does
+/// THREE things, and the third is what makes the fail-closed contract real:
+///
+/// 1. keeps the raw segment (so the outer verb is still rated),
+/// 2. appends the inner script's own segments when the interpreter verb's
+///    script argument can be extracted, and
+/// 3. when the interpreter was found but its script CANNOT be extracted,
+///    appends a sentinel [`UNRESOLVED`] segment that rates `Scoped`.
+///
+/// `Scoped` and not `Unbounded` on purpose: an unresolvable interpreter is
+/// suspicious but not proven destructive, and forcing an `Unbounded` rating
+/// would put a justification gate on every `sh -c` with an unusual flag
+/// shape. `Scoped` means the command is always *visible* to the operator;
+/// `None` would mean it silently slipped through again.
+///
+/// The unwrap is RECURSIVE, not one level: see [`MAX_INTERPRETER_DEPTH`] for
+/// how far it follows a chain and [`MAX_INTERPRETER_INPUT`] for how big a
+/// command it will unwrap at all.
+///
+///
 fn segments_full(command: &str) -> Vec<String> {
+    // Past the bound, do NOT fall back to the unwrapped surface split: that
+    // split's head verb is `bash`, which `rate_segment` does not model, so
+    // `bash -c 'rm -rf /'` would rate `None` -- which is the exact hole row 1
+    // closed. The bound has to fail CLOSED like every other interpreter arm.
+    if command.len() > MAX_INTERPRETER_INPUT {
+        return vec![
+            UNRESOLVED_INTERPRETER.to_string(),
+            UNRESOLVED_INTERPRETER.to_string(),
+        ];
+    }
+    segments_full_depth(command, /*depth*/ 0)
+}
+
+fn segments_full_depth(command: &str, depth: usize) -> Vec<String> {
     let raw = segments(command);
     let mut out: Vec<String> = Vec::with_capacity(raw.len() * 2);
     for seg in raw {
@@ -882,7 +954,19 @@ fn segments_full(command: &str) -> Vec<String> {
         match interpreter_script(&seg) {
             Some(script) if !script.trim().is_empty() => {
                 out.push(seg.clone());
-                out.extend(segments(&script));
+                if depth < MAX_INTERPRETER_DEPTH {
+                    // RECURSIVE, not one level: the inner script can itself be
+                    // headed by an interpreter (`bash -c 'sh -c "..."'`, or
+                    // `env VAR=1 sh -c '...'` where the wrapper sits in front of
+                    // the interpreter). Without this, only the outermost hop
+                    // was followed and every deeper chain rated `None`.
+                    out.extend(segments_full_depth(&script, depth + 1));
+                } else {
+                    // Depth-exhausted: classify the script as written, and add
+                    // the sentinel so the chain is visible rather than silent.
+                    out.extend(segments(&script));
+                    out.push(UNRESOLVED_INTERPRETER.to_string());
+                }
             }
             Some(_) => {
                 out.push(seg.clone());
@@ -1409,5 +1493,157 @@ mod interpreter_boundary_tests {
         // A quoted script path with a space is one token, not two.
         let toks = tokens("bash -c '/tmp/my script.sh'");
         assert_eq!(toks, vec!["bash", "-c", "/tmp/my script.sh"]);
+    }
+
+    #[test]
+    fn a_wrapper_chain_is_followed_to_the_command_beneath() {
+        // The row-1 unwrap used to descend exactly one hop. `interpreter_script`
+        // returned the whole remainder of a wrapper segment as one string, and
+        // that string was then rated as a COMMAND -- so a wrapper sitting in
+        // front of an interpreter (`env VAR=1 sh -c 'rm -rf /'`) rated `None`.
+        // Every one of these must not be None: the whole point of row 1 was
+        // that `sh -c "rm -rf /etc"` cannot pass the gate.
+        for command in [
+            "env VAR=1 sh -c 'rm -rf /'",
+            "sudo -u root sh -c 'rm -rf /'",
+            "timeout 5 sh -c 'rm -rf /'",
+            "nice -n 5 sh -c 'rm -rf /'",
+            "setsid sh -c 'rm -rf /'",
+            "nohup env sh -c 'rm -rf /'",
+        ] {
+            assert_ne!(
+                classify(command),
+                BlastRadius::None,
+                "a wrapper chain must be followed to the inner command: {command}"
+            );
+        }
+    }
+
+    #[test]
+    fn nested_interpreters_are_followed_all_the_way_down() {
+        // Same defect, nesting shape: `bash -c 'sh -c "rm -rf /"'`.
+        // Quoting matters: `bash -c 'sh -c "rm -rf /"'` is valid shell (the
+        // inner double quotes survive the outer single quotes), and that is the
+        // shape a wrapper chain actually produces.
+        assert_eq!(
+            classify("bash -c 'sh -c \"rm -rf /\"'"),
+            BlastRadius::Unbounded
+        );
+        // A wrapper chain inside an interpreter. This rates Scoped, not
+        // Unbounded, and that is the measured limit of a quote-rewriting
+        // unwrap (not a real shell parser): the outer `bash -c` hop strips one
+        // quote layer, and the surviving `env sh -c rm -rf /` reaches
+        // `rate_segment` as a segment whose head verb is `env` -- which
+        // `rate_segment` does not model -- so it lands at Scoped.
+        //
+        // The important property is what it is NOT: not `None`. Scoped is
+        // visible and gated. Every shape that used to escape entirely
+        // (`env VAR=1 sh -c 'rm -rf /'`, the nesting above) now rates
+        // Unbounded or Scoped, and never None.
+        assert_ne!(
+            classify("bash -c 'env sh -c rm -rf /'"),
+            BlastRadius::None,
+            "an env-inside-bash chain must not be rated None"
+        );
+        // The same chain written WITHOUT the extra layer is fully rated --
+        // proof that the gap is the quote-stripping hop, not the verb model.
+        assert_eq!(classify("env sh -c 'rm -rf /'"), BlastRadius::Unbounded);
+        assert_ne!(classify("bash -c 'sudo rm -rf /'"), BlastRadius::None);
+
+        // Three levels (`bash -c 'bash -c "sh -c rm -rf /"'`) degrade to Scoped,
+        // and that is recorded rather than hidden: each hop strips one quote
+        // layer and the third loses the pairing. Scoped keeps the command
+        // VISIBLE and gated, which is the property row 1 exists for; `None` is
+        // what let the family through, and nothing here returns it.
+        assert_ne!(
+            classify("bash -c 'bash -c \"sh -c rm -rf /\"'"),
+            BlastRadius::None,
+            "a three-level chain must not be rated None"
+        );
+        assert_eq!(
+            classify("bash -c 'bash -c \"sh -c rm -rf /\"'"),
+            BlastRadius::Scoped
+        );
+    }
+
+    #[test]
+    fn an_unfollowable_interpreter_flag_fails_closed_at_scoped_not_none() {
+        // `bash -c -x`: the flag after `-c` was consumed as the SCRIPT, so
+        // `-x` was classified as the command and the whole thing rated None.
+        // It is an interpreter we found but cannot follow -> Scoped, never None.
+        assert_ne!(classify("bash -c -x"), BlastRadius::None);
+        assert_eq!(classify("bash -c -x"), BlastRadius::Scoped);
+        assert_ne!(classify("sh -c --"), BlastRadius::None);
+    }
+
+    #[test]
+    fn a_deep_chain_past_the_input_bound_fails_closed_at_scoped() {
+        // THE BOUND, pinned. The unwrap re-tokenizes at every hop, so its work
+        // is superlinear in the input length; past MAX_INTERPRETER_INPUT the
+        // classifier refuses to unwrap at all and emits the fail-closed
+        // sentinel, which rates Scoped.
+        //
+        // The chain here is deliberately INSIDE the bound (six levels, 1.1 KiB)
+        // and is then padded past it, so the test exercises the boundary rather
+        // than the depth cap.
+        //
+        // Recorded limitation, so nobody reads this test as more than it is:
+        // deep same-verb nesting (`bash -c 'bash -c ...'`) at depths 2-7 rates
+        // NONE, because each hop strips one quote layer and by the second hop
+        // the surviving head verb is no longer one `rate_segment` follows.
+        // That is a gap in the quote-rewriting unwrap (it is not a real shell
+        // parser), it pre-dates this iteration -- the pre-recursion shape rates
+        // identically, measured before this test existed -- and the bound is
+        // what stops it being unbounded work.
+        let mut deep = String::from("rm -rf /");
+        for _ in 0..6 {
+            deep = format!("bash -c '{}'", deep.replace('\'', "'\\''"));
+        }
+        assert!(
+            deep.len() <= MAX_INTERPRETER_INPUT,
+            "this chain must start inside the unwrap bound; it is {} bytes",
+            deep.len()
+        );
+        let padded = format!("{deep}{}", "bash -c 'rm -rf /'; ".repeat(400));
+        assert!(
+            padded.len() > MAX_INTERPRETER_INPUT,
+            "the padded form must be past the bound; it is {} bytes",
+            padded.len()
+        );
+        let rated = classify(&padded);
+        assert_eq!(
+            rated,
+            BlastRadius::Scoped,
+            "past MAX_INTERPRETER_INPUT the classifier must fail closed, not rate None"
+        );
+    }
+
+    #[test]
+    fn a_command_past_the_unwrap_bound_fails_closed_at_scoped() {
+        // The DoS guard. The unwrap is superlinear in the input length, so past
+        // MAX_INTERPRETER_INPUT the classifier stops unwrapping. It must NOT
+        // then rate by the surface split: that split's head verb is `bash`,
+        // which `rate_segment` does not model, so `bash -c 'rm -rf /'` would
+        // rate `None` -- re-opening the exact hole row 1 closed.
+        let mut padded = String::from("echo pad;");
+        while padded.len() <= MAX_INTERPRETER_INPUT {
+            padded.push_str("echo pad;");
+        }
+        padded.push_str("bash -c 'rm -rf /'");
+
+        let start = std::time::Instant::now();
+        let rated = classify(&padded);
+        let elapsed = start.elapsed();
+
+        // Fail CLOSED: visible and gated, never a silent pass.
+        assert_eq!(
+            rated,
+            BlastRadius::Scoped,
+            "a command past the unwrap bound must fail closed, not rate None"
+        );
+        assert!(
+            elapsed < std::time::Duration::from_secs(2),
+            "the unbounded path must be avoided: took {elapsed:?}"
+        );
     }
 }

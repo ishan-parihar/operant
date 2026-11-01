@@ -24,6 +24,13 @@ struct PatchArgs {
     find: String,
     /// Replacement string
     replace: String,
+    /// Which occurrence to edit when `find` matches more than once.
+    ///
+    /// Codex's contract: an ambiguous find is REFUSED, not guessed. Supply
+    /// `0..count` to name one; leave it out and the tool names the count
+    /// instead of picking for you.
+    #[serde(default)]
+    occurrence: Option<usize>,
 }
 
 /// Tool for targeted find-and-replace patching of files
@@ -84,18 +91,18 @@ fn fuzzy_replace(content: &str, find: &str, replace: &str) -> Option<(String, us
             }
 
             if matched {
-                // Replace this block with the replacement text
-                for (idx, line) in replace.lines().enumerate() {
-                    if idx > 0 || !replace.is_empty() {
-                        result_lines.push(line.to_string());
-                    }
-                }
-                // Handle the case where replace is empty (deletion)
-                if replace.is_empty() {
-                    // Don't add anything
-                    if !result_lines.is_empty() || i > 0 {
-                        // already handled
-                    }
+                // Replace this block with the replacement text. `lines()`
+                // yields nothing at all for an empty `replace`, which is
+                // exactly the delete-a-line case, so the loop needs no empty
+                // arm -- and the `if replace.is_empty()` block that used to sit
+                // here was D2's dead branch: an `if` whose body was a comment
+                // saying "already handled", reached only when
+                // `!result_lines.is_empty() || i > 0` was true, which did
+                // nothing either way. Removed per row 4; the behaviour it
+                // pretended to have (delete a matched block by replacing it
+                // with nothing) is what `replace.lines()` already does.
+                for line in replace.lines() {
+                    result_lines.push(line.to_string());
                 }
                 i += find_lines.len();
                 replacements += 1;
@@ -108,15 +115,98 @@ fn fuzzy_replace(content: &str, find: &str, replace: &str) -> Option<(String, us
     }
 
     if replacements > 0 {
-        // Preserve the original trailing newline if present
-        let mut result = result_lines.join("\n");
-        if content.ends_with('\n') && !result.ends_with('\n') {
-            result.push('\n');
+        // Preserve the file's line endings, not just its newlines.
+        //
+        // The old writer joined with "\n" unconditionally, which converted
+        // every CRLF (and lone-CR) line in the file to LF on any fuzzy patch.
+        // Row 4 shipped `SourceFile`/`LineEnding` in tools/patch/mod.rs to fix
+        // exactly this, but that module was never wired to this tool -- so the
+        // fidelity the port exists for did not reach the operator. Mirrored
+        // here at the one place it matters.
+        //
+        // The trailing-ending branch is what makes the LAST line faithful: it
+        // appends the file's own ending, not a hard-coded "\n", so a CRLF
+        // file's final line stays CRLF (the old code appended "\n" and
+        // silently produced a mixed-ending file).
+        let ending = dominant_line_ending(content);
+        let mut result = result_lines.join(ending);
+        if (content.ends_with('\n') || content.ends_with('\r'))
+            && !result.is_empty()
+            && !result.ends_with(ending)
+        {
+            result.push_str(ending);
         }
         Some((result, replacements))
     } else {
         None
     }
+}
+
+/// The line ending a file predominantly uses, so a rewrite can keep it.
+///
+/// Mirrors `crate::tools::patch::SourceFile`'s rule: the first ending found
+/// wins, and a file with none at all defaults to LF. `normalize_whitespace`
+/// already normalized CRLF to LF for MATCHING, which is correct and intended;
+/// this is about what gets WRITTEN back.
+fn dominant_line_ending(content: &str) -> &'static str {
+    let mut first: Option<&'static str> = None;
+    let bytes = content.as_bytes();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if bytes[i] == b'\r' {
+            let ending = if bytes.get(i + 1) == Some(&b'\n') {
+                i += 2;
+                "\r\n"
+            } else {
+                i += 1;
+                "\r"
+            };
+            first.get_or_insert(ending);
+            continue;
+        }
+        if bytes[i] == b'\n' {
+            first.get_or_insert("\n");
+        }
+        i += 1;
+    }
+    first.unwrap_or("\n")
+}
+
+/// Delete every line whose trimmed text equals `find`, keeping endings.
+///
+/// An empty `replace` on a whole-line `find` means "remove that line". Using
+/// `str::replace` for it leaves a blank line behind, which is how the old
+/// `patch` handled a delete: the text vanished but the line stayed, so the tool
+/// could blank a line and never remove one.
+///
+/// Only whole-line matches count. A `find` that is a fragment of a longer line
+/// falls through to the caller's `str::replace`, which deletes just the
+/// fragment -- the behaviour a substring delete should have.
+fn delete_lines_matching(content: &str, find: &str) -> String {
+    let find_trimmed = find.trim();
+    if find_trimmed.is_empty() {
+        return content.to_string();
+    }
+    let ending = dominant_line_ending(content);
+    let mut kept: Vec<&str> = Vec::new();
+    let mut removed = 0usize;
+    for line in content.lines() {
+        if line.trim() == find_trimmed {
+            removed += 1;
+            continue;
+        }
+        kept.push(line);
+    }
+    // Nothing matched as a whole line, so this was a fragment delete: the
+    // caller's plain replace is the right behaviour.
+    if removed == 0 {
+        return content.replace(find, "");
+    }
+    let mut out = kept.join(ending);
+    if (content.ends_with('\n') || content.ends_with('\r')) && !out.is_empty() {
+        out.push_str(ending);
+    }
+    out
 }
 
 #[async_trait]
@@ -171,13 +261,79 @@ impl OperantTool for PatchTool {
         // Try exact match first
         let exact_count = content.matches(&args.find).count();
 
+        // OCCURRENCE GATE (D1): codex refuses an ambiguous find, and so does
+        // the ported engine in `crate::tools::patch::OccurrenceRule` -- but that engine was
+        // never called from here, so the registered tool kept the old
+        // replace-every-occurrence behaviour and reported it as success. The
+        // gate is applied to BOTH tiers so the fuzzy path cannot be a
+        // quieter way to rewrite more than one place.
         let (new_content, replacements, match_type) = if exact_count > 0 {
-            let replaced = content.replace(&args.find, &args.replace);
-            (replaced, exact_count, "exact")
+            match crate::tools::patch::OccurrenceRule::resolve(exact_count, args.occurrence) {
+                rule if rule.is_allowed() => {
+                    let replaced =
+                        if let crate::tools::patch::OccurrenceRule::Chosen { picked, .. } = rule {
+                            // The caller named which occurrence: replace only that
+                            // one, leaving the others untouched.
+                            let mut seen = 0usize;
+                            let mut out = String::with_capacity(content.len());
+                            let mut rest = content.as_str();
+                            while let Some(at) = rest.find(&args.find) {
+                                if seen == picked {
+                                    out.push_str(&rest[..at]);
+                                    out.push_str(&args.replace);
+                                    rest = &rest[at + args.find.len()..];
+                                    break;
+                                }
+                                let end = at + args.find.len();
+                                out.push_str(&rest[..end]);
+                                rest = &rest[end..];
+                                seen += 1;
+                            }
+                            out.push_str(rest);
+                            out
+                        } else {
+                            // A single occurrence: replace it.
+                            //
+                            // An EMPTY replacement removes the matched text,
+                            // and when what matched was a whole line that must
+                            // remove the LINE, not leave a blank one behind --
+                            // otherwise `patch` cannot delete anything, it only
+                            // blanks it. Deleting a mid-line substring still
+                            // deletes just the substring, which is correct.
+                            if args.replace.is_empty() {
+                                delete_lines_matching(&content, &args.find)
+                            } else {
+                                content.replace(&args.find, &args.replace)
+                            }
+                        };
+                    (replaced, exact_count, "exact")
+                }
+                rule => {
+                    let why = rule
+                        .refusal_message(&args.find)
+                        .unwrap_or_else(|| "ambiguous find".to_string());
+                    return ToolResult::error("patch", format!("{} (file '{}')", why, args.path));
+                }
+            }
         } else {
             // Fuzzy fallback
             match fuzzy_replace(&content, &args.find, &args.replace) {
-                Some((replaced, count)) => (replaced, count, "fuzzy"),
+                Some((replaced, count)) => {
+                    // Same gate on the fuzzy tier: an ambiguous fuzzy match is
+                    // just as ambiguous as an exact one.
+                    match crate::tools::patch::OccurrenceRule::resolve(count, args.occurrence) {
+                        rule if rule.is_allowed() => (replaced, count, "fuzzy"),
+                        rule => {
+                            let why = rule
+                                .refusal_message(&args.find)
+                                .unwrap_or_else(|| "ambiguous find".to_string());
+                            return ToolResult::error(
+                                "patch",
+                                format!("{} (file '{}')", why, args.path),
+                            );
+                        }
+                    }
+                }
                 None => {
                     return ToolResult::error(
                         "patch",
@@ -330,6 +486,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_patch_multiple_replacements() {
+        // D1 (codex's contract): an ambiguous find is REFUSED and the count is
+        // named, never a blind rewrite of every occurrence.
+        //
+        // This test used to assert the opposite -- that all three occurrences
+        // were replaced and reported as success. The row-4 engine in
+        // `tools/patch/mod.rs` shipped `OccurrenceRule` to close exactly this,
+        // but it was never called from the registered tool (the port landed as
+        // an orphan module with zero callers), so the old behaviour was still
+        // what shipped. The refusal is now enforced at the tool.
         let path = create_temp_file("foo bar foo baz foo\n");
         let path_str = path.to_str().unwrap().to_string();
 
@@ -345,12 +510,149 @@ mod tests {
             )
             .await;
 
-        assert!(result.success);
-        let parsed: Value = serde_json::from_str(&result.content).unwrap();
-        assert_eq!(parsed["replacements"], 3);
+        assert!(
+            !result.success,
+            "a find matching three times must be refused, not rewritten: {:?}",
+            result.error
+        );
+        // The message IS the contract: the model can only act on the count if
+        // it is named. `ToolResult::error` puts it in `error`, not `content`.
+        let message = result.error.as_deref().unwrap_or("");
+        assert!(
+            message.contains("3 times") || message.contains("three"),
+            "the refusal must name the count so the model can act on it: {message}"
+        );
 
+        // The file must be untouched: a refusal writes nothing.
+        let after = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            after, "foo bar foo baz foo\n",
+            "a refused ambiguous find must leave the file byte-identical"
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn test_patch_occurrence_index_selects_one() {
+        // The escape hatch the refusal message offers: name which occurrence.
+        let path = create_temp_file("foo bar foo baz foo\n");
+        let path_str = path.to_str().unwrap().to_string();
+
+        let tool = PatchTool;
+        let result = tool
+            .execute(
+                serde_json::json!({
+                    "path": path_str,
+                    "find": "foo",
+                    "replace": "qux",
+                    "occurrence": 1
+                }),
+                default_context(),
+            )
+            .await;
+
+        assert!(
+            result.success,
+            "a named occurrence must be applied: {}",
+            result.content
+        );
         let updated = std::fs::read_to_string(&path).unwrap();
-        assert_eq!(updated, "qux bar qux baz qux\n");
+        assert_eq!(
+            updated, "foo bar qux baz foo\n",
+            "only occurrence 1 changes; the others stay"
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn test_patch_occurrence_index_out_of_range_is_refused() {
+        // An index past the count is an ambiguous find, not a silent pick.
+        let path = create_temp_file("foo bar foo baz foo\n");
+        let path_str = path.to_str().unwrap().to_string();
+
+        let tool = PatchTool;
+        let result = tool
+            .execute(
+                serde_json::json!({
+                    "path": path_str,
+                    "find": "foo",
+                    "replace": "qux",
+                    "occurrence": 7
+                }),
+                default_context(),
+            )
+            .await;
+
+        assert!(!result.success, "an out-of-range index must be refused");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "foo bar foo baz foo\n"
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn test_patch_single_occurrence_still_succeeds() {
+        // The refusal must not make the common single-match case worse.
+        let path = create_temp_file("only one foo here\n");
+        let path_str = path.to_str().unwrap().to_string();
+
+        let tool = PatchTool;
+        let result = tool
+            .execute(
+                serde_json::json!({
+                    "path": path_str,
+                    "find": "foo",
+                    "replace": "qux"
+                }),
+                default_context(),
+            )
+            .await;
+
+        assert!(
+            result.success,
+            "a unique find must still apply: {}",
+            result.content
+        );
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "only one qux here\n"
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn test_patch_fuzzy_ambiguous_is_refused_too() {
+        // The gate applies to the fuzzy tier as well: normalised whitespace
+        // must not become a quieter way to rewrite more than one place.
+        let path = create_temp_file("fn  a()  {}\nfn  a()  {}\n");
+        let path_str = path.to_str().unwrap().to_string();
+
+        let tool = PatchTool;
+        let result = tool
+            .execute(
+                serde_json::json!({
+                    "path": path_str,
+                    "find": "fn a() {}",
+                    "replace": "fn a() { /* changed */ }"
+                }),
+                default_context(),
+            )
+            .await;
+
+        assert!(
+            !result.success,
+            "an ambiguous FUZZY find must be refused too: {}",
+            result.content
+        );
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "fn  a()  {}\nfn  a()  {}\n"
+        );
 
         let _ = std::fs::remove_file(&path);
     }
@@ -511,8 +813,13 @@ mod tests {
         let parsed: Value = serde_json::from_str(&result.content).unwrap();
         assert_eq!(parsed["replacements"], 1);
 
+        // The whole-file delete must leave an EMPTY file, not a stray
+        // newline. The old assertion here pinned `"\n"` -- which was the
+        // leave-a-blank-line defect in action: the text was removed but the
+        // LINE it occupied stayed. A delete that cannot actually delete is not
+        // a delete, so this expectation is corrected rather than preserved.
         let updated = std::fs::read_to_string(&path).unwrap();
-        assert_eq!(updated, "\n");
+        assert_eq!(updated, "");
 
         let _ = std::fs::remove_file(&path);
     }
@@ -585,5 +892,142 @@ mod tests {
         assert!(updated.contains("hi there"));
 
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn test_patch_fuzzy_preserves_crlf() {
+        // D2's sibling: row 4's LineEnding fidelity. `normalize_whitespace`
+        // normalizes CRLF to LF for MATCHING (correct), but the WRITER joined
+        // with "\n", so a fuzzy patch on a CRLF file converted the whole file.
+        // The file's own ending must survive the rewrite.
+        let path = create_temp_file("fn  a()  {\r\n  b();\r\n}\r\n");
+        let path_str = path.to_str().unwrap().to_string();
+
+        let tool = PatchTool;
+        let result = tool
+            .execute(
+                serde_json::json!({
+                    "path": path_str,
+                    "find": "fn a() {\n  b();\n}",
+                    "replace": "fn a() {\n  c();\n}"
+                }),
+                default_context(),
+            )
+            .await;
+
+        assert!(
+            result.success,
+            "fuzzy CRLF patch must apply: {:?}",
+            result.error
+        );
+        let updated = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            updated, "fn a() {\r\n  c();\r\n}\r\n",
+            "every kept line must retain its CRLF ending"
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn test_patch_exact_preserves_crlf() {
+        // The exact tier must be equally faithful.
+        let path = create_temp_file("alpha\r\nbeta\r\ngamma\r\n");
+        let path_str = path.to_str().unwrap().to_string();
+
+        let tool = PatchTool;
+        let result = tool
+            .execute(
+                serde_json::json!({
+                    "path": path_str,
+                    "find": "beta",
+                    "replace": "BETA"
+                }),
+                default_context(),
+            )
+            .await;
+
+        assert!(
+            result.success,
+            "exact CRLF patch must apply: {:?}",
+            result.error
+        );
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "alpha\r\nBETA\r\ngamma\r\n"
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn test_patch_lone_cr_is_preserved() {
+        // Classic Mac CR files are rare but exist; the writer must not
+        // normalise them either.
+        let path = create_temp_file("one\rtwo\rthree\r");
+        let path_str = path.to_str().unwrap().to_string();
+
+        let tool = PatchTool;
+        let result = tool
+            .execute(
+                serde_json::json!({
+                    "path": path_str,
+                    "find": "two",
+                    "replace": "TWO"
+                }),
+                default_context(),
+            )
+            .await;
+
+        assert!(
+            result.success,
+            "lone-CR patch must apply: {:?}",
+            result.error
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "one\rTWO\rthree\r");
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn test_patch_delete_a_line_with_an_empty_replacement() {
+        // D2: the dead branch that claimed to handle deletion. The behaviour it
+        // pretended to have is what `replace.lines()` already did -- an empty
+        // replacement yields no lines, so the matched block disappears. This is
+        // the test that keeps the branch removed.
+        let path = create_temp_file("keep\ndrop this\nkeep too\n");
+        let path_str = path.to_str().unwrap().to_string();
+
+        let tool = PatchTool;
+        let result = tool
+            .execute(
+                serde_json::json!({
+                    "path": path_str,
+                    "find": "drop this",
+                    "replace": ""
+                }),
+                default_context(),
+            )
+            .await;
+
+        assert!(
+            result.success,
+            "a delete-by-empty-replacement must apply: {:?}",
+            result.error
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "keep\nkeep too\n");
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn dominant_line_ending_detects_the_files_own_style() {
+        // The helper the writer uses, unit-tested directly.
+        assert_eq!(dominant_line_ending("a\nb\n"), "\n");
+        assert_eq!(dominant_line_ending("a\r\nb\r\n"), "\r\n");
+        assert_eq!(dominant_line_ending("a\rb\r"), "\r");
+        assert_eq!(dominant_line_ending("no ending at all"), "\n");
+        // Mixed: the FIRST ending wins, matching the ported SourceFile rule.
+        assert_eq!(dominant_line_ending("a\r\nb\n"), "\r\n");
     }
 }
