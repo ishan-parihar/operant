@@ -1,17 +1,29 @@
-//! Exclusive per-turn attribution — the RT-199 fix.
+//! Exclusive per-turn attribution: OPEN. **This module has no caller.**
 //!
-//! ## The bug this closes
+//! ## Read this before believing the RT-199 class is handled
+//!
+//! RT-199 (a hardcoded `Duration::from_millis(0)` that lived undetected
+//! because a `u64` cannot distinguish "took zero time" from "nobody measured
+//! this") was closed separately, by the observer path:
+//! `agent/mod.rs`'s `tool_durations_by_call` map, filled by `execute_tools` at
+//! the same sites that feed `TurnEndBus::record_tool_duration`, and read back
+//! by the `ObserverEvent::ToolCall` emit in `agent/run.rs`. That is the fix.
+//!
+//! This module was written to close a DIFFERENT, still-open question and was
+//! never wired in: what the four mutually-exclusive spans of a turn are. It
+//! previously claimed to be the RT-199 fix in its own doc header, which is
+//! false, and that false claim is the reason this paragraph exists: an orphan
+//! that documents itself as live is worse than one that does not, because the
+//! next agent reads the header, believes the class is handled, and does not
+//! check.
+//!
+//! ## The bug this would close
 //!
 //! operant already measures three things per turn: the LLM call duration
-//! (`agent/run.rs:1234`), each tool's duration (`run.rs:2209`), and the turn
-//! total (`run.rs:1705`). All three are **inclusive and overlapping** — the
-//! tools run *inside* the turn, and the LLM call that follows them runs inside
-//! it too — so nothing answers "why did this turn take 40 seconds".
-//!
-//! Worse, they are `Duration`s. RT-199 was a hardcoded `Duration::from_millis(0)`
-//! that lived undetected because a `u64` **cannot distinguish "took zero time"
-//! from "nobody measured this"**. The three-state enum below is the actual
-//! import from codex, and it is worth more than the arithmetic.
+//! (`agent/run.rs`), each tool's duration, and the turn total. All three are
+//! **inclusive and overlapping**: the tools run *inside* the turn, and the LLM
+//! call that follows them runs inside it too, so nothing answers "why did this
+//! turn take 40 seconds".
 //!
 //! ## The state model, ported
 //!
@@ -154,7 +166,7 @@ impl TurnBreakdown {
     /// Returns `true` when the four spans partition the turn exactly. An
     /// unmeasured span makes this `false` rather than silently true on zeros.
     pub fn is_exclusive(&self) -> bool {
-        if self.spans.iter().any(|s| *s == SpanDuration::Unmeasured) {
+        if self.spans.contains(&SpanDuration::Unmeasured) {
             return false;
         }
         let sum: Duration = self.spans.iter().map(|s| s.as_duration()).sum();
