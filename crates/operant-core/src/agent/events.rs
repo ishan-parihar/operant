@@ -990,7 +990,11 @@ impl OperantAgent {
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(skill_manager) = skill_manager_guard.as_ref() {
-            let skills = skill_manager.list();
+            // Availability-filtered, NOT `list()` (row 7): the block advertises
+            // these skills TO THE MODEL, and advertising a skill whose
+            // prerequisites are missing makes the model pick something the tool
+            // will refuse. `list_available()` is the advertising door.
+            let skills = skill_manager.list_available();
             if !skills.is_empty() {
                 frozen.push_str("\n\n<available_skills>\n");
                 for (name, description) in &skills {

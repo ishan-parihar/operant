@@ -203,10 +203,41 @@ impl SkillManager {
     }
 
     /// List all loaded skills as `(name, description)` pairs.
+    ///
+    /// Kept unfiltered: it is the inventory surface, and a skill that is
+    /// present-but-unusable still has to be describable. Callers that ADVERTISE
+    /// a skill to a model must use [`Self::list_available`]; see the row-7 note
+    /// on that method for why.
     pub fn list(&self) -> Vec<(String, String)> {
         let mut pairs: Vec<_> = self
             .skills
             .values()
+            .map(|s| (s.name.clone(), s.description.clone()))
+            .collect();
+        pairs.sort_by(|a, b| a.0.cmp(&b.0));
+        pairs
+    }
+
+    /// List the skills that are actually usable on this machine, as
+    /// `(name, description)` pairs.
+    ///
+    /// Row 7 (codex-architecture-deepen): `is_available()` existed and worked,
+    /// and no production code called it. The frozen prompt's
+    /// `<available_skills>` block was built from the unfiltered [`Self::list`],
+    /// so the model was advertised skills whose `prerequisites_env` or
+    /// `prerequisites_commands` were missing. It would pick one, the tool
+    /// would refuse, and the whole turn degraded. Advertising is the one place
+    /// availability matters, so this is the door every advertising caller uses.
+    ///
+    /// Availability is re-evaluated on every call, not cached: the prerequisites
+    /// are process env vars and on-disk commands, both of which can change
+    /// underneath a long-running gateway (RT-175's `/reload-skills` is the
+    /// live example).
+    pub fn list_available(&self) -> Vec<(String, String)> {
+        let mut pairs: Vec<_> = self
+            .skills
+            .values()
+            .filter(|s| self.is_available(s))
             .map(|s| (s.name.clone(), s.description.clone()))
             .collect();
         pairs.sort_by(|a, b| a.0.cmp(&b.0));
@@ -846,6 +877,93 @@ mod tests {
         assert_eq!(skill.version, "0.1.0");
         assert!(skill.platforms.is_empty());
         assert!(skill.content.contains("# Just content"));
+
+        cleanup(&tmp);
+    }
+
+    #[test]
+    fn the_prompt_surface_advertises_only_usable_skills() {
+        // Row 7 (codex-architecture-deepen): `is_available()` existed and worked,
+        // and NOTHING called it. The frozen prompt's `<available_skills>` block
+        // was built from the unfiltered `list()`, so the model was advertised
+        // skills whose `prerequisites_env` was missing and whose
+        // `prerequisites_commands` did not exist -- it would pick one, the tool
+        // would refuse, and the turn degraded.
+        //
+        // The env var name is deliberately implausible so the test does not
+        // depend on (or perturb) the real environment: nothing sets this, and
+        // `which` cannot find this either.
+        let tmp = make_temp_dir();
+        for (name, prereq) in [
+            (
+                "needs-env",
+                "prerequisites_env:\n  - OPERANT_TEST_ABSENT_VAR_XYZ\n",
+            ),
+            (
+                "needs-command",
+                "prerequisites_commands:\n  - operant_test_absent_cmd_xyz\n",
+            ),
+            ("plain", ""),
+        ] {
+            let dir = tmp.join(name);
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(
+                dir.join("SKILL.md"),
+                format!("---\nname: {name}\ndescription: {name} desc\n{prereq}---\nBody\n"),
+            )
+            .unwrap();
+        }
+
+        let mut mgr = SkillManager::new(tmp.clone());
+        mgr.load_all().unwrap();
+
+        // The INVENTORY surface stays unfiltered: all three are loaded.
+        let all = mgr.list();
+        assert_eq!(all.len(), 3, "list() must keep the full inventory");
+
+        // The ADVERTISING surface filters: only the one with satisfiable
+        // prerequisites is offered to a model.
+        let advertised = mgr.list_available();
+        assert_eq!(
+            advertised.len(),
+            1,
+            "only the skill with no unmet prerequisites is advertised"
+        );
+        assert_eq!(advertised[0].0, "plain");
+
+        // And the gap is exactly what this row closes: the old prompt path used
+        // list(), so two of these three were being advertised.
+        assert_ne!(
+            all.len(),
+            advertised.len(),
+            "the filter must actually remove something, or this test proves nothing"
+        );
+
+        cleanup(&tmp);
+    }
+
+    #[test]
+    fn reverting_the_advertised_list_to_the_inventory_list_fails_this_test() {
+        // The mutation-guard bookend for row 7. If `list_available()` ever stops
+        // filtering (or a caller goes back to `list()`), the count assertion
+        // above goes from 1 to 3 and names the regression.
+        let tmp = make_temp_dir();
+        let dir = tmp.join("needs-env");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("SKILL.md"),
+            "---\nname: needs-env\ndescription: d\nprerequisites_env:\n  - OPERANT_TEST_ABSENT_VAR_XYZ\n---\nBody\n",
+        )
+        .unwrap();
+
+        let mut mgr = SkillManager::new(tmp.clone());
+        mgr.load_all().unwrap();
+
+        assert!(!mgr.is_available(mgr.get("needs-env").unwrap()));
+        assert!(
+            mgr.list_available().is_empty(),
+            "a skill with an unmet prerequisite must not be advertised"
+        );
 
         cleanup(&tmp);
     }
