@@ -505,27 +505,42 @@ fn reveal_offset(
 
 /// Which prepared user-prompt slot the selector's cursor points at.
 ///
-/// `selected` is an index into the MARK list, and both lists are in
-/// conversation order, so position is the direct answer whenever the mark
-/// count matches the prompt count. The text fallback covers the one case where
-/// they cannot: a compaction that folded a prompt out of the display keeps the
-/// mark (so it can be refused) while removing its row, and the two lists
-/// desynchronise. Falling back by TEXT keeps the outline on the turn the
-/// operator can actually see rather than silently shifting it.
+/// `selected` is an index into the MARK list, and that list is NOT the display
+/// list: it keeps one entry per turn (so a folded turn can still be refused by
+/// Enter) while the display holds only the surviving prompts. A compaction that
+/// folds a prompt shifts the two lists apart, and the shift is silent — a
+/// positional shortcut still returns a value, just for the wrong turn.
+///
+/// A turn's TEXT is the identity that survives. It is the same anchor
+/// [`RewindSelectorState::sync_marks`] already keys on (iter-1515): a
+/// conversation produces the same prompts every frame, so text resolves across
+/// a re-derived list while position does not. omp resolves this by row range
+/// instead — `OutlineTarget` carries `start`/`end` (transcript-outline.ts:20-37)
+/// so `targets[selected]` names its own blocks by identity — and text is the
+/// closest identity this side has, because the turn_id is re-derived from a
+/// process-global counter between frames.
+///
+/// Position remains the last resort, for a selected turn whose text somehow
+/// fails to resolve (an empty mark, a prompt the display rewrote). Returning
+/// `None` there would blank the outline rather than mis-aim it.
 fn user_prompt_index(
     prepared: &crate::tui::operant_model::PreparedMessages,
     app: &crate::tui::app::App,
 ) -> Option<usize> {
     let sel = app.rewind_selector.selected;
-    if sel < prepared.user_prompt_texts.len() {
-        return Some(sel);
-    }
     let sel_text = app.rewind_selector.entries.get(sel)?.text.clone();
-    prepared.user_prompt_texts.iter().position(|t| {
+    let by_text = prepared.user_prompt_texts.iter().position(|t| {
         let a: String = t.chars().take(64).collect();
         let b: String = sel_text.chars().take(64).collect();
         a == b
-    })
+    });
+    if by_text.is_some() {
+        return by_text;
+    }
+    if sel < prepared.user_prompt_texts.len() {
+        return Some(sel);
+    }
+    None
 }
 
 fn restyle_dim(line: Line<'static>) -> Line<'static> {

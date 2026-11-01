@@ -9704,6 +9704,126 @@ mod rewind_preview_zones {
             "after stepping up, turn 3 reads as dropped"
         );
     }
+
+    /// A compaction that folds a prompt out of the display must not outline a
+    /// turn other than the one the operator picked.
+    ///
+    /// `selected` indexes the MARK list, which keeps one entry per turn so a
+    /// folded turn can still be refused by Enter. The display shows only the
+    /// surviving prompts, so after a compaction the two lists are NOT
+    /// index-aligned. Resolving by position returns a value whenever the index
+    /// still fits — and a value for the wrong turn is worse than none, because
+    /// the outline moves silently.
+    ///
+    /// This builds the case that actually bites: THREE marks, the FIRST
+    /// folded, so the display holds two prompts. The cursor is then on mark 1
+    /// ("second prompt") while the display's index 1 is "third prompt" — the
+    /// positional shortcut answers display prompt 2, so the pick zone is drawn
+    /// over "third prompt" and "second prompt"'s own answer lands in the drop
+    /// zone as content the rewind removes.
+    ///
+    /// Mutation-proven: reverting `user_prompt_index` to position-first leaves
+    /// the pick zone on "third prompt" and this fails on the drop-zone assert
+    /// below (observed: pick rows 12-19 over "third prompt", drop set empty).
+    #[test]
+    fn a_folded_middle_turn_does_not_outline_the_wrong_turn() {
+        let mut app = make_app();
+        app.is_simulating = true;
+
+        // Two display prompts, three marks: the FIRST turn's prompt was folded
+        // away by a compaction, so the mark list and the display are not
+        // index-aligned. `conv_index` mirrors the real thing — the folded
+        // turn's index is no longer reachable in the display.
+        app.messages.push(user("second prompt"));
+        app.messages
+            .push(crate::tui::adapter_types::types::Message {
+                role: crate::tui::adapter_types::types::Role::Assistant,
+                content: MessageContent::Text(long_answer("A1")),
+            });
+        app.messages.push(user("third prompt"));
+        app.messages
+            .push(crate::tui::adapter_types::types::Message {
+                role: crate::tui::adapter_types::types::Role::Assistant,
+                content: MessageContent::Text(long_answer("A2")),
+            });
+        app.core_rewind_marks = Some(std::sync::Arc::new(
+            crate::tui::rewind_marks::RewindMarksSource::new(
+                vec![
+                    operant_core::agent::UserTurnMark {
+                        turn_id: 11,
+                        conv_index: 0,
+                        conv_epoch: 1,
+                        text: "first prompt".to_string(),
+                    },
+                    operant_core::agent::UserTurnMark {
+                        turn_id: 12,
+                        conv_index: 2,
+                        conv_epoch: 1,
+                        text: "second prompt".to_string(),
+                    },
+                    operant_core::agent::UserTurnMark {
+                        turn_id: 13,
+                        conv_index: 4,
+                        conv_epoch: 1,
+                        text: "third prompt".to_string(),
+                    },
+                ],
+                Some("sess_fold".to_string()),
+                Vec::new(),
+            ),
+        ));
+
+        // Mirror `App::run`'s frame-loop sync: set the conversation first, then
+        // read the marks. Skipping it leaves the selector empty and blind.
+        {
+            let source = app.core_rewind_marks.as_ref().expect("marks").clone();
+            source.set_epoch(1);
+            let display_texts = app.user_prompt_texts_for_filter();
+            source.set_conversation(display_texts.clone());
+            let collected: Vec<(u64, String)> = source
+                .marks()
+                .into_iter()
+                .map(|m| (m.turn_id, m.text))
+                .collect();
+            app.rewind_selector.sync_marks(collected, &display_texts);
+        }
+        app.rewind_selector.open();
+
+        // The folded turn keeps its mark — flagged, not dropped, so Enter can
+        // still refuse it with an explanation rather than a silent no-op.
+        assert_eq!(
+            app.rewind_selector.entries.len(),
+            3,
+            "one entry per turn: the folded turn is flagged, not dropped"
+        );
+        assert!(
+            app.rewind_selector.entries.first().map(|e| e.compacted) == Some(true),
+            "the turn with no display row reads as compacted"
+        );
+
+        // Step up once: newest (mark 2) to mark 1, "second prompt".
+        app.rewind_selector.select_prev();
+        assert_eq!(app.rewind_selector.selected, 1, "one step up");
+
+        let (screen, styles) = paint(&app);
+        let p2 = screen
+            .iter()
+            .position(|l| l.contains("second prompt"))
+            .expect("the second prompt is painted");
+        let p3 = screen
+            .iter()
+            .position(|l| l.contains("third prompt"))
+            .expect("the third prompt is painted");
+        assert!(
+            !rows_with_mod(&styles, 'd').contains(&p2),
+            "the picked turn's own prompt is NOT dimmed — dimming it would mean \
+             the positional shortcut outlined a later turn's rows"
+        );
+        assert!(
+            rows_with_mod(&styles, 'd').contains(&p3),
+            "the turn below the picked one reads as dropped"
+        );
+    }
 }
 
 // ---- (2026-10-31, iter-1588) the live todo tick and the subagent-live accent ----
