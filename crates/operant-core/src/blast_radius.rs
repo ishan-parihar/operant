@@ -796,7 +796,7 @@ fn rejoin_tail(toks: &[String], start: usize) -> String {
     // `sh -c 'rm -rf /etc'` so the inner `-c` arm can still find the script).
     let first_is_a_quoted_phrase = tail
         .first()
-        .map_or(false, |t| t.chars().any(char::is_whitespace));
+        .is_some_and(|t| t.chars().any(char::is_whitespace));
     tail.iter()
         .map(|t| {
             if !first_is_a_quoted_phrase && (t.is_empty() || t.chars().any(char::is_whitespace)) {
