@@ -2524,6 +2524,19 @@ impl App {
                 KeyCode::Backspace => {
                     self.rewind_selector.filter.pop();
                 }
+                KeyCode::Up | KeyCode::Char('k') => {
+                    // Step through the MATCHES while filtering (omp's
+                    // `#stepFiltered`, rewind-selector.ts:541-547). Arrows used
+                    // to land in the dead `_ => {}` arm, so a filtered list of
+                    // N matches had no way to walk them — the filter's own half
+                    // of "the arrow keys do nothing".
+                    self.rewind_selector.select_prev();
+                    self.queue_rewind_preview();
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    self.rewind_selector.select_next();
+                    self.queue_rewind_preview();
+                }
                 KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                     self.rewind_selector.filter.push(c);
                     // Live-jump: keep the cursor on the first match.

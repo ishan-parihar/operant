@@ -8781,91 +8781,204 @@ mod prompt_jump_tests {
 /// This drives `draw_rewind_selector` directly and reads the painted cells.
 #[test]
 fn the_overlay_body_does_not_emit_a_spans_final_character_twice() {
-    use ratatui::Terminal;
-    use ratatui::backend::TestBackend;
-    use ratatui::style::{Modifier, Style};
+    {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        use ratatui::style::{Modifier, Style};
 
-    let mut app = make_app();
-    app.is_simulating = true;
+        let mut app = make_app();
+        app.is_simulating = true;
 
-    // Three prompts so the selector has entries, then a body whose styled span
-    // must survive the overlay's narrower area. The span crosses the width so a
-    // boundary bug has a seam to get wrong.
-    app.messages
-        .push(crate::tui::adapter_types::types::Message {
-            role: crate::tui::adapter_types::types::Role::User,
-            content: MessageContent::Text("first prompt".to_string()),
-        });
-    app.messages
-        .push(crate::tui::adapter_types::types::Message {
-            role: crate::tui::adapter_types::types::Role::Assistant,
-            content: MessageContent::Text("the answer ends here".to_string()),
-        });
+        // WHY THIS INSTRUMENT WAS REWRITTEN — the original could not FAIL.
+        //
+        // The first version PASSED with the defect deliberately reintroduced into
+        // `restyle_dim` (measured, iter-1596). Two independent reasons:
+        //
+        //   1. Its two plain-text messages produced ONE span per body line, so the
+        //      span BOUNDARY where a duplicate would appear never existed.
+        //   2. With only two turns the PICK zone covered the whole body, so NO row
+        //      was dimmed — and `restyle_dim` only runs on a DIM row. The code under
+        //      test never executed.
+        //
+        // Both are fixed below: MARKDOWN bodies (multi-span lines) and turns that
+        // exist BELOW the pick (a DROP zone).
+        //
+        // THE COUNTING TRAP that this fixture is shaped to avoid: an earlier attempt
+        // seeded the SAME markdown phrase into four turns and then asserted the
+        // phrase appears once. It appeared four times — legitimately, once per turn
+        // — and I almost recorded that as the RT-205 signature reproducing. One
+        // phrase in one turn makes the assertion say what it means, and the
+        // neighbouring turns carry DIFFERENT text so a DROP zone still exists.
+        let mut marks = Vec::new();
+        marks.push((100u64, "prompt number zero".to_string()));
+        app.messages
+            .push(crate::tui::adapter_types::types::Message {
+                role: crate::tui::adapter_types::types::Role::User,
+                content: crate::tui::adapter_types::types::MessageContent::Text(
+                    "prompt number zero".to_string(),
+                ),
+            });
+        app.messages
+            .push(crate::tui::adapter_types::types::Message {
+                role: crate::tui::adapter_types::types::Role::Assistant,
+                content: crate::tui::adapter_types::types::MessageContent::Text(
+                    "the *quick* **brown** _fox_ jumps over the lazy dog, \
+                 with a [link](http://example.com) and `inline code` too."
+                        .to_string(),
+                ),
+            });
+        // Distinct filler turns so the DROP zone has content to dim. Different
+        // text per turn, so nothing else can inflate the counts below.
+        for i in 1..4 {
+            let prompt = format!("filler prompt {i}");
+            app.messages
+                .push(crate::tui::adapter_types::types::Message {
+                    role: crate::tui::adapter_types::types::Role::User,
+                    content: crate::tui::adapter_types::types::MessageContent::Text(prompt.clone()),
+                });
+            marks.push((100 + i as u64, prompt));
+            app.messages
+                .push(crate::tui::adapter_types::types::Message {
+                    role: crate::tui::adapter_types::types::Role::Assistant,
+                    content: crate::tui::adapter_types::types::MessageContent::Text(format!(
+                        "filler answer {i}: ordinary prose with no emphasis markers in it at all"
+                    )),
+                });
+        }
+        app.core_rewind_marks = Some(std::sync::Arc::new(
+            crate::tui::rewind_marks::RewindMarksSource::new(
+                marks
+                    .into_iter()
+                    .map(|(turn_id, text)| operant_core::agent::UserTurnMark {
+                        turn_id,
+                        conv_index: 0,
+                        conv_epoch: 1,
+                        text,
+                    })
+                    .collect(),
+                Some("sess-rt205".to_string()),
+                Vec::new(),
+            ),
+        ));
+        // Mirror App::run's frame-loop sync: set_conversation first, then read the
+        // marks. Skipping it leaves the selector empty and the instrument blind.
+        {
+            let source = app.core_rewind_marks.as_ref().expect("marks").clone();
+            let display_texts = app.user_prompt_texts_for_filter();
+            source.set_conversation(display_texts.clone());
+            let collected: Vec<(u64, String)> = source
+                .marks()
+                .into_iter()
+                .map(|m| (m.turn_id, m.text))
+                .collect();
+            app.rewind_selector.sync_marks(collected, &display_texts);
+        }
 
-    let backend = TestBackend::new(120, 40);
-    let mut terminal = Terminal::new(backend).expect("terminal");
-    terminal
-        .draw(|frame| {
-            let area = frame.area();
-            crate::tui::rewind_selector::draw_rewind_selector(frame, area, &app);
-        })
-        .expect("draw");
+        // Open on the FIRST turn so the three filler turns fall in the DROP zone.
+        app.rewind_selector.open();
+        app.rewind_selector.selected = 0;
 
-    // The painted symbol row must contain each of these exactly once, and must
-    // not contain a duplicated trailing character.
-    // `buffer_style_dump` emits one token per cell and uses `_` as the symbol of
-    // an unstyled/blank cell, so a real space is painted as `_`. Translate it
-    // back so phrases can be searched as the operator sees them.
-    use crate::tui::debug::debug_hub::buffer_style_dump;
-    let dump = buffer_style_dump(terminal.backend().buffer());
-    let symbols: String = dump
-        .lines()
-        .map(|l| {
-            l.split(' ')
-                .filter_map(|tok| tok.split_once('@').map(|(_, sym)| sym))
-                .map(|s| if s == "_" { " " } else { s })
-                .collect::<String>()
-        })
-        .collect();
+        let paint = |app: &crate::tui::app::App| -> (String, String) {
+            let backend = TestBackend::new(120, 45);
+            let mut terminal = Terminal::new(backend).expect("terminal");
+            terminal
+                .draw(|frame| {
+                    let area = frame.area();
+                    crate::tui::rewind_selector::draw_rewind_selector(frame, area, app);
+                })
+                .expect("draw");
+            let buf = terminal.backend().buffer();
+            use crate::tui::debug::debug_hub::buffer_style_dump;
+            let dump = buffer_style_dump(buf);
+            // The token is `fg/bg/mods@symbol`; `_` means a real space.
+            let symbols: String = dump
+                .lines()
+                .skip(1)
+                .map(|l| {
+                    l.split(' ')
+                        .filter_map(|tok| tok.split_once('@').map(|(_, sym)| sym))
+                        .map(|s| if s == "_" { " " } else { s })
+                        .collect::<String>()
+                })
+                .collect();
+            (dump, symbols)
+        };
 
-    for needle in ["first prompt", "the answer ends here"] {
-        let occurrences = symbols.matches(needle).count();
+        let (dump, symbols) = paint(&app);
+
+        // GATE 1 — THE FIXTURE MUST REACH THE CODE UNDER TEST.
+        // A dim cell carries `d` in its mods field. No dim rows means
+        // `restyle_dim` never ran, so every assertion below would be vacuous.
+        let dim_rows = dump
+            .lines()
+            .skip(1)
+            .filter(|row| {
+                row.split(' ')
+                    .filter_map(|tok| tok.split_once('@'))
+                    .any(|(style, _)| style.split('/').nth(2).is_some_and(|m| m.contains('d')))
+            })
+            .count();
         assert!(
-            occurrences >= 1,
-            "the body must render {needle:?}: got 0 occurrences"
+            dim_rows >= 3,
+            "the fixture must paint at least 3 DIM rows (got {dim_rows}) — without \
+         them `restyle_dim` never executes and this instrument proves nothing."
         );
-        assert_eq!(
-            occurrences, 1,
-            "and it must render it exactly ONCE — a span-boundary defect emits \\
-             a run's final character twice (the live RT-205 signature)"
-        );
-    }
 
-    // The signature itself: no token may repeat its own symbol's last
-    // character as a separate adjacent token in a different style.
-    let mut adjacent_style_repeat = 0usize;
-    for line in dump.lines() {
-        let toks: Vec<(&str, &str)> = line.split(' ').filter_map(|t| t.split_once('@')).collect();
-        for pair in toks.windows(2) {
-            let (style_a, sym_a) = pair[0];
-            let (style_b, sym_b) = pair[1];
-            if style_a != style_b && sym_a.len() == 1 && sym_b.len() == 1 && sym_a == sym_b {
-                adjacent_style_repeat += 1;
+        // GATE 2 — the painted frame must carry more than one style somewhere, or
+        // there is no span boundary for a duplicate to appear at.
+        let distinct_styles: std::collections::HashSet<&str> = dump
+            .lines()
+            .skip(1)
+            .flat_map(|row| {
+                row.split(' ')
+                    .filter_map(|tok| tok.split_once('@'))
+                    .map(|(style, _)| style)
+            })
+            .collect();
+        assert!(
+            distinct_styles.len() > 4,
+            "the frame must carry several distinct styles (got {}); a flat frame \\
+         has no span boundary for the duplicate signature",
+            distinct_styles.len()
+        );
+
+        // THE SIGNATURE. Only the picked turn carries these words, so each must
+        // appear exactly once over the whole frame.
+        for needle in ["quick", "brown", "fox", "jumps over the lazy"] {
+            let occurrences = symbols.matches(needle).count();
+            assert_eq!(
+                occurrences, 1,
+                "{needle:?} must render exactly ONCE; {occurrences} means the text \\
+             was painted again under another style — the RT-205 signature"
+            );
+        }
+
+        // A duplicate final character shows up as an adjacent pair of single-char
+        // cells that share a symbol but carry different styles.
+        let mut adjacent_style_repeat = 0usize;
+        for line in dump.lines() {
+            let toks: Vec<(&str, &str)> =
+                line.split(' ').filter_map(|t| t.split_once('@')).collect();
+            for pair in toks.windows(2) {
+                let (style_a, sym_a) = pair[0];
+                let (style_b, sym_b) = pair[1];
+                if style_a != style_b && sym_a.len() == 1 && sym_b.len() == 1 && sym_a == sym_b {
+                    adjacent_style_repeat += 1;
+                }
             }
         }
-    }
-    assert_eq!(
-        adjacent_style_repeat, 0,
-        "no two adjacent single-character cells may carry the same symbol in \\
+        assert_eq!(
+            adjacent_style_repeat, 0,
+            "no two adjacent single-character cells may carry the same symbol in \\
          different styles — that is the duplicated-final-character signature"
-    );
+        );
 
-    // Guard against a vacuous pass: the styles we built must be reachable.
-    assert!(
-        !symbols.is_empty(),
-        "the painted frame must be non-empty for this test to mean anything"
-    );
-    let _ = (Modifier::BOLD, Style::default());
+        assert!(
+            !symbols.is_empty(),
+            "the painted frame must be non-empty for this test to mean anything"
+        );
+        let _ = (Modifier::BOLD, Style::default());
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -9758,7 +9871,7 @@ mod rewind_follows_the_outline {
     #[test]
     fn arrows_walk_the_filter_matches_not_the_whole_list() {
         let mut st = crate::tui::rewind_selector::RewindSelectorState::default();
-        let mut entry = |turn_id: u64, text: &str| crate::tui::rewind_selector::RewindEntry {
+        let entry = |turn_id: u64, text: &str| crate::tui::rewind_selector::RewindEntry {
             turn_id,
             text: text.to_string(),
             compacted: false,

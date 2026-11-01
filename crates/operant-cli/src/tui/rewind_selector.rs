@@ -124,16 +124,62 @@ impl RewindSelectorState {
         };
     }
 
+    /// Which entries the arrow keys may land on.
+    ///
+    /// omp's `#move` (rewind-selector.ts:647-668) steps over
+    /// `outlineVisibility` failures only — an entry that renders no row is not
+    /// a stop. Ours has the same shape in `compacted`: a turn folded out of
+    /// the display still has a mark (so Enter can refuse it) but no rows, so
+    /// parking on it produces an outline over nothing and a dead Enter. Skipping
+    /// them keeps the cursor on turns the operator can actually see.
+    fn navigable_indices(&self) -> Vec<usize> {
+        (0..self.entries.len())
+            .filter(|&i| !self.entries[i].compacted)
+            .collect()
+    }
+
     pub fn select_prev(&mut self) {
-        self.selected = self.selected.saturating_sub(1);
+        self.step(-1);
         self.notice = None;
     }
 
     pub fn select_next(&mut self) {
-        if self.selected + 1 < self.entries.len() {
-            self.selected += 1;
-        }
+        self.step(1);
         self.notice = None;
+    }
+
+    /// Move the cursor by one navigable entry, honouring the filter and
+    /// skipping turns no longer in the transcript.
+    ///
+    /// Called from both arrow keys; `rewind_selector.selected` is an index into
+    /// the FULL mark list (the render resolves it to a display slot), so the
+    /// steps are computed over the filtered/navigable subset and then mapped
+    /// back to that index. An empty filter is the full list minus compacted
+    /// entries, which is what open navigation uses.
+    fn step(&mut self, delta: isize) {
+        let candidates = self.navigable_indices();
+        let candidates: Vec<usize> = if self.filter.is_empty() {
+            candidates
+        } else {
+            let needle = self.filter.to_lowercase();
+            candidates
+                .into_iter()
+                .filter(|&i| self.entries[i].text.to_lowercase().contains(&needle))
+                .collect()
+        };
+        if candidates.is_empty() {
+            return;
+        }
+        let current = candidates
+            .iter()
+            .position(|&i| i == self.selected)
+            .unwrap_or(candidates.len());
+        let next = if delta < 0 {
+            current.saturating_sub(1)
+        } else {
+            (current + 1).min(candidates.len() - 1)
+        };
+        self.selected = candidates[next];
     }
 
     /// The entries that pass the current filter, with their positions.
@@ -300,12 +346,23 @@ pub fn draw_rewind_selector(frame: &mut Frame, area: Rect, app: &crate::tui::app
 
     // Footer: preview stats + inline notice — PINNED.
     let mut footer: Vec<Line> = vec![Line::from("")];
+    // POSITION (omp `#frame`: `${selected + 1}/${targets.length}`,
+    // rewind-selector.ts:926). The cheapest honest answer to "my arrows do
+    // nothing": this counter moves on every step even when the pane does not,
+    // so the operator can correlate a keypress with a change. Reused by the
+    // drop count below so the two cannot disagree.
+    let position = if state.entries.is_empty() {
+        String::new()
+    } else {
+        format!("  turn {}/{}", state.selected + 1, state.entries.len())
+    };
     let stats = match state.preview {
         Some((msgs, tokens)) => format!(
-            "  Keeps {msgs} messages · ~{tokens} tokens · drops {} turns",
-            state.entries.len().saturating_sub(state.selected + 1)
+            "  Keeps {msgs} messages · ~{tokens} tokens · drops {} turns{}",
+            state.entries.len().saturating_sub(state.selected + 1),
+            position,
         ),
-        None => "  …".to_string(),
+        None => format!("  …{position}"),
     };
     footer.push(Line::from(Span::styled(stats, dim)));
     if let Some(notice) = &state.notice {
@@ -328,10 +385,44 @@ pub fn draw_rewind_selector(frame: &mut Frame, area: Rect, app: &crate::tui::app
     frame.render_widget(Paragraph::new(header), chunks[0]);
 
     let body_h = chunks[1].height as usize;
-    let scroll = state.scroll.min(mid.len().saturating_sub(body_h));
+    let max_scroll = mid.len().saturating_sub(body_h);
+    let scroll = reveal_offset(state.scroll, sel_start, sel_end, body_h).min(max_scroll);
     frame.render_widget(Paragraph::new(mid).scroll((scroll as u16, 0)), chunks[1]);
 
     frame.render_widget(Paragraph::new(footer), chunks[2]);
+}
+
+/// THE ANCHOR REVEAL (omp `#outlineAnchor` → `ScrollView.revealRange`).
+///
+/// omp's frame carries the outline's row span
+/// (`selStart..selEnd`, rewind-selector.ts:989-997) and `TranscriptBrowser::render`
+/// calls `revealRange` on every paint (transcript-browser.ts:232), which moves the
+/// viewport only when that span leaves it and then clears follow-tail
+/// (scroll-view.ts:331-345). We kept the scroll state and none of the follow:
+/// `scroll` was written ONLY by PageUp/PageDown (key_handling.rs:2556-2561), so
+/// stepping up through a transcript taller than the pane walked the outline above
+/// the top edge. The operator saw the tail unmoved while only the footer's
+/// "drops N turns" counter changed, which reads as "the arrow keys do nothing" —
+/// the keys did move `selected`. This function is the missing half.
+///
+/// `alignment: "nearest"`: if the zone starts above the viewport, scroll to its
+/// start; else if it ends below, scroll to show its end. A zone taller than the
+/// viewport reveals its start, so the picked turn's prompt is always on screen.
+/// Pure, so a paint with no input cannot disagree with its predecessor — no
+/// oscillation, hence no flicker — and an operator who paged away keeps their
+/// page (the reveal pulls the zone in once, then it sits still until the
+/// selection changes).
+fn reveal_offset(
+    committed: usize,
+    zone_start: Option<usize>,
+    zone_end: Option<usize>,
+    body_h: usize,
+) -> usize {
+    match (zone_start, zone_end) {
+        (Some(top), Some(bottom)) if top < committed => top,
+        (Some(_top), Some(bottom)) if bottom > committed + body_h => bottom.saturating_sub(body_h),
+        _ => committed,
+    }
 }
 
 /// Which prepared user-prompt slot the selector's cursor points at.
