@@ -495,11 +495,19 @@ fn mermaid_gate_accepts_native_protocol_and_rejects_halfblock_fallback() {
             assert!(!should_render_mermaid_block(Some("mermaid")));
         });
         // [port-decision] upstream's second arm asserts the ENGINE honors the
-        // protocol override (Some(true) -> render). Under the W9 cut the
-        // fallback's native_image_protocol_available() is unconditionally
-        // false and with_image_protocol_override is a no-op passthrough, so
-        // that arm cannot pass by design. It moved to the cfg'd-out sibling
-        // below; recover it together with the mermaid engine (W9).
+        // protocol override (Some(true) -> render). It used to be cfg'd out here
+        // under the W9 cut (the fallback's native_image_protocol_available() was
+        // unconditionally false and with_image_protocol_override a no-op), so the
+        // assertion could not pass by design.
+        //
+        // RECOVERED (codex-architecture-deepen row 5, iter-1601): the engine is
+        // ported as tui/operant_mermaid and native_image_protocol_available()
+        // opens, so the port renders natively. The override remains a no-op
+        // passthrough in this build (there is no image protocol to disable), so
+        // this arm now reads: the engine is what opens the gate.
+        mermaid::with_image_protocol_override(Some(true), || {
+            assert!(should_render_mermaid_block(Some("mermaid")));
+        });
     });
 }
 
@@ -523,6 +531,101 @@ fn test_mixed_code_and_mermaid() {
     assert!(
         lines.len() >= 3,
         "Expected multiple lines for mixed content"
+    );
+}
+
+#[test]
+fn mermaid_block_renders_natively_as_inline_text() {
+    // Row 5 acceptance: with the gate open, a mermaid fence renders through
+    // the native engine as inline text. Before the port the fence's only
+    // output was "Mermaid rendering is disabled" (or raw source), because the
+    // gate was permanently closed. The diagram must appear, the refusal
+    // messages must not, and no image placeholder may be emitted (this build
+    // has no image protocol, and the transcript never needed one).
+    let md = "```mmd\nflowchart LR\n    A --> B\n```";
+    let lines = with_mermaid_rendering_override(Some(true), || render_markdown(md));
+    let text = lines_to_string(&lines);
+
+    assert!(text.contains('A'), "diagram nodes missing: {text}");
+    assert!(text.contains('B'), "diagram nodes missing: {text}");
+    assert!(
+        text.contains('◄') || text.contains("--> ") || text.contains("─"),
+        "diagram edges missing: {text}"
+    );
+    assert!(
+        !text.contains("Mermaid rendering is disabled"),
+        "native path regressed to the disabled stub: {text}"
+    );
+    assert!(
+        !text.contains("unsupported"),
+        "native path regressed to the unsupported stub: {text}"
+    );
+    assert!(
+        lines.iter().all(|line| {
+            mermaid::parse_image_placeholder(line).is_none()
+                && mermaid::parse_inline_image_placeholder(line).is_none()
+        }),
+        "a terminal with no image protocol must not receive a placeholder: {text}"
+    );
+}
+
+#[test]
+fn mermaid_lazy_renderer_also_renders_natively() {
+    // Same acceptance through the lazy path (markdown_render_lazy.rs), which
+    // uses render_mermaid_deferred_with_registration when the diagram mode is
+    // not None. Without this, a pinned/margin diagram mode would still show
+    // source in the incremental (streaming) transcript.
+    let md = "```mermaid\nflowchart TD\n    Start --> Finish\n```";
+    let lines = with_mermaid_rendering_override(Some(true), || {
+        render_markdown_lazy(md, Some(80), 0..usize::MAX)
+    });
+    let text = lines_to_string(&lines);
+
+    let has_nodes = text.contains("Start") && text.contains("Finish");
+    assert!(has_nodes, "lazy native render missing node labels: {text}");
+    assert!(
+        !text.contains("Mermaid rendering is disabled"),
+        "lazy native path regressed: {text}"
+    );
+}
+
+#[test]
+fn mermaid_streaming_renderer_renders_natively() {
+    // Same acceptance through the streaming path
+    // (render_mermaid_deferred_with_stream_scope), which is the one the live
+    // TUI uses while a diagram is arriving.
+    let md = "```mermaid\nsequenceDiagram\n    Alice->>Bob: Hi\n```";
+    let lines = with_mermaid_rendering_override(Some(true), || {
+        with_streaming_render_context(|| render_markdown_with_width(md, Some(80)))
+    });
+    let text = lines_to_string(&lines);
+
+    assert!(text.contains("Alice"), "sequence actor missing: {text}");
+    assert!(text.contains("Hi"), "sequence message missing: {text}");
+    assert!(
+        !text.contains("Mermaid rendering is disabled"),
+        "streaming native path regressed: {text}"
+    );
+}
+
+#[test]
+fn mermaid_unparseable_source_falls_back_to_source_with_reason() {
+    // The engine refuses unknown syntax. The callers degrade to the ORIGINAL
+    // source plus the refusal reason (codex's contract), never to a blank or a
+    // partial drawing. This is the row-5 replacement for the old
+    // "Mermaid rendering is disabled" stub: the diagram is either drawn, or it
+    // is shown as its own text with a reason.
+    let md = "```mermaid\nthis is not a diagram at all\n```";
+    let lines = with_mermaid_rendering_override(Some(true), || render_markdown(md));
+    let text = lines_to_string(&lines);
+
+    assert!(
+        text.contains("this is not a diagram at all"),
+        "original source must survive a refusal: {text}"
+    );
+    assert!(
+        !text.contains("Mermaid rendering is disabled"),
+        "must not regress to the disabled stub: {text}"
     );
 }
 

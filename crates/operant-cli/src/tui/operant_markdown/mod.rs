@@ -21,9 +21,11 @@ use syntect::highlighting::{Style as SynStyle, ThemeSet};
 use syntect::parsing::SyntaxSet;
 use unicode_width::UnicodeWidthStr;
 
-// [port-excision] mermaid-renderer feature/engine cut per plan (W9);
-// upstream ships this exact fallback path as the default when the feature is
-// off, so it is ported as the only (unconditional) mermaid module.
+// [port-excision] RETIRED (codex-architecture-deepen row 5, iter-1601): the
+// mermaid-renderer engine is ported from codex-rs as tui/operant_mermaid, and
+// the fallback below routes through it. The former "cfg-fallback ported as the
+// only mermaid module" state is gone: `native_image_protocol_available()` now
+// opens and the four `render_mermaid_*` entry points render natively.
 #[path = "markdown_mermaid_fallback.rs"]
 pub(crate) mod mermaid;
 
@@ -167,7 +169,7 @@ use render_support::{
 fn should_render_mermaid_block(lang: Option<&str>) -> bool {
     mermaid_rendering_enabled()
         && lang.map(mermaid::is_mermaid_lang).unwrap_or(false)
-        && mermaid::native_image_protocol_available()
+        && context::native_image_protocol_available()
 }
 pub use render_support::highlight_line;
 

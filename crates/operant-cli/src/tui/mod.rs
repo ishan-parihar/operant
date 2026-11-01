@@ -72,6 +72,7 @@ pub mod operant_app;
     )
 )]
 pub mod operant_markdown;
+pub(crate) mod operant_mermaid;
 #[cfg_attr(
     not(test),
     expect(dead_code, reason = "lands before its W3 renderer consumers")

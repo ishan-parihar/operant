@@ -27,6 +27,12 @@ thread_local! {
     /// Thread-local (not process-global) so tests that disable mermaid cannot
     /// race other test threads that rely on the process-env default.
     static MERMAID_RENDERING_OVERRIDE: Cell<Option<bool>> = const { Cell::new(None) };
+    /// Optional test/debug override for whether a native RENDERER exists. This
+    /// mirrors upstream's image-protocol override: the protocol is what a
+    /// renderer would target, and the port answers it from the engine's own
+    /// availability. Thread-local so the three callers that force the protocol
+    /// off (source-fallback tests) cannot race the caller that forces it on.
+    static NATIVE_IMAGE_PROTOCOL_OVERRIDE: Cell<Option<bool>> = const { Cell::new(None) };
     /// Scoped, thread-local diagram display mode. Takes precedence over the
     /// process-global override so render paths (e.g. the side panel, which
     /// renders with diagrams inline) can pin a mode for one render without
@@ -102,6 +108,30 @@ pub fn mermaid_rendering_enabled() -> bool {
 /// parallel tests cannot observe each other's override.
 pub fn with_mermaid_rendering_override<T>(enabled: Option<bool>, f: impl FnOnce() -> T) -> T {
     MERMAID_RENDERING_OVERRIDE.with(|ctx| with_scoped_cell_value(ctx, enabled, f))
+}
+
+/// Run `f` with the native-renderer door forced on/off (or `None` to restore
+/// the build default, which is open) on the current thread.
+///
+/// Thread-local and scoped, so parallel tests cannot observe each other's
+/// override.
+#[cfg(test)]
+pub fn with_image_protocol_override<T>(enabled: Option<bool>, f: impl FnOnce() -> T) -> T {
+    NATIVE_IMAGE_PROTOCOL_OVERRIDE.with(|ctx| with_scoped_cell_value(ctx, enabled, f))
+}
+
+/// Whether the door answers: a native renderer exists in this build.
+///
+/// The scoped test override wins; otherwise this consults the fallback's build
+/// default. It must be read from ONE place: the gate below. The default in
+/// `mermaid::native_image_protocol_available` must not consult this function,
+/// or the two mutually recurse forever. The port's first wiring of this seam did
+/// exactly that, and it only surfaced once the gate actually reached the call.
+pub(super) fn native_image_protocol_available() -> bool {
+    if let Some(enabled) = NATIVE_IMAGE_PROTOCOL_OVERRIDE.with(|ctx| ctx.get()) {
+        return enabled;
+    }
+    super::mermaid::native_image_protocol_available()
 }
 
 #[cfg(test)]
