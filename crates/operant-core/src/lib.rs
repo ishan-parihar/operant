@@ -127,6 +127,7 @@ pub mod sourcehound_cdp;
 pub mod tool_guardrails;
 pub mod tools;
 pub mod trajectory;
+pub mod turn_attribution;
 pub mod turn_end;
 pub mod turn_end_heuristics;
 pub mod turn_summary;
