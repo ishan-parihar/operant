@@ -308,6 +308,61 @@ impl OperantAgent {
     // handled, in plaintext, on a log that already leaked bot tokens. The span
     // still carries `model`, and the prompt's length and channel stay
     // observable from the gateway's own log lines.
+    /// The turn's four-span breakdown, or `None` when the kill-switch is
+    /// off.
+    ///
+    /// Row 3 of the deepen port (RT-209). The exclusive arithmetic lives in
+    /// `crate::turn_attribution`; this is the seam that feeds it real numbers.
+    /// It is computed at turn END (off the request path) because the prompt
+    /// tail is built by `build_messages` before the loop starts, when none of
+    /// these values exist yet. See the `turn_attribution` module header for
+    /// that measurement.
+    ///
+    /// The `Some` is gated by the flag ALONE. An `Unmeasured` span is a
+    /// perfectly good breakdown to hand a subscriber (it is honest about
+    /// which numbers exist), so a measurement gap is not a reason to return
+    /// `None` - only the kill-switch is.
+    ///
+    /// `pub(crate)` rather than private: the regression tests for this seam
+    /// live in the sibling `stream` module (`stream::turn_attribution_tests`),
+    /// which cannot see a private method of `run`.
+    pub(crate) fn turn_attribution(
+        &self,
+        turn_start: std::time::Instant,
+        inference: std::time::Duration,
+        saw_inference: bool,
+    ) -> Option<crate::turn_attribution::TurnBreakdown> {
+        if !self.config.show_turn_attribution {
+            return None;
+        }
+        use crate::turn_attribution::{SpanDuration, TurnBreakdown};
+
+        // A span that was never measured is `Unmeasured`, never `0`. An
+        // early-exit turn with no model call is a different fact from a model
+        // call that took no time.
+        let inference = if saw_inference {
+            SpanDuration::Measured(inference)
+        } else {
+            SpanDuration::Unmeasured
+        };
+        // `None` from the per-turn tool map means nothing was timed.
+        let tools = self
+            .turn_tool_duration()
+            .map_or(SpanDuration::Unmeasured, SpanDuration::Measured);
+        // `user_wait` has no measurable duration at this seam: the approval
+        // gate is a synchronous decision (`approval::check_tool_approval`), and
+        // the guardian LLM's time is model time already counted in `inference`.
+        // Honest `Unmeasured`, not a fabricated zero.
+        let user_wait = SpanDuration::Unmeasured;
+
+        Some(TurnBreakdown::build(
+            turn_start.elapsed(),
+            inference,
+            tools,
+            user_wait,
+        ))
+    }
+
     #[instrument(skip(self, user_query), fields(model = % self.config.model))]
     pub async fn run(&self, user_query: String) -> Result<Message> {
         info!("Starting agent run");
@@ -410,6 +465,28 @@ impl OperantAgent {
         // accumulated from each model response's usage. Checked against the
         // per-turn seat envelope at every iteration boundary below.
         let mut turn_spend_tokens: u64 = 0;
+        // iter-1623 (deepen row 3, RT-209): the turn's `inference` span, folded
+        // from every model call's own duration and emitted at turn END on the
+        // `TurnEnd` seam below.
+        //
+        // The prompt tail is NOT a usable seat: it is built by `build_messages`
+        // exactly once, before the loop starts, so at that moment no model call
+        // has happened and no tool has run. See the `turn_attribution` module
+        // header for that measurement.
+        //
+        // An accumulator and not an agent field: it is per-turn, the agent is
+        // long-lived, and a field here would be one more thing to reset correctly
+        // on every exit path.
+        let mut turn_inference = std::time::Duration::ZERO;
+        // Whether a model call actually happened. A `Duration::ZERO` that means
+        // "no call yet" is indistinguishable from a genuine zero, and conflating
+        // them is exactly the RT-199 failure this row exists to avoid.
+        //
+        // `allow(unused_assignments)`: rustc cannot see that the loop body runs
+        // before the turn END read, so it believes the initial `false` is dead.
+        // Same shape as `tool_names` below, and same reason.
+        #[allow(unused_assignments)]
+        let mut saw_inference = false;
         // Hard ceiling on a single turn, independent of iteration count.
         // A turn that keeps making real progress should not be cut off, but one
         // that is spinning against a degraded upstream must not hold a gateway
@@ -1232,6 +1309,10 @@ impl OperantAgent {
 
             // Emit LlmResponse observer event with timing
             let llm_duration = llm_start.elapsed();
+            // Row 3 (RT-209): fold this call into the turn's `inference` span,
+            // emitted at turn END below.
+            turn_inference += llm_duration;
+            saw_inference = true;
             if let Some(ref obs) = self.observer {
                 obs.record_event(&ObserverEvent::LlmResponse {
                     provider: self.config.model.clone(),
@@ -1680,7 +1761,13 @@ impl OperantAgent {
                         // byte-identical. `emit` is synchronous by contract:
                         // a slow subscriber can never block the turn.
                         if let Some(ref bus) = self.turn_end_bus {
-                            bus.emit(&session_id, iteration, total_tool_calls, &result.content);
+                            bus.emit(
+                                &session_id,
+                                iteration,
+                                total_tool_calls,
+                                &result.content,
+                                self.turn_attribution(turn_start, turn_inference, saw_inference),
+                            );
                         }
 
                         // Emit AgentEnd hook

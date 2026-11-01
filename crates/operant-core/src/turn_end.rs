@@ -73,7 +73,7 @@
 //!         let _ = event; // score, advise, dream — in a later lane
 //!     }
 //! });
-//! let delivered = bus.emit("session-1", 3, 7, "assistant reply");
+//! let delivered = bus.emit("session-1", 3, 7, "assistant reply", None);
 //! assert_eq!(delivered, 1);
 //! ```
 
@@ -125,6 +125,16 @@ pub struct TurnEnd {
     /// Concurrency means this order need not match the call order. Bounded
     /// by [`MAX_TOOL_DURATIONS`]; the tail is dropped with a warning.
     pub tool_durations_ms: Vec<u64>,
+    /// The turn's four exclusive spans, or `None` when nothing was
+    /// captured (the config kill-switch, or a turn that exited before
+    /// any model call).
+    ///
+    /// `None` is a distinct state from `Unmeasured` on a span: `None`
+    /// means no attribution was attempted, while a span left
+    /// `Unmeasured` means attribution ran and that one span is honest
+    /// about having no number. Subscribers must render `None` as
+    /// "unavailable", never as zeros.
+    pub attribution: Option<crate::turn_attribution::TurnBreakdown>,
     /// First [`RESULT_SUMMARY_LIMIT`] bytes of the assistant's final reply,
     /// cut on a UTF-8 char boundary.
     pub result_summary: String,
@@ -210,6 +220,7 @@ impl TurnEndBus {
         iterations: usize,
         tool_calls: usize,
         result: &str,
+        attribution: Option<crate::turn_attribution::TurnBreakdown>,
     ) -> usize {
         if self.tx.receiver_count() == 0 {
             return 0;
@@ -221,6 +232,7 @@ impl TurnEndBus {
             iterations,
             tool_calls,
             tool_durations_ms: self.take_durations(),
+            attribution,
             result_summary,
             result_truncated,
         };
@@ -336,7 +348,7 @@ mod tests {
         bus.record_tool_duration(340);
         bus.record_tool_duration(7);
 
-        let delivered = bus.emit("sess-1", 3, 7, "all done");
+        let delivered = bus.emit("sess-1", 3, 7, "all done", None);
         assert_eq!(delivered, 1, "one subscriber, one delivery");
 
         let events = collected(&seen, COLLECTOR_A).await;
@@ -358,7 +370,7 @@ mod tests {
         spawn_collector(&bus, seen.clone(), 3, COLLECTOR_B);
 
         for turn in 0..3u64 {
-            assert_eq!(bus.emit("sess-2", 1, 0, "reply"), 1);
+            assert_eq!(bus.emit("sess-2", 1, 0, "reply", None), 1);
             assert_eq!(bus.turn_seq.load(Ordering::Relaxed), turn + 1);
         }
 
@@ -389,7 +401,7 @@ mod tests {
         spawn_collector(&bus, a.clone(), 1, COLLECTOR_D);
         assert_eq!(bus.subscriber_count(), 2);
 
-        assert_eq!(bus.emit("sess-3", 1, 0, "hi"), 2);
+        assert_eq!(bus.emit("sess-3", 1, 0, "hi", None), 2);
 
         let drained =
             crate::daemon_pool::drain_for_label(COLLECTOR_C, Duration::from_secs(10)).await;
@@ -425,7 +437,7 @@ mod tests {
         assert_eq!(bus.subscriber_count(), 0);
         // No subscriber: emit is a no-op, and it does not consume the
         // turn counter or leave state behind for a later subscriber.
-        assert_eq!(bus.emit("sess-4", 2, 5, "reply"), 0);
+        assert_eq!(bus.emit("sess-4", 2, 5, "reply", None), 0);
         assert_eq!(bus.turn_seq.load(Ordering::Relaxed), 0);
         // Nor does an unobserved tool duration accumulate.
         for _ in 0..MAX_TOOL_DURATIONS * 2 {
@@ -469,6 +481,19 @@ mod tests {
             1,
             "run.rs must hold exactly one turn-end emission site"
         );
+        // ...and that site must actually CARRY the turn's breakdown. iter-1629
+        // (row 3 / RT-209) added `attribution` to `TurnEnd`: an emit call that
+        // passes `None` compiles fine and silently makes every span invisible,
+        // so the wiring is pinned at the source. Caught a mutation that removed
+        // the argument here (all 12 runtime tests passed without it).
+        assert!(
+            run_rs.contains("self.turn_attribution(turn_start, turn_inference, saw_inference)"),
+            "the turn-end emission must pass the computed TurnBreakdown, not None"
+        );
+        assert!(
+            !run_rs.contains("&result.content,\n                                None,"),
+            "the emission site must never hard-code a None attribution"
+        );
         // The timings producer is the tool executor, and nothing else.
         // All three execute_tools branches time their call: single,
         // serialized-interfering-batch, and the concurrent pool.
@@ -498,13 +523,13 @@ mod tests {
             panic!("subscriber blew up");
         });
         let kept = bus.subscribe();
-        assert_eq!(bus.emit("sess-5", 1, 0, "still fine"), 1);
+        assert_eq!(bus.emit("sess-5", 1, 0, "still fine", None), 1);
         let drained =
             crate::daemon_pool::drain_for_label("turn-end-test-boom", Duration::from_secs(10))
                 .await;
         assert_eq!(drained, 1);
         assert_eq!(ran.load(Ordering::SeqCst), 1);
-        assert_eq!(bus.emit("sess-5", 2, 0, "and again"), 1);
+        assert_eq!(bus.emit("sess-5", 2, 0, "and again", None), 1);
         assert_eq!(
             kept.len(),
             2,

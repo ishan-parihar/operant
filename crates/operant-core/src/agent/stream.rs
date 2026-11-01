@@ -1926,3 +1926,203 @@ fn stamp_result_names(early: Vec<Option<ToolResult>>, call_names: &[String]) -> 
         })
         .collect()
 }
+
+#[cfg(test)]
+mod turn_attribution_tests {
+    //! Row 3 (RT-209): the post-turn `TurnEnd` emission seat.
+    //!
+    //! The prompt tail cannot host this block: `build_messages` runs before the
+    //! loop, so at that moment no model call has happened and no tool has run,
+    //! and every span would read `n/a` forever. The numbers are therefore
+    //! computed at turn END. These tests pin the facts that make it honest.
+    //!
+    //! The mock client exists only so an `OperantAgent` can be constructed;
+    //! none of these tests ever reaches the model, because `turn_attribution`
+    //! is called directly.
+
+    use super::*;
+    use crate::turn_attribution::{SpanDuration, TurnSpan};
+
+    fn config() -> AgentConfig {
+        AgentConfig {
+            reasoning_effort: String::new(),
+            reasoning_effort_param: crate::config::ReasoningEffortParam::Auto,
+            context_semantic_compaction: false,
+            model: "demo".to_string(),
+            max_trajectories: 0,
+            max_iterations: 3,
+            tool_timeout: Duration::from_secs(5),
+            request_timeout: Duration::from_secs(10),
+            system_prompt: Some("You are a test agent.".to_string()),
+            stream: true,
+            context_window: 8000,
+            max_tool_result_share: crate::context_management::DEFAULT_MAX_TOOL_RESULT_SHARE,
+            max_healing_attempts: 1,
+            show_turn_attribution: true,
+            fallback_models: Vec::new(),
+            fallback_on_errors: false,
+            loop_detection_enabled: true,
+            approval_mode: "off".to_string(),
+            approval_allowlist: Vec::new(),
+            approval_allowlist_path: None,
+            record_trajectories: false,
+            guardrail_exempt_tools: Vec::new(),
+            skill_nudge_interval: 0,
+            memory_review_interval: 0,
+            max_retries: 3,
+            tool_search: Default::default(),
+            ponytail: Default::default(),
+        }
+    }
+
+    /// Never called: a client that exists so an agent can be built.
+    struct UnusedClient;
+
+    #[async_trait::async_trait]
+    impl crate::agent::model_client::ModelClient for UnusedClient {
+        async fn chat(&self, _request: ChatRequest) -> Result<crate::client::ChatResponse> {
+            Err(Error::Agent("unused in turn-attribution tests".into()))
+        }
+
+        async fn chat_streaming(
+            &self,
+            _request: ChatRequest,
+        ) -> Result<BoxStream<'static, Result<StreamChunk>>> {
+            let stream = futures::stream::once(async {
+                Err(Error::Agent("unused in turn-attribution tests".into()))
+            });
+            Ok(Box::pin(stream))
+        }
+
+        fn provider_name(&self) -> &str {
+            "unused"
+        }
+    }
+
+    async fn agent(cfg: AgentConfig) -> OperantAgent {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db =
+            crate::database::Database::init(temp_dir.path().join("attribution.sqlite")).unwrap();
+        OperantAgent::new(
+            cfg,
+            Box::new(UnusedClient),
+            crate::ToolRegistry::new(Duration::from_secs(1)),
+            std::sync::Arc::new(db),
+        )
+    }
+
+    #[tokio::test]
+    async fn measured_turn_carries_a_breakdown_with_honest_unmeasured_spans() {
+        let a = agent(config()).await;
+        let start = std::time::Instant::now();
+        let inference = Duration::from_millis(30);
+        a.record_tool_duration("call-1", 20);
+        // Sleep BEFORE building the breakdown so the turn's wall clock
+        // genuinely covers the spans handed in below: the turn cannot have
+        // taken less than the work done inside it.
+        std::thread::sleep(Duration::from_millis(70));
+
+        let bd = a
+            .turn_attribution(start, inference, true)
+            .expect("the flag is on and a model call happened, so a breakdown exists");
+
+        assert_eq!(
+            bd.span(TurnSpan::Inference),
+            SpanDuration::Measured(inference)
+        );
+        assert_eq!(
+            bd.span(TurnSpan::Tools),
+            SpanDuration::Measured(Duration::from_millis(20))
+        );
+        // No approval gate was crossed in this test, and nothing measures
+        // "user wait" at this seam, so those two spans must be honest about it.
+        assert_eq!(bd.span(TurnSpan::UserWait), SpanDuration::Unmeasured);
+        assert_eq!(bd.span(TurnSpan::Overhead), SpanDuration::Unmeasured);
+        // An unmeasured span means the sum cannot be verified, so `is_exclusive`
+        // must report `false` rather than silently `true` on zeros.
+        assert!(!bd.is_exclusive());
+        // Wall clock is the turn's real elapsed time. The sleep above makes it
+        // genuinely cover the spans handed in, so it must be at least their
+        // sum: a turn cannot take less than the work done inside it.
+        assert!(bd.total() >= inference + Duration::from_millis(20));
+    }
+
+    #[tokio::test]
+    async fn nothing_captured_is_unmeasured_never_zero() {
+        let a = agent(config()).await;
+        let start = std::time::Instant::now();
+        // A turn that exited before any model call, with no tool ever timed.
+        let bd = a
+            .turn_attribution(start, Duration::ZERO, false)
+            .expect("the flag is on, so a breakdown exists even with nothing measured");
+
+        // The RT-199 failure this row exists to avoid: a zero standing in for
+        // an absent measurement. All three input spans must be `Unmeasured`.
+        assert_eq!(bd.span(TurnSpan::Inference), SpanDuration::Unmeasured);
+        assert_eq!(bd.span(TurnSpan::Tools), SpanDuration::Unmeasured);
+        assert_eq!(bd.span(TurnSpan::UserWait), SpanDuration::Unmeasured);
+        assert_eq!(bd.span(TurnSpan::Overhead), SpanDuration::Unmeasured);
+        assert!(!bd.is_exclusive());
+    }
+
+    #[tokio::test]
+    async fn a_genuinely_instant_model_call_is_measured_zero_not_unmeasured() {
+        // The mirror image of the test above. A model call that really took no
+        // time is `Measured(0)`; conflating that with "no call happened" is the
+        // same bug facing the other direction.
+        let a = agent(config()).await;
+        let start = std::time::Instant::now();
+
+        let bd = a
+            .turn_attribution(start, Duration::ZERO, true)
+            .expect("saw_inference is true, so the span is a real measurement");
+
+        assert_eq!(
+            bd.span(TurnSpan::Inference),
+            SpanDuration::Measured(Duration::ZERO)
+        );
+        assert_eq!(bd.span(TurnSpan::Tools), SpanDuration::Unmeasured);
+    }
+
+    #[tokio::test]
+    async fn tool_totals_accumulate_across_calls() {
+        let a = agent(config()).await;
+        let start = std::time::Instant::now();
+        // Three parallel tool calls: the per-TURN total is the sum, which for
+        // concurrent work can exceed the turn's wall clock (documented on
+        // `turn_tool_duration`, and why `is_exclusive` reports `false`).
+        a.record_tool_duration("call-1", 10);
+        a.record_tool_duration("call-2", 15);
+        a.record_tool_duration("call-3", 25);
+
+        assert_eq!(
+            a.turn_tool_duration(),
+            Some(Duration::from_millis(50)),
+            "the per-turn tool total is the sum of every recorded call"
+        );
+        // ...and that total reaches the breakdown.
+        let bd = a
+            .turn_attribution(start, Duration::from_millis(5), true)
+            .unwrap();
+        assert_eq!(
+            bd.span(TurnSpan::Tools),
+            SpanDuration::Measured(Duration::from_millis(50))
+        );
+    }
+
+    #[tokio::test]
+    async fn the_kill_switch_returns_none_and_fakes_nothing() {
+        let mut cfg = config();
+        cfg.show_turn_attribution = false;
+        let a = agent(cfg).await;
+        let start = std::time::Instant::now();
+        a.record_tool_duration("call-1", 20);
+
+        // `None` is the kill-switch's whole contract: a subscriber must be able
+        // to tell "attribution is off" from "the spans were zero".
+        assert!(
+            a.turn_attribution(start, Duration::from_millis(5), true)
+                .is_none()
+        );
+    }
+}

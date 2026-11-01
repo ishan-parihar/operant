@@ -221,7 +221,7 @@ mod tests {
             || vec![Message::user("do the thing")],
             move |r| d2.lock().push(r),
         );
-        bus.emit("sess-1", 3, 5, "partial result text");
+        bus.emit("sess-1", 3, 5, "partial result text", None);
         // The engine needs a moment to run its side call.
         for _ in 0..50 {
             if !delivered.lock().is_empty() {
@@ -251,7 +251,7 @@ mod tests {
             || vec![Message::user("x")],
             move |r| d2.lock().push(r),
         );
-        bus.emit("sess-2", 1, 0, "done");
+        bus.emit("sess-2", 1, 0, "done", None);
         // Let the engine arm its 200ms window first — a notify that lands
         // BEFORE the arm is a stale pre-turn notification, drained by the
         // engine (see stale_notify_does_not_cancel). Only activity arriving
@@ -286,7 +286,7 @@ mod tests {
         // Notify BEFORE the turn ends — the queued activity is stale by the
         // time the engine arms at the turn end below.
         engine.notify();
-        bus.emit("sess-3", 1, 0, "done");
+        bus.emit("sess-3", 1, 0, "done", None);
         tokio::time::sleep(Duration::from_millis(300)).await;
         let got = delivered.lock();
         assert_eq!(got.len(), 1, "stale pre-turn notify must NOT cancel");
@@ -313,7 +313,7 @@ mod tests {
             Vec::new, // empty conversation
             move |r| d2.lock().push(r),
         );
-        bus.emit("sess-3", 0, 0, "");
+        bus.emit("sess-3", 0, 0, "", None);
         tokio::time::sleep(Duration::from_millis(200)).await;
         assert!(delivered.lock().is_empty());
         drop(engine);

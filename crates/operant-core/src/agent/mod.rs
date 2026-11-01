@@ -125,6 +125,16 @@ pub struct AgentConfig {
     /// so deleting them silently destroys the corpus that command is for.
     /// The operator opts into a bound.
     pub max_trajectories: usize,
+    /// Whether the turn's four-span attribution is aggregated and emitted on
+    /// the post-turn `TurnEnd` seam (deepen row 3 / RT-209). Default on.
+    ///
+    /// This is deliberately NOT a prompt block. The `<turn_context>` tail is
+    /// built by `build_messages` exactly once, before the loop starts, when no
+    /// model call has happened and no tool has run, so a block placed there
+    /// would report `n/a` for every span on every turn. The numbers are only
+    /// complete at turn END, which is where this surfaces them. See the
+    /// `crate::turn_attribution` module header for the measurement.
+    pub show_turn_attribution: bool,
     /// Ordered list of fallback models for automatic failover on retryable errors.
     pub fallback_models: Vec<String>,
     /// Whether automatic fallback to fallback_models is enabled.
@@ -211,6 +221,10 @@ impl From<&BehaviorSettings> for AgentConfig {
             max_tool_result_share: settings.max_tool_result_share,
             max_healing_attempts: settings.max_healing_attempts,
             max_trajectories: settings.max_trajectories,
+            // Row 3 / RT-209: turn attribution is aggregated and emitted on the
+            // `TurnEnd` seam, not the prompt tail (see `AgentConfig`'s own doc
+            // on the field and the `turn_attribution` module header).
+            show_turn_attribution: true,
             fallback_models: settings.fallback_models.clone(),
             fallback_on_errors: settings.fallback_on_errors,
             loop_detection_enabled: true,
@@ -3431,6 +3445,7 @@ mod tests {
             context_semantic_compaction: false,
             model: "demo".to_string(),
             max_trajectories: 0,
+            show_turn_attribution: true,
             max_iterations: 3,
             tool_timeout: Duration::from_secs(5),
             request_timeout: Duration::from_secs(10),
@@ -3484,6 +3499,7 @@ mod tests {
             context_semantic_compaction: false,
             model: "demo".to_string(),
             max_trajectories: 0,
+            show_turn_attribution: true,
             max_iterations: 3,
             tool_timeout: Duration::from_secs(5),
             request_timeout: Duration::from_secs(10),
@@ -3603,6 +3619,7 @@ mod tests {
             context_semantic_compaction: false,
             model: "demo".to_string(),
             max_trajectories: 0,
+            show_turn_attribution: true,
             max_iterations: 3,
             tool_timeout: Duration::from_secs(5),
             request_timeout: Duration::from_secs(10),
