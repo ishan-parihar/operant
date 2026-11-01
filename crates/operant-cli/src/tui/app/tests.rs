@@ -10402,4 +10402,53 @@ mod rewind_follows_the_outline {
             "and Down returns through the matches only, never onto the docs turn"
         );
     }
+
+    /// The live-jump while TYPING a filter must not park the cursor on a turn
+    /// compaction folded out of the transcript.
+    ///
+    /// The two filter paths disagreed: `filtered_indices` (used by the
+    /// key-handler's live-jump on every keystroke) returns every text match,
+    /// compacted or not, while `step` filters compacted entries out first. So a
+    /// query matching only a folded turn moved the cursor onto it — an outline
+    /// over no rows, and an Enter that can only refuse. `filtered_indices` is
+    /// the one that must honour the same nav gate, since it is the path that
+    /// decides where the keys will land next.
+    #[test]
+    fn typing_a_filter_that_only_matches_a_folded_turn_does_not_land_on_it() {
+        let mut st = crate::tui::rewind_selector::RewindSelectorState::default();
+        let entry = |turn_id: u64, text: &str| crate::tui::rewind_selector::RewindEntry {
+            turn_id,
+            text: text.to_string(),
+            compacted: false,
+        };
+        st.entries = vec![
+            entry(51, "fix the cache"),
+            entry(52, "rewrite the index"),
+            entry(53, "write the docs"),
+        ];
+        // The middle turn was folded by compaction: its mark survives (so Enter
+        // can refuse it) but it renders no row.
+        st.entries[1].compacted = true;
+        st.selected = 2;
+
+        // The operator types a query that matches ONLY the folded turn.
+        st.filter = "rewrite".to_string();
+        let matches = st.filtered_indices();
+        assert!(
+            matches.is_empty(),
+            "a query that matches only a folded turn offers nothing: the \
+             live-jump used to land on it, which no arrow key could then \
+             reach, and Enter could only refuse"
+        );
+
+        // And a query that matches ONE folded and ONE live turn still resolves
+        // to the live one — the gate is per-entry, not per-query.
+        st.filter = "e".to_string();
+        let matches = st.filtered_indices();
+        assert_eq!(
+            matches,
+            vec![0, 2],
+            "the folded turn is absent from the set the keys may reach"
+        );
+    }
 }

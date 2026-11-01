@@ -124,14 +124,19 @@ impl RewindSelectorState {
         };
     }
 
-    /// Which entries the arrow keys may land on.
+    /// Which entries the arrow keys AND the filter's live-jump may land on.
     ///
     /// omp's `#move` (rewind-selector.ts:647-668) steps over
     /// `outlineVisibility` failures only — an entry that renders no row is not
     /// a stop. Ours has the same shape in `compacted`: a turn folded out of
     /// the display still has a mark (so Enter can refuse it) but no rows, so
-    /// parking on it produces an outline over nothing and a dead Enter. Skipping
-    /// them keeps the cursor on turns the operator can actually see.
+    /// parking on it produces an outline over nothing and a dead Enter.
+    ///
+    /// ONE gate for both paths, because there were two: this one and
+    /// `filtered_indices`, which the key-handler's live-jump used on every
+    /// keystroke. They disagreed on exactly the case that matters — a query
+    /// matching only a folded turn jumped the cursor onto it, somewhere the
+    /// arrow keys could not then reach (they only walk navigable entries).
     fn navigable_indices(&self) -> Vec<usize> {
         (0..self.entries.len())
             .filter(|&i| !self.entries[i].compacted)
@@ -157,16 +162,7 @@ impl RewindSelectorState {
     /// back to that index. An empty filter is the full list minus compacted
     /// entries, which is what open navigation uses.
     fn step(&mut self, delta: isize) {
-        let candidates = self.navigable_indices();
-        let candidates: Vec<usize> = if self.filter.is_empty() {
-            candidates
-        } else {
-            let needle = self.filter.to_lowercase();
-            candidates
-                .into_iter()
-                .filter(|&i| self.entries[i].text.to_lowercase().contains(&needle))
-                .collect()
-        };
+        let candidates = self.matching_indices();
         if candidates.is_empty() {
             return;
         }
@@ -182,15 +178,26 @@ impl RewindSelectorState {
         self.selected = candidates[next];
     }
 
-    /// The entries that pass the current filter, with their positions.
-    pub fn filtered_indices(&self) -> Vec<usize> {
+    /// The navigable entries that pass the current filter, as indices.
+    ///
+    /// The one definition of "what the keys may reach", shared by `step` and
+    /// by the key-handler's live-jump so a typed filter cannot put the cursor
+    /// somewhere the arrows will not follow.
+    fn matching_indices(&self) -> Vec<usize> {
+        let navigable = self.navigable_indices();
         if self.filter.is_empty() {
-            return (0..self.entries.len()).collect();
+            return navigable;
         }
         let needle = self.filter.to_lowercase();
-        (0..self.entries.len())
+        navigable
+            .into_iter()
             .filter(|&i| self.entries[i].text.to_lowercase().contains(&needle))
             .collect()
+    }
+
+    /// The entries that pass the current filter, with their positions.
+    pub fn filtered_indices(&self) -> Vec<usize> {
+        self.matching_indices()
     }
 
     pub fn selected_turn_id(&self) -> Option<u64> {
@@ -473,8 +480,9 @@ fn reveal_offset(
     body_h: usize,
 ) -> usize {
     match (zone_start, zone_end) {
-        (Some(top), Some(bottom)) if top < committed => top,
-        (Some(_top), Some(bottom)) if bottom > committed + body_h => bottom.saturating_sub(body_h),
+        (Some(_), Some(bottom)) if bottom <= committed => committed,
+        (Some(top), Some(_)) if top < committed => top,
+        (Some(_), Some(bottom)) if bottom > committed + body_h => bottom.saturating_sub(body_h),
         _ => committed,
     }
 }
