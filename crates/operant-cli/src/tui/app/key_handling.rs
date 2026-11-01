@@ -2513,16 +2513,22 @@ impl App {
                     self.rewind_selector.filter_open = false;
                 }
                 KeyCode::Enter => {
-                    // Enter in the filter jumps to the first match.
-                    let matches = self.rewind_selector.filtered_indices();
-                    if let Some(&first) = matches.first() {
-                        self.rewind_selector.selected = first;
-                    }
+                    // (omp parity) `#closeFilter` (rewind-selector.ts:524-527)
+                    // deliberately does NOT move the selection: its own comment
+                    // is "Leave the filter, keeping the selected item outlined
+                    // in the full transcript". Enter means "I am done typing",
+                    // not "jump somewhere" — the operator already sees where
+                    // the outline is, and Enter-in-filter also re-enters the
+                    // "my selection jumped" complaint. Requery only, so the
+                    // filter's edit rule is the single place the cursor is
+                    // decided.
+                    self.requery_rewind_after_filter_edit();
                     self.rewind_selector.filter_open = false;
                     self.queue_rewind_preview();
                 }
                 KeyCode::Backspace => {
                     self.rewind_selector.filter.pop();
+                    self.requery_rewind_after_filter_edit();
                 }
                 KeyCode::Up | KeyCode::Char('k') => {
                     // Step through the MATCHES while filtering (omp's
@@ -2540,10 +2546,7 @@ impl App {
                 KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                     self.rewind_selector.filter.push(c);
                     // Live-jump: keep the cursor on the first match.
-                    let matches = self.rewind_selector.filtered_indices();
-                    if let Some(&first) = matches.first() {
-                        self.rewind_selector.selected = first;
-                    }
+                    self.requery_rewind_after_filter_edit();
                 }
                 _ => {}
             }

@@ -8558,6 +8558,83 @@ mod prompt_jump_tests {
         assert!(!app.rewind_selector.filter_open, "Esc cancels the filter");
     }
 
+    /// Typing a filter must not TELEPORT the cursor to the oldest match
+    /// when it is already parked on a matching turn.
+    ///
+    /// omp's `#filterChanged` (rewind-selector.ts:531-536) keeps the selection
+    /// while it still matches and only then falls back to the newest match
+    /// BELOW it (`matches.findLast(i => i < selected) ?? matches.at(-1)`).
+    /// Ours set `selected = matches.first()` on every keystroke — the OLDEST
+    /// match — so an operator who had walked up to turn 2 of 3 and typed a
+    /// filter matching 1, 2 and 3 had the cursor dragged down to 1 and had to
+    /// re-walk. That is the same "my arrows/selection do nothing useful"
+    /// complaint the operator filed three times.
+    #[test]
+    fn typing_a_filter_while_sitting_on_a_match_keeps_the_cursor() {
+        let mut app = make_app();
+        for prompt in ["t alpha", "n lima", "t gamma", "o delta", "n oscar"] {
+            app.messages.push(Message {
+                role: Role::User,
+                content: MessageContent::Text(prompt.to_string()),
+            });
+            app.messages.push(Message {
+                role: Role::Assistant,
+                content: MessageContent::Text(format!("answer {prompt}")),
+            });
+        }
+        app.open_rewind_selector();
+        let marks = vec![
+            (1u64, "t alpha".to_string()),
+            (2, "n lima".to_string()),
+            (3, "t gamma".to_string()),
+            (4, "o delta".to_string()),
+            (5, "n oscar".to_string()),
+        ];
+        let display_texts: Vec<String> = marks.iter().map(|(_, t)| t.clone()).collect();
+        app.rewind_selector.sync_marks(marks, &display_texts);
+        // The operator has walked the outline up to the THIRD turn.
+        app.rewind_selector.selected = 2;
+
+        app.handle_key_event(press_key(KeyCode::Char('f'), KeyModifiers::NONE));
+        // "t" matches turns 0, 2 and 3 — the parked one is NOT the first.
+        app.handle_key_event(press_key(KeyCode::Char('t'), KeyModifiers::NONE));
+        assert_eq!(
+            app.rewind_selector.selected, 2,
+            "typing a filter while resting on a matching turn keeps the \
+             cursor there — every keystroke dragged it to matches.first(), \
+             the OLDEST match, which is omp's #filterChanged divergence"
+        );
+
+        // And a query that matches nothing leaves it parked, not teleported.
+        app.handle_key_event(press_key(KeyCode::Esc, KeyModifiers::NONE));
+        app.rewind_selector.filter.clear();
+        app.handle_key_event(press_key(KeyCode::Char('f'), KeyModifiers::NONE));
+        app.rewind_selector.selected = 2;
+        app.handle_key_event(press_key(KeyCode::Char('z'), KeyModifiers::NONE));
+        assert_eq!(
+            app.rewind_selector.selected, 2,
+            "a no-match filter leaves the cursor where the operator left it"
+        );
+
+        // THE FALLBACK: park the cursor on a turn the query does NOT match,
+        // ABOVE two matches. "n oscar" (index 4) carries no "t", and "t"
+        // matches 0, 2 and 3 ("delta" ends in t) — so the newest match BELOW
+        // index 4 is 3. A first()-style fallback would give 0 and a
+        // last()-style one 3 as well, so this turns on the pair: combined with
+        // the segment above (a matching cursor is KEPT rather than dragged to
+        // 0), it is what pins "newest below" against "first match".
+        app.handle_key_event(press_key(KeyCode::Esc, KeyModifiers::NONE));
+        app.rewind_selector.filter.clear();
+        app.handle_key_event(press_key(KeyCode::Char('f'), KeyModifiers::NONE));
+        app.rewind_selector.selected = 4;
+        app.handle_key_event(press_key(KeyCode::Char('t'), KeyModifiers::NONE));
+        assert_eq!(
+            app.rewind_selector.selected, 3,
+            "a cursor parked on a non-matching turn lands on the newest match \
+             below it — 3, not the oldest match at 0"
+        );
+    }
+
     #[test]
     fn prev_jump_from_tail_lands_on_most_recent_prompt() {
         let mut app = make_app();

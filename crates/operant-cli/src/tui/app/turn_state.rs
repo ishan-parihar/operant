@@ -127,6 +127,41 @@ impl App {
         self.rewind_selector.open();
     }
 
+    /// Re-resolve the cursor after the filter text changed (a keystroke or a
+    /// backspace).
+    ///
+    /// omp's `#filterChanged` (rewind-selector.ts:531-536): keep the selection
+    /// while it still matches, and only when it no longer does fall back to the
+    /// newest match BELOW it, else the newest match of all. Ours used
+    /// `matches.first()` — the OLDEST match — on every keystroke, so an
+    /// operator who had walked the outline up several turns and typed a filter
+    /// had the cursor dragged back to the oldest and had to walk up again.
+    /// That is the "my selection jumps around" half of the same symptom the
+    /// operator reported three times.
+    ///
+    /// A filter matching nothing leaves the cursor alone: the operator is
+    /// mid-typing, and there is no honest row to move to.
+    ///
+    /// Backspace goes through here too, where it previously did nothing at all
+    /// — removing a character can widen the match set, and the cursor should be
+    /// re-resolved against it (and the preview refreshed).
+    pub(crate) fn requery_rewind_after_filter_edit(&mut self) {
+        let matches = self.rewind_selector.filtered_indices();
+        if matches.contains(&self.rewind_selector.selected) {
+            return;
+        }
+        if let Some(&below) = matches
+            .iter()
+            .rev()
+            .find(|&&i| i < self.rewind_selector.selected)
+        {
+            self.rewind_selector.selected = below;
+        } else if let Some(&last) = matches.last() {
+            self.rewind_selector.selected = last;
+        }
+        self.queue_rewind_preview();
+    }
+
     /// (2026-10-31, omp parity) Close the rewind selector and hand back any
     /// draft the open lifted out of the composer.
     ///
