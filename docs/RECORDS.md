@@ -1,5 +1,5 @@
-<!-- genome:zone records sha=5683f8b468ab -->
-**Decisions** (42)
+<!-- genome:zone records sha=e84656ac7595 -->
+**Decisions** (43)
 
 | ID | Title | Status | Description |
 |---|---|---|---|
@@ -45,8 +45,9 @@
 | AD-040 | The dashboard's session token is only ever handed to a holder of that token | Active | The dashboard served its session token on an unauthenticated route, so the bearer auth was theatre; the token is now exchanged for an HttpOnly cookie and the Host header is validated |
 | AD-041 | The PDF decompression bound covers the load path and the whole document, so AD-039's claim is now true | Active | AD-039 published 'the decompression bomb is now bounded', but only the extraction path was bounded: Document::load_mem uses LoadOptions::default(), whose max_decompressed_size is None, so the object a |
 | AD-042 | The webhook subscription family is INBOUND (R1): the subscription claims a route, the agent answers, and the answer is delivered to the target | Active | The webhook subscription family is INBOUND (R1): the subscription claims a route, the agent answers, and the answer is delivered to the target |
+| AD-043 | A defect recorded without its visibility to the caller carries the wrong severity, and the fix that ships is the fix for the severity that was written | Active | A defect recorded without its visibility to the caller carries the wrong severity, and the fix that ships is the fix for the severity that was written |
 
-**Regressions** (15)
+**Regressions** (18)
 
 | ID | Title | Severity | Description |
 |---|---|---|---|
@@ -65,6 +66,9 @@
 | RG-016 | The owner ledger's own index table went stale in both directions, and its own count prose named five closed rows as open | High | docs/audit/2026-06-19-BUGS.md's 'What is OPEN right now' table is the index the file itself calls 'the authority on what stands'. On 2026-10-29 it named RT-135 as an 'accepted stub' after iter-1474 cl |
 | RG-017 | a green test summary can be served from cache while the crate is red | High | a green test summary can be served from cache while the crate is red |
 | RG-018 | A stash entry became a second cause of loss while recovering from the first, and my recorded root cause for it was wrong | High | A stash entry became a second cause of loss while recovering from the first, and my recorded root cause for it was wrong |
+| RG-019 | an env-strip hardening copied from a statically-linked reference breaks a dynamically-linked binary | High | an env-strip hardening copied from a statically-linked reference breaks a dynamically-linked binary |
+| RG-020 | A line-range slice of a reference tree goes stale when the file grows, and the count in the heading is the number that gets quoted | High | A line-range slice of a reference tree goes stale when the file grows, and the count in the heading is the number that gets quoted |
+| RG-021 | a live repro that cannot reach its provider proves nothing about the feature | High | a live repro that cannot reach its provider proves nothing about the feature |
 <!-- genome:end records -->
 
 <!-- genome:zone idmap sha=2a03e30bd9bd -->
