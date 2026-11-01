@@ -19,6 +19,28 @@
 > section: the gateway carries a `todo` progress line with an emoji and no
 > counts, and no command reads the todo list. Gaps 1 and 2 stand unchanged
 > and are now fixed (iter-1590 / iter-1593).
+>
+> **AMENDED AGAIN 2026-11-01 (iter-1597) — the "no command reads the todo
+> list" half of Gap 4 is now CLOSED, which makes the sentence above stale on
+> purpose: it is left in place because the amendment record is the history of
+> what this audit believed, not a live claim.** `/todos` (alias `/todo`) is
+> registered at `gateway_commands.rs:298` and its handler (`:1615`) reads
+> `operant_core::tools::todo_list_for_session` — the SAME accessor the TUI tick
+> uses, so the channel reply and the TUI card read one truth rather than two
+> definitions of it. The session it reads is the one the agent writes: the
+> dispatch loop's routing `session_key` feeds the same `pin → derived` chain
+> `run_session_scoped_command` uses (`gateway_runner.rs:2245-2251`). Three
+> tests pin it (counts by status, the empty arm cross-linking `/subagents`,
+> markdown neutralisation) and 4 in operant-core pin the per-session keying.
+>
+> **What is still open from Gap 4 is item 2 only:** the `⏰ todo…` progress line
+> still carries an emoji and no counts, because `extract_tool_arg`
+> (`gateway_runner.rs:241`) only knows the kanban tool's argument names.
+>
+> **Label collision, noted per the numbering protocol:** two commits on
+> `origin/main` carry `iter-1597` — this audit's closure (`c8c34fbf`) and a
+> peer's process-hardening change (`5bf97977`). Both stay; history is
+> append-only.
 
 ## The operator's report
 
