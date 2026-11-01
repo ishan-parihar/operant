@@ -4111,3 +4111,169 @@ fn a_payload_without_live_ids_renders_unchanged() {
         "and no unmatched row invents a subagent: {plain}"
     );
 }
+
+/// A blocked row must say by WHAT, not only that it is blocked.
+///
+/// Before iter-1610 the row printed a `⊳` glyph and nothing else, so the
+/// operator could see that something was blocked but not the plan's actual
+/// shape. `blocked_by` names sibling TODO IDs, so the resolution is exact.
+///
+/// MUTATION PROVEN: deleting the `if blocked { … }` block in
+/// `render_todo_card_item_line` turns this test red — the glyph stays and the
+/// blocker's name disappears.
+#[test]
+fn a_blocked_row_names_the_sibling_that_blocks_it() {
+    let todos = vec![
+        crate::tui::operant_app::todo::TodoItem {
+            id: "t1".to_string(),
+            content: "Ship the card".to_string(),
+            status: "pending".to_string(),
+            priority: "high".to_string(),
+            group: None,
+            phase: None,
+            confidence: None,
+            completion_confidence: None,
+            confidence_history: Vec::new(),
+            blocked_by: vec!["t2".to_string()],
+            assigned_to: None,
+        },
+        crate::tui::operant_app::todo::TodoItem {
+            id: "t2".to_string(),
+            content: "Write the tests".to_string(),
+            status: "in_progress".to_string(),
+            priority: "high".to_string(),
+            group: None,
+            phase: None,
+            confidence: None,
+            completion_confidence: None,
+            confidence_history: Vec::new(),
+            blocked_by: Vec::new(),
+            assigned_to: None,
+        },
+    ];
+    let msg = DisplayMessage::todos(serde_json::to_string(&todos).unwrap());
+    let lines = render_todos_message(
+        &msg,
+        100,
+        crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+    );
+    let plain = lines
+        .iter()
+        .map(extract_line_text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        plain.contains("⊳ Ship the card"),
+        "the row still reads blocked: {plain}"
+    );
+    assert!(
+        plain.contains("blocked by Write the tests"),
+        "and names the sibling that blocks it: {plain}"
+    );
+}
+
+/// An id that matches no sibling must not be dropped silently.
+///
+/// A plan naming something absent from this list is a real state, and hiding it
+/// would make the card lie about how much the operator can see.
+#[test]
+fn an_unresolvable_blocker_is_counted_not_dropped() {
+    let todos = vec![
+        crate::tui::operant_app::todo::TodoItem {
+            id: "t1".to_string(),
+            content: "Ship the card".to_string(),
+            status: "pending".to_string(),
+            priority: "high".to_string(),
+            group: None,
+            phase: None,
+            confidence: None,
+            completion_confidence: None,
+            confidence_history: Vec::new(),
+            // One resolvable sibling plus one phantom id.
+            blocked_by: vec!["t2".to_string(), "gone".to_string()],
+            assigned_to: None,
+        },
+        crate::tui::operant_app::todo::TodoItem {
+            id: "t2".to_string(),
+            content: "Write the tests".to_string(),
+            status: "in_progress".to_string(),
+            priority: "high".to_string(),
+            group: None,
+            phase: None,
+            confidence: None,
+            completion_confidence: None,
+            confidence_history: Vec::new(),
+            blocked_by: Vec::new(),
+            assigned_to: None,
+        },
+    ];
+    let msg = DisplayMessage::todos(serde_json::to_string(&todos).unwrap());
+    let lines = render_todos_message(
+        &msg,
+        100,
+        crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+    );
+    let plain = lines
+        .iter()
+        .map(extract_line_text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        plain.contains("blocked by Write the tests"),
+        "the resolvable id is named: {plain}"
+    );
+    assert!(
+        plain.contains("blocked by 1 other"),
+        "the phantom is counted, not silently dropped: {plain}"
+    );
+}
+
+/// A completed row must not grow a blocker label: it is settled, and reading
+/// it as blocked would contradict the ✓ the card already prints.
+#[test]
+fn a_completed_row_gets_no_blocker_label() {
+    let todos = vec![
+        crate::tui::operant_app::todo::TodoItem {
+            id: "t1".to_string(),
+            content: "Shipped".to_string(),
+            status: "completed".to_string(),
+            priority: "high".to_string(),
+            group: None,
+            phase: None,
+            confidence: None,
+            completion_confidence: None,
+            confidence_history: Vec::new(),
+            blocked_by: vec!["t2".to_string()],
+            assigned_to: None,
+        },
+        crate::tui::operant_app::todo::TodoItem {
+            id: "t2".to_string(),
+            content: "Write the tests".to_string(),
+            status: "in_progress".to_string(),
+            priority: "high".to_string(),
+            group: None,
+            phase: None,
+            confidence: None,
+            completion_confidence: None,
+            confidence_history: Vec::new(),
+            blocked_by: Vec::new(),
+            assigned_to: None,
+        },
+    ];
+    let msg = DisplayMessage::todos(serde_json::to_string(&todos).unwrap());
+    let lines = render_todos_message(
+        &msg,
+        100,
+        crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+    );
+    let plain = lines
+        .iter()
+        .map(extract_line_text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(plain.contains("✓ Shipped"), "the row reads done: {plain}");
+    assert!(
+        !plain.contains("Shipped · blocked by"),
+        "a settled row gains no blocker label: {plain}"
+    );
+}

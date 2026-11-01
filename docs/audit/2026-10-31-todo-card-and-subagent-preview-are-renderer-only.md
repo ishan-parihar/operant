@@ -239,17 +239,30 @@ gap the original audit described.
 
 ## What jcode does that operant does not, in one table
 
+> **RE-DERIVED 2026-11-01 (iter-1607) — this table was stale in BOTH
+> directions.** Gaps 1, 2, 3 and 4's todo half are all closed now, and the
+> "Gap 1b" row was **wrong on the first pass**: operant HAS a todo card, a
+> toggle command AND a dismiss keybind (`/todos` at
+> `tui/app/commands.rs:1604`, `Alt+X` at `tui/app/key_handling.rs:1693`),
+> which is the mechanism jcode's `/todos card` + `todo_card_key_label()`
+> provides. The difference is *what* is toggled — jcode toggles an inline
+> chat card, operant toggles a pinned band — which is a surface choice,
+> not a missing feature. Row verdicts below are re-derived from the tree,
+> not copied forward.
+
 | Mechanism | jcode | operant | Verdict |
 |---|---|---|---|
-| Card fed from a tool result | yes (`show_todo_card`) | yes | parity |
-| Card fed from a **disk tick** | `refresh_todo_card_if_needed`, hashed | none | **Gap 1** |
-| Pinned band fed from a **disk tick** | `refresh_pinned_todos_if_needed`, 1s throttle | ToolComplete only | **Gap 1** |
-| Inline chat card + dismiss gesture | `/todos card`, jcode's `todo_card_key_label()` | no card command | **Gap 1b** |
-| Subagent → todo match, accent | `todoMatched` / `#5873` | none | **Gap 2** |
-| `assigned_to` on the card | `todo_card_agents` | carried, unrendered | **Gap 2** |
-| Subagent `todo_progress` / `todo_items` on the gallery | `member_display_status` + `members_to_gallery` map them | fields exist, always empty | **Gap 3** |
-| `/todos` in the gateway | n/a (jcode has no channel surface) | no todo command — but `/subagents` **exists and works** (iter-1500) | **Gap 4 (todo only)** |
-| Delegation roster in the gateway | n/a | `/subagents`, 5 tests green | **parity** |
+| Card fed from a tool result | yes (`show_todo_card`) | yes (`agent_events.rs`) | parity |
+| Card fed from a **disk tick** | `refresh_todo_card_if_needed`, hashed | `refresh_todos_if_needed`, 1s throttle + fingerprint (`app/mod.rs:1079`) | **parity — Gap 1 CLOSED (iter-1590)** |
+| Pinned band fed from a **disk tick** | `refresh_pinned_todos_if_needed` | same tick, band payload rebuilt on change | **parity — Gap 1 CLOSED (iter-1590)** |
+| Inline card / band toggle + dismiss | `/todos card`, `todo_card_key_label()` | `/todos` band toggle + `Alt+X` (`commands.rs:1604`, `key_handling.rs:1693`) | **parity — "Gap 1b" was never a gap** |
+| Subagent → todo match, accent | `todoMatched` / `#5873` | `subagent_live_todo_ids` (`app/mod.rs:1134`) | **parity — Gap 2 CLOSED (iter-1590)** |
+| `assigned_to` on the card | `todo_card_agents` | carried + `live_ids` on the payload, accent-coloured | **parity — Gap 2 CLOSED (iter-1590)** |
+| Subagent `todo_progress` / `todo_items` on the gallery | `members_to_gallery` | `swarm_gallery_members` (`app/mod.rs:1174`) | **parity — Gap 3 CLOSED (iter-1607)** |
+| `/todos` in the gateway | n/a (jcode has no channel surface) | `/todos` + `/todo` alias (`gateway_commands.rs:298`) | **parity — Gap 4 CLOSED (iter-1597)** |
+| Todo progress line carries counts | n/a | `todo_progress_summary` → `N tasks · D done · A active · P to do · X dropped` | **parity — Gap 4 CLOSED (iter-1602)** |
+| Delegation roster in the gateway | n/a | `/subagents`, 5 tests green | parity |
+| Per-session todo keying | n/a | tool + tick + gateway all key on the agent's session | **operant is ahead — iter-1597** |
 
 ## What to take from oh-my-pi, and what not to
 
@@ -258,6 +271,16 @@ oh-my-pi's todo tool (`packages/coding-agent/src/tools/todo.ts`) is a *verb* too
 **Take, cheaply:**
 
 1. **`waiting_on`** — jcode's `todo_card_background_tasks` (`todos_view.rs:144-191`) lights a blocked todo from a *live background task* it names. operant has `blocked_by` (id list) and already renders a glyph; the missing half is a resolver that maps those ids to `BackgroundTaskRegistry` rows and prints "⊳ … · swarm await 40%".
+   > **CORRECTED 2026-11-01 (iter-1610): the premise was wrong about the
+   > namespace.** `blocked_by` names SIBLING TODO IDs (the tool's own doc
+   > comment: "Ids of todos that must finish before this one starts"), and
+   > `BackgroundTask.id` is a `delegation_id` — a different namespace, so
+   > resolving one against the other can never match. "swarm await 40%" would
+   > have been theater. What was actually missing is the honest half: the row
+   > printed `⊳` and nothing else. Shipped: `blocked_by_parts` resolves against
+   > the same list and prints `· blocked by <sibling>`; unresolvable ids are
+   > COUNTED (`blocked by 2 others`), never silently dropped. Three tests pin
+   > it.
 2. **Closed-row context in a collapsed list** — oh-my-pi keeps {@link COLLAPSED_CLOSED_CONTEXT} (one) closed task above the open window so completions are visible as they happen. operant's `render_todos_message` shows the whole list; a long card makes that expensive, and the pinned band already truncates at 1/3 of the viewport (`ui_viewport.rs:1471`), so this is a *card-side* improvement, not a band one.
 3. **`blocked` as a first-class status with a reason note** — oh-my-pi's `blocker` rides the row as text, its markdown round-trip puts it in a trailing HTML comment so it survives edit/export. operant has `blocked_by: Vec<String>` (ids) and drops the note entirely.
 

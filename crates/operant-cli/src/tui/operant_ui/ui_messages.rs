@@ -1208,6 +1208,7 @@ pub(crate) fn render_todos_message(
                 for todo in items {
                     lines.push(render_todo_card_item_line(
                         todo,
+                        items,
                         base_indent,
                         inner_width,
                         live_ids.as_slice(),
@@ -1227,6 +1228,7 @@ pub(crate) fn render_todos_message(
             for todo in &todos {
                 lines.push(render_todo_card_item_line(
                     todo,
+                    &todos,
                     base_indent,
                     inner_width,
                     live_ids.as_slice(),
@@ -2147,12 +2149,16 @@ fn todo_card_confidence_label(todo: &crate::tui::operant_app::todo::TodoItem) ->
     state.map(|state| state.as_str().to_string())
 }
 
-fn render_todo_card_item_line(
+fn render_todo_card_item_line<T>(
     todo: &crate::tui::operant_app::todo::TodoItem,
+    siblings: &[T],
     base_indent: &str,
     inner_width: usize,
     live_ids: &[String],
-) -> Line<'static> {
+) -> Line<'static>
+where
+    T: std::borrow::Borrow<crate::tui::operant_app::todo::TodoItem>,
+{
     let blocked = !todo.blocked_by.is_empty() && todo.status != "completed";
     let (glyph, glyph_color) = if blocked {
         ("⊳", rgb(225, 165, 90))
@@ -2192,7 +2198,77 @@ fn render_todo_card_item_line(
             Style::default().fg(todo_live_color()),
         ));
     }
+    // A blocked row used to print only the ⊳ glyph, so it said "blocked" and
+    // nothing about by what — the operator still could not see the list's
+    // shape. `blocked_by` names SIBLING TODO IDs (the tool's own doc: "Ids of
+    // todos that must finish before this one starts"), so resolving against
+    // the same list is exact, not a guess. Unresolvable ids are counted, not
+    // dropped: a plan naming something not in this list is a real state, and
+    // silently omitting it would hide it.
+    if blocked {
+        let (resolved, unresolved) = blocked_by_parts(todo, siblings);
+        let mut label = String::new();
+        if !resolved.is_empty() {
+            label.push_str(" · blocked by ");
+            label.push_str(&resolved.join(", "));
+        }
+        if unresolved > 0 {
+            label.push_str(&format!(
+                "{}blocked by {} other{}",
+                if resolved.is_empty() { "" } else { " · " },
+                unresolved,
+                if unresolved == 1 { "" } else { "s" }
+            ));
+        }
+        if !label.is_empty() {
+            spans.push(Span::styled(label, Style::default().fg(rgb(225, 165, 90))));
+        }
+    }
     todo_card_line(spans, base_indent, inner_width)
+}
+
+/// The resolvable `blocked_by` labels and a count of the unresolvable ones.
+///
+/// Resolution is by todo id against the same list, so it cannot drift into the
+/// delegation-id namespace: `assigned_to` names a `delegation_id` and
+/// `blocked_by` names a todo id, and mixing the two would print a claim the
+/// card cannot support. An id that matches no sibling is counted rather than
+/// named, because "blocked by 2 others" is honest while naming a phantom is not.
+fn blocked_by_parts<T>(
+    todo: &crate::tui::operant_app::todo::TodoItem,
+    siblings: &[T],
+) -> (Vec<String>, usize)
+where
+    T: std::borrow::Borrow<crate::tui::operant_app::todo::TodoItem>,
+{
+    let mut resolved: Vec<String> = Vec::new();
+    let mut unresolved = 0usize;
+    for id in &todo.blocked_by {
+        // A settled blocker is either finished (so the row should not still
+        // read as blocked — but that is the tool's status business, not the
+        // renderer's) or absent. Either way it has no name to print here.
+        let name = siblings
+            .iter()
+            .map(|s| s.borrow())
+            .find(|s| &s.id == id)
+            .map(|s| s.content.clone());
+        match name {
+            Some(text) if !text.is_empty() => resolved.push(compact_blocker_label(&text)),
+            _ => unresolved += 1,
+        }
+    }
+    (resolved, unresolved)
+}
+
+/// A blocker's label, short enough not to eat the row.
+fn compact_blocker_label(text: &str) -> String {
+    const MAX: usize = 24;
+    let collapsed = text.split('\n').next().unwrap_or(text).trim().to_string();
+    if collapsed.chars().count() <= MAX {
+        return collapsed;
+    }
+    let head: String = collapsed.chars().take(MAX).collect();
+    format!("{}…", head.trim_end())
 }
 
 fn compact_run_id(run_id: &str) -> String {
