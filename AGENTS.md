@@ -241,6 +241,27 @@ incident happened.
     fails `has_runtime: false` there. Run them in the main tree or not at
     all; never treat that failure as a tip regression outside the main
     tree.
+   - **Deploying from a temporary worktree — two traps that cost ~80 min**
+     (observed 2026-11-01, iter-1612 deploy). Neither is a race and neither
+     is cargo's fault; both are environmental and both fail EARLY and
+     confusingly:
+     1. A fresh worktree has **no `local/`** (untracked build provisioning),
+        so `dev-env.sh` derives a `LIBCLANG_PATH` that points at nothing and
+        every bindgen build script exits 2 before compiling a line. Fix:
+        `ln -s <main-tree>/local local` (and `vendor`) into the worktree —
+        read-only sharing, no build-script fingerprint hazard.
+     2. **`espeak-rs-sys`'s cmake `data` target fails once the ABSOLUTE
+        build path crosses a length threshold**: phoneme filenames are
+        copied into fixed ~8-char buffers, so `r_trill_sh` (10 chars)
+        truncates and you get `Failed to open: .../phsource/r3/r_trill_sh`
+        then `Compiled phonemes: 16 errors`. Main tree path 65 chars works;
+        a 76-char worktree path fails. Use a SHORT worktree path
+        (`/home/ishanp/wtNNNN`, 19 chars) and `libespeak-ng.a` builds fine.
+        `CMAKE_BUILD_PARALLEL_LEVEL` is hardcoded to
+        `available_parallelism()` inside the crate's `build.rs`, so
+        `MAKEFLAGS`/`CMAKE_*` overrides do nothing — do not chase
+        parallelism. A symlinked shared `target/` also corrupts here
+        (fingerprints carry absolute paths); build in a PRIVATE target dir.
 7. **If the tip is red from a peer's in-flight subsystem, don't fix it and
    don't block on it.** Prove your delta adds zero (error-count before/after
    on the untouched base vs patched), say so in the commit body, push.
