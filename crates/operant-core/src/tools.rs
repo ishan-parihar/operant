@@ -43,6 +43,7 @@ pub mod mcp_tool;
 pub mod memory_tools;
 pub mod notification_tool;
 pub mod osv_check;
+pub mod patch;
 pub mod patch_tool;
 pub mod platform_bases;
 pub mod process_tool;
