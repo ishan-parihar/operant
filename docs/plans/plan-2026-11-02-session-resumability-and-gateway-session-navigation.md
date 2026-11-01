@@ -118,12 +118,30 @@ Gateway `/resume <session-id>` (gateway_commands.rs:1260) demands a
 which maps platform+user+channel to a session id. It does not list transcripts.
 
 So a telegram user must copy an id out of a message they cannot see, run
-`operant sessions list` on the server, and paste it back. jcode's gateway has
-`/remote` (control.rs:36-76) as the *auxiliary* face, but its session
-navigation is the same picker the TUI offers (the `SessionPicker` with
-`SessionFilterMode` including `Active` — "sessions with a live process right
-now, annotated with whether each is still streaming"). Codex's channel surface
-uses the thread-history protocol so a remote client lists threads as *rows*.
+`operant sessions list` on the server, and paste it back.
+
+**Correction (added 2026-11-02, same session, after the reference re-read):** an
+earlier revision of this section claimed jcode's channels navigate through the
+same picker the TUI offers and that codex's channel surface uses the
+thread-history protocol. **Both were wrong, and both are retracted here.**
+Measured: jcode's `channel.rs` telegram/discord/jade-relay reply loops
+(channel.rs:260, :469, :729) route every message into
+`AmbientRunnerHandle::inject_message` (`ambient/runner.rs:108-136`), which either
+pushes a `SoftInterruptMessage` into an active cycle or saves a directive and
+triggers a wake. There is **no slash-command parsing in any channel path** —
+the only text dispatch is `extract_permission_id` / `parse_permission_reply` for
+approve/deny replies (channel.rs:232-234). And codex has **no channel surface at
+all**: of its 132 crates there is no telegram/slack/discord/gateway crate
+(verified by directory listing and by `grep -riE "telegram_token|slack_bot|
+webhook_inbound"` returning nothing); `websocket-client` is transport, not
+adapter.
+
+So Gap 4 is **not a jcode/codex parity gap** — it is an operant-local usability
+defect with no reference implementation to copy. That strengthens the case for
+iter-2 rather than weakening it (there is nothing to vendor; it is a join and a
+reply format), and it changes what "parity" means for this iteration: the
+operator is not behind a reference here, operant is ahead, and the iteration
+should be judged on its own UX, not on matching jcode.
 
 Gap 4 is the second-largest gap and the second iteration. It is also the one
 where the shipped `gateway_api.rs` route group (iter-E of the 2026-10-28 plan)
@@ -227,6 +245,17 @@ run against a real marker file by hand.
 `crates/operant-core/src/gateway_session.rs`.
 
 The `/sessions` handler stops reporting only bindings. It becomes:
+
+**Platform reach (measured, and it scopes this iteration):** the operator's
+question named telegram and slack. **Slack cannot reach this command at all** —
+per AGENTS.md's own registry note and verified in the adapter source
+(`gateway/slack.rs:142-149`, `start()` logs and returns; no `wss://` connection;
+`handle_update` has no caller), Slack is outbound-only. The only platforms where
+a user can actually TYPE `/sessions` are the two long-polling/ending receivers:
+**Telegram and Discord**. Webhooks is inbound but is push-only (no reply path for
+a listing command). So iteration 2's real surface is telegram + discord, and its
+default test should be telegram. Slack gets the code for free (same handler) but
+it must not be claimed as reachable, and the plan's own gates must not assert it.
 
 - No args: list this platform's sessions **with transcripts** — join
   `gateway_sessions` (binding row: platform, chat name, last activity) against

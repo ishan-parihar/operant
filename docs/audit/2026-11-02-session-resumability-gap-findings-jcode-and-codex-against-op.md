@@ -92,6 +92,22 @@ an existing doc's summary of itself.
   main.rs:2691 re-reads the positional as a prompt) has an operant equivalent
   that reopens.
 
+- **[verified] Gap 4 has NO reference implementation — it is operant-local.**
+  Measured after a reference re-read prompted by the plan's own review: jcode's
+  channel reply loops (`channel.rs:260` telegram, `:469` discord, `:729`
+  jade-relay) route every message into
+  `AmbientRunnerHandle::inject_message` (`ambient/runner.rs:108-136`), which
+  pushes a `SoftInterruptMessage` into an active cycle or saves a directive and
+  triggers a wake. There is **no slash-command parsing in any jcode channel
+  path** — the only text dispatch is `extract_permission_id` /
+  `parse_permission_reply` for approve/deny replies (`channel.rs:232-234`). And
+  codex has **no channel surface at all**: of its 132 crates there is no
+  telegram/slack/discord/gateway crate (verified by directory listing and by
+  `grep -riE "telegram_token|slack_bot|webhook_inbound"` across codex-rs
+  returning nothing; `websocket-client` is transport, not an adapter).
+  Consequence: the plan's Gap 4 (gateway `/sessions` as a browsable transcript
+  list) is a usability defect with nothing to vendor. It is not a parity gap.
+
 - **[asserted] No fleet agent owns this surface right now.** The 2026-10-28 plan
   is fully landed and its workflow rows are closed; the last `session_hub` work
   landed at iter-1591 (RT-206, the Ctrl+B anchor). The `claim` registry shows two
