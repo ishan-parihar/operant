@@ -255,6 +255,18 @@ impl App {
                     // have been throttled for up to a second and could still
                     // be reading the pre-write file. Sharing the rebuild keeps
                     // the payload's shape in one place.
+                    //
+                    // Learn the store key from the result. The tool resolves it
+                    // as (explicit arg, agent session metadata, "default"), so
+                    // its echoed `sessionId` is authoritative — reading it here
+                    // is how the tick follows a session that is NOT "default"
+                    // instead of polling a bucket nothing writes to. The value
+                    // is already parsed as `value`, so no second parse.
+                    if let Some(sid) = value.get("sessionId").and_then(|v| v.as_str())
+                        && !sid.is_empty()
+                    {
+                        self.todos_session_id = sid.to_string();
+                    }
                     self.todos = parsed;
                     self.rebuild_todos_card_payload();
                     self.todos_fingerprint = todos_fingerprint(&self.todos);

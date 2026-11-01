@@ -9353,6 +9353,101 @@ fn an_unchanged_list_does_not_rebuild_the_card_payload() {
     );
 }
 
+/// A todo result from a NON-default session retargets the tick.
+///
+/// This is the other half of `test_todo_session_from_tool_context_metadata`
+/// (operant-core): the tool now writes the agent's session instead of the
+/// `default` catch-all, but a card whose tick still polls `default` would
+/// show nothing for a session that is doing all the writing. The result's
+/// own echoed `sessionId` is the authoritative key, so the handler learns
+/// it from the event rather than from a second copy of the agent.
+///
+/// MUTATION PROVEN: deleting the `if let Some(sid) = value.get("sessionId")`
+/// block in `agent_events.rs` makes this test red — the list lands on App
+/// via the tool result, but `todos_session_id` stays `default`, so the tick
+/// reads a bucket the write never touched.
+#[test]
+fn a_non_default_todo_result_retargets_the_live_tick() {
+    let _store = TodoStoreGuard::new("retarget");
+    let session = unique_session("retarget");
+    let mut app = make_app();
+    assert_eq!(
+        app.todos_session_id, "default",
+        "the precondition this fixes: a fresh app polls the catch-all"
+    );
+
+    // Write under a DIFFERENT session, and hand the app the same result
+    // the agent stream would carry (the tool's own reply).
+    let write = serde_json::json!({
+        "sessionId": session,
+        "todos": [
+            { "id": "r1", "content": "secret chat task", "status": "pending" }
+        ]
+    });
+    let result = futures::executor::block_on(operant_core::tools::OperantTool::execute(
+        &operant_core::tools::TodoTool,
+        write,
+        operant_core::tools::ToolContext::default(),
+    ));
+    assert!(result.success);
+
+    app.handle_agent_event(AgentEvent::ToolComplete {
+        result: operant_core::tools::ToolResult {
+            tool_call_id: "call_retarget".to_string(),
+            name: "todo".to_string(),
+            success: true,
+            content: result.content.clone(),
+            error: None,
+            timed_out: false,
+        },
+    });
+    assert_eq!(
+        app.todos_session_id, session,
+        "the result's own sessionId becomes the tick's store key"
+    );
+
+    // The tick now follows the session the tool wrote, which is the
+    // point: the card no longer goes blank the moment the tool result is
+    // gone. The tool result already put this list on App, so the first tick
+    // correctly reports NO change (identical fingerprint) — what must be
+    // proved is that the tick READS the retargeted session, so a LATER write
+    // only a subagent makes is still adopted.
+    app.todos_tick_at = None;
+    assert!(
+        !app.refresh_todos_if_needed(),
+        "the list the tool result already gave App is what the tick reads back"
+    );
+    assert_eq!(
+        app.todos_session_id, session,
+        "a no-change tick must not reset the key"
+    );
+
+    // The subagent write: nothing forwards its ToolComplete to the parent, so
+    // the ONLY thing that can show this is the tick reading the right file.
+    let child = futures::executor::block_on(operant_core::tools::OperantTool::execute(
+        &operant_core::tools::TodoTool,
+        serde_json::json!({
+            "sessionId": session,
+            "todos": [
+                { "id": "r1", "content": "secret chat task", "status": "pending" },
+                { "id": "r2", "content": "child added this", "status": "pending",
+                  "assignedTo": "dlg-9" }
+            ],
+            "merge": true
+        }),
+        operant_core::tools::ToolContext::default(),
+    ));
+    assert!(child.success);
+
+    app.todos_tick_at = None;
+    assert!(
+        app.refresh_todos_if_needed(),
+        "a write the parent never saw must still reach the card"
+    );
+    assert_eq!(app.todos.len(), 2);
+    assert_eq!(app.todos[1].content, "child added this");
+}
+
 /// A completed delegation stops lighting its todo.
 ///
 /// The accent reads "a live subagent is on this", so it has to clear when the
@@ -9435,4 +9530,270 @@ fn a_claim_on_a_delegation_that_never_existed_lights_nothing() {
         app.subagent_live_todo_ids().is_empty(),
         "an unresolvable claim is not a live subagent"
     );
+}
+
+// ---------------------------------------------------------------------------
+// 2026-10-31 round 2: the rewind selector must FOLLOW the outline (omp
+// `TranscriptBrowser` + `#outlineAnchor` → `revealRange`).
+//
+// The operator reported again, live: "the rewind preview is still very glitchy,
+// and the arrow keys are not navigating". Round one fixed the ZONE boundaries
+// (iter-1589) and the earlier `sync_marks` cursor reset (iter-1515). Neither
+// touched the one thing that decides whether an arrow press is VISIBLE.
+//
+// The render: `draw_rewind_selector` keeps the whole `mid` vector and slices
+// `state.scroll..scroll+body_h`. `state.scroll` is only ever written by PageUp
+// / PageDown / wheel — nothing on an arrow key moves it. omp does not model
+// this as an operator choice at all: its frame carries an ANCHOR
+// (`#outlineAnchor` → `composed.selStart..selEnd`) and `ScrollView.revealRange`
+// scrolls it into view every paint, then sets `followTail = false`. The
+// consequence is the one the operator felt: press Up five times over a
+// transcript longer than the pane, and the reversed outline walks off the top
+// edge of the pane — the highlight stays on a row the operator can no longer
+// see, and only the footer's "drops N turns" changes. That is exactly "arrows
+// do nothing".
+// ---------------------------------------------------------------------------
+#[cfg(test)]
+mod rewind_follows_the_outline {
+    use super::*;
+    use crate::tui::adapter_types::types::{Message, MessageContent, Role};
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    fn app() -> crate::tui::app::App {
+        make_app()
+    }
+
+    fn user(text: &str) -> Message {
+        Message {
+            role: Role::User,
+            content: MessageContent::Text(text.to_string()),
+        }
+    }
+
+    fn assistant_long(text: &str) -> Message {
+        Message {
+            role: Role::Assistant,
+            content: MessageContent::Text(text.to_string()),
+        }
+    }
+
+    /// A transcript taller than a 45-row pane: 8 turns of prose long enough to
+    /// wrap, so the body is several screens. That is the shape where a
+    /// selector without anchor-follow visibly strands the outline.
+    fn seed_tall(app: &mut crate::tui::app::App) {
+        let mut marks = Vec::new();
+        for i in 0..8 {
+            let prompt = format!("prompt number {i}");
+            app.messages.push(user(&prompt));
+            marks.push(((100 + i as u64), prompt));
+            let mut body = String::new();
+            for p in 0..12 {
+                body.push_str(&format!(
+                    "turn {i} paragraph {p} — a long line of prose so the body wraps \
+                     across several terminal rows in a 120 column pane.\n"
+                ));
+            }
+            app.messages.push(assistant_long(&body));
+        }
+        app.core_rewind_marks = Some(std::sync::Arc::new(
+            crate::tui::rewind_marks::RewindMarksSource::new(
+                marks
+                    .into_iter()
+                    .map(|(turn_id, text)| operant_core::agent::UserTurnMark {
+                        turn_id,
+                        conv_index: 0,
+                        conv_epoch: 1,
+                        text,
+                    })
+                    .collect(),
+                Some("sess_follow".to_string()),
+                Vec::new(),
+            ),
+        ));
+    }
+
+    /// Mirror `App::run`'s frame-loop sync EXACTLY (mod.rs:1502-1509): the
+    /// relocation set is pushed first, then the marks are read. Skipping
+    /// `set_conversation` makes `RewindMarksSource::marks()` return nothing
+    /// whenever a session id is present, because the epoch is 0 and no mark
+    /// text is in the (empty) relocation set — a harness that skips it
+    /// measures an empty selector and proves nothing about navigation.
+    fn sync_all(app: &mut crate::tui::app::App) {
+        let source = app.core_rewind_marks.as_ref().expect("marks").clone();
+        let display_texts = app.user_prompt_texts_for_filter();
+        source.set_conversation(display_texts.clone());
+        let marks: Vec<(u64, String)> = source
+            .marks()
+            .into_iter()
+            .map(|m| (m.turn_id, m.text))
+            .collect();
+        app.rewind_selector.sync_marks(marks, &display_texts);
+    }
+
+    /// The visible screen rows of the selector, as strings.
+    fn paint(app: &crate::tui::app::App) -> Vec<String> {
+        let backend = TestBackend::new(120, 45);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        terminal
+            .draw(|frame| {
+                crate::tui::rewind_selector::draw_rewind_selector(frame, frame.area(), app);
+            })
+            .expect("draw");
+        let buf = terminal.backend().buffer();
+        (0..45u16)
+            .map(|y| {
+                (0..120u16)
+                    .map(|x| buf[(x, y)].symbol().to_string())
+                    .collect::<Vec<_>>()
+                    .join("")
+            })
+            .collect()
+    }
+
+    #[test]
+    fn stepping_up_reveals_the_outlined_turn_in_the_pane() {
+        let mut app = app();
+        seed_tall(&mut app);
+        app.rewind_selector.open();
+        sync_all(&mut app);
+        // The selector opens on the newest turn; the body is far taller than
+        // the pane, so the operator sees the tail.
+        let _ = paint(&app);
+
+        // Walk up. Each step must keep the outlined turn ON SCREEN: a press
+        // whose only visible effect is the footer's counter is a dead key.
+        for step in 0..6 {
+            app.rewind_selector.select_prev();
+            let screen = paint(&app);
+            let selected = app.rewind_selector.selected;
+            let needle = format!("prompt number {selected}");
+            assert!(
+                screen.iter().any(|row| row.contains(&needle)),
+                "step {step}: the outlined turn (prompt number {selected}) is off \
+                 screen after Up — the pane still shows the tail. omp reveals the \
+                 anchor every frame; we leave `scroll` untouched, so the outline \
+                 strands above the top edge and Up reads as dead."
+            );
+        }
+    }
+
+    /// The reveal must not FIGHT an explicit page key, and a frame with no
+    /// input must be stable. `state.scroll` is operator state as much as it
+    /// is render state: an operator who pages down to read an older turn must
+    /// not have their page silently rewritten by a paint. omp's `revealRange`
+    /// returns false when the anchor is already inside the visible range and
+    /// leaves the offset alone (scroll-view.ts:331-345); ours must do the
+    /// same. A reveal that disagrees with its own previous result is the
+    /// flicker half of "still very glitchy".
+    #[test]
+    fn paging_away_is_not_undone_by_a_repaint_and_a_frame_is_stable() {
+        let mut app = app();
+        seed_tall(&mut app);
+        app.rewind_selector.open();
+        sync_all(&mut app);
+        let _ = paint(&app);
+
+        // Page down well past the selected turn: the operator is reading
+        // above the outline now.
+        for _ in 0..3 {
+            app.rewind_selector.scroll += 10;
+        }
+        let paged = app.rewind_selector.scroll;
+        assert!(paged > 0, "the page keys must move the viewport");
+
+        let after_page = paint(&app);
+        assert_eq!(
+            app.rewind_selector.scroll, paged,
+            "a paint must not silently overwrite the operator's page offset"
+        );
+
+        // A second paint with no input must produce the identical frame.
+        assert_eq!(
+            after_page,
+            paint(&app),
+            "two paints with no input between them must be byte-identical — an \
+             unstable reveal is the flicker the operator felt"
+        );
+    }
+
+    /// The arrow keys never park on a turn that is no longer in the transcript
+    /// (omp `#move` skips `outlineVisibility` failures,
+    /// rewind-selector.ts:647-668). A compacted turn keeps its mark so Enter
+    /// can refuse it, but it has no rows — parking on it draws an outline over
+    /// nothing and offers only a dead Enter.
+    #[test]
+    fn arrows_skip_a_turn_compaction_folded_out_of_the_transcript() {
+        let mut st = crate::tui::rewind_selector::RewindSelectorState::default();
+        let entry = |turn_id: u64, text: &str| crate::tui::rewind_selector::RewindEntry {
+            turn_id,
+            text: text.to_string(),
+            compacted: false,
+        };
+        st.entries = vec![
+            entry(31, "keep me"),
+            entry(32, "folded away"),
+            entry(33, "keep me too"),
+        ];
+        st.entries[1].compacted = true;
+        st.selected = 2;
+
+        st.select_prev();
+        assert_eq!(
+            st.selected, 0,
+            "Up must step over the folded turn rather than parking on it"
+        );
+        st.select_next();
+        assert_eq!(
+            st.selected, 2,
+            "and Down must step back over it too, never resting on a turn with \
+             no rows"
+        );
+    }
+
+    /// While the filter is open, the arrow keys walk the MATCHES (omp's
+    /// `#stepFiltered`, rewind-selector.ts:541-547). They used to land in the
+    /// filter branch's dead `_ => {}` arm, so a filtered list had no way to
+    /// move at all.
+    #[test]
+    fn arrows_walk_the_filter_matches_not_the_whole_list() {
+        let mut st = crate::tui::rewind_selector::RewindSelectorState::default();
+        let mut entry = |turn_id: u64, text: &str| crate::tui::rewind_selector::RewindEntry {
+            turn_id,
+            text: text.to_string(),
+            compacted: false,
+        };
+        st.entries = vec![
+            entry(41, "fix the cache"),
+            entry(42, "write the docs"),
+            entry(43, "fix the index"),
+            entry(44, "fix the retries"),
+        ];
+        st.selected = 3;
+        st.filter = "fix".to_string();
+
+        // Selected is on the tail match (44, index 3). The filter narrows the
+        // walk to 0, 2 and 3 — the docs turn at 1 must be unreachable.
+        st.select_prev();
+        assert_eq!(
+            st.selected, 2,
+            "Up steps off 44 onto the match at 43 — not onto the non-matching \
+             docs turn at index 1"
+        );
+        st.select_prev();
+        assert_eq!(
+            st.selected, 0,
+            "the next Up lands on the oldest match, still skipping the docs turn"
+        );
+        st.select_prev();
+        assert_eq!(
+            st.selected, 0,
+            "Up clamps at the first match, does not wrap"
+        );
+        st.select_next();
+        assert_eq!(
+            st.selected, 2,
+            "and Down returns through the matches only, never onto the docs turn"
+        );
+    }
 }

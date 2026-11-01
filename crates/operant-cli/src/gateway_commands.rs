@@ -295,6 +295,14 @@ pub static COMMAND_REGISTRY: &[CommandDef] = &[
         admin_only: false,
     },
     CommandDef {
+        name: "todos",
+        description: "Show this chat's todo list",
+        aliases: &["todo"],
+        category: "Session",
+        args_hint: "",
+        admin_only: false,
+    },
+    CommandDef {
         name: "steer",
         description: "Steer conversation direction",
         aliases: &[],
@@ -1602,6 +1610,75 @@ pub fn handle_command(cmd_name: &str, _args: &str, ctx: &CommandContext<'_>) -> 
                     )
                 }
             }
+        }
+
+        "todos" | "todo" => {
+            // This chat's todo list, from the SAME store the todo tool writes.
+            //
+            // Which session is read is the whole question, and it is answered
+            // by construction rather than by guessing: `tool_context` passes
+            // the agent's session id as metadata (stream.rs), so the tool's
+            // `sessionId` resolution is (explicit arg, that metadata,
+            // "default"). Deriving the key the same way the agent does
+            // (`run_session_scoped_command`'s pin → persisted → derived chain,
+            // gateway_runner.rs:2245-2251) is the only way this command reads
+            // the bucket the model is actually writing.
+            //
+            // `ctx.session_key` is the routing key the dispatch loop already
+            // derived, so the derivation here cannot drift from the one the
+            // agent uses — it is the same input to the same function.
+            let session_id = ctx
+                .session_pins
+                .as_ref()
+                .and_then(|pins| pins.get(ctx.session_key))
+                .unwrap_or_else(|| {
+                    crate::gateway_runner::derived_gateway_session_id(ctx.session_key)
+                });
+            let items = operant_core::tools::todo_list_for_session(&session_id);
+            if items.is_empty() {
+                return Some(
+                    "*Todos:* this chat has no task list yet.\n\
+                        The list appears once the model writes one with the `todo` \
+                        tool — `/subagents` shows the background workers instead."
+                        .to_string(),
+                );
+            }
+            let done = items
+                .iter()
+                .filter(|t| t.status == "completed")
+                .count();
+            let running = items
+                .iter()
+                .filter(|t| t.status == "in_progress")
+                .count();
+            let mut lines = vec![format!(
+                "*Todos:* {}/{} done · {} in progress",
+                done,
+                items.len(),
+                running
+            )];
+            for item in &items {
+                let glyph = match item.status.as_str() {
+                    "completed" => "✅",
+                    "in_progress" => "▶️",
+                    "cancelled" => "🚫",
+                    _ => "⬜",
+                };
+                // Escape the markdown characters a channel treats as formatting
+                // so a task titled `*_important*` does not italicise the row.
+                // The same discipline the `subagents` goal line uses by
+                // squashing newlines; here the text is kept intact and only
+                // the markers are neutralised, because a task title is worth
+                // reading verbatim.
+                let text = item
+                    .content
+                    .replace('_', "\\_")
+                    .replace('*', "\\*")
+                    .replace('`', "\\`")
+                    .replace('\n', " ");
+                lines.push(format!("{} {}", glyph, text));
+            }
+            lines.join("\n")
         }
 
         "steer" => {
@@ -3506,6 +3583,14 @@ mod subagents_command_tests {
         CommandContext::new(None, cfg, true, "op-1", "telegram", "chan-1")
     }
 
+    /// `/todos` must read the bucket the AGENT writes, and the agent's key is
+    /// derived from the routing `session_key` — so a test that leaves the key
+    /// empty is asserting against a session the agent never had.
+    fn ctx_keyed<'a>(cfg: &'a AppConfig, session_key: &'static str) -> CommandContext<'a> {
+        CommandContext::new(None, cfg, true, "op-1", "telegram", "chan-1")
+            .with_session_key(session_key)
+    }
+
     /// A per-test-unique goal marker, so `list_records()` rows from other
     /// tests (or earlier in this process) can never satisfy an assertion.
     fn marker(test: &str) -> String {
@@ -3672,6 +3757,127 @@ mod subagents_command_tests {
         assert_eq!(
             subagents, via_alias,
             "/subagent is an alias for /subagents, not a separate command"
+        );
+    }
+
+    /// /todos answers the OTHER question a channel operator asks: not "which
+    /// workers are running" but "what is this chat's task list". The store is
+    /// the one the todo tool writes, keyed by the session the routing
+    /// session_key derives — so this reads a chat's own list, not the
+    /// default bucket every chat used to share.
+    #[test]
+    fn todos_reads_the_session_the_agent_writes_and_counts_by_status() {
+        // The todo store is process-global, so point it at a per-test dir
+        // exactly the App tests do: without this the test reads the
+        // operator's real `~/.operant/todos/` and its claims mean nothing.
+        struct DirGuard(Option<std::path::PathBuf>);
+        impl Drop for DirGuard {
+            fn drop(&mut self) {
+                operant_core::tools::set_todo_dir_for_tests(self.0.take());
+            }
+        }
+        let dir = std::env::temp_dir().join(format!("operant-gw-todos-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::create_dir_all(&dir);
+        let previous = operant_core::tools::set_todo_dir_for_tests(Some(dir.clone()));
+        let _dir_guard = DirGuard(previous);
+
+        // The session this channel's agent gets: no pin, so the command
+        // derives it from the routing key the same way the runner does.
+        let session = crate::gateway_runner::derived_gateway_session_id("telegram:chan-todos");
+        let unique = format!("gw-todo-task-{}", std::process::id());
+        let written = futures::executor::block_on(operant_core::tools::OperantTool::execute(
+            &operant_core::tools::TodoTool,
+            serde_json::json!({
+                "sessionId": session,
+                "todos": [
+                    { "id": "gw1", "content": unique, "status": "completed" },
+                    { "id": "gw2", "content": "second row", "status": "in_progress" },
+                    // A pending row too, so the reply exercises all three
+                    // glyphs rather than only the two this write happened
+                    // to produce.
+                    { "id": "gw3", "content": "queued row", "status": "pending" },
+                ]
+            }),
+            operant_core::tools::ToolContext::default(),
+        ));
+        assert!(written.success, "the tool writes to the store");
+
+        let cfg = AppConfig::default();
+        let resp =
+            handle_command("todos", "", &ctx_keyed(&cfg, "telegram:chan-todos")).expect("handled");
+        assert!(
+            resp.contains(&unique),
+            "a channel task must be listed: {resp}"
+        );
+        assert!(
+            resp.contains("1/3 done"),
+            "the counts must reflect the store, not a guessed tally: {resp}"
+        );
+        assert!(
+            resp.contains("1 in progress"),
+            "in-progress count too: {resp}"
+        );
+        assert!(
+            resp.contains("✅") && resp.contains("⬜") && resp.contains("▶️"),
+            "the same status glyphs the TUI card uses: {resp}"
+        );
+    }
+
+    /// A channel that never wrote a list must say so and point at the
+    /// subagents list — not show an empty table that reads as "no tasks
+    /// pending" when the model has not been asked yet.
+    #[test]
+    fn todos_for_an_empty_session_says_there_is_no_list_yet() {
+        let cfg = AppConfig::default();
+        // A key nothing derived a session for: no pin, so the derived id
+        // is a hash no test (or agent) has written to.
+        let resp = handle_command("todos", "", &ctx_keyed(&cfg, "telegram:chan-never-todos"))
+            .expect("handled");
+        assert!(
+            resp.contains("no task list yet"),
+            "the empty arm must name the state: {resp}"
+        );
+        assert!(
+            resp.contains("/subagents"),
+            "and cross-link the worker list: {resp}"
+        );
+    }
+
+    /// Markdown in a task title must not italicise a channel row.
+    #[test]
+    fn todos_escapes_markdown_in_task_titles() {
+        struct DirGuard(Option<std::path::PathBuf>);
+        impl Drop for DirGuard {
+            fn drop(&mut self) {
+                operant_core::tools::set_todo_dir_for_tests(self.0.take());
+            }
+        }
+        let dir = std::env::temp_dir().join(format!("operant-gw-todos-esc-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::create_dir_all(&dir);
+        let previous = operant_core::tools::set_todo_dir_for_tests(Some(dir.clone()));
+        let _dir_guard = DirGuard(previous);
+
+        let session = crate::gateway_runner::derived_gateway_session_id("telegram:chan-esc");
+        let written = futures::executor::block_on(operant_core::tools::OperantTool::execute(
+            &operant_core::tools::TodoTool,
+            serde_json::json!({
+                "sessionId": session,
+                "todos": [
+                    { "id": "e1", "content": "run *_the_* tests `now`", "status": "pending" }
+                ]
+            }),
+            operant_core::tools::ToolContext::default(),
+        ));
+        assert!(written.success);
+
+        let cfg = AppConfig::default();
+        let resp =
+            handle_command("todos", "", &ctx_keyed(&cfg, "telegram:chan-esc")).expect("handled");
+        assert!(
+            resp.contains("run \\*\\_the\\_\\* tests \\`now\\`"),
+            "markdown markers must be neutralised, not rendered: {resp}"
         );
     }
 }

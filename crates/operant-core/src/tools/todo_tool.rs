@@ -359,12 +359,33 @@ impl OperantTool for TodoTool {
         ToolSchema::from_type::<TodoArgs>("todo", "Manage task list")
     }
 
-    async fn execute(&self, args: Value, _context: ToolContext) -> ToolResult {
+    async fn execute(&self, args: Value, context: ToolContext) -> ToolResult {
         let args: TodoArgs = match serde_json::from_value(args) {
             Ok(a) => a,
             Err(e) => return ToolResult::error("todo", format!("Invalid arguments: {}", e)),
         };
-        let session_id = args.session_id.unwrap_or_else(|| "default".to_string());
+        // The session this call belongs to, in precedence order: the explicit
+        // argument (a caller that knows better), then the agent's own session
+        // from `tool_context`, then the store's catch-all.
+        //
+        // The middle term is the one that was missing. `stream.rs`'s
+        // `tool_context` has passed the agent's session id as `session_id`
+        // metadata since Plan 015, and the todo tool never read it — so a
+        // gateway's todo list (whose agent is `set_session_id`'d per channel,
+        // `gateway_runner.rs:2251/2539`) and the TUI's both landed in the same
+        // `default` bucket and overwrote each other. Fixing the store here
+        // also gives the gateway `/todos` a session to read that is not a
+        // guess.
+        let session_id = args
+            .session_id
+            .or_else(|| {
+                context
+                    .metadata
+                    .get("session_id")
+                    .map(|id| id.trim().to_string())
+                    .filter(|id| !id.is_empty())
+            })
+            .unwrap_or_else(|| "default".to_string());
 
         // Read mode (hermes: omit `todos` to read the current list).
         // The first read of a session pulls its file from disk, so a fresh
@@ -709,6 +730,113 @@ mod tests {
         assert!(ok);
         assert_eq!(parsed["count"], 2);
         assert_eq!(parsed["sessionId"], "test-session-1");
+    }
+
+    /// The agent's session id in `tool_context` metadata is the store key
+    /// when the call carries no explicit arg. This is the term that was
+    /// missing: without it a gateway chat and the TUI both write the same
+    /// `default` bucket and each overwrites the other's list.
+    ///
+    /// MUTATION PROVEN: removing the `.or_else(metadata…)` term (so the
+    /// resolution falls straight to "default") makes this test red — the
+    /// write lands in `default`, and the read keyed on the agent session
+    /// returns count 0.
+    #[tokio::test]
+    async fn test_todo_session_from_tool_context_metadata() {
+        let _store = StoreGuard::new();
+        let tool = TodoTool;
+        let mut ctx = default_context();
+        ctx.metadata
+            .insert("session_id".to_string(), "gw_9f2c1ab".to_string());
+
+        let result = tool
+            .execute(
+                serde_json::json!({
+                    "todos": [
+                        { "id": "1", "content": "Gateway task", "status": "pending" }
+                    ]
+                }),
+                ctx,
+            )
+            .await;
+        let parsed: Value = serde_json::from_str(&result.content).unwrap_or(Value::Null);
+        assert!(result.success);
+        assert_eq!(parsed["sessionId"], "gw_9f2c1ab");
+
+        // The kicker: reading THAT session returns the task, and the
+        // `default` bucket is still empty, so the two really are separate.
+        let (read_ok, read_parsed, _) = execute_tool(serde_json::json!({
+            "sessionId": "gw_9f2c1ab"
+        }))
+        .await;
+        assert!(read_ok);
+        assert_eq!(read_parsed["count"], 1);
+        assert_eq!(read_parsed["todos"][0]["content"], "Gateway task");
+
+        let (_, default_parsed, _) =
+            execute_tool(serde_json::json!({ "sessionId": "default" })).await;
+        assert_eq!(default_parsed["count"], 0);
+    }
+
+    /// An explicit arg WINS over the metadata, because a caller that names
+    /// a session on purpose must not be silently retargeted by the ambient
+    /// agent id — that is how a subagent's list would land in the parent's.
+    #[tokio::test]
+    async fn test_todo_explicit_session_beats_metadata() {
+        let _store = StoreGuard::new();
+        let tool = TodoTool;
+        let mut ctx = default_context();
+        ctx.metadata
+            .insert("session_id".to_string(), "gw_9f2c1ab".to_string());
+
+        let result = tool
+            .execute(
+                serde_json::json!({
+                    "todos": [
+                        { "id": "1", "content": "Named task", "status": "pending" }
+                    ],
+                    "sessionId": "explicit-session"
+                }),
+                ctx,
+            )
+            .await;
+        let parsed: Value = serde_json::from_str(&result.content).unwrap_or(Value::Null);
+        assert_eq!(parsed["sessionId"], "explicit-session");
+
+        let (_, ambient, _) = execute_tool(serde_json::json!({ "sessionId": "gw_9f2c1ab" })).await;
+        assert_eq!(ambient["count"], 0);
+    }
+
+    /// Blank metadata must not become a store key of "" — an agent whose
+    /// session id is not yet minted passes `Some("")`-shaped values, and
+    /// "" would be a third bucket nothing ever reads.
+    ///
+    /// MUTATION PROVEN: deleting the `.filter(|id| !id.is_empty())` makes
+    /// this test red — the write lands under "" and the `default` read
+    /// returns count 0.
+    #[tokio::test]
+    async fn test_todo_blank_metadata_falls_back_to_default() {
+        let _store = StoreGuard::new();
+        let tool = TodoTool;
+        let mut ctx = default_context();
+        ctx.metadata
+            .insert("session_id".to_string(), "   ".to_string());
+
+        let result = tool
+            .execute(
+                serde_json::json!({
+                    "todos": [
+                        { "id": "1", "content": "Ambient task", "status": "pending" }
+                    ]
+                }),
+                ctx,
+            )
+            .await;
+        let parsed: Value = serde_json::from_str(&result.content).unwrap_or(Value::Null);
+        assert_eq!(parsed["sessionId"], "default");
+
+        let (_, read_back, _) = execute_tool(serde_json::json!({ "sessionId": "default" })).await;
+        assert_eq!(read_back["count"], 1);
     }
 
     #[tokio::test]

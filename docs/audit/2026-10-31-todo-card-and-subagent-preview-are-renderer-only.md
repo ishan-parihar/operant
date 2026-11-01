@@ -5,6 +5,21 @@
 **Amends:** `docs/plans/2026-10-30-subagent-preview-and-management-upgrade.md` § 3.1 and § 3.2
 **Prior art:** `docs/audit/2026-10-30-subagent-wave-3-deferral-rests-on-a-false-premise.md` (which already corrected one false premise in that plan), the `[port-excision]` / `[port-decision]` annotations in `crates/operant-cli/src/tui/operant_app/todo.rs`, and the header comment at `crates/operant-cli/src/tui/operant_ui/ui_todo_changes.rs:5-19`.
 
+> **AMENDED 2026-10-31, after the re-read.** § Gap 4 below is WRONG and is retracted
+> in full: the gateway already ships a delegation roster. `/subagents` was
+> registered and implemented in iter-1500 (`git log -L 290,293` on
+> `gateway_commands.rs` → `010109f6 feat(iter-1500): /subagents — the gateway
+> finally reads the delegation registry`), and `gateway_commands::subagents_command_tests`
+> pins it — 5 tests, all green today. The audit asserted "no todo card, no
+> delegation roster, no `/todos`, no `/subagents`" after grepping `gateway/`
+> for the word `todo` and `gateway_runner.rs` for `subagent`; `/subagents`
+> lives in `gateway_commands.rs`, which neither grep covered, and the plan § 2.2
+> row it cited as "still unshipped" had already landed 89 iterations earlier.
+> What survives of Gap 4 is narrower and is restated at the bottom of that
+> section: the gateway carries a `todo` progress line with an emoji and no
+> counts, and no command reads the todo list. Gaps 1 and 2 stand unchanged
+> and are now fixed (iter-1590 / iter-1593).
+
 ## The operator's report
 
 > "[T]odo list, and subagent preview within TUI and gateway-channels (telegram, slack, etc) is not complete. I cannot see the todo list or the subagent preview like that of `jcode`."
@@ -100,11 +115,46 @@ fn inline_swarm_gallery_active(&self) -> bool { false }
 
 No `impl App` overrides them (verified: `grep -n "inline_swarm_members" crates/operant-cli/src/tui/app/` → empty). So the gallery, the strip, and the focused panel are all wired to a source that returns no members. jcode's `members_to_gallery` (`info_widget_swarm_gallery.rs:100-135`) maps `member.todo_progress` → `GalleryMember.todo` and `member.todo_items` → `GalleryMember.todo_items`; operant has the mapper and `Default` for those fields.
 
-## Gap 4 — the gateway has no todo or subagent surface at all
+## Gap 4 — RETRACTED. The gateway ships a delegation roster; only the todo list is missing
 
-The operator named "gateway-channels (telegram, slack, etc)" specifically. In `crates/operant-core/src/gateway/` the word "todo" appears in **zero** files; `crates/operant-cli/src/gateway_runner.rs` has only emoji/argument plumbing (`:165`, `:241`) and tests (`:6479-6489`). No todo card, no delegation roster, no `/todos`, no `/subagents`.
+> **This section was wrong on the first pass and is rewritten.** See the
+> amendment at the top of this document. The original claimed "no todo card, no
+> delegation roster, no `/todos`, no `/subagents`", which is false for the
+> roster. What the evidence supports, after looking in the file the original
+> greps never covered:
 
-The plan's § 2.2 already scoped the gateway's `/subagents` command and it is still unshipped. The gateway's progress mechanism is a *tool-line* tracker (`gateway_runner.rs:537-603`: `msgs: ProgressMap`, `on_tool_start`, `attach_message_id`, `close_group`) that collapses repeated identical tool lines into `(×N)` counters — a natural place for a todo status line, and the natural place for the delegation roster the plan scoped.
+**The delegation roster exists and is the right surface.** `/subagents` is a
+registered gateway command (`gateway_commands.rs:290`, alias `subagent`) whose
+handler (`:1504`) reads `async_delegation::list_records()` and marks each row
+with `⏳ running` / `✅ completed` / `❌ failed`, an elapsed age measured at the
+display layer, the untruncated one-lined goal, the model, and a 120-char result
+or error snippet. `gateway_commands::subagents_command_tests` pins it — 5 tests,
+all green — including that `/agents` and `/subagents` resolve to distinct
+commands. It landed in iter-1500, 89 iterations before this audit, which is why
+the plan's § 2.2 row that this audit cited as "still unshipped" was stale.
+So the operator's "I cannot see the subagent preview" is **not** the gateway
+roster: on every one of the seven platforms they already have it.
+
+**What the gateway does lack, narrowed to what the evidence supports:**
+
+1. **No todo surface.** `crates/operant-core/src/gateway/` and
+   `gateway_commands.rs` between them have no command that reads the todo
+   store, so a channel operator cannot ask for the plan. The todo store now has
+   the read accessor to build one on (`todo_list_for_session`, iter-1590), which
+   is the same accessor the TUI tick uses — so a `/todos` would read the same
+   truth as the TUI card, not a second definition of it.
+2. **The `todo` progress line carries an emoji and nothing else.**
+   `tool_preview_line` (`gateway_runner.rs:310`) renders `⏰ todo…` because
+   `extract_tool_arg` (`:241`) only knows `action` / `task_id` / `title` — the
+   kanban tool's argument names. The todo tool's actual payload (`todos`, a JSON
+   array) is not one of them, so the line has no counts and no item text. The
+   `ToolProgressTracker` it feeds (`:537-603`) collapses repeated identical lines
+   into `(×N)`, which means a five-iteration todo loop prints five identical
+   `⏰ todo` bubbles — the exact case the counter exists for, with no useful text
+   to collapse.
+
+This is the honest remaining gateway work, and it is materially smaller than the
+gap the original audit described.
 
 ## What jcode does that operant does not, in one table
 
@@ -117,7 +167,8 @@ The plan's § 2.2 already scoped the gateway's `/subagents` command and it is st
 | Subagent → todo match, accent | `todoMatched` / `#5873` | none | **Gap 2** |
 | `assigned_to` on the card | `todo_card_agents` | carried, unrendered | **Gap 2** |
 | Subagent `todo_progress` / `todo_items` on the gallery | `member_display_status` + `members_to_gallery` map them | fields exist, always empty | **Gap 3** |
-| `/todos` in the gateway | n/a (jcode has no channel surface) | nothing | **Gap 4** |
+| `/todos` in the gateway | n/a (jcode has no channel surface) | no todo command — but `/subagents` **exists and works** (iter-1500) | **Gap 4 (todo only)** |
+| Delegation roster in the gateway | n/a | `/subagents`, 5 tests green | **parity** |
 
 ## What to take from oh-my-pi, and what not to
 
@@ -138,6 +189,12 @@ Four gaps, four small diffs, no core-schema change, no migration:
 - **Gap 1** is one public read accessor in `todo_tool.rs` (`pub fn load_session_public(session) -> Vec<TodoItem>`, wrapping the existing private `load_session`) plus a 1s-throttled hashed tick on `App` that calls it, and it fixes *both* the subagent-blind card *and* the stale-after-restart card. Largest visible win per line.
 - **Gap 2** is matching `App`'s live subagent rows (feeable from the delegation registry that `session_hub` already reads: `async_delegation::list_records`, `session_hub/mod.rs:279`) against `todo.assigned_to` and accenting the matched row. ~30 lines.
 - **Gap 3** is populating `SwarmMemberStatus` from that same registry + the child's todo file. The child's session id is not currently carried on the record (`AsyncDelegationRecord` has no `session_id` field), so the todo snapshot per member needs either that field or a content-hash join — this is the one gap with a real design decision, and it should be scoped separately.
-- **Gap 4** is `/subagents` per the existing plan § 2.2 (~40 lines, one formatting path, all seven platforms).
+- **Gap 4** is the todo half only, and it is now cheap: a `/todos` that reads
+  `todo_list_for_session` (which iter-1590 added) renders through the same
+  formatting path `/subagents` already uses, so all seven platforms get it at
+  once. The plan's § 2.2 row is CLOSED and should be struck — `/subagents`
+  shipped in iter-1500. `extract_tool_arg` also needs `todos` added so
+  `⏰ todo…` stops printing an information-free bubble.
 
-Gaps 1 and 2 are the operator's report and should land together; 3 and 4 are already scoped in the 2026-10-30 plan and are not blocking.
+Gaps 1 and 2 are fixed (iter-1590 code, iter-1593 tests); Gap 3 is the one with
+a real design decision and stays open.
