@@ -37,6 +37,16 @@
 > still carries an emoji and no counts, because `extract_tool_arg`
 > (`gateway_runner.rs:241`) only knows the kanban tool's argument names.
 >
+> **AMENDED A THIRD TIME 2026-11-01 (iter-1602) — item 2 is now CLOSED and
+> this audit has no open gaps.** `todo_progress_summary(name, args)`
+> (`gateway_runner.rs:363`) counts the four states the tool emits and renders
+> `⏰ todo · N tasks · D done · A active · P to do · X dropped`. The root cause
+> was not merely that the argument names were unknown: the todo payload's keys
+> (`todos` array, `merge` bool, `sessionId` string) hold no string the key lists
+> recognise, so the extractor's "first string value from any key" fallback
+> returned the model's own `intent` — already on the line. Six tests in
+> `tool_progress_tests` pin it, both directions mutation-proven.
+>
 > **Label collision, noted per the numbering protocol:** two commits on
 > `origin/main` carry `iter-1597` — this audit's closure (`c8c34fbf`) and a
 > peer's process-hardening change (`5bf97977`). Both stay; history is
