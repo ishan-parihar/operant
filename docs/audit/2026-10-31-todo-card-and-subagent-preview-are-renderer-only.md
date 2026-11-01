@@ -249,6 +249,36 @@ gap the original audit described.
 > chat card, operant toggles a pinned band — which is a surface choice,
 > not a missing feature. Row verdicts below are re-derived from the tree,
 > not copied forward.
+>
+> **AMENDED AGAIN 2026-11-01 (iter-1610's later re-validation) — the "Gap 3
+> CLOSED" verdict in the row subagent `todo_progress` / `todo_items` on the
+> gallery is WRONG and is retracted. It asserted "parity" on the strength of
+> `swarm_gallery_members` (app/mod.rs:1174) existing, which it does: before
+> iter-1607 `tui_state_impl.rs` had ZERO impls of `inline_swarm_members` /
+> `inline_swarm_gallery_active` / `swarm_members_for_transcript` (verified
+> against the true parent 3f6fc180), so the trait defaults `Vec::new()` and
+> `false` fed the renderers and the producers really were dead. That much is
+> sound. What does NOT hold is the consequence drawn from it: the strip that
+> `ui/mod.rs:2512` calls is `render_swarm_strip_lines`
+> (info_widget_swarm_gallery.rs:185), an inert stub returning `Vec::new()`
+> with every parameter underscore-prefixed — excised at iter-591, predating
+> iter-1607 (identical at the parent commit, so NOT a regression it
+> introduced). The obvious next move, pointing the call at the retained
+> `_verbatim` body, does NOT work: un-gating it (cfg(any()) -> cfg(all())) is
+> 13 compile errors across 4 symbols excised at iter-591 and absent from the
+> whole tree today — `SwarmStripHint` (x5), `SWARM_STRIP_VERTICAL_MAX_ROWS`,
+> `alt_chord_lower` (x4), `render_swarm_strip` and `render_swarm_strip_vertical`.
+> The strip therefore needs a PORT (a fresh renderer), not a gate flip, and
+> the `cfg(any())` is load-bearing rather than lazy. Separately, the
+> chat-card path (ui_prepare.rs:1727 -> render_swarm_chat_card_lines, which
+> IS a real body) is doubly gated: it needs a tool whose canonical name is
+> "swarm" — only "communicate" maps there (tool_display.rs:27) and no tool
+> named `communicate` is registered in production; the real fan-out tool is
+> `delegate_task` (sub_agent_tool.rs:49), which is not mapped — and it parses
+> the member's session id from a "Spawned new agent: " line whose only two
+> occurrences in the tree are the parser's own comment and split call. Net:
+> iter-1607 fixed the DATA and left the SURFACE unwired. The TUI subagent
+> preview still does not paint. Gaps 1, 2 and 4 stand closed and verified.
 
 | Mechanism | jcode | operant | Verdict |
 |---|---|---|---|
