@@ -782,10 +782,24 @@ fn glued_script(flag: &str) -> Option<String> {
 /// segment to [`segments`], and a token containing a space (`bash -c 'a b'`)
 /// would otherwise split into two.
 fn rejoin_tail(toks: &[String], start: usize) -> String {
-    toks[start..]
-        .iter()
+    let tail = &toks[start..];
+    // A tail whose FIRST token is itself a quoted phrase. `trap 'rm -rf /' EXIT`
+    // tokenizes to ["trap", "rm -rf /", "EXIT"] -- `tokens()` collapses the
+    // handler into ONE token, because it was quoted. Re-quoting that token here
+    // produced `'rm -rf /' EXIT`, which the recursion re-tokenized into a single
+    // head token `rm -rf /`; `verb_kind` does not know that name, so the whole
+    // destructive command rated `None` and slipped the gate. Emit such a tail
+    // UN-quoted so the recursion sees `rm` as the head verb and rates it.
+    //
+    // Only the FIRST token decides this: a quoted phrase in a LATER position is
+    // exactly what re-quoting is for (`nice -n 5 sh -c 'rm -rf /etc'` must stay
+    // `sh -c 'rm -rf /etc'` so the inner `-c` arm can still find the script).
+    let first_is_a_quoted_phrase = tail
+        .first()
+        .map_or(false, |t| t.chars().any(char::is_whitespace));
+    tail.iter()
         .map(|t| {
-            if t.is_empty() || t.chars().any(char::is_whitespace) {
+            if !first_is_a_quoted_phrase && (t.is_empty() || t.chars().any(char::is_whitespace)) {
                 format!("'{}'", t.replace('\'', "'\\''"))
             } else {
                 t.clone()
@@ -1564,6 +1578,56 @@ mod interpreter_boundary_tests {
             classify("bash -c 'bash -c \"sh -c rm -rf /\"'"),
             BlastRadius::Scoped
         );
+    }
+
+    #[test]
+    fn a_trap_handler_is_rated_not_skipped() {
+        // Row 1 red-team (2026-11-01): `trap` is in INTERPRETER_VERBS, so
+        // `interpreter_script` unwraps its tail and hands back the re-quoted
+        // handler. `trap 'rm -rf /' EXIT` tokenizes to ["trap", "rm -rf /",
+        // "EXIT"] -- `tokens()` collapses the handler to ONE token because it
+        // was quoted -- and `rejoin_tail` re-quoted it into `'rm -rf /' EXIT`.
+        // The recursion re-tokenized that into a single head token `rm -rf /`,
+        // which `verb_kind` does not model, so the whole command rated None.
+        //
+        // A destructive command rated None is the exact failure row 1 exists
+        // to prevent, so this pins it in both its bare and wrapped forms.
+        assert_eq!(
+            classify("trap 'rm -rf /' EXIT"),
+            BlastRadius::Unbounded,
+            "a trap whose handler is destructive must be rated, not skipped"
+        );
+        assert_eq!(
+            classify("env trap 'rm -rf /' EXIT"),
+            BlastRadius::Unbounded,
+            "the same handler behind a wrapper must still be rated"
+        );
+        // The benign trap must NOT have been made destructive by the fix: the
+        // rating comes from the handler, so a handler with no destructive verb
+        // stays Scoped (visible) rather than escalating to Unbounded.
+        assert_ne!(
+            classify("trap rm EXIT"),
+            BlastRadius::None,
+            "a trap must never silently slip the gate"
+        );
+    }
+
+    #[test]
+    fn reverting_the_rejoin_fix_fails_this_test() {
+        // The mutation-guard bookend for the rejoin_tail fix. If the
+        // `first_is_a_quoted_phrase` guard is removed (or the condition above is
+        // reverted to unconditional re-quoting), the head verb becomes
+        // `rm -rf /`, `verb_kind` returns None and the rating collapses back to
+        // BlastRadius::None -- which this test names.
+        let toks = tokens("trap 'rm -rf /' EXIT");
+        let rejoined = rejoin_tail(&toks, 1);
+        // The handler must stay UN-quoted so the recursion sees `rm`.
+        assert!(
+            !rejoined.starts_with('\''),
+            "rejoin_tail must not re-quote an already-unquoted first token, got {rejoined:?}"
+        );
+        let head = basename(&tokens(&rejoined)[0]).to_ascii_lowercase();
+        assert_eq!(head, "rm", "the head verb must survive the round-trip");
     }
 
     #[test]

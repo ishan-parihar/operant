@@ -49,7 +49,21 @@ fn normalize_whitespace(s: &str) -> String {
 /// Attempt a fuzzy replacement. Normalizes both the file content and
 /// the `find` string, locates the match in the normalized content,
 /// then maps back to the original content using a line-based approach.
-fn fuzzy_replace(content: &str, find: &str, replace: &str) -> Option<(String, usize)> {
+/// Fuzzy (whitespace-insensitive) replacement.
+///
+/// `occurrence` names which matched block to rewrite. It MUST be honoured:
+/// the caller gates on the match count and then trusts this function to rewrite
+/// only the block it was asked for. Before, the parameter did not exist and an
+/// ambiguous fuzzy match rewrote EVERY block -- `occurrence: 1` on two matches
+/// rewrote both, which is the exact failure the occurrence gate exists to
+/// prevent, surviving on the fuzzy tier because the gate only checked the count
+/// and this function did what it liked afterwards.
+fn fuzzy_replace(
+    content: &str,
+    find: &str,
+    replace: &str,
+    occurrence: Option<usize>,
+) -> Option<(String, usize)> {
     let normalized_content = normalize_whitespace(content);
     let normalized_find = normalize_whitespace(find);
 
@@ -74,6 +88,12 @@ fn fuzzy_replace(content: &str, find: &str, replace: &str) -> Option<(String, us
     let mut replacements = 0;
     let mut result_lines: Vec<String> = Vec::new();
     let mut i = 0;
+    // The match count the GATE must see: every match in the file, whether or
+    // not this run rewrites it. Counting only the rewritten ones would hand the
+    // gate a smaller number, so `occurrence: 1` over two matches would be judged
+    // `Ambiguous` and refused -- which is safe, but it silently turns a
+    // perfectly legal "edit the second one" into a dead end.
+    let mut seen_matches = 0usize;
 
     while i < content_lines.len() {
         // Check if lines starting at `i` match the normalized find lines
@@ -91,27 +111,43 @@ fn fuzzy_replace(content: &str, find: &str, replace: &str) -> Option<(String, us
             }
 
             if matched {
-                // Replace this block with the replacement text. `lines()`
-                // yields nothing at all for an empty `replace`, which is
-                // exactly the delete-a-line case, so the loop needs no empty
-                // arm -- and the `if replace.is_empty()` block that used to sit
-                // here was D2's dead branch: an `if` whose body was a comment
-                // saying "already handled", reached only when
-                // `!result_lines.is_empty() || i > 0` was true, which did
-                // nothing either way. Removed per row 4; the behaviour it
-                // pretended to have (delete a matched block by replacing it
-                // with nothing) is what `replace.lines()` already does.
-                for line in replace.lines() {
-                    result_lines.push(line.to_string());
+                // When a specific occurrence was named, every OTHER matched
+                // block is passed through untouched -- rewriting them all was
+                // the defect. Only the named one is replaced.
+                //
+                // TWO counters, deliberately: `seen_matches` is what the gate
+                // judges (how many places match at all), `replacements` is what
+                // the tool reports (how many places this run actually changed).
+                let is_target = match occurrence {
+                    Some(picked) => seen_matches == picked,
+                    None => true,
+                };
+                if is_target {
+                    // Only the named block is rewritten. `lines()` yields nothing
+                    // at all for an empty `replace`, which is exactly the
+                    // delete-a-line case.
+                    for line in replace.lines() {
+                        result_lines.push(line.to_string());
+                    }
+                    replacements += 1;
+                } else {
+                    // Pass the block through untouched, exactly as the exact
+                    // tier leaves its non-picked occurrences alone.
+                    //
+                    // Per the Rust standards, avoid cloning in the loop: this is
+                    // a cold path (one patch call), so the iterator is over an
+                    // index range and each line is copied exactly once.
+                    result_lines
+                        .extend((i..i + find_lines.len()).map(|k| content_lines[k].to_string()));
                 }
+                seen_matches += 1;
                 i += find_lines.len();
-                replacements += 1;
                 continue;
             }
-        }
 
-        result_lines.push(content_lines[i].to_string());
-        i += 1;
+            result_lines.push(content_lines[i].to_string());
+            i += 1;
+        }
     }
 
     if replacements > 0 {
@@ -136,7 +172,11 @@ fn fuzzy_replace(content: &str, find: &str, replace: &str) -> Option<(String, us
         {
             result.push_str(ending);
         }
-        Some((result, replacements))
+        // The GATE count, not the applied count: the caller must be able to
+        // distinguish "one place matched" from "two matched and you named one".
+        // Returning `replacements` alone would hand the gate a 1 and make a
+        // legal "edit the second one" impossible.
+        Some((result, seen_matches))
     } else {
         None
     }
@@ -270,10 +310,20 @@ impl OperantTool for PatchTool {
         let (new_content, replacements, match_type) = if exact_count > 0 {
             match crate::tools::patch::OccurrenceRule::resolve(exact_count, args.occurrence) {
                 rule if rule.is_allowed() => {
+                    // How many edits this run will ACTUALLY make. Reporting the
+                    // raw match count here is a lie: a named occurrence rewrites
+                    // exactly one place, so the tool once answered
+                    // `"replacements": 3` for a single edit. The model reads this
+                    // number to decide what it did, so it must be the truth.
+                    let mut applied = exact_count;
                     let replaced =
                         if let crate::tools::patch::OccurrenceRule::Chosen { picked, .. } = rule {
                             // The caller named which occurrence: replace only that
                             // one, leaving the others untouched.
+                            //
+                            // Exactly ONE edit, whatever the match count is --
+                            // this is what `applied` reports.
+                            applied = 1;
                             let mut seen = 0usize;
                             let mut out = String::with_capacity(content.len());
                             let mut rest = content.as_str();
@@ -306,7 +356,7 @@ impl OperantTool for PatchTool {
                                 content.replace(&args.find, &args.replace)
                             }
                         };
-                    (replaced, exact_count, "exact")
+                    (replaced, applied, "exact")
                 }
                 rule => {
                     let why = rule
@@ -317,12 +367,24 @@ impl OperantTool for PatchTool {
             }
         } else {
             // Fuzzy fallback
-            match fuzzy_replace(&content, &args.find, &args.replace) {
-                Some((replaced, count)) => {
+            match fuzzy_replace(&content, &args.find, &args.replace, args.occurrence) {
+                Some((replaced, gate_count)) => {
                     // Same gate on the fuzzy tier: an ambiguous fuzzy match is
-                    // just as ambiguous as an exact one.
-                    match crate::tools::patch::OccurrenceRule::resolve(count, args.occurrence) {
-                        rule if rule.is_allowed() => (replaced, count, "fuzzy"),
+                    // just as ambiguous as an exact one. `gate_count` is how
+                    // many places matched at all, which is what the gate must
+                    // judge -- the APPLIED count is 1 when an occurrence was
+                    // named, and reporting that as the gate's input would make
+                    // a legal "edit the second one" unselectable.
+                    let applied = match crate::tools::patch::OccurrenceRule::resolve(
+                        gate_count,
+                        args.occurrence,
+                    ) {
+                        rule if rule.is_allowed() => match rule {
+                            // A NAMED occurrence rewrites exactly one block, so
+                            // report exactly one -- not the total the gate saw.
+                            crate::tools::patch::OccurrenceRule::Chosen { .. } => 1,
+                            _ => gate_count,
+                        },
                         rule => {
                             let why = rule
                                 .refusal_message(&args.find)
@@ -332,7 +394,8 @@ impl OperantTool for PatchTool {
                                 format!("{} (file '{}')", why, args.path),
                             );
                         }
-                    }
+                    };
+                    (replaced, applied, "fuzzy")
                 }
                 None => {
                     return ToolResult::error(
@@ -658,6 +721,102 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_named_occurrence_reports_one_replacement_not_the_match_count() {
+        // Row 4 red-team (2026-11-01), defect D3. The reported
+        // `replacements` was the raw MATCH count, so a named occurrence over
+        // three matches answered `"replacements": 3` for the one edit it
+        // actually made. The model reads that number to reason about what it
+        // did, so it has to be the truth.
+        let path = create_temp_file("foo bar foo baz foo\n");
+        let path_str = path.to_str().unwrap().to_string();
+
+        let tool = PatchTool;
+        let result = tool
+            .execute(
+                serde_json::json!({
+                    "path": path_str,
+                    "find": "foo",
+                    "replace": "qux",
+                    "occurrence": 1
+                }),
+                default_context(),
+            )
+            .await;
+
+        assert!(
+            result.success,
+            "a named occurrence must apply: {}",
+            result.content
+        );
+        let reported: serde_json::Value =
+            serde_json::from_str(&result.content).expect("the success payload is JSON");
+        assert_eq!(
+            reported["replacements"], 1,
+            "one occurrence was named and one edit was made, so the count is 1 -- \
+             reporting the match count tells the model it changed three places"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "foo bar qux baz foo\n"
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn a_named_occurrence_is_honoured_on_the_fuzzy_tier() {
+        // Row 4 red-team (2026-11-01), defect D4 -- the worse of the two. The
+        // occurrence gate was applied to the fuzzy tier's COUNT, but
+        // `fuzzy_replace` had no occurrence parameter, so it rewrote EVERY
+        // matched block regardless. `occurrence: 1` over two fuzzy matches
+        // rewrote both: the exact failure the gate exists to prevent, surviving
+        // on the tier that was supposed to be the safer one.
+        let path = create_temp_file("the quick  fox\njumps\nthe quick fox\n");
+        let path_str = path.to_str().unwrap().to_string();
+
+        let tool = PatchTool;
+        let result = tool
+            .execute(
+                serde_json::json!({
+                    "path": path_str,
+                    "find": "the   quick   fox",
+                    "replace": "SLOW",
+                    "occurrence": 1
+                }),
+                default_context(),
+            )
+            .await;
+
+        assert!(
+            result.success,
+            "the second of two fuzzy matches must be reachable: {}",
+            result.content
+        );
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "the quick  fox\njumps\nSLOW\n",
+            "only the NAMED block may change; the first match must be left alone"
+        );
+        let reported: serde_json::Value =
+            serde_json::from_str(&result.content).expect("the success payload is JSON");
+        assert_eq!(reported["replacements"], 1);
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn the_fuzzy_tier_with_no_occurrence_still_replaces_every_match() {
+        // The bookend for D4: honouring `occurrence` must not quietly change the
+        // default. With no index named, the fuzzy tier keeps its documented
+        // replace-every-match behaviour -- which the ambiguity gate refuses
+        // before it gets there, so this reaches it through `fuzzy_replace`
+        // directly with a single match.
+        let out = fuzzy_replace("a  b\nc\n", "a b", "X", None).expect("one match");
+        assert_eq!(out.1, 1, "gate count is the number of matches");
+        assert_eq!(out.0, "X\nc\n");
+    }
+
+    #[tokio::test]
     async fn test_patch_fuzzy_whitespace() {
         let path = create_temp_file("  fn  main()  {\n    println!(\"hi\");\n  }\n");
         let path_str = path.to_str().unwrap().to_string();
@@ -698,7 +857,7 @@ mod tests {
         let find = "fn foo() {\nbar();\n}";
         let replace = "fn foo() {\n    baz();\n}";
 
-        let result = fuzzy_replace(content, find, replace);
+        let result = fuzzy_replace(content, find, replace, None);
         assert!(result.is_some());
         let (replaced, count) = result.unwrap();
         assert_eq!(count, 1);
@@ -728,13 +887,13 @@ mod tests {
 
     #[test]
     fn test_fuzzy_replace_empty_find() {
-        let result = fuzzy_replace("some content", "", "replacement");
+        let result = fuzzy_replace("some content", "", "replacement", None);
         assert!(result.is_none());
     }
 
     #[test]
     fn test_fuzzy_replace_no_match() {
-        let result = fuzzy_replace("hello world", "goodbye", "hi");
+        let result = fuzzy_replace("hello world", "goodbye", "hi", None);
         assert!(result.is_none());
     }
 
@@ -744,7 +903,7 @@ mod tests {
         let content = "fn main() {\n    return;\n}\n";
         let find = "fn main() {\n    return;\n}";
         let replace = "fn main() {\n    return 0;\n}";
-        let result = fuzzy_replace(content, find, replace);
+        let result = fuzzy_replace(content, find, replace, None);
         assert!(result.is_some());
         let (replaced, count) = result.unwrap();
         assert_eq!(count, 1);
@@ -756,7 +915,7 @@ mod tests {
         let content = "keep\nremove\nkeep\n";
         let find = "remove";
         let replace = "";
-        let result = fuzzy_replace(content, find, replace);
+        let result = fuzzy_replace(content, find, replace, None);
         assert!(result.is_some());
         let (replaced, count) = result.unwrap();
         assert_eq!(count, 1);
@@ -769,7 +928,7 @@ mod tests {
         let content = "line1\nline2\nline3\n";
         let find = "line2";
         let replace = "modified";
-        let result = fuzzy_replace(content, find, replace);
+        let result = fuzzy_replace(content, find, replace, None);
         assert!(result.is_some());
         let (replaced, _) = result.unwrap();
         assert!(
@@ -783,7 +942,7 @@ mod tests {
         let content = "line1\nline2\nline3";
         let find = "line2";
         let replace = "modified";
-        let result = fuzzy_replace(content, find, replace);
+        let result = fuzzy_replace(content, find, replace, None);
         assert!(result.is_some());
         let (replaced, _) = result.unwrap();
         assert!(
