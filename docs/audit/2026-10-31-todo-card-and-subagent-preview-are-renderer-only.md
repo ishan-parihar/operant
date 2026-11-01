@@ -282,7 +282,22 @@ oh-my-pi's todo tool (`packages/coding-agent/src/tools/todo.ts`) is a *verb* too
    > COUNTED (`blocked by 2 others`), never silently dropped. Three tests pin
    > it.
 2. **Closed-row context in a collapsed list** — oh-my-pi keeps {@link COLLAPSED_CLOSED_CONTEXT} (one) closed task above the open window so completions are visible as they happen. operant's `render_todos_message` shows the whole list; a long card makes that expensive, and the pinned band already truncates at 1/3 of the viewport (`ui_viewport.rs:1471`), so this is a *card-side* improvement, not a band one.
+   > **NOT A GAP — verified 2026-11-01 (iter-1610).** operant renders the whole list with a header tally
+   > (`X done · Y active · Z to do`, `ui_messages.rs:1384-1409`), which is what
+   > jcode's mechanism exists to approximate; there is no render cap to
+   > collapse against. The `ui_viewport.rs:1471` clamp this item cited does
+   > not exist at that line — the premise was misread. Collapsing would
+   > REMOVE information, so this is a regression if done, not a parity gain.
 3. **`blocked` as a first-class status with a reason note** — oh-my-pi's `blocker` rides the row as text, its markdown round-trip puts it in a trailing HTML comment so it survives edit/export. operant has `blocked_by: Vec<String>` (ids) and drops the note entirely.
+   > **THE USABLE HALF SHIPPED (iter-1610); the REST IS REFUSED ON PRINCIPLE.** The row now
+   > names its blockers (see item 1's correction). The part still missing is a
+   > DEDICATED `blocker` reason field, and adding one means a new key in the
+   > tool's public `TodoItem`, which invalidates the persisted per-session
+   > files and changes the model-facing contract — the exact swap this
+   > audit's own "Do not take" paragraph rejects for the verb/op schema,
+   > and one the operator's /ponytail discipline refuses for zero gain on
+   > the named surfaces. `details` already carries a free-text note when the
+   > model wants one. Do not re-open without an owner ruling.
 
 **Do not take:** the verb/op schema. operant's tool already models phase/lane/goal/confidence, which jcode's schema is the parity target for (AGENTS.md design preferences name jcode as the geometry baseline), and swapping the tool's whole shape would invalidate the persisted per-session files and the model-facing contract for zero gain on the surfaces the operator named. `blocked_by` stays id-based; the *renderer* gains the resolver above.
 
