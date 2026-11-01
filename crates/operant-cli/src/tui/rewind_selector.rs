@@ -480,9 +480,25 @@ fn reveal_offset(
     body_h: usize,
 ) -> usize {
     match (zone_start, zone_end) {
-        (Some(_), Some(bottom)) if bottom <= committed => committed,
+        // omp's FIRST arm (scroll-view.ts:334): the range starts above the
+        // viewport, so reveal its start. This must be checked before anything
+        // that looks at the zone's END, because a zone sitting wholly above the
+        // pane has a small end that satisfies every "is it below?" test —
+        // `bottom <= committed` included — and answering that first left the
+        // picked turn entirely off-screen with the pane unmoved. That is the
+        // exact symptom iter-1601 existed to fix, still reachable for a short
+        // zone.
         (Some(top), Some(_)) if top < committed => top,
+        // omp's SECOND arm (scroll-view.ts:341): the range ends below the
+        // viewport, so reveal its end. The `saturating_sub` keeps a zone
+        // taller than the pane from underflowing; it end-aligns, which is
+        // what omp's `scrollOffsetForRow(..., "end")` does too
+        // (scroll-viewport.ts:83-85: `selected - height + 1`).
         (Some(_), Some(bottom)) if bottom > committed + body_h => bottom.saturating_sub(body_h),
+        // Otherwise the range is already on screen: leave the operator's scroll
+        // exactly where it is, so a repaint with no input cannot move the pane
+        // (no oscillation, hence no flicker) and an operator who paged away by
+        // hand keeps their page.
         _ => committed,
     }
 }
@@ -709,6 +725,89 @@ mod tests {
             st.entries[1].compacted,
             "a turn the compaction folded must be flagged, so Enter refuses it \\
              instead of forking at a cut point that no longer resolves"
+        );
+    }
+
+    /// Reveal arithmetic traced line-by-line from omp, not assumed.
+    ///
+    /// `revealRange` (scroll-view.ts:310-341) takes
+    /// `margin=0`, `alignment="nearest"`, `oversized="nearest"` (the anchor
+    /// builder never sets `oversized`, so the default stands). Two arms run in
+    /// order: `top < visible.start` → `setActiveRow(top, "start")`;
+    /// else `bottom > visible.end` → `setActiveRow(bottom-1, "end")`.
+    /// `setActiveRow` then derives the offset through `scrollOffsetForRow`
+    /// (scroll-viewport.ts:62-93), where alignment `"end"` is
+    /// `selected - height + 1`.
+    ///
+    /// For a 40-row zone at 4..44 in a 10-row viewport committed at 0: top=4
+    /// is NOT below the viewport, so arm 2 wins and the offset is
+    /// `43 - 10 + 1 = 34` — the turn's END rows are shown and its prompt is
+    /// scrolled off. That is omp's real behaviour, oversized and all, so parity
+    /// requires the same number. This test pins the arithmetic so a later
+    /// "let's improve this" rewrite is caught disagreeing with the reference.
+    #[test]
+    fn the_reveal_offset_matches_omps_traced_arithmetic() {
+        // A 40-row turn in a 10-row viewport, committed at the top.
+        // omp: arm 2 (bottom > visible.end) -> active row 43 -> offset 34.
+        let revealed = reveal_offset(0, Some(4), Some(44), 10);
+        assert_eq!(
+            revealed, 34,
+            "an oversized zone end-aligns as omp's revealRange does: offset \
+             43-10+1, not the zone's start — pinning parity, not intent"
+        );
+
+        // The same zone with the operator paged DOWN into it: its start is now
+        // ABOVE the viewport, so omp's arm 1 fires and reveals the start.
+        // Committed at 30, visible is [30,40): top=4 < 30 -> active row 4 →
+        // offset 4. This is the case an "end always wins" mistake gets wrong.
+        let paged_back = reveal_offset(30, Some(4), Some(44), 10);
+        assert_eq!(
+            paged_back, 4,
+            "once the zone's start is scrolled above the viewport, omp's first \
+             arm reveals it — the prompt returns to the top of the pane"
+        );
+
+        // And the ordinary short-zone case: end-aligned when below the viewport.
+        let pulled = reveal_offset(0, Some(30), Some(33), 10);
+        assert_eq!(
+            pulled, 23,
+            "a short zone below the viewport is pulled up to show its end"
+        );
+
+        // And the arm-1 pull-back: a tall zone whose start scrolled above the
+        // viewport returns it to the top. Committed 6, zone 4..44, height 10:
+        // omp's arm 1 fires (top=4 < visible.start=6) and so does ours.
+        let start_returns = reveal_offset(6, Some(4), Some(44), 10);
+        assert_eq!(
+            start_returns, 4,
+            "a tall zone whose start scrolled above the viewport pulls it back \
+             into view — omp's first arm, and ours"
+        );
+
+        // The first arm on a SHORT zone, which is what a `drop-arm1`
+        // mutation lets through: the zone sits wholly above the viewport.
+        // Committed 20, visible [20,30), zone 3..6: omp's
+        // `top(3) < visible.start(20)` -> start-aligned at 3. Without arm 1
+        // none of the other guards fire and the offset stays at 20, leaving
+        // the picked turn entirely above the pane.
+        let wholly_above = reveal_offset(20, Some(3), Some(6), 10);
+        assert_eq!(
+            wholly_above, 3,
+            "a zone wholly above the viewport is revealed at its start — the \
+             arm-1 pull-back that keeps a picked turn from being scrolled off \
+             the top"
+        );
+
+        // The keep fall-through: NO arm fires, so the committed offset
+        // survives untouched. omp's arms are `top < visible.start` and
+        // `bottom > visible.end`; with visible [0,10) and the zone at 3..7,
+        // top=3 >= 0 and bottom=7 <= 10, so neither fires. Scrolling the pane
+        // here would be a per-frame yank the operator never asked for.
+        let untouched = reveal_offset(0, Some(3), Some(7), 10);
+        assert_eq!(
+            untouched, 0,
+            "a zone fully inside the viewport leaves the scroll exactly where \
+             the operator left it"
         );
     }
 }
