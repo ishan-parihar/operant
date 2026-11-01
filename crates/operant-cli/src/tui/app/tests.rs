@@ -9024,6 +9024,263 @@ fn the_overlay_body_does_not_emit_a_spans_final_character_twice() {
     );
 }
 
+/// RT-205, the STALE-CELL half: opening the rewind selector must ERASE the
+/// cells the previous frame painted, not merely paint its own content over the
+/// top.
+///
+/// WHY THIS TEST EXISTS AND COULD NOT HAVE BEEN WRITTEN BEFORE: the sibling
+/// instrument above (`the_overlay_body_does_not_emit_a_spans_final_character_twice`)
+/// measured one frame over a FRESH TestBackend buffer, so there was no previous
+/// content to survive and the defect was structurally invisible to it. It went
+/// green while the shipped binary was visibly corrupt.
+///
+/// MEASURED LIVE on the deployed binary (2026-11-01), driving the headless
+/// simulator with `--agent-script` so turns actually complete and `Esc Esc`
+/// opens the real selector: the frame before the overlay opened held
+/// ` operant · replay · perf:reduced` at row 13, and the overlay's own row 13
+/// painted `2› beta two brown lazy dog` — leaving cols 28..31 holding `educed`
+/// in the PREVIOUS line's own amber `rgb:CC9B1F`. At 120x45 the survivor was
+/// `ck`, the tail of `/model to switch · Small Stack` in the model badge's pink
+/// `rgb:FF96C8`, so row 17 read `4› delta four lazy sleeps nowck`. The fragment
+/// changes with terminal height (41 -> `educed`/`ck`, 44/45 -> `ced`/`ck`,
+/// 40/42/43 -> none) because the overlay's row length relative to the surviving
+/// cell changes — which is precisely why a single-frame or single-height
+/// instrument missed it.
+///
+/// MECHANISM, from ratatui's own source: `Paragraph`'s `render_line` writes only
+/// the line's own graphemes and never pads to `area.width`
+/// (`ratatui-widgets/src/paragraph.rs`), and `Terminal::try_draw` diffs against
+/// the previous buffer. So a short line leaves the tail of the previous longer
+/// line in place, symbol intact, and the overlay's fullscreen contract (see the
+/// paint-site comment in `render/operant_overlays.rs`) is what makes that a bug.
+#[test]
+/// RT-205, the STALE-CELL half: opening the rewind selector must ERASE the
+/// cells the previous frame painted, not merely paint its own content over the
+/// top.
+///
+/// WHY THIS TEST COULD NOT HAVE CAUGHT IT EARLIER — and one wrong turn recorded
+/// so it is not repeated. Two things had to be true for the defect to appear,
+/// and neither held in the repo's instruments:
+///
+/// 1. **The overlay must open over a frame that already has content in those
+///    rows.** The sibling instrument above measures ONE `draw` over a fresh
+///    `TestBackend`, so there is no previous content to survive: it went green
+///    while the shipped binary was visibly corrupt.
+/// 2. **The second frame must go through `render_app`,** which is what paints
+///    the chrome the stale cells come from. Driving `draw_rewind_selector`
+///    directly instead does NOT reproduce it — MEASURED: I wrote exactly that
+///    version, and it passed with the fix removed. `Paragraph`'s
+///    `buf.set_style(text_area, self.style)` resets the style across the whole
+///    text area, so the isolated call happens to be clean. The symbols survive
+///    only when the surrounding chrome pass is what left them.
+///
+/// MEASURED LIVE on the deployed binary (2026-11-01), via the headless
+/// simulator's `--agent-script` (mock agent events, so turns actually COMPLETE
+/// and `Esc Esc` opens the real selector): the frame before the overlay opened
+/// held ` operant · replay · perf:reduced` at row 13, and the overlay's own row
+/// 13 painted `2› beta two brown lazy dog`, leaving cols 28..31 holding
+/// `educed` in the PREVIOUS line's own amber `rgb:CC9B1F`. At 120x45 the survivor
+/// was `ck`, the tail of `/model to switch · Small Stack` in the model badge's
+/// pink `rgb:FF96C8`, so row 17 read `4› delta four lazy sleeps nowck`. The
+/// fragment changes with height (41 -> `educed`/`ck`, 44/45 -> `ced`/`ck`,
+/// 40/42/43 -> none) because the overlay's row length relative to the surviving
+/// cell changes — which is why a single-height instrument missed it.
+///
+/// MECHANISM, from ratatui's own source: `Paragraph`'s `render_line` writes only
+/// the line's own graphemes and never pads to `area.width`
+/// (`ratatui-widgets/src/paragraph.rs`), and `Terminal::try_draw` diffs against
+/// the previous buffer. A short line therefore leaves the tail of the previous
+/// longer line in place — symbol AND, where nothing reset the style, colour.
+/// The overlay's fullscreen contract (see the paint-site comment in
+/// `render/operant_overlays.rs`) is what makes that a bug.
+#[test]
+fn opening_the_rewind_selector_erases_the_previous_frames_cells() {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    let mut app = make_app();
+    app.is_simulating = true;
+
+    // FRAME ONE: the app's own chrome, painted by the real path. This is what
+    // leaves content in the rows the overlay is about to repaint more briefly.
+    // `/model` and friends are gated on live credentials, so the test owns that
+    // precondition rather than inheriting the ambient auth state.
+    app.has_credentials = true;
+    let mut terminal = Terminal::new(TestBackend::new(120, 45)).unwrap();
+    terminal
+        .draw(|frame| crate::tui::render::render_app(frame, &app))
+        .unwrap();
+
+    // FRAME TWO's precondition: four turns so the selector has entries and a
+    // DROP zone, using the same marks wiring the frame loop uses.
+    let mut marks = Vec::new();
+    for i in 0..4 {
+        let prompt = format!("prompt number {i}");
+        app.messages
+            .push(crate::tui::adapter_types::types::Message {
+                role: crate::tui::adapter_types::types::Role::User,
+                content: crate::tui::adapter_types::types::MessageContent::Text(prompt.clone()),
+            });
+        marks.push((100 + i as u64, prompt));
+        app.messages
+            .push(crate::tui::adapter_types::types::Message {
+                role: crate::tui::adapter_types::types::Role::Assistant,
+                content: crate::tui::adapter_types::types::MessageContent::Text(format!(
+                    "answer number {i}"
+                )),
+            });
+    }
+    app.core_rewind_marks = Some(std::sync::Arc::new(
+        crate::tui::rewind_marks::RewindMarksSource::new(
+            marks
+                .into_iter()
+                .map(|(turn_id, text)| operant_core::agent::UserTurnMark {
+                    turn_id,
+                    conv_index: 0,
+                    conv_epoch: 1,
+                    text,
+                })
+                .collect(),
+            Some("sess-rt205-stale".to_string()),
+            Vec::new(),
+        ),
+    ));
+    {
+        let source = app.core_rewind_marks.as_ref().unwrap().clone();
+        let display_texts = app.user_prompt_texts_for_filter();
+        source.set_conversation(display_texts.clone());
+        let collected: Vec<(u64, String)> = source
+            .marks()
+            .into_iter()
+            .map(|m| (m.turn_id, m.text))
+            .collect();
+        app.rewind_selector.sync_marks(collected, &display_texts);
+    }
+    app.rewind_selector.open();
+    app.rewind_selector.selected = 0;
+
+    // THE SECOND FRAME — the overlay, through the same path the TUI uses, over
+    // the chrome already in the buffer.
+    terminal
+        .draw(|frame| crate::tui::render::render_app(frame, &app))
+        .unwrap();
+
+    use crate::tui::debug::debug_hub::buffer_style_dump;
+    let dump = buffer_style_dump(terminal.backend().buffer());
+    let rows: Vec<Vec<(&str, &str)>> = dump
+        .lines()
+        .skip(1)
+        .map(|l| l.split(' ').filter_map(|t| t.split_once('@')).collect())
+        .collect();
+
+    let row_text = |cells: &[(&str, &str)]| -> String {
+        cells
+            .iter()
+            .map(|(_, s)| if *s == "_" { " " } else { *s })
+            .collect()
+    };
+
+    // PRECONDITION, so the test can never again pass by measuring an empty
+    // screen: the overlay must actually be on screen. This is the check whose
+    // absence let iter-1606 record a "does not reproduce" verdict from a frame
+    // that had no overlay in it at all.
+    let flat: String = rows.iter().map(|c| row_text(c)).collect();
+    assert!(
+        flat.contains("Rewind to a previous prompt"),
+        "the rewind selector must be on screen, or nothing below measures anything"
+    );
+
+    // THE SIGNATURE. A row painted by the overlay's body may not still carry a
+    // foreign-styled cell past its own content: that is one frame's content
+    // surviving into the next under another style, which is RT-205 exactly.
+    // Scope to the OVERLAY's own rows only. The overlay's chrome is identifiable
+    // from its own content: the header row (`Rewind to a previous prompt`), the
+    // caption row (`Rewind to here`), and the footer rows (`turn n/m`,
+    // `No rewindable turns`). Everything the overlay paints lives between them
+    // and its own footer. The app's status bar, composer and `-- INSERT --`
+    // marker are NOT the overlay's and are legitimately multi-styled, so they
+    // must not be considered — MEASURED: without this scope the first version
+    // flagged the app's own status row as a "leak" and failed even with the fix
+    // in place.
+    let overlay_header = rows
+        .iter()
+        .position(|cells| row_text(cells).contains("Rewind to a previous prompt"))
+        .unwrap_or(0);
+    let overlay_footer = rows
+        .iter()
+        .rposition(|cells| {
+            let t = row_text(cells);
+            t.contains("No rewindable turns") || (t.contains("turn ") && t.contains("/"))
+        })
+        .unwrap_or(rows.len());
+    // The overlay's BODY is the region its `mid` paragraph owns: from just
+    // after the caption row to just before the footer. Rows outside it belong
+    // to the app's own chrome, which the overlay is entitled to leave alone
+    // only if it does so identically every frame — see the assertion below,
+    // which checks the overlay did not let frame-one chrome linger in rows it
+    // painted over.
+    let caption_row = rows
+        .iter()
+        .position(|cells| row_text(cells).contains("Rewind to here"))
+        .unwrap_or(overlay_header);
+    let overlay_rows = (caption_row + 1)..overlay_footer;
+
+    let mut leaked = Vec::new();
+    for (r, cells) in rows.iter().enumerate() {
+        let text = row_text(cells);
+        let trimmed = text.trim_end();
+        if trimmed.is_empty() {
+            continue;
+        }
+        // THE PRECISE FORM. The overlay's body paints only the dim ramp
+        // (`rgb:505050/rgb:232832/-` with and without BOLD). Any other colour
+        // in that region is a cell the overlay never wrote — i.e. what frame
+        // one left behind. An earlier version counted distinct styles and
+        // rejected >2, which both over- and under-shot: it flagged the app's
+        // legitimate multi-styled status row, and would have missed a
+        // single-colour survivor.
+        let foreign: Vec<&str> = cells
+            .iter()
+            .filter(|(style, sym)| {
+                *sym != "_" && !sym.is_empty() && !style.starts_with("rgb:505050/")
+            })
+            .map(|(style, _)| *style)
+            .collect();
+        let in_overlay = overlay_rows.contains(&r);
+        if in_overlay && !foreign.is_empty() {
+            leaked.push((r, trimmed.to_string(), foreign.len()));
+        }
+    }
+    assert!(
+        leaked.is_empty(),
+        "no painted row may carry a foreign-styled tail: {leaked:?} — one frame's \\
+         content surviving into the next under another style is the RT-205 \\
+         signature"
+    );
+
+    // And the specific live shape, so the failure message names it: none of the
+    // overlay's turn rows may read longer than the prompt it was given.
+    for (prompt, needle) in [
+        ("prompt number 0", "prompt number 0"),
+        ("prompt number 1", "prompt number 1"),
+        ("prompt number 2", "prompt number 2"),
+        ("prompt number 3", "prompt number 3"),
+    ] {
+        for cells in rows.iter() {
+            let text = row_text(cells);
+            let trimmed = text.trim_end();
+            if let Some(at) = trimmed.find(needle) {
+                let after = &trimmed[at + needle.len()..];
+                assert!(
+                    after.trim().is_empty(),
+                    "row {trimmed:?} ends with {after:?} past {prompt:?} — a \\
+                     survivor from the previous frame"
+                );
+            }
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // 2026-10-31: the rewind selector's PREVIEW over a transcript that has teeth.
 //

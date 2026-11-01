@@ -387,6 +387,60 @@ pub fn draw_rewind_selector(frame: &mut Frame, area: Rect, app: &crate::tui::app
     let body_h = chunks[1].height as usize;
     let max_scroll = mid.len().saturating_sub(body_h);
     let scroll = reveal_offset(state.scroll, sel_start, sel_end, body_h).min(max_scroll);
+    // (RT-205) ERASE EVERY CELL OF THE BODY — this is a FULLSCREEN surface (see
+    // the paint-site comment in `render/operant_overlays.rs`), so the paragraph
+    // owns the whole area and must write all of it.
+    //
+    // ratatui's `render_line` writes ONLY the line's own graphemes
+    // (`widgets/paragraph.rs`, `for StyledGrapheme { symbol, style } in
+    // wrapped.graphemes`) and never pads to `area.width`, and
+    // `Terminal::try_draw` diffs against the PREVIOUS buffer — so any cell a
+    // line does not reach keeps whatever the last frame left there, symbols
+    // included. Ratatui's own contract: "each frame is compared to the previous
+    // frame... If the render function does not fully render the frame, the
+    // terminal will not be in a consistent state."
+    //
+    // MEASURED, live, on the deployed binary, opening this selector over a
+    // 4-turn transcript at 120x41: the pre-overlay frame held
+    // ` operant · replay · perf:reduced` at row 13, and the overlay's row 13
+    // painted `2› beta two brown lazy dog` — 27 columns — leaving cols 28..31
+    // holding `educed` in the banner's own amber `rgb:CC9B1F`. At 120x45 the
+    // survivor was `ck` (the tail of `/model to switch · Small Stack`) in the
+    // model badge's pink `rgb:FF96C8`, so row 17 read
+    // `4› delta four lazy sleeps nowck`. The leaked fragment differs by height
+    // (41 -> `educed`/`ck`, 44/45 -> `ced`/`ck`, 40/42/43 -> none, because the
+    // overlay's row content length relative to the stale banner cell changes)
+    // which is exactly the RT-205 signature: one frame's content surviving into
+    // the next under a DIFFERENT style.
+    //
+    // The repo's own unit instrument could not see this: it draws the overlay
+    // over a FRESH empty buffer, so there is no stale cell to survive.
+    //
+    // Pad each line to the area's full width with the body's own background,
+    // and pad the line COUNT so no row is left unpainted either. A line shorter
+    // than the area is what leaks, so every line must reach the right edge.
+    let body_w = chunks[1].width as usize;
+    let blank = " ".repeat(body_w);
+    for line in &mut mid {
+        let used: usize = line.spans.iter().map(|s| s.content.chars().count()).sum();
+        if used < body_w {
+            line.spans
+                .push(Span::styled(blank[used..].to_string(), Style::default()));
+        }
+    }
+    // Rows beyond `mid` are likewise never reached by `render_line`, so a short
+    // body would leave the bottom of the area stale the same way. The pad rows
+    // must be REAL SPACES, not empty `Line::from("")`: an empty line has no
+    // graphemes, so `render_line` writes no cells for it at all and the row
+    // keeps whatever the previous frame left there. MEASURED: the first version
+    // of this fix padded with empty lines and the leak was unchanged — rows
+    // 16-26 still held frame one's banner, model line and status bar.
+    if mid.len() < body_h {
+        mid.resize(
+            body_h,
+            Line::from(Span::styled(blank.clone(), Style::default())),
+        );
+    }
     frame.render_widget(Paragraph::new(mid).scroll((scroll as u16, 0)), chunks[1]);
 
     frame.render_widget(Paragraph::new(footer), chunks[2]);
