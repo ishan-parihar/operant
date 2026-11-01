@@ -92,10 +92,52 @@ an existing doc's summary of itself.
   main.rs:2691 re-reads the positional as a prompt) has an operant equivalent
   that reopens.
 
-- **[verified] Gap 4 has NO reference implementation — it is operant-local.**
-  Measured after a reference re-read prompted by the plan's own review: jcode's
-  channel reply loops (`channel.rs:260` telegram, `:469` discord, `:729`
-  jade-relay) route every message into
+- **[verified, second pass] The exit write point ALREADY EXISTS — `run_exit_teardown`.**
+  `app/mod.rs:1454-1463` is a three-line teardown on the shared exit path
+  (`word_predictor.persist()`, `debug_hub.dump_on_exit()`,
+  `background_tasks.release_all(...)`), called once from the single
+  `if self.should_exit` consumer at mod.rs:1644-1656. So the Gap-1 marker is a
+  fourth line in an existing function, not new plumbing. The session id is
+  reachable there: `App::current_session` (mod.rs:293) and
+  `App::core_session_switch` (mod.rs:548).
+
+- **[verified, second pass] Five of the seven `should_exit = true` sites are the
+  headless simulator, not an operator exit.** The two real ones are
+  `key_handling.rs:2650` (the interactive Ctrl+C/Ctrl+D double-press) and
+  `commands.rs:621` (`/exit` `/quit`). The other five (`event_coalesce.rs:92`,
+  `mod.rs:1554/1564/1574/1589`) are all on `is_simulating` / `sim_drain_*` paths.
+  **Consequence:** a marker written unconditionally in teardown would fire on
+  every `tui debug simulate` run, claiming a session the operator never quit.
+  The `is_simulating` guard is the mutation-proven behaviour.
+
+- **[verified, second pass] Gap 6 found: `list_sessions` is not NULL/latency-safe
+  on its ORDER BY.** `database.rs:991-1003` ends `ORDER BY s.ended_at DESC`; the
+  schema allows NULL and SQLite puts NULLs last on DESC, so such a row sinks to
+  the bottom of `sessions list` / `browse` / `prune` / `insights` and the
+  `session_search` tool. The rich loader beside it already does it correctly with
+  `COALESCE(s.ended_at, s.started_at)` (database.rs:1045) — two loaders, one
+  NULL-safe. Measured: 0 of 3,226 rows are NULL today (the `save_session` upsert
+  always writes one), **but 19 are stale** (`ended_at == started_at`): 11
+  `sess_*`/source=agent (all 11 carry messages) and 8 `gw_*`/source=gateway (7
+  carry messages). A first draft reported "18, all `gw_*`" — wrong on both
+  numbers, re-measured. The fix is one `COALESCE` expression.
+
+- **[verified, second pass] `RowStatus` has THREE variants, not the four the first
+  draft claimed.** `session/listing.rs:25-31` is `Live | Idle | Archived`. There
+  is no `RowStatus::Current` anywhere in the tree; the current session is
+  expressed as `Live`. The first draft also mis-cited the line number (:36 vs
+  :25-31).
+
+- **[verified, second pass] `list_sessions` is on the `sessions resume` default
+  path.** `cmd_sessions.rs:501-511` — `resolve_session(None)` calls
+  `db.list_sessions(1)` and takes the first row, so the Gap-6 ordering bug lands
+  directly on `operant sessions resume` (no id) and `sessions recap` (no id),
+  not only on the list command.
+
+- **[verified, second pass] Gap 4 has NO reference implementation — it is
+  operant-local.** Measured after a reference re-read prompted by the plan's own
+  review: jcode's channel reply loops (`channel.rs:260` telegram, `:469` discord,
+  `:729` jade-relay) route every message into
   `AmbientRunnerHandle::inject_message` (`ambient/runner.rs:108-136`), which
   pushes a `SoftInterruptMessage` into an active cycle or saves a directive and
   triggers a wake. There is **no slash-command parsing in any jcode channel

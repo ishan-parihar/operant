@@ -149,10 +149,51 @@ already did half the work.
 
 ## Gap 5 — no session status vocabulary
 
-`RowStatus` has `Current | Live | Idle | Archived` (session/listing.rs:36).
-Neither codes "was interrupted by a Ctrl+C exit" or "crashed". jcode has
-`SessionStatus::Crashed{..}`, `Running`, `Closed`. Adding a variant is cheap;
-it is what makes Gaps 1-4 *visible* rather than inferred.
+`RowStatus` (`session/listing.rs:25-31`) has exactly **three** variants —
+`Live | Idle | Archived` — not four: an earlier revision of this plan named a
+`Current` variant that does not exist in the tree (`rg "RowStatus::Current"`
+returns nothing; the current session is expressed as `Live`, which the enum's own
+doc calls "the session this process is actively streaming into right now").
+jcode has `SessionStatus::Crashed{..}`, `Running`, `Closed`. Adding an
+`Interrupted` variant is cheap; it is what makes Gaps 1-4 *visible* rather than
+inferred.
+
+## Gap 6 — `list_sessions` sorts on a timestamp that goes stale (found on validation)
+
+Not in the original five. The validation pass measured it, and it is a real
+latent defect rather than a cosmetic one, so it belongs in the plan.
+
+`Database::list_sessions` (`database.rs:991-1003`) ends with
+`ORDER BY s.ended_at DESC`. In SQLite `ORDER BY … DESC` puts NULLs **last**, so
+any row whose `ended_at` is NULL sorts to the very bottom of
+`operant sessions list`, `sessions browse`, `sessions prune`, `insights` and the
+`session_search` tool. The schema allows NULL (`ended_at TEXT`, no NOT NULL) and
+jcode's own `list_sessions_rich` guards against this with
+`COALESCE(s.ended_at, s.started_at)` (database.rs:1045) — which is why the RICH
+loader is correct and the legacy one is not. They are two loaders for the same
+rows, and only one of them is NULL-safe.
+
+Measured on the live DB (and this section is itself the product of a validation
+correction — the first draft said "18, all `gw_*` rows", which was wrong on both
+numbers): **0 of 3,226 rows have a NULL `ended_at` today** (because
+`save_session`'s upsert always writes a non-NULL value), **but 19 rows are
+stale** — `ended_at == started_at`, a zero-duration row. By prefix:
+11 are `sess_*`/`source=agent` (all 11 carry messages) and 8 are
+`gw_*`/`source=gateway` (7 of the 8 carry messages). So it is not a
+gateway-only path; the `sess_*` rows come from a rewind fork's parent row or
+another create-without-a-turn site, which is exactly the class of path the bug
+is exposed by. Those 19 rows sort as though they closed the instant they opened,
+indistinguishable from one whose `ended_at` was never refreshed.
+
+The bug is latent rather than active only because `save_session` refreshes
+`ended_at` on every turn (`turn_context.rs:181`). Any path that creates a session
+row without a turn — the gateway create, a rewind fork's parent, a cron seat —
+leaves it sorting wrong until something runs in it.
+
+**The fix is one expression**, and it belongs in iteration 2 as a one-line
+collateral: `ORDER BY COALESCE(s.ended_at, s.started_at) DESC`, matching what
+`list_sessions_rich` already does beside it. Not its own iteration — that would
+be a five-line change paying a full iteration's cost.
 
 ---
 
@@ -195,11 +236,44 @@ a reason:
 Five iterations. Ordered so each is independently shippable and testable, and
 so that no two touch the same file (the fleet's rule 3).
 
-### Iteration 1 — the interrupted-session signal (core, zero TUI overlap)
+### Iteration 1 — the interrupted-session signal (core + one teardown line)
 
 **Files:** `crates/operant-core/src/session_interrupted.rs` (new),
 `crates/operant-core/src/database.rs`, `session/listing.rs`,
-`crates/operant-cli/src/tui/app/adapter_types/tui_app.rs`.
+`crates/operant-cli/src/tui/app/mod.rs`.
+
+> **The heading is corrected, and the reason matters.** The first revision of
+> this plan called iteration 1 "core, zero TUI overlap" and named
+> `adapter_types/tui_app.rs` as its TUI file. Both were wrong, and the second
+> pass caught them by reading rather than trusting the first: the write point is
+> in `app/mod.rs` (785 lines, a **peer-hot** file per the 2026-10-28 plan's own
+> risk note), so a fresh `git status --porcelain -- crates/operant-cli/src/tui/app/mod.rs`
+> is mandatory before this iteration starts. The overlap is now 1 function
+> (`run_exit_teardown`) in 1 file rather than "zero", and the fleet-rule-3 check
+> below is what keeps that honest.
+
+**Validation note (verified on the second pass — this is what makes iteration 1
+cheap, and the first revision of this plan had it wrong):** the write point
+**already exists**. There is exactly ONE teardown on the shared exit path —
+`App::run_exit_teardown` (`app/mod.rs:1454-1463`), three lines that already
+persist state before the process goes away (`word_predictor.persist()`,
+`debug_hub.dump_on_exit()`, `background_tasks.release_all(...)`), called once
+from the single `if self.should_exit` consumer at `app/mod.rs:1644-1656`.
+So the marker is a **fourth line in an existing function**, not new teardown
+plumbing. Verified the id is reachable there too: `App::current_session`
+(mod.rs:293) and `App::core_session_switch` (mod.rs:548) both exist on `self`,
+and the frame-loop retarget at mod.rs:1632 already reads `core_session_switch`.
+
+The seven `should_exit = true` sites were also re-checked rather than assumed:
+`key_handling.rs:2650` (the interactive Ctrl+C/Ctrl+D double-press) and
+`commands.rs:621` (`/exit` `/quit`) are the two real operator exits. The other
+five (`event_coalesce.rs:92`, `mod.rs:1554/1564/1574/1589`) are all on the
+scripted headless-simulation path (`is_simulating` / `sim_drain_*`) and end the
+process without an operator having quit anything. **Consequence for iteration 1's
+test:** a sim exit must NOT write the marker, because there is no operator and no
+live conversation to resume. That guard is the mutation-proven behaviour, and it
+is one the first revision of this plan would have gotten wrong by writing the
+marker unconditionally in teardown.
 
 1. `SessionInterrupted` marker. On Ctrl+C/Ctrl+D exit confirmation
    (`handle_exit_key_confirmation` sets `should_exit`), the teardown writes a
@@ -233,7 +307,9 @@ so that no two touch the same file (the fleet's rule 3).
 **Tests (each fails without the change):** marker write on exit path and
 absence on clean quit; `session_presence()` skips a dead pid and counts a live
 one; `RowStatus::Interrupted` set on consume and cleared on the next turn;
-`resolve_session(None)` still resolves the most recent when no marker exists.
+`resolve_session(None)` still resolves the most recent when no marker exists;
+and the guard the second pass added — **a headless sim exit (`is_simulating`)
+writes no marker**, because there is no operator and no live conversation.
 
 **Gates:** `cargo test -p operant-core --lib session_interrupted`;
 `cargo test -p operant-cli --bin operant`; the CLI's `sessions resume` output
@@ -276,7 +352,11 @@ chat surface.
 **Tests:** the join returns the telegram session the operator owns, not another
 platform's; `/sessions 2` pins row 2's id; `/sessions bogus` refuses without
 pinning (the honesty gate); a long listing truncates at the cap with the tail
-notice.
+notice; and Gap 6's collateral — a session row created with `ended_at == started_at`
+(a zero-duration row) still sorts by `started_at` under
+`COALESCE(ended_at, started_at)` rather than sinking to the bottom, asserted
+against `list_sessions` (the legacy loader) so the regression cannot hide in the
+rich loader's already-correct shadow.
 
 ### Iteration 3 — the interrupted badge in the hub, and the resume affordance
 
@@ -336,8 +416,8 @@ State: `genome handoff --write` at the end, after the push.
 
 | iteration | new lines | notes |
 |---|---|---|
-| 1 | ~200 core + ~40 CLI | the marker + presence port + status variant |
-| 2 | ~150 | one join + reply formatting, reusing two existing gates |
+| 1 | ~200 core + **~15 CLI** + 1 teardown line | the marker + presence port + status variant. The TUI cost is 15 lines, not 40, because the hook (`run_exit_teardown`) already exists and the only real work is the sim-exit guard. |
+| 2 | ~150 + a 1-line SQL fix | one join + reply formatting, reusing two existing gates; the Gap 6 `COALESCE` is collateral. |
 | 3 | ~80 | one render arm + an `open()` parameter |
 | 4 | ~30 | a flag, help text, docs |
 | 5 | docs only | |
@@ -362,20 +442,36 @@ question is actually about ("how do they resume after Ctrl+C"), and iterations
 2-5 are each independently skippable if the operator wants only the
 resume-after-close behaviour.
 
-Iteration 1 has no peer overlap (`session_interrupted.rs` is a new file, and the
-TUI touch is teardown-only in `tui_app.rs`), so it is the safe leg to start on
-in a dirty tree. Re-run `git status --porcelain -- crates/operant-core/src/session_interrupted.rs
-crates/operant-cli/src/tui/app/adapter_types/tui_app.rs` before it, per fleet rule 3.
+**Correction carried from the validation pass:** the first revision of this
+section said iteration 1 "has no peer overlap" and named
+`adapter_types/tui_app.rs`. Wrong on both counts — the write point is
+`crates/operant-cli/src/tui/app/mod.rs` (`run_exit_teardown`, 1454-1463), a file
+the 2026-10-28 plan's own risk list calls peer-hot. The overlap is now one
+function in one file, which is small but nonzero, so the check before this
+iteration is mandatory, not optional:
+
+```bash
+git status --porcelain -- crates/operant-core/src/session_interrupted.rs \
+                            crates/operant-core/src/database.rs \
+                            crates/operant-core/src/session/listing.rs \
+                            crates/operant-cli/src/tui/app/mod.rs
+```
 
 Iteration 3 must follow iteration 1 (the badge needs `RowStatus::Interrupted` to
 exist). Iteration 2 can run any time after iteration 1's marker ships, since its
-join reads `RowStatus` but does not write it.
+join reads `RowStatus` but does not write it — and it carries Gap 6's one-line
+`COALESCE` fix, which is independent of everything else and could ship alone.
 
 ## Risks
 
-- **Fleet overlap.** iter-1 touches `key_handling`-adjacent code only through the
-  teardown path in `tui_app.rs`; iter-3 touches `session_hub/`. Re-grep
-  `git status` before each, and stage explicit paths only.
+- **Fleet overlap (corrected — the first revision understated this).** iter-1 is
+  *not* peer-free: its TUI write point is `crates/operant-cli/src/tui/app/mod.rs`
+  (`run_exit_teardown`, 1454-1463), a file the 2026-10-28 plan's own risk list
+  names as peer-hot. It does NOT touch `key_handling.rs` — that was the first
+  revision's guess and it was wrong; the Ctrl+C arm only sets `should_exit`, and
+  the shared consumer at mod.rs:1644 does the rest. iter-3 touches
+  `session_hub/`. The check command is in "Resume here" above; run it before
+  starting, and stage explicit paths only.
 - **The marker must never strand a session.** If the TUI crashes before
   teardown, no marker is written and the last session stays the most recent row
   — which the operator can already reach. The marker is strictly additive
