@@ -134,7 +134,7 @@ pub struct TurnEnd {
     /// `Unmeasured` means attribution ran and that one span is honest
     /// about having no number. Subscribers must render `None` as
     /// "unavailable", never as zeros.
-    pub attribution: Option<crate::turn_attribution::TurnBreakdown>,
+    pub attribution: Option<crate::turn_attribution::TurnAttribution>,
     /// First [`RESULT_SUMMARY_LIMIT`] bytes of the assistant's final reply,
     /// cut on a UTF-8 char boundary.
     pub result_summary: String,
@@ -220,7 +220,7 @@ impl TurnEndBus {
         iterations: usize,
         tool_calls: usize,
         result: &str,
-        attribution: Option<crate::turn_attribution::TurnBreakdown>,
+        attribution: Option<crate::turn_attribution::TurnAttribution>,
     ) -> usize {
         if self.tx.receiver_count() == 0 {
             return 0;

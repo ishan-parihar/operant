@@ -1941,7 +1941,7 @@ mod turn_attribution_tests {
     //! is called directly.
 
     use super::*;
-    use crate::turn_attribution::{SpanDuration, TurnSpan};
+    use crate::turn_attribution::{self, SpanDuration, TurnAttribution, TurnSpan};
 
     fn config() -> AgentConfig {
         AgentConfig {
@@ -2022,9 +2022,20 @@ mod turn_attribution_tests {
         // taken less than the work done inside it.
         std::thread::sleep(Duration::from_millis(70));
 
-        let bd = a
+        let attr = a
             .turn_attribution(start, inference, true)
             .expect("the flag is on and a model call happened, so a breakdown exists");
+        // Partial capture: three of four spans were measured, and the one that
+        // was not must be NAMED rather than silently rendered as a number.
+        assert!(
+            matches!(&attr, TurnAttribution::Incomplete { missing, .. }
+                if missing.as_slice() == [TurnSpan::UserWait, TurnSpan::Overhead]),
+            "an unmeasured span must be named, not rounded to zero: {attr:?}"
+        );
+        let bd = match attr {
+            TurnAttribution::Complete(b) | TurnAttribution::Incomplete { measured: b, .. } => b,
+            TurnAttribution::Disabled => unreachable!("the flag is on"),
+        };
 
         assert_eq!(
             bd.span(TurnSpan::Inference),
@@ -2052,9 +2063,21 @@ mod turn_attribution_tests {
         let a = agent(config()).await;
         let start = std::time::Instant::now();
         // A turn that exited before any model call, with no tool ever timed.
-        let bd = a
+        let attr = a
             .turn_attribution(start, Duration::ZERO, false)
             .expect("the flag is on, so a breakdown exists even with nothing measured");
+        // Nothing was captured, so the classification is `Incomplete` and it
+        // names ALL FOUR spans. That list is the answer to "why is there no
+        // attribution here", and it is what a zero would destroy.
+        assert!(
+            matches!(&attr, TurnAttribution::Incomplete { missing, .. }
+                if missing.as_slice() == turn_attribution::TurnSpan::ALL),
+            "a turn with no capture must name every missing span: {attr:?}"
+        );
+        let bd = match attr {
+            TurnAttribution::Complete(b) | TurnAttribution::Incomplete { measured: b, .. } => b,
+            TurnAttribution::Disabled => unreachable!("the flag is on"),
+        };
 
         // The RT-199 failure this row exists to avoid: a zero standing in for
         // an absent measurement. All three input spans must be `Unmeasured`.
@@ -2073,9 +2096,13 @@ mod turn_attribution_tests {
         let a = agent(config()).await;
         let start = std::time::Instant::now();
 
-        let bd = a
+        let attr = a
             .turn_attribution(start, Duration::ZERO, true)
             .expect("saw_inference is true, so the span is a real measurement");
+        let bd = match attr {
+            TurnAttribution::Complete(b) | TurnAttribution::Incomplete { measured: b, .. } => b,
+            TurnAttribution::Disabled => unreachable!("the flag is on"),
+        };
 
         assert_eq!(
             bd.span(TurnSpan::Inference),
@@ -2101,9 +2128,13 @@ mod turn_attribution_tests {
             "the per-turn tool total is the sum of every recorded call"
         );
         // ...and that total reaches the breakdown.
-        let bd = a
+        let attr = a
             .turn_attribution(start, Duration::from_millis(5), true)
             .unwrap();
+        let bd = match attr {
+            TurnAttribution::Complete(b) | TurnAttribution::Incomplete { measured: b, .. } => b,
+            TurnAttribution::Disabled => unreachable!("the flag is on"),
+        };
         assert_eq!(
             bd.span(TurnSpan::Tools),
             SpanDuration::Measured(Duration::from_millis(50))

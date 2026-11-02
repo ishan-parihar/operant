@@ -331,11 +331,11 @@ impl OperantAgent {
         turn_start: std::time::Instant,
         inference: std::time::Duration,
         saw_inference: bool,
-    ) -> Option<crate::turn_attribution::TurnBreakdown> {
+    ) -> Option<crate::turn_attribution::TurnAttribution> {
         if !self.config.show_turn_attribution {
             return None;
         }
-        use crate::turn_attribution::{SpanDuration, TurnBreakdown};
+        use crate::turn_attribution::{SpanDuration, TurnAttribution, TurnBreakdown};
 
         // A span that was never measured is `Unmeasured`, never `0`. An
         // early-exit turn with no model call is a different fact from a model
@@ -355,12 +355,15 @@ impl OperantAgent {
         // Honest `Unmeasured`, not a fabricated zero.
         let user_wait = SpanDuration::Unmeasured;
 
-        Some(TurnBreakdown::build(
-            turn_start.elapsed(),
-            inference,
-            tools,
-            user_wait,
-        ))
+        let breakdown = TurnBreakdown::build(turn_start.elapsed(), inference, tools, user_wait);
+        // Classify, and hand the subscriber the classified form: `Complete`
+        // when all four spans were measured, `Incomplete` NAMING the spans
+        // that were not. A subscriber that renders "tools: n/a" without
+        // being told WHICH spans are absent cannot tell a capture gap from a
+        // model that used no tools, which is the ambiguity this whole row
+        // exists to remove. `Disabled` never reaches here: the kill-switch
+        // already returned `None`.
+        Some(TurnAttribution::of(breakdown))
     }
 
     #[instrument(skip(self, user_query), fields(model = % self.config.model))]

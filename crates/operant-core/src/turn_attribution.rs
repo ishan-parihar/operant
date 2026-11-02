@@ -475,4 +475,70 @@ mod tests {
         assert!(b.is_exclusive(), "a zero turn is fully measured");
         assert_eq!(b.span(TurnSpan::Overhead), SpanDuration::measured(ms(0)));
     }
+
+    /// Source paths, relative to the crate root. `CARGO_MANIFEST_DIR` is
+    /// cargo's own env var, so it resolves regardless of the test's cwd (a
+    /// `file!()`-relative read failed here for exactly that reason).
+    fn src(rel: &str) -> std::path::PathBuf {
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(rel)
+    }
+
+    /// True when `needle` appears in at least one of `roots` (crate-relative
+    /// paths). An unreadable file counts as no-match, so a renamed or deleted
+    /// seam fails loudly instead of silently passing.
+    fn used_in(needle: &str, roots: &[&str]) -> bool {
+        roots
+            .iter()
+            .any(|r| std::fs::read_to_string(src(r)).is_ok_and(|c| c.contains(needle)))
+    }
+
+    /// The seams that must actually consume this module. Deliberately excludes
+    /// `turn_attribution.rs` itself: a type used only by its own module's tests
+    /// is exactly the orphan RT-209 was opened on.
+    const PRODUCTION_SEAMS: [&str; 4] = [
+        "src/agent/run.rs",
+        "src/agent/stream.rs",
+        "src/turn_end.rs",
+        "src/agent/mod.rs",
+    ];
+
+    /// The orphan guard, added after iter-1631 missed it once.
+    ///
+    /// RT-209 was opened because this module shipped with "exported at
+    /// `lib.rs:130` and called by NOTHING, tests included", and the compiler
+    /// cannot see that: the module is `pub` inside a `pub mod`, so a type with
+    /// zero users produces no `dead_code` warning and no gate fails. iter-1631
+    /// wired `TurnSpan`, `SpanDuration` and `TurnBreakdown` and STILL left
+    /// `TurnAttribution` unused, which this audit found only by grepping
+    /// external references by hand.
+    ///
+    /// The check is a source scan because every user counts, and a new public
+    /// type here with no production caller fails this test rather than
+    /// accumulating a second invisible orphan.
+    #[test]
+    fn every_public_type_in_this_module_has_a_production_caller() {
+        // The public surface, as RT-209's defect statement inventories it. A new
+        // public type must be added to this list deliberately, WITH a caller.
+        for name in [
+            "TurnSpan",
+            "SpanDuration",
+            "TurnBreakdown",
+            "TurnAttribution",
+        ] {
+            assert!(
+                used_in(name, &PRODUCTION_SEAMS),
+                "turn_attribution::{name} has no production caller: it is the RT-209 orphan \
+                 again. Wire it into a seam or remove it; do NOT leave it for the next audit \
+                 to find. iter-1631 wired three of the four and still missed TurnAttribution."
+            );
+        }
+
+        // And the classifier must be CONSUMED at the emission seam, not merely
+        // constructed: a `TurnAttribution::of(...)` whose result is dropped
+        // still leaves every span invisible to a subscriber.
+        assert!(
+            used_in("TurnAttribution::of", &PRODUCTION_SEAMS),
+            "TurnAttribution::of must be called at the emission seam, not only in this module"
+        );
+    }
 }
