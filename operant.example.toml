@@ -388,6 +388,11 @@ autoload = true
 # `template_name` / `template_description` are accepted but UNREAD (RT-136).
 
 [gateway]
+# `/sessions` browses this platform's sessions WITH their transcripts (title,
+# recency, message count) and `/sessions <n>` switches to one. It is reachable
+# only where a user can TYPE: telegram and discord. Slack is outbound-only, so
+# no Slack user can send it at all. No new key here — the flag's behaviour is
+# the mechanism, not a setting.
 telegram_enabled = false
 # telegram_token = ""
 telegram_api_base = "https://api.telegram.org"

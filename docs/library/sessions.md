@@ -7,6 +7,7 @@ Not for: the gateway's channel-scoped session store
 ([gateway.md](gateway.md)), the memory engine ([memory.md](memory.md)).
 
 Source: `crates/operant-core/src/session/` (mod, autocompact),
+`crates/operant-core/src/session_interrupted.rs` (the exit marker),
 `crates/operant-core/src/agent/rewind.rs`,
 `crates/operant-core/src/active_sessions.rs`,
 `crates/operant-core/src/tools/session_search_tool.rs`,
@@ -74,6 +75,50 @@ file-mutating tool run can be preceded by a snapshot, committed to a
 private store under `~/.operant/checkpoints/`; explicit
 `checkpoint ensure/list/restore/diff` for the model and
 `operant checkpoints status/list/prune/clear` for the operator.
+
+## The interrupted-session signal
+
+Two records, one generation each, and neither is a cursor.
+
+**The exit marker** (`session_interrupted.rs`) is a small JSON file under
+the sessions directory holding the session id, a timestamp, a title, and a
+version. The TUI's teardown writes it on an interrupted exit; a deliberate
+`/exit` deletes it first, so the marker means "this was cut off" and never
+"you chose to stop". `consume_marker` reads and deletes in one act, so the
+resume offer survives being acknowledged exactly once — a notice that
+cannot be dismissed stops being a notice. A corrupt marker reads as
+nothing: the operator's session list is the durable source and a bad
+sidecar file must never stop a launch. An empty session id is refused
+outright, because it would match nothing.
+
+**The DB flag** rides the existing `end_reason` column as
+`Database::INTERRUPTED_END_REASON` — no schema change and no migration.
+`list_sessions_rich` derives `RowStatus::Interrupted` from it, ranking below
+`Archived` (a parked row is a deliberate state) and above `Idle` (an
+interrupted row is a resumable accident, which is the more useful answer).
+`clear_session_interrupted` is scoped to the interrupted value rather than
+nulling the column, so a real `"completed"` survives. A session's next turn
+clears it after `save_session`, which is what stops every relaunch
+re-claiming every old session as interrupted.
+
+**The notice never auto-attaches.** Both the TUI and the gateway name the
+interrupted session and stop there. Ctrl+C is how an operator escapes a
+turn that is going badly; silently reattaching them to the session they
+abandoned would be the opposite of a rescue.
+
+**Liveness.** `active_sessions.rs` gained a cross-process presence
+registry (`claim_session_here` / `session_is_live` / `prune_dead_presence`)
+distinct from the file-based concurrency cap it already held, which tracks
+sessions one *process* owns and says nothing about other processes.
+`claim_session_here` is the single entry point a live process calls: it
+prunes other processes' dead records, then claims for its own pid. Without
+it the notice cannot tell a marked session whose process died from one
+still streaming in another window — and offering to resume the latter is
+an invitation to race on the same rows. `process_is_running` uses
+`fs::metadata` on `/proc/<pid>` rather than `libc::kill(pid, 0)` because
+`libc` is not an `operant-core` dependency; the tradeoff (EPERM and ENOENT
+are indistinguishable) is written down in-code and fails toward the
+redundant notice, never toward a wedged self-registration.
 
 ## Intention
 

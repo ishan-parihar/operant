@@ -60,6 +60,31 @@ transcript persistence with FTS5 search, session switching/resume/branch.
 `clear_history` only on session change (iter-49) — the session-caching
 fix.
 
+## `/sessions` is a browser, not an id dump
+
+The handler used to report only *bindings* — session id, platform user,
+channel — so a telegram user had to copy an id out of a message they cannot
+read, run `operant sessions list` on the server, and paste it back.
+`browse_platform_sessions` (`gateway_commands.rs`) now joins the binding
+table to the rich session loader the CLI and hub already share, and renders
+`1. *title* — 3h ago · 12 msg`. `/sessions <n>` pins that row through the
+same honesty gate `/resume` uses, so a number whose transcript was pruned is
+**refused** rather than silently attaching the agent to an empty context.
+
+Three decisions worth knowing before changing the reply format:
+
+1. **Platform reach is telegram + discord only.** Slack is outbound-only, so
+   a Slack user cannot type `/sessions` at all, and webhooks is push-only with
+   no reply path for a listing. The browser must not claim Slack.
+2. **The reply is capped and says so.** A chat surface has no scrollback, so
+   an uncapped listing is a list whose tail the operator never sees; a cap
+   that does not announce itself tells them to stop looking for something the
+   reply already dropped.
+3. **The interrupted badge rides the join.** This listing is where the
+   operator decides what to continue, so it is the surface where knowing
+   which rows were cut off matters most. The marker itself is a session
+   concern — [sessions.md](sessions.md) owns it, not this file.
+
 ## The dispatch breaker (`dispatch_breaker.rs`)
 
 Per-channel circuit breaker (hermes `#526` parity): after

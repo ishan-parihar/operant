@@ -242,10 +242,11 @@ A recalled prompt never re-opens the slash-command popup, so Up/Down keep steppi
 | `operant skills list / install / audit` | Skill management (install a directory or URL) |
 | `operant mcp list / add / test / serve` | MCP servers; `serve` runs Operant as an MCP server over stdio; `/mcp r` in the TUI reconnects deferred servers |
 | `operant memory query / export` | Search / export memory |
-| `operant sessions list` | Session history |
+| `operant sessions list` | Session history (`--interrupted` filters to sessions an exit marker flagged) |
+| `operant sessions resume` | Re-orient on a session (`--last` picks the interrupted one) |
 | `operant model get / set` | Active model configuration |
 | `operant cron` / `operant kanban` | Scheduled jobs / task boards |
-| `operant gateway start` | Messaging gateway (telegram, discord, slack, whatsapp) |
+| `operant gateway start` | Messaging gateway (telegram, discord, slack, whatsapp); `/sessions` browses transcripts on telegram + discord |
 | `operant plugins list` | WASM plugins |
 | `operant doctor` / `operant status` | Health checks and system overview |
 | `operant update integrations` | Force-check sourcehound/aft updates (auto: first use per session, 6h throttle) |
