@@ -1106,13 +1106,13 @@ mod tests {
         }
     }
 
-/// Flatten one rendered line's spans into the text a terminal would show.
-fn line_text(line: &ratatui::text::Line<'_>) -> String {
-    line.spans
-        .iter()
-        .map(|span| span.content.as_ref())
-        .collect()
-}
+    /// Flatten one rendered line's spans into the text a terminal would show.
+    fn line_text(line: &ratatui::text::Line<'_>) -> String {
+        line.spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect()
+    }
 
     #[test]
     fn model_suggestions_align_provider_and_method_columns() {

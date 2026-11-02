@@ -10,7 +10,7 @@ use ratatui::widgets::Wrap;
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout},
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
 };
@@ -23,20 +23,70 @@ use operant_core::session::listing::{RowKind, RowStatus, SessionEntryV2};
 const SPLIT: (Constraint, Constraint) = (Constraint::Percentage(40), Constraint::Percentage(60));
 
 /// How many rows of organising chrome sit above the session rows inside the
-/// list block: the header row and the filter tab bar. `state.selected` indexes
-/// the body set, so every consumer that maps a selection onto a rendered row
-/// adds this — see the `ListState` wiring in `render_list_body`.
-const CHROME_ROWS: usize = 2;
+/// list block: the header row, the filter tab bar, and the column header.
+/// `state.selected` indexes the body set, so every consumer that maps a
+/// selection onto a rendered row adds this — see the `ListState` wiring in
+/// `render_list_body`.
+const CHROME_ROWS: usize = 3;
 
-/// The two chrome rows as list items, so they render INSIDE the block's
+/// The three chrome rows as list items, so they render INSIDE the block's
 /// borders (drawing them above the block produced a left pane whose top rows
 /// carried no border glyph, which is both wrong to look at and wrong to every
 /// border-parity analysis here).
+///
+/// The column header comes last so it sits directly above the column it names.
+/// Codex's `agent_center` renders exactly this — a dim
+/// `Tasks | Status | Updated` line so the eye knows what the right-hand columns
+/// mean — and without it a row's status is "the dim bit at the end", which is
+/// not a column, it is a guess.
 fn chrome_items(state: &SessionHubState, inner_width: u16) -> Vec<ListItem<'static>> {
-    vec![
+    let mut items = vec![
         ListItem::new(render_header(state)),
         ListItem::new(render_tab_bar(state, inner_width)),
-    ]
+    ];
+    // Right-align the two columns whose values are right-aligned in the rows,
+    // so the header sits above its own data rather than floating at the left.
+    let col_header = |label: &str, width: u16| {
+        let pad = (width as usize).saturating_sub(label.chars().count());
+        format!("{}{}", " ".repeat(pad), label)
+    };
+    items.push(ListItem::new(Line::from(vec![
+        Span::styled(
+            " Tasks",
+            Style::default()
+                .fg(theme_colors::muted())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            col_header("Status", COL_STATUS),
+            Style::default()
+                .fg(theme_colors::muted())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            col_header("Updated", COL_UPDATED),
+            Style::default()
+                .fg(theme_colors::muted())
+                .add_modifier(Modifier::BOLD),
+        ),
+    ])));
+    items
+}
+
+/// The Status column's width, measured in cells: the longest value it holds
+/// (`Interrupted`, or a delegation's `pending`/`failed`) plus the two spaces
+/// that separate it from the metrics column.
+const COL_STATUS: u16 = 16;
+/// The Updated column's width. `relative_time`'s longest form is
+/// "N days ago" (11), so the extra space is slack for a 5-digit day count.
+const COL_UPDATED: u16 = 15;
+
+/// Right-align pad for a column value: `column - value` spaces, or none when
+/// the value already fills its column. The caller passes the value's own width
+/// INCLUDING the two-space separator, so the padding fills exactly the gap
+/// between the previous column's tail and this value's first character.
+fn row_align(value: usize, column: u16) -> String {
+    " ".repeat((column as usize).saturating_sub(value))
 }
 
 /// The compact age form the TUI already uses (app/mod.rs's session-list
@@ -453,27 +503,21 @@ fn render_list_body(frame: &mut Frame, state: &SessionHubState, area: ratatui::l
                 //
                 // The row's real gap was the delegation STATUS: a Completed and
                 // a Failed subagent looked identical unless focused. Both live
-                // on `RowKind::Subagent.status`, so print it here.
-                let (usage_span, status_span) = match &row.kind {
-                    RowKind::Subagent { status, .. } => (
-                        Span::styled("  usage —", Style::default().fg(theme_colors::muted())),
-                        Some(Span::styled(
-                            format!("  {status}"),
-                            Style::default().fg(match *status {
-                                "pending" => theme_colors::success(),
-                                "failed" => theme_colors::error(),
-                                _ => theme_colors::muted(),
-                            }),
-                        )),
-                    ),
+                // on `RowKind::Subagent.status`, and the Status column below is
+                // where they are shown now.
+                //
+                // Stage B moved the delegation status out of this inline spot
+                // and into the Status column, where a header row names it:
+                // printing it in both places would render `pending  pending`.
+                let usage_span = match &row.kind {
+                    RowKind::Subagent { .. } => {
+                        Span::styled("  usage —", Style::default().fg(theme_colors::muted()))
+                    }
                     _ => {
                         let token_span = tokens_suffix(row.tokens);
-                        (
-                            Span::styled(
-                                format!("  {} msg{token_span}", row.message_count),
-                                Style::default().fg(theme_colors::muted()),
-                            ),
-                            None,
+                        Span::styled(
+                            format!("  {} msg{token_span}", row.message_count),
+                            Style::default().fg(theme_colors::muted()),
                         )
                     }
                 };
@@ -487,11 +531,48 @@ fn render_list_body(frame: &mut Frame, state: &SessionHubState, area: ratatui::l
                     Span::styled(emp, Style::default().fg(theme_colors::muted())),
                     usage_span,
                 ];
-                if let Some(status_span) = status_span {
-                    meta_spans.push(status_span);
-                }
+                // The Status and Updated columns are right-aligned to their
+                // header labels, so `row_align` pads the value out to its
+                // column's trailing edge and the header above is truthful.
+                // Without the pad the column header names a position the data
+                // never occupies, which is worse than no header at all.
+                //
+                // Stage B also fills a real gap: a session row's status was
+                // carried ONLY by the title line's colour-coded glyph, so an
+                // Idle and an Interrupted row differed by a hue and nothing
+                // more. The column now carries the word for both session rows
+                // and delegation rows, from one value so the two cannot drift.
+                let status_value: (&str, Color) = match &row.kind {
+                    RowKind::Subagent { status, .. } => (
+                        status,
+                        match *status {
+                            "pending" => theme_colors::success(),
+                            "failed" => theme_colors::error(),
+                            _ => theme_colors::muted(),
+                        },
+                    ),
+                    _ => (
+                        row.status.label(),
+                        match row.status {
+                            RowStatus::Live => theme_colors::success(),
+                            // Interrupted is the state the operator is hunting
+                            // for at this pane, so it warns rather than dims.
+                            RowStatus::Interrupted => theme_colors::warning(),
+                            RowStatus::Archived | RowStatus::Idle => theme_colors::muted(),
+                        },
+                    ),
+                };
                 meta_spans.push(Span::styled(
-                    format!("  {}", relative_time(row.updated_at)),
+                    row_align(status_value.0.chars().count() + 2, COL_STATUS),
+                    Style::default(),
+                ));
+                meta_spans.push(Span::styled(
+                    status_value.0.to_string(),
+                    Style::default().fg(status_value.1),
+                ));
+                meta_spans.push(Span::styled(row_align(0, COL_UPDATED), Style::default()));
+                meta_spans.push(Span::styled(
+                    relative_time(row.updated_at),
                     Style::default().fg(theme_colors::muted()),
                 ));
                 if !matches!(row.kind, RowKind::Subagent { .. }) {

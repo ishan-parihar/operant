@@ -639,6 +639,12 @@ pub struct App {
     /// rows (plan 2026-10-28 iter-B/C; replaced the 70x20 session_browser
     /// modal).
     pub session_hub: crate::tui::session_hub::SessionHubState,
+    /// The interrupted session the exit marker named, held until the hub opens
+    /// so `SessionHubState::open_selecting` can put the cursor on that row
+    /// (plan 2026-11-02, P2). `None` is the ordinary case and means "no
+    /// pre-selection" — an `Option` rather than a separate flag so the state
+    /// "armed" and "not armed" cannot disagree with the id it carries.
+    pub pending_hub_preselect: Option<String>,
     /// Export format picker dialog (/export).
     pub export_dialog: ExportDialogState,
     /// Context window / rate limit visualization overlay (/context).
