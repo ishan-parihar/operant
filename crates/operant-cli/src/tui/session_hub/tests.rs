@@ -2006,3 +2006,171 @@ fn the_sort_clause_renders_in_the_controls_row() {
          operator has to be able to see which ORDER the list is in: {controls:?}"
     );
 }
+
+// ── Stage E — the archive confirm (2026-11-02) ───────────────────────────────
+//
+// Codex's `ArchiveState` (resume_picker/archive.rs) arms on the key and commits
+// on Enter, and it cancels on every other keystroke. These pin that machine's
+// two load-bearing properties: the confirm DOES require a second keystroke, and
+// it does NOT commit a row the operator moved off.
+
+#[test]
+fn arming_archive_requires_a_second_keystroke_to_commit() {
+    let mut hub = sort_fixture();
+    let armed = hub.arm_archive();
+    assert_eq!(
+        armed.as_deref(),
+        Some("cheap"),
+        "`a` arms the selected row and names it"
+    );
+    assert!(
+        hub.archive_state.is_armed(),
+        "arming must actually arm — an arm that does nothing is a confirm that \\
+         archives without asking"
+    );
+    // The row is still in the visible set: nothing has been written yet.
+    assert!(
+        visible_ids(&hub).contains(&"cheap".to_string()),
+        "arming must not remove the row: the operator has not confirmed"
+    );
+}
+
+#[test]
+fn committing_an_armed_archive_yields_the_selection_and_disarms() {
+    let mut hub = sort_fixture();
+    hub.arm_archive();
+    let committed = hub.commit_archive();
+    match committed {
+        Some(HubSelection::ArchiveSession(id)) => {
+            assert_eq!(id, "cheap", "the commit archives the ARMED row");
+        }
+        other => panic!("an armed Enter must yield ArchiveSession, got {other:?}"),
+    }
+    assert!(
+        !hub.archive_state.is_armed(),
+        "the commit must clear the armed state, or a second Enter re-archives"
+    );
+    // A commit with nothing armed is not a commit.
+    assert!(
+        hub.commit_archive().is_none(),
+        "committing an idle confirm must do nothing at all"
+    );
+}
+
+#[test]
+fn disarming_leaves_nothing_armed() {
+    let mut hub = sort_fixture();
+    hub.arm_archive();
+    hub.disarm_archive();
+    assert!(!hub.archive_state.is_armed());
+    assert!(
+        hub.commit_archive().is_none(),
+        "a disarmed confirm must not be committable — this is the property that \\
+         makes the harmless escape hatch harmless"
+    );
+}
+
+#[test]
+fn a_subagent_row_cannot_be_armed_for_archiving() {
+    // A delegation record is process-local registry state, not a database row.
+    // `set_session_archived` would update nothing and the operator would be
+    // told "0 rows changed" for a keystroke that looked like it worked.
+    let mut hub = SessionHubState::new();
+    hub.visible = true;
+    hub.loading = false;
+    hub.replace_rows(vec![subagent_row("dlg-9", "audit the tests", "pending")]);
+    assert!(
+        hub.arm_archive().is_none(),
+        "a subagent row has no `sessions` row to archive and must refuse"
+    );
+    assert!(
+        !hub.archive_state.is_armed(),
+        "the refusal must leave the confirm idle, not half-armed"
+    );
+}
+
+#[test]
+fn the_archive_confirm_commits_the_armed_row_not_the_now_selected_row() {
+    // The bug this pins: the operator arms row A, moves to row B, and Enter
+    // archives B. The armed state must hold the ROW, not "whatever is selected
+    // now".
+    let mut hub = sort_fixture();
+    hub.arm_archive();
+    hub.select_next();
+    hub.select_next();
+    assert_eq!(
+        hub.selected_row().map(|r| r.id.as_str()),
+        Some("rich"),
+        "the fixture's third row must now be selected"
+    );
+    match hub.commit_archive() {
+        Some(HubSelection::ArchiveSession(id)) => assert_eq!(
+            id, "cheap",
+            "the commit must archive the ARMED row, not the one now under the \\
+             cursor — archiving a session the operator never confirmed is the \\
+             failure this stage exists to prevent"
+        ),
+        other => panic!("expected ArchiveSession, got {other:?}"),
+    }
+}
+
+#[test]
+fn the_armed_row_renders_the_archive_marker_not_its_status() {
+    // The operator must see WHICH row will be archived, not only the notice
+    // line at the bottom of the frame. This asserts on the DRAWN buffer: the
+    // first attempt at this test rendered a fresh (unarmed) hub and asserted on
+    // that, which proved nothing about the armed render at all.
+    use crate::tui::render::FrameCtx;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    let mut hub = SessionHubState::new();
+    hub.visible = true;
+    hub.loading = false;
+    hub.replace_rows(vec![
+        row("sess-a", Some("to archive"), None),
+        row("sess-b", Some("leave alone"), None),
+    ]);
+    hub.arm_archive();
+    assert_eq!(
+        hub.selected_row().map(|r| r.id.as_str()),
+        Some("sess-a"),
+        "the fixture must start with sess-a selected for the marker to land on it"
+    );
+
+    let mut terminal = Terminal::new(TestBackend::new(FRAME_WIDTH, 40)).unwrap();
+    let mut ctx = FrameCtx {
+        size: ratatui::layout::Rect::new(0, 0, FRAME_WIDTH, 40),
+        preview_max_scroll: None,
+        stop: false,
+    };
+    terminal
+        .draw(|f| {
+            super::render::render_session_hub(f, &hub, f.area(), &mut ctx);
+        })
+        .unwrap();
+    let rows: Vec<String> = crate::tui::debug::debug_hub::buffer_rows(terminal.backend().buffer())
+        .into_iter()
+        .map(|l| l.chars().take(LIST_PANE_END).collect())
+        .collect();
+
+    let armed_row = rows
+        .iter()
+        .find(|r| r.contains("to archive"))
+        .unwrap_or_else(|| panic!("the armed row must render its title: {rows:?}"));
+    assert!(
+        armed_row.contains('\u{1f5d1}'),
+        "the armed row must carry the archive marker (\\u{{1f5d1}}), not its \\
+         ordinary status glyph: {armed_row:?}"
+    );
+
+    let other_row = rows
+        .iter()
+        .find(|r| r.contains("leave alone"))
+        .unwrap_or_else(|| panic!("the unarmed row must render: {rows:?}"));
+    assert!(
+        !other_row.contains('\u{1f5d1}'),
+        "only the ARMED row carries the marker — a marker on every row would \\
+         make the confirm ambiguous: {other_row:?}"
+    );
+}

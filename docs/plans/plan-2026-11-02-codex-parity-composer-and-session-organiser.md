@@ -607,3 +607,37 @@ Three findings from implementation, all caught by tests before commit:
 Measured geometry for the next agent (120x40): the block's top border is buffer
 row 0, the three chrome rows are 1-3, the selected session row is 4, and each
 session row occupies TWO buffer rows (title + meta).
+
+## Stage E — LANDED (sort `feat(iter-1670)`)
+
+`o` cycles the sort key. Codex's `ThreadSortKey` has exactly two usable keys
+(`CreatedAt`, `UpdatedAt`; `RecencyAt`/`SectionPosition` collapse onto
+`UpdatedAt`) and its command center adds `Model`. Neither maps onto operant's
+projection: `SessionEntryV2` carries NO creation timestamp, and no hub row
+carries a model field.
+
+**The finding that shaped the ladder: a sort key that silently sorts by a
+different field is worse than no key at all.** Operant's projection has one
+temporal axis (`updated_at`, itself `ended_at` falling back to `started_at`), so
+`Created` would have answered "recently created" with "recently ended". The
+ladder is therefore built from the usage columns the rows genuinely carry —
+`Recent | Cost | Messages | Tokens` — which are the questions an operator
+actually opens a hub to answer, and the regression test
+`no_sort_key_sorts_by_a_field_the_row_does_not_have` locks the absence of the
+phantom key.
+
+**Sort is a comparator over the flat `visible_idx`, not a second index model** —
+the same rule Stage C proved for grouping. `cycle_sort` preserves the selection
+BY ROW ID.
+
+**Two measured findings on placement and width:**
+
+1. The header has no room: it measures 45 of the pane's 46 inner columns before
+   the clause exists, so the clause rides the END of the controls row.
+2. The controls row's ladder needed a new rung. At the common 48-column pane,
+   the six compact filter labels plus a two-column gap leave three columns and
+   the clause needs eight — so the first rung failed and the sort key was
+   invisible at exactly the width most operators work at. The SAME labels with a
+   one-column gap fit at exactly 45, so that rung now exists.
+
+Rendered: `all 3 cur 0 emp 0 live 0 br 3 arch 0 recent`.

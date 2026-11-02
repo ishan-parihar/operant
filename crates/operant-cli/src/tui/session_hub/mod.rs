@@ -299,6 +299,38 @@ pub enum HubSelection {
     SwitchSession(String),
     /// Focus a live subagent row (iter-C's focus view).
     FocusSubagent(String),
+    /// Archive this session (Stage E, `a`). Archiving is REVERSIBLE
+    /// (`archived = 0` restores), but it is one keystroke away from a mistaken
+    /// Enter, so it goes through an explicit confirm before it is offered to
+    /// the App.
+    ArchiveSession(String),
+}
+
+/// Archive confirmation state (Stage E). Codex's `ArchiveState` (resume_picker/
+/// archive.rs) is the same machine with different names: `Idle` until `a`
+/// arms it, then the operator must commit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HubArchiveState {
+    /// Nothing is pending.
+    Idle,
+    /// `a` was pressed: the operator sees what WILL be archived and has not yet
+    /// committed. Enter commits, anything else disarms.
+    Armed { session_id: usize },
+}
+
+impl HubArchiveState {
+    /// Is a confirm pending?
+    pub const fn is_armed(self) -> bool {
+        matches!(self, Self::Armed { .. })
+    }
+
+    /// The session awaiting a commit, as an index into `rows`.
+    pub const fn armed_row(self) -> Option<usize> {
+        match self {
+            Self::Idle => None,
+            Self::Armed { session_id } => Some(session_id),
+        }
+    }
 }
 
 /// Page state. Owned by `App`; rendered full-frame while `visible`.
@@ -321,6 +353,10 @@ pub struct SessionHubState {
     /// `rows` already arrived in — `updated_at DESC` from the database — so a
     /// fresh hub renders exactly as it did before Stage E.
     pub sort_mode: HubSortMode,
+    /// Archive confirmation (Stage E). `Idle` until `a` arms the selected row,
+    /// then Enter commits. Kept on the hub's own state rather than the App's
+    /// because the hub is what knows which row is selected.
+    pub archive_state: HubArchiveState,
     /// Search tokens (AND). Empty = no filtering, no highlight.
     pub search_query: String,
     /// While true, keystrokes edit `search_query` (jcode's search mode).
@@ -378,6 +414,7 @@ impl SessionHubState {
             filter_mode: HubFilterMode::All,
             group_mode: HubGroupMode::Auto,
             sort_mode: HubSortMode::Auto,
+            archive_state: HubArchiveState::Idle,
             search_query: String::new(),
             search_active: false,
             loading: true,
@@ -647,6 +684,56 @@ impl SessionHubState {
             self.selected = pos;
         }
         self.note_preview_miss();
+    }
+
+    /// Arm archive for the selected row (Stage E, `a`).
+    ///
+    /// A no-op on an already-armed state and on a subagent row: a delegation
+    /// record is process-local registry state, not a database row, so there is
+    /// nothing in `sessions` for `set_session_archived` to update — archiving
+    /// one would be a write against a row that does not exist, which is exactly
+    /// the failure the App reports as "no such session" on every commit.
+    ///
+    /// Returns the row id that was armed, so the caller can name what will be
+    /// archived without re-deriving the selection.
+    pub fn arm_archive(&mut self) -> Option<String> {
+        if self.archive_state.is_armed() {
+            return None;
+        }
+        let Some(pos) = self.selected_row_idx() else {
+            return None;
+        };
+        if matches!(self.rows[pos].kind, RowKind::Subagent { .. }) {
+            return None;
+        }
+        self.archive_state = HubArchiveState::Armed { session_id: pos };
+        Some(self.rows[pos].id.clone())
+    }
+
+    /// Commit an armed archive, or disarm if nothing is armed.
+    ///
+    /// The row INDEX, not the id, is what leaves the armed state: the operator
+    /// may have moved the selection between arming and committing, and archiving
+    /// the row they are now on would be a different session than the one they
+    /// confirmed.
+    pub fn commit_archive(&mut self) -> Option<HubSelection> {
+        let pos = self.archive_state.armed_row()?;
+        self.archive_state = HubArchiveState::Idle;
+        Some(HubSelection::ArchiveSession(
+            self.rows.get(pos).map(|r| r.id.clone()).unwrap_or_default(),
+        ))
+    }
+
+    /// Disarm a pending archive. Every key that is not Enter while armed lands
+    /// here, so the confirm cannot outlive the operator's attention.
+    pub fn disarm_archive(&mut self) {
+        self.archive_state = HubArchiveState::Idle;
+    }
+
+    /// The flat `visible_idx` position of the selected row.
+    fn selected_row_idx(&self) -> Option<usize> {
+        let idx = *self.visible_idx.get(self.selected)?;
+        Some(idx)
     }
 
     /// How many of ALL the rows each filter mode would show. This is the live

@@ -593,10 +593,20 @@ fn render_list_body(frame: &mut Frame, state: &SessionHubState, area: ratatui::l
             .enumerate()
             .map(|(i, row)| {
                 let selected = i == state.selected;
+                // Stage E: an armed row swaps its status glyph for the archive
+                // marker. The status returns when the confirm is disarmed, so
+                // the operator never has to hold two states in their head —
+                // and the row that WILL be archived is the row that says so,
+                // not just the notice line at the bottom of the frame.
+                let armed = state.archive_state.armed_row() == Some(i);
                 let mut spans = vec![Span::styled(
-                    format!(" {} ", status_glyph(row.status)),
-                    Style::default().fg(if matches!(row.status, RowStatus::Live) {
-                        theme_colors::success()
+                    if armed {
+                        " \u{1f5d1} ".to_string()
+                    } else {
+                        format!(" {} ", status_glyph(row.status))
+                    },
+                    Style::default().fg(if armed || matches!(row.status, RowStatus::Live) {
+                        theme_colors::warning()
                     } else {
                         theme_colors::muted()
                     }),
