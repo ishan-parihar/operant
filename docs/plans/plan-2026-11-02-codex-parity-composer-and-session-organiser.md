@@ -488,6 +488,6 @@ operator most needed — the filter they had not tried yet — was the silent
 casualty. `HubFilterMode::short_label` exists for exactly this ladder and its
 forms are all unambiguous at the lead.
 
-Still open, deliberately: Stages B–E. Stage A does not add grouping or sort,
+Still open, deliberately: Stages C–E. Stage B did not add grouping or sort,
 and the header's `Group:` clause is shaped for but not yet wired.
 
