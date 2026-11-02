@@ -46,6 +46,14 @@ SNAP_TOP = _snapshot_top_keys()
 # `permissions_picker`, which do. A scenario asserting a real overlay key was
 # therefore rejected as unresolvable, which is how iter-1659's first draft
 # failed. Reading the array is the only version that cannot drift (iter-1659).
+#
+# The count is cross-checked against the array's own declared length
+# `[(&'static str, bool); N]`, which the COMPILER enforces, so a reformat the regex
+# no longer matches fails loudly here instead of silently dropping a key. Proven
+# necessary (iter-1662): rewriting one entry from `(\n  "key",\n  value,\n)` to
+# `( "key"\n  , value\n)` took the set from 29 keys to 28 with no error and no
+# warning -- `history_search_overlay` simply stopped resolving. Without the count
+# check that is the SAME silent failure this derivation was written to replace.
 def _overlay_flag_keys():
     src = (REPO / "crates/operant-cli/src/tui/app/commands.rs").read_text(encoding="utf-8")
     body = src[src.index("fn overlay_flags"):]
@@ -53,6 +61,14 @@ def _overlay_flag_keys():
     keys = set(re.findall(r'\(\s*"([a-z_0-9]+)",\s*', body))
     if not keys:
         raise SystemExit("could not derive overlay_flags() keys from commands.rs")
+    declared = re.search(r"fn overlay_flags\(&self\) -> \[\(&'static str, bool\); (\d+)\]", src)
+    if not declared:
+        raise SystemExit("could not read overlay_flags()'s declared array length")
+    if len(keys) != int(declared.group(1)):
+        raise SystemExit(
+            f"overlay_flags() parse drift: regex found {len(keys)} keys but the "
+            f"array declares {declared.group(1)}. An entry was reformatted so the "
+            f"regex no longer matches it — fix the regex, not the count.")
     return keys
 OVERLAYS = _overlay_flag_keys()
 
