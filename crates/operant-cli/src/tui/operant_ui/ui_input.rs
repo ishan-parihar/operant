@@ -2746,12 +2746,13 @@ pub(super) fn draw_input(
     frame.render_widget(paragraph, padded);
     if input_text.is_empty() && !has_suggestions {
         // codex's empty state is `› Ask Codex to do anything` — the placeholder
-        // sits on the GLYPH's own row, past the gutter, never on a row of its
-        // own. Two offsets, both required:
+        // sits on the GLYPH's own row, past the gutter, never on a row of its own.
+        // Two offsets, both required:
         //
         // - ROW: the glyph row is `suggestions_offset` rows into the padded rect
-        //   (a hint or vim badge row precedes it when one is present), so the
-        //   placeholder must skip those rows or it paints over the badge.
+        //   (a hint row precedes it when one is present — the `-- INSERT --`
+        //   vim badge that used to sit here is gone since RT-144), so the
+        //   placeholder must skip those rows or it paints over the hint line.
         // - COLUMN: the glyph is an in-line span at the START of that line
         //   (`wrap_input_text_gutter` paints `prompt_char` as the line's first
         //   span), so the placeholder must start `prompt_len` columns in or it
