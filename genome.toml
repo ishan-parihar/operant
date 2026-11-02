@@ -38,7 +38,7 @@ pointer_ignore = "SKILL.md autonomous-status.toml settings.json auth.json"
 # Living plans carry a maintained 'Resume here' section instead of
 # same-day v3 churn: an execution plan with open iterations is amended in
 # place under this key, per the dated-frozen header's own escape clause.
-living_plans = ["docs/plans/2026-10-28-unified-session-management-v2-jcode-picker-pane-omp-hub-empl.md", "docs/plans/plan-2026-11-02-session-resumability-and-gateway-session-navigation.md"]
+living_plans = ["docs/plans/2026-10-28-unified-session-management-v2-jcode-picker-pane-omp-hub-empl.md", "docs/plans/plan-2026-11-02-session-resumability-and-gateway-session-navigation.md", "docs/plans/2026-11-02-session-resumability-remaining-gaps-after-iter-1634.md"]
 # the gate the repo's own iteration loop names: fast checks, then the workspace suite
 gate = "./scripts/check.sh check --workspace && cargo test --workspace"
 # the judgement the iteration loop makes mandatory, in its own order

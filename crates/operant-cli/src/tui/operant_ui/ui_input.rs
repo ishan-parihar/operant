@@ -2,6 +2,7 @@
 // Copyright (c) 2025 Jeremy Huang. Ported verbatim @ 0a9dc7805; imports
 // re-rooted per the batch-3 map. See operant_ui/mod.rs for scope.
 
+use super::composer;
 use super::inline_interactive_ui::format_elapsed;
 use super::selection_highlight::highlight_line_selection;
 use super::tools_ui::{get_tool_activity_detail, summarize_batch_running_tools_compact};
@@ -454,34 +455,51 @@ pub(super) fn input_prompt(app: &dyn TuiState) -> (&'static str, Color) {
     } else if app.active_skill().is_some() {
         ("» ", accent_color())
     } else {
-        ("> ", user_color())
+        // codex parity: the default prompt is a bold `›`, not `> ` — see
+        // `chat_composer.rs:4945`'s `"›".bold()` fallback branch. Same two
+        // columns, and the heavier glyph is the visible spine of the filled band.
+        ("› ", user_color())
     }
 }
 
-pub(crate) fn input_prompt_len(app: &dyn TuiState, next_prompt: usize) -> usize {
-    let (prompt_char, _) = input_prompt(app);
-    next_prompt.to_string().chars().count() + prompt_char.chars().count()
+/// The gutter width under the codex-parity (index-less) policy.
+///
+/// codex reserves `LIVE_PREFIX_COLS = 2` and never paints an index
+/// (`tui/src/ui_consts.rs:10`). Every operant mode glyph is exactly two columns
+/// (`$ `, `» `, `… `, `› `), so the reserved width is
+/// [`composer::GUTTER_COLS`] in every mode: the composer's left edge stops
+/// drifting right as the prompt index grows past 9 and past 99, which is what
+/// lets the band's gutter align with the transcript's own status rows.
+pub(crate) fn input_gutter_cols(app: &dyn TuiState) -> usize {
+    debug_assert_eq!(
+        input_prompt(app).0.chars().count(),
+        usize::from(composer::GUTTER_COLS),
+        "a prompt glyph changed width: composer::GUTTER_COLS must track it"
+    );
+    usize::from(composer::GUTTER_COLS)
 }
 
 pub(super) fn wrapped_input_line_count(
     app: &dyn TuiState,
     area_width: u16,
-    next_prompt: usize,
+    _next_prompt: usize,
 ) -> usize {
     let reserved_width = send_mode_reserved_width(app);
-    let prompt_len = input_prompt_len(app, next_prompt);
+    let prompt_len = input_gutter_cols(app);
     let line_width = (area_width as usize).saturating_sub(prompt_len + reserved_width);
     if line_width == 0 {
         return 1;
     }
 
-    let num_str = next_prompt.to_string();
     let (prompt_char, caret_color) = input_prompt(app);
-    let (lines, _, _) = wrap_input_text(
+    // `None` num_str: the codex-parity gutter. This function measures the same
+    // rows `draw_input` paints, so both must use one gutter policy — a mismatch
+    // makes the band height and the drawn text disagree and the composer scrolls.
+    let (lines, _, _) = wrap_input_text_gutter(
         app.input(),
         app.cursor_pos(),
         line_width,
-        &num_str,
+        None,
         prompt_char,
         caret_color,
         prompt_len,
@@ -2486,7 +2504,12 @@ pub(super) fn draw_input(
     frame: &mut Frame,
     app: &dyn TuiState,
     area: Rect,
-    next_prompt: usize,
+    // The composer no longer paints the prompt index (codex parity:
+    // `LIVE_PREFIX_COLS = 2`, no number). The parameter stays because the
+    // caller's frame layout still derives the band height from it and the index
+    // remains meaningful to the footer status row; dropping it would ripple into
+    // the call site for no gain.
+    _next_prompt: usize,
     debug_capture: &mut Option<FrameCaptureBuilder>,
 ) -> Option<Position> {
     let input_text = app.input();
@@ -2500,8 +2523,8 @@ pub(super) fn draw_input(
     let has_suggestions = command_suggestions_active(app, &app.command_suggestions());
 
     let (prompt_char, caret_color) = input_prompt(app);
-    let num_str = format!("{}", next_prompt);
-    let prompt_len = input_prompt_len(app, next_prompt);
+    // The codex-parity gutter: two columns, no prompt index.
+    let prompt_len = input_gutter_cols(app);
     let reserved_width = send_mode_reserved_width(app);
     let line_width = (area.width as usize).saturating_sub(prompt_len + reserved_width);
 
@@ -2509,11 +2532,16 @@ pub(super) fn draw_input(
         return None;
     }
 
-    let (all_lines, cursor_line, cursor_col) = wrap_input_text(
+    // The filled band, painted before anything else in the band so the hint row,
+    // the text and the selection highlight all land on top of it — the same
+    // ordering codex uses at `chat_composer.rs:4889`.
+    composer::paint_band_fill(area, frame);
+
+    let (all_lines, cursor_line, cursor_col) = wrap_input_text_gutter(
         input_text,
         cursor_pos,
         line_width,
-        &num_str,
+        None,
         prompt_char,
         caret_color,
         prompt_len,
@@ -2581,7 +2609,13 @@ pub(super) fn draw_input(
 
     let suggestions_offset = lines.len();
     let total_input_lines = all_lines.len();
-    let visible_height = area.height as usize;
+    // The band carries one blank row above and below the text, and the gutter
+    // columns on the left — codex's `composer_layout.rs:105-110` inset
+    // (`tlbr(1, LIVE_PREFIX_COLS, 1, 1)`). Everything below measures and paints
+    // against this inset rect, so the band's own top row stays as the fill's
+    // breathing space and its bottom row is free for the footer's send icon.
+    let padded = composer::textarea_rect(area);
+    let visible_height = padded.height as usize;
 
     let scroll_offset = if total_input_lines + suggestions_offset <= visible_height {
         0
@@ -2621,15 +2655,15 @@ pub(super) fn draw_input(
                     .unwrap_or(0);
                 let mut margin = prompt_len;
                 if centered {
-                    margin += (area.width as usize).saturating_sub(prompt_len + text_width) / 2;
+                    margin += (padded.width as usize).saturating_sub(prompt_len + text_width) / 2;
                 }
-                margin.min(area.width as usize) as u16
+                margin.min(padded.width as usize) as u16
             })
             .collect();
         let input_rows_area = Rect::new(
-            area.x,
-            area.y.saturating_add(suggestions_offset as u16),
-            area.width,
+            padded.x,
+            padded.y.saturating_add(suggestions_offset as u16),
+            padded.width,
             visible_input_rows as u16,
         );
         super::record_input_copy_snapshot(
@@ -2701,21 +2735,41 @@ pub(super) fn draw_input(
     } else {
         Paragraph::new(lines.clone())
     };
-    frame.render_widget(paragraph, area);
+    frame.render_widget(paragraph, padded);
+    if input_text.is_empty() && !has_suggestions {
+        // codex's empty state is `› Ask Codex to do anything` — the placeholder
+        // sits on the GLYPH's own row, past the gutter, never on a row of its
+        // own. Two offsets, both required:
+        //
+        // - ROW: the glyph row is `suggestions_offset` rows into the padded rect
+        //   (a hint or vim badge row precedes it when one is present), so the
+        //   placeholder must skip those rows or it paints over the badge.
+        // - COLUMN: the glyph is an in-line span at the START of that line
+        //   (`wrap_input_text_gutter` paints `prompt_char` as the line's first
+        //   span), so the placeholder must start `prompt_len` columns in or it
+        //   overwrites the glyph.
+        let placeholder_rect = Rect {
+            x: padded.x.saturating_add(prompt_len as u16),
+            y: padded.y.saturating_add(suggestions_offset as u16),
+            width: padded.width.saturating_sub(prompt_len as u16),
+            height: padded.height.saturating_sub(suggestions_offset as u16),
+        };
+        composer::paint_placeholder(placeholder_rect, frame);
+    }
 
     let cursor_screen_line = cursor_line.saturating_sub(scroll_offset) + suggestions_offset;
-    let cursor_y = area.y + (cursor_screen_line as u16).min(area.height.saturating_sub(1));
+    let cursor_y = padded.y + (cursor_screen_line as u16).min(padded.height.saturating_sub(1));
 
     let cursor_x = if centered {
         let actual_line_width = lines
             .get(cursor_screen_line)
             .map(|l| l.width())
             .unwrap_or(prompt_len);
-        let center_offset = (area.width as usize).saturating_sub(actual_line_width) / 2;
+        let center_offset = (padded.width as usize).saturating_sub(actual_line_width) / 2;
         let cursor_offset = prompt_len + cursor_col;
-        area.x + center_offset as u16 + cursor_offset as u16
+        padded.x + center_offset as u16 + cursor_offset as u16
     } else {
-        area.x + prompt_len as u16 + cursor_col as u16
+        padded.x + prompt_len as u16 + cursor_col as u16
     };
 
     let cursor = Position::new(cursor_x, cursor_y);
@@ -2911,6 +2965,42 @@ pub(crate) fn wrap_input_text<'a>(
     prompt_len: usize,
     selection: Option<(usize, usize)>,
 ) -> (Vec<Line<'a>>, usize, usize) {
+    wrap_input_text_gutter(
+        input,
+        cursor_pos,
+        line_width,
+        Some(num_str),
+        prompt_char,
+        caret_color,
+        prompt_len,
+        selection,
+    )
+}
+
+/// `wrap_input_text` with an explicit gutter policy.
+///
+/// `num_str = Some("1")` is operant's historic gutter: a coloured prompt index
+/// followed by the mode glyph, so continuation rows indent by
+/// `num_str.width() + 2`. `num_str = None` is the codex-parity gutter
+/// (`tui/src/ui_consts.rs`'s `LIVE_PREFIX_COLS = 2`): no index at all, only the
+/// mode glyph, so the composer's left edge aligns with the transcript's status
+/// rows instead of drifting right as the index grows from 9 to 10 to 100.
+///
+/// The gutter's WIDTH is still supplied by the caller as `prompt_len`: the two
+/// policies differ only in what is painted, never in the reserved columns, so
+/// `draw_input`'s copy-selection margins and cursor maths are unchanged between
+/// them.
+#[allow(clippy::too_many_arguments)]
+fn wrap_input_text_gutter<'a>(
+    input: &str,
+    cursor_pos: usize,
+    line_width: usize,
+    num_str: Option<&str>,
+    prompt_char: &'a str,
+    caret_color: Color,
+    prompt_len: usize,
+    selection: Option<(usize, usize)>,
+) -> (Vec<Line<'a>>, usize, usize) {
     let cursor_char_pos =
         crate::tui::operant_app::core::byte_offset_to_char_index(input, cursor_pos);
     // [operant adaptation] selection is byte offsets from the App seam
@@ -2940,11 +3030,22 @@ pub(crate) fn wrap_input_text<'a>(
         }
 
         if idx == 0 {
-            let num_color = rainbow_prompt_color(0);
-            let mut spans = vec![
-                Span::styled(num_str.to_string(), Style::default().fg(num_color)),
-                Span::styled(prompt_char.to_string(), Style::default().fg(caret_color)),
-            ];
+            // Under the codex-parity gutter (`num_str == None`) the line paints
+            // only the mode glyph, and the continuation-row indent
+            // (`" ".repeat(prompt_len)`) carries the alignment — so a wrapped
+            // first row and its continuations keep one left edge without a
+            // numbered index drifting it.
+            let mut spans: Vec<Span<'a>> = Vec::new();
+            if let Some(num) = num_str {
+                spans.push(Span::styled(
+                    num.to_string(),
+                    Style::default().fg(rainbow_prompt_color(0)),
+                ));
+            }
+            spans.push(Span::styled(
+                prompt_char.to_string(),
+                Style::default().fg(caret_color),
+            ));
             spans.extend(selected_text_spans(segment, sel_chars));
             lines.push(Line::from(spans));
         } else {

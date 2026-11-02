@@ -43,6 +43,8 @@ pub(crate) use animations::{
 mod box_utils;
 #[path = "ui_changelog.rs"]
 mod changelog;
+#[path = "composer.rs"]
+pub(crate) mod composer;
 #[path = "ui_diagram_pane.rs"]
 mod diagram_pane;
 #[path = "ui_frame_metrics.rs"]
@@ -2542,7 +2544,15 @@ fn draw_inner(frame: &mut Frame, app: &dyn TuiState) {
     let hint_line_height = input_ui::input_hint_line_height(app);
     let inline_block_height: u16 = inline_ui_height(app);
     let inline_ui_gap_height: u16 = if inline_block_height > 0 { 1 } else { 0 };
-    let input_height = base_input_height + hint_line_height;
+    // codex reserves one blank row above and one below the text inside its
+    // band: `desired_height_with_options`'s trailing `+2`, and the
+    // `Constraint::Min(3 + voice_rows)` floor in `composer_layout.rs`. The band
+    // owns those two rows — chunk 7 grows by 2 and the transcript gives them up,
+    // which is the same trade codex makes. Without them the typed text sits
+    // flush against the top of the fill and the fill reads as a header strip
+    // rather than a surface.
+    let input_padding_height: u16 = 2;
+    let input_height = base_input_height + hint_line_height + input_padding_height;
 
     if let Some(capture) = &mut debug_capture {
         capture.render_order.push("prepare_messages".to_string());
