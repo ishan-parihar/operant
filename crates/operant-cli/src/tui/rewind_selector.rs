@@ -58,6 +58,11 @@ impl RewindSelectorState {
 
     pub fn close(&mut self) {
         self.visible = false;
+        // The query lives in the FIELD (see `matching_indices`), so closing the
+        // selector disposes of it exactly as omp's `#closeFilter` disposes of
+        // the input. Leaving it set is how a stale query survives into the next
+        // open and quietly filters the operator's first arrow press.
+        self.filter.clear();
         self.filter_open = false;
         self.notice = None;
     }
@@ -166,16 +171,35 @@ impl RewindSelectorState {
         if candidates.is_empty() {
             return;
         }
-        let current = candidates
-            .iter()
-            .position(|&i| i == self.selected)
-            .unwrap_or(candidates.len());
+        // omp's rule, literally (rewind-selector.ts:539-548 `#stepFiltered`):
+        // the next match AFTER / BEFORE the cursor, or nowhere at all. Choosing
+        // by relation rather than by a position-in-subset translation is what
+        // makes a cursor parked outside the subset behave: the old
+        // `position().unwrap_or(len)` snapped an off-subset cursor to the tail,
+        // which is accidentally right for Up (the entry past the tail is the
+        // cursor's own slot when the cursor sits at the very end) and silently
+        // wrong for Down — `current` clamped to `len` and the next computation
+        // clamped to `len - 1`, so ONE press DOWN moved the cursor to the BOTTOM
+        // of the list. That is the whole-list jump an operator reads as the
+        // selector ignoring them, and it is reachable precisely after iter-1633
+        // made a folded turn render by text while its mark keeps a cursor slot.
+        //
+        // omp also treats "no relation" as "do not move" rather than as
+        // "snap somewhere", which is what `if next === undefined return` does;
+        // ours matches, so a cursor the filter does not cover simply stays put
+        // instead of teleporting when an arrow is pressed.
         let next = if delta < 0 {
-            current.saturating_sub(1)
+            candidates
+                .iter()
+                .rev()
+                .find(|&&i| i < self.selected)
+                .copied()
         } else {
-            (current + 1).min(candidates.len() - 1)
+            candidates.iter().find(|&&i| i > self.selected).copied()
         };
-        self.selected = candidates[next];
+        if let Some(idx) = next {
+            self.selected = idx;
+        }
     }
 
     /// The navigable entries that pass the current filter, as indices.

@@ -10648,4 +10648,164 @@ mod rewind_follows_the_outline {
             "the folded turn is absent from the set the keys may reach"
         );
     }
+
+    /// (iter-1634) The keys walk the NAVIGABLE subset, and a cursor parked
+    /// outside it (on a folded turn) steps by RELATION rather than snapping to
+    /// the tail of the subset.
+    ///
+    /// Three jobs are independently checkable now: what the rows show, where
+    /// the cursor index sits, and what the keys may reach. The seam between
+    /// them is what this pins — `selected` indexes the FULL mark list (a folded
+    /// turn keeps a slot so Enter can refuse it), so an arrow press has to
+    /// translate through the navigable subset and back.
+    ///
+    /// The old translation was `position().unwrap_or(len)`: correct for Up by
+    /// accident, and silently wrong for Down, where `current` clamped to `len`
+    /// and the next index clamped to `len - 1` — ONE press DOWN moved the
+    /// cursor to the BOTTOM of the list. Reachable exactly after iter-1633,
+    /// because a folded turn now renders by text while its mark keeps a slot.
+    /// Mutation-proven: restoring the position translation fails the Down
+    /// assertion below (observed: Up from the head jumped to 3).
+    #[test]
+    fn arrows_off_a_folded_cursor_stay_on_the_navigable_subset() {
+        let mut st = crate::tui::rewind_selector::RewindSelectorState::default();
+        let entry =
+            |turn_id: u64, text: &str, compacted: bool| crate::tui::rewind_selector::RewindEntry {
+                turn_id,
+                text: text.to_string(),
+                compacted,
+            };
+        // The FIRST turn is folded (no display row) but its mark survives.
+        st.entries = vec![
+            entry(61, "first prompt", true),
+            entry(62, "second prompt", false),
+            entry(63, "third prompt", false),
+            entry(64, "fourth prompt", false),
+        ];
+        st.selected = 0;
+
+        // Up from the folded head has nowhere to go: there is no navigable
+        // entry below index 0, and omp's rule answers "do not move" rather
+        // than "snap somewhere". The cursor stays where the operator left it
+        // and Enter's refusal explains why.
+        st.select_prev();
+        assert_eq!(
+            st.selected, 0,
+            "Up from the folded head does not move the cursor — there is no \
+             navigable entry below it"
+        );
+
+        // Down steps into the navigable subset — from 0 (not in it) to its
+        // first member, 1. NOT to the tail.
+        st.selected = 0;
+        st.select_next();
+        assert_eq!(
+            st.selected, 1,
+            "Down from an out-of-subset cursor moves ONE navigable step, not \
+             to the end of the list"
+        );
+
+        // And walking the whole subset never lands on the folded entry.
+        st.selected = 0;
+        for _ in 0..8 {
+            st.select_next();
+            assert!(
+                !st.entries[st.selected].compacted,
+                "no arrow press may park the cursor on a compacted entry"
+            );
+        }
+        assert_eq!(st.selected, 3, "Down stops at the newest navigable turn");
+
+        // The same walk backwards.
+        for _ in 0..8 {
+            st.select_prev();
+            assert!(
+                !st.entries[st.selected].compacted,
+                "no arrow press may park the cursor on a compacted entry"
+            );
+        }
+        assert_eq!(st.selected, 1, "Up stops at the oldest navigable turn");
+    }
+
+    /// (iter-1634) Leaving the filter box stops it filtering. omp keeps the
+    /// query IN the field — `#filter` is `this.#filterInput?.getValue()`
+    /// (rewind-selector.ts:195-197) — so the moment `#closeFilter` drops the
+    /// input the query is gone and `#filterMatches` answers "every visible
+    /// target". OUR query string used to outlive the close, because
+    /// `matching_indices` read the string rather than the field's state, so an
+    /// operator who typed "t", pressed Enter to leave the box, and pressed Up
+    /// had the cursor skip straight over the turn above — a filter they could
+    /// no longer see was still steering the keys.
+    ///
+    /// `handleNativeEvent` (rewind-selector.ts:878-886) is the other half of
+    /// the rule: while `#filter !== undefined` a cancel is `#closeFilter()`, and
+    /// once it is closed a cancel is `deps.onCancel()`. So an Esc in the filter
+    /// box is "I am done typing" and the second Esc is "never mind" — ours
+    /// does the same at key_handling.rs:2515, and this pins the pair together
+    /// so they do not collapse into one behaviour.
+    #[test]
+    fn escaping_the_filter_stops_it_filtering() {
+        let mut app = make_app();
+        for prompt in ["t alpha", "n lima", "t gamma", "o delta", "n oscar"] {
+            app.messages.push(Message {
+                role: Role::User,
+                content: MessageContent::Text(prompt.to_string()),
+            });
+            app.messages.push(Message {
+                role: Role::Assistant,
+                content: MessageContent::Text(format!("answer {prompt}")),
+            });
+        }
+        app.open_rewind_selector();
+        let marks: Vec<(u64, String)> = ["t alpha", "n lima", "t gamma", "o delta", "n oscar"]
+            .iter()
+            .enumerate()
+            .map(|(i, t)| ((i + 1) as u64, t.to_string()))
+            .collect();
+        let display_texts: Vec<String> = marks.iter().map(|(_, t)| t.clone()).collect();
+        app.rewind_selector.sync_marks(marks, &display_texts);
+
+        // Open the filter, type a query that reaches three of the five turns.
+        app.handle_key_event(press_key(KeyCode::Char('f'), KeyModifiers::NONE));
+        app.handle_key_event(press_key(KeyCode::Char('t'), KeyModifiers::NONE));
+        // "o delta" also carries a "t", so the query reaches three of five.
+        assert_eq!(
+            app.rewind_selector.filtered_indices(),
+            vec![0, 2, 3],
+            "the query reaches three turns"
+        );
+
+        // Esc closes the field AND disposes of the query: it is dead state
+        // once the field is gone, and leaving it set keeps an invisible filter
+        // steering the arrows.
+        app.handle_key_event(press_key(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(
+            !app.rewind_selector.filter_open,
+            "Esc closes the filter field"
+        );
+        assert!(
+            app.rewind_selector.filter.is_empty(),
+            "and the query goes with it, so nothing invisible keeps filtering"
+        );
+
+        // With the field closed the arrows no longer step the matches: they
+        // start from the cursor and move through the FULL list. From the
+        // cursor on turn 2 ("n lima", which the query does not match) Up moves
+        // to turn 1, not skipping it for a "t" turn.
+        app.rewind_selector.selected = 2;
+        app.handle_key_event(press_key(KeyCode::Up, KeyModifiers::NONE));
+        assert_eq!(
+            app.rewind_selector.selected, 1,
+            "with the filter field closed, Up walks the whole list rather than \
+             the match subset"
+        );
+
+        // And the match set itself answers "everything navigable" once the
+        // field is closed, which is what makes that Up possible.
+        assert_eq!(
+            app.rewind_selector.filtered_indices(),
+            vec![0, 1, 2, 3, 4],
+            "a closed filter field offers the whole list"
+        );
+    }
 }

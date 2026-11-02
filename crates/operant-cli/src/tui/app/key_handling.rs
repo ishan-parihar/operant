@@ -2511,6 +2511,7 @@ impl App {
             match key.code {
                 KeyCode::Esc => {
                     self.rewind_selector.filter_open = false;
+                    self.rewind_selector.filter.clear();
                 }
                 KeyCode::Enter => {
                     // (omp parity) `#closeFilter` (rewind-selector.ts:524-527)
@@ -2524,6 +2525,13 @@ impl App {
                     // decided.
                     self.requery_rewind_after_filter_edit();
                     self.rewind_selector.filter_open = false;
+                    // The query is dead once the field closes (omp's query lives
+                    // IN the input: `#filter` is `#filterInput?.getValue()`,
+                    // rewind-selector.ts:195-197). Leaving it set is invisible
+                    // state that keeps steering the arrows — the operator typed
+                    // "t", left the box, and the next Up skipped the turn
+                    // above because it held no "t" they could no longer see.
+                    self.rewind_selector.filter.clear();
                     self.queue_rewind_preview();
                 }
                 KeyCode::Backspace => {
