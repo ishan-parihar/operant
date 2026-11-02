@@ -1123,7 +1123,7 @@ fn parse_generic_chord(
 
     let (head, last) = lower.rsplit_once('+')?;
 
-    if last.chars().count() != 1 || head.is_empty() {
+    if head.is_empty() {
         return None;
     }
     let mut modifiers = KeyModifiers::NONE;
@@ -1138,7 +1138,52 @@ fn parse_generic_chord(
     if modifiers == KeyModifiers::NONE {
         return None;
     }
+    // The chord's KEY does not have to be a single printable character. Before
+    // this branch, `<shift+enter>` / `<ctrl+enter>` / `<alt+enter>` all fell
+    // through to `None` (because `"enter".chars().count() != 1`) and were then
+    // typed as their literal characters — so NO scenario could exercise the
+    // newline chord, and the operator's own "Shift+Enter is not working"
+    // report could never be reproduced or ruled out from the harness. The
+    // single-char path stays above it; this only names the non-character keys a
+    // chord is realistically written with.
+    if let Some(code) = chord_key_code(last) {
+        return Some((code, modifiers));
+    }
+    // Everything else must still be exactly one printable character, so
+    // `<ctrl+ab>` stays unrecognised rather than silently truncating.
+    if last.chars().count() != 1 {
+        return None;
+    }
     Some((KeyCode::Char(last.chars().next()?), modifiers))
+}
+
+/// The non-character key names a `<mods+name>` chord may end with.
+///
+/// Deliberately a closed set matching the keys `parse_key_sequence` already
+/// knows by their bare name: a chord naming something this table lacks returns
+/// `None` and the token is typed literally, which is the same contract an
+/// unknown `<…>` token has always had.
+fn chord_key_code(last: &str) -> Option<crossterm::event::KeyCode> {
+    use crossterm::event::KeyCode;
+    match last {
+        "enter" | "return" => Some(KeyCode::Enter),
+        "esc" | "escape" => Some(KeyCode::Esc),
+        "tab" => Some(KeyCode::Tab),
+        "backtab" => Some(KeyCode::BackTab),
+        "up" => Some(KeyCode::Up),
+        "down" => Some(KeyCode::Down),
+        "left" => Some(KeyCode::Left),
+        "right" => Some(KeyCode::Right),
+        "pageup" | "pgup" => Some(KeyCode::PageUp),
+        "pagedown" | "pgdn" => Some(KeyCode::PageDown),
+        "backspace" | "bs" => Some(KeyCode::Backspace),
+        "insert" | "ins" => Some(KeyCode::Insert),
+        "delete" | "del" => Some(KeyCode::Delete),
+        "home" => Some(KeyCode::Home),
+        "end" => Some(KeyCode::End),
+        "space" => Some(KeyCode::Char(' ')),
+        _ => None,
+    }
 }
 
 fn parse_key_sequence(seq: &str) -> Vec<crossterm::event::KeyEvent> {
@@ -2418,6 +2463,66 @@ mod tests {
             );
             assert_eq!(events[0].code, code, "{token} code");
             assert_eq!(events[0].modifiers, mods, "{token} modifiers");
+        }
+    }
+
+    #[test]
+    fn modified_enter_chords_parse_as_enter_not_literal_text() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+        // The named key behind a modifier must survive as that KEY. Before
+        // this, `"enter"` failed the single-character rule in
+        // `parse_generic_chord` and the whole token was typed literally, so
+        // `<shift+enter>` inserted the eleven characters `shift+enter` into the
+        // composer. That made the newline chord — and every scenario that
+        // would test it — impossible from `--keys`.
+        let cases: Vec<(&str, KeyCode, KeyModifiers)> = vec![
+            ("<shift+enter>", KeyCode::Enter, KeyModifiers::SHIFT),
+            ("<alt+enter>", KeyCode::Enter, KeyModifiers::ALT),
+            ("<ctrl+enter>", KeyCode::Enter, KeyModifiers::CONTROL),
+            (
+                "<ctrl+shift+enter>",
+                KeyCode::Enter,
+                KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            ),
+            ("<shift+esc>", KeyCode::Esc, KeyModifiers::SHIFT),
+            ("<alt+tab>", KeyCode::Tab, KeyModifiers::ALT),
+            ("<shift+up>", KeyCode::Up, KeyModifiers::SHIFT),
+            (
+                "<ctrl+backspace>",
+                KeyCode::Backspace,
+                KeyModifiers::CONTROL,
+            ),
+            ("<alt+delete>", KeyCode::Delete, KeyModifiers::ALT),
+            ("<shift+home>", KeyCode::Home, KeyModifiers::SHIFT),
+            ("<ctrl+end>", KeyCode::End, KeyModifiers::CONTROL),
+        ];
+        for (token, code, mods) in cases {
+            let events = parse_key_sequence(token);
+            assert_eq!(
+                events.len(),
+                1,
+                "{token} must be ONE event, got {events:?} — it is being typed as text"
+            );
+            assert_eq!(events[0].code, code, "{token} code");
+            assert_eq!(events[0].modifiers, mods, "{token} modifiers");
+        }
+    }
+
+    #[test]
+    fn a_chord_whose_key_is_not_a_real_key_still_types_literally() {
+        // The guard on the new escape hatch: naming something that is neither
+        // a single character nor a known key must still fall back to literal
+        // typing, so `<ctrl+ab>` does not silently truncate to `<ctrl+a>`.
+        for token in ["<ctrl+ab>", "<shift+enterx>", "<alt+f13>", "<ctrl+>"] {
+            let events = parse_key_sequence(token);
+            let typed: String = events
+                .iter()
+                .filter_map(|e| match e.code {
+                    crossterm::event::KeyCode::Char(c) => Some(c),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(typed, token, "{token} must type as its literal characters");
         }
     }
 

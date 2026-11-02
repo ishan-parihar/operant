@@ -5497,6 +5497,114 @@ fn a_failed_turn_puts_the_prompt_back_in_the_composer() {
     );
 }
 
+/// The restore must not leave the sentence on screen twice. The submit path
+/// pushes the user message into the transcript before the turn runs, so a
+/// failed turn previously showed the prompt as a transcript row AND back in
+/// the composer — the operator's "leaking text in the input box" report. The
+/// transcript row for the failed turn is dropped with the restore.
+///
+/// MUTATION-PROOF: deleting the `drop_transcript_user_row_matching` call in
+/// `restore_failed_input_to_composer` fails the second assertion.
+#[test]
+fn a_failed_turn_restores_the_prompt_without_leaving_it_in_the_transcript() {
+    let mut app = make_app();
+    app.set_prompt_text("audit the browser stack".to_string());
+
+    // The submit path's own ordering: `take_input` empties the composer and
+    // arms the restore slot, and the caller then pushes the row.
+    let submitted = app.take_input();
+    app.add_message(Role::User, submitted);
+    assert_eq!(app.messages.len(), 1, "the submit pushed a user row");
+
+    app.handle_agent_event(AgentEvent::Error {
+        error: "provider overloaded_error (529)".to_string(),
+    });
+
+    assert_eq!(app.prompt_input.text, "audit the browser stack");
+    assert_eq!(
+        app.messages.len(),
+        0,
+        "the failed turn's user row must not stay behind as a duplicate"
+    );
+}
+
+/// The row removal is bounded to the FAILED submission: a transcript that
+/// legitimately holds the same prompt twice keeps its earlier copy, and only
+/// the tail row goes away. Without the bound, a repeat question would
+/// silently lose one of its two turns from the transcript.
+#[test]
+fn restoring_a_failed_prompt_keeps_an_earlier_identical_user_row() {
+    let mut app = make_app();
+    app.add_message(Role::User, "same question".to_string());
+    app.set_prompt_text("same question".to_string());
+    let submitted = app.take_input();
+    app.add_message(Role::User, submitted);
+    assert_eq!(app.messages.len(), 2);
+
+    app.handle_agent_event(AgentEvent::Error {
+        error: "provider overloaded_error (529)".to_string(),
+    });
+
+    assert_eq!(
+        app.messages.len(),
+        1,
+        "only the failed turn's row is removed; the earlier one survives"
+    );
+    assert_eq!(app.prompt_input.text, "same question");
+}
+
+/// A restore whose text never reached the transcript (a queued steer, a
+/// command expansion) must not delete an unrelated row. The lookup matches
+/// exact content at the tail, so a transcript with no such row is untouched.
+#[test]
+fn restoring_a_prompt_that_has_no_user_row_removes_nothing() {
+    let mut app = make_app();
+    app.add_message(Role::User, "an unrelated earlier prompt".to_string());
+    app.set_prompt_text("text that was never submitted".to_string());
+    app.take_input();
+
+    app.handle_agent_event(AgentEvent::Error {
+        error: "provider overloaded_error (529)".to_string(),
+    });
+
+    assert_eq!(
+        app.messages.len(),
+        1,
+        "an unrelated row must survive a restore that does not own it"
+    );
+    assert_eq!(app.prompt_input.text, "text that was never submitted");
+}
+
+/// Turn attribution stays index-aligned after the row leaves: the metadata
+/// vector is derived from the user-message count, so a removed row must not
+/// leave an orphan entry that shifts every later turn's model and duration.
+#[test]
+fn restoring_a_failed_prompt_keeps_turn_metadata_aligned() {
+    let mut app = make_app();
+    app.add_message(Role::User, "first prompt".to_string());
+    app.set_prompt_text("second prompt".to_string());
+    let submitted = app.take_input();
+    app.add_message(Role::User, submitted);
+    // `add_message` for a user row already snapshots the turn, so the counts
+    // are aligned the moment the row lands.
+    app.sync_turn_metadata_to_messages();
+    assert_eq!(
+        app.turn_metadata.len(),
+        app.messages.iter().filter(|m| m.role == Role::User).count()
+    );
+
+    app.handle_agent_event(AgentEvent::Error {
+        error: "provider overloaded_error (529)".to_string(),
+    });
+
+    let user_count = app.messages.iter().filter(|m| m.role == Role::User).count();
+    assert_eq!(
+        app.turn_metadata.len(),
+        user_count,
+        "no orphan metadata entry may survive the removed row"
+    );
+}
+
 /// The same failure can reach the error arm twice — the agent emits
 /// `AgentEvent::Error` and then returns `Err`, which makes
 /// `drain_run_complete` synthesize a second one. The prompt comes back once.

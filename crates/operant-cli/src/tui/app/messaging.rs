@@ -306,6 +306,19 @@ impl App {
     /// that dies on a bad model id or a dead endpoint costs the user their
     /// prompt rather than their prompt *and* the turn.
     ///
+    /// The transcript row the submission pushed is REMOVED with it. The submit
+    /// path pushes the user message before the turn runs (so the operator sees
+    /// their prompt the instant they press Enter, and the turn has a
+    /// conversation to append to), which means a failed turn would otherwise
+    /// leave the sentence on screen twice: once as a transcript row and once
+    /// back in the composer where it is editable. The duplicate is not
+    /// cosmetic — it is the "my prompt is stuck in history / duplicated text
+    /// in the input box" report, and an operator cannot tell which copy is
+    /// the editable one. codex does the same thing from the other side: its
+    /// `restore_user_message_to_composer` rebuilds the composer from the
+    /// failed message and never leaves a second copy behind
+    /// (`chatwidget/input_restore.rs:543`).
+    ///
     /// Restore-once falls out of the `take()`: the same failure can reach this
     /// through two doors — the agent emits `AgentEvent::Error` itself
     /// (`agent/run.rs`) and then returns `Err`, which makes
@@ -320,11 +333,40 @@ impl App {
                 self.failed_input_recovery = None;
             }
             ComposerRecovery::Restore(text) => {
+                self.drop_transcript_user_row_matching(&text);
                 self.prompt_input.replace_text(text);
                 self.refresh_prompt_input();
                 self.set_status_notice("Prompt restored to the composer — the turn failed.");
             }
         }
+    }
+
+    /// Remove the newest user row whose text is `text`, and report whether one
+    /// was found.
+    ///
+    /// Bounded to the row the failed submission pushed: it searches backwards
+    /// from the tail (the submit path appends), matches on exact content, and
+    /// removes at most one. A transcript that legitimately repeats a prompt
+    /// (the operator asked the same thing twice) keeps its earlier copy — only
+    /// the row belonging to the FAILED turn goes away. A submit whose text
+    /// reached the transcript through a different route (a queued steer, a
+    /// slash-command expansion) has no exact-match row at the tail and is left
+    /// alone, as is an empty transcript.
+    pub(crate) fn drop_transcript_user_row_matching(&mut self, text: &str) -> bool {
+        use crate::tui::adapter_types::types::{MessageContent, Role};
+        let Some(idx) = self.messages.iter().rposition(|m| {
+            m.role == Role::User && matches!(&m.content, MessageContent::Text(t) if t == text)
+        }) else {
+            return false;
+        };
+        self.messages.remove(idx);
+        // Keep the turn-attribution columns index-aligned: they are derived
+        // from the user-message count (see `sync_turn_metadata_to_messages`),
+        // so a row leaving behind an orphan entry would shift every later
+        // turn's model/duration by one.
+        self.sync_turn_metadata_to_messages();
+        self.invalidate_transcript();
+        true
     }
 
     /// Drop the held submission without restoring it.
