@@ -15,6 +15,7 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
 };
 
+use super::row_style;
 use super::{HubGroupMode, PaneFocus, SessionHubState};
 use crate::tui::theme_colors;
 use operant_core::session::listing::{RowKind, RowStatus, SessionEntryV2};
@@ -27,7 +28,7 @@ const SPLIT: (Constraint, Constraint) = (Constraint::Percentage(40), Constraint:
 /// `state.selected` indexes the body set, so every consumer that maps a
 /// selection onto a rendered row adds this — see the `ListState` wiring in
 /// `render_list_body`.
-const CHROME_ROWS: usize = 3;
+pub(crate) const CHROME_ROWS: usize = 3;
 
 /// The three chrome rows as list items, so they render INSIDE the block's
 /// borders (drawing them above the block produced a left pane whose top rows
@@ -494,6 +495,13 @@ fn render_tab_bar(state: &SessionHubState, width: u16) -> Line<'static> {
 /// so the chrome above it is an additive layer rather than an edit to the row
 /// rendering every session row depends on.
 fn render_list_body(frame: &mut Frame, state: &SessionHubState, area: ratatui::layout::Rect) {
+    // The block is built here, not further down, because Stage D needs the
+    // inner width to paint each row's fill to the right border. Deriving it in
+    // two places is how the fill ends up one cell short.
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme_colors::border()));
+    let inner_width = block.inner(area).width;
     let body_items: Vec<ListItem> = if state.loading {
         vec![
             ListItem::new(Line::from(vec![
@@ -678,7 +686,28 @@ fn render_list_body(frame: &mut Frame, state: &SessionHubState, area: ratatui::l
                 // selection index must stay 1:1 with `visible_idx`, and a
                 // second item per session would drift Up/Down onto the meta
                 // row. ratatui's List supports a multi-line item body.
-                ListItem::new(vec![Line::from(spans), meta_line])
+                //
+                // Stage D: the row's own background, painted to the full inner
+                // width so the highlight reaches the right border instead of
+                // stopping where the text does. Applied here, before the
+                // heading pass below, so a group heading keeps the block's own
+                // background and the tint marks a session rather than a section.
+                let mut lines = vec![Line::from(spans), meta_line];
+                let fill = if selected {
+                    row_style::selected_fill_style()
+                } else {
+                    row_style::zebra_fill_style(i)
+                };
+                if let Some(fill) = fill {
+                    for line in &mut lines {
+                        *line = row_style::apply_row_background(
+                            std::mem::replace(line, Line::default()),
+                            fill,
+                            inner_width,
+                        );
+                    }
+                }
+                ListItem::new(lines)
             })
             .collect()
     };
@@ -692,10 +721,6 @@ fn render_list_body(frame: &mut Frame, state: &SessionHubState, area: ratatui::l
     //
     // The block is built first because the heading's count column needs the
     // inner width too.
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme_colors::border()));
-    let inner_width = block.inner(area).width;
     let body_items: Vec<ListItem> = interpose_group_headings(state, body_items, inner_width);
     let items: Vec<ListItem> = chrome_items(state, inner_width)
         .into_iter()
@@ -715,11 +740,15 @@ fn render_list_body(frame: &mut Frame, state: &SessionHubState, area: ratatui::l
         ));
     }
     frame.render_stateful_widget(
-        List::new(items).block(block).highlight_style(
-            Style::default()
-                .bg(theme_colors::selection_bg())
-                .fg(theme_colors::text()),
-        ),
+        List::new(items)
+            .block(block)
+            // Stage D: the row's own fill IS the highlight now (painted above,
+            // across the full inner width). A `highlight_style` here would
+            // patch the row's background with a single flat colour, undoing the
+            // tint and the zebra on exactly the row the operator is on. The
+            // List still needs a selected state to position the viewport, so
+            // the highlight is an empty Style rather than no highlight at all.
+            .highlight_style(Style::default()),
         area,
         &mut list_state,
     );

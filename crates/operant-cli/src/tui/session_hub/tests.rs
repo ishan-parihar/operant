@@ -1631,3 +1631,197 @@ fn status_grouping_keys_are_the_api_labels() {
     let total: usize = groups.iter().map(|(_, rows)| rows.len()).sum();
     assert_eq!(total, hub.visible_rows().len(), "grouping drops no rows");
 }
+
+// ── Stage D — row backgrounds (2026-11-02) ──────────────────────────────────
+//
+// The problem these pin: before Stage D the selected row's highlight stopped
+// where the text stopped, so a short row looked like a colour stripe with the
+// row still "open" to the right. Each test reads the DRAWN buffer's background
+// colours, not a style the code claims to set — a fill that is constructed but
+// never painted is exactly the bug that motivates this section.
+
+/// A hub state with `n` rows, selected on row 0, rendered to a `TestBackend` so
+/// the caller can read the painted cell backgrounds.
+fn hub_buffer(rows: usize) -> ratatui::buffer::Buffer {
+    use crate::tui::render::FrameCtx;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    let mut hub = SessionHubState::new();
+    hub.visible = true;
+    hub.loading = false;
+    hub.replace_rows(
+        (0..rows)
+            .map(|i| row(&format!("sess-{i}"), Some("t"), None))
+            .collect(),
+    );
+    let mut terminal = Terminal::new(TestBackend::new(FRAME_WIDTH, 40)).unwrap();
+    let mut ctx = FrameCtx {
+        size: ratatui::layout::Rect::new(0, 0, FRAME_WIDTH, 40),
+        preview_max_scroll: None,
+        stop: false,
+    };
+    terminal
+        .draw(|f| {
+            super::render::render_session_hub(f, &hub, f.area(), &mut ctx);
+        })
+        .unwrap();
+    terminal.backend().buffer().clone()
+}
+
+/// The background colour of the cell at (x, y).
+///
+/// A `TestBackend` leaves every untouched cell at `Color::Reset` rather than
+/// `None`, so a fill is proven by comparing VALUES, not by `is_some()`.
+fn bg_at(buf: &ratatui::buffer::Buffer, x: u16, y: u16) -> ratatui::style::Color {
+    buf[(x, y)]
+        .style()
+        .bg
+        .unwrap_or(ratatui::style::Color::Reset)
+}
+
+/// The 0.12 selected tint, blended from `user_bg()` by the module under test.
+///
+/// Derived here rather than hard-coded so the test survives a palette change:
+/// what it pins is that the ROW carries this tint, not the tint's literal.
+#[allow(clippy::unwrap_used)]
+fn selected_tint() -> ratatui::style::Color {
+    let style = super::row_style::selected_fill_style().expect("the selected alpha paints a fill");
+    style.bg.expect("a fill is a background")
+}
+
+/// How far right the row at buffer row `y` paints a background other than the
+/// terminal default.
+fn fill_extent(buf: &ratatui::buffer::Buffer, y: u16) -> u16 {
+    (0..48u16)
+        .rev()
+        .find(|x| bg_at(buf, *x, y) != ratatui::style::Color::Reset)
+        .unwrap_or(0)
+}
+
+#[test]
+fn selected_row_background_reaches_the_right_border() {
+    let buf = hub_buffer(4);
+    // Measured layout: the block's top border is buffer row 0, the 3 chrome
+    // rows follow (header, tab bar, column header), and the selected session
+    // row begins at buffer row 4 — one buffer row per rendered line.
+    let selected_y = 4u16;
+    assert_eq!(
+        bg_at(&buf, 30, selected_y),
+        selected_tint(),
+        "the selected row must carry the 0.12 tint"
+    );
+    let extent = fill_extent(&buf, selected_y);
+    // A short row's own text ends near column 20. Before Stage D the highlight
+    // ended with the text; the pass exists so it reaches the pane's right edge.
+    let text_end = 23u16;
+    assert!(
+        extent > text_end,
+        "the fill must extend past the row's text (it ends near column \
+         {text_end}) — it stopped at column {extent}"
+    );
+    assert!(
+        extent >= 45,
+        "the fill must reach the pane's right edge, not stop short of the border \
+         — it stopped at column {extent}"
+    );
+    assert_eq!(
+        bg_at(&buf, 0, selected_y),
+        ratatui::style::Color::Reset,
+        "column 0 is the block's own left border and must not take the row tint"
+    );
+}
+
+#[test]
+fn selected_row_fill_differs_from_an_unselected_rows() {
+    let buf = hub_buffer(4);
+    // Row index 0 is selected (buffer row 4); row index 1 is odd and must be
+    // left clean (buffer row 6, two rendered lines per session row).
+    let (selected_y, plain_y) = (4u16, 6u16);
+    assert_eq!(
+        bg_at(&buf, 30, selected_y),
+        selected_tint(),
+        "the selected row takes the tint"
+    );
+    assert_eq!(
+        bg_at(&buf, 30, plain_y),
+        ratatui::style::Color::Reset,
+        "row 1 is odd and must not be zebra'd — a tint here means the zebra \
+         ladder is off by one, and a zebra on every row is no zebra at all"
+    );
+}
+
+#[test]
+fn zebra_fill_only_lands_on_even_rows() {
+    // Directly on the helper, not the buffer: the ladder is a property of
+    // `zebra_fill_style`, and asserting it at the pixel level would conflate
+    // the zebra with the chrome's own background.
+    assert!(
+        super::row_style::zebra_fill_style(0).is_some(),
+        "row 0 is a zebra row"
+    );
+    assert!(
+        super::row_style::zebra_fill_style(1).is_none(),
+        "row 1 must stay clean — a zebra on every row is no zebra at all"
+    );
+    assert!(
+        super::row_style::zebra_fill_style(2).is_some(),
+        "row 2 is a zebra row"
+    );
+}
+
+#[test]
+fn a_sub_visible_alpha_produces_no_fill_at_all() {
+    // An invisible fill is not a subtle fill: it costs a paint and carries no
+    // information. This pins the ladder, not the literal.
+    assert!(
+        super::row_style::row_fill_style(super::row_style::MIN_VISIBLE_ALPHA - 0.001).is_none(),
+        "below MIN_VISIBLE_ALPHA the caller must be told there is no fill, so it \
+         can skip the per-span patch pass entirely"
+    );
+    assert!(
+        super::row_style::row_fill_style(super::row_style::SELECTED_ALPHA).is_some(),
+        "the selected alpha must produce a fill"
+    );
+}
+
+#[test]
+fn apply_row_background_preserves_each_spans_own_foreground() {
+    use ratatui::style::{Color, Modifier, Style};
+    use ratatui::text::{Line, Span};
+
+    let line = Line::from(vec![
+        Span::styled(
+            "live",
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" plain"),
+    ]);
+    let fill = Style::default().bg(Color::Rgb(40, 40, 50));
+    let painted = super::row_style::apply_row_background(line, fill, 40);
+
+    let first = &painted.spans[0].style;
+    assert_eq!(
+        first.fg,
+        Some(Color::Green),
+        "the span's own hue must survive the fill: recolouring the text here is \
+         what would destroy the status-glyph and accent semantics"
+    );
+    assert!(
+        first.add_modifier.contains(Modifier::BOLD),
+        "the span's weight must survive the fill"
+    );
+    assert_eq!(
+        first.bg,
+        Some(Color::Rgb(40, 40, 50)),
+        "the fill's background must land on every span"
+    );
+    // The fill reaches the full width, which is the whole point of the pass.
+    let painted_width: usize = painted.spans.iter().map(|s| s.content.len()).sum();
+    assert_eq!(
+        painted_width, 40,
+        "the fill must pad the row to the full inner width: {painted_width}"
+    );
+}

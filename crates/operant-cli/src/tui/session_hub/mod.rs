@@ -21,6 +21,7 @@ use std::time::Instant;
 use operant_core::session::listing::{RowKind, RowStatus, SessionEntryV2};
 
 mod render;
+mod row_style;
 pub use render::render_session_hub;
 
 /// N idle session rows for hosts and tests that need a populated hub list
