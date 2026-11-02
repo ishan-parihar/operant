@@ -641,3 +641,24 @@ BY ROW ID.
    one-column gap fit at exactly 45, so that rung now exists.
 
 Rendered: `all 3 cur 0 emp 0 live 0 br 3 arch 0 recent`.
+
+### Stage E archive — DEDUPED (`fix(iter-1674)`)
+
+The archive half was implemented here **and** by a peer's `feat(iter-1671)`
+("session archive/unarchive with confirm flow"), which landed while this
+half was in flight. Both wrote `UPDATE sessions SET archived` and both ran a
+confirm. The peer's landed first, so theirs owns the mechanism; the duplicate is
+removed.
+
+**Kept from this slice, because it is additive rather than competing:**
+`SessionHubState::pending_archive_pos()` translates the peer's session-ID
+confirm into a `visible_idx` position (identity vs rendered index — two
+different questions), and the armed row swaps its status glyph for the archive
+marker on the drawn buffer, so the operator sees WHICH row is being archived
+instead of only the notice line.
+
+**The hazard this exposed, recorded for the next agent:** the peer's
+`diag_leak.rs` was untracked WIP, and this slice's `app/mod.rs` briefly carried
+`pub(crate) mod diag_leak;` for it. A commit referencing an untracked file
+compiles locally and breaks on every other checkout. That is the same family as
+the stale-`git add -A` rule: a file in your tree is not a file in your commit.
