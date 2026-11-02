@@ -1,8 +1,31 @@
-//! Exclusive per-turn attribution. **LIVE as of iter-1631** on the `TurnEnd`
-//! seam: `TurnEnd::attribution` (`turn_end.rs`) carries a `TurnBreakdown` per
-//! completed turn, built by `OperantAgent::turn_attribution()`
-//! (`agent/run.rs`). **No surface renders it yet** -- that is the remaining
-//! half of RT-209, and the field exists for it.
+//! Exclusive per-turn attribution. **LIVE as of iter-1631, and its whole public
+//! surface has a production caller as of iter-1635** on the `TurnEnd` seam:
+//! `TurnEnd::attribution` (`turn_end.rs`) carries a `TurnAttribution` -- the
+//! three-state classification, not a bare `TurnBreakdown` -- per completed
+//! turn, built by `OperantAgent::turn_attribution()` (`agent/run.rs`).
+//!
+//! **Why the classification matters**: a raw `TurnBreakdown` tells a subscriber
+//! that `tools` is `Unmeasured` but not WHICH spans are missing, so it cannot
+//! tell "the model used no tools" from "nobody timed the tools". That ambiguity
+//! is the whole reason this module exists, so the classifier is the payload.
+//!
+//! `TurnAttribution::Disabled` never reaches here: the kill-switch returns
+//! `None` before anything is built (see `AgentConfig::show_turn_attribution`).
+//! An `Incomplete` result is a legitimate value -- it NAMES the gaps -- so a
+//! measurement gap is never a reason to suppress the emission.
+//!
+//! **Still open is a FEATURE, not a defect: no surface renders it yet.** It is
+//! captured, classified, and delivered to every `TurnEnd` subscriber
+//! (`advisor::spawn_advisor` and `recap` both receive it); nobody displays it.
+//!
+//! **The orphan guard at the bottom of this file is load-bearing.**
+//! iter-1631 wired `TurnSpan`, `SpanDuration` and `TurnBreakdown` and left
+//! `TurnAttribution` unused, and NO gate caught it: this module is `pub` in a
+//! `pub mod`, so a type with zero users emits no `dead_code` warning, `cargo
+//! test` is green, and clippy is silent. That is exactly how RT-209 shipped
+//! invisible in the first place. The guard scans the four production seams per
+//! public type, and requires `TurnAttribution::of` to be called from outside
+//! this module so a classifier that is built and discarded still fails.
 //!
 //! ## Read this before believing the RT-199 class is handled
 //!
