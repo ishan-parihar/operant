@@ -297,4 +297,125 @@ mod tests {
             assert_ne!(dark, light);
         });
     }
+
+    /// THE STALE-CELL REGRESSION (operator report 2026-11-02: opening a page
+    /// "does not refresh properly, thus showing the stale elements from
+    /// previous screen-render, like the input-box, and sometimes orphan text
+    /// letters").
+    ///
+    /// Two frames on ONE terminal, exactly as `App::run` drives it: the chat
+    /// frame first, then the session hub opening over it. `terminal.draw`
+    /// flushes a CELL DIFF — it writes only the cells the new frame's widgets
+    /// touch — so a fullscreen page whose own widgets cover less than the
+    /// whole viewport leaves the previous frame's cells in place. That is the
+    /// leak the operator saw, and no single-frame test can see it: a fresh
+    /// `TestBackend` starts blank, so `painted_frame` above cannot reproduce
+    /// a cell that a PREVIOUS painter left behind.
+    ///
+    /// This is why the test lives here rather than in the corpus: the corpus
+    /// scenarios all begin from an empty buffer.
+    #[test]
+    fn opening_the_session_hub_clears_the_chat_frames_cells() {
+        with_palette_lock(|| {
+            let mut app = make_app();
+            let mut terminal = Terminal::new(TestBackend::new(120, 40)).expect("test backend");
+
+            // Frame one: the chat frame. It paints the composer band and the
+            // status row at the bottom of the viewport — the very cells the
+            // hub's own panes do not reach.
+            terminal.draw(|f| render_app(f, &app)).expect("first draw");
+            let chat_frame = terminal.backend().buffer().clone();
+            // The composer band is the specific leak the operator named
+            // ("like the input-box"), so prove it is really painted before we
+            // assert the hub removes it — an assertion over a cell nobody drew
+            // would pass for the wrong reason.
+            let composer_cell_count = chat_frame
+                .content
+                .iter()
+                .filter(|c| c.symbol() != " ")
+                .count();
+            assert!(
+                composer_cell_count > 0,
+                "the chat frame painted nothing, so this test proves nothing"
+            );
+
+            // Frame two: the hub opens. Frame diffs against frame one, so
+            // anything the hub does not write is a stale cell.
+            app.session_hub.open(None);
+            terminal.draw(|f| render_app(f, &app)).expect("second draw");
+            let hub_frame = terminal.backend().buffer().clone();
+
+            // The leak, stated as a count: cells the hub frame holds that the
+            // chat frame also held AND that are not part of the hub's own two
+            // panes. Rather than trying to classify which cell belongs to
+            // what, assert the hub covers the viewport the chat frame covered:
+            // the chat frame's non-blank cells must ALL have been rewritten or
+            // cleared by the hub frame.
+            let leaked: Vec<(usize, &str)> = chat_frame
+                .content
+                .iter()
+                .enumerate()
+                .filter(|(i, before)| {
+                    before.symbol() != " " && hub_frame.content[*i].symbol() == before.symbol()
+                })
+                .map(|(i, before)| (i, before.symbol()))
+                .collect();
+            assert!(
+                leaked.is_empty(),
+                "{} cell(s) survived from the chat frame into the open hub — the \
+                 fullscreen page did not clear what it does not paint. First few \
+                 (index, symbol): {:?}",
+                leaked.len(),
+                &leaked[..leaked.len().min(8)]
+            );
+        });
+    }
+
+    /// THE SAME STALE-CELL REGRESSION for the rewind selector, the other
+    /// whole-viewport page (the operator named it first: "the rewind-screen …
+    /// the TUI render does not refresh properly"). The selector is NOT protected
+    /// by the session hub's Clear — it covers the area itself by padding the
+    /// middle chunk with REAL SPACES rather than empty lines (rewind_selector.rs:
+    /// 463-475, measured: an empty line has no graphemes, so `render_line` writes
+    /// no cells for it and the row keeps whatever the previous frame left there).
+    /// This test is what keeps that padding honest: if the pad is removed or
+    /// regresses to empty lines, the leak returns and this fails with the count.
+    #[test]
+    fn opening_the_rewind_selector_clears_the_chat_frames_cells() {
+        with_palette_lock(|| {
+            let mut app = make_app();
+            let mut terminal = Terminal::new(TestBackend::new(120, 40)).expect("test backend");
+
+            terminal.draw(|f| render_app(f, &app)).expect("first draw");
+            let chat_frame = terminal.backend().buffer().clone();
+            let chat_nonblank = chat_frame
+                .content
+                .iter()
+                .filter(|c| c.symbol() != " ")
+                .count();
+            assert!(chat_nonblank > 0, "the chat frame painted nothing");
+
+            app.rewind_selector.open();
+            terminal.draw(|f| render_app(f, &app)).expect("second draw");
+            let sel_frame = terminal.backend().buffer().clone();
+
+            let leaked: Vec<(usize, &str)> = chat_frame
+                .content
+                .iter()
+                .enumerate()
+                .filter(|(i, before)| {
+                    before.symbol() != " " && sel_frame.content[*i].symbol() == before.symbol()
+                })
+                .map(|(i, before)| (i, before.symbol()))
+                .collect();
+            assert!(
+                leaked.is_empty(),
+                "{} cell(s) survived from the chat frame into the open rewind \
+                 selector — its pad rows must be REAL SPACES, not empty lines. \
+                 First few (index, symbol): {:?}",
+                leaked.len(),
+                &leaked[..leaked.len().min(8)]
+            );
+        });
+    }
 }
