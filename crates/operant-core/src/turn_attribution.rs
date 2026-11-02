@@ -561,6 +561,27 @@ mod tests {
         "src/agent/mod.rs",
     ];
 
+    /// The attachment seam: the file where a host wires the bus in.
+    ///
+    /// This is the layer iter-1659's validation pass found unpinned. The
+    /// emission site in `run.rs` is guarded twice over (exactly one call, and
+    /// it must carry the classification), but EVERY one of those guards is
+    /// inside `if let Some(ref bus) = self.turn_end_bus` -- and `turn_end_bus`
+    /// is `None` unless a host attaches one. `with_turn_end_bus` has ZERO
+    /// callers, so the only attachment paths are `attach_advisor` (which
+    /// early-returns when `[advisor] enabled = false`, the default) and
+    /// `attach_recap_engine` (which attaches unconditionally).
+    ///
+    /// The verified state, checked by reading both hosts rather than trusting
+    /// the ledger: `gateway_runner.rs` and `tui/adapter_types/tui_app.rs` each
+    /// call `attach_recap_engine` UNCONDITIONALLY, before the enabled-gated
+    /// advisor, so a real turn does emit. That is a fact about two files in
+    /// another crate, and nothing here pins it.
+    const ATTACHMENT_SEAMS: [&str; 2] = [
+        "../operant-cli/src/gateway_runner.rs",
+        "../operant-cli/src/tui/adapter_types/tui_app.rs",
+    ];
+
     /// The files that would actually READ the value if a subscriber existed.
     /// Wider than `PRODUCTION_SEAMS` by design: the emitter seam and the
     /// consuming subscriber are different modules, and the two `TurnEnd`
@@ -706,6 +727,44 @@ mod tests {
                 src(path).exists(),
                 "SUBSCRIBER_SEAMS names {path}, which does not exist: the guard would stop \
                  checking it silently (an unreadable file counts as no-match)"
+            );
+        }
+    }
+
+    /// Each real host must actually attach the bus.
+    ///
+    /// The emission site in `run.rs` is guarded twice over, and both guards
+    /// sit INSIDE `if let Some(ref bus) = self.turn_end_bus`. So a host that
+    /// never attaches a bus makes every span invisible without failing any
+    /// test in this module -- the guards would all still pass, because the
+    /// code they inspect is never reached.
+    ///
+    /// `with_turn_end_bus` has zero callers, so the only attachment path is
+    /// `attach_recap_engine` (unconditional). `attach_advisor` also attaches
+    /// but early-returns on `[advisor] enabled = false`, which is the
+    /// DEFAULT -- so a host that calls only the advisor, or calls neither,
+    /// emits nothing.
+    ///
+    /// The needle is the CALL SITE `agent.attach_recap_engine(`, not the bare
+    /// method name, and that is not a stylistic choice: my first draft used the
+    /// bare name and mutation proved it BLIND. Renaming the call to
+    /// `agent.attach_recap_engine_DISABLED(` left the test green, because the
+    /// mutated identifier still contains the needle as a substring. That is the
+    /// fourth time this module shipped a substring-shaped check -- type name in
+    /// a signature, `render` inside unrelated identifiers, `is_exclusive` in
+    /// test code, and now a renamed call -- which is why the needle includes
+    /// the receiver and the opening paren.
+    #[test]
+    fn every_host_attaches_the_turn_end_bus() {
+        for host in ATTACHMENT_SEAMS {
+            let text = std::fs::read_to_string(src(host))
+                .unwrap_or_else(|e| panic!("cannot read host seam {host}: {e}"));
+            assert!(
+                text.contains("agent.attach_recap_engine("),
+                "{host} never calls `attach_recap_engine`, so it attaches no `TurnEndBus` \
+                 and every attribution byte this module computes is dropped. `with_turn_end_bus` \
+                 has no callers and `attach_advisor` early-returns when `[advisor] enabled = \
+                 false` (the default), so the unconditional attach is the only live path."
             );
         }
     }
