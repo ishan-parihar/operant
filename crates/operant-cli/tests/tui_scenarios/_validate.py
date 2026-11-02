@@ -66,9 +66,12 @@ def _overlay_flag_keys():
         raise SystemExit("could not read overlay_flags()'s declared array length")
     if len(keys) != int(declared.group(1)):
         raise SystemExit(
-            f"overlay_flags() parse drift: regex found {len(keys)} keys but the "
-            f"array declares {declared.group(1)}. An entry was reformatted so the "
-            f"regex no longer matches it — fix the regex, not the count.")
+            f"overlay_flags() parse drift: the regex matched {len(keys)} keys but "
+            f"the array declares {declared.group(1)}. Either an entry was "
+            f"reformatted so the regex no longer matches it, or the declared length "
+            f"was changed without the matching entry. Both are bugs; the compiler "
+            f"also rejects a bumped length with no entry, so check the entry "
+            f"format first — fix the regex, not the count.")
     return keys
 OVERLAYS = _overlay_flag_keys()
 
