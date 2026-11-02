@@ -1451,7 +1451,71 @@ impl App {
     ///
     /// Both exit paths funnel through here, so this cannot be added to one and
     /// forgotten on the other.
+    /// Write the interrupted-session marker on a live exit (plan 2026-11-02).
+    ///
+    /// Two records, both best-effort: the sidecar marker
+    /// (`operant_core::session_interrupted`) is the durable answer that a relaunch
+    /// consumes to offer a resume, and the `end_reason = 'interrupted'` flag on
+    /// the session row is what the session list renders. The marker is written
+    /// FIRST, because the DB open can fail (a missing file, a lock) while the
+    /// marker is a plain file write, and a lost resume offer costs far more than
+    /// a stale one.
+    ///
+    /// Skipped when simulating: a simulated run's teardown must not leave real
+    /// state behind, and the scenario corpus drives this path on every run.
+    ///
+    /// Nothing here returns an error up the stack. An exit path that fails on
+    /// its own bookkeeping is worse than one that skips it — the process was
+    /// leaving anyway, and a panic here would skip the rest of the teardown.
+    fn write_interrupted_marker(&self) {
+        if self.is_simulating {
+            return;
+        }
+        let Some(source) = self.core_session_switch.as_ref() else {
+            return;
+        };
+        let Some(session_id) = source.session_id() else {
+            return;
+        };
+        let title = self.session_title.clone().unwrap_or_default();
+        let marker =
+            operant_core::session_interrupted::SessionInterrupted::new(&session_id, &title);
+        if let Err(e) = operant_core::session_interrupted::write_marker(&marker) {
+            // Deliberately not surfaced to the operator: this runs as the TUI
+            // tears down, when there is nowhere left to show it. The next
+            // launch without the marker is the failure, and it is a silent one.
+            tracing::debug!(error = %e, "Failed to write the interrupted-session marker");
+            return;
+        }
+        // The DB flag: what the session LIST shows, which is where the operator
+        // actually looks. A plain blocking call, NOT `block_in_place`:
+        // `block_in_place` PANICS on a current-thread runtime, and this teardown
+        // runs under one both in tests and via `operant tui debug simulate`
+        // (see `run_app_loop` in adapter_types/tui_app.rs, which gates it for
+        // exactly that reason). The DB open is one local file open on an exit
+        // path, so blocking the thread for it costs nothing a multi-threaded
+        // dance would buy back.
+        let db_path = self.config.database_path.clone();
+        let marked = operant_core::database::Database::init(db_path)
+            .and_then(|db| db.mark_session_interrupted(&session_id))
+            .unwrap_or(false);
+        if !marked {
+            // Reached when the row does not exist (a session created by a path
+            // that never wrote one) or the DB is unopenable. Not cleared: the
+            // marker file already carries the resume offer, and a row that
+            // appears later still gets the flag from the next interrupt.
+            tracing::debug!(
+                session_id = %session_id,
+                "No session row to flag interrupted; the marker file carries it"
+            );
+        }
+    }
+
     fn run_exit_teardown(&mut self) {
+        // The interrupted-session marker goes FIRST: it is the one record whose
+        // loss is unrecoverable from the operator's side, and everything else
+        // below may fail without consequence.
+        self.write_interrupted_marker();
         // Flush the word predictor's learned model to its snapshot before
         // the process goes away (M5: persist on clean exit).
         if let Some(engine) = &self.word_predictor {

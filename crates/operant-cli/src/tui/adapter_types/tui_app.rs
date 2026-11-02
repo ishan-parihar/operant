@@ -397,6 +397,36 @@ impl TuiApp {
                 Self::run_pending_agent_actions(&mut self.app, Some(agent)).await;
             }
 
+            // The interrupted-session notice (plan 2026-11-02, gap 2).
+            //
+            // Consumed exactly once, before the first frame paints, so the
+            // operator sees it as the greeting rather than as a mid-session
+            // interruption. A NOTICE, never an auto-attach: Ctrl+C is how an
+            // operator escapes a turn that is going badly, and silently
+            // reattaching them to the very session they abandoned would be the
+            // exact opposite of a rescue. They click /session and pick it when
+            // they want it.
+            //
+            // Consumed here rather than in the teardown-safe `App` so the read
+            // happens on the real boot path and not on `operant tui debug
+            // simulate`, which drives the loop directly.
+            if !self.app.is_simulating
+                && let Some(marker) = operant_core::session_interrupted::consume_marker()
+            {
+                let label = if marker.title.is_empty() {
+                    marker.session_id.chars().take(8).collect::<String>()
+                } else {
+                    marker.title
+                };
+                self.app.set_status_notice(format!(
+                    "Last session was interrupted: {label} — /session to resume it."
+                ));
+                tracing::info!(
+                    session_id = %marker.session_id,
+                    "Offered an interrupted-session resume from the exit marker"
+                );
+            }
+
             match run_app_loop(&mut self.app, &mut terminal) {
                 Ok(Some(input)) => {
                     // A model / provider / effort chosen in a picker INSIDE

@@ -116,6 +116,7 @@ pub mod runtime_metrics;
 pub mod schema;
 pub mod security;
 pub mod session;
+pub mod session_interrupted;
 pub mod session_recap;
 pub mod shell_hooks;
 pub mod skill_marketplace;

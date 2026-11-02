@@ -136,6 +136,158 @@ fn now_millis() -> u64 {
         .unwrap_or(0)
 }
 
+// ── Cross-process presence ─────────────────────────────────────────────
+//
+// `ActiveSessionTracker` above tracks sessions THIS process owns. The
+// interrupted-session marker (`crate::session_interrupted`) plus the ember
+// gutter need the opposite view: is a given session id live in some OTHER
+// process? Without it, a relaunch offers to resume a session that is still
+// running behind it, and two processes write the same session concurrently.
+//
+// # Why /proc and not libc
+//
+// `libc` is not a dependency of `operant-core` (only `operant-cli` uses it),
+// and the plan forbids adding one for this. `libc::kill(pid, 0)` and
+// `std::fs::metadata("/proc/<pid>")` are equivalent for the one question we
+// ask — "does this pid exist?" — on Linux. The cost is that EPERM and ENOENT
+// are indistinguishable here (both surface as `Ok(None)` / absent), so a live
+// process owned by another user can be reported dead. That is acceptable: a
+// false "dead" costs a redundant resume notice, while a false "live" would
+// wedge a session's self-registration, and we deliberately fail toward the
+// redundant notice. A non-Linux target has no `/proc`, so `process_is_running`
+// reports false and presence simply does not prune there — the registry stays
+// correct, just never garbage-collected.
+
+/// Where the presence records live, inside the operant home.
+fn presence_dir() -> PathBuf {
+    crate::platform::operant_home().join("session-presence")
+}
+
+/// One session's owning process, recorded so another process can see it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionPresence {
+    pub session_id: String,
+    /// The pid that registered the session.
+    ///
+    /// Recorded as text and parsed on read: a stale numeric type in a
+    /// long-lived format is a migration, and this is a cache.
+    pub pid: u32,
+}
+
+fn presence_path(session_id: &str) -> PathBuf {
+    // Deliberately reused sanitize semantics rather than a raw join: a session
+    // id containing a path separator would escape the directory.
+    let safe = session_id
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    presence_dir().join(format!("{safe}.json"))
+}
+
+/// Whether a process with this pid is running right now.
+///
+/// See the /proc tradeoff note at the top of this section.
+pub fn process_is_running(pid: u32) -> bool {
+    std::fs::metadata(format!("/proc/{pid}")).is_ok()
+}
+
+/// Record that this process owns `session_id`.
+///
+/// Overwrites any existing record for that id: the last writer is the owner,
+/// and a second process claiming a session is exactly the state being defended
+/// against.
+pub fn register_presence(session_id: &str, pid: u32) -> Result<(), String> {
+    std::fs::create_dir_all(presence_dir()).map_err(|e| e.to_string())?;
+    let body = serde_json::json!({
+        "session_id": session_id,
+        "pid": pid,
+    });
+    std::fs::write(presence_path(session_id), body.to_string()).map_err(|e| e.to_string())
+}
+
+/// Remove the presence record for `session_id`.
+///
+/// Called on a clean exit; an unclean exit leaves the record for
+/// `prune_dead_presence` to reclaim.
+pub fn unregister_presence(session_id: &str) -> bool {
+    std::fs::remove_file(presence_path(session_id)).is_ok()
+}
+
+/// Session ids whose presence record names `pid`.
+///
+/// Used at exit to release every session this process owned, so an exit path
+/// does not have to have tracked its own ids.
+pub fn presence_session_ids_for_pid(pid: u32) -> Vec<String> {
+    let dir = presence_dir();
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for entry in entries.flatten() {
+        if let Some(presence) = presence_from_path(&entry.path())
+            && presence.pid == pid
+        {
+            out.push(presence.session_id);
+        }
+    }
+    out
+}
+
+fn presence_from_path(path: &std::path::Path) -> Option<SessionPresence> {
+    let raw = std::fs::read_to_string(path).ok()?;
+    let value: serde_json::Value = serde_json::from_str(raw.trim()).ok()?;
+    Some(SessionPresence {
+        session_id: value.get("session_id")?.as_str()?.to_string(),
+        pid: value.get("pid")?.as_u64()? as u32,
+    })
+}
+
+/// The presence record for a session id, if any.
+pub fn session_presence(session_id: &str) -> Option<SessionPresence> {
+    presence_from_path(&presence_path(session_id))
+}
+
+/// Whether `session_id` is live in ANOTHER process.
+///
+/// True only when a record exists AND its process is running. A record with a
+/// dead pid is answered false — that is the interruption this registry
+/// exists to surface, and it is what makes the stale-record case the useful
+/// one.
+pub fn session_is_live(session_id: &str) -> bool {
+    session_presence(session_id).is_some_and(|p| process_is_running(p.pid))
+}
+
+/// Drop records whose process is gone, returning `(pruned, kept)`.
+///
+/// Best-effort: an unreadable entry is neither pruned nor kept, it is skipped,
+/// because corrupt presence data must not stop a relaunch.
+pub fn prune_dead_presence() -> (usize, usize) {
+    let dir = presence_dir();
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return (0, 0);
+    };
+    let mut pruned = 0usize;
+    let mut kept = 0usize;
+    for entry in entries.flatten() {
+        let Some(presence) = presence_from_path(&entry.path()) else {
+            continue;
+        };
+        if process_is_running(presence.pid) {
+            kept += 1;
+        } else {
+            let _ = std::fs::remove_file(entry.path());
+            pruned += 1;
+        }
+    }
+    (pruned, kept)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -197,5 +349,116 @@ mod tests {
         let tracker = ActiveSessionTracker::new(root.clone(), None);
         assert!(tracker.acquire("user/with:slashes and spaces!").unwrap());
         assert_eq!(tracker.count().unwrap(), 1);
+    }
+
+    // ── Cross-process presence ────────────────────────────────────────
+    //
+    // These run against a real temp `HERMES_HOME` under the repo's serial env
+    // lock: the registry is a directory under the operant home, so two tests
+    // racing on it would read each other's files. The lock is the same one
+    // `platform::operant_home` readers elsewhere take.
+
+    /// Run `f` with `HERMES_HOME` pointed at a fresh temp dir, then restore.
+    fn with_presence_home<T>(f: impl FnOnce(&std::path::Path) -> T) -> T {
+        let _guard = crate::platform::test_env_lock_blocking();
+        let home = temp_root("presence_home");
+        let original = std::env::var("HERMES_HOME").ok();
+        // SAFETY: test-only env mutation under the serial env guard.
+        unsafe { std::env::set_var("HERMES_HOME", &home) };
+        let out = f(&home);
+        match original {
+            Some(val) => unsafe { std::env::set_var("HERMES_HOME", val) },
+            None => unsafe { std::env::remove_var("HERMES_HOME") },
+        }
+        let _ = std::fs::remove_dir_all(&home);
+        out
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn a_registered_session_reports_live_then_released_on_unregister() {
+        with_presence_home(|_home| {
+            let pid = std::process::id();
+            register_presence("sess-live", pid).expect("register");
+            assert_eq!(session_presence("sess-live").map(|p| p.pid), Some(pid));
+            assert!(
+                session_is_live("sess-live"),
+                "our own pid is running, so this must read live"
+            );
+            assert!(
+                unregister_presence("sess-live"),
+                "unregister reports removal"
+            );
+            assert!(
+                session_presence("sess-live").is_none(),
+                "released presence must be gone"
+            );
+            assert!(!session_is_live("sess-live"));
+        });
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn a_dead_pid_is_not_live_and_prune_reclaims_it() {
+        with_presence_home(|_home| {
+            // pid 999999 is far above the usual pid_max and cannot exist.
+            let dead_pid = 999_999u32;
+            assert!(!process_is_running(dead_pid), "sanity: that pid is dead");
+            register_presence("sess-dead", dead_pid).expect("register");
+            assert!(
+                !session_is_live("sess-dead"),
+                "a stale record must not read as live"
+            );
+            let (pruned, kept) = prune_dead_presence();
+            assert_eq!(pruned, 1, "the dead record must be pruned");
+            assert_eq!(kept, 0, "nothing live to keep");
+            assert!(session_presence("sess-dead").is_none());
+        });
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn presence_ids_for_a_pid_lists_only_that_process() {
+        with_presence_home(|_home| {
+            let mine = std::process::id();
+            register_presence("a-mine", mine).expect("register");
+            register_presence("b-mine", mine).expect("register");
+            register_presence("c-other", 999_998).expect("register");
+            let mut mine_ids = presence_session_ids_for_pid(mine);
+            mine_ids.sort();
+            assert_eq!(mine_ids, vec!["a-mine".to_string(), "b-mine".to_string()]);
+        });
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn a_session_id_with_path_separators_cannot_escape_the_directory() {
+        with_presence_home(|home| {
+            let mine = std::process::id();
+            register_presence("../escaped", mine).expect("register");
+            assert!(
+                !home
+                    .parent()
+                    .expect("home has a parent")
+                    .join("escaped.json")
+                    .exists(),
+                "a sanitized id must not write outside the presence dir"
+            );
+            assert!(
+                session_presence("../escaped").is_some(),
+                "lookup by the ORIGINAL id must still work"
+            );
+        });
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn registering_twice_keeps_the_last_writer() {
+        with_presence_home(|_home| {
+            register_presence("sess-race", 999_997).expect("first");
+            register_presence("sess-race", std::process::id()).expect("second");
+            let presence = session_presence("sess-race").expect("record");
+            assert_eq!(presence.pid, std::process::id(), "last writer wins");
+        });
     }
 }

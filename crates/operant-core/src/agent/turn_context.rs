@@ -183,6 +183,16 @@ pub async fn build_turn_context(agent: &OperantAgent, user_query: &str) -> Resul
             warn!(error = %e, "Failed to save session metadata");
             e
         })?;
+    // A turn in this session is the proof it is no longer interrupted: clear
+    // the flag left by a previous process's exit. Without this every relaunch
+    // would re-offer the same resume, which is the lie the flag exists to
+    // avoid. Best-effort and deliberately AFTER save_session, so the row is
+    // guaranteed to exist.
+    if let Err(e) = agent.database.clear_session_interrupted(&session_id) {
+        // Not fatal: a stale flag costs one extra resume notice, and failing a
+        // turn over it would be a far worse trade.
+        warn!(error = %e, "Failed to clear the interrupted-session flag");
+    }
     // The operator's employee tag: stamp the seat on the row (plan
     // 2026-10-28 iter-A). Personal mode leaves the column NULL. A separate
     // UPDATE rather than a wider `save_session` signature: three other

@@ -40,6 +40,10 @@ pub fn relative_time(updated_at: chrono::DateTime<chrono::Utc>) -> String {
 fn status_glyph(status: RowStatus) -> &'static str {
     match status {
         RowStatus::Live => "⚡",
+        // The interrupted marker: a session the previous process left mid-run.
+        // Distinct from `Idle` because the operator's whole question at a
+        // session hub is "which of these was cut off".
+        RowStatus::Interrupted => "⚠",
         RowStatus::Idle => "·",
         RowStatus::Archived => "📦",
     }

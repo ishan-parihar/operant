@@ -997,7 +997,7 @@ impl Database {
                  FROM sessions s
                  LEFT JOIN messages m ON s.id = m.session_id
                  GROUP BY s.id
-                 ORDER BY s.ended_at DESC
+                 ORDER BY COALESCE(s.ended_at, s.started_at) DESC
                  LIMIT ?1",
             )
             .map_err(|e| Error::Agent(format!("Failed to prepare list_sessions: {}", e)))?;
@@ -1009,7 +1009,15 @@ impl Database {
                     title: row.get(1)?,
                     source: row.get(2)?,
                     created_at: row.get(3)?,
-                    updated_at: row.get(4)?,
+                    // `ended_at` is NULL for every session that is still
+                    // running, and `DatabaseSession::updated_at` is a plain
+                    // String — so `row.get(4)` returned Err on the most common
+                    // row in the table and took the whole list query down with
+                    // it. Read it as an Option and fall back to `started_at`,
+                    // which is what the session's recency actually is.
+                    updated_at: row
+                        .get::<_, Option<String>>(4)?
+                        .unwrap_or_else(|| row.get::<_, String>(3).unwrap_or_default()),
                     message_count: row.get::<_, i32>(5)? as usize,
                     actual_cost_usd: row.get(6)?,
                 })
@@ -1046,7 +1054,8 @@ impl Database {
                         s.cwd, s.archived,
                         s.input_tokens + s.output_tokens + s.cache_read_tokens + s.cache_write_tokens AS tokens,
                         COALESCE(s.actual_cost_usd, s.estimated_cost_usd, 0.0) AS cost_usd,
-                        COUNT(m.id) AS msg_count
+                        COUNT(m.id) AS msg_count,
+                       CASE WHEN s.end_reason = 'interrupted' THEN 1 ELSE 0 END AS interrupted
                  FROM sessions s
                  LEFT JOIN messages m ON s.id = m.session_id
                  GROUP BY s.id
@@ -1071,6 +1080,7 @@ impl Database {
                     tokens: row.get::<_, i64>(8)?.max(0) as u64,
                     cost_usd: row.get(9)?,
                     message_count: row.get::<_, i64>(10)?.max(0) as usize,
+                    interrupted: row.get::<_, i64>(11)?.max(0) != 0,
                 })
             })
             .map_err(|e| Error::Agent(format!("list_sessions_rich query error: {}", e)))?;
@@ -1083,6 +1093,12 @@ impl Database {
                 .unwrap_or_else(|_| Utc::now());
             let status = if row.archived {
                 crate::session::listing::RowStatus::Archived
+            } else if row.interrupted {
+                // Below `Archived`: an archived row is deliberately parked,
+                // while an interrupted one is a resumable accident. Above
+                // `Idle`: the operator asked what needs their attention, and
+                // "the session that died" is that.
+                crate::session::listing::RowStatus::Interrupted
             } else {
                 // Same-process presence: the hub sets `Live` on the current
                 // session id after loading; the DB cannot know it.
@@ -1549,7 +1565,7 @@ impl Database {
                  LEFT JOIN messages m ON s.id = m.session_id
                  WHERE st.tag = ?1
                  GROUP BY s.id
-                 ORDER BY s.ended_at DESC",
+                 ORDER BY COALESCE(s.ended_at, s.started_at) DESC",
             )
             .map_err(|e| Error::Agent(format!("Failed to prepare session-by-tag query: {}", e)))?;
         let rows = stmt
@@ -1560,7 +1576,15 @@ impl Database {
                     source: row.get(2)?,
                     message_count: row.get::<_, i64>(5)?,
                     created_at: row.get(3)?,
-                    updated_at: row.get(4)?,
+                    // `ended_at` is NULL for every session that is still
+                    // running, and `DatabaseSession::updated_at` is a plain
+                    // String — so `row.get(4)` returned Err on the most common
+                    // row in the table and took the whole list query down with
+                    // it. Read it as an Option and fall back to `started_at`,
+                    // which is what the session's recency actually is.
+                    updated_at: row
+                        .get::<_, Option<String>>(4)?
+                        .unwrap_or_else(|| row.get::<_, String>(3).unwrap_or_default()),
                     tags: Vec::new(),
                 })
             })
@@ -1927,6 +1951,76 @@ impl Database {
         Ok(affected)
     }
 
+    // ── The interrupted-session flag ───────────────────────────────────
+    //
+    // Stored in the existing `end_reason` column rather than a new one. That
+    // column already carries free-text closure reasons ("completed"), is never
+    // read for logic, and adding a column for one bit would mean a schema
+    // change plus a reconcile pass for no gain. `RowStatus::Interrupted` is
+    // derived from this at read time (session/listing.rs).
+
+    /// `end_reason` value meaning "the owning process exited while this session
+    /// was live". `RowStatus::api_label` must be kept in step with it.
+    pub const INTERRUPTED_END_REASON: &str = "interrupted";
+
+    /// Mark `session_id` as interrupted.
+    ///
+    /// Returns whether a row was actually updated, so a caller can report a
+    /// no-op instead of claiming a flag it did not set (an id that exists
+    /// nowhere still writes nothing).
+    pub fn mark_session_interrupted(&self, session_id: &str) -> Result<bool> {
+        let conn = self.lock_conn()?;
+        let affected = conn
+            .execute(
+                "UPDATE sessions SET end_reason = ?1 WHERE id = ?2",
+                params![Self::INTERRUPTED_END_REASON, session_id],
+            )
+            .map_err(|e| Error::Agent(format!("Failed to mark session interrupted: {}", e)))?;
+        Ok(affected > 0)
+    }
+
+    /// Clear the interrupted flag on `session_id`, if it is set.
+    ///
+    /// Deliberately scoped to the interrupted value rather than blanket-nulling
+    /// `end_reason`: a session that ended for a real reason ("completed") keeps
+    /// it, and a session's next turn clears only the interruption.
+    ///
+    /// Returns whether the flag was actually cleared, letting a caller tell
+    /// "cleared" from "was not interrupted" — the difference the regression
+    /// test pins.
+    pub fn clear_session_interrupted(&self, session_id: &str) -> Result<bool> {
+        let conn = self.lock_conn()?;
+        let affected = conn
+            .execute(
+                "UPDATE sessions SET end_reason = NULL
+                 WHERE id = ?1 AND end_reason = ?2",
+                params![session_id, Self::INTERRUPTED_END_REASON],
+            )
+            .map_err(|e| Error::Agent(format!("Failed to clear session interrupted: {}", e)))?;
+        Ok(affected > 0)
+    }
+
+    /// Session ids currently flagged interrupted, most recently active first.
+    pub fn interrupted_session_ids(&self) -> Result<Vec<String>> {
+        let conn = self.lock_conn()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id FROM sessions WHERE end_reason = ?1
+                 ORDER BY COALESCE(ended_at, started_at) DESC",
+            )
+            .map_err(|e| {
+                Error::Agent(format!("Failed to prepare interrupted_session_ids: {}", e))
+            })?;
+        let rows = stmt
+            .query_map(params![Self::INTERRUPTED_END_REASON], |row| {
+                row.get::<_, String>(0)
+            })
+            .map_err(|e| Error::Agent(format!("interrupted_session_ids query error: {}", e)))?
+            .collect::<std::result::Result<Vec<String>, _>>()
+            .map_err(|e| Error::Agent(format!("interrupted_session_ids row: {}", e)))?;
+        Ok(rows)
+    }
+
     pub fn update_session_title(&self, session_id: &str, title: &str) -> Result<()> {
         let now = chrono::Utc::now().to_rfc3339();
         let conn = self.lock_conn()?;
@@ -2021,7 +2115,7 @@ impl Database {
                  FROM sessions s
                  LEFT JOIN messages m ON s.id = m.session_id
                  GROUP BY s.id
-                 ORDER BY s.ended_at DESC
+                 ORDER BY COALESCE(s.ended_at, s.started_at) DESC
                  LIMIT ?1",
             )
             .map_err(|e| Error::Agent(format!("Failed to prepare recent sessions: {}", e)))?;
@@ -2033,7 +2127,15 @@ impl Database {
                     source: row.get(2)?,
                     message_count: row.get::<_, i64>(5)?,
                     created_at: row.get(3)?,
-                    updated_at: row.get(4)?,
+                    // `ended_at` is NULL for every session that is still
+                    // running, and `DatabaseSession::updated_at` is a plain
+                    // String — so `row.get(4)` returned Err on the most common
+                    // row in the table and took the whole list query down with
+                    // it. Read it as an Option and fall back to `started_at`,
+                    // which is what the session's recency actually is.
+                    updated_at: row
+                        .get::<_, Option<String>>(4)?
+                        .unwrap_or_else(|| row.get::<_, String>(3).unwrap_or_default()),
                     tags: Vec::new(),
                 })
             })
@@ -2059,7 +2161,7 @@ impl Database {
                  LEFT JOIN messages m ON s.id = m.session_id
                  WHERE s.ended_at >= ?1
                  GROUP BY s.id
-                 ORDER BY s.ended_at DESC",
+                 ORDER BY COALESCE(s.ended_at, s.started_at) DESC",
             )
             .map_err(|e| Error::Agent(format!("Failed to prepare active sessions: {}", e)))?;
         let rows = stmt
@@ -2070,7 +2172,15 @@ impl Database {
                     source: row.get(2)?,
                     message_count: row.get::<_, i64>(5)?,
                     created_at: row.get(3)?,
-                    updated_at: row.get(4)?,
+                    // `ended_at` is NULL for every session that is still
+                    // running, and `DatabaseSession::updated_at` is a plain
+                    // String — so `row.get(4)` returned Err on the most common
+                    // row in the table and took the whole list query down with
+                    // it. Read it as an Option and fall back to `started_at`,
+                    // which is what the session's recency actually is.
+                    updated_at: row
+                        .get::<_, Option<String>>(4)?
+                        .unwrap_or_else(|| row.get::<_, String>(3).unwrap_or_default()),
                     tags: Vec::new(),
                 })
             })
@@ -2322,6 +2432,9 @@ struct RichSessionRow {
     tokens: u64,
     cost_usd: f64,
     message_count: usize,
+    /// `end_reason = 'interrupted'`, carried so the loader can derive
+    /// `RowStatus::Interrupted` without a second query.
+    interrupted: bool,
 }
 
 /// A search result from FTS5 query.
@@ -4094,6 +4207,157 @@ mod tests {
     // ── plan 2026-10-28 iter-A: the unified record + employee tag ──
 
     #[test]
+    #[test]
+    fn an_interrupted_session_reports_through_the_rich_row() {
+        let db = test_db();
+        let now = chrono::Utc::now().to_rfc3339();
+        db.save_session("int-1", Some("Interrupted"), "local", &now, &now)
+            .unwrap();
+        db.save_session("int-2", Some("Normal"), "local", &now, &now)
+            .unwrap();
+        assert!(
+            db.mark_session_interrupted("int-1").unwrap(),
+            "an existing row must report the write"
+        );
+
+        let rows = db.list_sessions_rich(10).unwrap();
+        let one = rows.iter().find(|r| r.id == "int-1").unwrap();
+        assert_eq!(one.status, crate::session::listing::RowStatus::Interrupted);
+        assert_eq!(one.status.api_label(), "interrupted");
+        let two = rows.iter().find(|r| r.id == "int-2").unwrap();
+        assert_eq!(two.status, crate::session::listing::RowStatus::Idle);
+
+        assert_eq!(
+            db.interrupted_session_ids().unwrap(),
+            vec!["int-1".to_string()]
+        );
+    }
+
+    #[test]
+    fn clearing_a_real_end_reason_survives_interrupted_clearing() {
+        let db = test_db();
+        let now = chrono::Utc::now().to_rfc3339();
+        db.save_session("done-1", None, "local", &now, &now)
+            .unwrap();
+        // A session that ended for a real reason, not an interruption.
+        db.lock_conn()
+            .unwrap()
+            .execute(
+                "UPDATE sessions SET end_reason = 'completed' WHERE id = 'done-1'",
+                [],
+            )
+            .unwrap();
+
+        // The scoped clear must leave the real reason alone.
+        assert!(
+            !db.clear_session_interrupted("done-1").unwrap(),
+            "a non-interrupted row must report nothing cleared"
+        );
+        let reason: Option<String> = db
+            .lock_conn()
+            .unwrap()
+            .query_row(
+                "SELECT end_reason FROM sessions WHERE id = 'done-1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(reason.as_deref(), Some("completed"));
+    }
+
+    #[test]
+    fn the_next_turn_stops_a_session_being_interrupted() {
+        let db = test_db();
+        let now = chrono::Utc::now().to_rfc3339();
+        db.save_session("resume-1", None, "local", &now, &now)
+            .unwrap();
+        db.mark_session_interrupted("resume-1").unwrap();
+        assert_eq!(
+            db.interrupted_session_ids().unwrap(),
+            vec!["resume-1".to_string()]
+        );
+
+        assert!(
+            db.clear_session_interrupted("resume-1").unwrap(),
+            "clearing an interrupted row must report the change"
+        );
+        assert!(
+            db.interrupted_session_ids().unwrap().is_empty(),
+            "the row must no longer offer a resume"
+        );
+        assert!(
+            !db.clear_session_interrupted("resume-1").unwrap(),
+            "a second clear must be a no-op"
+        );
+    }
+
+    #[test]
+    fn an_archived_row_ranks_above_an_interrupted_one() {
+        let db = test_db();
+        let now = chrono::Utc::now().to_rfc3339();
+        db.save_session("arch-1", None, "local", &now, &now)
+            .unwrap();
+        db.save_session("int-9", None, "local", &now, &now).unwrap();
+        db.mark_session_interrupted("int-9").unwrap();
+        // Archived must not be downgraded by the interrupt flag: an archived
+        // row is deliberately parked, which is a stronger statement.
+        // (set directly rather than through a helper — there is no archive
+        // setter on `Database`, and this test is about the ranking, not the
+        // archive path.)
+        db.lock_conn()
+            .unwrap()
+            .execute("UPDATE sessions SET archived = 1 WHERE id = 'arch-1'", [])
+            .unwrap();
+        db.mark_session_interrupted("arch-1").unwrap();
+
+        let rows = db.list_sessions_rich(10).unwrap();
+        let arch = rows.iter().find(|r| r.id == "arch-1").unwrap();
+        assert_eq!(arch.status, crate::session::listing::RowStatus::Archived);
+    }
+
+    #[test]
+    fn an_unfinished_session_is_not_invisible_to_recency_ordering() {
+        // Gap 6 (plan 2026-11-02): `ORDER BY s.ended_at DESC` sorts on a column
+        // that is NULL until the session closes, and SQLite orders NULLs FIRST
+        // in DESC — so every LIVE session sunk to the very bottom of the list
+        // and the session the operator was just using looked like the oldest
+        // thing in the database. Four loaders shared the bug; this test pins
+        // the shared fix on the one an operator sees most.
+        let db = test_db();
+        let old_start = "2026-01-01T00:00:00Z";
+        let old_end = "2026-02-01T00:00:00Z";
+        let new_start = "2026-06-01T00:00:00Z";
+        // The finished one: it CLOSED more recently than the live one STARTED,
+        // so "take the newest of the two timestamps" would still put it first.
+        // What the COALESCE buys is that a NULL ended_at no longer counts as
+        // the newest row, so the running session sorts by its real recency.
+        db.save_session("closed-recent", None, "local", old_start, old_end)
+            .unwrap();
+        // The still-live one: `save_session` always writes an ended_at, so
+        // clear it back to what a running session actually looks like.
+        db.save_session("live-new", None, "local", new_start, new_start)
+            .unwrap();
+        db.lock_conn()
+            .unwrap()
+            .execute(
+                "UPDATE sessions SET ended_at = NULL WHERE id = 'live-new'",
+                [],
+            )
+            .unwrap();
+
+        let ids: Vec<String> = db
+            .list_sessions(10)
+            .unwrap()
+            .into_iter()
+            .map(|s| s.id)
+            .collect();
+        assert_eq!(
+            ids.first().map(String::as_str),
+            Some("live-new"),
+            "the live session must sort by its started_at and come first"
+        );
+    }
+
     fn list_sessions_rich_returns_the_unified_record() {
         let db = test_db();
         let now = chrono::Utc::now().to_rfc3339();

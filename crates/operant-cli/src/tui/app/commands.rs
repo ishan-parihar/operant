@@ -618,6 +618,11 @@ impl App {
                 true
             }
             "exit" | "quit" => {
+                // A deliberate exit is not an interruption: drop the marker so
+                // the next launch does not offer to resume a session the
+                // operator just chose to close. Ctrl+C/Ctrl+D still writes it —
+                // that path goes through handle_exit_key_confirmation, not here.
+                operant_core::session_interrupted::clear_marker();
                 self.should_exit = true;
                 true
             }

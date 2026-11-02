@@ -20,10 +20,20 @@ use chrono::{DateTime, Utc};
 /// `Live` marks the session the *current process* is streaming into (the TUI
 /// is same-process, so presence is `is_streaming`, not jcode's cross-process
 /// pid registry).
+///
+/// `Interrupted` is the one state NOT derived from the row's own columns: it
+/// comes from the exit marker (`crate::session_interrupted`) materialised onto
+/// the row at exit, and it answers a question no column answered before — "was
+/// this session live when the owning process went away?" That is jcode's
+/// `SessionStatus::Crashed{..}`, and operant could not previously say it at all.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RowStatus {
     /// The session this process is actively streaming into right now.
     Live,
+    /// The session the previous process was attached to when it exited, named
+    /// by the interrupted-session marker. Cleared when that session's next
+    /// turn starts.
+    Interrupted,
     /// An ordinary, at-rest session row.
     Idle,
     /// Archived by the operator.
@@ -36,6 +46,7 @@ impl RowStatus {
     pub fn api_label(&self) -> &'static str {
         match self {
             RowStatus::Live => "live",
+            RowStatus::Interrupted => "interrupted",
             RowStatus::Idle => "idle",
             RowStatus::Archived => "archived",
         }
