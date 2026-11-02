@@ -624,6 +624,16 @@ pub struct BehaviorSettings {
     /// so deleting them silently destroys the corpus that command is for.
     /// The operator opts into a bound.
     pub max_trajectories: usize,
+    /// Whether the turn's four exclusive spans are aggregated and emitted on the
+    /// post-turn `TurnEnd` seam (deepen row 3 / RT-209). Default on.
+    ///
+    /// Reachable from `operant.toml` as `[agent] show_turn_attribution`.
+    /// iter-1631 added the field to `AgentConfig` and filled it with a literal
+    /// `true`, which made the kill switch unreachable from configuration: every
+    /// construction site set true, so no operator could turn it off. A flag that
+    /// cannot be set is not a kill switch, it is documentation.
+    #[serde(default = "default_true")]
+    pub show_turn_attribution: bool,
     pub tool_progress: ToolProgressMode,
     pub session_reset: SessionResetMode,
     pub context_compression: bool,
@@ -864,6 +874,7 @@ impl Default for BehaviorSettings {
             max_healing_attempts: 3,
             show_reasoning: true,
             max_trajectories: 0,
+            show_turn_attribution: true,
             reasoning_effort: String::new(),
             reasoning_effort_param: ReasoningEffortParam::Auto,
             tool_progress: ToolProgressMode::Auto,
@@ -3292,6 +3303,70 @@ allow_subcommands = ["status"]
             "the config must STATE that the agent-facing half is unwired — \
              an undocumented boundary is how a future agent ships the same \
              overclaim iter-1422 did"
+        );
+    }
+    /// The kill switch must be REACHABLE, not merely present.
+    ///
+    /// iter-1631 added `AgentConfig::show_turn_attribution` and filled it from
+    /// `From<&BehaviorSettings>` with a literal `true`. Every construction site
+    /// set true, so no operator could turn it off from `operant.toml` -- a flag
+    /// that cannot be set is not a kill switch, it is documentation. iter-1643
+    /// threaded it through `BehaviorSettings` and this pins the wiring: the
+    /// TOML key must reach the agent-facing config, in both directions.
+    #[test]
+    fn the_turn_attribution_kill_switch_reaches_the_agent_config() {
+        // Default: on, and asserted so a future refactor cannot silently flip it.
+        let on = parse_config_str(
+            r#"
+[agent]
+stream = true
+"#,
+            std::path::Path::new("on.toml"),
+        )
+        .expect("a config with no explicit key parses");
+        assert!(
+            on.agent.show_turn_attribution,
+            "the default must be on -- serde(default = default_true) regressing \
+             would silently disable turn attribution for every operator"
+        );
+
+        // The operator switches it OFF in TOML, and the agent config sees it.
+        let off = parse_config_str(
+            r#"
+[agent]
+stream = true
+show_turn_attribution = false
+"#,
+            std::path::Path::new("off.toml"),
+        )
+        .expect("an explicit false must parse");
+        assert!(
+            !off.agent.show_turn_attribution,
+            "the TOML key must override the default"
+        );
+
+        // And the `From` impl must THREAD it, not hardcode: this is the exact
+        // shape iter-1631 got wrong, so it is asserted directly rather than
+        // inferred from the TOML parse above.
+        let cfg: crate::agent::AgentConfig = (&off.agent).into();
+        assert!(
+            !cfg.show_turn_attribution,
+            "AgentConfig must inherit the operator's setting -- a hardcoded true \
+             here is the defect this test exists to catch"
+        );
+        let cfg_on: crate::agent::AgentConfig = (&on.agent).into();
+        assert!(
+            cfg_on.show_turn_attribution,
+            "and the default must reach the agent too, in both directions"
+        );
+
+        // The example config must advertise the key: an unreachable flag is not
+        // discoverable, and `operant.example.toml` is where operators look.
+        let example = include_str!("../../../operant.example.toml");
+        assert!(
+            example.contains("show_turn_attribution"),
+            "operant.example.toml must advertise the kill switch -- a flag the \
+             operator cannot find is the same as no flag"
         );
     }
 

@@ -224,7 +224,11 @@ impl From<&BehaviorSettings> for AgentConfig {
             // Row 3 / RT-209: turn attribution is aggregated and emitted on the
             // `TurnEnd` seam, not the prompt tail (see `AgentConfig`'s own doc
             // on the field and the `turn_attribution` module header).
-            show_turn_attribution: true,
+            //
+            // THREADED from settings, not a literal: iter-1631 hardcoded
+            // `true` here, which made the operator's kill switch unreachable
+            // from `operant.toml`. A flag nobody can set is not a kill switch.
+            show_turn_attribution: settings.show_turn_attribution,
             fallback_models: settings.fallback_models.clone(),
             fallback_on_errors: settings.fallback_on_errors,
             loop_detection_enabled: true,

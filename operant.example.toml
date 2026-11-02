@@ -61,6 +61,20 @@ context_window = 128000
 # prompt-completion pairs for fine-tuning — so a bound deletes the corpus that
 # command is for. The operator opts in.
 max_trajectories = 0
+# Whether the turn's four exclusive spans (inference / tools / user-wait /
+# overhead) are aggregated and emitted on the post-turn `TurnEnd` seam
+# (deepen row 3 / RT-209). Default on.
+#
+# This is a measurement, not a prompt block, and it is deliberately NOT in
+# the model's context: the `<turn_context>` tail is built once before the
+# loop starts, when no model call has happened and no tool has run, so a
+# block placed there would report `n/a` for every span on every turn. The
+# numbers are only complete at turn END, which is where they go.
+#
+# `false` turns the capture off entirely: `TurnEnd::attribution` is `None`,
+# which means "no attribution attempted" — a different fact from a span left
+# `Unmeasured`. Set it false if you do not want the per-turn timing recorded.
+show_turn_attribution = true
 # Largest share of `context_window` that ONE tool result may occupy before its
 # bulk is withheld behind an explicit marker (iter-357). The kept head, the
 # token count, the per-token price and the number of tokens removed are all
