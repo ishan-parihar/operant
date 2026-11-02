@@ -538,6 +538,7 @@ fn delta_fingerprint(delta: &[Message]) -> u64 {
     h
 }
 
+
 #[cfg(test)]
 mod tests {
     use super::*;

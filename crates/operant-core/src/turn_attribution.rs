@@ -14,15 +14,20 @@
 //! An `Incomplete` result is a legitimate value -- it NAMES the gaps -- so a
 //! measurement gap is never a reason to suppress the emission.
 //!
-//! **Honest state as of the iter-1642 audit: the value is WRITTEN and READ BY
-//! NOTHING.** `run()` classifies the turn, `TurnEnd` carries the enum into
+//! **Honest state as of the iter-1655 audit: the value is WRITTEN and READ BY
+//! NOTHING, and the two public methods that would render it have no caller
+//! either.** `run()` classifies the turn, `TurnEnd` carries the enum into
 //! every delivered event, and both subscribers (`advisor.rs`, `recap.rs`)
-//! read only `end.session_id`. The whole chain is live at every layer except
-//! the last, and no compiler, clippy, or test can see that: a `pub` field on a
-//! `pub` struct in a library emits no `dead_code` warning. The guard at the
-//! bottom of this file now prints a `KNOWN GAP` notice for it instead of
-//! passing silently, because a guard that passes on a substring match is the
-//! same failure this module already shipped twice.
+//! read only `end.session_id`. `TurnBreakdown::is_exclusive()` and
+//! `TurnAttribution::render()` are `pub`, unit-tested, and reachable from
+//! nowhere -- the RT-209 orphan shape one level down, which the type-name
+//! guard could not see because a type name appears in a signature. The whole
+//! chain is live at every layer except the last, and no compiler, clippy, or
+//! test can see that: a `pub` field on a `pub` struct in a library emits no
+//! `dead_code` warning. The guard at the bottom of this file now prints a
+//! `KNOWN GAP` notice for it instead of passing silently, because a guard
+//! that passes on a substring match is the same failure this module already
+//! shipped twice.
 //!
 //! **The orphan guard at the bottom of this file is load-bearing.**
 //! iter-1631 wired `TurnSpan`, `SpanDuration` and `TurnBreakdown` and left
@@ -521,10 +526,56 @@ mod tests {
             .any(|r| std::fs::read_to_string(src(r)).is_ok_and(|c| c.contains(needle)))
     }
 
+    /// Like [`used_in`], but ignores a file's `#[cfg(test)]` region.
+    ///
+    /// This distinction is the whole point. `stream.rs` holds the emission
+    /// tests, so a test assertion of `bd.is_exclusive()` satisfies a naive
+    /// whole-file scan while the method stays uncalled in production -- and a
+    /// passing unit test is not a caller. iter-1631 shipped with
+    /// `TurnAttribution` at zero callers while the type-name guard passed,
+    /// because a type name appears in a signature; this closes the same hole
+    /// one level down.
+    ///
+    /// The split is a byte-index cut, not a parser: it searches for the first
+    /// `#[cfg(test)]`, which is how every module in this crate declares its
+    /// tests. A file with no test region is searched whole.
+    fn used_in_production(needle: &str, roots: &[&str]) -> bool {
+        roots.iter().any(|r| {
+            std::fs::read_to_string(src(r)).is_ok_and(|c| {
+                let production = match c.find("#[cfg(test)]") {
+                    Some(idx) => &c[..idx],
+                    None => &c[..],
+                };
+                production.contains(needle)
+            })
+        })
+    }
+
     /// The seams that must actually consume this module. Deliberately excludes
     /// `turn_attribution.rs` itself: a type used only by its own module's tests
     /// is exactly the orphan RT-209 was opened on.
     const PRODUCTION_SEAMS: [&str; 4] = [
+        "src/agent/run.rs",
+        "src/agent/stream.rs",
+        "src/turn_end.rs",
+        "src/agent/mod.rs",
+    ];
+
+    /// The files that would actually READ the value if a subscriber existed.
+    /// Wider than `PRODUCTION_SEAMS` by design: the emitter seam and the
+    /// consuming subscriber are different modules, and the two `TurnEnd`
+    /// subscribers in the tree (`advisor.rs`, `recap.rs`) live at `src/` --
+    /// NOT `src/agent/`, an error the first draft of this constant made. Two
+    /// of six paths named a file that does not exist, and because `used_in`
+    /// treats an unreadable file as a no-match, the guard silently checked
+    /// nothing for them. `subscriber_seams_resolve` below exists so that typo
+    /// fails loudly instead.
+    ///
+    /// Scoped to the producers alone, this check would report "no consumer"
+    /// forever while a consumer is being written somewhere else.
+    const SUBSCRIBER_SEAMS: [&str; 6] = [
+        "src/advisor.rs",
+        "src/recap.rs",
         "src/agent/run.rs",
         "src/agent/stream.rs",
         "src/turn_end.rs",
@@ -598,6 +649,63 @@ mod tests {
                 "KNOWN GAP (RT-209): TurnEnd::attribution is carried but no subscriber reads it. \
                  The capture and classification are live; the rendering consumer is the \
                  deferred half. Update this guard when a subscriber reads `end.attribution`."
+            );
+        }
+
+        // ...and the module's two public API METHODS that exist for a
+        // subscriber's benefit. iter-1655's validation pass found them with
+        // ZERO production callers, which is the RT-209 shape at method
+        // granularity: the guard above checks type names, and a type name
+        // appears in a signature, so it passed while the two methods the types
+        // exist to expose went uncalled.
+        //
+        // `is_exclusive()` is the exclusivity proof -- `build()`
+        // saturating-subtracts a residual, so the four spans partition the turn
+        // only when nothing over-ran, and a subscriber that never asks cannot
+        // know. `render()` is the human-readable block. Both are `pub`, both
+        // are unit-tested, and both are reachable from nowhere.
+        //
+        // A NOTICE, not an assert, for the same documented reason the read
+        // check above is one: this is the deferred half of the same feature, so
+        // failing the build for a declared state would only train the next
+        // agent to delete the guard.
+        //
+        // Two details that the first draft got wrong and that mutation then
+        // caught. The needles are CALL SITES (`x.render()`), not bare method
+        // names: a bare "render" matches 11 times in `run.rs` and 18 in
+        // `mod.rs` as parts of unrelated identifiers, so a bare-name check
+        // passes happily while both methods go uncalled. And the scan is
+        // `used_in_production`, not `used_in`: `stream.rs`'s two
+        // `.is_exclusive()` hits are test assertions inside its `#[cfg(test)]`
+        // region (lines 2054 and 2088, past `#[cfg(test)]` at 1930 -- read, not
+        // assumed), so a whole-file scan reports the method as called when its
+        // only callers are tests.
+        for method in [".is_exclusive()", ".render()"] {
+            if !used_in_production(method, &SUBSCRIBER_SEAMS) {
+                eprintln!(
+                    "KNOWN GAP (RT-209): turn_attribution::{method} has no production caller. \
+                     The capture and classification are live; a subscriber that consumes them is \
+                     the deferred half. Wire one into advisor.rs or recap.rs to clear this."
+                );
+            }
+        }
+    }
+
+    /// Every `SUBSCRIBER_SEAMS` path must exist.
+    ///
+    /// `used_in` and `used_in_production` both return false for an unreadable
+    /// file, so a wrong path is indistinguishable from "the method has no
+    /// caller" and the guard would quietly check nothing. The first draft of
+    /// `SUBSCRIBER_SEAMS` had exactly two such paths (`src/agent/advisor.rs`,
+    /// `src/agent/recap.rs` -- the real files are at `src/`), which is how this
+    /// assertion earned its place.
+    #[test]
+    fn subscriber_seams_resolve() {
+        for path in SUBSCRIBER_SEAMS {
+            assert!(
+                src(path).exists(),
+                "SUBSCRIBER_SEAMS names {path}, which does not exist: the guard would stop \
+                 checking it silently (an unreadable file counts as no-match)"
             );
         }
     }
