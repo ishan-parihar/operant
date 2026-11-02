@@ -14,20 +14,26 @@
 //! An `Incomplete` result is a legitimate value -- it NAMES the gaps -- so a
 //! measurement gap is never a reason to suppress the emission.
 //!
-//! **Honest state as of the iter-1655 audit: the value is WRITTEN and READ BY
-//! NOTHING, and the two public methods that would render it have no caller
-//! either.** `run()` classifies the turn, `TurnEnd` carries the enum into
-//! every delivered event, and both subscribers (`advisor.rs`, `recap.rs`)
-//! read only `end.session_id`. `TurnBreakdown::is_exclusive()` and
-//! `TurnAttribution::render()` are `pub`, unit-tested, and reachable from
-//! nowhere -- the RT-209 orphan shape one level down, which the type-name
-//! guard could not see because a type name appears in a signature. The whole
-//! chain is live at every layer except the last, and no compiler, clippy, or
-//! test can see that: a `pub` field on a `pub` struct in a library emits no
-//! `dead_code` warning. The guard at the bottom of this file now prints a
-//! `KNOWN GAP` notice for it instead of passing silently, because a guard
-//! that passes on a substring match is the same failure this module already
-//! shipped twice.
+//! **Consumed at the seam as of iter-1661, not by any subscriber.**
+//! `run()` classifies the turn, `TurnEnd` carries the enum into every
+//! delivered event, and `TurnEndBus::log_attribution` renders one `debug!`
+//! line per turn at the emission site -- so the value an operator can see is
+//! real. What is still absent is a SUBSCRIBER: both existing subscribers
+//! (`advisor.rs`, `recap.rs`) read only `end.session_id`, so the value the
+//! event CARRIED is dropped. The seam log reads the local variable before the
+//! emit, which is why the two are not the same claim. `TurnBreakdown`'s
+//! `is_exclusive()` has no production caller either, and `TurnAttribution`'s
+//! multi-line `render()` has none -- the seam uses `render_one_line`. All
+//! three gaps print a `KNOWN GAP` notice from the guard at the bottom of this
+//! file, because a guard that passes silently is the failure this module has
+//! already shipped twice.
+//!
+//! **Why the log line and not a TUI panel.** A panel needs new TUI surface,
+//! which is a peer's area and a far larger iteration. The seam is the one
+//! place that already holds the classified enum AND the guarantee that the
+//! turn is over, so a line there makes the value observable with no new
+//! architecture. `debug!`, not `info!`: one line per turn is noise at info
+//! level in a gateway running many turns per minute.
 //!
 //! **The orphan guard at the bottom of this file is load-bearing.**
 //! iter-1631 wired `TurnSpan`, `SpanDuration` and `TurnBreakdown` and left
@@ -335,6 +341,42 @@ impl TurnAttribution {
         }
     }
 
+    /// One line, four spans, nothing dropped.
+    ///
+    /// [`Self::render`] throws away the `missing` list on the `Incomplete`
+    /// path -- `missing: _` -- so the human-readable block cannot tell "the
+    /// model used no tools" from "nobody timed the tools", which is the
+    /// ambiguity the classifier exists to remove. A log line is where that
+    /// distinction has to survive, because it is the only place the operator
+    /// actually sees the value.
+    ///
+    /// An unmeasured span renders `n/a`, never `0ms`: that single rule is the
+    /// RT-199 contract made visible, and a zero span is a different fact.
+    pub fn render_one_line(&self) -> String {
+        // Delegating by naming the contained enum, not by calling `span`/`total`
+        // on `self`: those live on `TurnBreakdown`, and the classifier's job is
+        // to delegate rather than re-expose the whole surface.
+        let breakdown = match self {
+            Self::Complete(b) => b,
+            Self::Incomplete { measured, .. } => measured,
+            Self::Disabled => return "disabled".to_string(),
+        };
+        let spans = crate::turn_attribution::TurnSpan::ALL
+            .iter()
+            .map(|s| {
+                let v = match breakdown.span(*s) {
+                    crate::turn_attribution::SpanDuration::Measured(d) => {
+                        format!("{}ms", d.as_millis())
+                    }
+                    crate::turn_attribution::SpanDuration::Unmeasured => "n/a".to_string(),
+                };
+                format!("{}={}", s.as_str(), v)
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        format!("total={}ms {}", breakdown.total().as_millis(), spans)
+    }
+
     /// True when the four spans partition the turn exactly.
     pub fn is_exclusive(&self) -> bool {
         matches!(self, Self::Complete(b) if b.is_exclusive())
@@ -486,6 +528,42 @@ mod tests {
         assert!(!a.is_exclusive());
         // An incomplete turn still renders (with n/a for the gap).
         assert!(a.render().is_some());
+    }
+
+    #[test]
+    fn the_one_line_render_keeps_the_named_gap_and_never_prints_a_zero_for_it() {
+        // The RT-199 contract in its plainest form: an unmeasured span is
+        // `n/a`, never `0ms`. A zero span and an absent span are different
+        // facts, and this is the only place the operator sees the difference,
+        // because the seam log reads this line.
+        let partial = TurnBreakdown::build(
+            ms(100),
+            SpanDuration::measured(ms(10)),
+            SpanDuration::Unmeasured,
+            SpanDuration::measured(ms(30)),
+        );
+        let a = TurnAttribution::of(partial);
+        let line = a.render_one_line();
+        assert!(line.contains("total=100ms"), "total must appear: {line}");
+        assert!(
+            line.contains("tools=n/a"),
+            "the unmeasured span must render n/a, not 0ms: {line}"
+        );
+        assert!(
+            !line.contains("tools=0ms"),
+            "a zero span is a measurement, not an absence: {line}"
+        );
+        // Every one of the four spans is present, so a subscriber reading one
+        // line never has to wonder which span a value belonged to.
+        for name in ["inference", "tools", "user_wait", "overhead"] {
+            assert!(
+                line.contains(&format!("{name}=")),
+                "span {name} missing from {line}"
+            );
+        }
+        // Degenerate: `Disabled` renders a word, not an empty line, so a log
+        // reader never sees a blank attribution.
+        assert_eq!(TurnAttribution::Disabled.render_one_line(), "disabled");
     }
 
     #[test]
@@ -642,34 +720,58 @@ mod tests {
             "TurnAttribution::of must be called at the emission seam, not only in this module"
         );
 
-        // ...and the value must be READ by a subscriber, not merely carried.
+        // ...and the value must be CONSUMED, not merely carried.
         //
         // A type annotation counts as a "caller" for the check above, so the
         // whole chain can be live at every layer EXCEPT the last one, which is
         // exactly what iter-1635 shipped: `run()` classified the turn,
         // `TurnEnd` carried the enum, and BOTH subscribers (`advisor.rs`,
-        // `recap.rs`) read only `end.session_id`. The attribution was
-        // written into every delivered event and read by nothing, and no
-        // compiler, clippy, or test could see it -- a `pub` field on a `pub`
-        // struct in a library emits no `dead_code` warning.
+        // `recap.rs`) read only `end.session_id`. The attribution was written
+        // into every delivered event and read by nothing, and no compiler,
+        // clippy, or test could see it -- a `pub` field on a `pub` struct in a
+        // library emits no `dead_code` warning.
         //
-        // The read test is a field access, not the type name: a `use` or a
-        // type mention does not satisfy it. When a subscriber starts
-        // rendering the breakdown, this is the assertion it updates.
-        let read = used_in("end.attribution", &PRODUCTION_SEAMS)
+        // iter-1661 closed the deferred half at the SEAM (a `debug!` line at
+        // turn end), so the needle now accepts two shapes and they are NOT
+        // equivalent, which is why both are named rather than ORed into one
+        // fuzzy check:
+        //
+        //   1. a field read off the delivered event (`end.attribution`) --
+        //      what a real SUBSCRIBER does, and still absent.
+        //   2. the seam consumer (`log_attribution(`) -- what now runs.
+        //
+        // (1) is the stronger claim and stays a NOTICE because it remains
+        // genuinely absent: the log line reads the local variable before the
+        // emit, so no subscriber consumes the value the event carries. That
+        // distinction is the honest state, and reporting it is the point.
+        let field_read = used_in("end.attribution", &PRODUCTION_SEAMS)
             || used_in("event.attribution", &PRODUCTION_SEAMS)
             || used_in("turn_end.attribution", &PRODUCTION_SEAMS);
-        if !read {
-            // Declared as an EXPECTED gap rather than a failure, with the
-            // reason: the capture is live and the consumer is the one piece
-            // that is deliberately deferred (RT-209's remaining feature).
-            // Turning this into a hard assert would fail the build for a
-            // documented, intentional state, which trains the next agent to
-            // delete the assertion instead of doing the work.
+        // The needle is the CALL SITE (`TurnEndBus::log_attribution(`), not the
+        // bare name: `turn_end.rs` DEFINES `log_attribution(`, so a bare-name
+        // needle matches the definition and the assert passes with the call
+        // deleted. Mutation proved that first draft blind -- deleting the call
+        // in `run.rs` left the test green, which is the fifth substring-shaped
+        // check this module has shipped.
+        let seam_consumer = used_in("TurnEndBus::log_attribution(", &PRODUCTION_SEAMS);
+        assert!(
+            seam_consumer,
+            "no production caller consumes the attribution. iter-1661 wired the seam log; if it \
+             was removed, restore a consumer rather than leaving the value carried and dropped."
+        );
+        if !field_read {
+            // NOTICE, not a failure, and the reason is now inverted from what
+            // it was: the deferred half this guard protected for eleven
+            // iterations LANDED at the seam (iter-1661), so what remains is the
+            // narrower and stronger claim -- a real subscriber that reads the
+            // value the event carries. Asserting it would fail the build for a
+            // state that is documented and intentional, which trains the next
+            // agent to delete the assertion.
             eprintln!(
-                "KNOWN GAP (RT-209): TurnEnd::attribution is carried but no subscriber reads it. \
-                 The capture and classification are live; the rendering consumer is the \
-                 deferred half. Update this guard when a subscriber reads `end.attribution`."
+                "KNOWN GAP (RT-209): the attribution is CONSUMED at the seam (iter-1661's turn-end \
+                 log), but no SUBSCRIBER reads `end.attribution` off the delivered event. The seam \
+                 log reads the local variable before the emit. A subscriber -- advisor, recap, or a \
+                 TUI surface -- is what would consume the carried value."
             );
         }
 
@@ -705,8 +807,10 @@ mod tests {
             if !used_in_production(method, &SUBSCRIBER_SEAMS) {
                 eprintln!(
                     "KNOWN GAP (RT-209): turn_attribution::{method} has no production caller. \
-                     The capture and classification are live; a subscriber that consumes them is \
-                     the deferred half. Wire one into advisor.rs or recap.rs to clear this."
+                     The seam log consumes `render_one_line`; this is the OTHER half of the \
+                     deferred surface -- a subscriber that asks the exclusivity question or \
+                     renders the multi-line block. Wire one into advisor.rs, recap.rs, or a TUI \
+                     surface to clear this."
                 );
             }
         }

@@ -1764,12 +1764,23 @@ impl OperantAgent {
                         // byte-identical. `emit` is synchronous by contract:
                         // a slow subscriber can never block the turn.
                         if let Some(ref bus) = self.turn_end_bus {
+                            let attribution =
+                                self.turn_attribution(turn_start, turn_inference, saw_inference);
+                            // The consumer RT-209 deferred: without this, the
+                            // four spans are computed, classified, emitted, and
+                            // read by nothing. Guarded rather than unguarded
+                            // because the log line must cost nothing when the
+                            // operator turned attribution off (`None`), which is
+                            // the common case.
+                            if let Some(ref attribution) = attribution {
+                                crate::turn_end::TurnEndBus::log_attribution(attribution);
+                            }
                             bus.emit(
                                 &session_id,
                                 iteration,
                                 total_tool_calls,
                                 &result.content,
-                                self.turn_attribution(turn_start, turn_inference, saw_inference),
+                                attribution,
                             );
                         }
 

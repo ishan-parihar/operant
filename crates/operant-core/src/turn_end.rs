@@ -242,6 +242,49 @@ impl TurnEndBus {
         self.tx.send(event).unwrap_or_default()
     }
 
+    /// Log the turn's four-span breakdown, once, at the true turn end.
+    ///
+    /// This is the consumer RT-209 deferred for its whole life: the value has
+    /// been captured, classified and emitted since iter-1635, and no subscriber
+    /// read it. The laziest complete fix is a log line at the seam, because
+    /// the seam is the one place that already holds both the classified enum
+    /// and the guarantee that the turn is over -- and a line in `gateway.log`
+    /// is a real observable, where a panel would need new TUI surface.
+    ///
+    /// Called by the emission site (not inside `emit`) so the log cost is paid
+    /// only when the operator turned attribution on. `Disabled` is impossible
+    /// here -- `run()` returns `None` before the emit -- but `Incomplete` is
+    /// the case worth printing, because it NAMES the spans that were never
+    /// measured, which is the diagnostic this whole row exists to provide.
+    ///
+    /// `debug!` not `info!`: one line per turn is noise at info level in a
+    /// gateway that runs many turns per minute.
+    pub(crate) fn log_attribution(attribution: &crate::turn_attribution::TurnAttribution) {
+        // `render_one_line` delegates to the contained breakdown and prints
+        // every span, measured or `n/a`. The `Incomplete` arm is called out
+        // separately because `render()` discards the missing names and that
+        // discard is exactly the ambiguity this row exists to remove: the
+        // operator must be able to tell "the model used no tools" from
+        // "nobody timed the tools".
+        match attribution {
+            crate::turn_attribution::TurnAttribution::Disabled => {}
+            crate::turn_attribution::TurnAttribution::Complete(_) => {
+                tracing::debug!("turn attribution: {}", attribution.render_one_line());
+            }
+            crate::turn_attribution::TurnAttribution::Incomplete { missing, .. } => {
+                tracing::debug!(
+                    "turn attribution (incomplete, unmeasured: {}): {}",
+                    missing
+                        .iter()
+                        .map(|s| s.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    attribution.render_one_line()
+                );
+            }
+        }
+    }
+
     /// Fork a subscriber's work off the turn path.
     ///
     /// Thin delegation to [`crate::daemon_pool::spawn`] — the seam reuses

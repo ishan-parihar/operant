@@ -99,23 +99,31 @@ fn the_ledger_does_not_claim_the_emission_was_never_built() {
 /// Neither the ledger nor the CHANGELOG may claim the value is delivered.
 ///
 /// "Delivered to every subscriber" was the iter-1642 overclaim, corrected, and
-/// the word is still a trap: `TurnEnd::attribution` IS delivered into every
-/// emitted event, and is read by none of them. A sentence saying the capture is
-/// "delivered" without naming the consumer is the same false promise.
+/// the word is a trap: `TurnEnd::attribution` IS delivered into every emitted
+/// event, and was read by none of them. iter-1661 closed the seam half, so the
+/// claim is narrower now and the guard follows it -- a sentence saying the
+/// value is consumed without naming what still is NOT consumed is the same
+/// false promise in a new shape.
 ///
-/// The ledger legitimately quotes the original finding as history, so this
-/// checks for the CLAIM form rather than the bare word: the phrase appears only
-/// inside the iter-1642 correction, which is allowed precisely because it says
-/// the claim was overstated.
+/// Three accepted phrasings, because all three say the same thing and the
+/// ledger legitimately reworded when the seam landed: "no subscriber reads"
+/// (pre-1661), "no SUBSCRIBER reads" / "no consumer reads" (post-1661). The
+/// point is that the DEFERRED PART IS NAMED, not the exact words.
 #[test]
 fn the_docs_still_name_the_deferred_consumer() {
+    const NAMED: [&str; 4] = [
+        "no subscriber reads",
+        "no SUBSCRIBER reads",
+        "no consumer reads",
+        "every subscriber reads only",
+    ];
     for rel in ["docs/audit/2026-06-19-BUGS.md", "docs/CHANGELOG.md"] {
         let text = read(rel);
         assert!(
-            text.contains("no subscriber reads") || text.contains("no consumer reads"),
-            "{rel} no longer names the deferred consumer. The capture is live and the \
-             consumer is the deferred half; a reader must be told that, not left to infer \
-             it from a green test run."
+            NAMED.iter().any(|n| text.contains(n)),
+            "{rel} no longer names the deferred consumer (looked for: {NAMED:?}). The capture is \
+             live and the consumer is the deferred half; a reader must be told that, not left to \
+             infer it from a green test run."
         );
     }
 }
