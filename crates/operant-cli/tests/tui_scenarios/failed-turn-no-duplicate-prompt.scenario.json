@@ -1,0 +1,18 @@
+{
+  "name": "failed-turn-no-duplicate-prompt",
+  "surface": "crates/operant-cli/src/tui/app/messaging.rs (restore_failed_input_to_composer) + adapter_types/tui_app.rs (submit path)",
+  "opens_with": "Composer holds a prompt, Enter submits it, and the turn fails on the provider",
+  "keys": "hello world<enter>",
+  "size": "120x40",
+  "assert": [
+    "focus == Input",
+    "is_streaming == false"
+  ],
+  "assert_screen": [
+    "count:hello world==1"
+  ],
+  "baseline": "failed-turn-no-duplicate-prompt.txt",
+  "style_baseline": "failed-turn-no-duplicate-prompt.style.txt",
+  "agent_script": "error-modal.json",
+  "notes": "The operator's 2026-11-02 report: 'a lot of leaking text in the input box, whenever a prompt is sent'. The submit path pushes the user message into the transcript BEFORE the turn runs, so a turn that then died left that row on screen while restore_failed_input_to_composer handed the same text back to the composer: the same sentence rendered twice, once as the transcript's '1> hello world' row and once in the composer, with nothing telling the operator which copy was editable. The restore is deliberately kept (a failed turn costs the operator their turn, not their prompt *and* the turn); only the duplicate row is removed, bounded three ways (reverse search from the tail, exact content match, at most one row) so a transcript that legitimately repeats a prompt keeps its earlier copy. MUTATION-CHECKED, AND THE RESULT IS NEGATIVE — DO NOT READ THIS AS COVERAGE FOR THE DEFECT: the headless mock branch (else-if is_mock in adapter_types/tui_app.rs) pushes the user message WITHOUT routing through the live submit path, so with the drop_transcript_user_row_matching call deleted this scenario still renders one hello world and still PASSES. Reverting the call, rebuilding, and running it produced green on the broken build. It pins the observable outcome — a failed turn hands the prompt back to the composer exactly once and leaves it editable — but the duplicate is only reachable on the live path (a real provider error, no --agent-script), which the mock cannot reproduce. The four unit tests in app/tests.rs cover that one and are mutation-proved RED. Kept for its own cheap deterministic pin and so a future live-path harness can reuse it; asserting a message COUNT is deliberately avoided because the mock's own bookkeeping is not the defect."
+}

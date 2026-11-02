@@ -1,0 +1,18 @@
+{
+  "name": "shift-enter-newline",
+  "surface": "crates/operant-cli/src/tui/app/key_handling.rs (composer chords) + prompt_input/editing.rs (insert_newline) + operant_ui/ui_input.rs (composer render)",
+  "opens_with": "Composer has text and the operator reaches for the newline chord",
+  "keys": "ab<shift+enter>cd",
+  "size": "120x40",
+  "assert": [
+    "messages == 0"
+  ],
+  "assert_screen": [
+    "contains:ab",
+    "contains:cd",
+    "not-contains:shift+enter"
+  ],
+  "baseline": "shift-enter-newline.txt",
+  "style_baseline": "shift-enter-newline.style.txt",
+  "notes": "The operator's 2026-11-02 report: 'SHIFT+ENTER like utility typing shortcuts are not working'. The production key handler was never the gap — Enter+SHIFT has mapped to `insert_newline` since iter-120 and has a passing unit test. The gap was in the HARNESS: `parse_generic_chord` (cmd_tui_debug.rs) required exactly one character after the `+`, so `<shift+enter>` fell through to None and `parse_key_sequence` typed the whole token as its literal characters — eleven keystrokes of `shift+enter` into the composer. No scenario could exercise the chord, so the report could be neither reproduced nor ruled out from the corpus. Fixed by `chord_key_code`, which names the non-character keys. This scenario is the durable pin: the `not-contains:shift+enter` assertion is the whole point — if the parser regresses to literal typing, the eleven characters appear on screen and this scenario goes red. Params `not-contains:shift` would also fail on a trailing space; the full token is asserted so a partial regression still trips it. \"messages == 0\" pins that the chord inserted rather than submitted."
+}

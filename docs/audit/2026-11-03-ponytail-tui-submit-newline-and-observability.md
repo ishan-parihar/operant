@@ -129,3 +129,31 @@ two places that already hold the number.
 This session's own delta: **+256 lines of production and test code** across 3 files,
 fixing 2 operator-reported defects, each mutation-proved RED. No new file, no new
 module, no new dependency, no new trait, no new config key.
+
+---
+
+## The one negative result, recorded because a green gate that catches nothing is worse
+## than no gate
+
+Two corpus scenarios were added (iter-1679). One is mutation-proof; the other is not,
+and I only found that by doing the mutation:
+
+| scenario | fix reverted | result |
+|---|---|---|
+| `shift-enter-newline` (`ab<shift+enter>cd`) | `chord_key_code` branch deleted | **RED** — fails on `not-contains:shift+enter` |
+| `failed-turn-no-duplicate-prompt` (`hello world<enter>` + `error-modal.json`) | `drop_transcript_user_row_matching` call deleted | **STILL GREEN** |
+
+The second one's mechanism is worth knowing: the headless mock path
+(`else if is_mock`, `adapter_types/tui_app.rs:1099`) pushes the user message itself,
+without going through `submit_user_message`. So the transcript row that the fix removes
+is never created by the mock, and deleting the removal cannot change its output. The
+scenario asserts `count:hello world==1`, which is true before and after.
+
+**Consequence and what it says about the harness:** any defect reachable only through
+the live submit path is invisible to the mock corpus. The four unit tests in
+`app/tests.rs` cover this one because they call `take_input` + `add_message` in the same
+order production does. If more of these accumulate, the fix is a live-path scenario
+runner (drive a real provider error, not a mock), not more unit tests.
+
+The scenario is kept, with its notes rewritten to state the negative result, because it
+still pins the restore-once outcome deterministically and cheaply.

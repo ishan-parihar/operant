@@ -1,0 +1,40 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+ operant · replay
+ operant
+ /model to switch · Offline Capture
+ v0.3.0
+ /login to add provider
+ ● anthropic(key)
+ ~
+
+ ▸ thought
+
+ Calling out to the network now.
+
+   ✗ Error: provider overloaded_error (529): the upstream is saturated, retry shortly [Alt] [⇧] [S]
+
+ 1› hello world                                                                                                        │
+
+Prompt restored to the composer — the turn failed.
+
+  › Ask operant to do anything
+
+                                                                         ~ 10/200k ▱▱▱▱▱▱▱▱▱▱ 0% API key Offline Capture
+
+
+
+
+
+

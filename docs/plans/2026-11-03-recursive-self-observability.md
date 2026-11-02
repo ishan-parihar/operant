@@ -74,6 +74,29 @@ That gap is G-6 below.
 
 ---
 
+## The codex contrast, measured feature-by-feature (not file-by-file)
+
+Module *names* differ almost completely (`codex: chat_composer/{draft_state, slash_input,
+popup_state, vim_register}` vs `operant: prompt_input/{editing, suggestions, vim_ops,
+kill_ring}`), so a filename diff is worthless — it reports 16 "gaps" that are mostly
+renames. Mapped by *behaviour*, the composer is at parity or ahead on: word classes and
+chords, @-mention grammar with directory chaining, ghost text, history search, vim with
+registers, paste-burst detection, selection and copy, multi-line wrapping and the
+codex-parity two-column gutter.
+
+The codex behaviours with **no operant counterpart at all**:
+
+| codex module | what it does | operant equivalent | verdict |
+|---|---|---|---|
+| `terminal_probe.rs` | queries the terminal's actual kitty flags | none — pushes and hopes | **G-6, real gap** |
+| `debug_config.rs` | prints every config layer + each key's requirement source | single-file config, no layers | **G-5 part 2, real gap** |
+| `chat_composer/reconnect.rs` | restricted input modes (Disconnected / UnavailableThread) that keep drafts editable and still allow local commands | none | **recorded, prioritize low** — operant's failed-turn restore is the closest thing and now also keeps the draft |
+| `attachment_state.rs` | typed attachment lifecycle (local / remote / placeholder deletion reconciliation) | `image_paste.rs` + `pinned_images.rs`, placeholders drop with a warning notice | partial |
+
+Everything else the operator might expect from codex is already here.
+
+---
+
 ## G-1 — Trajectory steps carry no latency and no error text (P1)
 
 `TrajectoryStep` records `thought / action / action_args / observation / response / success`.
@@ -145,13 +168,28 @@ Nothing stores them where an operator or agent can ask "what did the advisor say
 
 **Check:** a quarantined note appears in the debug report and a normal one does not double-count.
 
-## G-5 — Config drift has no detector (P2)
+## G-5 — Config drift has no detector, and there is only ONE layer to drift from (P2)
 
-`operant checkpoints` and `config` exist; nothing diffs live config against a baseline and
-says "these keys changed since you started, and you did not change them".
+`load_app_config` (`config.rs:2485`) resolves to a single file — explicit path, else the
+first of `default_config_paths()` that exists, else defaults. There is no layer stack.
+codex has one (`codex_config::ConfigLayerStack`, plus a `debug_config` surface that
+prints every layer including disabled ones with each key's requirement source —
+`codex-rs/tui/src/debug_config.rs`).
 
-**Build:** snapshot the resolved `AppConfig` (already serializable) into the checkpoint,
-diff on load, print. ~100 lines, no new surface.
+**Consequence for this row:** a drift detector over a one-layer config answers only
+"did the file change on disk", which `git` or a checksum already tells you. The
+useful question — "which VALUE is winning and from where" — needs the layer model
+does not have. So this row has two parts and the second is the real one:
+
+1. snapshot + diff (~100 lines, honest, ships alone if part 2 is deferred);
+2. a layer stack: defaults < project < profile < env < explicit, with the winning
+   layer reported per key. This is a much larger change than the proposal imagined
+   — it touches every consumer that assumes one config — and it is **not** in scope
+   for this plan. It is recorded here so nobody mistakes G-5 for a small win.
+
+**Check for part 1:** a snapshot taken before a `config set` and compared after names
+  the changed key and both values. **No check exists yet for part 2 — that is the
+  signal it is not specced.**
 
 ## G-6 — Enhanced keys are requested but never verified (P2)
 
