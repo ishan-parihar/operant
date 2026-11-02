@@ -1416,3 +1416,59 @@ fn the_highlight_follows_the_selection_past_the_chrome_rows() {
         "the rows render below the chrome: tab={tab_row}, beta={beta}"
     );
 }
+
+// ── The interrupted-session pre-selection (plan 2026-11-02, P2) ─────────
+//
+// The cursor-placement half of the interrupted-session notice. The rank
+// (interrupted above idle) is NOT tested here: it belongs to the session-
+// organiser plan's Stage C, and duplicating it would put two agents in one
+// ordering rule.
+
+#[test]
+fn open_selecting_puts_the_cursor_on_the_named_row() {
+    let mut hub = SessionHubState::new();
+    hub.replace_rows(vec![
+        row("newest", Some("Newest"), None),
+        row("interrupted", None, None),
+        row("oldest", None, None),
+    ]);
+    // The interrupted session is deliberately NOT row 0: it was interrupted a
+    // while ago and other sessions have run since, which is exactly the case
+    // `open()` gets wrong.
+    hub.open_selecting(None, "interrupted");
+    assert_eq!(
+        hub.selected_row().map(|r| r.id.as_str()),
+        Some("interrupted"),
+        "the cursor must land on the row the exit marker named"
+    );
+}
+
+#[test]
+fn open_selecting_falls_back_to_row_zero_when_the_row_is_not_visible() {
+    // The filter/search case: the marked session is not in `visible_idx` at
+    // all. `open()`'s row-0 behaviour is the right answer then, and this pins
+    // that degrade rather than letting a missing row mean a stale cursor.
+    let mut hub = SessionHubState::new();
+    hub.replace_rows(vec![row("a", None, None), row("b", None, None)]);
+    hub.open_selecting(None, "pruned-or-filtered-out");
+    assert_eq!(
+        hub.selected_row().map(|r| r.id.as_str()),
+        Some("a"),
+        "a missing row must degrade to row 0, not to no selection"
+    );
+}
+
+#[test]
+fn open_selecting_does_not_reorder_the_rows() {
+    // The rank is Stage C's. Pinning that the ordering is untouched here is
+    // what stops this from quietly pre-empting it.
+    let mut hub = SessionHubState::new();
+    hub.replace_rows(vec![row("first", None, None), row("second", None, None)]);
+    let before: Vec<String> = hub.visible_rows().iter().map(|r| r.id.clone()).collect();
+    hub.open_selecting(None, "second");
+    let after: Vec<String> = hub.visible_rows().iter().map(|r| r.id.clone()).collect();
+    assert_eq!(
+        after, before,
+        "cursor placement must not change the row order"
+    );
+}

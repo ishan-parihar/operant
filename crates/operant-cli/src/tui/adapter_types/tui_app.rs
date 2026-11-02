@@ -434,6 +434,12 @@ impl TuiApp {
             if !self.app.is_simulating
                 && let Some(marker) = operant_core::session_interrupted::consume_marker()
             {
+                // Arm the hub's cursor (plan 2026-11-02, P2). The notice below
+                // names the interrupted session in words; this makes the first
+                // `/resume` land ON it. Stored as pending rather than applied:
+                // the hub can only select a row once the row set has loaded, so
+                // the id is held until the hub is actually opened.
+                self.app.pending_hub_preselect = Some(marker.session_id.clone());
                 let label = if marker.title.is_empty() {
                     marker.session_id.chars().take(8).collect::<String>()
                 } else {

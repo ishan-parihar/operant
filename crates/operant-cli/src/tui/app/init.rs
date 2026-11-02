@@ -223,6 +223,7 @@ impl App {
             plugins_hub: crate::tui::plugins_hub::PluginsHubState::new(),
             journey_view: crate::tui::journey_view::JourneyViewState::new(),
             session_hub: crate::tui::session_hub::SessionHubState::new(),
+            pending_hub_preselect: None,
             export_dialog: ExportDialogState::new(),
             context_viz: ContextVizState::new(),
             usage_overlay: crate::tui::usage_overlay::UsageOverlayState::new(),

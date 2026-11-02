@@ -525,7 +525,20 @@ impl App {
             "session" | "resume" => {
                 // (plan 2026-10-28 iter-B) the unified session hub replaces
                 // the 70x20 browser modal.
-                self.session_hub.open(None);
+                //
+                // The one site that honours the interrupted-session
+                // pre-selection (plan 2026-11-02, P2): if this launch followed
+                // an interrupted exit, the cursor starts on that session rather
+                // than on row 0. The other four `open()` sites are filter-
+                // specific(/branch, /siblings) or reachable mid-session, where
+                // the marker's session is stale by definition — routing them
+                // through the pre-selection would aim the cursor at the wrong
+                // thing.
+                if let Some(session_id) = self.pending_hub_preselect.take() {
+                    self.session_hub.open_selecting(None, &session_id);
+                } else {
+                    self.session_hub.open(None);
+                }
                 self.session_list_pending = true;
                 true
             }

@@ -287,6 +287,44 @@ impl SessionHubState {
         self.rebuild_visible();
     }
 
+    /// Open with the cursor already on `session_id`, when the row set holds it.
+    ///
+    /// # Why this exists
+    ///
+    /// `open()` resets `selected = 0` and rebuilds by `updated_at DESC`, so the
+    /// session the operator was just interrupted in is usually near the top but
+    /// NOT at it — and once other sessions run it is not near the top at all.
+    /// The interrupted-session notice (plan 2026-11-02) names that session in
+    /// words; this is the *keyboard* path to the same target, so the first
+    /// `/resume` or the first arrow press lands on the row the operator was
+    /// already told about instead of an arbitrary one.
+    ///
+    /// # Why it degrades rather than fails
+    ///
+    /// The row set depends on the active filter and search, so the marked
+    /// session may not be in `visible_idx` at all. Row 0 is the right answer
+    /// then — it is exactly `open()`'s behaviour — and an error here would be
+    /// worse than no cursor placement.
+    ///
+    /// Deliberately does NOT reorder the rows: the interrupted-first rank is a
+    /// separate change owned by the session-organiser plan's Stage C, and
+    /// pre-empting it here would put two agents in one ordering rule.
+    pub fn open_selecting(&mut self, armed_close_tap: Option<Instant>, session_id: &str) {
+        self.open(armed_close_tap);
+        // The same lookup `set_rows` performs for its keep-id branch, so a miss
+        // behaves identically: fall through to the clamped row-0 selection
+        // rather than showing a preview for a row that is no longer selected.
+        if let Some(pos) = self
+            .visible_idx
+            .iter()
+            .position(|&i| self.rows[i].id == session_id)
+        {
+            self.selected = pos;
+            self.preview_scroll = 0;
+        }
+        self.clamp_selection();
+    }
+
     pub fn close(&mut self) {
         self.visible = false;
         self.focused_subagent = None;
