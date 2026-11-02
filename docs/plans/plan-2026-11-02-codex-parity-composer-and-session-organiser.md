@@ -568,3 +568,42 @@ measured 53 cells against 46. The suffix drops the repeated unit and now reads
 do not re-add fixed-width padding to the columns (measured 2026-11-02: it was
 what cost the row its data below).
 
+## Stage D — LANDED (`feat(iter-1665)`)
+
+Row backgrounds, porting codex's `dense_row_background_style` +
+`apply_line_background` (resume_picker.rs:3177-3220). The problem it solves is
+measured, not cosmetic: the selected row's highlight stopped where the TEXT
+stopped, so a short row read as a colour stripe with the row still open to the
+right.
+
+**The tint is derived, never hard-coded.** `row_style.rs` blends an overlay
+INTO `vendor::style::theme::user_bg()` at 0.12 (selected) / 0.05 (zebra on even
+rows), with the overlay BLACK on light themes and WHITE on dark ones — a tint
+that moves in the same direction as the surface disappears. Using the vendored
+`blend_color` rather than a literal is what makes the fill theme-proof.
+
+**`MIN_VISIBLE_ALPHA` is a real gate, not decoration.** Below it the function
+returns `None`, which lets the caller skip the per-span patch pass. An
+invisible fill is not a subtle fill: it is a paint that carries no information.
+
+**Deliberately not ported: codex's `readable_color_on`.** It needs a
+terminal-palette xterm table plus a quantised-output guarantee that operant's
+22-role palette does not use. Operant's spans are already palette roles chosen
+against the base background, which is the invariant that actually matters here.
+
+Three findings from implementation, all caught by tests before commit:
+
+1. The fill cannot be applied while a row is being built — the width is not
+   known until the block is, and `ListItem::content` is private, so a
+   post-pass over built items is not available either. The block is built
+   first in `render_list_body` and the width is threaded into the row closure.
+2. A `TestBackend` leaves untouched cells at `Color::Reset`, NOT `None`. A fill
+   must be proven by comparing values; `is_some()` reports the whole screen as
+   filled.
+3. `List::highlight_style` had to become an empty Style. It patches the row's
+   background with one flat colour, and would have undone the tint and the
+   zebra on exactly the row the operator is on.
+
+Measured geometry for the next agent (120x40): the block's top border is buffer
+row 0, the three chrome rows are 1-3, the selected session row is 4, and each
+session row occupies TWO buffer rows (title + meta).
