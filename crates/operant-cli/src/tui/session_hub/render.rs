@@ -22,6 +22,23 @@ use operant_core::session::listing::{RowKind, RowStatus, SessionEntryV2};
 /// jcode's split: 40% list, 60% preview.
 const SPLIT: (Constraint, Constraint) = (Constraint::Percentage(40), Constraint::Percentage(60));
 
+/// How many rows of organising chrome sit above the session rows inside the
+/// list block: the header row and the filter tab bar. `state.selected` indexes
+/// the body set, so every consumer that maps a selection onto a rendered row
+/// adds this — see the `ListState` wiring in `render_list_body`.
+const CHROME_ROWS: usize = 2;
+
+/// The two chrome rows as list items, so they render INSIDE the block's
+/// borders (drawing them above the block produced a left pane whose top rows
+/// carried no border glyph, which is both wrong to look at and wrong to every
+/// border-parity analysis here).
+fn chrome_items(state: &SessionHubState, inner_width: u16) -> Vec<ListItem<'static>> {
+    vec![
+        ListItem::new(render_header(state)),
+        ListItem::new(render_tab_bar(state, inner_width)),
+    ]
+}
+
 /// The compact age form the TUI already uses (app/mod.rs's session-list
 /// drain) — moved here so the hub owns one formatter.
 pub fn relative_time(updated_at: chrono::DateTime<chrono::Utc>) -> String {
@@ -194,7 +211,137 @@ pub fn render_session_hub(
 }
 
 fn render_list(frame: &mut Frame, state: &SessionHubState, area: ratatui::layout::Rect) {
-    let items: Vec<ListItem> = if state.loading {
+    // Stage A: the header + live-count tab bar are the organising chrome the
+    // operator's left pane lacked. They render INSIDE the bordered block, above
+    // the rows — not above the block. Measured on the drawn buffer at 120x40,
+    // drawing them outside produced a left pane whose top rows carry no border
+    // glyph at all, which both looks broken (a label floating two rows above
+    // its box) and breaks every border-parity analysis in this tree that finds
+    // the pane split by counting the second `│` per row.
+    //
+    // The chrome replaces the box title `Sessions [all]`, which could name the
+    // view but could not carry the counts codex's `render_filled_tab_bar` does:
+    // with 3,266 rows in the local DB, "which of the six filters even has
+    // anything in it" was unanswerable without cycling all of them.
+    render_list_body(frame, state, area);
+}
+
+/// The header row. Codex's equivalent is `Agent command center  Group: Project
+/// g`: one line that answers "where am I" AND "what changes the organisation".
+/// Stage C adds the `Group:` clause; the span vector is shaped for it now so
+/// adding it will not restructure this function.
+fn render_header(state: &SessionHubState) -> Line<'static> {
+    let mut spans = vec![
+        Span::styled(
+            " Sessions",
+            Style::default()
+                .fg(theme_colors::accent())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!("  {} rows", state.rows.len()),
+            Style::default().fg(theme_colors::muted()),
+        ),
+    ];
+    // The search row sits above this list, so say what the list is showing
+    // rather than letting the operator wonder whether the counts include the
+    // search. The counts deliberately do NOT: see `filter_counts`.
+    if !state.search_query.is_empty() {
+        spans.push(Span::styled(
+            format!("  matching \"{}\"", state.search_query),
+            Style::default().fg(theme_colors::text()),
+        ));
+    }
+    // Without the key hint the tab bar below reads as decoration.
+    spans.push(Span::styled(
+        "  s cycle",
+        Style::default().fg(theme_colors::muted()),
+    ));
+    Line::from(spans)
+}
+
+/// Every filter mode with its live count, in the order `s` cycles them. The
+/// active tab carries a real background fill and the rest are dimmed; that
+/// contrast alone is the whole interaction, because it lets the operator aim
+/// at a filter before committing to it.
+fn render_tab_bar(state: &SessionHubState, width: u16) -> Line<'static> {
+    let counts = state.filter_counts();
+    // The tab bar's degradation ladder. Codex's `toolbar_for_width` does the
+    // same: full labels while they fit, compact ones when they do not, and the
+    // single active filter when even that does not. Measured on the 120x40
+    // frame, the left pane is 48 columns, which fits SIX compact labels
+    // ("all 12 cur 3 emp 0 live 0 br 5 arch 2" = 36) but not SIX long ones
+    // ("current dir", "this branch's tree" and "by employee" pushed `archived`
+    // clean off the edge and the count the operator needed was the silent
+    // casualty). codex degrades, so we do too.
+    let total_width = |long: bool, sep: u16| -> u16 {
+        counts
+            .iter()
+            .map(|(m, n)| {
+                let label = if long { m.label() } else { m.short_label() };
+                (label.chars().count() + 1 + n.to_string().len()) as u16 + sep
+            })
+            .sum::<u16>()
+    };
+    const SEP: u16 = 2;
+    let (use_long, sep) = if total_width(true, SEP) <= width {
+        (true, SEP)
+    } else if total_width(false, SEP) <= width {
+        (false, SEP)
+    } else if total_width(false, 1) <= width {
+        (false, 1)
+    } else {
+        // Degrade to the active filter alone; a count nobody can read is
+        // decoration, and the header above still names the filter.
+        let active = counts
+            .iter()
+            .find(|(m, _)| *m == state.filter_mode)
+            .map_or_else(|| "0".to_string(), |(_, n)| n.to_string());
+        return Line::from(vec![Span::styled(
+            format!(" {} {}", state.filter_mode.label(), active),
+            Style::default()
+                .bg(theme_colors::selection_bg())
+                .fg(theme_colors::accent())
+                .add_modifier(Modifier::BOLD),
+        )]);
+    };
+
+    let mut spans: Vec<Span<'static>> = Vec::with_capacity(counts.len() * 3 + 1);
+    spans.push(Span::styled(
+        " ",
+        Style::default().fg(theme_colors::muted()),
+    ));
+    for (i, (mode, n)) in counts.iter().enumerate() {
+        // A mode with nothing in it still renders: "active 0" is the answer to
+        // "is anything running", which is the operator's question at a session
+        // hub, and hiding the tab would hide the zero that answers it.
+        let label = if use_long {
+            mode.label().to_string()
+        } else {
+            mode.short_label().to_string()
+        };
+        let text = format!("{label} {n}");
+        let style = if *mode == state.filter_mode {
+            Style::default()
+                .bg(theme_colors::selection_bg())
+                .fg(theme_colors::accent())
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme_colors::muted())
+        };
+        spans.push(Span::styled(text, style));
+        if i + 1 < counts.len() {
+            spans.push(Span::styled(" ".repeat(sep as usize), Style::default()));
+        }
+    }
+    Line::from(spans)
+}
+
+/// The bordered list itself — the old `render_list` body, unchanged. Split out
+/// so the chrome above it is an additive layer rather than an edit to the row
+/// rendering every session row depends on.
+fn render_list_body(frame: &mut Frame, state: &SessionHubState, area: ratatui::layout::Rect) {
+    let body_items: Vec<ListItem> = if state.loading {
         vec![
             ListItem::new(Line::from(vec![
                 Span::styled("  ⏳ ", Style::default().fg(theme_colors::accent())),
@@ -363,18 +510,25 @@ fn render_list(frame: &mut Frame, state: &SessionHubState, area: ratatui::layout
             .collect()
     };
 
+    // The two chrome rows come FIRST inside the block, above every state's
+    // body — loading, empty, or rows — so the counts never disappear while a
+    // filter change reloads. The tab bar needs the block's inner width to
+    // choose its label form, which is why the block is built first.
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme_colors::border()))
-        .title(Span::styled(
-            format!(" Sessions [{}] ", state.filter_mode.label()),
-            Style::default()
-                .fg(theme_colors::accent())
-                .add_modifier(Modifier::BOLD),
-        ));
+        .border_style(Style::default().fg(theme_colors::border()));
+    let inner_width = block.inner(area).width;
+    let items: Vec<ListItem> = chrome_items(state, inner_width)
+        .into_iter()
+        .chain(body_items)
+        .collect();
     let mut list_state = ListState::default();
     if !state.loading && !state.visible_rows().is_empty() {
-        list_state.select(Some(state.selected));
+        // `state.selected` indexes `visible_idx`, which is the BODY set: the
+        // two chrome rows sit above it, so the highlight must be shifted by
+        // exactly CHROME_ROWS or the first visible session renders selected
+        // while the operator's cursor is on the third.
+        list_state.select(Some(CHROME_ROWS + state.selected));
     }
     frame.render_stateful_widget(
         List::new(items).block(block).highlight_style(

@@ -455,3 +455,39 @@ no stage introduces a second filter enum — `HubFilterMode` is the one.
 Verify each stage with the headless sim (`operant tui debug simulate --size
 110x40 --dump-screen`) with the session hub open, and check the drawn screen for
 the header, the counts, the columns and the selected row.
+
+---
+
+## Stage A — what landed (`feat(iter-1644)`) and its two findings
+
+One shared predicate, `row_matches_filter(mode, row, branch_root, cwd)`, is now
+the single definition of what each filter means: `rebuild_visible` uses it for
+the visible set and `filter_counts()` uses it for the counts. Two copies of
+"what does `active` mean" would have drifted, and a count that disagrees with
+the list is worse than no count at all. `filter_counts()` walks `next()` to
+derive the tab bar's order, so it cannot disagree with the order `s` cycles in.
+
+The chrome renders as the first two `ListItem`s INSIDE the bordered block, not
+above it. That ordering is the finding: drawing them above produced a left pane
+whose top rows carried no border glyph at all, which looked broken AND shifted
+every border-parity analysis in the tree (the preview-pane tests locate the
+pane split by counting the second `│` per row). Both symptoms were caught by
+the test suite before this was committed, which is why the border-parity test
+exists now — it is the regression test for a mistake that never shipped.
+
+`state.selected` indexes the BODY set, so the rendered selection is
+`CHROME_ROWS + selected`. Two chrome rows above the rows is exactly the kind of
+offset bug that highlights a different row than the operator is on.
+
+The tab bar degrades by width, as codex's `toolbar_for_width` does: full labels
+("all 12  current dir 3  …") while they fit, compact ones ("all 12 cur 3 emp 0
+live 0 br 5 arch 2") when the pane is 40% of 120 columns, and the single active
+filter when even that does not. The measured defect this fixes: at 48 columns
+the six long labels pushed `archived` clean off the edge, and the count the
+operator most needed — the filter they had not tried yet — was the silent
+casualty. `HubFilterMode::short_label` exists for exactly this ladder and its
+forms are all unambiguous at the lead.
+
+Still open, deliberately: Stages B–E. Stage A does not add grouping or sort,
+and the header's `Group:` clause is shaped for but not yet wired.
+

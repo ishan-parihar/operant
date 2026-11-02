@@ -95,6 +95,55 @@ impl HubFilterMode {
             Self::Archived => "archived",
         }
     }
+
+    /// The compact form the tab bar falls back to when six long labels do not
+    /// fit. Codex's `toolbar_for_width` degrades the same way rather than
+    /// letting the last pill fall off the edge — the count at the far right is
+    /// the one the operator needs (it is the filter they have not tried yet).
+    /// Every form is unambiguous at the lead: `cur`/`emp`/`live`/`br`/`arch`
+    /// all start differently, so the compact row can be read.
+    pub fn short_label(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::CurrentDir => "cur",
+            Self::ByEmployee => "emp",
+            Self::Active => "live",
+            Self::CurrentBranch => "br",
+            Self::Archived => "arch",
+        }
+    }
+}
+
+/// Does this row pass this filter mode, with the process context the modes
+/// need. ONE predicate for the visible set AND the tab bar's counts: two copies
+/// of "what does `active` mean" would drift, and the count the operator reads
+/// would then lie about what the list will show.
+pub(super) fn row_matches_filter(
+    mode: HubFilterMode,
+    r: &SessionEntryV2,
+    branch_root: Option<&str>,
+    cwd: Option<&str>,
+) -> bool {
+    match mode {
+        HubFilterMode::All => true,
+        HubFilterMode::CurrentDir => r.cwd.as_deref().zip(cwd).is_some_and(|(a, b)| a == b),
+        HubFilterMode::ByEmployee => r.employee_id.is_some(),
+        HubFilterMode::Active => {
+            matches!(r.status, RowStatus::Live)
+                || matches!(
+                    &r.kind,
+                    RowKind::Subagent {
+                        status: "pending",
+                        ..
+                    }
+                )
+        }
+        HubFilterMode::Archived => matches!(r.status, RowStatus::Archived),
+        HubFilterMode::CurrentBranch => match branch_root {
+            Some(root) => r.id == root || r.parent_id.as_deref() == Some(root),
+            None => true,
+        },
+    }
 }
 
 /// One rendered message in the preview pane (jcode's `PreviewMessage`,
@@ -349,6 +398,46 @@ impl SessionHubState {
         self.visible_idx.iter().map(|&i| &self.rows[i]).collect()
     }
 
+    /// How many of ALL the rows each filter mode would show. This is the live
+    /// count codex's tab bar carries (`agent_center`'s `render_filled_tab_bar`
+    /// over `TASK_FILTERS`): the operator must see that `active` has 0 rows
+    /// BEFORE committing to it, or the filter is a guess. With 3,266 rows in
+    /// the local DB, cycling all six modes to find out was the entire problem.
+    ///
+    /// Search is deliberately excluded: while a search is active these answer
+    /// "what would I see if I switched filters", which is the only question a
+    /// static tab bar can answer. Mixing the live search in would make the
+    /// numbers jump per keystroke and teach the operator to ignore them.
+    pub fn filter_counts(&self) -> Vec<(HubFilterMode, usize)> {
+        // The order comes from `next()` walking its own cycle, so the tab bar
+        // can never disagree with the order `s` cycles in.
+        let cwd = std::env::current_dir()
+            .ok()
+            .map(|p| p.to_string_lossy().to_string());
+        let mut modes = Vec::with_capacity(6);
+        let mut mode = HubFilterMode::All;
+        loop {
+            modes.push(mode);
+            mode = mode.next();
+            if mode == HubFilterMode::All {
+                break;
+            }
+        }
+        modes
+            .into_iter()
+            .map(|mode| {
+                let n = self
+                    .rows
+                    .iter()
+                    .filter(|r| {
+                        row_matches_filter(mode, r, self.branch_root.as_deref(), cwd.as_deref())
+                    })
+                    .count();
+                (mode, n)
+            })
+            .collect()
+    }
+
     pub fn selected_row(&self) -> Option<&SessionEntryV2> {
         self.visible_idx.get(self.selected).map(|&i| &self.rows[i])
     }
@@ -385,29 +474,13 @@ impl SessionHubState {
             .rows
             .iter()
             .enumerate()
-            .filter(|(_, r)| match self.filter_mode {
-                HubFilterMode::All => true,
-                HubFilterMode::CurrentDir => r
-                    .cwd
-                    .as_deref()
-                    .zip(cwd.as_deref())
-                    .is_some_and(|(a, b)| a == b),
-                HubFilterMode::ByEmployee => r.employee_id.is_some(),
-                HubFilterMode::Active => {
-                    matches!(r.status, RowStatus::Live)
-                        || matches!(
-                            &r.kind,
-                            RowKind::Subagent {
-                                status: "pending",
-                                ..
-                            }
-                        )
-                }
-                HubFilterMode::Archived => matches!(r.status, RowStatus::Archived),
-                HubFilterMode::CurrentBranch => match self.branch_root.as_deref() {
-                    Some(root) => r.id == root || r.parent_id.as_deref() == Some(root),
-                    None => true,
-                },
+            .filter(|(_, r)| {
+                row_matches_filter(
+                    self.filter_mode,
+                    r,
+                    self.branch_root.as_deref(),
+                    cwd.as_deref(),
+                )
             })
             .filter(|(_, r)| {
                 // AND-token search over a lowercase haystack: title, id,
