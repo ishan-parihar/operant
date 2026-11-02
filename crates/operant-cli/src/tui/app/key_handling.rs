@@ -664,20 +664,6 @@ impl App {
                 }
                 return false;
             }
-            // Stage E: a pending archive confirm is DISARMED by anything that
-            // is not Enter. Codex calls the same rule from
-            // `chord_matcher.cancel()` on every non-archive key, and the reason
-            // is the same: a confirm that survives an unrelated keystroke is a
-            // confirm that will eventually fire on a keystroke the operator
-            // meant for something else.
-            //
-            // Enter is handled by its own branch below, which checks the armed
-            // state FIRST — so it must not reach this guard.
-            if self.session_hub.archive_state.is_armed() && !matches!(key.code, KeyCode::Enter) {
-                self.session_hub.disarm_archive();
-                self.set_status_notice("Archive cancelled.".to_string());
-                return false;
-            }
             match key.code {
                 KeyCode::Esc => self.session_hub.close(),
                 // Tab: swap which pane the step keys act on (jcode's
@@ -822,45 +808,11 @@ impl App {
                 // an operator ends up believing a filter hid a session when the
                 // sort merely moved it.
                 KeyCode::Char('o') => self.session_hub.cycle_sort(),
-                // Archive the selected session (Stage E). `a`, not codex's
-                // Ctrl+A: codex reserves the bare letter for exactly this while
-                // guarding it with a keymap conflict check, and operant's hub
-                // has no Ctrl+A binding to collide with — so the unmodified
-                // key is the honest port of the intent, and the confirm below is
-                // the guard codex's keymap check would have provided.
-                //
-                // Archiving is REVERSIBLE, but it is one keystroke from a
-                // mistaken Enter, so the key only ARMS the row: the operator
-                // sees what will be archived and must commit with Enter.
-                // (The disarm guard above runs first, so a second `a` cancels
-                // rather than re-arming: one key, one meaning, and pressing it
-                // twice is the fastest way out of a confirm you regret.)
-                KeyCode::Char('a') => match self.session_hub.arm_archive() {
-                    Some(id) => self.set_status_notice(format!(
-                        "Archive {id}? Enter to confirm, any other key to cancel."
-                    )),
-                    None => self.set_status_notice(
-                        "Only a session row can be archived (not a subagent).".to_string(),
-                    ),
-                },
-                // Enter: commit an armed archive (Stage E), switch to the
-                // selected session (the existing pending_switch_session flow —
-                // run_pending_agent_actions retargets and rebuilds, so the two
-                // cannot diverge; TUI-2), or focus a live subagent row (iter-C).
-                //
-                // The armed check comes FIRST: while an archive is pending,
-                // Enter means "archive", not "switch". Leaving the two in one
-                // gesture is how an operator archives the session they meant to
-                // open.
+                // Enter: switch to the selected session (the existing
+                // pending_switch_session flow — run_pending_agent_actions
+                // retargets and rebuilds, so the two cannot diverge; TUI-2),
+                // or focus a live subagent row (iter-C).
                 KeyCode::Enter => {
-                    if self.session_hub.archive_state.is_armed() {
-                        if let Some(HubSelection::ArchiveSession(id)) =
-                            self.session_hub.commit_archive()
-                        {
-                            self.pending_archive_session = Some(id);
-                        }
-                        return false;
-                    }
                     match self.session_hub.confirm_selection() {
                         Some(HubSelection::SwitchSession(id)) => {
                             self.session_hub.close();
@@ -880,14 +832,6 @@ impl App {
                         Some(HubSelection::FocusSubagent(_)) => {
                             // The hub renders the focus view itself; nothing
                             // to apply here.
-                        }
-                        // Reached only when a caller hands the App an archive
-                        // without going through `commit_archive` (which the
-                        // armed path above uses). Handling it here rather than
-                        // ignoring it keeps the enum exhaustive and the write
-                        // in ONE place.
-                        Some(HubSelection::ArchiveSession(id)) => {
-                            self.pending_archive_session = Some(id);
                         }
                         None => {}
                     }

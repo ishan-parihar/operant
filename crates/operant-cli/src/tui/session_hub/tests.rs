@@ -2009,117 +2009,53 @@ fn the_sort_clause_renders_in_the_controls_row() {
 
 // ── Stage E — the archive confirm (2026-11-02) ───────────────────────────────
 //
-// Codex's `ArchiveState` (resume_picker/archive.rs) arms on the key and commits
-// on Enter, and it cancels on every other keystroke. These pin that machine's
-// two load-bearing properties: the confirm DOES require a second keystroke, and
-// it does NOT commit a row the operator moved off.
+// The confirm itself is the peer's `pending_archive` (iter-1671) — ONE source of
+// truth for "which row is being archived", which this slice deliberately did not
+// duplicate. What these pin is the part this slice owns: the confirm must track a
+// ROW rather than "whatever is selected", and the armed row must be MARKED on the
+// drawn buffer rather than named only in a notice line.
 
 #[test]
-fn arming_archive_requires_a_second_keystroke_to_commit() {
+fn the_archive_confirm_tracks_the_row_not_the_selection() {
+    // The bug this pins: the operator arms row A, moves to row B, and commits.
+    // A confirm keyed on the live selection would archive B.
     let mut hub = sort_fixture();
-    let armed = hub.arm_archive();
-    assert_eq!(
-        armed.as_deref(),
-        Some("cheap"),
-        "`a` arms the selected row and names it"
-    );
-    assert!(
-        hub.archive_state.is_armed(),
-        "arming must actually arm — an arm that does nothing is a confirm that \\
-         archives without asking"
-    );
-    // The row is still in the visible set: nothing has been written yet.
-    assert!(
-        visible_ids(&hub).contains(&"cheap".to_string()),
-        "arming must not remove the row: the operator has not confirmed"
-    );
-}
-
-#[test]
-fn committing_an_armed_archive_yields_the_selection_and_disarms() {
-    let mut hub = sort_fixture();
-    hub.arm_archive();
-    let committed = hub.commit_archive();
-    match committed {
-        Some(HubSelection::ArchiveSession(id)) => {
-            assert_eq!(id, "cheap", "the commit archives the ARMED row");
-        }
-        other => panic!("an armed Enter must yield ArchiveSession, got {other:?}"),
-    }
-    assert!(
-        !hub.archive_state.is_armed(),
-        "the commit must clear the armed state, or a second Enter re-archives"
-    );
-    // A commit with nothing armed is not a commit.
-    assert!(
-        hub.commit_archive().is_none(),
-        "committing an idle confirm must do nothing at all"
-    );
-}
-
-#[test]
-fn disarming_leaves_nothing_armed() {
-    let mut hub = sort_fixture();
-    hub.arm_archive();
-    hub.disarm_archive();
-    assert!(!hub.archive_state.is_armed());
-    assert!(
-        hub.commit_archive().is_none(),
-        "a disarmed confirm must not be committable — this is the property that \\
-         makes the harmless escape hatch harmless"
-    );
-}
-
-#[test]
-fn a_subagent_row_cannot_be_armed_for_archiving() {
-    // A delegation record is process-local registry state, not a database row.
-    // `set_session_archived` would update nothing and the operator would be
-    // told "0 rows changed" for a keystroke that looked like it worked.
-    let mut hub = SessionHubState::new();
-    hub.visible = true;
-    hub.loading = false;
-    hub.replace_rows(vec![subagent_row("dlg-9", "audit the tests", "pending")]);
-    assert!(
-        hub.arm_archive().is_none(),
-        "a subagent row has no `sessions` row to archive and must refuse"
-    );
-    assert!(
-        !hub.archive_state.is_armed(),
-        "the refusal must leave the confirm idle, not half-armed"
-    );
-}
-
-#[test]
-fn the_archive_confirm_commits_the_armed_row_not_the_now_selected_row() {
-    // The bug this pins: the operator arms row A, moves to row B, and Enter
-    // archives B. The armed state must hold the ROW, not "whatever is selected
-    // now".
-    let mut hub = sort_fixture();
-    hub.arm_archive();
+    hub.pending_archive = Some("cheap".to_string());
     hub.select_next();
     hub.select_next();
     assert_eq!(
         hub.selected_row().map(|r| r.id.as_str()),
         Some("rich"),
-        "the fixture's third row must now be selected"
+        "the third fixture row must now be selected"
     );
-    match hub.commit_archive() {
-        Some(HubSelection::ArchiveSession(id)) => assert_eq!(
-            id, "cheap",
-            "the commit must archive the ARMED row, not the one now under the \\
-             cursor — archiving a session the operator never confirmed is the \\
-             failure this stage exists to prevent"
-        ),
-        other => panic!("expected ArchiveSession, got {other:?}"),
-    }
+    assert_eq!(
+        hub.pending_archive_pos(),
+        Some(0),
+        "the armed row must still resolve to the row the confirm named (cheap, \\
+         position 0 in the flat visible set), not the row under the cursor"
+    );
 }
 
 #[test]
-fn the_armed_row_renders_the_archive_marker_not_its_status() {
+fn an_unknown_archive_confirm_names_no_row_at_all() {
+    // A stale confirm (the row left the list under it) must not resolve: a
+    // marker landing on whatever happens to occupy the old position would be a
+    // lie about which session is being archived.
+    let mut hub = sort_fixture();
+    hub.pending_archive = Some("session-that-is-gone".to_string());
+    assert!(
+        hub.pending_archive_pos().is_none(),
+        "a confirm naming a row that is not in the visible set must resolve to \\
+         nothing rather than to an unrelated row"
+    );
+}
+
+#[test]
+fn the_armed_row_is_marked_on_the_drawn_buffer() {
     // The operator must see WHICH row will be archived, not only the notice
-    // line at the bottom of the frame. This asserts on the DRAWN buffer: the
-    // first attempt at this test rendered a fresh (unarmed) hub and asserted on
-    // that, which proved nothing about the armed render at all.
+    // line at the bottom of the frame. Asserted on the drawn buffer: the first
+    // attempt at this test rendered a fresh hub and asserted on that, which
+    // proved nothing about the armed render.
     use crate::tui::render::FrameCtx;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
@@ -2131,7 +2067,7 @@ fn the_armed_row_renders_the_archive_marker_not_its_status() {
         row("sess-a", Some("to archive"), None),
         row("sess-b", Some("leave alone"), None),
     ]);
-    hub.arm_archive();
+    hub.pending_archive = Some("sess-a".to_string());
     assert_eq!(
         hub.selected_row().map(|r| r.id.as_str()),
         Some("sess-a"),
@@ -2160,8 +2096,8 @@ fn the_armed_row_renders_the_archive_marker_not_its_status() {
         .unwrap_or_else(|| panic!("the armed row must render its title: {rows:?}"));
     assert!(
         armed_row.contains('\u{1f5d1}'),
-        "the armed row must carry the archive marker (\\u{{1f5d1}}), not its \\
-         ordinary status glyph: {armed_row:?}"
+        "the armed row must carry the archive marker, not its ordinary status \\
+         glyph: {armed_row:?}"
     );
 
     let other_row = rows

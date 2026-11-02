@@ -151,48 +151,6 @@ impl App {
         changed
     }
 
-    /// 0. Drain the Stage E archive write's result, then ask for a fresh row
-    /// load so the archived session leaves the list in the same breath.
-    ///
-    /// The reload is the point: the hub renders `Database::list_sessions_rich`,
-    /// so a write the operator cannot SEE is a write they will repeat. Codex
-    /// does the same (`handle_archive_result` re-derives its filter), and it is
-    /// the difference between "I pressed a and nothing happened" and a row that
-    /// is simply gone.
-    pub(super) fn drain_archive_result(&mut self) -> bool {
-        let Some(ref mut rx) = self.archive_result_rx else {
-            return false;
-        };
-        match rx.try_recv() {
-            Ok(result) => {
-                self.archive_result_rx = None;
-                match result {
-                    Ok(0) => {
-                        // The UPDATE matched nothing: the row was deleted or
-                        // archived by something else between the confirm and the
-                        // write. Saying so beats a silent no-op.
-                        self.set_status_notice(
-                            "That session is already gone — nothing to archive.".to_string(),
-                        );
-                    }
-                    Ok(_) => self.set_status_notice("Session archived.".to_string()),
-                    Err(e) => {
-                        self.set_status_notice(format!("Failed to archive session: {e}"));
-                        // The row is still there, which is the correct outcome
-                        // for a failed write: re-arming costs one keystroke,
-                        // and a removed row that was never archived is data the
-                        // operator cannot get back by pressing a again.
-                    }
-                }
-                // Either way, re-read: the row either left the list or it is
-                // still exactly where the operator left it.
-                self.session_list_pending = true;
-                true
-            }
-            Err(_) => false,
-        }
-    }
-
     /// 1. Drain background session-hub row loads into the unified page.
     pub(super) fn drain_session_list(&mut self) -> bool {
         let Some(ref mut rx) = self.session_list_rx else {

@@ -26,7 +26,6 @@ use event_coalesce::MAX_DRAINED_EVENTS_PER_WAKE;
 use crate::tui::operant_model::ContentPos;
 pub(crate) use scroll_anchor::ScrollMemory;
 
-pub(crate) mod diag_leak;
 #[cfg(test)]
 pub(crate) mod tests;
 pub use enums::*;
@@ -280,12 +279,6 @@ pub struct App {
     /// makes one). Applied by `run_pending_agent_actions` (`set_session_id` +
     /// display rebuild), the plan-03 pattern.
     pub pending_switch_session: Option<String>,
-
-    /// (plan Stage E) A session the hub's archive confirm committed, waiting
-    /// for `run_pending_agent_actions` to perform the write on a worker thread
-    /// — the same pattern as `pending_switch_session`, because the hub is a
-    /// pure view and the App owns the database handle.
-    pub pending_archive_session: Option<String>,
 
     /// The session this App is currently attached to, retained from the
     /// agent's own identity rather than re-derived from the hub's rows.
@@ -712,10 +705,6 @@ pub struct App {
     /// unified `SessionEntryV2` rows — DB list + delegation snapshot).
     pub session_list_rx:
         Option<tokio::sync::mpsc::Receiver<Vec<operant_core::session::listing::SessionEntryV2>>>,
-    /// Receiver for the Stage E archive write (plan 2026-11-02). Its own
-    /// channel, like `preview_rx`, because an archive in flight while a row
-    /// load lands must not be confused for one.
-    pub archive_result_rx: Option<tokio::sync::mpsc::Receiver<operant_core::Result<usize>>>,
     /// Receiver for the hub's per-session PREVIEW load (the right pane's
     /// transcript window). Separate from `session_list_rx` so the list load
     /// and the pane load are independent flights: moving the cursor while
@@ -1734,27 +1723,6 @@ impl App {
                     );
                 }
             }
-            // Stage E: the archive confirm's write. `set_session_archived` is a
-            // single indexed UPDATE, but it still goes through the same
-            // worker-thread shape the session list load uses, because the hub
-            // is rendered on the UI thread and a synchronous SQLite write
-            // there is the ~250 ms stall the operator already reported once.
-            if let Some(session_id) = self.pending_archive_session.take() {
-                let short: String = session_id.chars().take(8).collect();
-                let db_path = self.config.database_path.clone();
-                let (tx, rx) = tokio::sync::mpsc::channel(1);
-                self.archive_result_rx = Some(rx);
-                tokio::spawn(async move {
-                    let result = tokio::task::spawn_blocking(move || {
-                        operant_core::database::Database::init(db_path)
-                            .and_then(|db| db.set_session_archived(&session_id, true))
-                    })
-                    .await
-                    .unwrap_or_else(|e| Err(operant_core::Error::Agent(e.to_string())));
-                    let _ = tx.send(result).await;
-                });
-                self.set_status_notice(format!("Archiving {short}\u{2026}"));
-            }
             if self.should_exit {
                 // A simulated run's screen/style dump must reflect the LAST
                 // applied event: `terminal.draw` happens before the event
@@ -1820,11 +1788,6 @@ impl App {
             self.drain_model_fetch();
             self.drain_default_model();
 
-            // Drain the Stage E archive write's result BEFORE the row load
-            // runs: the drain is what flags the reload, and a drain after the
-            // trigger would leave the operator one frame short of their own
-            // keystroke's effect.
-            self.drain_archive_result();
             // Spawn async session-hub row load when requested. One load =
             // DB rows + live subagent rows (plan 2026-10-28: the unified
             // record, the plan-03 mpsc pattern, the 50-cap gone — G7).

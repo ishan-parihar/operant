@@ -1147,28 +1147,6 @@ impl Database {
         Ok(())
     }
 
-    /// Archive a session, or restore it (`archived = 0`). The `archived` column
-    /// already exists and `list_sessions_rich` already reads it into
-    /// `RowStatus::Archived`, so this is the write half of a state the read
-    /// model has understood since the column landed — until now nothing in the
-    /// tree could SET it (the upsert carries it, and one test pokes it with raw
-    /// SQL).
-    ///
-    /// Returns the number of rows actually changed, which is how the caller
-    /// tells "archived" from "no such session": `list_sessions_rich` reads the
-    /// DB, so a silently-missed write would leave the operator looking at a row
-    /// that is still there and believing the archive failed.
-    pub fn set_session_archived(&self, session_id: &str, archived: bool) -> Result<usize> {
-        let conn = self.lock_conn()?;
-        let changed = conn
-            .execute(
-                "UPDATE sessions SET archived = ?2 WHERE id = ?1",
-                params![session_id, i64::from(archived)],
-            )
-            .map_err(|e| Error::Agent(format!("Failed to set session archived: {}", e)))?;
-        Ok(changed)
-    }
-
     /// FTS5 session search with an optional role filter (`user`/`assistant`/
     /// `tool`). hermes `session_search` role_filter parity. `role = None`
     /// matches every role (backwards compatible with `search_sessions`).
@@ -4430,59 +4408,6 @@ mod tests {
         let two = rows.iter().find(|r| r.id == "rich-2").expect("rich-2");
         assert_eq!(two.employee_id, None, "personal sessions carry no seat");
         assert_eq!(two.title, None);
-    }
-
-    #[test]
-    fn set_session_archived_round_trips_through_list_sessions_rich() {
-        // The write half of a state the read model has understood since the
-        // column landed: until Stage E nothing in the tree could SET it, and
-        // this pins both directions (archive and restore) against the read
-        // that actually reaches the hub's rows.
-        let db = test_db();
-        let now = chrono::Utc::now().to_rfc3339();
-        db.save_session("arch-1", Some("Archivable"), "local", &now, &now)
-            .expect("save");
-
-        assert_eq!(
-            db.set_session_archived("arch-1", true).expect("archive"),
-            1,
-            "an existing row must report exactly one changed row"
-        );
-        let rows = db.list_sessions_rich(10).expect("list");
-        let one = rows.iter().find(|r| r.id == "arch-1").expect("arch-1");
-        assert_eq!(
-            one.status,
-            crate::session::listing::RowStatus::Archived,
-            "the read model must see the archive: a write the picker cannot see \
-             is a write the operator will repeat"
-        );
-
-        // And back: archiving is reversible, which is why the confirm is a
-        // confirm and not a delete.
-        assert_eq!(
-            db.set_session_archived("arch-1", false).expect("restore"),
-            1
-        );
-        let rows = db.list_sessions_rich(10).expect("list again");
-        assert_eq!(
-            rows.iter().find(|r| r.id == "arch-1").map(|r| r.status),
-            Some(crate::session::listing::RowStatus::Idle),
-            "restoring must return the row to the ordinary status"
-        );
-    }
-
-    #[test]
-    fn set_session_archived_reports_a_miss_rather_than_succeeding_quietly() {
-        // An id that does not exist changes zero rows. Reporting that is what
-        // lets the hub say "already gone" instead of "archived" about a row
-        // that is still on screen.
-        let db = test_db();
-        assert_eq!(
-            db.set_session_archived("no-such-session", true)
-                .expect("miss"),
-            0,
-            "a write against a missing row must report 0 changed rows, not Ok(())"
-        );
     }
 
     #[test]

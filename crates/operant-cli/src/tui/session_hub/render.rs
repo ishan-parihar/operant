@@ -598,7 +598,7 @@ fn render_list_body(frame: &mut Frame, state: &SessionHubState, area: ratatui::l
                 // the operator never has to hold two states in their head —
                 // and the row that WILL be archived is the row that says so,
                 // not just the notice line at the bottom of the frame.
-                let armed = state.archive_state.armed_row() == Some(i);
+                let armed = state.pending_archive_pos() == Some(i);
                 let mut spans = vec![Span::styled(
                     if armed {
                         " \u{1f5d1} ".to_string()
