@@ -915,6 +915,194 @@ fn session_seat_line(employee_id: Option<&str>) -> String {
     }
 }
 
+/// How many bindings the browser renders before truncating.
+///
+/// A telegram message is not scrollable, so an uncapped listing is not
+/// "complete" — it is a list whose tail the operator never sees. The cap keeps
+/// the reply short enough to read, and the omitted count is named explicitly
+/// so a truncated list is honest rather than silently short.
+const SESSION_BROWSE_CAP: usize = 10;
+
+/// `/sessions` with no args — browse this platform's sessions WITH transcripts.
+///
+/// # Why this exists
+///
+/// The handler used to report only *bindings*: `session_id`, platform user,
+/// channel — an opaque `gw_<hash>` per row, with no title, message count or
+/// recency. So a telegram user had to copy an id out of a message they cannot
+/// read, run `operant sessions list` on the server, and paste it back. That is
+/// Gap 4, and it is the second-largest gap in the plan.
+///
+/// # Platform reach
+///
+/// Slack is OUTBOUND-ONLY (no Socket Mode WebSocket — `gateway/slack.rs`'s
+/// `start()` logs and returns), so a Slack user cannot type `/sessions` at all.
+/// The only receivers are **telegram and discord**; webhooks is inbound but
+/// push-only with no reply path for a listing. This browser is therefore
+/// judged on telegram/discord UX alone and must not claim Slack.
+///
+/// # Why the join is here and not a second loader
+///
+/// The binding table maps platform+user+channel to a session id, and that id
+/// IS the operant session id (`gw_<hash>`), so the join is a lookup by id
+/// against the rich loader that already exists. A second SQL join in
+/// `gateway_session.rs` would duplicate `list_sessions_rich`'s NULL-safe
+/// ordering for nothing gained.
+///
+/// `None` means there is nothing better to say than what the caller already
+/// prints (no gateway, or no bindings on this platform).
+pub fn browse_platform_sessions(ctx: &CommandContext<'_>) -> Option<String> {
+    let store = ctx.gateway?.get_session_store();
+    let bindings = store.list_active_sessions(Some(ctx.platform));
+    if bindings.is_empty() {
+        return None;
+    }
+
+    // The transcript side of the join. A DB failure degrades to the caller's
+    // binding-only listing rather than to an error: the operator asked what
+    // sessions exist, and that question the store alone can still answer.
+    let rich = operant_core::database::Database::init(ctx.config.database_path.clone())
+        .and_then(|db| db.list_sessions_rich(SESSION_BROWSE_CAP * 4))
+        .unwrap_or_default();
+
+    let rows = join_bindings_to_transcripts(&bindings, &rich);
+    if rows.is_empty() {
+        return None;
+    }
+    Some(render_session_browser(&rows))
+}
+
+/// A binding joined to whatever its transcript row knows.
+///
+/// `message_count == 0` with no title means the binding names a session with no
+/// row, or a row no turn ever wrote — a gateway session created before any turn,
+/// or one whose transcript was pruned. Common enough to render rather than hide.
+struct BrowseRow {
+    title: Option<String>,
+    message_count: usize,
+    updated_at: Option<chrono::DateTime<chrono::Utc>>,
+    interrupted: bool,
+}
+
+/// Join `bindings` to `rich` by session id, preserving the store's order and
+/// capping at `SESSION_BROWSE_CAP`.
+///
+/// The store's order is last-activity order, which is what an operator browsing
+/// a chat surface wants first. Both sides are small (one binding per chat; the
+/// rich loader is capped), so a nested scan is honest here — a hash index would
+/// be the reflex, but this join runs once per command.
+fn join_bindings_to_transcripts(
+    bindings: &[operant_core::gateway::PlatformSession],
+    rich: &[operant_core::session::listing::SessionEntryV2],
+) -> Vec<BrowseRow> {
+    bindings
+        .iter()
+        .take(SESSION_BROWSE_CAP)
+        .map(|b| {
+            let row = rich.iter().find(|r| r.id == b.session_id);
+            BrowseRow {
+                title: row.and_then(|r| r.title.clone()),
+                message_count: row.map_or(0, |r| r.message_count),
+                updated_at: row.map(|r| r.updated_at),
+                interrupted: row.is_some_and(|r| {
+                    matches!(
+                        r.status,
+                        operant_core::session::listing::RowStatus::Interrupted
+                    )
+                }),
+            }
+        })
+        .collect()
+}
+
+/// Render the browsable reply: 1-based index, title, recency, message count.
+///
+/// The index is the whole affordance — `/sessions 3` pins row 3 through the
+/// same path `/resume` already uses, so the operator never types an opaque id.
+fn render_session_browser(rows: &[BrowseRow]) -> String {
+    let mut lines = vec![format!("*Your sessions ({}):*", rows.len())];
+    for (i, row) in rows.iter().enumerate() {
+        let title = row.title.as_deref().unwrap_or("(untitled)");
+        let title = truncate_title(title, BROWSE_TITLE_COLS);
+        // Recency, not an absolute timestamp: "3h ago" is scannable in a chat
+        // list, "2026-11-02T05:13:22Z" is not. The hub's own formatter.
+        let age = row
+            .updated_at
+            .map(relative_age)
+            .unwrap_or_else(|| "unknown".to_string());
+        // The interrupted mark matters most HERE of all: this list is where the
+        // operator decides what to continue, and "which of these was cut off"
+        // is the question that brings them to it.
+        let badge = if row.interrupted {
+            " (interrupted)"
+        } else {
+            ""
+        };
+        lines.push(format!(
+            "{}. *{}*{} — {} · {} msg",
+            i + 1,
+            title,
+            badge,
+            age,
+            row.message_count
+        ));
+    }
+    if bindings_len_may_exceed(rows) {
+        lines.push("_… and older sessions omitted._".to_string());
+    }
+    lines.push("Reply `/sessions <n>` to switch, or `/new` for a fresh one.".to_string());
+    lines.join("\n")
+}
+
+/// Whether the reply may be hiding rows, so the tail notice is honest.
+///
+/// Derived from the row count against the cap rather than tracked separately:
+/// a flag that can disagree with the rendered list is how a truncated list ends
+/// up claiming to be complete.
+fn bindings_len_may_exceed(rows: &[BrowseRow]) -> bool {
+    rows.len() >= SESSION_BROWSE_CAP
+}
+
+/// How many characters of a title the browser shows before ellipsising.
+///
+/// A chat line is narrow and the row carries four other fields; 40 characters
+/// is enough to recognise a session and short enough that the count, recency
+/// and badge stay on the same visual line.
+const BROWSE_TITLE_COLS: usize = 40;
+
+/// Truncate on a character boundary, never on a byte one.
+///
+/// `&title[..n]` panics on a multi-byte char, and titles are model-authored
+/// text where that is reachable. `chars().take()` cannot.
+fn truncate_title(title: &str, max: usize) -> String {
+    let mut out: String = title.chars().take(max).collect();
+    if out.chars().count() < title.chars().count() {
+        out.push('…');
+    }
+    out
+}
+
+/// Recency for a chat listing: "3h ago", not an absolute timestamp.
+///
+/// The hub has the same formatter behind a private module and reusing it would
+/// mean widening that visibility purely for one line in another crate's file;
+/// the arithmetic is three comparisons and duplicating it here is the smaller
+/// change. Days, not weeks: past a week the exact date matters more than the
+/// distance, and this listing is for "what was I just doing" anyway.
+fn relative_age(updated_at: chrono::DateTime<chrono::Utc>) -> String {
+    let age = chrono::Utc::now().signed_duration_since(updated_at);
+    let mins = age.num_minutes();
+    if mins < 1 {
+        "just now".to_string()
+    } else if mins < 60 {
+        format!("{mins}m ago")
+    } else if age.num_hours() < 24 {
+        format!("{}h ago", age.num_hours())
+    } else {
+        format!("{}d ago", age.num_days())
+    }
+}
+
 pub fn handle_command(cmd_name: &str, _args: &str, ctx: &CommandContext<'_>) -> Option<String> {
     let args = _args;
     let def = COMMAND_REGISTRY.iter().find(|d| {
@@ -1234,27 +1422,107 @@ pub fn handle_command(cmd_name: &str, _args: &str, ctx: &CommandContext<'_>) -> 
             }
         }
 
+
         "sessions" => {
-            let mut lines = vec!["*Active Sessions:*".to_string()];
-            if let Some(gateway) = ctx.gateway {
-                let store = gateway.get_session_store();
-                let total = store.get_session_count();
-                lines.push(format!("• Total active sessions: {}", total));
-                let sessions = store.list_active_sessions(Some(ctx.platform));
-                if sessions.is_empty() {
-                    lines.push("• No sessions for this platform.".to_string());
-                } else {
-                    for s in &sessions {
-                        lines.push(format!(
-                            "• `{}` — user: `{}`, channel: `{}`",
-                            s.session_id, s.platform_user_id, s.platform_channel_id
-                        ));
+            // Gap 4 (plan 2026-11-02, iter-2): `/sessions` becomes a BROWSER
+            // rather than a dump of binding ids. No args lists this platform's
+            // sessions WITH their transcripts; a numeric argument pins that row
+            // through the SAME honesty gate `/resume` uses, so a `/sessions 9`
+            // on a pruned transcript is refused rather than silently attaching
+            // the agent to an empty context.
+            let arg = args.trim();
+            if arg.is_empty() {
+                // Fall back to the old binding-only reply when there is no
+                // gateway or no binding to browse: that is strictly more
+                // information than an error, and it is what the operator had
+                // before this iteration.
+                return Some(
+                    browse_platform_sessions(ctx).unwrap_or_else(|| {
+                        let mut lines = vec!["*Sessions:*".to_string()];
+                        if let Some(gateway) = ctx.gateway {
+                            let store = gateway.get_session_store();
+                            let total = store.get_session_count();
+                            lines.push(format!("• Total active sessions: {}", total));
+                            let sessions = store.list_active_sessions(Some(ctx.platform));
+                            if sessions.is_empty() {
+                                lines.push("• No sessions for this platform.".to_string());
+                            } else {
+                                for s in &sessions {
+                                    lines.push(format!(
+                                        "• `{}` — user: `{}`, channel: `{}`",
+                                        s.session_id, s.platform_user_id, s.platform_channel_id
+                                    ));
+                                }
+                            }
+                        } else {
+                            lines.push(
+                                "• Gateway not connected. Use CLI `operant sessions list`."
+                                    .to_string(),
+                            );
+                        }
+                        lines.join("\n")
+                    }),
+                );
+            }
+
+            // A numeric argument is an index into what the no-arg listing just
+            // showed. Resolve it through the SAME join, so the row the operator
+            // counts is the row that gets pinned — re-deriving the list here and
+            // in the browser is how the two would drift.
+            let index: Option<usize> = arg.parse().ok();
+            match index {
+                Some(n) => {
+                    let store = ctx.gateway.map(|g| g.get_session_store());
+                    let bindings = store
+                        .as_ref()
+                        .map(|s| s.list_active_sessions(Some(ctx.platform)))
+                        .unwrap_or_default();
+                    match bindings.get(n.saturating_sub(1)) {
+                        Some(chosen) => {
+                            // The honesty gate, verbatim from `/resume` below:
+                            // pin the id ONLY if the transcript it continues
+                            // exists. Refusing beats attaching to an empty
+                            // context and claiming a resume.
+                            match open_stored_transcript(ctx, &chosen.session_id) {
+                                Ok(stored) if stored.messages == 0 => {
+                                    format!(
+                                        "Session {} has no stored messages to continue.",
+                                        n
+                                    )
+                                }
+                                Ok(_) => {
+                                    if let Some(pins) = ctx.session_pins.as_ref()
+                                        && !ctx.session_key.is_empty()
+                                    {
+                                        pins.set(ctx.session_key, &chosen.session_id);
+                                    }
+                                    format!(
+                                        "Switched to session {} — continuing that conversation.",
+                                        n
+                                    )
+                                }
+                                Err(e) => {
+                                    tracing::warn!(
+                                        platform = ctx.platform,
+                                        session_index = n,
+                                        error = %e,
+                                        "/sessions <n> refused: the transcript could not be opened"
+                                    );
+                                    format!("Could not open session {}: {}.", n, e)
+                                }
+                            }
+                        }
+                        None => format!(
+                            "No session number {}. Send `/sessions` to see what is available.",
+                            n
+                        ),
                     }
                 }
-            } else {
-                lines.push("• Gateway not connected. Use CLI `operant sessions list`.".to_string());
+                // A non-numeric argument is an id, which is what `/resume` is
+                // for. Point at it rather than half-implementing a second
+                // spelling of the same command.
+                None => "Send `/sessions <number>` to pick from the list, or `/resume <session-id>` for an id.".to_string(),
             }
-            lines.join("\n")
         }
 
         "resume" => {
@@ -3554,6 +3822,148 @@ mod tests {
         let mut personal = org_config(dir.path());
         personal.holon.enabled = false;
         assert!(unknown_org_employee(&personal, "hrmaster").is_none());
+    }
+    // ── The /sessions browser (Gap 4) ─────────────────────────────────
+
+    /// A fresh temp-file database, one per test.
+    fn test_db() -> operant_core::database::Database {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "operant_gateway_browse_{}_{}.db",
+            std::process::id(),
+            n
+        ));
+        let _ = std::fs::remove_file(&path);
+        operant_core::database::Database::init(path).expect("test database")
+    }
+
+    //
+    // These test the JOIN and the honesty of the truncation, not the reply's
+    // wording: a test asserting "contains 'msg'" would pass while the wrong
+    // rows were selected, which is the failure that matters.
+
+    /// A binding naming `session_id`, the shape `list_active_sessions` returns.
+    fn binding(session_id: &str) -> operant_core::gateway::PlatformSession {
+        operant_core::gateway::PlatformSession {
+            session_id: session_id.to_string(),
+            platform: "telegram".to_string(),
+            platform_user_id: "u1".to_string(),
+            platform_channel_id: "c1".to_string(),
+            operant_session_id: String::new(),
+            created_at: String::new(),
+            last_active: String::new(),
+            metadata: Default::default(),
+        }
+    }
+
+    #[test]
+    fn the_join_reports_the_transcript_row_not_just_the_binding() {
+        let db = test_db();
+        let now = chrono::Utc::now().to_rfc3339();
+        db.save_session("gw_a", Some("Fix the login bug"), "gateway", &now, &now)
+            .unwrap();
+        db.save_message_full(&operant_core::database::MessageData {
+            session_id: "gw_a".to_string(),
+            role: "user".to_string(),
+            content: Some("it 500s".to_string()),
+            ..Default::default()
+        })
+        .unwrap();
+        // A second binding with NO row at all: the prune case.
+        let rich = db.list_sessions_rich(50).unwrap();
+
+        let rows = join_bindings_to_transcripts(&[binding("gw_a"), binding("gw_gone")], &rich);
+        assert_eq!(rows.len(), 2, "every binding becomes a row");
+
+        let with = &rows[0];
+        assert_eq!(with.title.as_deref(), Some("Fix the login bug"));
+        assert_eq!(with.message_count, 1, "the count comes from the join");
+        assert!(with.updated_at.is_some(), "recency comes from the join too");
+
+        let without = &rows[1];
+        assert_eq!(
+            without.title, None,
+            "a pruned transcript must not invent a title"
+        );
+        assert_eq!(without.message_count, 0);
+        assert!(without.updated_at.is_none());
+    }
+
+    #[test]
+    fn an_interrupted_binding_carries_the_mark_into_the_browser() {
+        // The interruption badge is the reason this listing exists: the operator
+        // is choosing what to continue, and "which of these was cut off" is the
+        // question that brought them to the command. Without the join carrying
+        // the flag, the browser would render every row identically.
+        let db = test_db();
+        let now = chrono::Utc::now().to_rfc3339();
+        db.save_session("gw_hot", Some("Hot"), "gateway", &now, &now)
+            .unwrap();
+        db.save_session("gw_cold", Some("Cold"), "gateway", &now, &now)
+            .unwrap();
+        db.mark_session_interrupted("gw_hot").unwrap();
+
+        let rich = db.list_sessions_rich(50).unwrap();
+        let rows = join_bindings_to_transcripts(&[binding("gw_hot"), binding("gw_cold")], &rich);
+        assert!(rows[0].interrupted, "the flagged row carries the mark");
+        assert!(!rows[1].interrupted, "a clean row must not");
+
+        let rendered = render_session_browser(&rows);
+        assert!(
+            rendered.contains("Hot") && rendered.contains("(interrupted)"),
+            "the badge must survive rendering: {rendered}"
+        );
+        assert!(
+            !rendered.contains("Cold (interrupted)"),
+            "a clean row must not gain the badge"
+        );
+    }
+
+    #[test]
+    fn a_listing_at_the_cap_says_it_is_hiding_rows() {
+        // The honesty half of truncation. A capped list that claims to be
+        // complete is worse than an uncapped one: the operator stops looking
+        // for something the reply already dropped.
+        let db = test_db();
+        let now = chrono::Utc::now().to_rfc3339();
+        for i in 0..(SESSION_BROWSE_CAP + 3) {
+            db.save_session(&format!("gw_many_{i}"), None, "gateway", &now, &now)
+                .unwrap();
+        }
+        let bindings: Vec<_> = (0..(SESSION_BROWSE_CAP + 3))
+            .map(|i| binding(&format!("gw_many_{i}")))
+            .collect();
+        let rich = db.list_sessions_rich(100).unwrap();
+
+        let rows = join_bindings_to_transcripts(&bindings, &rich);
+        assert_eq!(
+            rows.len(),
+            SESSION_BROWSE_CAP,
+            "the join caps at the browser cap"
+        );
+        let rendered = render_session_browser(&rows);
+        assert!(
+            rendered.contains("omitted"),
+            "a capped listing must say it is hiding rows: {rendered}"
+        );
+    }
+
+    #[test]
+    fn a_short_listing_does_not_claim_to_be_hiding_rows() {
+        let db = test_db();
+        let now = chrono::Utc::now().to_rfc3339();
+        db.save_session("gw_one", Some("Only one"), "gateway", &now, &now)
+            .unwrap();
+        let rich = db.list_sessions_rich(50).unwrap();
+        let rows = join_bindings_to_transcripts(&[binding("gw_one")], &rich);
+        let rendered = render_session_browser(&rows);
+        assert!(
+            !rendered.contains("omitted"),
+            "a complete listing must not claim to be truncated: {rendered}"
+        );
+        assert!(rendered.contains("1."), "the row carries its 1-based index");
     }
 }
 
