@@ -523,7 +523,7 @@ happens and where a second glyph would otherwise be drawn twice.
 
 ---
 
-## Stage C — what landed (`feat(iter-1654)` state, `feat(iter-1655)` render)
+## Stage C — LANDED (model `feat(iter-1654)`, render `feat(iter-1659)`)
 
 Grouping, cycled with `g`. Four axes: `Auto` (the load's own `updated_at DESC`),
 `Directory` (`row.cwd`), `Employee` (`row.employee_id`), `Status`
@@ -559,4 +559,12 @@ misplaces groups. The translation is explicit in `interpose_group_headings`.
 
 `cycle_group()` preserves the selection BY ROW ID, not by position, so pressing
 `g` does not move the cursor to a different session.
+
+A third finding, from the row-fitting sweep: with the Status and Updated columns
+on the meta line, the old ` · 1.2k tok` suffix (11 cells) pushed the row's
+trailing `$cost` off the 46-column inner pane entirely — the rendered row
+measured 53 cells against 46. The suffix drops the repeated unit and now reads
+` · 1.2k`, which fits. Widen the pane and the header names what the number is;
+do not re-add fixed-width padding to the columns (measured 2026-11-02: it was
+what cost the row its data below).
 
