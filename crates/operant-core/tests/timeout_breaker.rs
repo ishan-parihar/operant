@@ -338,6 +338,7 @@ fn test_config(max_iterations: usize) -> AgentConfig {
         context_semantic_compaction: false,
         model: "demo".to_string(),
         max_trajectories: 0,
+        show_turn_attribution: true,
         max_iterations,
         // Generous stream-level wrapper: the registry's own (short) timeout
         // fires first in these tests, exercising the `tools.rs` writer. The

@@ -158,6 +158,7 @@ async fn main() -> Result<()> {
         reasoning_effort_param: Default::default(),
         model: std::env::var("MODEL").unwrap_or_else(|_| "gpt-4".to_string()),
         max_trajectories: 0,
+        show_turn_attribution: true,
         max_iterations: 10,
         tool_timeout: Duration::from_secs(30),
         system_prompt: Some(

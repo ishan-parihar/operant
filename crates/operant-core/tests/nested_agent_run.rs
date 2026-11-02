@@ -423,6 +423,7 @@ fn test_config() -> AgentConfig {
         context_semantic_compaction: false,
         model: "demo".to_string(),
         max_trajectories: 0,
+        show_turn_attribution: true,
         max_iterations: PARENT_MAX_ITERATIONS,
         // 5s per tool call: shorter than the child's own 30s deadline, so the
         // child completing proves it did not inherit the parent's tool timeout.

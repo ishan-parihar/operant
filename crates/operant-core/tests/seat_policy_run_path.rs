@@ -361,6 +361,7 @@ fn test_config() -> AgentConfig {
         reasoning_effort_param: Default::default(),
         context_semantic_compaction: false,
         max_trajectories: 0,
+        show_turn_attribution: true,
         model: "demo".to_string(),
         max_iterations: 4,
         tool_timeout: Duration::from_secs(5),

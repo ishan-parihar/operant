@@ -136,6 +136,7 @@ fn test_config() -> AgentConfig {
         context_semantic_compaction: false,
         model: "demo-stream-interrupt".to_string(),
         max_trajectories: 0,
+        show_turn_attribution: true,
         max_iterations: 3,
         tool_timeout: Duration::from_secs(5),
         request_timeout: Duration::from_secs(10),

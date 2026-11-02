@@ -343,6 +343,7 @@ fn test_config(max_iterations: usize, skill_nudge_interval: usize) -> AgentConfi
         context_semantic_compaction: false,
         model: "demo".to_string(),
         max_trajectories: 0,
+        show_turn_attribution: true,
         max_iterations,
         tool_timeout: Duration::from_secs(5),
         request_timeout: Duration::from_secs(10),
