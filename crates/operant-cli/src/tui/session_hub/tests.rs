@@ -1825,3 +1825,184 @@ fn apply_row_background_preserves_each_spans_own_foreground() {
         "the fill must pad the row to the full inner width: {painted_width}"
     );
 }
+
+// ── Stage E — the sort key (2026-11-02) ─────────────────────────────────────
+//
+// Sort is the third of the three controls (filter `s`, group `g`, sort `o`),
+// and the one that can silently betray the operator: a sort that does not
+// reorder, or a sort that moves the cursor, is worse than no sort. These pin
+// both halves — the ORDER it produces and the SELECTION it keeps.
+
+/// Three rows with distinct, deliberately scrambled usage numbers: `rows` as
+/// the database load would order them (newest-`updated_at` first) has NO
+/// relationship to the cost/message/token ladders, so a passing test cannot be
+/// an accident of the fixture.
+fn sort_fixture() -> SessionHubState {
+    let mut hub = SessionHubState::new();
+    hub.visible = true;
+    hub.loading = false;
+    let mut cheap = row("cheap", Some("cheapest"), None);
+    cheap.cost_usd = 0.01;
+    cheap.message_count = 1;
+    cheap.tokens = 10;
+    let mut mid = row("mid", Some("middle"), None);
+    mid.cost_usd = 0.50;
+    mid.message_count = 7;
+    mid.tokens = 500;
+    let mut rich = row("rich", Some("priciest"), None);
+    rich.cost_usd = 12.34;
+    rich.message_count = 120;
+    rich.tokens = 90_000;
+    hub.replace_rows(vec![cheap, mid, rich]);
+    hub
+}
+
+fn visible_ids(hub: &SessionHubState) -> Vec<String> {
+    hub.visible_rows().iter().map(|r| r.id.clone()).collect()
+}
+
+#[test]
+fn cost_sort_puts_the_most_expensive_row_first() {
+    let mut hub = sort_fixture();
+    hub.sort_mode = HubSortMode::Cost;
+    hub.rebuild_visible();
+    assert_eq!(
+        visible_ids(&hub),
+        vec!["rich", "mid", "cheap"],
+        "cost sort must lead with the row that cost the most"
+    );
+}
+
+#[test]
+fn messages_sort_puts_the_busiest_row_first() {
+    let mut hub = sort_fixture();
+    hub.sort_mode = HubSortMode::Messages;
+    hub.rebuild_visible();
+    assert_eq!(
+        visible_ids(&hub),
+        vec!["rich", "mid", "cheap"],
+        "messages sort must lead with the row carrying the most prompts"
+    );
+}
+
+#[test]
+fn tokens_sort_puts_the_largest_row_first() {
+    let mut hub = sort_fixture();
+    hub.sort_mode = HubSortMode::Tokens;
+    hub.rebuild_visible();
+    assert_eq!(
+        visible_ids(&hub),
+        vec!["rich", "mid", "cheap"],
+        "tokens sort must lead with the row that consumed the most context"
+    );
+}
+
+#[test]
+fn auto_sort_is_the_loads_own_order_and_reorders_nothing() {
+    let mut hub = sort_fixture();
+    // The fixture is loaded in `cheap, mid, rich` order, which is NOT any of
+    // the usage ladders — so if `Auto` sorted by anything it would change this.
+    let before = visible_ids(&hub);
+    hub.sort_mode = HubSortMode::Auto;
+    hub.rebuild_visible();
+    assert_eq!(
+        visible_ids(&hub),
+        before,
+        "Auto must preserve the load's order; a sort here would only shuffle \\
+         rows that tie on the load's own `updated_at DESC`"
+    );
+}
+
+#[test]
+fn cycling_sort_preserves_the_selected_row_by_identity() {
+    let mut hub = sort_fixture();
+    // Land on `mid`, then cycle the sort: `Auto -> Cost` reorders the flat
+    // visible set, and a position-based cursor would land on a different row.
+    let mid_pos = hub
+        .visible_rows()
+        .iter()
+        .position(|r| r.id == "mid")
+        .expect("the fixture has a mid row");
+    hub.selected = mid_pos;
+    let selected_before = hub.selected_row().map(|r| r.id.clone());
+    hub.cycle_sort();
+    assert_eq!(
+        hub.selected_row().map(|r| r.id.clone()),
+        selected_before,
+        "cycling the sort must keep the SAME row selected, not the same \\
+         position — a sort that teleports the cursor is the operator's \\
+         highlight jumping to a session they were not reading"
+    );
+    assert_eq!(
+        hub.sort_mode,
+        HubSortMode::Cost,
+        "cycle_sort must actually advance the key"
+    );
+}
+
+#[test]
+fn cycling_sort_walks_the_whole_ladder_back_to_auto() {
+    let mut mode = HubSortMode::Auto;
+    let mut seen = vec![mode];
+    for _ in 0..4 {
+        mode = mode.next();
+        seen.push(mode);
+    }
+    assert_eq!(
+        seen,
+        vec![
+            HubSortMode::Auto,
+            HubSortMode::Cost,
+            HubSortMode::Messages,
+            HubSortMode::Tokens,
+            HubSortMode::Auto,
+        ],
+        "the ladder must be exactly the four keys and must return to Auto — a \\
+         duplicate key would make one press look like nothing happened"
+    );
+}
+
+#[test]
+fn no_sort_key_sorts_by_a_field_the_row_does_not_have() {
+    // The regression guard for the phantom `Created` key: operant's projection
+    // (`SessionEntryV2`) carries NO creation timestamp, so a `Created` variant
+    // would have to sort by `updated_at` and silently answer a different
+    // question. The ladder must not contain it.
+    let labels: Vec<&str> = [
+        HubSortMode::Auto,
+        HubSortMode::Cost,
+        HubSortMode::Messages,
+        HubSortMode::Tokens,
+    ]
+    .iter()
+    .map(|m| m.label())
+    .collect();
+    assert!(
+        !labels.contains(&"created"),
+        "no sort key may claim to sort by creation time: the row has no such \\
+        field, and a key that silently sorts by another axis is worse than no \\
+        key at all (found in the projection, session/listing.rs)"
+    );
+}
+
+#[test]
+fn the_sort_clause_renders_in_the_controls_row() {
+    // The clause must actually reach the buffer: a control that exists in the
+    // model and not on the screen is decoration the operator cannot find.
+    let (list, _preview) = hub_rows(vec![
+        row("rich", Some("priciest"), None),
+        row("mid", Some("middle"), None),
+        row("cheap", Some("cheapest"), None),
+    ]);
+    // Match on the tab bar's own content rather than its leading glyph: the
+    // row is a `│` border plus the tabs, so prefix-matching `all ` never hits.
+    let controls = list
+        .iter()
+        .find(|r| r.contains(" arch 0") || r.contains("Sort:"))
+        .unwrap_or_else(|| panic!("the controls row must render: {list:?}"));
+    assert!(
+        controls.contains("recent"),
+        "a fresh hub's sort clause must name its own key (`recent`) — the \\
+         operator has to be able to see which ORDER the list is in: {controls:?}"
+    );
+}

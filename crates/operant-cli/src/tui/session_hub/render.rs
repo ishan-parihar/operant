@@ -420,6 +420,29 @@ fn render_header(state: &SessionHubState) -> Line<'static> {
 /// at a filter before committing to it.
 fn render_tab_bar(state: &SessionHubState, width: u16) -> Line<'static> {
     let counts = state.filter_counts();
+    // The sort clause (Stage E). It rides the END of this row because this row
+    // is already the controls row, and the header has no room: the header
+    // measures 45 of the pane's 46 inner columns before this clause exists, so
+    // appending it there would cost the operator the row count or the `s`/`g`
+    // affordance. The Stage B finding ("a header that costs the operator data
+    // below it is a net loss") is measured again here rather than re-learned.
+    //
+    // Being last also makes it the FIRST thing the ladder below drops, which is
+    // the right priority: the filter tabs are the operator's aim, the sort is a
+    // refinement of what they already aimed at.
+    let sort_clause = |long: bool| -> String {
+        if long {
+            format!(
+                "  Sort: {}  {}",
+                state.sort_mode.label(),
+                state.sort_mode.key()
+            )
+        } else {
+            format!(" {}", state.sort_mode.label())
+        }
+    };
+    let sort_width = |long: bool| -> u16 { sort_clause(long).chars().count() as u16 };
+
     // The tab bar's degradation ladder. Codex's `toolbar_for_width` does the
     // same: full labels while they fit, compact ones when they do not, and the
     // single active filter when even that does not. Measured on the 120x40
@@ -428,22 +451,39 @@ fn render_tab_bar(state: &SessionHubState, width: u16) -> Line<'static> {
     // ("current dir", "this branch's tree" and "by employee" pushed `archived`
     // clean off the edge and the count the operator needed was the silent
     // casualty). codex degrades, so we do too.
-    let total_width = |long: bool, sep: u16| -> u16 {
-        counts
+    let total_width = |long: bool, sep: u16, with_sort: bool| -> u16 {
+        let tabs = counts
             .iter()
             .map(|(m, n)| {
                 let label = if long { m.label() } else { m.short_label() };
                 (label.chars().count() + 1 + n.to_string().len()) as u16 + sep
             })
-            .sum::<u16>()
+            .sum::<u16>();
+        if with_sort {
+            tabs + sort_width(long)
+        } else {
+            tabs
+        }
     };
     const SEP: u16 = 2;
-    let (use_long, sep) = if total_width(true, SEP) <= width {
-        (true, SEP)
-    } else if total_width(false, SEP) <= width {
-        (false, SEP)
-    } else if total_width(false, 1) <= width {
-        (false, 1)
+
+    // The ladder's rungs, richest first. The sort clause is dropped between the
+    // long and compact rungs: long labels + sort overflow, compact labels +
+    // sort fit, and the filter tabs alone are the last resort.
+    let (use_long, sep, show_sort) = if total_width(true, SEP, true) <= width {
+        (true, SEP, true)
+    } else if total_width(false, SEP, true) <= width {
+        (false, SEP, true)
+    } else if total_width(false, 1, true) <= width {
+        // The measured rung that matters most: at the 48-column pane (120x40,
+        // the common case) the six compact labels plus a two-column gap leave
+        // three columns, and the sort clause needs eight — but the SAME labels
+        // with a one-column gap fit exactly. Dropping the sort here instead
+        // would hide the key on the exact width most operators work at, which
+        // is the Stage B finding one rung earlier.
+        (false, 1, true)
+    } else if total_width(false, 1, false) <= width {
+        (false, 1, false)
     } else {
         // Degrade to the active filter alone; a count nobody can read is
         // decoration, and the header above still names the filter.
@@ -487,6 +527,16 @@ fn render_tab_bar(state: &SessionHubState, width: u16) -> Line<'static> {
         if i + 1 < counts.len() {
             spans.push(Span::styled(" ".repeat(sep as usize), Style::default()));
         }
+    }
+    if show_sort {
+        // `text`, not `accent`: the sort is a refinement of what the operator
+        // already aimed at, and `selection_bg` here would make it compete with
+        // the ACTIVE filter tab for the eye. The long clause names its own key
+        // (`o`) because a control whose affordance is invisible is decoration.
+        spans.push(Span::styled(
+            sort_clause(use_long),
+            Style::default().fg(theme_colors::text()),
+        ));
     }
     Line::from(spans)
 }
@@ -701,7 +751,7 @@ fn render_list_body(frame: &mut Frame, state: &SessionHubState, area: ratatui::l
                 if let Some(fill) = fill {
                     for line in &mut lines {
                         *line = row_style::apply_row_background(
-                            std::mem::replace(line, Line::default()),
+                            std::mem::take(line),
                             fill,
                             inner_width,
                         );

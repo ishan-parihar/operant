@@ -165,6 +165,60 @@ impl HubGroupMode {
     }
 }
 
+/// Sort key for the visible rows, cycled with `o` (Stage E).
+///
+/// Codex's `ThreadSortKey` has exactly two usable keys — `CreatedAt` and
+/// `UpdatedAt` (its `RecencyAt`/`SectionPosition` collapse onto `UpdatedAt`).
+/// Operant's projection (`SessionEntryV2`, `session/listing.rs`) carries NO
+/// creation timestamp — `updated_at` is `ended_at` falling back to
+/// `started_at`, and that is the whole temporal axis a listed row has — so
+/// `Created` is NOT in the ladder: a sort key that silently sorts by a
+/// different field is worse than no key at all.
+///
+/// What operant's rows DO carry that answers a real question is usage:
+/// `cost_usd`, `message_count` and `tokens`. So the ladder is
+/// `Recent | Cost | Messages | Tokens` rather than codex's two, and codex's
+/// `Model` axis is not here at all (no hub row carries a model field, so every
+/// row would tie and the key would be decoration).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HubSortMode {
+    /// The load's own order (`updated_at DESC`), preserved so a fresh hub
+    /// renders exactly as it did before Stage E. The default, and the only
+    /// mode that is not a re-grade of the row's numbers.
+    Auto,
+    /// Most expensive first — "where is the money going".
+    Cost,
+    /// Busiest first — "where was the work".
+    Messages,
+    /// Largest first — "which sessions consumed the context window".
+    Tokens,
+}
+
+impl HubSortMode {
+    pub fn next(self) -> Self {
+        match self {
+            Self::Auto => Self::Cost,
+            Self::Cost => Self::Messages,
+            Self::Messages => Self::Tokens,
+            Self::Tokens => Self::Auto,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Auto => "recent",
+            Self::Cost => "cost",
+            Self::Messages => "messages",
+            Self::Tokens => "tokens",
+        }
+    }
+
+    /// The key that cycles it, for the header's affordance.
+    pub const fn key(self) -> &'static str {
+        "o"
+    }
+}
+
 /// Does this row pass this filter mode, with the process context the modes
 /// need. ONE predicate for the visible set AND the tab bar's counts: two copies
 /// of "what does `active` mean" would drift, and the count the operator reads
@@ -260,6 +314,13 @@ pub struct SessionHubState {
     /// filter decides which rows exist, this decides the order they are read
     /// in, and the renderer draws a heading per group.
     pub group_mode: HubGroupMode,
+    /// How the visible rows are ordered *within* their reading order (Stage E,
+    /// `o`). Orthogonal to both the filter and the grouping: the sort key is a
+    /// comparator over the flat `visible_idx`, so grouping stays a view and
+    /// every navigation path is untouched. `Auto` (the default) is the order
+    /// `rows` already arrived in — `updated_at DESC` from the database — so a
+    /// fresh hub renders exactly as it did before Stage E.
+    pub sort_mode: HubSortMode,
     /// Search tokens (AND). Empty = no filtering, no highlight.
     pub search_query: String,
     /// While true, keystrokes edit `search_query` (jcode's search mode).
@@ -313,6 +374,7 @@ impl SessionHubState {
             selected: 0,
             filter_mode: HubFilterMode::All,
             group_mode: HubGroupMode::Auto,
+            sort_mode: HubSortMode::Auto,
             search_query: String::new(),
             search_active: false,
             loading: true,
@@ -566,6 +628,22 @@ impl SessionHubState {
         self.note_preview_miss();
     }
 
+    /// Cycle the sort key. Like `cycle_group`, the selection is preserved BY
+    /// ROW ID: a sort reorders the flat visible set, so position-based
+    /// preservation would teleport the cursor to a different session and the
+    /// operator would lose the row they were reading.
+    pub fn cycle_sort(&mut self) {
+        let keep = self.selected_row().map(|r| r.id.clone());
+        self.sort_mode = self.sort_mode.next();
+        self.rebuild_visible();
+        if let Some(id) = keep
+            && let Some(pos) = self.visible_idx.iter().position(|&i| self.rows[i].id == id)
+        {
+            self.selected = pos;
+        }
+        self.note_preview_miss();
+    }
+
     /// How many of ALL the rows each filter mode would show. This is the live
     /// count codex's tab bar carries (`agent_center`'s `render_filled_tab_bar`
     /// over `TASK_FILTERS`): the operator must see that `active` has 0 rows
@@ -678,6 +756,40 @@ impl SessionHubState {
             })
             .map(|(i, _)| i)
             .collect();
+        // Stage E: the sort key reorders the FLAT visible set, exactly the way
+        // grouping reorders the reading order. It is applied last, so the
+        // filter and the search never see a sorted view, and it is a stable
+        // sort — a `sort_by_key` on equal keys leaves arrival order intact, so
+        // `Auto` (and every tie under the other keys) still reads
+        // `updated_at DESC` from the load.
+        //
+        // `Auto` sorts by nothing: the load's own order IS the `updated_at
+        // DESC` answer, and re-sorting on it would only shuffle equal
+        // timestamps.
+        //
+        // Every key sorts descending: the first row under each is the extreme
+        // the operator asked about ("most expensive", "busiest", "largest").
+        // `sort_by` is stable, so a tie leaves the arrival order — and therefore
+        // the load's `updated_at DESC` — intact.
+        match self.sort_mode {
+            HubSortMode::Auto => {}
+            HubSortMode::Cost => self.visible_idx.sort_by(|&a, &b| {
+                self.rows[a]
+                    .cost_usd
+                    .partial_cmp(&self.rows[b].cost_usd)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .reverse()
+            }),
+            HubSortMode::Messages => self.visible_idx.sort_by(|&a, &b| {
+                self.rows[a]
+                    .message_count
+                    .cmp(&self.rows[b].message_count)
+                    .reverse()
+            }),
+            HubSortMode::Tokens => self
+                .visible_idx
+                .sort_by(|&a, &b| self.rows[a].tokens.cmp(&self.rows[b].tokens).reverse()),
+        }
         self.clamp_selection();
     }
 

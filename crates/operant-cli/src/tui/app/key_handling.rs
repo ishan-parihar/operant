@@ -705,6 +705,18 @@ impl App {
                 // ends up believing a filter hid a session when grouping moved
                 // it. Two keys, two questions.
                 KeyCode::Char('g') => self.session_hub.cycle_group(),
+                // Cycle the sort key (Stage E, plan 2026-11-02). `o` because
+                // `s` (filter) and `g` (group) already own the left hand of
+                // the hub's own vocabulary, and because codex binds its sort
+                // control to a toolbar focus rather than a bare letter.
+                //
+                // The three controls answer three different questions, which is
+                // why they are three keys and not one: the filter decides which
+                // rows EXIST, grouping decides how they are READ, and the sort
+                // decides the order WITHIN a reading. Collapsing any two is how
+                // an operator ends up believing a filter hid a session when the
+                // sort merely moved it.
+                KeyCode::Char('o') => self.session_hub.cycle_sort(),
                 // Enter: switch to the selected session (the existing
                 // pending_switch_session flow — run_pending_agent_actions
                 // retargets and rebuilds, so the two cannot diverge; TUI-2),
