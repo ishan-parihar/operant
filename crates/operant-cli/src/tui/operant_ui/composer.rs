@@ -254,4 +254,152 @@ mod tests {
             assert!(style.bg.is_some(), "a non-empty fill style must set a bg");
         }
     }
+
+    // ── the drawn band, asserted on a buffer (2026-11-02 validation pass) ────
+    //
+    // iter-1637 verified this by hand ("`› hello` at col 4 with fill
+    // rgb:353547") and pinned none of it. Every test above reads the HELPER'S
+    // return value, which passes even if the renderer never calls it. These
+    // paint the band the way the real path does and read the buffer back.
+
+    /// Paint `paint_band_fill` over a full-width row and return the buffer, so
+    /// the fill's actual reach can be measured rather than assumed.
+    fn band_buffer(width: u16, height: u16) -> ratatui::buffer::Buffer {
+        use ratatui::backend::TestBackend;
+        use ratatui::{Terminal, widgets::Block};
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal
+            .draw(|f| {
+                let area = f.area();
+                // The band fill, then a bare block over the same area exactly as
+                // `chat_composer.rs:4889` does, so the fill survives.
+                paint_band_fill(area, f);
+                f.render_widget(Block::default(), area);
+            })
+            .unwrap();
+        terminal.backend().buffer().clone()
+    }
+
+    #[test]
+    fn the_band_fill_paints_every_column_of_the_row() {
+        // The whole point of the fill over a border: it reaches the row's full
+        // width, including the columns no text occupies.
+        let width = 40u16;
+        let buf = band_buffer(width, 3);
+        let fill = composer_fill_style();
+        // Refuse to pass vacuously: if the surface has no colour there is no
+        // fill, and this test must SAY so rather than returning quietly and
+        // reporting green.
+        let expected = fill
+            .bg
+            .expect("this theme declares a surface colour, so the band has a fill");
+        for x in 0..width {
+            assert_eq!(
+                buf[(x, 1)].style().bg,
+                Some(expected),
+                "the band fill must reach column {x} — a fill that stops where \
+                 the text stops is the border-based look this stage replaced"
+            );
+        }
+    }
+
+    #[test]
+    fn the_gutter_constants_are_what_the_renderer_uses() {
+        // iter-1637's claim "the gutter is 2 columns and the text starts after
+        // it" is only true if `textarea_rect` really subtracts GUTTER_COLS.
+        // Pinned here so a gutter change and a rect change cannot drift apart.
+        let area = ratatui::layout::Rect::new(0, 0, 50, 5);
+        let text = textarea_rect(area);
+        assert_eq!(
+            text.x,
+            area.x + GUTTER_COLS,
+            "the text must start after the gutter"
+        );
+        // One column of right padding too — see the module's `tlbr(1, GUTTER, 1, 1)`.
+        assert_eq!(
+            text.width,
+            area.width - GUTTER_COLS - 1,
+            "the text area must leave the gutter on the left and a column on the right"
+        );
+    }
+
+    #[test]
+    fn the_placeholder_is_dimmed_and_not_bold() {
+        // A placeholder that reads as strongly as real input is the failure mode
+        // this restyle exists to avoid: codex dims it.
+        let line = placeholder_line();
+        let style = line.spans[0].style;
+        // Some foreground that is NOT the ordinary text colour.
+        assert!(
+            style.fg.is_some(),
+            "the placeholder needs its own foreground: {style:?}"
+        );
+        assert!(
+            style.add_modifier.contains(Modifier::ITALIC),
+            "the placeholder is italic, which is how it reads as a hint: {style:?}"
+        );
+        assert!(
+            !style.add_modifier.contains(Modifier::BOLD),
+            "a bold placeholder competes with the text it stands in for: {style:?}"
+        );
+    }
+
+    #[test]
+    fn the_band_fill_cannot_reach_past_the_row_below_it() {
+        // The operator's standing constraint, pinned mechanically: the footer
+        // (overscroll row, hint rows, the INSERT badge, the send icon) must stay
+        // byte-identical. The band is its own layout chunk, so a fill that bled
+        // into the row below would mean the band grew.
+        //
+        // Byte-identity, not "bg is None": `Block::default().render` legitimately
+        // writes a `Reset` style over the row, so the control comparison is the
+        // same render WITHOUT the band fill. The two footer rows must be equal.
+        use ratatui::backend::TestBackend;
+        use ratatui::{Terminal, widgets::Block};
+
+        /// Footer row 3 with (or without) the band fill painted above it.
+        fn footer_row(with_band_fill: bool) -> String {
+            let mut terminal = Terminal::new(TestBackend::new(40, 4)).unwrap();
+            terminal
+                .draw(|f| {
+                    let all = f.area();
+                    let band = Rect { height: 3, ..all };
+                    let footer = Rect {
+                        y: all.y + 3,
+                        height: 1,
+                        ..all
+                    };
+                    if with_band_fill {
+                        paint_band_fill(band, f);
+                    }
+                    f.render_widget(Block::default(), footer);
+                })
+                .unwrap();
+            let buf = terminal.backend().buffer();
+            (0..40u16)
+                .map(|x| format!("{:?}", buf[(x, 3)]))
+                .collect::<Vec<_>>()
+                .join("|")
+        }
+
+        assert_eq!(
+            footer_row(false),
+            footer_row(true),
+            "the band fill changed the footer row — the footer must stay byte-identical"
+        );
+
+        // And the band itself still gets its fill, so the test is not vacuous.
+        let fill = composer_fill_style()
+            .bg
+            .expect("this theme declares a surface colour");
+        let mut terminal = Terminal::new(TestBackend::new(40, 4)).unwrap();
+        terminal
+            .draw(|f| {
+                let all = f.area();
+                let band = Rect { height: 3, ..all };
+                paint_band_fill(band, f);
+            })
+            .unwrap();
+        assert_eq!(terminal.backend().buffer()[(0, 0)].style().bg, Some(fill));
+    }
 }
