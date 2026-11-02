@@ -523,6 +523,25 @@ happens and where a second glyph would otherwise be drawn twice.
 
 ---
 
+### Known gap — Stage B's two-glyph row was NOT built
+
+Stage B's original text promised "a row that draws `›`/space for selection and
+`○` for identity separately, so a highlighted row never loses its selection
+glyph". Only the column header landed. The two-glyph row did NOT, and every
+subsequent stage (C, D, E) was built on the one-glyph row — so the plan's own
+wording above currently claims something the code does not do.
+
+Why it was dropped rather than deferred silently: with Stage D's row fill, the
+selected row is already distinguished by its tint across the full inner width,
+which is a stronger signal than a leading glyph. Adding a *second* glyph on top
+of a full-width fill costs a column and buys redundancy — the exact
+over-engineering the repo's guidelines reject.
+
+What it would actually take, if the operator wants it anyway: a leading
+`›`/space column in `render_list_body`, one cell narrower `inner_width` passed
+to `apply_row_background`, and the row-offset tests re-measured (the glyph shifts
+every column by one). That is a standalone iteration, not a Stage B amendment.
+
 ## Stage C — LANDED (model `feat(iter-1654)`, render `feat(iter-1659)`)
 
 Grouping, cycled with `g`. Four axes: `Auto` (the load's own `updated_at DESC`),
