@@ -27,13 +27,56 @@ ESCAPES = set("nt\\")
 
 # app/commands.rs::debug_snapshot()
 def _snapshot_top_keys():
-    # Derived from the json!({ ... }) literal in debug_snapshot(): top-level keys
-    # are the 12-space-indented `"key":` lines. Transcribing them drifted (five
-    # keys added since), so the validator reads the source directly.
+    # Derived from the json!({ ... }) literal in debug_snapshot(): a top-level
+    # key is any `"key":` at brace level 0 inside that literal. (This used to
+    # key on 12-space indentation; iter-1664 replaced it with depth for the
+    # reason below.) Transcribing the key list drifted (five keys added since),
+    # so the validator reads the source directly.
+    #
+    # The keys are taken by BRACE DEPTH rather than by source indentation.
+    # Proven necessary (iter-1664): a nested map whose CHILD key happens to sit
+    # at the same 12-space indentation as a top-level key is picked up by the
+    # indentation regex and lands in the top set -- derived 30 keys including a
+    # child key that only exists INSIDE a value. The failure is silent and
+    # runs in the dangerous direction: a scenario asserting
+    # `nested_map.phantom_key` would validate, then bail at run time on an
+    # unresolved path. `debug_snapshot` returns a `serde_json::Value` with no
+    # compile-time array length, so unlike `overlay_flags()` there is no
+    # declared count to cross-check against. Depth-based extraction is
+    # exact by construction (a top-level key is at level 0), and the span is
+    # brace-counted so a nested value cannot end the search early.
     src = (REPO / "crates/operant-cli/src/tui/app/commands.rs").read_text(encoding="utf-8")
-    body = src[src.index("fn debug_snapshot"):]
-    body = body[body.index("json!({"):body.index("\n        })")]
-    keys = set(re.findall(r'^ {12}"([a-z_0-9]+)":', body, re.M))
+    start = src.index("fn debug_snapshot")
+    open_at = src.index("json!({", start) + len("json!({")
+    depth, i, in_string = 1, open_at, False
+    while depth > 0:
+        c = src[i]
+        if c == '"':
+            in_string = not in_string
+        elif not in_string:
+            if c == "{":
+                depth += 1
+            elif c == "}":
+                depth -= 1
+        i += 1
+    body = src[open_at:i - 1]
+    keys, level, j = set(), 0, 0
+    while j < len(body):
+        c = body[j]
+        if c == '"':
+            k = j + 1
+            while body[k] != '"':
+                k += 1
+            word = body[j + 1:k]
+            if level == 0 and re.match(r"\s*:", body[k + 1:]):
+                keys.add(word)
+            j = k + 1
+            continue
+        if c == "{":
+            level += 1
+        elif c == "}":
+            level -= 1
+        j += 1
     if not keys:
         raise SystemExit("could not derive debug_snapshot() keys from commands.rs")
     return keys
