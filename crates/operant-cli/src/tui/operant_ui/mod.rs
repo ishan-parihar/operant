@@ -141,6 +141,7 @@ pub(crate) use pinned_ui::clear_side_panel_debug_snapshot;
 use pinned_ui::draw_side_panel_markdown;
 use viewport::draw_messages;
 pub(crate) use viewport::pinned_todo_more_area;
+pub(crate) use viewport::tool_row_region_at;
 
 use crate::tui::operant_app::color_support;
 use crate::tui::operant_app::color_support::rgb;
@@ -3157,44 +3158,61 @@ fn has_started_conversation(state: &dyn TuiState) -> bool {
         .any(|m| matches!(m.role.as_str(), "user" | "assistant" | "tool" | "reasoning"))
 }
 
-/// The vendored policy without the hub gate. Split out so the hub-supression
-/// test can compare "what the policy wants" against "what the gate says" and
-/// prove the suppression is exactly the hub's and nothing more.
-pub(crate) fn idle_animation_active_with_policy_pub(
-    state: &dyn TuiState,
-    policy: &crate::tui::operant_app::perf::TuiPerfPolicy,
-) -> bool {
-    idle_animation_active_with_policy(state, policy)
-}
-
 fn idle_animation_active_with_policy(
     state: &dyn TuiState,
     policy: &crate::tui::operant_app::perf::TuiPerfPolicy,
 ) -> bool {
-    if state.remote_startup_phase_active() {
-        return false;
-    }
+    // RT-145: the radar-pulse idle animation is retired (operator decision,
+    // 2026-11-02). Its 14-row band sat ABOVE the status line, so with the
+    // extension the composer was never at the bottom the way codex's is, and the
+    // animation only ever ran on an empty pre-conversation screen — 14 rows of
+    // full-frame trigonometry per animation tick to decorate the one state
+    // where the user has nothing to read yet.
+    //
+    // It is turned off at the gate rather than deleted from the tree for four
+    // concrete reasons:
+    //
+    // 1. The whole surface is 1,069 lines across two vendored modules
+    //    (`operant_anim`, `ui_animations`) with ~20 in-module tests, the
+    //    partial-repaint fast path, and a corpus pin (`OPERANT_DISABLED_ANIMATIONS`).
+    //    Deleting it in the same iteration as the composer work would triple the
+    //    diff and bury the change that actually matters.
+    // 2. `operant_anim` shares its file with `hsv_to_rgb` / `shape_char_3x3`,
+    //    which other code can still reach.
+    // 3. With this returning false, `idle_animation_reserved_height` returns 0,
+    //    the layout's `animation_height` is 0, `draw_idle_animation` is never
+    //    called, and the band's rows are returned to the transcript.
+    // 4. `display.disabled_animations = ["signal"]` / `OPERANT_DISABLED_ANIMATIONS`
+    //    already produce exactly this state, so the code path is exercised by
+    //    real users on every start and is not dead.
+    //
+    // What this deliberately does NOT touch, because users would notice:
+    //   - `animation_elapsed()` — the shared clock. Spinners in the status line,
+    //     the swarm strip spinners, and the periodic status tips all read it.
+    //   - `policy.enable_decorative_animations` — a perf knob that also drives
+    //     the tail-follow scroll catch-up and the prompt-entry fade. Those stay
+    //     as the host's perf tier decides; only THIS animation is off.
+    let _ = (state, policy);
+    false
 
-    // Decorative animations are purely visual; never spin them while the terminal
-    // window/tab is backgrounded. A swarm of unfocused sessions would otherwise
-    // each render a full-screen 3D scene at animation FPS, saturating every core.
-    if !state.client_focused() {
-        return false;
-    }
-
-    // The idle animation is decorative.  Leaving many dormant tabs/sessions open
-    // should not keep every TUI repainting forever, especially when those tabs
-    // are hidden behind a terminal multiplexer or kitty single-instance window.
-    if deep_idle_dormant(state) {
-        return false;
-    }
-
-    policy.enable_decorative_animations
-        && policy.tier.idle_animation_enabled()
-        && !has_started_conversation(state)
-        && !state.is_processing()
-        && state.streaming_text().is_empty()
-        && state.queued_messages().is_empty()
+    // Original gate, retained verbatim so a future operator can put the
+    // animation back by replacing the `false` above with this:
+    //
+    // if state.remote_startup_phase_active() {
+    //     return false;
+    // }
+    // if !state.client_focused() {
+    //     return false;
+    // }
+    // if deep_idle_dormant(state) {
+    //     return false;
+    // }
+    // policy.enable_decorative_animations
+    //     && policy.tier.idle_animation_enabled()
+    //     && !has_started_conversation(state)
+    //     && !state.is_processing()
+    //     && state.streaming_text().is_empty()
+    //     && state.queued_messages().is_empty()
 }
 
 pub(crate) fn idle_animation_active(state: &dyn TuiState) -> bool {

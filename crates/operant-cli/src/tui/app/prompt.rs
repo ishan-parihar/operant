@@ -141,6 +141,36 @@ impl App {
         self.invalidate_transcript();
     }
 
+    /// RT-146: toggle the tool row the user CLICKED, by tool-call id.
+    ///
+    /// Kept separate from `toggle_latest_tool_expansion` because the two answer
+    /// different questions and conflating them is how the feature would
+    /// regress: `Ctrl+O` is "expand the newest thing that happened", this is
+    /// "expand the row I pointed at". `expanded_tool_id` stays a single
+    /// `Option` — one expansion at a time is the whole contract, and the
+    /// adapter's folded layout assumes at most one open row.
+    ///
+    /// Returns whether the click had any effect, so the caller can decide
+    /// whether to fall through to a text selection. A click on a row whose full
+    /// output was never retained (`tool_full_outputs` is bounded to
+    /// `KEEP_CALLS`) is inert and says so.
+    pub(super) fn toggle_tool_expansion_by_id(&mut self, tool_call_id: &str) -> bool {
+        if !self.tool_full_outputs.contains_key(tool_call_id) {
+            self.set_status_notice(
+                "That tool's full output is no longer retained — Ctrl+O expands the latest."
+                    .to_string(),
+            );
+            return false;
+        }
+        self.expanded_tool_id = if self.expanded_tool_id.as_deref() == Some(tool_call_id) {
+            None
+        } else {
+            Some(tool_call_id.to_string())
+        };
+        self.invalidate_transcript();
+        true
+    }
+
     /// Ctrl+G: suspend the TUI, edit the composer text in the external
     /// editor (`[tui] external_editor`, `$VISUAL`, `$EDITOR`, `vi`), and
     /// load the saved text back. The terminal returns to exactly the mode

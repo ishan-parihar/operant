@@ -2,6 +2,7 @@
 // Copyright (c) 2025 Jeremy Huang. Ported verbatim @ 0a9dc7805; imports
 // re-rooted per the batch-3 map. See operant_ui/mod.rs for scope.
 use super::*;
+use crate::tui::operant_model::ToolRowRange;
 use crate::tui::operant_model::WrappedLineMap;
 use crate::tui::operant_ui as ui;
 // [port-decision] upstream ui_prepare.rs reached Instant via a lost glob import;
@@ -515,6 +516,7 @@ fn empty_prepared_messages() -> PreparedMessages {
         user_prompt_texts: Vec::new(),
         image_regions: Vec::new(),
         edit_tool_ranges: Vec::new(),
+        tool_row_ranges: Vec::new(), // RT-146
         copy_targets: Vec::new(),
         message_boundaries: Vec::new(),
         mermaid_pending_epoch: None,
@@ -740,7 +742,7 @@ fn prepare_active_batch_progress(
         super::left_pad_lines_to_block_width(&mut lines, width, block_width);
     }
 
-    wrap_lines_with_map(lines, &[], &[], &[], &[], &[], width, &[], &[], &[])
+    wrap_lines_with_map(lines, &[], &[], &[], &[], &[], width, &[], &[], &[], &[])
 }
 
 pub(crate) fn prepare_messages(
@@ -1042,6 +1044,7 @@ fn prepare_messages_inner(app: &dyn TuiState, width: u16, height: u16) -> Prepar
             user_prompt_texts: Vec::new(),
             image_regions: Vec::new(),
             edit_tool_ranges: Vec::new(),
+            tool_row_ranges: Vec::new(), // RT-146
             copy_targets: Vec::new(),
             message_boundaries: Vec::new(),
             mermaid_pending_epoch: None,
@@ -1080,6 +1083,7 @@ fn prepare_messages_inner(app: &dyn TuiState, width: u16, height: u16) -> Prepar
             user_prompt_texts: Vec::new(),
             image_regions: Vec::new(),
             edit_tool_ranges: Vec::new(),
+            tool_row_ranges: Vec::new(), // RT-146
             copy_targets: Vec::new(),
             message_boundaries: Vec::new(),
             mermaid_pending_epoch: None,
@@ -1444,6 +1448,10 @@ struct BodyAcc {
     user_line_indices: Vec<usize>,
     user_prompt_texts: Vec<String>,
     edit_tool_line_ranges: Vec<(usize, String, usize, usize, bool)>,
+    /// RT-146: click-to-expand. `(tool_call_id, raw_start, raw_end)` per tool
+    /// message, in the same raw-line space `edit_tool_line_ranges` uses so the
+    /// existing `raw_to_wrapped` translation publishes both from one pass.
+    tool_row_line_ranges: Vec<(String, usize, usize)>,
     copy_targets: Vec<RawCopyTarget>,
     /// One entry per rendered message, in order: `(msg_hash, lines_len_after,
     /// raw_len_after, user_prompt_len_after)`. `lines_len_after` counts any
@@ -1772,6 +1780,14 @@ fn render_message_into(
                         expandable,
                     ));
                 }
+                // RT-146: every tool message (edit tools included) gets a row
+                // range, because click-to-expand is about ANY tool's output and
+                // the edit-tool branch above is only about the diff pane. Pushed
+                // unconditionally rather than nested here so the two features
+                // stay independent — a click on a `read` row must work even
+                // though `read` never enters `edit_tool_line_ranges`.
+                acc.tool_row_line_ranges
+                    .push((tc.id.clone(), tool_start_line, acc.lines.len()));
                 if let Some(items) = ctx.anchored_images.by_tool.get(&tc.id) {
                     for line in super::inline_image_ui::anchored_image_lines(
                         items,
@@ -2036,6 +2052,7 @@ pub(super) fn prepare_body_incremental(
         &acc.user_prompt_texts,
         width,
         &acc.edit_tool_line_ranges,
+        &acc.tool_row_line_ranges,
         &acc.copy_targets,
         &acc.segments,
     );
@@ -2132,6 +2149,22 @@ pub(super) fn prepare_body_incremental(
                 ..target
             }),
     );
+    // RT-146: the tail is appended after a cached prefix, so its tool ranges
+    // shift by the prefix's wrapped length exactly like the copy targets above.
+    // The id is NOT shifted — it is the tool call's own identity, and shifting
+    // it would break the `tool_full_outputs` / `expanded_tool_id` lookup.
+    prepared
+        .tool_row_ranges
+        .extend(
+            new_wrapped
+                .tool_row_ranges
+                .into_iter()
+                .map(|range| ToolRowRange {
+                    tool_call_id: range.tool_call_id,
+                    start_line: range.start_line + prev_len,
+                    end_line: range.end_line + prev_len,
+                }),
+        );
     prepared
         .message_boundaries
         .extend(
@@ -2194,6 +2227,13 @@ pub(super) fn truncate_prepared_to_boundary(prepared: &mut PreparedMessages, kee
         .retain(|r| r.abs_line_idx < wrapped_len);
     prepared
         .edit_tool_ranges
+        .retain(|r| r.start_line < wrapped_len);
+    // RT-146: a tool call belongs to exactly one message, and the cut is a
+    // message boundary, so dropping ranges that begin at or after the cut is
+    // exact — no range straddles it. Without this the retained prefix keeps
+    // click targets pointing into the dropped tail.
+    prepared
+        .tool_row_ranges
         .retain(|r| r.start_line < wrapped_len);
     prepared.copy_targets.retain(|t| t.start_line < wrapped_len);
 
@@ -2358,6 +2398,7 @@ pub(super) fn prepare_body_prepended(
         &acc.user_prompt_texts,
         width,
         &acc.edit_tool_line_ranges,
+        &acc.tool_row_line_ranges,
         &acc.copy_targets,
         &acc.segments,
     );
@@ -2479,6 +2520,27 @@ pub(super) fn prepare_body_prepended(
                 }),
         );
         prepared.edit_tool_ranges = ranges;
+    }
+
+    {
+        // RT-146: the head path reuses a cached prefix, so tool ranges that
+        // begin inside it keep working while the rebuilt tail's ranges get
+        // shifted into frame coordinates. Same two filters as the copy targets
+        // below (kept from the head / shifted for the tail), applied to the one
+        // list a click reads.
+        let mut ranges = head.tool_row_ranges;
+        ranges.extend(
+            prepared
+                .tool_row_ranges
+                .iter()
+                .filter(|range| range.start_line >= cut_wrapped)
+                .map(|range| ToolRowRange {
+                    tool_call_id: range.tool_call_id.clone(),
+                    start_line: shift_wrapped(range.start_line),
+                    end_line: shift_wrapped(range.end_line),
+                }),
+        );
+        prepared.tool_row_ranges = ranges;
     }
 
     {
@@ -2711,6 +2773,7 @@ pub(super) fn prepare_body(
         &acc.user_prompt_texts,
         width,
         &acc.edit_tool_line_ranges,
+        &acc.tool_row_line_ranges,
         &acc.copy_targets,
         &acc.segments,
     );
@@ -2813,6 +2876,7 @@ fn wrap_lines(
         user_prompt_texts: user_prompt_texts.to_vec(),
         image_regions,
         edit_tool_ranges: Vec::new(),
+        tool_row_ranges: Vec::new(), // RT-146
         copy_targets: Vec::new(),
         message_boundaries: Vec::new(),
         mermaid_pending_epoch: None,
@@ -2832,6 +2896,11 @@ fn wrap_lines_with_map(
     user_prompt_texts: &[String],
     width: u16,
     edit_ranges: &[(usize, String, usize, usize, bool)],
+    // Raw-line `(tool_call_id, start, end)` triples for every tool message.
+    // RT-146: parallel to `edit_ranges` and translated through the same
+    // `raw_to_wrapped` table in the same pass, so a tool-row click resolves to
+    // the row the user actually saw.
+    tool_row_line_ranges: &[(String, usize, usize)],
     copy_ranges: &[RawCopyTarget],
     segments: &[(u64, usize, usize, usize)],
 ) -> PreparedMessages {
@@ -2936,6 +3005,22 @@ fn wrap_lines_with_map(
         });
     }
 
+    // RT-146: translate the accumulator's raw-line tool ranges into the Wrapped
+    // line space, in the same pass and with the same `raw_to_wrapped` table the
+    // edit ranges use — two translations of one table cannot drift apart, and a
+    // click must resolve to the row the user actually saw.
+    let tool_row_ranges = tool_row_line_ranges
+        .iter()
+        .map(|(tool_call_id, raw_start, raw_end)| ToolRowRange {
+            tool_call_id: tool_call_id.clone(),
+            start_line: raw_to_wrapped.get(*raw_start).copied().unwrap_or(0),
+            end_line: raw_to_wrapped
+                .get(*raw_end)
+                .copied()
+                .unwrap_or(wrapped_lines.len()),
+        })
+        .collect::<Vec<_>>();
+
     let mut copy_targets = Vec::new();
     for target in copy_ranges {
         let start_line = raw_to_wrapped
@@ -2994,6 +3079,7 @@ fn wrap_lines_with_map(
         user_prompt_texts: user_prompt_texts.to_vec(),
         image_regions,
         edit_tool_ranges,
+        tool_row_ranges,
         copy_targets,
         message_boundaries,
         mermaid_pending_epoch: None,

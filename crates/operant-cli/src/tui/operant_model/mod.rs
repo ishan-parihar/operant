@@ -51,7 +51,7 @@ pub use cache::{
 pub use message::DisplayMessage;
 pub use prepared::{
     CopyTarget, EditToolRange, ImageRegion, ImageRegionRender, MessageBoundary, PreparedChatFrame,
-    PreparedMessages, PreparedSection, PreparedSectionKind,
+    PreparedMessages, PreparedSection, PreparedSectionKind, ToolRowRange,
 };
 pub use vendor_types::ToolCall;
 pub use wrapped_line_map::WrappedLineMap;

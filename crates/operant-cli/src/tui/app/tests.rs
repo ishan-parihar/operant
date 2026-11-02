@@ -61,26 +61,38 @@ fn app_reports_the_session_hub_state_to_the_render_layer() {
     );
 }
 
-/// The gate itself, asserted directly. The hub must not resurrect an animation
-/// the policy already switched off, and it must not keep one that the policy
-/// wants when the hub is closed — the suppression is strictly the hub's.
+/// The gate itself, asserted directly. RT-145 retired the radar-pulse idle
+/// animation outright (operator decision 2026-11-02), so the gate is now
+/// unconditionally false: no policy, no hub state, no conversation state can
+/// resurrect it.
+///
+/// The hub part of this test is kept because it still has teeth: before RT-145
+/// the hub's suppression was the only thing standing between a dormant
+/// terminal and a full-screen 3D sample per frame. With the animation gone,
+/// the assertion is now a guard against reactivation by way of the hub.
 #[test]
-fn the_hub_suppresses_the_idle_animation_band() {
+fn the_idle_animation_band_is_retired() {
     let mut app = make_app();
     app.session_hub.open(None);
     assert!(
         !crate::tui::operant_ui::should_reserve_idle_animation(&app),
-        "an open hub must suppress the band: it covers the whole frame, so the \
-         reservation and the sample are pure waste"
+        "an open hub must not resurrect the retired animation"
     );
     app.session_hub.close();
-    let policy = crate::tui::operant_app::perf::tui_policy();
-    let wants = crate::tui::operant_ui::idle_animation_active_with_policy_pub(&app, &policy);
-    assert_eq!(
-        crate::tui::operant_ui::should_reserve_idle_animation(&app),
-        wants,
-        "with the hub closed the gate must be exactly the vendored policy — the \
-         suppression is the hub's alone and must not leak past it"
+    assert!(
+        !crate::tui::operant_ui::should_reserve_idle_animation(&app),
+        "the idle animation is retired: no state may re-enable it"
+    );
+
+    // The composer therefore sits directly above the status line, which is the
+    // codex arrangement the operator asked for. Asserted at the source because
+    // `animation_height` is a local in `draw_inner`; the two lines that zero it
+    // are the whole contract.
+    let ui_mod = include_str!("../operant_ui/mod.rs");
+    assert!(
+        ui_mod.contains("let animation_height: u16 = idle_animation_reserved_height(show_animation, input_height);"),
+        "the layout stopped deriving the animation band height from the gate — \
+         a retired animation must not hold a hardcoded band"
     );
 }
 
@@ -845,10 +857,17 @@ fn ctrl_t_no_longer_enters_copy_mode_and_alt_y_does() {
     crate::tui::operant_app::config_shim::set_reasoning_display_override(None);
 }
 
-/// RT-29: the vim mode was never drawn. The composer now leads its hint row
-/// with the mode badge while vim is on, and draws nothing extra while it is off.
+/// RT-144: the `-- INSERT --` / `-- NORMAL --` vim badge is GONE and must not
+/// come back. RT-29 originally required it drawn while vim is on; the operator
+/// removed it as a redundant tag that restates what the mode glyph and cursor
+/// already show, and codex's composer band carries no mode row at all.
+///
+/// This test is the guard: it fails the moment anyone reintroduces a badge, and
+/// it also pins that vim MODE is still live state (so the fix could not be
+/// "delete vim mode"), and that merely enabling vim no longer reserves a hint
+/// row — which used to shrink the transcript and move the footer.
 #[test]
-fn vim_mode_is_drawn_in_the_composer_only_while_vim_is_on() {
+fn vim_mode_draws_no_badge_and_reserves_no_hint_row() {
     use crate::tui::prompt_input::VimMode;
 
     let mut app = make_app();
@@ -860,12 +879,37 @@ fn vim_mode_is_drawn_in_the_composer_only_while_vim_is_on() {
     app.prompt_input.vim_enabled = true;
     app.prompt_input.vim_mode = VimMode::Normal;
     let rows = screen_rows(&app);
-    assert_eq!(rows_containing(&rows, "-- NORMAL --").len(), 1, "{rows:#?}");
+    assert!(
+        rows_containing(&rows, "-- ").is_empty(),
+        "NORMAL must not be drawn as a badge: {rows:#?}"
+    );
 
     app.prompt_input.vim_mode = VimMode::Insert;
     let rows = screen_rows(&app);
-    assert_eq!(rows_containing(&rows, "-- INSERT --").len(), 1, "{rows:#?}");
-    assert!(rows_containing(&rows, "-- NORMAL --").is_empty());
+    assert!(
+        rows_containing(&rows, "-- ").is_empty(),
+        "INSERT must not be drawn as a badge: {rows:#?}"
+    );
+
+    // The mode itself is still real state, so the removal is cosmetic:
+    assert_eq!(app.prompt_input.vim_mode, VimMode::Insert);
+    assert!(app.prompt_input.vim_enabled);
+
+    // And it must not reserve layout: enabling vim used to add a hint row.
+    // `input_hint_line_height` is `pub(super)` to `operant_ui`, so this pins the
+    // contract at the source — the same include_str! discipline the file already
+    // uses for the resize-anchor seam. A re-added clause would reintroduce a
+    // reservation with no painter, which is worse than no reservation at all.
+    let input_ui = include_str!("../operant_ui/ui_input.rs");
+    assert!(
+        !input_ui.contains("app.vim_mode_label().is_some()"),
+        "ui_input.rs reintroduced a hint-row reservation for the vim badge — \
+         the badge is gone, so the row would be a transcript row silently lost"
+    );
+    assert!(
+        !input_ui.contains("-- {label} --"),
+        "ui_input.rs reintroduced the `-- <MODE> --` badge"
+    );
 }
 
 /// Config `[tui] show_tool_calls = false` starts the session with tool rows
@@ -8281,6 +8325,7 @@ mod prompt_jump_tests {
             user_prompt_texts: Vec::new(),
             image_regions: Vec::new(),
             edit_tool_ranges: Vec::new(),
+            tool_row_ranges: Vec::new(), // RT-146
             copy_targets: Vec::new(),
             message_boundaries: Vec::new(),
             mermaid_pending_epoch: None,
@@ -9274,8 +9319,9 @@ fn opening_the_rewind_selector_erases_the_previous_frames_cells() {
     // from its own content: the header row (`Rewind to a previous prompt`), the
     // caption row (`Rewind to here`), and the footer rows (`turn n/m`,
     // `No rewindable turns`). Everything the overlay paints lives between them
-    // and its own footer. The app's status bar, composer and `-- INSERT --`
-    // marker are NOT the overlay's and are legitimately multi-styled, so they
+    // and its own footer. The app's status bar and composer (RT-144 removed
+    // the vim `-- INSERT --` badge) are NOT the overlay's and are
+    // legitimately multi-styled, so they
     // must not be considered — MEASURED: without this scope the first version
     // flagged the app's own status row as a "leak" and failed even with the fix
     // in place.
@@ -10806,6 +10852,250 @@ mod rewind_follows_the_outline {
             app.rewind_selector.filtered_indices(),
             vec![0, 1, 2, 3, 4],
             "a closed filter field offers the whole list"
+        );
+    }
+}
+
+// ---- RT-146: click-to-expand tool-call previews ----
+
+/// The whole prepared transcript as plain text, sections in order.
+///
+/// Reads `wrapped_plain_lines` — the same plain-text projection the copy path
+/// uses — so a test sees the rows a user would select, not the styled spans.
+fn flat_text(frame: &crate::tui::operant_model::PreparedChatFrame) -> String {
+    frame
+        .sections
+        .iter()
+        .flat_map(|section| section.prepared.wrapped_plain_lines.iter().cloned())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Build a three-tool transcript and publish the regions the viewport would.
+/// Returns the app so tests can drive the click handler and assert the row map.
+///
+/// The regions come from the REAL prepare path (`prepare_messages`) against the
+/// assembled transcript, not a hand-built map, so the test fails if the publish
+/// wire breaks rather than only proving the hit-test maths.
+fn app_with_three_clickable_tools() -> App {
+    use crate::tui::adapter_types::types::Message;
+    use crate::tui::app::enums::{ToolStatus, ToolUseBlock};
+
+    let mut app = make_app();
+    app.messages
+        .push(Message::user("run three commands".to_string()));
+    app.messages
+        .push(Message::assistant("calling them".to_string()));
+    // Bash rows are the tool surface that actually renders an output body (the
+    // 3-line preview under `show_bash_output`, the full text when expanded), so
+    // they are the right fixture: a `read_file` row renders a single summary
+    // line with no body at all, and "expand" would have nothing to show.
+    crate::tui::operant_ui::tools_ui::tests_show_bash_output_override::set(true);
+    for i in 0..3 {
+        let body =
+            format!("output a{i} signal\noutput b{i} tail\noutput c{i} extra\noutput d{i} final");
+        app.tool_use_blocks.push(ToolUseBlock {
+            id: format!("call-{i}"),
+            name: "bash".to_string(),
+            after_index: 2,
+            status: ToolStatus::Done,
+            output_preview: Some(body),
+            input_json: serde_json::json!({"command": format!("run-{i}")}).to_string(),
+            intent: None,
+        });
+        app.remember_tool_output(
+            &format!("call-{i}"),
+            &format!("full output {i}\nsecond line {i}\nthird line {i}"),
+        );
+    }
+    app.invalidate_transcript();
+    // Publish exactly what the viewport publishes, from the real prepared frame.
+    // Rows are one summary line + N body lines, so the region must span all of
+    // them — a one-line region would make every click below the header fall
+    // through to a text selection instead of toggling.
+    let prepared = crate::tui::operant_ui::prepare::prepare_messages(&app, 80, 40);
+    crate::tui::operant_ui::viewport::set_tool_row_regions(prepared.tool_row_ranges.clone());
+    app
+}
+
+/// The touchdown contract: a click on a tool call's row expands THAT call, a
+/// second click on the same row collapses it, and a click on a different row
+/// moves the single expansion. The old `Ctrl+O` path could only ever touch the
+/// LAST finished tool, which is why this exists.
+#[test]
+fn clicking_a_tool_row_toggles_that_call_only() {
+    let mut app = app_with_three_clickable_tools();
+    let regions = crate::tui::operant_ui::viewport::tool_row_regions();
+    assert_eq!(
+        regions.len(),
+        3,
+        "every tool call must publish a row range: {regions:?}"
+    );
+    let first = &regions[0];
+
+    assert!(
+        app.expanded_tool_id.is_none(),
+        "nothing is expanded before the first click"
+    );
+
+    assert!(
+        app.toggle_tool_expansion_by_id(&first.tool_call_id),
+        "a click on a retained tool row must expand it"
+    );
+    assert_eq!(
+        app.expanded_tool_id.as_deref(),
+        Some(first.tool_call_id.as_str())
+    );
+
+    // A click on a DIFFERENT row moves the single expansion, it does not stack.
+    let second = &regions[1];
+    app.toggle_tool_expansion_by_id(&second.tool_call_id);
+    assert_eq!(
+        app.expanded_tool_id.as_deref(),
+        Some(second.tool_call_id.as_str()),
+        "one expansion at a time is the whole contract"
+    );
+
+    // A click on the same row collapses.
+    app.toggle_tool_expansion_by_id(&second.tool_call_id);
+    assert!(app.expanded_tool_id.is_none(), "the second click collapses");
+}
+
+/// `expanded_tool_id` is consumed by the adapter to render the full output, so
+/// a click must reach the pixels — an id nobody reads would be the same
+/// no-op the repo already caught in `thinking_row_map`/`message_row_map`.
+#[test]
+fn a_clicked_tool_row_renders_its_full_output() {
+    let mut app = app_with_three_clickable_tools();
+    let target = crate::tui::operant_ui::viewport::tool_row_regions()
+        .first()
+        .expect("three tool rows published")
+        .tool_call_id
+        .clone();
+
+    // COLLAPSED: the click has not happened yet, so each row shows its
+    // 3-line preview and NONE shows the retained full output.
+    let collapsed_text = flat_text(&crate::tui::operant_ui::prepare::prepare_messages(
+        &app, 80, 40,
+    ));
+    assert!(
+        !collapsed_text.contains("full output 0"),
+        "collapsed must NOT show the full output — otherwise the preview is \
+         already the whole thing and expand is meaningless. got: {collapsed_text}"
+    );
+    // The 3-line preview IS visible (it shows the last 3 lines), so there is
+    // something to expand from.
+    assert!(
+        collapsed_text.contains("output d0 final"),
+        "the preview must be on screen for a click to be meaningful: {collapsed_text}"
+    );
+
+    // EXPANDED: the click happened, so that row renders the retained full
+    // output. The prep path always rebuilds under `cfg!(test)`, so this is the
+    // real frame rather than a cached one.
+    app.toggle_tool_expansion_by_id(&target);
+    let expanded_text = flat_text(&crate::tui::operant_ui::prepare::prepare_messages(
+        &app, 80, 40,
+    ));
+    assert!(
+        expanded_text.contains("full output 0"),
+        "an expanded row must render the retained full output — the click has to \
+         reach the transcript, not just the state field. got: {expanded_text}"
+    );
+    assert!(
+        expanded_text.contains("third line 0"),
+        "the FULL text must arrive, not a first line: {expanded_text}"
+    );
+    // And ONLY that row expands: one-at-a-time is the contract.
+    assert!(
+        !expanded_text.contains("full output 1"),
+        "expanding one row must not expand its neighbours: {expanded_text}"
+    );
+
+    // Collapsing again takes it back off screen.
+    app.toggle_tool_expansion_by_id(&target);
+    let recollapsed = flat_text(&crate::tui::operant_ui::prepare::prepare_messages(
+        &app, 80, 40,
+    ));
+    assert!(
+        !recollapsed.contains("full output 0"),
+        "a second click must hide the full output again: {recollapsed}"
+    );
+}
+
+/// A row whose full output was evicted by the bounded budget must be a no-op
+/// that SAYS so, never a silent swallow and never a panic.
+#[test]
+fn clicking_an_evicted_tool_row_is_inert_and_reports() {
+    let mut app = make_app();
+    // A real row range, but nothing retained for its id.
+    app.toggle_tool_expansion_by_id("call-does-not-exist");
+    assert!(
+        app.expanded_tool_id.is_none(),
+        "an unretained row must not expand to an empty string"
+    );
+    assert!(
+        app.status_message.is_some(),
+        "the user must be told the output is gone rather than see a dead click"
+    );
+    let notice = app.status_message.clone().unwrap();
+    assert!(
+        notice.contains("no longer retained") || notice.contains("Ctrl+O"),
+        "the notice must point at the live affordance: {notice}"
+    );
+}
+
+/// The hit test: a screen row maps to exactly one tool call, rows outside any
+/// tool call map to nothing, and rows above the content (the pinned-todo /
+/// prompt-preview top band) map to nothing rather than to row 0.
+#[test]
+fn tool_row_hit_test_uses_the_frames_own_scroll() {
+    use crate::tui::operant_model::ToolRowRange;
+    use crate::tui::operant_ui::viewport::{set_tool_row_regions, tool_row_region_at};
+
+    let content_top = 4u16;
+    set_tool_row_regions(vec![ToolRowRange {
+        tool_call_id: "call-x".to_string(),
+        start_line: 10,
+        end_line: 14,
+    }]);
+
+    // scroll 0: content row 12 sits at screen row 4 + 12 = 16.
+    assert_eq!(
+        tool_row_region_at(16, content_top, 0).map(|r| r.tool_call_id),
+        Some("call-x".to_string())
+    );
+    // Scrolled down by 8: that same wrapped line is now at screen row 4 + 4.
+    assert_eq!(
+        tool_row_region_at(8, content_top, 8).map(|r| r.tool_call_id),
+        Some("call-x".to_string()),
+        "the hit test must follow the frame's scroll, not a cached screen row"
+    );
+    // Above the content: the top band, not the first tool call.
+    assert_eq!(tool_row_region_at(3, content_top, 0), None);
+    // Gap before the region, and past its exclusive end.
+    assert_eq!(tool_row_region_at(6, content_top, 0), None);
+    assert_eq!(tool_row_region_at(18, content_top, 0), None);
+
+    // Reset so a later test does not inherit these.
+    set_tool_row_regions(Vec::new());
+    assert_eq!(tool_row_region_at(16, content_top, 0), None);
+}
+
+/// The regions must be capped to what is on screen, or a 5,000-line transcript
+/// publishes 5,000 regions and every click pays for the whole list.
+#[test]
+fn published_tool_regions_start_at_the_prepared_frames_ranges() {
+    let app = app_with_three_clickable_tools();
+    let regions = crate::tui::operant_ui::viewport::tool_row_regions();
+    for region in &regions {
+        assert!(
+            region.start_line < region.end_line,
+            "a region must span at least one line: {region:?}"
+        );
+        assert!(
+            !region.tool_call_id.is_empty(),
+            "a region must carry the tool-call id the toggle needs: {region:?}"
         );
     }
 }

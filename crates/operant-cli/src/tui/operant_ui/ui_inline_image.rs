@@ -748,6 +748,7 @@ pub(crate) fn build_section(
         user_prompt_texts: Vec::new(),
         image_regions,
         edit_tool_ranges: Vec::new(),
+        tool_row_ranges: Vec::new(), // RT-146
         copy_targets: Vec::new(),
         message_boundaries: Vec::new(),
         mermaid_pending_epoch: None,
@@ -768,6 +769,7 @@ fn empty() -> PreparedMessages {
         user_prompt_texts: Vec::new(),
         image_regions: Vec::new(),
         edit_tool_ranges: Vec::new(),
+        tool_row_ranges: Vec::new(), // RT-146
         copy_targets: Vec::new(),
         message_boundaries: Vec::new(),
         mermaid_pending_epoch: None,

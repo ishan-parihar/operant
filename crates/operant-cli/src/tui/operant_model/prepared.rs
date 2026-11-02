@@ -13,6 +13,28 @@ use crate::tui::operant_markdown::CopyTargetKind;
 use ratatui::text::Line;
 use std::sync::Arc;
 
+/// One tool call's rows in the prepared body, in wrapped-line coordinates.
+///
+/// RT-146: click-to-expand. A tool row is rendered from a `role = "tool"`
+/// [`DisplayMessage`] carrying `tool_data: Some(ToolCall)`, and the click
+/// handler needs to map a screen row back to that call's id — the key into
+/// `App::tool_full_outputs` and `App::expanded_tool_id`.
+///
+/// This is deliberately NOT `EditToolRange`: that type exists for the side
+/// panel's diff pane, is produced only for `is_edit_tool_name` messages, and no
+/// click path reads it. A tool-row click has to work for every tool message,
+/// edit tools included, so it carries only the two facts the hit test and the
+/// toggle need.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ToolRowRange {
+    /// `ToolUseBlock.id` — the key into the app's tool-output maps.
+    pub tool_call_id: String,
+    /// First wrapped line of this call's rows.
+    pub start_line: usize,
+    /// Exclusive end, matching every other region in this module.
+    pub end_line: usize,
+}
+
 /// Pre-computed image region from line scanning.
 #[derive(Clone, Copy)]
 pub struct ImageRegion {
@@ -101,6 +123,9 @@ pub struct PreparedMessages {
     pub image_regions: Vec<ImageRegion>,
     /// Line ranges for edit tool messages.
     pub edit_tool_ranges: Vec<EditToolRange>,
+    /// RT-146: line ranges for EVERY tool message, for click-to-expand. Unlike
+    /// `edit_tool_ranges` this is not gated on the tool being an edit tool.
+    pub tool_row_ranges: Vec<ToolRowRange>,
     pub copy_targets: Vec<CopyTarget>,
     /// Per-message cumulative boundaries in transcript order, used for prefix
     /// reuse on rebuild. Empty when boundary tracking is not available (e.g.
@@ -162,6 +187,10 @@ pub struct PreparedChatFrame {
     pub user_prompt_texts: Vec<String>,
     pub image_regions: Vec<ImageRegion>,
     pub edit_tool_ranges: Vec<EditToolRange>,
+    /// RT-146: click-to-expand. Frame-global (section-offset) copies of each
+    /// section's tool-call line ranges, so a click hit-tests ONE list instead
+    /// of resolving which section a line fell in first.
+    pub tool_row_ranges: Vec<ToolRowRange>,
     pub copy_targets: Vec<CopyTarget>,
 }
 
@@ -190,6 +219,7 @@ impl PreparedChatFrame {
         let mut user_prompt_texts = Vec::new();
         let mut image_regions = Vec::new();
         let mut edit_tool_ranges = Vec::new();
+        let mut tool_row_ranges = Vec::new();
         let mut copy_targets = Vec::new();
 
         for (kind, prepared) in sections {
@@ -197,6 +227,7 @@ impl PreparedChatFrame {
                 && prepared.raw_plain_lines.is_empty()
                 && prepared.image_regions.is_empty()
                 && prepared.edit_tool_ranges.is_empty()
+                && prepared.tool_row_ranges.is_empty()
                 && prepared.copy_targets.is_empty()
             {
                 continue;
@@ -237,6 +268,11 @@ impl PreparedChatFrame {
                 end_line: range.end_line + line_start,
                 expandable: range.expandable,
             }));
+            tool_row_ranges.extend(prepared.tool_row_ranges.iter().map(|range| ToolRowRange {
+                tool_call_id: range.tool_call_id.clone(),
+                start_line: range.start_line + line_start,
+                end_line: range.end_line + line_start,
+            }));
             copy_targets.extend(prepared.copy_targets.iter().map(|target| CopyTarget {
                 kind: target.kind.clone(),
                 content: target.content.clone(),
@@ -264,6 +300,7 @@ impl PreparedChatFrame {
             user_prompt_texts,
             image_regions,
             edit_tool_ranges,
+            tool_row_ranges,
             copy_targets,
         }
     }

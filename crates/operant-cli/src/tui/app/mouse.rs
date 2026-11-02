@@ -1045,6 +1045,33 @@ impl App {
                     return;
                 }
 
+                // RT-146: click anywhere on a tool call's rows to expand its
+                // full output, click again to collapse. Placed BEFORE the
+                // `in_selectable` branch so the click is a toggle rather than a
+                // drag-select anchor — a selection that also fires a toggle
+                // would fight itself on every attempt to copy a tool result.
+                //
+                // `chat_content_area()` and the resolved scroll are the same
+                // values the paint used (both published each frame), so the
+                // hit test resolves against the geometry actually on screen
+                // rather than a stale one from an earlier layout.
+                {
+                    let content = crate::tui::operant_ui::chat_content_area();
+                    let scroll = crate::tui::operant_ui::last_resolved_chat_scroll();
+                    if mouse_event.column >= content.x
+                        && mouse_event.column < content.x.saturating_add(content.width)
+                        && let Some(region) = crate::tui::operant_ui::tool_row_region_at(
+                            mouse_event.row,
+                            content.y,
+                            scroll,
+                        )
+                    {
+                        self.clear_selection();
+                        self.toggle_tool_expansion_by_id(&region.tool_call_id);
+                        return;
+                    }
+                }
+
                 if in_input {
                     self.focus = FocusTarget::Input;
                     self.clear_selection();

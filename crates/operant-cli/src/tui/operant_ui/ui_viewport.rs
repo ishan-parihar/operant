@@ -436,6 +436,13 @@ pub(super) fn draw_messages(
     // Retain the frame itself: it is the geometry (per-item row ranges), and
     // handlers outside `draw` resolve anchors against it.
     super::set_last_chat_frame(prepared.clone());
+    // RT-146: publish the tool-call row ranges so a click can resolve to the
+    // exact call whose row the user pointed at. Published HERE, where `scroll`
+    // is final, rather than at `set_pinned_todo_more_area` above (which runs
+    // before either scroll resolution): the click handler subtracts this same
+    // `scroll`, and a snapshot published from a different one maps every click
+    // to the wrong line.
+    set_tool_row_regions(prepared.tool_row_ranges.clone());
     // Record where the reader ended up in content coordinates. A resize
     // rewraps the transcript, so the only thing that survives it is "which
     // message was under the reader", not a line index. (operant's publisher
@@ -1615,6 +1622,58 @@ fn set_pinned_todo_more_area(area: Option<Rect>) {
 /// way the thinking-block header is dispatched through `thinking_row_map`.
 pub(crate) fn pinned_todo_more_area() -> Option<Rect> {
     PINNED_TODO_MORE_AREA.lock().ok().and_then(|area| *area)
+}
+
+/// Tool-call rows published to the click handler from the last drawn frame.
+///
+/// The regions are in WRAPPED-line coordinates (the transcript's own line
+/// space), not screen coordinates, for a specific reason: the click handler
+/// already knows this frame's `content_top` and `scroll` (it reads them from
+/// the same published rect the paint used), and a screen-relative snapshot goes
+/// stale the instant the transcript scrolls — the bug class the repo's other
+/// row maps have already hit. Line-relative plus the frame's own scroll is
+/// stable for exactly as long as the frame it came from.
+static TOOL_ROW_REGIONS: std::sync::Mutex<Vec<crate::tui::operant_model::ToolRowRange>> =
+    std::sync::Mutex::new(Vec::new());
+
+/// Publish this frame's tool-call row regions, replacing the previous frame's.
+///
+/// Called once per drawn frame by the viewport, alongside
+/// [`set_pinned_todo_more_area`]. An empty slice is the normal steady state
+/// (a transcript with no tool calls), not an error.
+pub(crate) fn set_tool_row_regions(regions: Vec<crate::tui::operant_model::ToolRowRange>) {
+    if let Ok(mut current) = TOOL_ROW_REGIONS.lock() {
+        *current = regions;
+    }
+}
+
+/// The tool-call row regions from the last drawn frame.
+pub(crate) fn tool_row_regions() -> Vec<crate::tui::operant_model::ToolRowRange> {
+    TOOL_ROW_REGIONS
+        .lock()
+        .ok()
+        .map(|r| r.clone())
+        .unwrap_or_default()
+}
+
+/// Hit-test a screen row against the last frame's tool-call regions.
+///
+/// `content_top` is the first screen row of the transcript text and `scroll` is
+/// the wrapped line that row carried, both from the frame being hit-tested.
+/// Returns the region the row falls inside, or `None` when the row is above the
+/// content (the prompt-preview/pinned-todo top band) or between tool calls.
+pub(crate) fn tool_row_region_at(
+    screen_row: u16,
+    content_top: u16,
+    scroll: usize,
+) -> Option<crate::tui::operant_model::ToolRowRange> {
+    if screen_row < content_top {
+        return None;
+    }
+    let abs_line = scroll + (screen_row - content_top) as usize;
+    tool_row_regions()
+        .into_iter()
+        .find(|region| abs_line >= region.start_line && abs_line < region.end_line)
 }
 
 fn compute_prompt_preview_line_count(

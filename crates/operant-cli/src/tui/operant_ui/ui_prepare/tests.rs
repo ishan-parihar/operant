@@ -77,7 +77,8 @@ fn wrapped_row_map_tiles_raw_line_and_skips_repeated_prefix() {
             .unwrap_or_else(|| panic!("case should render a line wider than 40: {case:?}"));
         let raw_width = unicode_width::UnicodeWidthStr::width(ui::line_plain_text(&line).as_str());
 
-        let prepared = wrap_lines_with_map(vec![line], &[], &[], &[], &[], &[], 40, &[], &[], &[]);
+        let prepared =
+            wrap_lines_with_map(vec![line], &[], &[], &[], &[], &[], 40, &[], &[], &[], &[]);
         let maps = prepared.wrapped_line_map.as_ref();
 
         assert!(maps.len() > 1, "case should wrap at width 40: {case:?}");
@@ -148,6 +149,7 @@ fn wrapped_copy_rows_match_visible_content_at_reported_widths() {
                 &[],
                 &[],
                 &[],
+                &[],
             ));
         }
 
@@ -175,6 +177,7 @@ fn wrapped_copy_rows_match_visible_content_at_reported_widths() {
             &users,
             &[],
             width,
+            &[],
             &[],
             &[],
             &[],
@@ -207,6 +210,7 @@ fn matching_suffix_len_detects_prepended_history() {
         user_prompt_texts: Vec::new(),
         image_regions: Vec::new(),
         edit_tool_ranges: Vec::new(),
+        tool_row_ranges: Vec::new(), // RT-146
         copy_targets: Vec::new(),
         message_boundaries: old
             .iter()
