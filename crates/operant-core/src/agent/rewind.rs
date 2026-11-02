@@ -532,4 +532,132 @@ mod tests {
         );
         assert_eq!(agent.rewind_marks()[0].text, "archived question");
     }
+
+    /// THE REAL COMPACTION DESYNC, end to end — the condition iter-1633 fixed,
+    /// produced by the production path rather than a hand-built fixture.
+    ///
+    /// `user_prompt_index` (the rewind renderer's mark-list-to-display-slot
+    /// resolver) used to answer by POSITION first. Position is only correct
+    /// while the two lists are index-aligned, and a REAL compaction breaks that
+    /// alignment: `compact_history_now` folds the oldest exchanges out of the
+    /// conversation, while `record_user_turn`'s marks keep one entry per turn so
+    /// Enter can still refuse a turn whose rows are gone.
+    ///
+    /// This drives the actual seam (`add_message` -> `record_user_turn` ->
+    /// `compact_history_now` -> `conversation_rewind_marks`) instead of
+    /// constructing the desync by hand, so the test fails if the real path ever
+    /// stops producing it. The TUI half of the resolution is pinned separately
+    /// by `a_folded_middle_turn_does_not_outline_the_wrong_turn`.
+    #[tokio::test]
+    async fn a_real_compaction_desyncs_the_mark_list_from_the_conversation() {
+        let (agent, _db) = agent();
+        // The shape `compact_history_now_folds_old_exchanges_and_keeps_the_tail`
+        // proves actually folds: enough turns that `HEAD_KEEP`/`TAIL_KEEP` leave
+        // a middle to collapse, and long enough bodies to trip the char budget.
+        let texts = [
+            "alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "theta",
+        ];
+        for (i, text) in texts.iter().enumerate() {
+            let idx = agent.conversation.read().await.len();
+            // `record_user_turn` records the FULL prompt, so pad it here and the
+            // mark carries the padding — which is what the real agent does.
+            let prompt = format!("{text} {}", "x".repeat(200));
+            agent.add_message(Message::user(prompt.clone())).await;
+            agent.record_user_turn(prompt, idx);
+            agent
+                .add_message(crate::client::Message::assistant(format!(
+                    "answer {i} {}",
+                    "y".repeat(200)
+                )))
+                .await;
+        }
+
+        let marks_before = agent.conversation_rewind_marks().await;
+        assert_eq!(marks_before.len(), 8, "eight turns are recorded");
+        let conv_len_before = agent.conversation.read().await.len();
+        assert_eq!(conv_len_before, 16, "user + assistant per turn");
+
+        // The production compaction. Folds the oldest exchanges and keeps the
+        // tail verbatim (see `compact_history_now_folds_old_exchanges_and_keeps_
+        // the_tail`).
+        let (before, after) = agent.compact_history_now().await;
+        assert!(
+            after < before,
+            "compaction must actually fold: {before} -> {after}"
+        );
+
+        // THE ASSERTION THAT MATTERS: the marks still describe FOUR turns while
+        // the conversation now holds FEWER user messages. That gap is the
+        // desync; the selector's pick must be resolved by text, not by the
+        // mark index, because the two lists no longer share an origin.
+        let marks_after = agent.rewind_marks();
+        let user_texts: Vec<String> = agent
+            .conversation
+            .read()
+            .await
+            .iter()
+            .filter(|m| m.role == crate::client::Role::User)
+            .map(|m| m.content.clone())
+            .collect();
+
+        // THE ASSERTION THAT MATTERS: compaction replaces a folded exchange
+        // with ONE `[compacted exchange ...]` marker, so the marker's text is
+        // NOT the mark's recorded prompt. The MARK still exists (the selector
+        // keeps offering it so Enter can refuse it) but its recorded text is
+        // absent from the conversation — which is precisely the state the
+        // selector's `compacted` flag is derived from, and precisely the state a
+        // POSITIONAL mark-index-to-display-slot resolver answers wrongly.
+        assert_eq!(
+            marks_after.len(),
+            8,
+            "the mark list keeps one entry per turn — a folded turn is refused \
+             by Enter, not silently dropped"
+        );
+        let markers: Vec<&String> = user_texts
+            .iter()
+            .filter(|t| t.starts_with("[compacted exchange"))
+            .collect();
+        assert!(
+            !markers.is_empty(),
+            "compaction actually folded exchanges into markers: {user_texts:?}"
+        );
+
+        // Every marker row corresponds to a mark whose prompt text is gone.
+        let absent: Vec<&str> = marks_after
+            .iter()
+            .map(|m| m.text.as_str())
+            .filter(|t| !user_texts.iter().any(|u| u == t))
+            .collect();
+        assert_eq!(
+            absent.len(),
+            markers.len(),
+            "each folded conversation row is one mark whose recorded prompt is \
+             now absent — {absent:?} against {markers:?}"
+        );
+
+        // What the real path produces, and the reason the selector must keep
+        // offering the folded mark: TWO turns' prompts are gone from the
+        // conversation while their marks survive. That is the state the
+        // selector's `compacted` flag is derived from and the state Enter must
+        // refuse rather than fork at a cut point that no longer resolves.
+        //
+        // NOTE on positional alignment, MEASURED here rather than assumed:
+        // `micro_compact` replaces each folded exchange with its marker IN
+        // PLACE, so in this shape the surviving marks' indices still coincide
+        // with their display slots (measured: 0->0, 1->1, 4->4, 5->5, 6->6,
+        // 7->7). The positional resolver's betrayal therefore needs the other
+        // shape — a fold that REMOVES a display row outright — which is what
+        // `a_folded_middle_turn_does_not_outline_the_wrong_turn` builds by hand
+        // on the TUI side (three marks against two display prompts). This test
+        // pins the production precondition for that fixture: the marks survive,
+        // their texts do not, and nothing realigns them by construction.
+        assert_eq!(
+            absent
+                .iter()
+                .map(|t| t.split_whitespace().next().unwrap())
+                .collect::<Vec<_>>(),
+            vec!["gamma", "delta"],
+            "exactly the folded turns' prompts are absent, in conversation order"
+        );
+    }
 }
