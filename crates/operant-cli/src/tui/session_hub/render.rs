@@ -15,7 +15,7 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
 };
 
-use super::{PaneFocus, SessionHubState};
+use super::{HubGroupMode, PaneFocus, SessionHubState};
 use crate::tui::theme_colors;
 use operant_core::session::listing::{RowKind, RowStatus, SessionEntryV2};
 
@@ -46,10 +46,11 @@ fn chrome_items(state: &SessionHubState, inner_width: u16) -> Vec<ListItem<'stat
     ];
     // Right-align the two columns whose values are right-aligned in the rows,
     // so the header sits above its own data rather than floating at the left.
-    let col_header = |label: &str, width: u16| {
-        let pad = (width as usize).saturating_sub(label.chars().count());
-        format!("{}{}", " ".repeat(pad), label)
-    };
+    // The column header labels sit at the SAME position the row's values do:
+    // immediately after the identifiers, one two-space gap each. Padding them
+    // to fixed column widths is what pushed a row's `$cost` off the 48-column
+    // pane (measured 2026-11-02), and a header that costs the operator data
+    // below it is a net loss.
     items.push(ListItem::new(Line::from(vec![
         Span::styled(
             " Tasks",
@@ -58,13 +59,13 @@ fn chrome_items(state: &SessionHubState, inner_width: u16) -> Vec<ListItem<'stat
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
-            col_header("Status", COL_STATUS),
+            "  Status",
             Style::default()
                 .fg(theme_colors::muted())
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
-            col_header("Updated", COL_UPDATED),
+            "  Updated",
             Style::default()
                 .fg(theme_colors::muted())
                 .add_modifier(Modifier::BOLD),
@@ -73,20 +74,104 @@ fn chrome_items(state: &SessionHubState, inner_width: u16) -> Vec<ListItem<'stat
     items
 }
 
-/// The Status column's width, measured in cells: the longest value it holds
-/// (`Interrupted`, or a delegation's `pending`/`failed`) plus the two spaces
-/// that separate it from the metrics column.
-const COL_STATUS: u16 = 16;
-/// The Updated column's width. `relative_time`'s longest form is
-/// "N days ago" (11), so the extra space is slack for a 5-digit day count.
-const COL_UPDATED: u16 = 15;
+/// Insert one heading row before each group's first row.
+///
+/// `rows` is the body items in FLAT `visible_idx` order, so `rows[k]` is the
+/// row at `visible_idx[k]` and the mapping is positional. Grouping reorders the
+/// READING, not the items, so the heading positions come from the groups'
+/// first-appearance offsets in that same flat list.
+///
+/// `Auto` returns the list untouched: the default must not add chrome, and a
+/// heading that repeats the whole list's contents is noise.
+fn interpose_group_headings(
+    state: &SessionHubState,
+    rows: Vec<ListItem<'static>>,
+    inner_width: u16,
+) -> Vec<ListItem<'static>> {
+    if state.group_mode == HubGroupMode::Auto || rows.is_empty() {
+        return rows;
+    }
+    let groups = state.visible_groups();
+    // `visible_groups` yields ROW indices (into `state.rows`), while the items
+    // here are positioned in `visible_idx`. Translating between the two is
+    // mandatory, not defensive: under a filter the two sets differ, and a
+    // heading interposed at the wrong position is worse than no grouping.
+    let mut opens: Vec<(usize, String, usize)> = groups
+        .iter()
+        .filter_map(|(key, idxs)| {
+            let first = *idxs.first()?;
+            // The flat position of `first`, i.e. where it sits in the built
+            // items — which is exactly where its heading must be inserted.
+            let pos = state.visible_idx.iter().position(|&i| i == first)?;
+            Some((pos, key.clone(), idxs.len()))
+        })
+        .collect();
+    opens.sort_by_key(|(pos, _, _)| *pos);
+    let mut out: Vec<ListItem<'static>> = Vec::with_capacity(rows.len() + opens.len());
+    let mut next_heading = 0usize;
+    for (flat_pos, item) in rows.into_iter().enumerate() {
+        while next_heading < opens.len() && opens[next_heading].0 == flat_pos {
+            let (_, key, count) = &opens[next_heading];
+            out.push(group_heading_row(key, *count, inner_width));
+            next_heading += 1;
+        }
+        out.push(item);
+    }
+    out
+}
 
-/// Right-align pad for a column value: `column - value` spaces, or none when
-/// the value already fills its column. The caller passes the value's own width
-/// INCLUDING the two-space separator, so the padding fills exactly the gap
-/// between the previous column's tail and this value's first character.
-fn row_align(value: usize, column: u16) -> String {
-    " ".repeat((column as usize).saturating_sub(value))
+/// How many group-heading rows the renderer draws ABOVE the body row at
+/// `selected`. One heading per group precedes that group's first row, so the
+/// count is the number of groups that open before it.
+///
+/// This exists because `state.selected` indexes the flat `visible_idx` while
+/// the renderer draws a flattened list of headings + rows. Subtracting the
+/// headings from the rendered position is what keeps the highlight on the row
+/// the operator is on — the Stage A offset class, one level deeper.
+fn group_heading_rows_above(state: &SessionHubState, selected: usize) -> usize {
+    if state.group_mode == HubGroupMode::Auto {
+        return 0;
+    }
+    // `Auto` renders one flat group with no heading, so it contributes zero;
+    // every other mode renders one heading per group.
+    state
+        .visible_groups()
+        .into_iter()
+        .take_while(|(_, rows)| !rows.contains(&state.visible_idx[selected]))
+        .count()
+}
+
+/// One group heading row: the group's key and its row count, dimmed. Codex's
+/// `render_group_header` renders the same line — the count is the part that
+/// carries information (how many sessions live in this directory), so a bare
+/// heading would be a divider with no content.
+fn group_heading_row(key: &str, count: usize, inner_width: u16) -> ListItem<'static> {
+    let truncated: String = key
+        .chars()
+        .take((inner_width as usize).saturating_sub(16))
+        .collect();
+    let ellipsis = if key.chars().count() > truncated.chars().count() {
+        "…"
+    } else {
+        ""
+    };
+    let mut spans = vec![Span::styled(
+        format!(" {truncated}{ellipsis}"),
+        Style::default()
+            .fg(theme_colors::muted())
+            .add_modifier(Modifier::BOLD),
+    )];
+    // The count rides at the row's right-hand edge, where the Updated column's
+    // values sit, so it reads as "how many rows are under this heading" rather
+    // than as stray text at the end of the line.
+    let label = format!("{count} ");
+    let pad = 15usize.saturating_sub(label.chars().count());
+    spans.push(Span::styled(" ".repeat(pad), Style::default()));
+    spans.push(Span::styled(
+        label,
+        Style::default().fg(theme_colors::muted()),
+    ));
+    ListItem::new(Line::from(spans))
 }
 
 /// The compact age form the TUI already uses (app/mod.rs's session-list
@@ -139,6 +224,12 @@ fn row_title(row: &SessionEntryV2) -> String {
 /// Compact token count for the row's meta line: a 14,103-message session's
 /// token total is seven digits, which at a 40%-width list would push the
 /// session id off the row entirely. `k`/`M` keeps the identifier visible.
+///
+/// (2026-11-02, measured) The unit went too: with the Status and Updated
+/// columns also on the line, " · 1.2k tok" cost 11 cells and pushed the row's
+/// `$cost` off the 46-column inner pane entirely. Dropping the repeated " tok"
+/// (the column header says what the number is) fits the row at 48-wide panes
+/// again, and a token count nobody reads to three digits.
 fn tokens_suffix(tokens: u64) -> String {
     const K: f64 = 1_000.0;
     const M: f64 = 1_000_000.0;
@@ -146,11 +237,11 @@ fn tokens_suffix(tokens: u64) -> String {
     if tokens == 0 {
         String::new()
     } else if t >= M {
-        format!(" · {:.1}M tok", t / M)
+        format!(" \u{2022} {:.1}M", t / M)
     } else if t >= K {
-        format!(" · {:.1}k tok", t / K)
+        format!(" \u{2022} {:.1}k", t / K)
     } else {
-        format!(" · {tokens} tok")
+        format!(" \u{2022} {tokens}")
     }
 }
 
@@ -302,10 +393,22 @@ fn render_header(state: &SessionHubState) -> Line<'static> {
             Style::default().fg(theme_colors::text()),
         ));
     }
-    // Without the key hint the tab bar below reads as decoration.
+    // Without the key hints the tab bar and the group headings read as
+    // decoration.
     spans.push(Span::styled(
         "  s cycle",
         Style::default().fg(theme_colors::muted()),
+    ));
+    // The `Group:` clause, codex's own header line shape. Stage C fills in the
+    // mode and the key that changes it: the header alone now answers both
+    // "which axis is this list ordered by" and "which key reorders it".
+    spans.push(Span::styled(
+        format!(
+            "  Group: {}  {}",
+            state.group_mode.label(),
+            state.group_mode.key()
+        ),
+        Style::default().fg(theme_colors::text()),
     ));
     Line::from(spans)
 }
@@ -531,12 +634,6 @@ fn render_list_body(frame: &mut Frame, state: &SessionHubState, area: ratatui::l
                     Span::styled(emp, Style::default().fg(theme_colors::muted())),
                     usage_span,
                 ];
-                // The Status and Updated columns are right-aligned to their
-                // header labels, so `row_align` pads the value out to its
-                // column's trailing edge and the header above is truthful.
-                // Without the pad the column header names a position the data
-                // never occupies, which is worse than no header at all.
-                //
                 // Stage B also fills a real gap: a session row's status was
                 // carried ONLY by the title line's colour-coded glyph, so an
                 // Idle and an Interrupted row differed by a hue and nothing
@@ -563,16 +660,11 @@ fn render_list_body(frame: &mut Frame, state: &SessionHubState, area: ratatui::l
                     ),
                 };
                 meta_spans.push(Span::styled(
-                    row_align(status_value.0.chars().count() + 2, COL_STATUS),
-                    Style::default(),
-                ));
-                meta_spans.push(Span::styled(
-                    status_value.0.to_string(),
+                    format!("  {}", status_value.0),
                     Style::default().fg(status_value.1),
                 ));
-                meta_spans.push(Span::styled(row_align(0, COL_UPDATED), Style::default()));
                 meta_spans.push(Span::styled(
-                    relative_time(row.updated_at),
+                    format!("  {}", relative_time(row.updated_at)),
                     Style::default().fg(theme_colors::muted()),
                 ));
                 if !matches!(row.kind, RowKind::Subagent { .. }) {
@@ -591,25 +683,36 @@ fn render_list_body(frame: &mut Frame, state: &SessionHubState, area: ratatui::l
             .collect()
     };
 
-    // The two chrome rows come FIRST inside the block, above every state's
-    // body — loading, empty, or rows — so the counts never disappear while a
-    // filter change reloads. The tab bar needs the block's inner width to
-    // choose its label form, which is why the block is built first.
+    // Stage C interposes one heading before each group's first row. The rows
+    // above are built in the FLAT `visible_idx` order (so `i == state.selected`
+    // still works unchanged), so grouping is a presentation pass over the
+    // finished list rather than a change to how a row is built. That keeps the
+    // row-building closure readable and stops grouping from spreading into
+    // every per-row branch.
+    //
+    // The block is built first because the heading's count column needs the
+    // inner width too.
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme_colors::border()));
     let inner_width = block.inner(area).width;
+    let body_items: Vec<ListItem> = interpose_group_headings(state, body_items, inner_width);
     let items: Vec<ListItem> = chrome_items(state, inner_width)
         .into_iter()
         .chain(body_items)
         .collect();
     let mut list_state = ListState::default();
     if !state.loading && !state.visible_rows().is_empty() {
-        // `state.selected` indexes `visible_idx`, which is the BODY set: the
-        // two chrome rows sit above it, so the highlight must be shifted by
-        // exactly CHROME_ROWS or the first visible session renders selected
-        // while the operator's cursor is on the third.
-        list_state.select(Some(CHROME_ROWS + state.selected));
+        // `state.selected` indexes `visible_idx`, which is the BODY set. The
+        // highlight must land on the row's RENDERED position, which is the
+        // chrome rows plus every group heading drawn above it. Counting them
+        // here (rather than assuming `CHROME_ROWS + selected`) is what keeps
+        // the highlight on the operator's row once Stage C inserts one heading
+        // per group: with three groups and five rows, row 4 renders at
+        // position 3 + 3 + 4, not 3 + 4.
+        list_state.select(Some(
+            CHROME_ROWS + group_heading_rows_above(state, state.selected) + state.selected,
+        ));
     }
     frame.render_stateful_widget(
         List::new(items).block(block).highlight_style(

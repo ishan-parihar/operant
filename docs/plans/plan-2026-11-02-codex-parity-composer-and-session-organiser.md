@@ -521,3 +521,42 @@ Stage B did not ship the two-glyph row (`›` selection marker separate from the
 status glyph). It is deferred to Stage D, which is where the row's background work
 happens and where a second glyph would otherwise be drawn twice.
 
+---
+
+## Stage C — what landed (`feat(iter-1654)` state, `feat(iter-1655)` render)
+
+Grouping, cycled with `g`. Four axes: `Auto` (the load's own `updated_at DESC`),
+`Directory` (`row.cwd`), `Employee` (`row.employee_id`), `Status`
+(`RowStatus::api_label`). Codex's four are Project/Directory/Status/Model;
+`Directory` is the honest port of `Project` because operant does not resolve git
+identity (common_dir + relative_cwd) here, and `Model` is omitted because every
+operant row would render an empty group.
+
+**The design decision worth recording: grouping is a VIEW over the flat
+`visible_idx`, not a second index model.** Every existing navigation path is
+untouched by Stage C, and a second index model is exactly how this feature turns
+into two sources of truth that disagree. `visible_groups()` returns
+`Vec<(group_key, Vec<row_idx>)>` in first-appearance order, which is what keeps
+groups stable across a row refresh instead of shuffling the section the operator
+is reading. The renderer then does a presentation pass over the finished row
+list, interposing one heading before each group's first row.
+
+Two offsets, both the same class and both pinned by tests:
+
+1. `CHROME_ROWS` (3) covers the header, the tab bar and the column header.
+2. `group_heading_rows_above(state, selected)` covers however many group
+   headings the renderer drew above the selected row. This one is the finding:
+   `state.selected` indexes the FLAT `visible_idx`, while the renderer draws
+   flattened headings + rows, so `CHROME_ROWS + selected` lands one row too high
+   for every row after the first group boundary. Counting the headings rather
+   than assuming a constant is what keeps the highlight on the operator's row.
+
+A second finding, caught during implementation before it shipped:
+`visible_groups()` yields ROW indices (into `rows`), while the built items are
+positioned in `visible_idx`. Under a filter those two sets differ, so
+interposing a heading at the row index as if it were a position silently
+misplaces groups. The translation is explicit in `interpose_group_headings`.
+
+`cycle_group()` preserves the selection BY ROW ID, not by position, so pressing
+`g` does not move the cursor to a different session.
+

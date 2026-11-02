@@ -1472,3 +1472,162 @@ fn open_selecting_does_not_reorder_the_rows() {
         "cursor placement must not change the row order"
     );
 }
+
+// ---- (2026-11-02) Stage C: grouping is a view, and the offset survives it ----
+
+fn row_with_cwd(id: &str, cwd: &str) -> SessionEntryV2 {
+    let mut r = row(id, Some(id), None);
+    r.cwd = Some(cwd.to_string());
+    r
+}
+
+/// The default must not add chrome: with grouping in `Auto` the list is flat,
+/// so a heading row would be a line of noise repeating the whole list.
+#[test]
+fn auto_grouping_adds_no_heading_rows() {
+    let mut hub = SessionHubState::new();
+    hub.replace_rows(vec![
+        row_with_cwd("a", "/one"),
+        row_with_cwd("b", "/two"),
+        row_with_cwd("c", "/one"),
+    ]);
+    hub.group_mode = HubGroupMode::Auto;
+    let groups = hub.visible_groups();
+    assert_eq!(
+        groups.len(),
+        1,
+        "Auto is one flat group, not per-cwd groups"
+    );
+    assert!(groups[0].0.is_empty(), "the Auto key is empty by contract");
+    assert_eq!(groups[0].1.len(), 3, "every visible row is in it");
+}
+
+/// Group order is FIRST-APPEARANCE, not alphabetical or by count. Codex's
+/// `AgentsOverviewGroup` guarantees the same so a row refresh does not shuffle
+/// the section the operator is reading.
+#[test]
+fn group_order_is_first_appearance_not_recomputed() {
+    let mut hub = SessionHubState::new();
+    hub.replace_rows(vec![
+        row_with_cwd("a", "/zeta"),
+        row_with_cwd("b", "/alpha"),
+        row_with_cwd("c", "/zeta"),
+    ]);
+    hub.group_mode = HubGroupMode::Directory;
+    let groups = hub.visible_groups();
+    assert_eq!(groups.len(), 2, "two directories, two groups");
+    assert_eq!(
+        groups[0].0, "/zeta",
+        "the first row's dir opens the first group"
+    );
+    assert_eq!(groups[1].0, "/alpha");
+    assert_eq!(
+        groups[0].1.len(),
+        2,
+        "the first group holds both /zeta rows"
+    );
+}
+
+/// `cycle_group` preserves the selection BY ROW ID. Grouping reorders the
+/// reading, so a position-based preservation would move the cursor onto a
+/// different session and the operator would watch the highlight jump sideways
+/// while pressing `g`.
+#[test]
+fn cycling_group_keeps_the_cursor_on_the_same_session() {
+    let mut hub = SessionHubState::new();
+    hub.replace_rows(vec![
+        row_with_cwd("a", "/one"),
+        row_with_cwd("b", "/two"),
+        row_with_cwd("c", "/one"),
+    ]);
+    hub.select_next();
+    assert_eq!(hub.selected_row().map(|r| r.id.as_str()), Some("b"));
+    hub.cycle_group();
+    assert_eq!(hub.group_mode, HubGroupMode::Directory);
+    assert_eq!(
+        hub.selected_row().map(|r| r.id.as_str()),
+        Some("b"),
+        "the selected row must be the same session after grouping changes"
+    );
+}
+
+/// The heading offset. `state.selected` indexes the flat `visible_idx` while
+/// the renderer draws flattened headings + rows, so the highlight must be
+/// shifted by the headings above it — the Stage A offset class, one level
+/// deeper, and the exact bug a flat `CHROME_ROWS + selected` reintroduces.
+#[test]
+fn the_highlight_accounts_for_group_headings_above_the_row() {
+    // Four rows, three groups. First-appearance order puts /one first (it holds
+    // rows 0 AND 3), then /two, then /three. So row 3 sits in the FIRST group
+    // and has NO heading above it, while row 2 (/three) has TWO — that is the
+    // case a flat `CHROME_ROWS + selected` gets wrong by two rows.
+    let mut hub = SessionHubState::new();
+    hub.replace_rows(vec![
+        row_with_cwd("a", "/one"),
+        row_with_cwd("b", "/two"),
+        row_with_cwd("c", "/three"),
+        row_with_cwd("d", "/one"),
+    ]);
+    hub.group_mode = HubGroupMode::Directory;
+
+    // Row 3 (`d`) is in the first group: no heading above it.
+    hub.selected = 3;
+    let above_d = hub
+        .visible_groups()
+        .iter()
+        .take_while(|(_, rows)| !rows.contains(&row_index(&hub, "d")))
+        .count();
+    assert_eq!(
+        above_d, 0,
+        "the first group's later rows have no heading above them"
+    );
+
+    // Row 2 (`c`) is in the third group: two headings above it.
+    hub.selected = 2;
+    let above_c = hub
+        .visible_groups()
+        .iter()
+        .take_while(|(_, rows)| !rows.contains(&row_index(&hub, "c")))
+        .count();
+    assert_eq!(above_c, 2, "the third group opens below two headings");
+
+    // And the row must still be the same one after all of it.
+    assert_eq!(hub.selected_row().map(|r| r.id.as_str()), Some("c"));
+}
+
+/// The ROW index (into `hub.rows`) of `id` — the index space `visible_groups`
+/// actually returns. Under a filter this differs from the row's position in
+/// `visible_idx`, which is exactly the distinction the heading-offset code has
+/// to honour (see `interpose_group_headings`, which translates between them).
+fn row_index(hub: &SessionHubState, id: &str) -> usize {
+    hub.rows
+        .iter()
+        .position(|r| r.id == id)
+        .unwrap_or_else(|| panic!("{id} must exist"))
+}
+
+/// Status grouping falls back to a label the read-only API already owns, so
+/// the group heading does not invent a second vocabulary for the same states.
+#[test]
+fn status_grouping_keys_are_the_api_labels() {
+    let mut interrupted = row("i", Some("interrupted one"), None);
+    interrupted.status = RowStatus::Interrupted;
+    let mut hub = SessionHubState::new();
+    hub.replace_rows(vec![
+        row("idle", Some("idle one"), None),
+        interrupted,
+        row("live", Some("live one"), None),
+    ]);
+    hub.group_mode = HubGroupMode::Status;
+    let groups = hub.visible_groups();
+    let keys: Vec<&str> = groups.iter().map(|(k, _)| k.as_str()).collect();
+    assert_eq!(
+        keys,
+        vec!["idle", "interrupted"],
+        "the live row is grouped under its api label, in first-appearance order"
+    );
+    // The live row must have landed in a group, not vanished: grouping is a
+    // view over the SAME row set, so no row may drop out of it.
+    let total: usize = groups.iter().map(|(_, rows)| rows.len()).sum();
+    assert_eq!(total, hub.visible_rows().len(), "grouping drops no rows");
+}

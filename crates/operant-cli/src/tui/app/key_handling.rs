@@ -698,6 +698,13 @@ impl App {
                 // parked in the preview is the one most likely to need it.
                 KeyCode::Char('r') => self.session_hub.request_preview_reload(),
                 KeyCode::Char('s') => self.session_hub.cycle_filter(),
+                // Cycle the grouping (Stage C, plan 2026-11-02). Codex binds
+                // `g` to its `Group:` control for the same reason: the filter
+                // (`s`) decides which rows exist, grouping decides the order
+                // they are read in, and confusing the two is how an operator
+                // ends up believing a filter hid a session when grouping moved
+                // it. Two keys, two questions.
+                KeyCode::Char('g') => self.session_hub.cycle_group(),
                 // Enter: switch to the selected session (the existing
                 // pending_switch_session flow — run_pending_agent_actions
                 // retargets and rebuilds, so the two cannot diverge; TUI-2),
