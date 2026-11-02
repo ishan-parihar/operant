@@ -51,6 +51,19 @@ impl RowStatus {
             RowStatus::Archived => "archived",
         }
     }
+
+    /// The TUI's display label, which `api_label`'s own doc has promised since
+    /// it was written. Title-case because it sits in a right-aligned Status
+    /// column under a `Status` header, where a lowercase `interrupted` reads as
+    /// a continuation of the sentence beside it rather than as a column value.
+    pub fn label(&self) -> &'static str {
+        match self {
+            RowStatus::Live => "Live",
+            RowStatus::Interrupted => "Interrupted",
+            RowStatus::Idle => "Idle",
+            RowStatus::Archived => "Archived",
+        }
+    }
 }
 
 /// What a row in the unified list IS.
