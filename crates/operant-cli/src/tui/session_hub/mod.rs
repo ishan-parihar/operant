@@ -357,6 +357,9 @@ pub struct SessionHubState {
     /// The row the `CurrentBranch` filter treats as the branch root (the
     /// agent's live session id, fed at open). `None` = no anchor.
     pub branch_root: Option<String>,
+    /// Stage E archive confirm: `Some(id)` while the operator has pressed `a`
+    /// on a row and is being asked to confirm before it is parked.
+    pub pending_archive: Option<String>,
 }
 
 impl Default for SessionHubState {
@@ -387,6 +390,7 @@ impl SessionHubState {
             armed_close_tap: None,
             focused_subagent: None,
             branch_root: None,
+            pending_archive: None,
         }
     }
 
@@ -401,6 +405,7 @@ impl SessionHubState {
         self.preview_scroll = 0;
         self.focus = PaneFocus::Sessions;
         self.focused_subagent = None;
+        self.pending_archive = None;
         self.armed_close_tap = armed_close_tap;
         self.rebuild_visible();
     }

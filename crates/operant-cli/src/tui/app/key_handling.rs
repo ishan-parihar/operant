@@ -632,6 +632,16 @@ impl App {
         // modal's rename arm moved to /rename <title> only).
         if self.session_hub.visible {
             use crate::tui::session_hub::{HubSelection, PaneFocus};
+            // Cancel a pending archive on any key that isn't y/n/Esc/a.
+            if self.session_hub.pending_archive.is_some()
+                && !matches!(
+                    key.code,
+                    KeyCode::Char('y' | 'Y' | 'n' | 'N' | 'a') | KeyCode::Esc
+                )
+            {
+                self.session_hub.pending_archive = None;
+                self.status_message = Some("Archive cancelled.".to_string());
+            }
             // Search-edit mode swallows plain keys first (jcode's
             // search_active).
             if self.session_hub.search_active {
@@ -705,6 +715,87 @@ impl App {
                 // ends up believing a filter hid a session when grouping moved
                 // it. Two keys, two questions.
                 KeyCode::Char('g') => self.session_hub.cycle_group(),
+                // Stage E archive (plan 2026-11-02): `a` parks the selected
+                // row behind an explicit y/n confirm. Guarded against the
+                // active session and subagent rows, which cannot be archived.
+                KeyCode::Char('a') => {
+                    if self.session_hub.pending_archive.is_some() {
+                        // Already pending — ignore the second press.
+                    } else if let Some(row) = self.session_hub.selected_row() {
+                        let id = row.id.clone();
+                        let is_subagent = matches!(
+                            row.kind,
+                            operant_core::session::listing::RowKind::Subagent { .. }
+                        );
+                        if is_subagent {
+                            self.status_message =
+                                Some("Cannot archive a live subagent row.".to_string());
+                        } else if Some(&id) == self.current_session.as_ref() {
+                            self.status_message =
+                                Some("Cannot archive the active session.".to_string());
+                        } else {
+                            let action = if row.status
+                                == operant_core::session::listing::RowStatus::Archived
+                            {
+                                "Unarchive"
+                            } else {
+                                "Archive"
+                            };
+                            self.session_hub.pending_archive = Some(id.clone());
+                            self.status_message = Some(format!(
+                                "{} session {}? (y/n)",
+                                action,
+                                id.chars().take(8).collect::<String>()
+                            ));
+                        }
+                    }
+                }
+                // Confirm / cancel an in-flight archive.
+                KeyCode::Char('y') | KeyCode::Char('Y')
+                    if self.session_hub.pending_archive.is_some() =>
+                {
+                    let id = self.session_hub.pending_archive.take().unwrap();
+                    let db_path = self.config.database_path.clone();
+                    // Determine current archived state to toggle.
+                    let was_archived = self
+                        .session_hub
+                        .rows
+                        .iter()
+                        .find(|r| r.id == id)
+                        .map(|r| r.status == operant_core::session::listing::RowStatus::Archived)
+                        .unwrap_or(false);
+                    let _ = (|| -> anyhow::Result<()> {
+                        let db = operant_core::database::Database::init(db_path)?;
+                        if was_archived {
+                            db.unarchive_session(&id)?;
+                        } else {
+                            db.archive_session(&id)?;
+                        }
+                        Ok(())
+                    })();
+                    // Re-list rather than mutating in place (codex archive.rs).
+                    self.session_list_pending = true;
+                    self.status_message = Some(if was_archived {
+                        format!(
+                            "Unarchived session {}.",
+                            id.chars().take(8).collect::<String>()
+                        )
+                    } else {
+                        format!(
+                            "Archived session {}.",
+                            id.chars().take(8).collect::<String>()
+                        )
+                    });
+                }
+                KeyCode::Char('n') | KeyCode::Char('N')
+                    if self.session_hub.pending_archive.is_some() =>
+                {
+                    self.session_hub.pending_archive = None;
+                    self.status_message = Some("Archive cancelled.".to_string());
+                }
+                // Esc is handled above (`KeyCode::Esc => self.session_hub.close()`):
+                // closing the hub drops the pending archive, so it is not
+                // repeated here (that arm would be unreachable).
                 // Cycle the sort key (Stage E, plan 2026-11-02). `o` because
                 // `s` (filter) and `g` (group) already own the left hand of
                 // the hub's own vocabulary, and because codex binds its sort

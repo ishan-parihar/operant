@@ -2000,6 +2000,33 @@ impl Database {
         Ok(affected > 0)
     }
 
+    /// Archive `session_id`: park it (status becomes `Archived`) so it stops
+    /// showing up under the `active`/`all` filters unless explicitly viewed
+    /// under the `archived` filter. Returns whether a row was actually
+    /// updated (false = no such session).
+    pub fn archive_session(&self, session_id: &str) -> Result<bool> {
+        let conn = self.lock_conn()?;
+        let affected = conn
+            .execute(
+                "UPDATE sessions SET archived = 1 WHERE id = ?1",
+                params![session_id],
+            )
+            .map_err(|e| Error::Agent(format!("Failed to archive session: {}", e)))?;
+        Ok(affected > 0)
+    }
+
+    /// Reverse of `archive_session`: restore an archived row to `Idle`.
+    pub fn unarchive_session(&self, session_id: &str) -> Result<bool> {
+        let conn = self.lock_conn()?;
+        let affected = conn
+            .execute(
+                "UPDATE sessions SET archived = 0 WHERE id = ?1",
+                params![session_id],
+            )
+            .map_err(|e| Error::Agent(format!("Failed to unarchive session: {}", e)))?;
+        Ok(affected > 0)
+    }
+
     /// Session ids currently flagged interrupted, most recently active first.
     pub fn interrupted_session_ids(&self) -> Result<Vec<String>> {
         let conn = self.lock_conn()?;

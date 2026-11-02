@@ -544,6 +544,23 @@ fn paint_session_hub(frame: &mut Frame, app: &App, ctx: &mut FrameCtx) {
     // selected index, so no interior mutability is needed. The one
     // measurement that must flow back (the preview's scroll bound) rides
     // `ctx.preview_max_scroll` for the frame loop to apply.
+    //
+    // The full-frame Clear is LOAD-BEARING (operator report 2026-11-02: the
+    // session picker "does not refresh properly, showing stale elements from
+    // the previous screen-render, like the input box and orphan letters").
+    // `terminal.draw` flushes a CELL DIFF, so a frame only ever writes the
+    // cells its own widgets touch: the hub's List writes one row per item and
+    // the preview's Paragraph writes one row per line, so every row past the
+    // end of each pane's content kept whatever the CHAT FRAME had painted
+    // there — the transcript, the composer's `>` marker, the status bar. Live
+    // at 120x40: rows 14-21 and 25-34 of the open picker were the previous
+    // screen. Neither pane can fix this locally (each owns only its own chunk
+    // and the border's Block paints no background), so the page clears the
+    // whole viewport first. This is the same shape the rewind selector already
+    // pads with real spaces (rewind_selector.rs:463-475) and the same shape
+    // `sync_overlay_alt_screen` would give us — but that path is gated on
+    // `terminal_scroll_mode`, which ships FALSE, so no overlay may rely on it.
+    frame.render_widget(ratatui::widgets::Clear, frame.area());
     crate::tui::session_hub::render_session_hub(frame, &app.session_hub, frame.area(), ctx);
 }
 
