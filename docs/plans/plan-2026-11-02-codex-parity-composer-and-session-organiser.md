@@ -244,6 +244,43 @@ failure is none of this iteration's files — `cargo check -p operant-cli --bin
 operant --tests` reports zero errors under `operant_ui/` — and per AGENTS.md
 fleet rule 7 a peer's red subsystem is not this slice's to fix.
 
+### 3.8 The verification gap, closed at `test(iter-1681)`
+
+Section 3.7 said "10 unit tests in `composer.rs`" and left it there. Those ten
+tests all read a HELPER'S return value: `composer_fill_style()` returns a style,
+`placeholder_line()` returns a `Line`, `textarea_rect()` returns a rect. Every
+one of them passes whether or not the renderer ever calls the helper. The gutter
+column could have been deleted outright — `paint_placeholder` and
+`textarea_rect` carry no caller-independent contract — and the whole suite
+would have stayed green. The section above's measured result was captured by
+hand and not pinned anywhere.
+
+`test(iter-1681)` added four buffer-level tests in `composer.rs::tests`, each
+rendering into a `TestBackend` and reading it back:
+
+| test | asserts | mutation that proves it is not a tautology |
+|---|---|---|
+| `the_band_fill_paints_every_column_of_the_row` | the fill reaches every column of the band | painted only half the width → FAILED at col 20 |
+| `the_gutter_constants_are_what_the_renderer_uses` | `textarea_rect` subtracts `GUTTER_COLS` and leaves one column on the right | (structural pin; the gutter and rect cannot drift apart) |
+| `the_placeholder_is_dimmed_and_not_bold` | the placeholder carries its own fg, italic, not bold | (style pin) |
+| `the_band_fill_cannot_reach_past_the_row_below_it` | the footer row is byte-identical with and without the fill | band grown to 4 rows → FAILED |
+
+The footer test is the operator's standing constraint ("keep the footer as it
+is") made mechanical. **First attempt failed for a false reason:** it asserted
+`bg == None` on the footer row, and `Block::default().render` legitimately writes
+`Some(Reset)` over an untouched cell, so the assertion failed on a correct
+render. Rewritten as a control comparison (the same render with and without the
+fill), which is the stronger claim and the one that mutation-tests cleanly. The
+lesson recorded in the file: a cell's style is `Reset`, not `None`, so
+byte-identity is the right way to pin "nothing else changed" in ratatui.
+
+The fill test uses `expect`, not an early return, so it cannot pass vacuously on
+a theme whose surface carries no RGB colour.
+
+Suite at iter-1681: **2087 passed / 1 failed**. The failure is `pinned_ui`'s
+Mermaid side-panel, a peer's in-flight subsystem (fleet rule 7), present before
+this commit.
+
 ---
 
 ## Part 4 — codex's session-management system (the investigation)
