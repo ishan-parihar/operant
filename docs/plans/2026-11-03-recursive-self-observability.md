@@ -72,6 +72,20 @@ Enter chord. Operant pushes
 trailing-backslash continuation and the `/terminal-setup` hint are the current mitigations.
 That gap is G-6 below.
 
+3. **"or page refreshes" — the second half of the report does NOT reproduce.** Checked with the
+   documented oracle for this exact defect class rather than trusted: `--frame-per-event`
+   captured every painted frame across a full submit-and-reply turn (60 frames), and
+   **no frame ever carried the prompt twice**. The composer's text clears on submit, the
+   transcript carries the user row exactly once, and `scroll_emit` emits only settled
+   transcript rows and never the composer (`scroll_emit.rs` has no reference to
+   `prompt_input`). `note_resize` touches scroll anchoring only. So whatever the operator saw
+   on a refresh is not reproducible headlessly — most likely the same failed-turn duplicate
+   from item 1, which is now fixed, or a terminal-side artefact. Recorded rather than guessed
+   at: if it recurs on the live path, the capture command to run is
+   `operant tui debug simulate --keys '<the prompt><enter>' --frame-per-event
+   --capture-dir <dir>` and the check is
+   `grep -l '<prompt>' <dir>/frame-*.txt | wc -l` against the per-frame occurrence count.
+
 ---
 
 ## The codex contrast, measured feature-by-feature (not file-by-file)
