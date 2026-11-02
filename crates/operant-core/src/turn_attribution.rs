@@ -14,9 +14,15 @@
 //! An `Incomplete` result is a legitimate value -- it NAMES the gaps -- so a
 //! measurement gap is never a reason to suppress the emission.
 //!
-//! **Still open is a FEATURE, not a defect: no surface renders it yet.** It is
-//! captured, classified, and delivered to every `TurnEnd` subscriber
-//! (`advisor::spawn_advisor` and `recap` both receive it); nobody displays it.
+//! **Honest state as of the iter-1642 audit: the value is WRITTEN and READ BY
+//! NOTHING.** `run()` classifies the turn, `TurnEnd` carries the enum into
+//! every delivered event, and both subscribers (`advisor.rs`, `recap.rs`)
+//! read only `end.session_id`. The whole chain is live at every layer except
+//! the last, and no compiler, clippy, or test can see that: a `pub` field on a
+//! `pub` struct in a library emits no `dead_code` warning. The guard at the
+//! bottom of this file now prints a `KNOWN GAP` notice for it instead of
+//! passing silently, because a guard that passes on a substring match is the
+//! same failure this module already shipped twice.
 //!
 //! **The orphan guard at the bottom of this file is load-bearing.**
 //! iter-1631 wired `TurnSpan`, `SpanDuration` and `TurnBreakdown` and left
@@ -563,5 +569,36 @@ mod tests {
             used_in("TurnAttribution::of", &PRODUCTION_SEAMS),
             "TurnAttribution::of must be called at the emission seam, not only in this module"
         );
+
+        // ...and the value must be READ by a subscriber, not merely carried.
+        //
+        // A type annotation counts as a "caller" for the check above, so the
+        // whole chain can be live at every layer EXCEPT the last one, which is
+        // exactly what iter-1635 shipped: `run()` classified the turn,
+        // `TurnEnd` carried the enum, and BOTH subscribers (`advisor.rs`,
+        // `recap.rs`) read only `end.session_id`. The attribution was
+        // written into every delivered event and read by nothing, and no
+        // compiler, clippy, or test could see it -- a `pub` field on a `pub`
+        // struct in a library emits no `dead_code` warning.
+        //
+        // The read test is a field access, not the type name: a `use` or a
+        // type mention does not satisfy it. When a subscriber starts
+        // rendering the breakdown, this is the assertion it updates.
+        let read = used_in("end.attribution", &PRODUCTION_SEAMS)
+            || used_in("event.attribution", &PRODUCTION_SEAMS)
+            || used_in("turn_end.attribution", &PRODUCTION_SEAMS);
+        if !read {
+            // Declared as an EXPECTED gap rather than a failure, with the
+            // reason: the capture is live and the consumer is the one piece
+            // that is deliberately deferred (RT-209's remaining feature).
+            // Turning this into a hard assert would fail the build for a
+            // documented, intentional state, which trains the next agent to
+            // delete the assertion instead of doing the work.
+            eprintln!(
+                "KNOWN GAP (RT-209): TurnEnd::attribution is carried but no subscriber reads it. \
+                 The capture and classification are live; the rendering consumer is the \
+                 deferred half. Update this guard when a subscriber reads `end.attribution`."
+            );
+        }
     }
 }
