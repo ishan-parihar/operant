@@ -1509,6 +1509,18 @@ impl App {
                 "No session row to flag interrupted; the marker file carries it"
             );
         }
+        // Release this process's claim on the session (plan 2026-11-02, P0).
+        //
+        // Until P0 nothing ever called into the presence registry, so
+        // `session_is_live` answered false for every session including the one
+        // this process had been streaming into all along — the registry was
+        // 263 lines of mechanism with no caller. This is the caller.
+        //
+        // Deliberately AFTER the marker write, and only on this path: an
+        // interrupted exit must leave a record that a process WAS here and is
+        // now gone, which is exactly what makes the interrupted status honest.
+        // The clean-exit path (the `/exit` arm in commands.rs) releases it too.
+        operant_core::active_sessions::unregister_presence(&session_id);
     }
 
     fn run_exit_teardown(&mut self) {

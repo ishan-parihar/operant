@@ -291,6 +291,27 @@ impl TuiApp {
                 ),
             ));
         }
+        // Claim the session for THIS process (plan 2026-11-02, P0).
+        //
+        // The presence registry has existed since iter-1634 with no caller
+        // at all, so `session_is_live` answered false for every session —
+        // including the one this process is about to stream into. Claiming
+        // here is what makes "live" mean anything, which is what lets the
+        // interrupted status tell a dead process from a running one.
+        //
+        // Read the id AFTER the source is installed: before the first turn
+        // there is no id (RT-206 recorded exactly this trap), so a claim on
+        // an empty id would be a claim on nothing.
+        if let Some(session_id) = self
+            .app
+            .core_session_switch
+            .as_ref()
+            .and_then(|s| s.session_id())
+        {
+            if let Err(e) = operant_core::active_sessions::claim_session_here(&session_id) {
+                tracing::debug!(error = %e, "Failed to claim the session for this process");
+            }
+        }
 
         // Create the user-question channel and register the sender with
         // operant_core::user_question. The clarify tool will push
@@ -418,11 +439,24 @@ impl TuiApp {
                 } else {
                     marker.title
                 };
-                self.app.set_status_notice(format!(
-                    "Last session was interrupted: {label} — /session to resume it."
-                ));
+                // The liveness check is what the presence registry exists for
+                // (plan 2026-11-02, P0). Before P0 this notice said the same
+                // thing whether the marked session's process had died or was
+                // still streaming away in another terminal — so an operator who
+                // had left a window open got told to resume a session that was
+                // running, and two processes would then race on the same rows.
+                let live = operant_core::active_sessions::session_is_live(&marker.session_id);
+                self.app.set_status_notice(if live {
+                    // Still live elsewhere: resume would attach to a session
+                    // another process owns. Name the situation rather than
+                    // offering an action that would fork a second writer.
+                    format!("{label} is still running in another window — it is already live.")
+                } else {
+                    format!("Last session was interrupted: {label} — /session to resume it.")
+                });
                 tracing::info!(
                     session_id = %marker.session_id,
+                    live,
                     "Offered an interrupted-session resume from the exit marker"
                 );
             }
@@ -913,6 +947,27 @@ impl TuiApp {
                     move || agent_for_id.session_id(),
                 ),
             ));
+        }
+        // Claim the session for THIS process (plan 2026-11-02, P0).
+        //
+        // The presence registry has existed since iter-1634 with no caller
+        // at all, so `session_is_live` answered false for every session —
+        // including the one this process is about to stream into. Claiming
+        // here is what makes "live" mean anything, which is what lets the
+        // interrupted status tell a dead process from a running one.
+        //
+        // Read the id AFTER the source is installed: before the first turn
+        // there is no id (RT-206 recorded exactly this trap), so a claim on
+        // an empty id would be a claim on nothing.
+        if let Some(session_id) = self
+            .app
+            .core_session_switch
+            .as_ref()
+            .and_then(|s| s.session_id())
+        {
+            if let Err(e) = operant_core::active_sessions::claim_session_here(&session_id) {
+                tracing::debug!(error = %e, "Failed to claim the session for this process");
+            }
         }
 
         // Skip the network models.dev fetch on the deterministic mock path.

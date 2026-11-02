@@ -253,6 +253,36 @@ pub fn session_presence(session_id: &str) -> Option<SessionPresence> {
     presence_from_path(&presence_path(session_id))
 }
 
+/// Claim `session_id` for THIS process at boot, pruning other processes' dead
+/// records on the way.
+///
+/// This is the single entry point a live process calls, and it exists so the
+/// three acts stay together and cannot drift:
+///
+/// 1. **prune** — drop records whose pid is gone, so stale claims from
+///    SIGKILLed runs do not accumulate and so `session_is_live` never answers
+///    true for a session nobody owns.
+/// 2. **claim** — record this pid as the owner. A second process claiming the
+///    same session overwrites: the last writer is the owner, and refusing
+///    instead would wedge every relaunch behind a zombie record.
+/// 3. **observe** — the previous owner's claim is gone by definition once step
+///    1 has pruned it, which is what makes the interrupted status honest: a
+///    relaunch can tell "still running somewhere" from "the process died".
+///
+/// Returns whether the claim was recorded, so a caller can log a no-op instead
+/// of asserting a state it did not create.
+pub fn claim_session_here(session_id: &str) -> Result<bool, String> {
+    let (pruned, _kept) = prune_dead_presence();
+    if pruned > 0 {
+        tracing::debug!(
+            pruned,
+            "Pruned dead presence records before claiming a session"
+        );
+    }
+    register_presence(session_id, std::process::id())?;
+    Ok(true)
+}
+
 /// Whether `session_id` is live in ANOTHER process.
 ///
 /// True only when a record exists AND its process is running. A record with a
@@ -459,6 +489,85 @@ mod tests {
             register_presence("sess-race", std::process::id()).expect("second");
             let presence = session_presence("sess-race").expect("record");
             assert_eq!(presence.pid, std::process::id(), "last writer wins");
+        });
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn claiming_a_session_here_records_this_process_and_survives_the_prune() {
+        // The P0 wiring test. iter-1634 shipped this registry with no caller,
+        // so every test above passed while nothing in production ever touched
+        // it. This one pins the contract the callers now depend on: a fresh
+        // claim records THIS process's pid, and the prune that
+        // `claim_session_here` performs does not reclaim the claim it just made
+        // (that would be the bug that makes liveness silently always-false).
+        with_presence_home(|_home| {
+            let claimed =
+                claim_session_here("claim-mine").expect("claiming this process's session");
+            assert!(claimed, "a fresh claim must report success");
+
+            let presence = session_presence("claim-mine").expect("the claim must be recorded");
+            assert_eq!(
+                presence.pid,
+                std::process::id(),
+                "the claim must name the claiming process, not an arbitrary pid"
+            );
+            assert!(
+                session_is_live("claim-mine"),
+                "this process is running, so its own claim must read live"
+            );
+
+            // The prune inside claim must not eat the claim it just wrote.
+            let (pruned, kept) = prune_dead_presence();
+            assert_eq!(pruned, 0, "a live claim must never be pruned");
+            assert_eq!(kept, 1, "this process's claim must survive");
+        });
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn claiming_prunes_a_dead_owner_s_claim_so_the_interrupted_status_is_honest() {
+        // The other half of the contract, and the reason P0 exists at all:
+        // after a relaunch claims the session, the DEAD owner's record must be
+        // gone, so `session_is_live` can tell "a process is still here" from
+        // "the process died". If the dead record survived, a relaunch would
+        // read its own session as live-somewhere-else forever.
+        with_presence_home(|_home| {
+            register_presence("dead-owner", 999_994).expect("register the dead owner");
+            assert!(!session_is_live("dead-owner"), "sanity: that pid is dead");
+
+            claim_session_here("dead-owner").expect("relaunch claims the same session");
+            let presence = session_presence("dead-owner").expect("the relaunch now owns it");
+            assert_eq!(
+                presence.pid,
+                std::process::id(),
+                "the relaunch must replace the dead owner, not share the record"
+            );
+            assert!(
+                session_is_live("dead-owner"),
+                "the live relaunch reads live"
+            );
+        });
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn releasing_a_claim_makes_the_session_read_dead_immediately() {
+        // What the clean and interrupted exit paths both rely on: once this
+        // process releases, the session is NOT live, even though this process
+        // is still running. Without that, a session would read live forever
+        // after its exit and the interrupted status would never be offered.
+        with_presence_home(|_home| {
+            claim_session_here("release-me").expect("claim");
+            assert!(session_is_live("release-me"));
+            assert!(
+                unregister_presence("release-me"),
+                "release must report removal"
+            );
+            assert!(
+                !session_is_live("release-me"),
+                "a released session must not read live"
+            );
         });
     }
 }

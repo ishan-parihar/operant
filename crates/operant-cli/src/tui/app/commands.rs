@@ -623,6 +623,16 @@ impl App {
                 // operator just chose to close. Ctrl+C/Ctrl+D still writes it —
                 // that path goes through handle_exit_key_confirmation, not here.
                 operant_core::session_interrupted::clear_marker();
+                // Release the presence claim too (plan 2026-11-02, P0). A
+                // deliberate exit means this process is NOT attached to the
+                // session any more, and the interrupted-exit path releases it as
+                // well — so both exits end with no live claim, and the only way
+                // a session reads live is a process that is still running.
+                if let Some(source) = self.core_session_switch.as_ref()
+                    && let Some(session_id) = source.session_id()
+                {
+                    operant_core::active_sessions::unregister_presence(&session_id);
+                }
                 self.should_exit = true;
                 true
             }

@@ -555,6 +555,42 @@ async fn cmd_run(config: &AppConfig) -> Result<()> {
     if !started {
         return Ok(());
     }
+    // The gateway's interrupted-session notice (plan 2026-11-02, P1).
+    //
+    // iter-1634 gave the TUI a resume notice and the gateway nothing, so a
+    // telegram/discord operator had no path from "I was interrupted" to
+    // "resume that" — the gateway's equivalent was still `/new` + `/resume` by
+    // opaque id. The gateway has no TUI status bar to notice into, so the
+    // surface is a console line on boot: that is where the operator who runs
+    // this daemon actually looks.
+    //
+    // NOT an auto-attach, same reasoning as the TUI: Ctrl+C is how an operator
+    // escapes a turn that is going badly, and silently reattaching the gateway
+    // would be the opposite of a rescue.
+    if let Some(marker) = operant_core::session_interrupted::consume_marker() {
+        let live = operant_core::active_sessions::session_is_live(&marker.session_id);
+        let label = if marker.title.is_empty() {
+            marker.session_id.clone()
+        } else {
+            marker.title.clone()
+        };
+        if live {
+            // Live elsewhere: naming the resume would invite a second writer on
+            // the same rows. Say what is true instead.
+            println!(
+                "Note: session '{label}' is still live in another process — no resume offered."
+            );
+        } else {
+            println!(
+                "Note: session '{label}' was interrupted. Send `/sessions` to browse, then `/resume <n>` to resume it."
+            );
+        }
+        tracing::info!(
+            session_id = %marker.session_id,
+            live,
+            "Offered the gateway an interrupted-session resume from the exit marker"
+        );
+    }
     println!("Press Ctrl+C (SIGINT) or send SIGTERM to stop the gateway.");
 
     // `tokio::signal::unix` does not exist on Windows: the module is absent
