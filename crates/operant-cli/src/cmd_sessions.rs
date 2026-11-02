@@ -15,7 +15,15 @@ use operant_core::database::Database;
 #[derive(Debug, Clone, Subcommand)]
 pub enum SessionsSubcommand {
     /// List recent sessions
-    List,
+    ///
+    /// `--interrupted` filters to the sessions an exit marker flagged, so the
+    /// operator asks "what did I leave half-done" in one token instead of
+    /// reading `end_reason` out of the DB by hand.
+    List {
+        /// Only sessions flagged interrupted by an exit marker.
+        #[arg(long)]
+        interrupted: bool,
+    },
     /// Show a session's messages
     Show {
         /// Session ID to display
@@ -76,9 +84,19 @@ pub enum SessionsSubcommand {
     /// Recap a session and re-orient before continuing it. Prints the recap,
     /// the latest user prompt, and how to resume it in the TUI (/resume) or
     /// the gateway.
+    ///
+    /// `id` is optional so `operant sessions resume` alone works, and
+    /// `--last` reads the interrupted-session marker instead of guessing from
+    /// recency: with no marker it falls back to the same most-recent row, so
+    /// the flag never *reduces* what the command can do. Codex has
+    /// `codex resume --last "prompt"`; jcode has `jcode resume --last`.
     Resume {
-        /// Session ID to resume
-        id: String,
+        /// Session ID to resume (default: most recent)
+        id: Option<String>,
+        /// Resume the interrupted session the marker names, not merely the
+        /// most recently updated row.
+        #[arg(long)]
+        last: bool,
     },
     /// Backfill titles for sessions left untitled by the auto-name wipe bug
     /// (iter-1485). One-shot and idempotent: each repaired session is named
@@ -94,7 +112,9 @@ pub async fn handle_sessions_command(
     json: bool,
 ) -> Result<()> {
     match cmd {
-        SessionsSubcommand::List => cmd_list(config, json).await,
+        SessionsSubcommand::List { interrupted } => {
+            cmd_list_filtered(config, json, interrupted).await
+        }
         SessionsSubcommand::Show { id } => cmd_show(config, &id).await,
         SessionsSubcommand::Delete { id } => cmd_delete(config, &id).await,
         SessionsSubcommand::Stats => cmd_stats(config, json).await,
@@ -109,18 +129,53 @@ pub async fn handle_sessions_command(
         SessionsSubcommand::Browse => cmd_browse(config).await,
         SessionsSubcommand::Search { query, limit } => cmd_search(config, &query, limit).await,
         SessionsSubcommand::Recap { id } => cmd_recap(config, id.as_deref()).await,
-        SessionsSubcommand::Resume { id } => cmd_resume(config, &id).await,
+        SessionsSubcommand::Resume { id, last } => cmd_resume(config, id.as_deref(), last).await,
         SessionsSubcommand::FixTitles => cmd_fix_titles(config).await,
     }
 }
 
-async fn cmd_list(config: &AppConfig, json: bool) -> Result<()> {
+/// `sessions list`, optionally filtered to interrupted sessions only.
+///
+/// The filter is applied here rather than in a second loader because
+/// `list_sessions_rich` ALREADY carries the flag: iter-1634 added
+/// `RowStatus::Interrupted` to its row shape, so a `status` field on each row
+/// is all the information the filter needs. A second SQL loader would be a
+/// second ordering rule to keep in step for zero information gained — the
+/// ponytail call the parent plan made about Gap 6 applies to this too.
+async fn cmd_list_filtered(config: &AppConfig, json: bool, interrupted_only: bool) -> Result<()> {
     let db = Database::init(config.database_path.clone()).context("Failed to open database")?;
     // The unified record (plan 2026-10-28 iter-A): one loader for the CLI,
     // the session hub, and the gateway routes — RT-A closed here too.
     let sessions = db
         .list_sessions_rich(20)
         .context("Failed to list sessions")?;
+
+    let is_interrupted = |s: &operant_core::session::listing::SessionEntryV2| {
+        matches!(
+            s.status,
+            operant_core::session::listing::RowStatus::Interrupted
+        )
+    };
+    let sessions: Vec<_> = if interrupted_only {
+        // Borrow, then hand the borrowed slice on: cloning the whole row to
+        // filter it would allocate 20 structs to answer a yes/no question.
+        sessions.iter().filter(|s| is_interrupted(s)).collect()
+    } else {
+        sessions.iter().collect()
+    };
+    let sessions = if interrupted_only && sessions.is_empty() {
+        // An honest empty, not a silent one: the operator asked a specific
+        // question and deserves to be told the answer is "none" rather than a
+        // header with nothing under it.
+        if json {
+            println!("[]");
+        } else {
+            println!("No interrupted sessions.");
+        }
+        return Ok(());
+    } else {
+        sessions
+    };
 
     if json {
         let items: Vec<serde_json::Value> = sessions
@@ -535,9 +590,50 @@ async fn cmd_recap(config: &AppConfig, id: Option<&str>) -> Result<()> {
 
 /// Recap a session and print how to continue it (hermes `/resume` parity:
 /// re-orient first, then restore history and keep going).
-async fn cmd_resume(config: &AppConfig, id: &str) -> Result<()> {
+/// `sessions resume` — re-orient on a session and say how to continue it.
+///
+/// `id` is optional (falls back to most recent, which `resolve_session` already
+/// does). `last` instead reads the interrupted-session marker and names THAT
+/// session, so the operator sees why this session and not another: with no
+/// marker it degrades to the same most-recent fallback rather than failing,
+/// which is what keeps `--last` safe to add to any alias or script.
+async fn cmd_resume(config: &AppConfig, id: Option<&str>, last: bool) -> Result<()> {
     let db = Database::init(config.database_path.clone()).context("Failed to open database")?;
-    let session = resolve_session(&db, Some(id))?;
+
+    let mut interrupted_note: Option<String> = None;
+    let target_id: Option<String> = if let Some(id) = id {
+        Some(id.to_string())
+    } else if last {
+        // The marker is the answer to "what was I doing", not a guess from
+        // recency. Consuming it here is correct: this IS the resume, so the
+        // one-generation notice has served its purpose.
+        match operant_core::session_interrupted::consume_marker() {
+            Some(marker) => {
+                let live = operant_core::active_sessions::session_is_live(&marker.session_id);
+                interrupted_note = Some(if live {
+                    // Live in another process: say so rather than pretending a
+                    // clean resumption is safe. Two processes writing one
+                    // session's rows is the race the registry prevents.
+                    format!(
+                        "Session {} was interrupted but is still live in another process.",
+                        marker.session_id
+                    )
+                } else {
+                    format!("Session {} was interrupted.", marker.session_id)
+                });
+                Some(marker.session_id)
+            }
+            None => None,
+        }
+    } else {
+        None
+    };
+
+    let session = resolve_session(&db, target_id.as_deref())?;
+    if let Some(note) = interrupted_note {
+        println!("{note}");
+        println!();
+    }
     let messages = db
         .get_session_messages_full(&session.id)
         .context("Failed to get session messages")?;
@@ -567,4 +663,92 @@ async fn cmd_resume(config: &AppConfig, id: &str) -> Result<()> {
     println!("  • TUI:      operant chat  →  /resume  →  pick this session");
     println!("  • Gateway:  send a message on the same platform channel");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_db() -> Database {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "operant_sessions_cli_{}_{}.db",
+            std::process::id(),
+            n
+        ));
+        let _ = std::fs::remove_file(&path);
+        Database::init(path).expect("Failed to create test database")
+    }
+
+    /// The predicate `sessions list --interrupted` filters on. Extracted so the
+    /// test asserts the FILTER rather than the print format: the flag's whole
+    /// contract is "only interrupted rows", and a rendering test would pass
+    /// while the filter selected the wrong set.
+    fn is_interrupted(s: &operant_core::session::listing::SessionEntryV2) -> bool {
+        matches!(
+            s.status,
+            operant_core::session::listing::RowStatus::Interrupted
+        )
+    }
+
+    #[test]
+    fn the_interrupted_filter_selects_only_interrupted_rows() {
+        let db = test_db();
+        let now = chrono::Utc::now().to_rfc3339();
+        db.save_session("kept", None, "local", &now, &now).unwrap();
+        db.save_session("skipped", None, "local", &now, &now)
+            .unwrap();
+        db.mark_session_interrupted("kept").unwrap();
+
+        let rows = db.list_sessions_rich(10).unwrap();
+        let selected: Vec<&str> = rows
+            .iter()
+            .filter(|r| is_interrupted(r))
+            .map(|r| r.id.as_str())
+            .collect();
+        assert_eq!(
+            selected,
+            vec!["kept"],
+            "the filter must pass the interrupted row and drop the clean one"
+        );
+    }
+
+    #[test]
+    fn the_interrupted_filter_is_empty_not_all_when_nothing_is_interrupted() {
+        // The failure mode that matters: a filter that degrades to "show
+        // everything" when it matches nothing would answer the operator's
+        // question with the unfiltered list and quietly lie.
+        let db = test_db();
+        let now = chrono::Utc::now().to_rfc3339();
+        db.save_session("a", None, "local", &now, &now).unwrap();
+        db.save_session("b", None, "local", &now, &now).unwrap();
+
+        let rows = db.list_sessions_rich(10).unwrap();
+        assert_eq!(rows.len(), 2, "sanity: both rows are listed unfiltered");
+        assert_eq!(
+            rows.iter().filter(|r| is_interrupted(r)).count(),
+            0,
+            "with nothing interrupted the filter must select nothing, not everything"
+        );
+    }
+
+    #[test]
+    fn resume_without_an_id_and_without_a_marker_still_resolves_the_most_recent() {
+        // The parent plan's own test list names this: `--last` must never
+        // REDUCE what the command can already do. `resolve_session(None)`
+        // already defaults to most-recent, and `--last` with no marker must
+        // fall back to exactly that rather than failing.
+        let db = test_db();
+        let older = "2026-01-01T00:00:00Z";
+        let newer = "2026-03-01T00:00:00Z";
+        db.save_session("older", None, "local", older, older)
+            .unwrap();
+        db.save_session("newer", None, "local", newer, newer)
+            .unwrap();
+
+        let resolved = resolve_session(&db, None).expect("no-id resume must resolve");
+        assert_eq!(resolved.id, "newer", "no id means most recent");
+    }
 }
