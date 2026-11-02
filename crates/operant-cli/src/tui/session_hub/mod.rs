@@ -114,6 +114,56 @@ impl HubFilterMode {
     }
 }
 
+/// How the visible rows are grouped, cycled with `g` (codex's `AgentsOverview`
+/// `Group:` control). Grouping is ORTHOGONAL to filtering: the filter decides
+/// which rows exist, grouping decides the order they are read in. Codex's four
+/// axes are Project/Directory/Status/Model; operant's are its own data's axes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HubGroupMode {
+    /// The order the rows arrived in — the global `updated_at DESC` the load
+    /// already applies. The default, and the only mode that is not a regrade.
+    Auto,
+    /// Grouped by the session's working directory (`row.cwd`). Codex's
+    /// `Project` mode keys on git repo identity (common_dir + relative_cwd) so
+    /// worktrees of one repo collapse; operant does not resolve git identity
+    /// here, so `Directory` is the honest name rather than a promise the data
+    /// does not keep.
+    Directory,
+    /// Grouped by the employee tag — "who is executing this". The rows carrying
+    /// no employee tag (personal sessions) form their own group rather than
+    /// being dropped.
+    Employee,
+    /// Grouped by `RowStatus`, which is the question an operator opens the hub
+    /// to answer: what was interrupted, what is live.
+    Status,
+}
+
+impl HubGroupMode {
+    pub fn next(self) -> Self {
+        match self {
+            Self::Auto => Self::Directory,
+            Self::Directory => Self::Employee,
+            Self::Employee => Self::Status,
+            Self::Status => Self::Auto,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Auto => "all",
+            Self::Directory => "directory",
+            Self::Employee => "employee",
+            Self::Status => "status",
+        }
+    }
+
+    /// The key that cycles it, for the header's affordance. Codex shows `g`
+    /// next to the mode it is changing for exactly this reason.
+    pub const fn key(self) -> &'static str {
+        "g"
+    }
+}
+
 /// Does this row pass this filter mode, with the process context the modes
 /// need. ONE predicate for the visible set AND the tab bar's counts: two copies
 /// of "what does `active` mean" would drift, and the count the operator reads
@@ -205,6 +255,10 @@ pub struct SessionHubState {
     visible_idx: Vec<usize>,
     pub selected: usize,
     pub filter_mode: HubFilterMode,
+    /// How the visible rows are grouped. Orthogonal to `filter_mode`: the
+    /// filter decides which rows exist, this decides the order they are read
+    /// in, and the renderer draws a heading per group.
+    pub group_mode: HubGroupMode,
     /// Search tokens (AND). Empty = no filtering, no highlight.
     pub search_query: String,
     /// While true, keystrokes edit `search_query` (jcode's search mode).
@@ -257,6 +311,7 @@ impl SessionHubState {
             visible_idx: Vec::new(),
             selected: 0,
             filter_mode: HubFilterMode::All,
+            group_mode: HubGroupMode::Auto,
             search_query: String::new(),
             search_active: false,
             loading: true,
@@ -434,6 +489,80 @@ impl SessionHubState {
     /// The rows that survive filter + search, as indices into `rows`.
     pub fn visible_rows(&self) -> Vec<&SessionEntryV2> {
         self.visible_idx.iter().map(|&i| &self.rows[i]).collect()
+    }
+
+    /// Which group this row falls into under `mode`. The key is a `String` and
+    /// not a `Copy` enum because two of the four axes (Directory, Employee) are
+    /// open sets read from the row's data, so the key IS the data.
+    fn group_key(&self, row: &SessionEntryV2) -> String {
+        match self.group_mode {
+            HubGroupMode::Auto => String::new(),
+            HubGroupMode::Directory => row.cwd.clone().unwrap_or_else(|| "(no cwd)".to_string()),
+            HubGroupMode::Employee => row
+                .employee_id
+                .clone()
+                .unwrap_or_else(|| "(personal)".to_string()),
+            HubGroupMode::Status => row.status.api_label().to_string(),
+        }
+    }
+
+    /// The visible rows as ordered groups, each group's rows kept in their
+    /// existing relative order.
+    ///
+    /// This is the whole Stage C surface: `visible_idx` stays a FLAT list so
+    /// every existing navigation path (Up/Down/select_next/clamp_selection and
+    /// the callers that read `visible_rows()`) is untouched, and grouping is a
+    /// VIEW over it rather than a change to the index model. Codex's
+    /// `AgentsOverviewGroup` does the same — group headings are a rendering
+    /// concern, not a second index.
+    ///
+    /// `Auto` returns ONE group with an empty label, which the renderer draws
+    /// with no heading at all: the default must not add chrome.
+    pub fn visible_groups(&self) -> Vec<(String, Vec<usize>)> {
+        if self.group_mode == HubGroupMode::Auto {
+            return vec![(String::new(), self.visible_idx.clone())];
+        }
+        // First-appearance order keeps the groups stable across refreshes, which
+        // is what codex's `AgentsOverviewGroup` guarantees too: re-deriving the
+        // groups from a re-loaded row set must not shuffle the section the
+        // operator is reading.
+        let mut order: Vec<String> = Vec::new();
+        let mut groups: std::collections::HashMap<String, Vec<usize>> =
+            std::collections::HashMap::new();
+        for &i in &self.visible_idx {
+            let key = self.group_key(&self.rows[i]);
+            if !groups.contains_key(&key) {
+                order.push(key.clone());
+            }
+            groups.entry(key).or_default().push(i);
+        }
+        order
+            .into_iter()
+            .map(|k| {
+                let rows = groups.remove(&k).unwrap_or_default();
+                (k, rows)
+            })
+            .collect()
+    }
+
+    /// Cycle the grouping. The selection is preserved BY ROW ID rather than by
+    /// position: grouping reorders the list, so position-based preservation
+    /// would move the cursor to a different session and the operator would
+    /// watch the highlight jump sideways while pressing `g`.
+    pub fn cycle_group(&mut self) {
+        let keep = self.selected_row().map(|r| r.id.clone());
+        self.group_mode = self.group_mode.next();
+        // Grouping is a view, so the flat visible_idx is unchanged — only the
+        // reading order moves. Find the kept row's new position in that flat
+        // list; it is still `selected`, so re-deriving it is a no-op in the
+        // flat model, but the lookup is what makes it correct if grouping ever
+        // grows into a reordering (sort is Stage E).
+        if let Some(id) = keep
+            && let Some(pos) = self.visible_idx.iter().position(|&i| self.rows[i].id == id)
+        {
+            self.selected = pos;
+        }
+        self.note_preview_miss();
     }
 
     /// How many of ALL the rows each filter mode would show. This is the live
