@@ -38,17 +38,23 @@ def _snapshot_top_keys():
         raise SystemExit("could not derive debug_snapshot() keys from commands.rs")
     return keys
 SNAP_TOP = _snapshot_top_keys()
-# app/commands.rs::overlay_flags()  (34 entries, array length asserted in the crate)
-OVERLAYS = {
-    "help_overlay", "history_search_overlay", "global_search", "rewind_flow",
-    "settings_screen", "theme_screen", "stats_dialog", "mcp_view", "agents_menu",
-    "diff_viewer", "memory_file_selector", "skills_view", "plugins_hub",
-    "journey_view", "hooks_config_menu", "voice_mode_notice", "inline_interactive",
-    "session_hub", "export_dialog", "context_viz",
-    "mcp_approval", "bypass_permissions_dialog", "key_input_dialog",
-    "custom_provider_dialog", "free_mode_dialog",
-    "connect_dialog", "import_config_picker", "import_config_dialog",
-    "command_palette", "ask_user_dialog", "permission_request"}
+# app/commands.rs::overlay_flags() — derived from the source, never transcribed.
+# This was a hand-maintained copy TWICE over (in _validate.py and in
+# schema.json's overlay_paths_exhaustive) and both drifted: the validator's copy
+# still carried `rewind_flow`, `hooks_config_menu`, `voice_mode_notice` and
+# `mcp_approval`, none of which resolve, while omitting `rewind_selector` and
+# `permissions_picker`, which do. A scenario asserting a real overlay key was
+# therefore rejected as unresolvable, which is how iter-1659's first draft
+# failed. Reading the array is the only version that cannot drift (iter-1659).
+def _overlay_flag_keys():
+    src = (REPO / "crates/operant-cli/src/tui/app/commands.rs").read_text(encoding="utf-8")
+    body = src[src.index("fn overlay_flags"):]
+    body = body[:body.index("];")]
+    keys = set(re.findall(r'\(\s*"([a-z_0-9]+)",\s*', body))
+    if not keys:
+        raise SystemExit("could not derive overlay_flags() keys from commands.rs")
+    return keys
+OVERLAYS = _overlay_flag_keys()
 
 # Every surface in render/mod.rs::render_app, in Z-order.
 SURFACES = [

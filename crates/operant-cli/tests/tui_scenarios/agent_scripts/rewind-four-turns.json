@@ -1,0 +1,14 @@
+[
+  {"type":"user","text":"first prompt"},
+  {"type":"content","text":"answer for the first turn, long enough to wrap a few lines so the block is visible"},
+  {"type":"done","text":""},
+  {"type":"user","text":"second prompt"},
+  {"type":"content","text":"answer for the second turn, also long enough to wrap a few lines"},
+  {"type":"done","text":""},
+  {"type":"user","text":"third prompt"},
+  {"type":"content","text":"answer for the third turn, likewise long enough to wrap"},
+  {"type":"done","text":""},
+  {"type":"user","text":"fourth prompt"},
+  {"type":"content","text":"answer for the fourth turn, likewise long enough to wrap"},
+  {"type":"done","text":""}
+]

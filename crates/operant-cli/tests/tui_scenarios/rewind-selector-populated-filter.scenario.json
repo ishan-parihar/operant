@@ -1,0 +1,20 @@
+{
+  "name": "rewind-selector-populated-filter",
+  "surface": "crates/operant-cli/src/tui/rewind_selector.rs (filter + step over real entries, iter-1637)",
+  "opens_with": "The same four-turn transcript, then the filter 'second' plus one Up press",
+  "keys": "<esc><esc>fsecond<enter><up>",
+  "size": "120x40",
+  "agent_script": "rewind-four-turns.json",
+  "assert": [
+    "rewind_selector.visible == true"
+  ],
+  "assert_screen": [
+    "not-contains:filter: second",
+    "contains:second prompt",
+    "contains:3 turns below dropped",
+    "contains:turn 1/4"
+  ],
+  "baseline": "rewind-selector-populated-filter.txt",
+  "style_baseline": "rewind-selector-populated-filter.style.txt",
+  "notes": "iter-1659: the two defects iter-1637 fixed, both live-verified on the DEPLOYED binary. Measured on the running binary with this exact script: `fsecond` lands on turn 2/4 (2 turns below dropped), `<enter>` CLOSES the filter field — `filter: second` is no longer on screen, which is iter-1637's second fix proven from the outside — and `<up>` then walks to turn 1/4 and `<down>` to turn 3/4, both by RELATION. (1) pre-fix, `fsecond` + Enter + `<up>` was STUCK on turn 2/4 because `step` translated by position (current clamped to len, next index clamped to len-1); the clamps made the arrows read as dead keys. (2) the filter query outlived the filter field — ours kept reading the string where omp reads `#filterInput?.getValue()` so `#closeFilter` (rewind-selector.ts:195-197) drops it — so a typed filter silently steered later arrows. The `not-contains:filter: second` assertion is the observable proof of (2): the field is closed and the query was disposed. rewind-selector-filter (the pre-existing scenario) types fparser but never seeds an entry, asserts only that the filter LINE renders, and therefore could not fail on either defect. The existing empty-state scenarios keep the empty path pinned; these three add the populated path."
+}

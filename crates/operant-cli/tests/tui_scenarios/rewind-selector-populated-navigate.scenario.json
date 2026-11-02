@@ -1,0 +1,19 @@
+{
+  "name": "rewind-selector-populated-navigate",
+  "surface": "crates/operant-cli/src/tui/rewind_selector.rs::draw_rewind_selector + step() (iter-1637)",
+  "opens_with": "The same four-turn transcript, then three Up presses to walk the cursor to the oldest turn",
+  "keys": "<esc><esc><up><up><up>",
+  "size": "120x40",
+  "agent_script": "rewind-four-turns.json",
+  "assert": [
+    "rewind_selector.visible == true"
+  ],
+  "assert_screen": [
+    "contains:Rewind to a previous prompt",
+    "contains:turn 1/4",
+    "contains:3 turns below dropped"
+  ],
+  "baseline": "rewind-selector-populated-navigate.txt",
+  "style_baseline": "rewind-selector-populated-navigate.style.txt",
+  "notes": "iter-1659: pins the cursor walk, and this is the scenario that proves why a text-only baseline was worthless here. The text dump CANNOT see the cursor at all — every prompt row renders as N> prompt with no marker — so the walk's proof lives in the style layer: the REVERSED modifier (:360) shifts from the newest block to an earlier one while the dropped block dims. Measured on the deployed binary: default puts REVERSED+d bright-fg on row 10 (4> fourth), <up> moves it to row 8 (3> third) and dims row 10, three presses land on row 4 (1> first). The '3 turns below dropped' text is the drop count iter-1633 introduced and is the one cursor-position fact a TEXT baseline can carry. A fourth press must clamp (turn 1/4 stays), which the unit tests pin. HONEST LIMIT (2026-11-02, retracts my earlier live-A-B claim): this golden is NOT mutation-proof for iter-1637's step() relation. Reverting that step to its pre-fix position translation leaves all three goldens green, and an 88-combination filter/arrow sweep against the mutated vs fixed binary found ZERO divergences. Reason: typing a filter SNAPS the cursor onto the first match (`ffirst` -> turn 1/4, `ffour` -> turn 4/4) and a filter matching nothing returns early from step(), so the cursor is never left outside the candidate set where position translation and relation differ. The relation rule stands as omp parity (rewind-selector.ts:539-548) but must be described as parity hardening, NOT a fixed live bug. What this golden DOES prove, by mutation, is the pick zone (:348)."
+}

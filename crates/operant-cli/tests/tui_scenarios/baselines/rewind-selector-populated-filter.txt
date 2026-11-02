@@ -1,0 +1,40 @@
+  Rewind to a previous prompt · Enter to rewind · f filter · Esc cancel                                           ↑1
+  ⏪i Rewind to here · the prompt returns to the composer · 3 turns below dropped
+
+1› first prompt
+
+2› second prompt
+
+3› third prompt
+
+4› fourth prompt
+
+answer for the first turn, long enough to wrap a few lines so the block is visible
+
+answer for the second turn, also long enough to wrap a few lines
+
+answer for the third turn, likewise long enough to wrap
+
+answer for the fourth turn, likewise long enough to wrap
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  …  turn 1/4                                                            ~ 76/200k ▱▱▱▱▱▱▱▱▱▱ 0% API key Offline Capture
