@@ -491,3 +491,33 @@ forms are all unambiguous at the lead.
 Still open, deliberately: Stages C–E. Stage B did not add grouping or sort,
 and the header's `Group:` clause is shaped for but not yet wired.
 
+---
+
+## Stage B — what landed (`feat(iter-1649)`) and the rule it proved
+
+A dim `Tasks | Status | Updated` header row above the session rows, and both
+right-hand columns right-aligned to their labels with `row_align`.
+
+**The rule Stage B proved: a column header that names a column the data does not
+occupy is worse than no header at all.** A header row is one `Line` of dim text
+and therefore cheap to add and easy to add dishonestly — the temptation is to
+print `Status` and let the values land wherever. The rows must be padded to their
+column widths (`COL_STATUS = 16`, `COL_UPDATED = 15`) or the header is a lie
+rendered in four extra pixels of dim text. That is why `row_align` exists.
+
+It also fills a real gap the row had: a session row's status was carried ONLY by
+the title line's colour-coded glyph, so Idle and Interrupted differed by a hue and
+nothing more. One `status_value` binding now feeds both the session rows
+(`RowStatus::label`) and the delegation rows (`RowKind::Subagent.status`), so the
+two cannot drift into disagreeing about what a row's status is. The delegation
+status left its old inline spot on the meta line for the column — printing it in
+both places would have rendered `pending  pending`.
+
+`CHROME_ROWS` moved from 2 to 3, and the `ListState` selection offset moved with
+it: the same offset class Stage A pinned a test for, now with three rows of
+chrome instead of two.
+
+Stage B did not ship the two-glyph row (`›` selection marker separate from the
+status glyph). It is deferred to Stage D, which is where the row's background work
+happens and where a second glyph would otherwise be drawn twice.
+
