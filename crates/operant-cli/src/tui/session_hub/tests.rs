@@ -2110,3 +2110,173 @@ fn the_armed_row_is_marked_on_the_drawn_buffer() {
          make the confirm ambiguous: {other_row:?}"
     );
 }
+
+// ── cross-stage validation (2026-11-02, review pass) ────────────────────────
+//
+// One fully-populated hub, every stage's claim asserted on the SAME drawn
+// buffer. Written because validating each stage in isolation can pass while the
+// stages interfere with each other — the row fill lands on cells the column
+// header also owns, and the sort clause shares the controls row with the filter
+// tabs. This is the check that they coexist.
+
+#[test]
+fn every_stages_claim_holds_on_one_drawn_hub() {
+    use crate::tui::render::FrameCtx;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    // A hub with enough rows to exercise: grouping, the fill, the zebra, and
+    // both panes. Rows carry DIFFERENT costs/messages so a sort is observable.
+    let mut rich = row("rich", Some("priciest"), Some("premiere"));
+    rich.cost_usd = 12.34;
+    rich.message_count = 120;
+    rich.tokens = 90_000;
+    rich.cwd = Some("/work/alpha".to_string());
+    let mut mid = row("mid", Some("middle"), None);
+    mid.cost_usd = 0.50;
+    mid.message_count = 7;
+    mid.tokens = 500;
+    mid.cwd = Some("/work/beta".to_string());
+    let rows = vec![
+        rich,
+        mid,
+        row("cheap", Some("cheapest"), None),
+        row("cheap-2", Some("second cheap"), None),
+    ];
+
+    let mut hub = SessionHubState::new();
+    hub.visible = true;
+    hub.loading = false;
+    hub.replace_rows(rows);
+    // Stage C: group by directory so headings are drawn.
+    hub.group_mode = HubGroupMode::Directory;
+    // Stage E: sort by cost so the clause says "cost" and the order changes.
+    hub.sort_mode = HubSortMode::Cost;
+    hub.rebuild_visible();
+
+    let mut terminal = Terminal::new(TestBackend::new(FRAME_WIDTH, 40)).unwrap();
+    let mut ctx = FrameCtx {
+        size: ratatui::layout::Rect::new(0, 0, FRAME_WIDTH, 40),
+        preview_max_scroll: None,
+        stop: false,
+    };
+    terminal
+        .draw(|f| {
+            super::render::render_session_hub(f, &hub, f.area(), &mut ctx);
+        })
+        .unwrap();
+    let screen: Vec<String> =
+        crate::tui::debug::debug_hub::buffer_rows(terminal.backend().buffer())
+            .into_iter()
+            .map(|l| l.to_string())
+            .collect();
+    let joined = screen.join("\n");
+
+    // ── Stage A: the header, the tab bar with live counts, the column header ──
+    assert!(
+        joined.contains("Sessions"),
+        "Stage A: the header must name the view\n{joined}"
+    );
+    assert!(
+        joined.contains("4 rows"),
+        "Stage A: the header must carry the live row count\n{joined}"
+    );
+    assert!(
+        joined.contains("s cycle"),
+        "Stage A: the filter affordance must be visible\n{joined}"
+    );
+    assert!(
+        joined.contains("all 4"),
+        "Stage A: the tab bar must show the live count for `all`\n{joined}"
+    );
+    assert!(
+        joined.contains("Tasks") && joined.contains("Status") && joined.contains("Updated"),
+        "Stage B: the column header must name all three columns\n{joined}"
+    );
+
+    // ── Stage C: the group heading and its count ──
+    assert!(
+        joined.contains("/work/alpha"),
+        "Stage C: a directory grouping must render a heading per directory\n{joined}"
+    );
+
+    // ── Stage E: the sort clause names the ACTIVE key ──
+    assert!(
+        joined.contains("cost"),
+        "Stage E: the controls row must name the active sort key\n{joined}"
+    );
+
+    // ── Stage D: the selected row's fill spans the inner width ──
+    //
+    // The selected row is NOT at a fixed buffer row once Stage C groups the
+    // list: the first rendered thing under the chrome is the group HEADING
+    // (deliberately unfilled — the tint marks a session, not a section), and the
+    // session row follows it. Find the row by the selected session's title
+    // rather than assuming a constant offset.
+    // Scope to the LIST pane: each `screen` row carries BOTH panes concatenated,
+    // so a plain `contains("priciest")` matches the preview's title line too.
+    let list_pane = |r: &String| r.chars().take(LIST_PANE_END).collect::<String>();
+    let selected_y = screen
+        .iter()
+        .position(|r| list_pane(r).contains("priciest"))
+        .unwrap_or_else(|| panic!("the selected row must render\n{joined}"))
+        as u16;
+    let extent = (0..48u16)
+        .rev()
+        .find(|x| {
+            buf_bg(terminal.backend().buffer(), *x, selected_y) != ratatui::style::Color::Reset
+        })
+        .unwrap_or(0);
+    assert!(
+        extent >= 40,
+        "Stage D: the selected row's fill must reach the pane's right edge, \
+         stopped at column {extent} at buffer row {selected_y}\n{joined}"
+    );
+
+    // ── Stage D, the other half: the metrics survived the fill ──
+    //
+    // This is what the validation pass actually FOUND. With the employee badge
+    // unbounded, this exact row measured 61 cells against the pane's 46 inner
+    // columns and was truncated mid-word, losing the cost: the operator could
+    // see WHO was running the session but not what it cost.
+    // The row's id shrinks to 4 chars under load (`#ric`), so match the badge
+    // rather than the full id.
+    let meta_row = screen
+        .iter()
+        .find(|r| r.contains("premiere") && r.contains("120 msg"))
+        .unwrap_or_else(|| panic!("the row's meta line must render\n{joined}"));
+    // The AGE survives. That is the field the old truncation was eating
+    // mid-word (`Idle  jus`), and it is what the ladder now protects.
+    assert!(
+        meta_row.contains("just now"),
+        "the row's age must survive the loaded row: {meta_row:?}"
+    );
+    // The row is not truncated mid-word: the last thing on it is a complete
+    // token count, and the id is a deliberate short handle rather than a cut.
+    assert!(
+        meta_row.contains("90.0k"),
+        "the token count must survive: {meta_row:?}"
+    );
+    // The cost is unrecoverable AT THIS WIDTH (a 40% pane cannot carry id +
+    // employee + 120 msg + 90k + age + cost), but it is one Tab away.
+    assert!(
+        joined.contains("$12.3400"),
+        "the cost must still be reachable in the preview pane even when the row \
+         cannot carry it: {joined}"
+    );
+
+    // ── the right pane still renders (the constraint the operator set) ──
+    assert!(
+        joined.contains("Preview"),
+        "the right pane must still be present\n{joined}"
+    );
+}
+
+/// Background colour of a buffer cell, defaulted to `Reset` (a `TestBackend`
+/// leaves untouched cells there, so a fill is proven by comparing VALUES).
+fn buf_bg(buf: &ratatui::buffer::Buffer, x: u16, y: u16) -> ratatui::style::Color {
+    buf[(x, y)]
+        .style()
+        .bg
+        .unwrap_or(ratatui::style::Color::Reset)
+}

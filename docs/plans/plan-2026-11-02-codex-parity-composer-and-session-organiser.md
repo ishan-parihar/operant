@@ -681,3 +681,47 @@ instead of only the notice line.
 `pub(crate) mod diag_leak;` for it. A commit referencing an untracked file
 compiles locally and breaks on every other checkout. That is the same family as
 the stale-`git add -A` rule: a file in your tree is not a file in your commit.
+
+### Validation pass, and the row-overflow it found (2026-11-02)
+
+A cross-stage validation test (`every_stages_claim_holds_on_one_drawn_hub`) renders
+ONE fully-populated hub and asserts every stage's claim on the same buffer,
+because validating each stage alone can pass while the stages interfere.
+
+**It found a real defect, and it is the same class as Stage B's own finding.** A
+row carrying all of employee + 120 messages + 90k tokens + a status + an age + a
+cost measured 61-63 cells against the pane's 46 inner columns. It rendered
+truncated mid-word — `#rich  🪪  premiere  120 msg • 90.0k  Idle  jus` — so the
+operator could see WHO was running the session but not WHAT IT COST or even how
+old it was. The `Stage B` rule was that a header costing the data below it is a
+net loss; this was the last unfixed instance of it.
+
+**The fix is a degradation ladder ordered by recoverability, not by preference:**
+
+1. Drop the STATUS word first. It has its own named column in the header above,
+   so it is recoverable by looking one row up.
+2. Then shrink the ID from 12 chars toward 3. The preview pane prints the id in
+   full and `/resume` completes it.
+3. Age, messages, tokens and cost are never dropped. On a row that carries all of
+   them at once, the cost genuinely does not fit at 40% width — it is one Tab
+   away in the preview, which prints `$12.3400` in full.
+
+**What the ladder guarantees, measured on the drawn buffer:**
+
+```
+#ric  🪪  premiere  120 msg • 90.0k  just now     <- loaded row: status dropped, age kept
+#mid  7 msg • 500  just now  $0.5000             <- simple row: UNCHANGED, full id + cost
+#cheap  3 msg • 1.2k  just now  $0.0100          <- simple row: UNCHANGED
+```
+
+A simple row is byte-identical to what it was before this change, which is the
+property that makes a degradation ladder safe: it costs nothing until the row
+actually needs it.
+
+One thing this pass could NOT validate: the scenario corpus. `_run.py verify
+--scenario session-hub` reports 3 drifts against the deployed binary, but the
+`simulate` harness cannot open the hub in this environment at all
+(`overlays.session_hub == false`, because the sandboxed config has no provider),
+so those results say nothing about the hub. The corpus's goldens are also for
+`/branch`, a different surface, and were last regenerated at iter-1467 — before
+Stage A. They should be regenerated in an environment with a provider.

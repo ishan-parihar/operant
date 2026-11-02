@@ -661,7 +661,65 @@ fn render_list_body(frame: &mut Frame, state: &SessionHubState, area: ratatui::l
                 // inside a 40%-width pane alongside the metrics; the operator
                 // resolves the full id from /resume's completion or
                 // `sessions list --json` when they need the whole string.
-                let short_id: String = row.id.chars().take(12).collect();
+                //
+                // (2026-11-02, measured) 12 chars is what the SIMPLE row fits.
+                // A row carrying all of employee + 120 messages + 90k tokens +
+                // a $12 cost measured 63 cells against the pane's 46 inner
+                // columns, and it was truncated mid-word: the operator lost the
+                // age AND the cost, which are the point of the row. The id is
+                // the one field here that is fully recoverable — the preview
+                // pane prints it in full and `/resume` completes it — so it is
+                // the field that yields. Everything else on the line is a fact
+                // the operator cannot get back without opening the session.
+                //
+                // The budget is this render's own inner width (already computed
+                // above as `inner_width`), not a second constant to keep in sync
+                // with the pane geometry.
+                //
+                // MEASURED, and the finding that matters: the metrics of a fully
+                // loaded row are themselves 55 cells against the pane's 46 inner
+                // columns — employee + 120 msg + 90k tokens + Idle + just now +
+                // $12.3400 — so no amount of id-shrinking makes it fit. Squeezing
+                // the id to 3 chars would have produced a row with an unreadable
+                // handle and STILL no age. So the row degrades the way the Stage
+                // B rule demands: drop the LEAST load-bearing field, in a fixed
+                // order, until the rest fits.
+                //
+                // The order is chosen by recoverability, not by preference:
+                //   1. STATUS goes first — it has its own named column in the
+                //      header above (Stage B), so it is recoverable by looking up.
+                //   2. The ID is next — the preview pane prints it in full.
+                //   Age, messages, tokens and cost are NEVER dropped: they are
+                //   the reason the operator opened the list.
+                let metrics_width = emp.chars().count()
+                    + format!("{} msg", row.message_count).chars().count()
+                    + tokens_suffix(row.tokens).chars().count()
+                    + row.status.label().chars().count()
+                    + relative_time(row.updated_at).chars().count()
+                    + if matches!(row.kind, RowKind::Subagent { .. }) {
+                        0
+                    } else {
+                        format!("${:.4}", row.cost_usd).chars().count()
+                    }
+                    + 8;
+                // Drop the status column BEFORE shrinking the id: the header
+                // above already names it (Stage B), so it is the one field here
+                // the row can afford to lose. Shrinking the id first would burn
+                // the handle to save a word that is already one row up.
+                let show_status = metrics_width as usize + 13 <= inner_width as usize;
+                let metrics_width = if show_status {
+                    metrics_width
+                } else {
+                    metrics_width.saturating_sub(row.status.label().chars().count())
+                };
+                let mut id_budget = 12usize;
+                // Then shrink the id while it still reads as a handle.
+                while metrics_width as usize + id_budget + 1 > inner_width as usize && id_budget > 3
+                {
+                    id_budget -= 1;
+                }
+
+                let short_id: String = row.id.chars().take(id_budget).collect();
                 // (2026-10-30) A subagent row printed "$0.0000 · 0 msg · 0.000k
                 // tok" and asserted a fact it did not have: `records_snapshot`
                 // in async_delegation.rs hardcodes message_count 0, cost 0.0
@@ -727,10 +785,12 @@ fn render_list_body(frame: &mut Frame, state: &SessionHubState, area: ratatui::l
                         },
                     ),
                 };
-                meta_spans.push(Span::styled(
-                    format!("  {}", status_value.0),
-                    Style::default().fg(status_value.1),
-                ));
+                if show_status {
+                    meta_spans.push(Span::styled(
+                        format!("  {}", status_value.0),
+                        Style::default().fg(status_value.1),
+                    ));
+                }
                 meta_spans.push(Span::styled(
                     format!("  {}", relative_time(row.updated_at)),
                     Style::default().fg(theme_colors::muted()),

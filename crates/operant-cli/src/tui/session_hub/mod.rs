@@ -659,12 +659,6 @@ impl SessionHubState {
         self.visible_idx.iter().position(|&i| self.rows[i].id == id)
     }
 
-    /// The flat `visible_idx` position of the selected row.
-    fn selected_row_idx(&self) -> Option<usize> {
-        let idx = *self.visible_idx.get(self.selected)?;
-        Some(idx)
-    }
-
     /// How many of ALL the rows each filter mode would show. This is the live
     /// count codex's tab bar carries (`agent_center`'s `render_filled_tab_bar`
     /// over `TASK_FILTERS`): the operator must see that `active` has 0 rows
