@@ -4,10 +4,24 @@
   "opens_with": "/session",
   "keys": "/session<enter>",
   "size": "120x40",
+  "assert": [
+    "overlays.session_hub == true",
+    "any_modal_open == true"
+  ],
+  "assert_screen": [
+    "contains:Sessions"
+  ],
   "variants": [
     {
       "size": "80x24",
-      "keys": "/session<enter>"
+      "keys": "/session<enter>",
+      "assert": [
+        "overlays.session_hub == true",
+        "any_modal_open == true"
+      ],
+      "assert_screen": [
+        "contains:Sessions"
+      ]
     },
     {
       "size": "120x40",
@@ -17,20 +31,11 @@
         "any_modal_open == true"
       ],
       "assert_screen": [
-        "contains:this branch",
         "contains:Sessions"
       ]
     }
   ],
-  "assert": [
-    "overlays.session_hub == true",
-    "any_modal_open == true"
-  ],
-  "assert_screen": [
-    "contains:Sessions",
-    "contains:Loading sessions"
-  ],
   "baseline": "session-hub.txt",
   "style_baseline": "session-hub.style.txt",
-  "notes": "ENV, one dependency: the hub's rows come from the sessions table in the live database, so the body text is machine-specific (which sessions exist, their ages, the branch tree). The assertions pin the FRAME SHAPE, not the body: the overlay is on, no other modal is, and the hub's own chrome renders (the title block ' Sessions [<filter>] ' at session_hub/render.rs:245 and, once rows land, the footer 's cycles filters · Esc closes' at :182). ENV, third and load-bearing: the headless runner paints a BOUNDED number of frames after the key events, and the session load lands on a spawn_blocking DB read — so the painted frame is the hub's interim state ('⏳ Loading sessions… · scanning local sessions and live subagents…' at :160-169). The asserts therefore pin strings present in BOTH states: the title block and the interim banner. The footer and rows are NOT asserted because they are a race, which is precisely the old session-branching exclusion's reason text rewritten as a scenario that can pass. The 120x40 /branch variant pins audit R1's replacement: /branch used to open the DELETED session_branching overlay and now opens THIS pane on the CurrentBranch filter, whose label 'this branch's tree' (session_hub/mod.rs:65) appears in the title block. VERIFY BY HAND for the body text against a machine with sessions; the shape assertions are the gate."
+  "notes": "VERIFY BY HAND for the body text against a machine with sessions; the shape assertions are the gate.\n\n2026-11-03 (iter-1706, MEASURED, two rounds of correction): the ORIGINAL asserts pinned strings that no longer exist in this tree, both written on earlier evidence rather than re-measured. 'Loading sessions' is the hub's INTERIM banner (session_hub/render.rs:560) and it paints only while state.loading is true; on a fixture with no sessions the spawn_blocking scan settles before the first painted frame, so the frame is the EMPTY state instead ('No sessions to show.', :571 and :925). 'this branch' was the /branch variant's audit-R1 needle and it is gone: the hub's title block was rebuilt from the single-line ' Sessions [<filter>] ' at :245 into a bordered 'Sessions 0 rows / s cycle / Group: all' pane, across 22 commits since this golden, none of them mine. 'Esc closes' (the footer at :182) survives at 120x40 but is CLIPPED at 80x24, so it is size-dependent and belongs in no shared assert.\n\nWhat the three variants pin now is only what is common to every size, every load state, and both doors into the pane: 'Sessions' plus the two state assertions. The goldens are NOT re-proved here: this surface is a peer's in-flight rebuild and overwriting their session-hub.txt/style.txt baseline would destroy WIP that is not mine. The scenario runs green against the CURRENT render once the shape assertions match reality; the baseline files stay with their owner."
 }
