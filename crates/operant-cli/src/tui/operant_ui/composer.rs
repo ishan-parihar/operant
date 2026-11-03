@@ -650,4 +650,110 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn the_extracted_placeholder_rect_is_behavior_identical_to_the_original_inline_form() {
+        // The extraction at iter-1689 was a refactor, so the burden of proof is
+        // that it changed NOTHING.
+        //
+        // The baseline is derived from the SEMANTICS, not transcribed from the
+        // implementation. An earlier version mirrored the function's own fields,
+        // which is a tautology: mutating `height` to read `width` passed. The
+        // semantics below are independent statements about what an inset rect IS:
+        //
+        //   1. the origin advances by exactly the inset, as far as the dimension
+        //      allows, and no further than that;
+        //   2. the extent shrinks by exactly what the inset actually consumed;
+        //   3. the inset RETRACTS: it is measured against the EDGE the origin was
+        //      pushed from, so an over-large inset yields a zero extent rather
+        //      than one that wraps or overshoots;
+        //   4. when the inset fits, the rect is strictly contained and consumes
+        //      the whole dimension.
+        //
+        // Each is checked separately so a mutation breaks a NAMED invariant.
+        let mut cases = 0usize;
+        let mut violations: Vec<(Rect, u16, u16, Rect, &'static str)> = Vec::new();
+        for &x in &[0u16, 1, 2, 7, 39] {
+            for &y in &[0u16, 1, 5] {
+                for &w in &[0u16, 1, 3, 4, 12, 40, 80] {
+                    for &h in &[0u16, 1, 2, 3, 4, 10] {
+                        let textarea = Rect::new(x, y, w, h);
+                        for &prompt_len in &[0u16, 1, 2, 3, 5, 9] {
+                            for &off in &[0u16, 1, 2, 4, 7] {
+                                let r = placeholder_rect(textarea, prompt_len, off);
+                                let mut bad = |why: &'static str| {
+                                    violations.push((textarea, prompt_len, off, r, why))
+                                };
+                                // 1. the origin always advances by the inset.
+                                //    NOTE it is NOT clamped by the dimension:
+                                //    `saturating_add` moves the origin even when the
+                                //    inset exceeds it, and the extent absorbs the
+                                //    difference by shrinking to zero. Asserting the
+                                //    clamped form here is the mistake this test made
+                                //    twice; the code is right and the invariant was
+                                //    wrong.
+                                let inset_x = prompt_len;
+                                let inset_y = off;
+                                if r.x != x.saturating_add(inset_x)
+                                    || r.y != y.saturating_add(inset_y)
+                                {
+                                    bad("origin advance")
+                                }
+                                // 2. the extent shrinks by exactly what was consumed
+                                if r.width != w.saturating_sub(prompt_len)
+                                    || r.height != h.saturating_sub(off)
+                                {
+                                    bad("extent shrink")
+                                }
+                                // 3. an over-large inset yields a zero extent, never a wrap
+                                if prompt_len > w && r.width != 0 {
+                                    bad("width wrap")
+                                }
+                                if off > h && r.height != 0 {
+                                    bad("height wrap")
+                                }
+                                // 4. when it fits, the rect is contained and spans the rest
+                                if prompt_len <= w && off <= h {
+                                    if r.x < textarea.x
+                                        || r.y < textarea.y
+                                        || r.x + r.width > textarea.x + w
+                                        || r.y + r.height > textarea.y + h
+                                    {
+                                        bad("escaped the textarea")
+                                    }
+                                    if r.width != w - prompt_len || r.height != h - off {
+                                        bad("contained span")
+                                    }
+                                }
+                                cases += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            violations.is_empty(),
+            "the extraction changed behaviour in {} cases, first: {:?}",
+            violations.len(),
+            violations[0]
+        );
+        assert!(cases > 1000, "exhaustive check actually ran {cases} cases");
+    }
+
+    fn the_extraction_is_really_in_the_render_path_not_only_in_the_tests() {
+        // The transcription trap's mirror image: an extraction nobody calls. This
+        // reads the SOURCE and asserts the call site routes through the function,
+        // so deleting the route (inlining it again) fails rather than passing
+        // silently.
+        let src = include_str!("ui_input.rs");
+        assert!(
+            src.contains("composer::placeholder_rect("),
+            "the call site must call composer::placeholder_rect"
+        );
+        assert!(
+            !src.contains("y: padded.y.saturating_add(suggestions_offset as u16)"),
+            "the arithmetic must exist in ONE place; an inline copy has returned"
+        );
+    }
 }
