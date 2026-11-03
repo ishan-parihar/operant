@@ -281,6 +281,56 @@ Suite at iter-1681: **2087 passed / 1 failed**. The failure is `pinned_ui`'s
 Mermaid side-panel, a peer's in-flight subsystem (fleet rule 7), present before
 this commit.
 
+### 3.9 The deeper validation pass (2026-11-03), and what it found
+
+The four tests were correct, but three of them pinned the wrong granularity. A
+test that renders `paint_band_fill` alone and a test that renders the whole
+empty-draft composer can both pass while the composition is broken — the same
+"validate each stage alone" trap the session hub's cross-stage test had already
+proved. Three more tests were added, all painting the REAL path:
+
+1. `the_empty_composer_paints_the_placeholder_at_the_text_origin_beside_the_glyph`
+   — the composed empty composer reads exactly
+   `  \u{203a} Ask operant to do anything` (the gutter's blank half at cols 0-1,
+   the `›` at col 2, its space at col 3, the placeholder from col 4), and the
+   painted cells really carry the placeholder's italic.
+2. `the_placeholder_does_not_overwrite_the_gutter_glyph` — the bug the call
+   site's `padded.x + prompt_len` (`ui_input.rs:2763`) exists to prevent.
+3. `the_band_fill_also_covers_the_blank_rows_the_text_does_not_occupy` — the
+   band's blank top and bottom rows carry the fill too.
+
+**Two honest corrections this pass produced, both recorded because both were
+mistakes of the validator rather than of the code:**
+
+- **My first harness modeled the geometry wrong.** I painted the `›` glyph into a
+  2-column rect at the band's origin and asserted it at col 2, but the real
+  mechanism is that `wrap_input_text_gutter` (`ui_input.rs:3056`) makes the glyph
+  the paragraph's FIRST SPAN, and the paragraph paints at `padded` — so the glyph
+  lands at `padded.x` and the text follows one gutter later. My harness expected
+  `  ›` (glyph at col 2) while the real path yields `›` at col 2 too, but the
+  placeholder's origin is `padded.x + prompt_len`, not `padded.x`. I fixed the
+  harness to use the paragraph, which is the mechanism, rather than a rectangle
+  guess that merely happened to land in the same place this once. **The lesson:
+  model the renderer's mechanism, not a plausible offset.** A test that passes
+  because the offsets coincide is not a test.
+- **My first "blank rows" mutation was not a mutation.** I shrank the fill from
+  the band's height to `height - 1` and expected a failure; over a 4-row band
+  that is 3 rows, which still covers rows 0-2, so all 16 tests passed and I
+  nearly recorded a false PASS. A probe test proved it: the fill was still on
+  rows 0,1,2. The real mutation (fill limited to 1 row, the "border box" look)
+  does fail. **The lesson: a mutation that does not fail proves nothing, and a
+  mutation you did not verify changed behaviour is not evidence.** Print the
+  mutated state before trusting either result.
+
+**Release binaries do not carry tests, so the deployed artifact cannot be
+validated by test-name presence.** `strings ~/.local/bin/operant | grep
+the_band_fill_paints_every_column_of_the_row` returns 0 — `#[cfg(test)]` is not
+compiled into a release build. The md5 match and the gateway's restart timestamp
+prove the right artifact is deployed; the claim that it carries the NEW CODE is
+validated instead by `paint_band_fill` being compiled in and the placeholder
+string being present. This is expected behaviour, recorded here so the next agent
+does not read a 0 as a failed deploy.
+
 ---
 
 ## Part 4 — codex's session-management system (the investigation)

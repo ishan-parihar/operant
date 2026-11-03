@@ -402,4 +402,106 @@ mod tests {
             .unwrap();
         assert_eq!(terminal.backend().buffer()[(0, 0)].style().bg, Some(fill));
     }
+
+    /// Paint the REAL empty-draft composer path over `area` and return the
+    /// buffer: band fill, then the glyph-row paragraph, then the placeholder
+    /// into the rect the call site computes. This is the composition iter-1637
+    /// verified by hand and iter-1681 only pinned as isolated helpers.
+    fn empty_composer_buffer(width: u16, height: u16) -> ratatui::buffer::Buffer {
+        use ratatui::backend::TestBackend;
+        use ratatui::{Terminal, widgets::Block};
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal
+            .draw(|f| {
+                let area = f.area();
+                // 1. the band fill, in the real order.
+                paint_band_fill(area, f);
+                // 2. a bare block over it, as `chat_composer.rs:4889` does.
+                f.render_widget(Block::default(), area);
+                // 3. the placeholder into the inset rect the call site derives.
+                let padded = textarea_rect(area);
+                // ui_input.rs:2763 — the placeholder column is `padded.x +
+                // prompt_len`, and `input_gutter_cols` is GUTTER_COLS here.
+                let placeholder_rect = Rect {
+                    x: padded.x.saturating_add(GUTTER_COLS),
+                    y: padded.y,
+                    width: padded.width.saturating_sub(GUTTER_COLS),
+                    height: padded.height,
+                };
+                paint_placeholder(placeholder_rect, f);
+                // 4. the text paragraph itself. This is the real mechanism and
+                //    the reason for the gutter's shape: `wrap_input_text_gutter`
+                //    (ui_input.rs:3056) makes the mode glyph the line's FIRST
+                //    SPAN, and the whole paragraph paints at `padded` — so the
+                //    glyph lands at `padded.x` (= GUTTER_COLS from the band's
+                //    left edge) and the text glyph follows it, one gutter later.
+                //    That is why the placeholder must be inset by `prompt_len`
+                //    from `padded.x`: it shares the text's origin, never the
+                //    glyph's.
+                f.render_widget(
+                    ratatui::widgets::Paragraph::new(Line::from(vec![
+                        Span::styled("\u{203a}", Style::default().add_modifier(Modifier::BOLD)),
+                        Span::raw(" "),
+                    ])),
+                    padded,
+                );
+            })
+            .unwrap();
+        terminal.backend().buffer().clone()
+    }
+
+    #[test]
+    fn the_empty_composer_paints_the_placeholder_at_the_text_origin_beside_the_glyph() {
+        // The composition claim iter-1637 asserted by hand and iter-1681 left
+        // unverified: the `›` glyph sits in the gutter and the placeholder
+        // starts after it, on the same row, over the fill.
+        let buf = empty_composer_buffer(40, 4);
+        let row: String = (0..40u16)
+            .map(|x| buf[(x, 1)].symbol())
+            .collect::<String>()
+            .trim_end()
+            .to_string();
+        assert_eq!(
+            row, "  \u{203a} Ask operant to do anything",
+            "the empty composer must read [gutter blank][\u{203a}][blank]PLACEHOLDER"
+        );
+        // The row's own width confirms nothing was painted past the placeholder.
+        // The painted cells really carry the placeholder's styling, so this is
+        // the placeholder line and not a leftover from a previous pass.
+        let placeholder_style = buf[(6, 1)].style();
+        assert!(
+            placeholder_style.add_modifier.contains(Modifier::ITALIC),
+            "the painted placeholder must carry its italic: {placeholder_style:?}"
+        );
+    }
+
+    #[test]
+    fn the_placeholder_does_not_overwrite_the_gutter_glyph() {
+        // The bug the call site's `padded.x + prompt_len` exists to prevent:
+        // the placeholder painted at `padded.x` would clobber the `›`.
+        let buf = empty_composer_buffer(40, 4);
+        assert_eq!(
+            buf[(2, 1)].symbol(),
+            "\u{203a}",
+            "the glyph must survive the placeholder's paint pass"
+        );
+    }
+
+    #[test]
+    fn the_band_fill_also_covers_the_blank_rows_the_text_does_not_occupy() {
+        // iter-1681's reach test measured row 1 only. The band's blank top and
+        // bottom rows are part of the look (`input_padding_height = 2`), and a
+        // fill that stopped after the text row would be the old border box.
+        let buf = empty_composer_buffer(40, 4);
+        let fill = composer_fill_style()
+            .bg
+            .expect("this theme declares a surface colour");
+        for (label, y) in [("top", 0u16), ("text", 1), ("bottom", 2)] {
+            assert_eq!(
+                buf[(0, y)].style().bg,
+                Some(fill),
+                "the {label} row of the band must carry the fill"
+            );
+        }
+    }
 }
