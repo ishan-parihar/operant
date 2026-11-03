@@ -94,6 +94,9 @@ pub(crate) fn render_assistant_message(
     msg: &DisplayMessage,
     width: u16,
     _diff_mode: crate::tui::operant_app::config_shim::DiffDisplayMode,
+    // Present only so every cached renderer shares one signature; a prose
+    // message has no tool row to expand.
+    _row_expanded: bool,
 ) -> Vec<Line<'static>> {
     let centered = markdown::center_code_blocks();
     let wrap_width = centered_wrap_width(width, centered, 96);
@@ -315,6 +318,7 @@ pub(crate) fn render_reasoning_message(
     msg: &DisplayMessage,
     width: u16,
     _diff_mode: crate::tui::operant_app::config_shim::DiffDisplayMode,
+    _row_expanded: bool,
 ) -> Vec<Line<'static>> {
     let centered = markdown::center_code_blocks();
     let wrap_width = centered_wrap_width(width, centered, 96);
@@ -551,6 +555,7 @@ pub(crate) fn render_system_message(
     msg: &DisplayMessage,
     width: u16,
     _diff_mode: crate::tui::operant_app::config_shim::DiffDisplayMode,
+    _row_expanded: bool,
 ) -> Vec<Line<'static>> {
     if let Some(title) = msg.title.as_deref()
         && title == "Connection"
@@ -698,6 +703,7 @@ pub(crate) fn render_usage_message(
     msg: &DisplayMessage,
     width: u16,
     _diff_mode: crate::tui::operant_app::config_shim::DiffDisplayMode,
+    _row_expanded: bool,
 ) -> Vec<Line<'static>> {
     let border_style = Style::default().fg(rgb(120, 140, 190));
     let title = msg.title.as_deref().unwrap_or("Usage");
@@ -752,11 +758,12 @@ pub(crate) fn render_overnight_message(
     msg: &DisplayMessage,
     width: u16,
     diff_mode: crate::tui::operant_app::config_shim::DiffDisplayMode,
+    _row_expanded: bool,
 ) -> Vec<Line<'static>> {
     let Ok(card) = serde_json::from_str::<crate::tui::operant_app::overnight::OvernightProgressCard>(
         &msg.content,
     ) else {
-        return render_system_message(msg, width, diff_mode);
+        return render_system_message(msg, width, diff_mode, false);
     };
 
     let centered = markdown::center_code_blocks();
@@ -1138,9 +1145,10 @@ pub(crate) fn render_todos_message(
     msg: &DisplayMessage,
     width: u16,
     diff_mode: crate::tui::operant_app::config_shim::DiffDisplayMode,
+    _row_expanded: bool,
 ) -> Vec<Line<'static>> {
     let Ok(payload) = serde_json::from_str::<TodoCardPayload>(&msg.content) else {
-        return render_system_message(msg, width, diff_mode);
+        return render_system_message(msg, width, diff_mode, false);
     };
     let (todos, plan, goals, live_ids) = payload.into_parts();
 
@@ -2824,6 +2832,7 @@ pub(crate) fn render_background_task_message(
     msg: &DisplayMessage,
     width: u16,
     diff_mode: crate::tui::operant_app::config_shim::DiffDisplayMode,
+    _row_expanded: bool,
 ) -> Vec<Line<'static>> {
     if msg
         .content
@@ -2845,7 +2854,7 @@ pub(crate) fn render_background_task_message(
     }
 
     let Some(parsed) = parse_background_task_notification_markdown(&msg.content) else {
-        return render_system_message(msg, width, diff_mode);
+        return render_system_message(msg, width, diff_mode, false);
     };
 
     let centered = markdown::center_code_blocks();
@@ -3444,6 +3453,7 @@ pub(crate) fn render_swarm_message(
     msg: &DisplayMessage,
     width: u16,
     _diff_mode: crate::tui::operant_app::config_shim::DiffDisplayMode,
+    _row_expanded: bool,
 ) -> Vec<Line<'static>> {
     // [port-decision un-gated at batch-4]: the W7 info_widget family landed
     // (operant_app/info_widget/info_widget_swarm_gallery.rs); the swarm card
@@ -4112,6 +4122,7 @@ pub(crate) fn render_tool_message(
     msg: &DisplayMessage,
     width: u16,
     diff_mode: crate::tui::operant_app::config_shim::DiffDisplayMode,
+    row_is_expanded: bool,
 ) -> Vec<Line<'static>> {
     if let Some(lines) = render_scheduled_tool_message(msg, width) {
         return lines;
@@ -4159,6 +4170,7 @@ pub(crate) fn render_tool_message(
             &DisplayMessage::todos(payload),
             width,
             crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+            false,
         );
     }
 
@@ -4559,6 +4571,7 @@ pub(crate) fn render_tool_message(
                             &DisplayMessage::todos(payload),
                             nested_width,
                             crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+                            false,
                         )
                     } else {
                         render_todo_assessment_updates(
@@ -4579,7 +4592,7 @@ pub(crate) fn render_tool_message(
         && is_edit_tool
         && let Some(change_lines) = edit_tool_inline_diff_lines(tc, &msg.content)
     {
-        let full_inline = diff_mode.is_full_inline();
+        let full_inline = diff_mode.is_full_inline() || row_is_expanded;
         let file_path_for_ext = tc
             .input
             .get("file_path")

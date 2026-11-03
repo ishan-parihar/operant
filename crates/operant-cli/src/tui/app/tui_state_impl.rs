@@ -144,6 +144,10 @@ impl TuiState for App {
         self.display_messages_slice()
     }
 
+    fn expanded_tool_id(&self) -> Option<&str> {
+        self.expanded_tool_id.as_deref()
+    }
+
     fn display_user_message_count(&self) -> usize {
         self.messages
             .iter()
@@ -540,7 +544,17 @@ impl TuiState for App {
     }
 
     fn diff_mode(&self) -> DiffDisplayMode {
-        DiffDisplayMode::Off
+        // The inline diff is the documented default (DiffDisplayMode::default()
+        // is `Inline`, vendor_types.rs:87). It used to return `Off` here, which
+        // meant the TUI never rendered a file-edit diff body at all: the
+        // summary line showed `(+N -N)` counts and nothing else, and the
+        // click/ctrl-o per-row expansion had nothing to expand because the
+        // whole block is gated behind `diff_mode.is_inline()`
+        // (messages.rs:4591). The static snapshot in `config_shim::config()`
+        // already carries the default, so read it rather than restating it.
+        crate::tui::operant_app::config_shim::config()
+            .display
+            .diff_mode
     }
 
     fn current_session_id(&self) -> Option<String> {

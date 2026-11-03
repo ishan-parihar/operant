@@ -10,6 +10,7 @@ pub(crate) fn get_cached_message_lines<F>(
     msg: &DisplayMessage,
     width: u16,
     diff_mode: crate::tui::operant_app::config_shim::DiffDisplayMode,
+    row_expanded: bool,
     render: F,
 ) -> Vec<Line<'static>>
 where
@@ -17,12 +18,14 @@ where
         &DisplayMessage,
         u16,
         crate::tui::operant_app::config_shim::DiffDisplayMode,
+        bool,
     ) -> Vec<Line<'static>>,
 {
     crate::tui::operant_model::get_cached_message_lines(
         msg,
         width,
         diff_mode,
+        row_expanded,
         crate::tui::operant_model::MessageCacheContext {
             diagram_mode: crate::tui::operant_app::config_shim::config()
                 .display
@@ -64,7 +67,8 @@ mod tests {
             &msg,
             80,
             crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
-            |_, _, _| vec![Line::from("fit")],
+            false,
+            |_, _, _, _| vec![Line::from("fit")],
         );
         assert_eq!(first.len(), 1);
 
@@ -73,7 +77,8 @@ mod tests {
             &msg,
             80,
             crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
-            |_, _, _| vec![Line::from("large-1"), Line::from("large-2")],
+            false,
+            |_, _, _, _| vec![Line::from("large-1"), Line::from("large-2")],
         );
         crate::tui::operant_app::mermaid::set_mermaid_inline_expand_level(hash, 0);
 

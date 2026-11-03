@@ -16,6 +16,15 @@ struct MessageCacheKey {
     diff_mode: DiffDisplayMode,
     message_hash: u64,
     content_len: usize,
+    // Per-row expand/collapse. A row's diff renders its full body when the row
+    // itself is expanded, and the diff is parsed from the tool call's INPUT plus
+    // the message content -- neither of which changes when only the row's
+    // expansion toggles. Without this key the cache hands back the collapsed
+    // body for an expanded row, silently ignoring the click. (Tool-OUTPUT
+    // expansion gets away without it only because adapter.rs swaps the full text
+    // into msg.content, moving content_len and message_hash; a diff has no such
+    // accident.)
+    row_expanded: bool,
     diagram_mode: DiagramDisplayMode,
     centered: bool,
     mermaid_epoch: u64,
@@ -103,14 +112,15 @@ pub fn get_cached_message_lines<F>(
     msg: &DisplayMessage,
     width: u16,
     diff_mode: DiffDisplayMode,
+    row_expanded: bool,
     context: MessageCacheContext,
     render: F,
 ) -> Vec<Line<'static>>
 where
-    F: FnOnce(&DisplayMessage, u16, DiffDisplayMode) -> Vec<Line<'static>>,
+    F: FnOnce(&DisplayMessage, u16, DiffDisplayMode, bool) -> Vec<Line<'static>>,
 {
     if cfg!(test) {
-        return render(msg, width, diff_mode);
+        return render(msg, width, diff_mode, row_expanded);
     }
 
     let key = MessageCacheKey {
@@ -118,6 +128,7 @@ where
         diff_mode,
         message_hash: msg.stable_cache_hash(),
         content_len: msg.content.len(),
+        row_expanded,
         diagram_mode: context.diagram_mode,
         centered: context.centered,
         mermaid_epoch: context.mermaid_epoch,
@@ -135,7 +146,7 @@ where
         return lines;
     }
 
-    let lines = render(msg, width, diff_mode);
+    let lines = render(msg, width, diff_mode, row_expanded);
     cache.insert(key, lines.clone());
     lines
 }

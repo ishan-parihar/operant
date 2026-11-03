@@ -11440,3 +11440,136 @@ fn the_rewind_caption_survives_a_filter_close() {
         "the caption keeps its leading gap and lands on the right columns: {closed:?}"
     );
 }
+
+/// Per-row diff expansion, end to end through the real prepare path.
+///
+/// A file-edit row is the half of click-to-expand that tool-OUTPUT expansion
+/// cannot cover: its body is a DIFF parsed from the tool call's INPUT, which
+/// a toggle never rewrites, and `MessageCacheKey` does not include the
+/// expanded id — so without the row-expanded key a click flips the state while
+/// the cached row keeps rendering the truncated diff it was cached at.
+///
+/// The whole block is also gated behind `diff_mode.is_inline()`, which is why
+/// this test would have passed trivially (nothing renders at all) while the
+/// feature was dead: `App::diff_mode()` returned a hardcoded `Off`. The
+/// collapsed assertion below is what catches that — it requires the diff HEAD
+/// to be on screen, not just the summary line.
+#[test]
+fn a_clicked_file_edit_row_untruncates_its_diff() {
+    use crate::tui::adapter_types::types::Message;
+    use crate::tui::operant_app::config_shim::DiffDisplayMode;
+
+    // The global mode must be the collapsed default: this test is about the
+    // per-row flag, and `FullInline` would render the whole diff whether or
+    // not the row was clicked.
+    let _guard = crate::tui::operant_app::config_shim::reasoning_override_test_guard();
+    assert_eq!(
+        app_diff_mode_for_test(),
+        crate::tui::operant_app::config_shim::DiffDisplayMode::Inline,
+        "the global default must be the collapsed Inline mode, or this test \
+         cannot tell a row click from the global setting"
+    );
+
+    fn edit_app() -> crate::tui::app::App {
+        use crate::tui::app::enums::{ToolStatus, ToolUseBlock};
+
+        // 40 changed lines per side. `MAX_INLINE_DIFF_LINES` is 12 and the
+        // truncated shape keeps 12 head + 12 tail, so anything past the 12th
+        // line of the tail half (line 29 of 40) is hidden until the click.
+        // 17 per side would leave the last lines already visible, which makes
+        // the expand assertion vacuous.
+        let old: Vec<String> = (1..=40).map(|i| format!("  let old_{i} = {i};")).collect();
+        let new: Vec<String> = (1..=40).map(|i| format!("  let new_{i} = {i};")).collect();
+        let mut app = make_app();
+        app.messages
+            .push(Message::user("edit the constants".to_string()));
+        app.messages.push(Message::assistant("editing".to_string()));
+        app.tool_use_blocks.push(ToolUseBlock {
+            id: "edit-a".to_string(),
+            name: "edit".to_string(),
+            after_index: 2,
+            status: ToolStatus::Done,
+            output_preview: Some("The file src/big.rs has been edited successfully.".to_string()),
+            input_json: serde_json::json!({
+                "file_path": "src/big.rs",
+                "old_string": old.join("\n"),
+                "new_string": new.join("\n"),
+            })
+            .to_string(),
+            intent: None,
+        });
+        // The production path retains every completed call's output (bounded
+        // by KEEP_CALLS); the toggle's own retention gate reads that map, so a
+        // fixture without it makes the click inert for a reason that has
+        // nothing to do with the diff.
+        app.remember_tool_output(
+            "edit-a",
+            "The file src/big.rs has been edited successfully.",
+        );
+        app
+    }
+
+    let mut app = edit_app();
+    let collapsed = flat_text(&crate::tui::operant_ui::prepare::prepare_messages(
+        &app, 80, 40,
+    ));
+    assert!(
+        collapsed.contains("edit src/big.rs (+40 -40)"),
+        "the collapsed row must render its diff header and counts — a bare \
+         summary means the diff block is gated off entirely, which is the \
+         regression this test exists to catch. got: {collapsed}"
+    );
+    assert!(
+        collapsed.contains("... 68 more changes ..."),
+        "a collapsed edit row must TRUNCATE the diff — the whole point of the \
+         click is that the rest is hidden until asked for. got: {collapsed}"
+    );
+    assert!(
+        !collapsed.contains("new_20 = 20"),
+        "the truncated middle must stay off screen until the row is expanded \
+         — the head and tail halves are deliberately kept so there is context \
+         at both ends. got: {collapsed}"
+    );
+
+    app.toggle_tool_expansion_by_id("edit-a");
+    let expanded = flat_text(&crate::tui::operant_ui::prepare::prepare_messages(
+        &app, 80, 40,
+    ));
+    assert!(
+        !expanded.contains("more changes"),
+        "an expanded row has nothing left to truncate, so the affordance must \
+         go away rather than sit there claiming more. got: {expanded}"
+    );
+    assert!(
+        expanded.contains("new_40 = 40"),
+        "the click must untruncate the diff — the tail of a long edit is exactly \
+         what an operator expands to see. got: {expanded}"
+    );
+    assert!(
+        expanded.contains("old_20 = 20"),
+        "both sides of the diff must arrive, not only the additions. got: {expanded}"
+    );
+
+    app.toggle_tool_expansion_by_id("edit-a");
+    let recollapsed = flat_text(&crate::tui::operant_ui::prepare::prepare_messages(
+        &app, 80, 40,
+    ));
+    assert!(
+        !recollapsed.contains("new_20 = 20"),
+        "a second click must truncate the diff again. got: {recollapsed}"
+    );
+    assert!(
+        recollapsed.contains("... 68 more changes ..."),
+        "collapsing must restore the teaser, not leave a blank row. got: {recollapsed}"
+    );
+}
+
+/// The process-wide diff mode as the App currently resolves it.
+///
+/// Split out so the test above guards on the GLOBAL mode rather than assuming
+/// it: if `diff_mode()` regresses to `Off` the expand test would still fail
+/// loudly (nothing renders), but the message would be about the header, not
+/// the toggle, and this names the actual defect.
+fn app_diff_mode_for_test() -> crate::tui::operant_app::config_shim::DiffDisplayMode {
+    make_app().diff_mode()
+}

@@ -98,6 +98,18 @@ pub(crate) fn hash_rendered_image_signature_fields(
 pub trait TuiState {
     // ---- Transcript ----
     fn display_messages(&self) -> &[DisplayMessage];
+    /// RT-146: the tool call whose full body the operator expanded, if any.
+    /// `None` means no row is expanded. One-at-a-time is the contract, so a
+    /// single `Option` is the whole surface.
+    ///
+    /// Needed by the prep layer because the DIFF body is parsed from the tool
+    /// call's input rather than from `msg.content`, so unlike tool-OUTPUT
+    /// expansion it cannot infer expansion from the text it is handed. The
+    /// message-lines cache keys on this value; without the key a click would
+    /// be served a stale collapsed row.
+    fn expanded_tool_id(&self) -> Option<&str> {
+        None
+    }
     fn display_user_message_count(&self) -> usize;
     /// Number of user prompts hidden before the first visible message because of
     /// compacted-history truncation. Used to keep prompt numbers absolute.

@@ -36,6 +36,7 @@ fn render_system_message_forces_system_color_on_all_spans() {
         &msg,
         80,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+        false,
     );
 
     assert!(!lines.is_empty(), "expected rendered system message lines");
@@ -60,6 +61,7 @@ fn render_cold_cache_warning_is_always_one_width_bounded_line() {
                 &msg,
                 width,
                 crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+                false,
             );
             assert_eq!(
                 lines.len(),
@@ -108,6 +110,7 @@ fn render_launch_hotkeys_keeps_both_shortcuts_visible() {
                 &msg,
                 width,
                 crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+                false,
             );
             assert_eq!(lines.len(), 1);
             assert_eq!(extract_line_text(&lines[0]).trim(), content);
@@ -140,6 +143,7 @@ fn render_compact_launch_and_divergence_notices_as_one_line() {
                     msg,
                     width,
                     crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+                    false,
                 );
                 assert_eq!(
                     lines.len(),
@@ -176,6 +180,7 @@ fn render_system_message_renders_markdown_formatting() {
         &msg,
         80,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+        false,
     );
     let plain = lines
         .iter()
@@ -220,6 +225,7 @@ fn render_system_message_preserves_indentation_and_newlines() {
         &msg,
         80,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+        false,
     );
     let rendered = lines.iter().map(extract_line_text).collect::<Vec<_>>();
 
@@ -276,6 +282,7 @@ fn render_system_message_centered_mode_left_aligns_with_padding() {
         &msg,
         80,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+        false,
     );
 
     assert!(!lines.is_empty(), "expected rendered system message lines");
@@ -312,6 +319,7 @@ fn render_system_message_uses_width_stable_titles_on_kitty() {
         &msg,
         80,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+        false,
     );
     let plain = lines
         .iter()
@@ -342,6 +350,7 @@ fn render_background_task_message_uses_box_and_truncates_preview_lines() {
         &msg,
         80,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+        false,
     );
     let plain = lines
         .iter()
@@ -374,6 +383,7 @@ fn render_background_task_message_strips_ansi_from_existing_preview() {
         &msg,
         80,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+        false,
     )
     .iter()
     .map(extract_line_text)
@@ -399,6 +409,7 @@ fn render_system_message_strips_ansi_from_existing_inline_command_preview() {
         &msg,
         80,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+        false,
     )
     .iter()
     .map(extract_line_text)
@@ -425,6 +436,7 @@ fn render_background_task_message_uses_swarm_flavor_for_swarm_tool() {
         &msg,
         100,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+        false,
     );
     let plain = lines
         .iter()
@@ -448,6 +460,7 @@ fn render_background_task_progress_message_uses_swarm_flavor_for_swarm_tool() {
         &msg,
         100,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+        false,
     );
     let plain = lines
         .iter()
@@ -469,6 +482,7 @@ fn render_background_task_progress_message_uses_box_with_progress_bar() {
         &msg,
         80,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+        false,
     );
     let plain = lines
         .iter()
@@ -542,6 +556,7 @@ fn render_overnight_message_uses_rounded_progress_card() {
         &msg,
         100,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+        false,
     );
     let plain = lines
         .iter()
@@ -594,6 +609,7 @@ fn render_todos_message_shows_grouped_card_with_status_glyphs() {
         &msg,
         100,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+        false,
     );
     let plain = lines
         .iter()
@@ -849,6 +865,7 @@ fn render_todos_message_shows_goal_scores_without_verbose_feedback() {
         &msg,
         100,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+        false,
     )
     .iter()
     .map(extract_line_text)
@@ -905,6 +922,7 @@ fn render_todos_message_shows_user_intention_when_understanding_is_unclear() {
         &msg,
         60,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+        false,
     )
     .iter()
     .map(extract_line_text)
@@ -937,6 +955,7 @@ fn render_todos_message_shows_user_intention_when_understanding_is_unclear() {
         &msg,
         100,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+        false,
     )
     .iter()
     .map(extract_line_text)
@@ -999,6 +1018,7 @@ fn render_todos_message_uses_readable_semantic_colors() {
         &msg,
         100,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+        false,
     );
     let color_for = |text: &str| {
         lines
@@ -1057,6 +1077,7 @@ fn render_todos_message_color_codes_every_intent_state() {
             &msg,
             100,
             crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+            false,
         );
         let rendered_color = lines
             .iter()
@@ -1108,6 +1129,7 @@ fn render_todos_message_collapses_passing_quality_gates() {
         &msg,
         100,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+        false,
     );
     let plain = lines
         .iter()
@@ -1162,6 +1184,7 @@ fn render_todos_message_wraps_goal_scores_at_narrow_widths() {
         &msg,
         40,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+        false,
     );
     let plain = lines
         .iter()
@@ -1184,6 +1207,7 @@ fn render_todos_message_empty_list_shows_placeholder() {
         &msg,
         100,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+        false,
     )
     .iter()
     .map(extract_line_text)
@@ -1200,6 +1224,7 @@ fn render_todos_message_bad_payload_falls_back_to_system() {
         &msg,
         100,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+        false,
     );
     assert!(!lines.is_empty());
 }
@@ -1256,6 +1281,7 @@ fn render_todo_tool_result_uses_borderless_card_with_goal_scores() {
         &msg,
         100,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+        false,
     )
     .iter()
     .map(extract_line_text)
@@ -1358,6 +1384,7 @@ fn render_todo_quality_gate_retry_shows_only_changed_goal_fields() {
         &msg,
         100,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+        false,
     )
     .iter()
     .map(extract_line_text)
@@ -1483,6 +1510,7 @@ fn render_todo_plan_update_card_shows_only_changed_intent_fields() {
         &msg,
         100,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+        false,
     )
     .iter()
     .map(extract_line_text)
@@ -1589,6 +1617,7 @@ fn unbiased_visual_prompt_retry_renders_complete_feedback_change() {
                 &msg,
                 72,
                 crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+                false,
             )
             .iter()
             .map(extract_line_text)
@@ -1729,6 +1758,7 @@ fn visually_appealing_prompt_batched_retry_renders_complete_todo_card() {
         &msg,
         84,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+        false,
     )
     .iter()
     .map(extract_line_text)
@@ -1823,6 +1853,7 @@ fn render_ownership_gated_todo_result_keeps_the_full_card() {
         &msg,
         100,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+        false,
     )
     .iter()
     .map(extract_line_text)
@@ -1847,6 +1878,7 @@ fn render_background_task_messages_prefer_display_name() {
         &completion,
         100,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+        false,
     )
     .iter()
     .map(extract_line_text)
@@ -1861,6 +1893,7 @@ fn render_background_task_messages_prefer_display_name() {
         &progress,
         100,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+        false,
     )
     .iter()
     .map(extract_line_text)
@@ -1886,6 +1919,7 @@ fn render_system_message_uses_scheduled_task_card() {
         &msg,
         100,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+        false,
     );
     let plain = lines
         .iter()
@@ -1927,6 +1961,7 @@ fn render_tool_message_uses_scheduled_card() {
         &msg,
         100,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+        false,
     );
     let plain = lines
         .iter()
@@ -1954,6 +1989,7 @@ fn render_assistant_message_renders_plan_block_as_card() {
         &msg,
         100,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+        false,
     );
     crate::tui::operant_app::markdown::set_center_code_blocks(saved);
     let plain = lines
@@ -1984,6 +2020,7 @@ fn render_assistant_message_plan_card_survives_unterminated_fence() {
         &msg,
         80,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+        false,
     );
     crate::tui::operant_app::markdown::set_center_code_blocks(saved);
     let plain = lines
@@ -2008,6 +2045,7 @@ fn render_assistant_message_plan_card_keeps_nested_fences_inside() {
         &msg,
         100,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+        false,
     );
     crate::tui::operant_app::markdown::set_center_code_blocks(saved);
     let plain = lines
@@ -2063,6 +2101,7 @@ fn render_assistant_message_truncates_tool_calls_to_single_line() {
         &msg,
         20,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+        false,
     );
     assert_eq!(extract_line_text(&lines[1]), "");
     let tool_lines: Vec<String> = lines
@@ -2113,6 +2152,7 @@ fn render_assistant_message_centers_single_line_tool_summary() {
         &msg,
         28,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+        false,
     );
     assert_eq!(extract_line_text(&lines[1]), "");
     let tool_lines: Vec<String> = lines
@@ -2163,6 +2203,7 @@ fn render_assistant_message_without_body_does_not_add_extra_blank_line_before_to
         &msg,
         28,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+        false,
     );
     let rendered: Vec<String> = lines.iter().map(extract_line_text).collect();
 
@@ -2184,6 +2225,7 @@ fn render_assistant_message_centered_mode_keeps_markdown_unpadded_for_center_ali
         &msg,
         120,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+        false,
     );
     let content_line = lines
         .iter()
@@ -2216,6 +2258,7 @@ fn render_assistant_message_recenters_structured_markdown_to_actual_width() {
         &msg,
         140,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+        false,
     );
     let rendered: Vec<String> = lines.iter().map(extract_line_text).collect();
     let bullets: Vec<&String> = rendered.iter().filter(|line| line.contains("• ")).collect();
@@ -2257,6 +2300,7 @@ fn render_system_message_centered_mode_caps_wrap_width_for_visible_gutters() {
         &msg,
         120,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+        false,
     );
     let rendered: Vec<String> = lines
         .iter()
@@ -2284,6 +2328,7 @@ fn render_system_message_uses_minimal_inline_style_for_reload_title() {
         &msg,
         80,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+        false,
     );
     let plain = lines
         .iter()
@@ -2317,6 +2362,7 @@ fn render_system_message_uses_connection_card_for_reconnect_status() {
         &msg,
         80,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+        false,
     );
     let plain = lines
         .iter()
@@ -2346,6 +2392,7 @@ fn render_swarm_message_centered_mode_caps_wrap_width_for_long_notifications() {
         &msg,
         120,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+        false,
     );
     let rendered: Vec<String> = lines.iter().map(extract_line_text).collect();
     let first_pad = rendered[0].chars().take_while(|c| *c == ' ').count();
@@ -2378,6 +2425,7 @@ fn render_swarm_message_collapsed_shows_tldr_and_expand_badge_only() {
         &msg,
         100,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+        false,
     );
     let plain = lines
         .iter()
@@ -2410,6 +2458,7 @@ fn render_swarm_message_expanded_shows_body_and_collapse_badge() {
         &msg,
         100,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+        false,
     );
     let plain = lines
         .iter()
@@ -2447,6 +2496,7 @@ fn render_tool_message_prefers_subagent_title_with_model() {
         &msg,
         80,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+        false,
     );
     let rendered: String = lines[0]
         .spans
@@ -2482,6 +2532,7 @@ fn render_tool_message_shows_intent_and_technical_preview_on_one_line() {
         &msg,
         120,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+        false,
     );
     let rendered = extract_line_text(&lines[0]);
 
@@ -2517,6 +2568,7 @@ fn render_tool_message_hides_technical_preview_by_default() {
         &msg,
         120,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+        false,
     );
     let rendered = extract_line_text(&lines[0]);
 
@@ -2557,6 +2609,7 @@ fn render_tool_message_keeps_error_summary_when_details_hidden() {
         &msg,
         120,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+        false,
     );
     let rendered = extract_line_text(&lines[0]);
 
@@ -2587,6 +2640,7 @@ fn render_tool_message_shows_token_badge() {
         &msg,
         120,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+        false,
     );
     let badge_span = lines[0]
         .spans
@@ -2620,6 +2674,7 @@ fn render_tool_message_hides_bash_output() {
         &msg,
         120,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+        false,
     );
     let rendered = lines.iter().map(extract_line_text).collect::<Vec<_>>();
 
@@ -2649,6 +2704,7 @@ fn render_tool_message_shows_bash_output_when_enabled() {
         &msg,
         120,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+        false,
     )
     .iter()
     .map(extract_line_text)
@@ -2694,6 +2750,7 @@ fn render_tool_message_shows_gmail_draft_card() {
         &msg,
         100,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+        false,
     );
     let plain = lines
         .iter()
@@ -2729,6 +2786,7 @@ fn render_gmail_draft_card_marks_failures_and_empty_fields() {
         &msg,
         80,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+        false,
     );
     let plain = lines
         .iter()
@@ -2766,6 +2824,7 @@ fn render_gmail_draft_card_wraps_attachments_and_shows_complete_long_body() {
         &msg,
         48,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+        false,
     );
     let rendered = lines.iter().map(extract_line_text).collect::<Vec<_>>();
     let plain = rendered.join("\n");
@@ -2813,6 +2872,7 @@ fn render_gmail_draft_card_preserves_html_like_body_text() {
         &msg,
         100,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+        false,
     )
     .iter()
     .map(extract_line_text)
@@ -2856,6 +2916,7 @@ fn render_batch_tool_message_shows_nested_gmail_draft_card() {
         &msg,
         100,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+        false,
     );
     let plain = lines
         .iter()
@@ -2907,6 +2968,7 @@ fn render_batch_tool_message_shows_flat_and_nested_subcall_intents() {
         &msg,
         120,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+        false,
     )
     .iter()
     .map(extract_line_text)
@@ -2958,6 +3020,7 @@ fn render_tool_message_shows_discovery_browse_results_and_rationale() {
         &msg,
         100,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+        false,
     );
     let plain = lines
         .iter()
@@ -3038,6 +3101,7 @@ fn batched_discovery_renders_without_disclosure_notice() {
         &msg,
         100,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+        false,
     );
     let plain = lines
         .iter()
@@ -3078,6 +3142,7 @@ fn render_tool_message_shows_selected_discovery_setup() {
         &msg,
         100,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+        false,
     );
     let plain = lines
         .iter()
@@ -3113,6 +3178,7 @@ fn render_tool_message_does_not_duplicate_selected_when_tool_is_missing() {
         &msg,
         100,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+        false,
     );
     let plain = lines
         .iter()
@@ -3139,6 +3205,7 @@ fn render_tool_message_marks_off_catalog_selection_without_fake_details() {
         &msg,
         100,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+        false,
     );
     let plain = lines
         .iter()
@@ -3178,6 +3245,7 @@ fn render_tool_message_shows_catalog_suggestion_receipt_and_trust_line() {
         &msg,
         100,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+        false,
     );
     let plain = lines
         .iter()
@@ -3216,6 +3284,7 @@ fn discovery_cards_wrap_within_narrow_transcript_width() {
         &msg,
         48,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+        false,
     );
     assert!(
         lines.iter().all(|line| line.width() <= 47),
@@ -3245,6 +3314,7 @@ fn render_tool_message_colors_high_token_badge() {
         &msg,
         120,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+        false,
     );
     let badge_span = lines[0]
         .spans
@@ -3280,6 +3350,7 @@ fn render_tool_message_shows_inline_diff_for_pascal_case_multiedit() {
         &msg,
         100,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Inline,
+        false,
     );
     let plain = lines
         .iter()
@@ -3316,6 +3387,7 @@ fn render_tool_message_labels_single_file_apply_patch_diff() {
         &msg,
         100,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Inline,
+        false,
     );
     let plain = lines
         .iter()
@@ -3352,6 +3424,7 @@ fn render_tool_message_preserves_multi_file_apply_patch_boundaries() {
         &msg,
         100,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Inline,
+        false,
     );
     let plain = lines
         .iter()
@@ -3396,6 +3469,7 @@ fn render_tool_message_shows_numbered_write_result_diff_after_input_compaction()
         &msg,
         100,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Inline,
+        false,
     );
     let plain = lines
         .iter()
@@ -3443,6 +3517,7 @@ fn render_tool_message_never_draws_an_empty_edit_diff_frame() {
             &msg,
             100,
             crate::tui::operant_app::config_shim::DiffDisplayMode::Inline,
+            false,
         );
         let plain = lines
             .iter()
@@ -3477,6 +3552,7 @@ fn render_tool_message_marks_a_skipped_call_as_neither_success_nor_failure() {
         &msg,
         100,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Inline,
+        false,
     );
     let plain = lines
         .iter()
@@ -3510,6 +3586,7 @@ fn render_tool_message_marks_failed_apply_patch_without_empty_diff() {
         &msg,
         100,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Inline,
+        false,
     );
     let plain = lines
         .iter()
@@ -3556,6 +3633,7 @@ fn render_tool_message_inline_mode_truncates_large_diffs() {
         &msg,
         40,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Inline,
+        false,
     );
     let plain = lines
         .iter()
@@ -3571,6 +3649,84 @@ fn render_tool_message_inline_mode_truncates_large_diffs() {
         "plain={plain}"
     );
     assert!(plain.contains("suffix_2_abcdefghijklm…"), "plain={plain}");
+}
+
+/// RT-146, plan 2026-11-03: a row the operator expanded shows its FULL diff
+/// even while the global mode is the collapsed `Inline` default.
+///
+/// This is the half of click-to-expand that tool-OUTPUT expansion cannot
+/// cover. `render_tool_message_inline_mode_truncates_large_diffs` above pins
+/// the collapsed shape, and `render_tool_message_full_inline_mode_shows_full_diff`
+/// pins the same body under the global `FullInline` mode - so the only thing
+/// this test can be about is the per-row flag, which is exactly the point.
+///
+/// The flag is not decoration: the diff body is parsed from the tool call's
+/// INPUT plus the message content, and neither changes when only the row's
+/// expansion toggles. That is why `MessageCacheKey` carries `row_expanded`
+/// (operant_model/cache.rs) - without it the row cache would hand back the
+/// collapsed body for an expanded row and the click would silently no-op.
+#[test]
+fn render_tool_message_row_expansion_uncollapses_the_diff() {
+    let old = (1..=7)
+        .map(|i| format!("old line {i}\n"))
+        .collect::<String>();
+    let new = (1..=7)
+        .map(|i| format!("new line {i} suffix_{i}_abcdefghijklmnopqrstuvwxyz0123456789\n"))
+        .collect::<String>();
+    let msg = DisplayMessage {
+        role: "tool".to_string(),
+        content: "Edited demo.txt".to_string(),
+        tool_calls: Vec::new(),
+        duration_secs: None,
+        title: Some("demo.txt".to_string()),
+        tool_data: Some(crate::tui::operant_model::vendor_types::ToolCall {
+            id: "call_edit_row_expanded".to_string(),
+            name: "edit".to_string(),
+            input: serde_json::json!({
+                "file_path": "demo.txt",
+                "old_string": old,
+                "new_string": new,
+            }),
+            intent: None,
+            thought_signature: None,
+        }),
+    };
+
+    let plain_of = |row_expanded: bool| {
+        render_tool_message(
+            &msg,
+            40,
+            crate::tui::operant_app::config_shim::DiffDisplayMode::Inline,
+            row_expanded,
+        )
+        .iter()
+        .map(extract_line_text)
+        .collect::<Vec<_>>()
+        .join("\n")
+    };
+
+    let collapsed = plain_of(false);
+    assert!(
+        collapsed.contains("... 2 more changes ..."),
+        "the collapsed row still truncates, exactly as the sibling test pins: \
+         plain={collapsed}"
+    );
+
+    let expanded = plain_of(true);
+    assert!(
+        !expanded.contains("more changes"),
+        "an expanded row must not truncate: plain={expanded}"
+    );
+    // The rows the collapsed form hid are the proof: the middle of the diff
+    // (`old line 3`) and the head the truncation dropped (`old line 1`).
+    assert!(
+        expanded.contains("old line 3"),
+        "the truncated middle must appear when the row is expanded: plain={expanded}"
+    );
+    assert!(
+        expanded.contains("old line 1"),
+        "the dropped head must appear when the row is expanded: plain={expanded}"
+    );
 }
 
 #[test]
@@ -3604,6 +3760,7 @@ fn render_tool_message_full_inline_mode_shows_full_diff() {
         &msg,
         40,
         crate::tui::operant_app::config_shim::DiffDisplayMode::FullInline,
+        false,
     );
     let plain = lines
         .iter()
@@ -3650,6 +3807,7 @@ fn render_tool_message_memory_recall_centered_mode_left_aligns_with_padding() {
         &msg,
         120,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+        false,
     );
     let rendered: Vec<String> = lines
         .iter()
@@ -3708,6 +3866,7 @@ fn render_tool_message_memory_store_centered_mode_left_aligns_with_padding() {
         &msg,
         120,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+        false,
     );
     let rendered: Vec<String> = lines
         .iter()
@@ -3757,6 +3916,7 @@ fn render_tool_message_shows_swarm_spawn_prompt_summary() {
         &msg,
         120,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+        false,
     );
     let rendered: String = lines[0]
         .spans
@@ -3801,6 +3961,7 @@ fn render_tool_message_batch_subcall_shows_swarm_dm_details() {
         &msg,
         120,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+        false,
     );
     let rendered = lines
         .iter()
@@ -3870,6 +4031,7 @@ fn render_assistant_message_plan_card_wraps_instead_of_truncating() {
             &msg,
             width,
             crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+            false,
         );
         let squashed = lines
             .iter()
@@ -3943,6 +4105,7 @@ fn render_swarm_message_preserves_inline_image_placeholder_lines() {
         &msg,
         100,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+        false,
     );
     assert!(!lines.is_empty());
 
@@ -3970,6 +4133,7 @@ fn render_empty_todo_tool_result_collapses_to_compact_line() {
         &msg,
         100,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+        false,
     )
     .iter()
     .map(extract_line_text)
@@ -4031,6 +4195,7 @@ fn a_subagent_live_todo_renders_in_the_accent_with_its_delegation_id() {
         &msg,
         100,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+        false,
     );
     let plain = lines
         .iter()
@@ -4096,6 +4261,7 @@ fn a_payload_without_live_ids_renders_unchanged() {
         &msg,
         100,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+        false,
     );
     let plain = lines
         .iter()
@@ -4156,6 +4322,7 @@ fn a_blocked_row_names_the_sibling_that_blocks_it() {
         &msg,
         100,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+        false,
     );
     let plain = lines
         .iter()
@@ -4212,6 +4379,7 @@ fn an_unresolvable_blocker_is_counted_not_dropped() {
         &msg,
         100,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+        false,
     );
     let plain = lines
         .iter()
@@ -4265,6 +4433,7 @@ fn a_completed_row_gets_no_blocker_label() {
         &msg,
         100,
         crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+        false,
     );
     let plain = lines
         .iter()

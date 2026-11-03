@@ -1424,6 +1424,12 @@ struct BodyRenderCtx<'a> {
     app: &'a dyn TuiState,
     width: u16,
     centered: bool,
+    /// RT-146: the tool call whose full body the operator expanded, if any.
+    /// One-at-a-time is the contract. Carried here because the DIFF body
+    /// cannot read it from the message content the way tool-OUTPUT
+    /// expansion can, and the message cache must key on it or a toggle is
+    /// served a stale collapsed row.
+    expanded_tool_id: Option<String>,
     /// Number rendered next to the first user prompt = global prompt count +
     /// number of prompts hidden by compaction.
     prompt_number_offset: usize,
@@ -1646,6 +1652,8 @@ fn render_message_into(
                 msg,
                 content_width,
                 app.diff_mode(),
+                // Not a tool row: per-row expansion does not apply.
+                false,
                 render_assistant_message,
             );
             let message_copy_targets = assistant_message_copy_targets(&msg.content, &cached);
@@ -1721,7 +1729,24 @@ fn render_message_into(
         }
         "tool" => {
             let tool_start_line = acc.lines.len();
-            let cached = get_cached_message_lines(msg, width, app.diff_mode(), render_tool_message);
+            // Is THIS row the one the operator expanded? `expanded_tool_id` is
+            // a single Option (one-at-a-time is the contract), so the answer
+            // is this row's own tool-call id matching it. Tool-OUTPUT
+            // expansion already reaches the renderer through msg.content
+            // (adapter.rs swaps in the retained full text); this is the same
+            // fact reaching the DIFF body, which is parsed from the tool
+            // call's input and therefore needs the flag passed explicitly.
+            let row_is_expanded = msg
+                .tool_data
+                .as_ref()
+                .is_some_and(|tc| ctx.expanded_tool_id.as_deref() == Some(tc.id.as_str()));
+            let cached = get_cached_message_lines(
+                msg,
+                width,
+                app.diff_mode(),
+                row_is_expanded,
+                render_tool_message,
+            );
             if let Some(target) = tool_message_copy_target(msg, cached.len()) {
                 acc.copy_targets
                     .push(offset_copy_target(target, tool_start_line));
@@ -1806,6 +1831,7 @@ fn render_message_into(
                 msg,
                 content_width,
                 app.diff_mode(),
+                false,
                 render_system_message,
             );
             let rows = cached
@@ -1838,6 +1864,8 @@ fn render_message_into(
                     msg,
                     content_width,
                     app.diff_mode(),
+                    // Not a tool row.
+                    false,
                     render_reasoning_message,
                 );
                 for line in cached {
@@ -1851,6 +1879,7 @@ fn render_message_into(
                 msg,
                 content_width,
                 app.diff_mode(),
+                false,
                 render_background_task_message,
             );
             for line in cached {
@@ -1859,8 +1888,14 @@ fn render_message_into(
         }
         "swarm" => {
             let content_width = width.saturating_sub(4);
-            let cached =
-                get_cached_message_lines(msg, content_width, app.diff_mode(), render_swarm_message);
+            let cached = get_cached_message_lines(
+                msg,
+                content_width,
+                app.diff_mode(),
+                // Not a tool row.
+                false,
+                render_swarm_message,
+            );
             for line in cached {
                 let line = align_if_unset(line, align);
                 let plain = ui::line_plain_text(&line);
@@ -1907,8 +1942,14 @@ fn render_message_into(
         }
         "usage" => {
             let content_width = width.saturating_sub(4);
-            let cached =
-                get_cached_message_lines(msg, content_width, app.diff_mode(), render_usage_message);
+            let cached = get_cached_message_lines(
+                msg,
+                content_width,
+                app.diff_mode(),
+                // Not a tool row.
+                false,
+                render_usage_message,
+            );
             for line in cached {
                 acc.push_auto(align_if_unset(line, align));
             }
@@ -1919,6 +1960,8 @@ fn render_message_into(
                 msg,
                 content_width,
                 app.diff_mode(),
+                // Not a tool row.
+                false,
                 super::messages::render_overnight_message,
             );
             for line in cached {
@@ -1931,6 +1974,8 @@ fn render_message_into(
                 msg,
                 content_width,
                 app.diff_mode(),
+                // Not a tool row.
+                false,
                 super::messages::render_todos_message,
             );
             for line in cached {
@@ -2023,6 +2068,7 @@ pub(super) fn prepare_body_incremental(
         app,
         width,
         centered,
+        expanded_tool_id: app.expanded_tool_id().map(str::to_string),
         prompt_number_offset: app.compacted_hidden_user_prompts(),
         total_prompts: app.display_user_message_count(),
         pending_count: input_ui::pending_prompt_count(app),
@@ -2373,6 +2419,7 @@ pub(super) fn prepare_body_prepended(
         app,
         width,
         centered,
+        expanded_tool_id: app.expanded_tool_id().map(str::to_string),
         prompt_number_offset: app.compacted_hidden_user_prompts(),
         total_prompts: app.display_user_message_count(),
         pending_count: input_ui::pending_prompt_count(app),
@@ -2671,6 +2718,7 @@ fn prepare_streaming_cached(
             app,
             width,
             centered,
+            expanded_tool_id: app.expanded_tool_id().map(str::to_string),
             prompt_number_offset: app.compacted_hidden_user_prompts(),
             total_prompts: app.display_user_message_count(),
             pending_count: input_ui::pending_prompt_count(app),
@@ -2721,6 +2769,7 @@ pub(super) fn prepare_body(
         app,
         width,
         centered,
+        expanded_tool_id: app.expanded_tool_id().map(str::to_string),
         prompt_number_offset: app.compacted_hidden_user_prompts(),
         total_prompts: app.display_user_message_count(),
         pending_count: input_ui::pending_prompt_count(app),

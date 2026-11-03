@@ -1490,6 +1490,9 @@ fn pinned_todo_band_lines(
                     &msg,
                     width,
                     app.diff_mode(),
+                    // The pinned todo card is not a tool row: per-row
+                    // expand/collapse does not apply to it.
+                    false,
                     super::messages::render_todos_message,
                 )
             })
