@@ -806,3 +806,53 @@ NOT built. The failure mode of guessing is worse than the gap: probing on a
 second fd races crossterm for the reply and can silently EAT the operator's
 first keystrokes, which is a worse regression than an imprecise hint row. The
 row is marked BLOCKED in the plan's sequencing table.
+2026-11-03: SIXTH VALIDATION PASS over this session's delivered claims -- every one
+re-derived against CURRENT origin/main (a peer has refactored under me), none
+relaxed, one materially strengthened.
+--------------------------------------------------------------------------------
+- RT-210 closed: CONFIRMED, and the check I had NOT run was the important one. I
+  had verified it in the main repo's WORKING TREE, which then carried
+  uncommitted WIP -- so the claim could have rested on code nobody else had.
+  render.rs is now clean at HEAD, origin/main matches it byte for byte, the
+  E0616 `ListItem.content` access is absent from both, and `cargo check -p
+  operant-cli --bin operant` finishes clean. Sound.
+- Arrows = empty state: CONFIRMED, with better evidence than I had. I had
+  inferred it from `record_user_turn` gating on completed turns. The repo's OWN
+  doc comment at agent/events.rs:587-591 states the mechanism verbatim -- a host
+  that loads an older session "gets either an EMPTY mark list ... The selector's
+  arrows then move an index over nothing and every key reads as dead". The
+  operator's complaint in the code's own words. The second cause it names (a
+  STRANGER's marks from whichever session turned last) is real but not in play,
+  because `reseed_user_turns_for_rehydration` re-derives per session.
+- Four guard tests: all four pass at tip, all four mutations still caught. M1
+  remove the hub Clear -> both the stale-cell and the guard test fail. M2 pad
+  reverts to `Line::from("")` -> stale-cell test fails. M3 caption back to the
+  wide glyph -> fails naming the leaked cell. M4 a Clear added to the selector ->
+  the guard refuses it. All four source files then md5-verified byte-identical to
+  origin/main, so the mutation sweep left nothing behind (and the derived
+  Cargo.lock the builds touched was reverted).
+- Session-hub Clear load-bearing: CONFIRMED at tip, re-derived rather than
+  trusted. A peer refactored operant_overlays.rs and the paint-fn list grew, so I
+  re-located it: `paint_session_hub` (line 540) holds exactly one full-frame
+  Clear (line 563) and it is the only one in any production paint fn.
+- RT-211 live in the deployed binary: CONFIRMED, and this check surfaced
+  something my earlier "deployed" claim did not cover -- ~/.local/bin/operant is
+  now md5 80e1bfed, a peer's redeploy over my 085a690e, so "my artifact is
+  deployed" is no longer literally true. What matters, and what holds, is that
+  the RUNNING gateway (started 08:22:20, executing that path) carries the fix:
+  `strings` finds `  >> Rewind to here` and ZERO wide-glyph instances, and a live
+  render of populated-filter produces `  >> Rewind to here ...` with no leaked
+  cell.
+- iter-1695 correction accurate: every cited figure re-derived. 168 bytes and
+  byte-identical debug/deployed: exact. 146 goldens / 128 pre-bump / 18 post:
+  exact. Rows 14-20 (seven intro rows) and 23 (`1>`) / 24 (status row): exact.
+  Nothing in the correction needed softening.
+
+PRE-EXISTING FAILURE SETTLED PROPERLY, not asserted: the mermaid `pinned_ui`
+failure is not mine, and this time it is PROVEN. Diffing the pinned/mermaid dirs
+between my base and tip shows 1051 changed lines -- a peer's work -- so a
+directory comparison could not settle it. A clean throwaway worktree at the
+pre-change base (33552dfd) runs the test and it FAILS there too. The worktree was
+then removed; its `vendor/` was tracked build provisioning rather than a peer's
+WIP, which I checked BEFORE force-removing (fleet rule 11), and the main repo's
+vendor/ is intact.
