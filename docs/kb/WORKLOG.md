@@ -688,3 +688,37 @@ iter-1689 adds the whole-viewport guard: only_the_session_hub_clears_the_whole_v
 DEPLOY: provenance gate caught a stale artifact first (mtime 06:34 predated the commit 06:54 because a bare touch does not invalidate cargo's fingerprint) -- rebuilt, artifact 07:20 postdates the commit, deployed to ~/.local/bin (the path the gateway unit actually executes; /usr/local/bin/operant is absent here and sudo is unavailable), gateway restarted 07:21 after the 07:21 deploy.
 
 LIVE VERIFICATION on the deployed binary: the caption renders '  >> Rewind to here . the prompt returns to the composer . 3 t...' -- no leaked cell, correct columns. Both caption-bearing corpus scenarios verify 0 drift. The two remaining rewind-scenario drifts are the PRE-EXISTING v0.2.1/v0.3.0 version-line staleness the peer root-caused in iter-1690 (the golden literally holds v0.2.1 while the binary emits v0.3.0), identical on the pristine base and not touched here.
+
+2026-11-03: CORRECTION to this session's own iter-1693 entry -- my claim was
+imprecise, and I would rather correct it than leave it standing.
+--------------------------------------------------------------------------------
+iter-1693 recorded that "the two remaining rewind-scenario drifts are the
+pre-existing v0.2.1/v0.3.0 version-line staleness". MEASURED BACK PROPERLY, that
+named a symptom rather than the cause. Rendering rewind-selector and
+rewind-selector-filter through the corpus runner's own Fixture (so the pinned
+ANTHROPIC_API_KEY at _run.py:122 really applies) and diffing against the
+committed goldens shows the golden holds an ENTIRE intro block the current
+renderer no longer paints: rows 14-20 ('operant . replay', 'operant',
+'/model to switch . Offline Capture', 'v0.2.1', '/login to add provider',
+'bulleted anthropic(key)', '~'), plus '1>' and the '~ API key Offline Capture'
+status row at 23-24. The version line is one row of seven.
+
+PROVENANCE: both goldens date to 45388d61 (iter-838), untouched for ~700
+iterations. The debug binary built from this tree and the deployed release
+render IDENTICALLY (168 bytes each), so the binary is not the variable -- the
+goldens are. This widens the peer's iter-1690 root cause rather than contradicting
+it: stale goldens from an older renderer state, of which the version bump is the
+most visible row.
+
+QUANTIFIED for triage: of 146 *.txt goldens under baselines/, 128 were last
+touched BEFORE the version bump and 18 at/after it (measured by bucketing each
+file's last commit's iteration number). So 'verify' reporting 66-68 DRIFTs is not
+a regression signal -- the corpus is a snapshot-refresh backlog until that
+clears, and no one landing a render change can distinguish "my frame moved" from
+"this golden is 700 iterations old". Refreshing one golden is not sufficient
+either: the intro block AND the status row move together, so a partial refresh
+leaves a file that fails for the other half.
+
+NOT TOUCHED: none of the 128 are my slice and all predate my work. The only
+goldens I refreshed are the two my change actually moved (the caption marker),
+and both verify 0 drift on the deployed binary.
