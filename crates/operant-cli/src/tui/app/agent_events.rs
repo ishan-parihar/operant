@@ -194,13 +194,7 @@ impl App {
                         .clone()
                         .unwrap_or_else(|| "Unknown error".to_string())
                 };
-                let all_lines: Vec<&str> = result_text.lines().collect();
-                let preview_lines = all_lines.len().min(3);
-                let mut preview = all_lines[..preview_lines].join("\n");
-                let remaining = all_lines.len().saturating_sub(preview_lines);
-                if remaining > 0 {
-                    preview.push_str(&format!("\n\u{2026} {} more lines", remaining));
-                }
+                let preview = tool_output_preview(&result_text, is_error);
                 self.remember_tool_output(&tool_id, &result_text);
                 if let Some(block) = self.tool_use_blocks.iter_mut().find(|b| b.id == tool_id) {
                     block.status = if is_error {
@@ -282,13 +276,7 @@ impl App {
             } => {
                 let tool_id = tool_call_id.clone();
                 let result_text = error;
-                let all_lines: Vec<&str> = result_text.lines().collect();
-                let preview_lines = all_lines.len().min(3);
-                let mut preview = all_lines[..preview_lines].join("\n");
-                let remaining = all_lines.len().saturating_sub(preview_lines);
-                if remaining > 0 {
-                    preview.push_str(&format!("\n\u{2026} {} more lines", remaining));
-                }
+                let preview = tool_output_preview(&result_text, true);
                 self.remember_tool_output(&tool_id, &result_text);
                 if let Some(block) = self.tool_use_blocks.iter_mut().find(|b| b.id == tool_id) {
                     block.status = ToolStatus::Error;
@@ -702,6 +690,50 @@ fn is_user_interrupt(error: &str) -> bool {
     error
         .trim_start_matches("Agent error: ")
         .starts_with("Interrupted by user")
+}
+
+/// Takes the preview from the TAIL, the way codex does it (`compact.rs:114`:
+/// `output.lines().rev().take(DETAIL_PREVIEW_LINES)`) — because the line the
+/// user wants for a build, a test run, or a migration is the one that says what
+/// happened, and that line is LAST. The head-3 form this replaces showed
+/// preamble instead: `Compiling`, packrat progress, curl noise.
+///
+/// Only the slice changes; the `… N more lines` suffix keeps its exact shape so
+/// an operator's reading of the row is unchanged, and the count now names the
+/// lines dropped from the TOP rather than the ones dropped from the bottom.
+///
+/// The `(no output)` row is codex's `compact.rs:127`: a successful call that
+/// produced nothing used to fall through operant's renderer to an EMPTY tool
+/// row — a blank line that reads as nothing rather than as a silent success.
+const TOOL_PREVIEW_LINES: usize = 3;
+
+/// The collapsed preview for a finished tool call: the LAST
+/// [`TOOL_PREVIEW_LINES`] rows in reading order, plus a `… N more lines` suffix
+/// for the head it dropped. An empty success renders as one dim `(no output)`
+/// row so the row is not a blank line. An empty failure keeps its empty
+/// preview untouched (the renderer invents `✗ failed` for it).
+///
+/// Before this took the tail it took `all_lines[..3]` — the FIRST three rows,
+/// which for a build or a test run is the `Compiling` preamble and never the
+/// verdict line.
+fn tool_output_preview(result_text: &str, is_error: bool) -> String {
+    let all_lines: Vec<&str> = result_text.lines().collect();
+    if all_lines.is_empty() {
+        // Codex says so with a dim row (`compact.rs:127`). The empty-failure
+        // case deliberately stays empty: `adapter.rs:395` renders `✗ failed`
+        // for it, and replacing that placeholder here would double the marker.
+        return if is_error {
+            String::new()
+        } else {
+            "(no output)".to_string()
+        };
+    }
+    let tail_start = all_lines.len().saturating_sub(TOOL_PREVIEW_LINES);
+    let mut preview = all_lines[tail_start..].join("\n");
+    if tail_start > 0 {
+        preview.push_str(&format!("\n\u{2026} {} more lines", tail_start));
+    }
+    preview
 }
 
 impl super::App {

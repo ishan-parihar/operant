@@ -41,17 +41,114 @@ This plan supersedes nothing. It is the acceptance sibling of the landed
 
 ---
 
+## Part 0 — The codex contrast (read this first; it changed the plan)
+
+Read from `../external-repos/codex/codex-rs` before writing any code:
+
+| surface | codex | operant today | verdict |
+|---|---|---|---|
+| collapsed preview lines | `output.lines().rev().take(DETAIL_PREVIEW_LINES)` — the **last** 3 lines (`exec_cell/compact.rs:114`) | `all_lines[..3]` — the **first** 3 (`agent_events.rs:197`) | **gap: port the tail-3 ordering** |
+| `DETAIL_PREVIEW_LINES` | 3 (`history_cell/activity_preview.rs:10`) | 3 (hardcoded `min(3)`) | same |
+| hidden-line count | `ActivityDisclosure::OutputLines(hidden)` where `hidden = retained - 3 + clipped_overflow` (`compact.rs:22-38`) | `… {n} more lines` appended to the *first* 3 | **gap: the count is right but it is attached to the wrong lines** |
+| empty-output row | `└ (no output)` dim row (`compact.rs:127`) | no such row; an empty call renders as `✗ failed` via the inference | **gap: port the row** |
+| expand interface | `HistoryCell::expanded_hyperlink_lines(width)` (`history_cell/mod.rs:266`), chosen per-cell by an `expanded: bool` | `expanded_tool_id` + `tool_full_outputs`, one at a time | **already better** — operant's is per-call and clickable |
+| file-edit diff | `create_diff_preview_with_links(changes, cwd, width, preview_lines)` — a *bounded preview* body, with `create_diff_summary_with_links` as the collapsed form (`diff_render.rs:364-393`) | `edit_tool_inline_diff_lines` + a head/tail truncation at `MAX_INLINE_DIFF_LINES = 12` with `… {n} more changes …`, and a `FullInline` mode that shows all of it (`ui_messages.rs:4580-4660`) | **parity, gated on the wrong axis** — see below |
+| per-row expand | `expanded: bool` passed per cell in `active_cell_owned_transcript_lines` (`chatwidget/activity_presentation.rs:26-38`) | global `app.diff_mode()` (`DiffDisplayMode::{Off,Inline,FullInline,File}`) | **gap: no per-row toggle** |
+
+The two gaps that matter, and why they matter for what the operator asked:
+
+1. **The tail-vs-head ordering.** For a long command — `cargo test`, a build, a migration — the
+   useful line is the LAST one. operant shows the first three, which for any
+   non-trivial command is preamble. This is the single highest-value line in
+   this plan.
+2. **The file-edit diff has no per-row expand.** `FullInline` is a *global config* mode: it
+   shows every edit inline, which is right for a short session and wrong for a
+   long-horizon one. Codex keeps the diff collapsed to a bounded preview and
+   lets the user expand the row they care about. The collapsible form is the
+   one that survives compaction.
+
+**The integration constraint that shapes the diff half.** `diff_mode` is part of
+the prep cache key (`ui_prepare.rs:763-790`), and `expanded_tool_id` is NOT.
+That is already correct for tool *output*: both toggles call
+`invalidate_transcript()` (`prompt.rs:141,170`), which bumps
+`transcript_version`, which is in the key, so the frame is rebuilt. A per-row
+diff expand must ride that same bump or it will read a cached collapsed row.
+
+**What is deliberately NOT ported.** Codex's `HistoryCell` trait object model,
+`HyperlinkLine`, `activity_ids()` grouping, `MotionMode`, bash syntax
+highlighting, and its 2,745-line `diff_render.rs`. Those are a different
+architecture; operant's `EditToolRange`/`ToolRowRange` row-map seam already
+carries the two facts the click needs, and `edit_tool_inline_diff_lines`
+already produces the parsed diff. Reusing those is the `/ponytail` port: new
+behaviour, no new machinery.
+
+---
+
 ## Scope
 
-Two additions and two scenarios. No behaviour change, no new dependency, no new
-config key.
+Four additions. No new dependency, no new config key, no new baseline golden.
 
 | # | Change | File |
 |---|---|---|
-| 1 | Expose tool-row state in `debug_snapshot` | `crates/operant-cli/src/tui/app/commands.rs` |
-| 2 | Regression unit test pinning the new keys | `crates/operant-cli/src/tui/app/tests.rs` |
-| 3 | A corpus scenario that clicks a tool row and asserts expansion | `crates/operant-cli/tests/tui_scenarios/tool-row-click-expands.scenario.json` |
-| 4 | Its collapse-half sibling | `crates/operant-cli/tests/tui_scenarios/tool-row-click-collapses.scenario.json` |
+| 1 | Collapsed preview takes the **last** lines and adds a `(no output)` row | `crates/operant-cli/src/tui/app/agent_events.rs` |
+| 2 | Expose tool-row state in `debug_snapshot` | `crates/operant-cli/src/tui/app/commands.rs` |
+| 3 | Regression unit test pinning the new keys and the tail-3 contract | `crates/operant-cli/src/tui/app/tests.rs` |
+| 4 | Two corpus scenarios asserting expansion state | `crates/operant-cli/tests/tui_scenarios/*.scenario.json` |
+
+### Change 1 in detail — the tail-3 port
+
+`agent_events.rs:197` today:
+
+```rust
+let preview_lines = all_lines.len().min(3);
+let mut preview = all_lines[..preview_lines].join("\n");
+let remaining = all_lines.len().saturating_sub(preview_lines);
+```
+
+becomes codex's ordering — the **last** three, in reading order, with the
+hidden count carrying the lines that fell off the top:
+
+```rust
+const TOOL_PREVIEW_LINES: usize = 3;
+let tail_start = all_lines.len().saturating_sub(TOOL_PREVIEW_LINES);
+let mut preview = all_lines[tail_start..].join("\n");
+let remaining = tail_start;
+```
+
+The `… {n} more lines` suffix is unchanged in form; only which lines it counts
+changes (`n` now counts the *hidden head*, not the dropped tail).
+
+The `(no output)` row: when a successful call produced no output at all,
+operant currently stores an empty preview and the row's renderer falls through
+to the failure marker. Add codex's `(no output)` row so a silent success reads
+as silent rather than failed. Gated on `!is_error` so the failure path is
+untouched.
+
+**Not** touched: `intent` / the tool-call description column
+(`ui_tools.rs:17-24`, `show_tool_call_details`), the `✗`/`⊘`/`✓` status
+markers, `tool_output_looks_failed`, and the compaction-facing
+`output_preview` field's existence. Only *which lines* it holds changes.
+
+### Change 2 — the per-row diff expand
+
+Deliberately deferred to a sibling plan. Reasons, measured not guessed:
+
+- The diff render reads global `app.diff_mode()` and is reached through a
+  message-lines cache keyed on `(content_len, content_width, centered,
+  diff_mode, cached_len)` (`ui_prepare.rs:31-36, 168-173`). A per-row toggle has
+  to either thread a per-row state into that key or bypass the cache for the
+  expanded row. Both are real design decisions with blast radius across
+  `FullPrepCacheKey`, the head/tail prefix reuse at `ui_prepare.rs:2505-2522`,
+  and `ui_memory_estimates.rs`.
+- `FullInline` already delivers the *content* the operator asked for — every
+  edit's full diff, no truncation — without any new machinery. The missing
+  piece is that it is global, not that it is absent.
+- Shipping the tail-3 fix (high value, ~6 lines) in the same iteration as a
+  cache-key redesign would bury it.
+
+The sibling plan's job is to make `DiffDisplayMode` per-row-capable by reusing
+`ToolRowRange` (already click-mapped) and `edit_tool_inline_diff_lines`
+(already parsed), with the cache-key change proven by a mutation test.
 
 No change is needed in `cmd_tui_debug.rs`: `evaluate_assertions`
 (`cmd_tui_debug.rs:1355`) navigates the snapshot by dot-path generically, so a
@@ -69,6 +166,9 @@ new key is assertable the moment it exists.
 - It does not turn `show_bash_output` on. See Part 3b — that is the one lever
   that would make a *screen* oracle possible, and it is a behaviour change, not
   a test-harness change.
+- It does not port codex's `HistoryCell` trait model, `HyperlinkLine`,
+  `activity_ids()` grouping, `MotionMode`, bash syntax highlighting, or
+  `diff_render.rs`. See Part 0.
 
 ---
 

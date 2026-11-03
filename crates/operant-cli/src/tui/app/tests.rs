@@ -11131,6 +11131,82 @@ fn a_clicked_tool_row_renders_its_full_output() {
     );
 }
 
+/// The click-to-expand contract as the HEADLESS HARNESS sees it.
+///
+/// `a_clicked_tool_row_renders_its_full_output` above proves the click reaches
+/// the pixels, but it runs in-process with `prepare_messages` reading the
+/// toggle's live state. The headless `debug_snapshot`-driven path cannot
+/// reach that: the collapsed preview body is gated behind
+/// `show_tool_call_details`, and `tests_show_bash_output_override` is
+/// `#[cfg(test)]` in THIS crate, so a shipped `operant tui debug simulate`
+/// process cannot flip it. A screen assertion in the scenario corpus is
+/// therefore structurally impossible for this feature — state is the only
+/// observable that survives the trip to the harness.
+///
+/// This pins the three keys the corpus asserts on. Without them a future
+/// regression that stops publishing the toggle breaks the feature while every
+/// existing scenario stays green.
+///
+/// Deliberately NOT in `overlays`: an open tool row is not a modal, and
+/// `any_modal_open` gates error-modal precedence, toast suppression and key
+/// routing (see the comment on `usage_overlay` in `commands.rs`).
+#[test]
+fn debug_snapshot_exposes_tool_row_expansion_state() {
+    let mut app = app_with_three_clickable_tools();
+
+    let snap = app.debug_snapshot();
+    assert!(
+        snap["overlays"].get("expanded_tool_id").is_none(),
+        "tool-row expansion must NOT land in `overlays` — it would make \
+         `any_modal_open` claim a modal is open, which changes real routing"
+    );
+    let mut calls = snap["tool_calls_seen"]
+        .as_array()
+        .expect("tool_calls_seen must be an array")
+        .iter()
+        .map(|v| v.as_str().expect("ids must be strings").to_string())
+        .collect::<Vec<_>>();
+    calls.sort();
+    assert_eq!(
+        calls,
+        vec!["call-0", "call-1", "call-2"],
+        "every tool call in the transcript must be visible to the harness"
+    );
+    let mut retained = snap["tool_full_outputs"]
+        .as_array()
+        .expect("tool_full_outputs must be an array")
+        .iter()
+        .map(|v| v.as_str().expect("ids must be strings").to_string())
+        .collect::<Vec<_>>();
+    retained.sort();
+    assert_eq!(
+        retained, calls,
+        "the click target must be exactly the retained set: a row whose full \
+         output was evicted is inert (`clicking_an_evicted_tool_row_...`), and \
+         an id retained with no row would expand nothing"
+    );
+    assert!(
+        snap["expanded_tool_id"].is_null(),
+        "nothing is expanded before the first click"
+    );
+
+    app.toggle_tool_expansion_by_id("call-1");
+    assert_eq!(
+        app.debug_snapshot()["expanded_tool_id"],
+        serde_json::json!("call-1"),
+        "the snapshot must carry the id the click selected — a stale or absent \
+         key is exactly the silent regression this plan closes"
+    );
+
+    // Second click on the same row collapses, and the key must say so rather
+    // than staying stuck at the old id.
+    app.toggle_tool_expansion_by_id("call-1");
+    assert!(
+        app.debug_snapshot()["expanded_tool_id"].is_null(),
+        "collapse must be observable, not a state-only change the harness misses"
+    );
+}
+
 /// A row whose full output was evicted by the bounded budget must be a no-op
 /// that SAYS so, never a silent swallow and never a panic.
 #[test]

@@ -124,6 +124,10 @@ impl App {
             "focus": format!("{:?}", self.focus),
             "token_count": self.token_count,
             "any_modal_open": self.any_modal_open(),
+            overlays.insert(
+                "expanded_tool_id".to_string(),
+                serde_json::Value::String(self.expanded_tool_id.clone().unwrap_or_default()),
+            );
             "overlays": serde_json::Value::Object(overlays),
             // Non-modal surfaces, deliberately NOT in `overlays`:
             // `any_modal_open()` is derived from `overlay_flags()`, and both
@@ -146,6 +150,23 @@ impl App {
             "selection_area_w": self.last_selectable_area.get().width,
             "selection_area_h": self.last_selectable_area.get().height,
             "selection_text": self.selection_text.borrow().clone(),
+            // Tool-row expansion (RT-146) — the click/Ctrl+O toggle's state
+            // exposure. Deliberately beside `selection_*` and NOT in
+            // `overlays`: an open tool row is not a modal, so folding these
+            // in would make `any_modal_open` lie (same reason as the two
+            // above). The scenario corpus asserts on these because the
+            // collapsed preview is gated behind `show_bash_output`, which
+            // defaults to false and is `#[cfg(test)]`-only in this crate
+            // (`tests_show_bash_output_override`) — a simulated run cannot
+            // flip it, so a screen oracle is STRUCTURALLY impossible for
+            // this feature. State is the only observable that reaches the
+            // harness.
+            "tool_full_outputs": self.tool_full_outputs.keys().cloned().collect::<Vec<_>>(),
+            "tool_calls_seen": self
+                .tool_use_blocks
+                .iter()
+                .map(|b| b.id.clone())
+                .collect::<Vec<_>>(),
             // Terminal-scroll mode (P5): scenarios assert the mode is
             // live from config and that emission never re-emits (the
             // watermark only advances). insert_before is inert on the
