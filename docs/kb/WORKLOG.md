@@ -984,3 +984,22 @@ who never discovers the fallback. The operator's actual reported symptom --
 and live-verified. That materially weakens the case for ~120 lines plus a
 surplus-byte policy on the input path, and ASKS Q4 should be re-asked with this
 in view rather than as though the user were stuck.
+
+2026-11-03: iteration-label collision NOTE (iter-1701 held by two commits)
+--------------------------------------------------------------------------------
+Two commits on origin/main carry the label iter-1701: mine, 229cd40b ("withdraw
+the runtime-inference route"), and a peer's, c648fdde ("prove the whole-viewport
+guard can fail"). I computed 1701 from origin/main's top label, and the peer
+pushed between my lookup and my push -- the exact read-then-write race the
+protocol warns about (three prior duplicates: iter-516, iter-518, iter-529).
+
+Recorded here as the protocol requires, and deliberately NOT fixed: force-pushing
+to renumber published history is worse than the duplicate, because an audit trail
+that can be rewritten is not one. Both commits are legitimate, distinct work and
+neither was amended or removed. My next label (iter-1702) was verified free and
+has exactly one instance.
+
+The check that would have caught it is the one I ran on the wrong revision: I
+confirmed 'ahead == 1' against origin/main and pushed, but origin had already
+moved by the time push executed. The gap is between the check and the push, not
+in the check itself.
