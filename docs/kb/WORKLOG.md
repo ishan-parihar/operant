@@ -857,9 +857,14 @@ then removed; its `vendor/` was tracked build provisioning rather than a peer's
 WIP, which I checked BEFORE force-removing (fleet rule 11), and the main repo's
 vendor/ is intact.
 
-2026-11-03: a THIRD route for G-6 that the blocker made visible -- infer it at
-runtime, no fd and no fork
+2026-11-03: WITHDRAWN -- the "third route for G-6" (runtime inference) does not
+work. Superseded by the correction immediately below this one. Kept rather than
+deleted because the mistake is instructive: I read crossterm's parser far enough
+to see that `CSI ... u` decodes with the shift modifier and stopped there,
+without asking what the counter-case decodes to. Read the next entry.
 --------------------------------------------------------------------------------
+[original text, now known false] 2026-11-03: a THIRD route for G-6 that the
+blocker made visible -- infer it at runtime, no fd and no fork
 The previous entry framed G-6's remaining half as blocked between two options,
 both of which assume the answer must come from a STARTUP PROBE. Pushed one step
 further and found that assumption unnecessary.
@@ -894,6 +899,46 @@ size of each. The three routes, for the record:
                             silently eat the operator's first keystrokes: a
                             worse regression than the gap it closes.
   B own our own fd, probe before crossterm's loop starts, surplus-byte policy.
-  C infer at runtime.     -- RECOMMENDED, see above.
+  C infer at runtime.     -- RECOMMENDED, see above. [NOW KNOWN FALSE -- the
+                            whole premise was wrong, see the entry that follows]
   (forking crossterm for buffer_input -- REJECTED: supply-chain and maintenance
    cost on a hot input path, for one function.)
+
+2026-11-03: the third route is WITHDRAWN -- runtime inference cannot work, and
+the reason is a near-miss worth recording
+--------------------------------------------------------------------------------
+I went back over route C's premise and it does not hold. Two independent
+reasons, either of which alone kills it:
+
+1. THE NEGATIVE CASE HAS NO DISTINGUISHING BYTES. The claim was "a chord the
+   operator pressed that arrives as plain Enter IS the evidence". It is not: a
+   terminal that ignores the push and a user who really pressed plain Enter send
+   the SAME byte, a bare \r. parse.rs:92 maps both to an unmodified
+   KeyCode::Enter. Nothing downstream can tell them apart, because nothing
+   upstream arrived differently.
+
+2. THE POSITIVE CASE IS UNREACHABLE TOO, AND THAT ONE IS A GENUINE NEAR MISS.
+   Crossterm DOES parse the terminal's real flags: parse.rs:259
+   parse_csi_keyboard_enhancement_flags reads 'ESC [ ? flags u' -- which is
+   exactly codex's query reply -- and returns
+   InternalEvent::KeyboardEnhancementFlags(flags). Had I found that first I
+   would have had the answer with no new fd. But event.rs:251 is the entire
+   conversion at the API boundary:
+
+       match read_internal(&EventFilter)? {
+           InternalEvent::Event(event) => Ok(event),
+           #[cfg(unix)] _ => unreachable!(),
+       }
+
+   Only InternalEvent::Event survives. Everything else -- including the flags we
+   want -- is parsed and then DROPPED. So the information crossterm computes is
+   unreachable from crossterm's public API.
+
+THE HABIT THAT CAUSED IT: I read parse.rs far enough to find the arm that made
+my claim TRUE and stopped, without reading the arm that would have made it
+false. Confirming evidence is easy to find and proves nothing on its own; you
+have to go looking for the counter-case.
+
+What this leaves: route B (own our own fd, probe before crossterm's loop starts,
+with a surplus-byte policy) is the only buildable option, and ASKS Q4 now asks
+the owner to choose between building it and accepting the gap.
