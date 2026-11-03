@@ -811,4 +811,87 @@ mod tests {
         assert!(frames > 0, "no row paints through the Frame sink");
         assert!(buffers > 0, "no row paints through the Buffer sink");
     }
+
+    /// THE WHOLE-VIEWPORT GUARD — the invariant RT-211 lives under.
+    ///
+    /// Two pages in this file cover the entire viewport (`paint_session_hub`
+    /// and `paint_rewind_selector`); every other overlay is a centred dialog
+    /// sized to its own content, which the cell diff handles fine. Exactly one
+    /// of the two MAY hold a full-frame `Clear`, and the reason it must hold it
+    /// is the operator's 2026-11-02 report: `terminal.draw` flushes a CELL
+    /// DIFF, so a frame writes only the cells its own widgets touch.
+    ///
+    /// This asserts both halves, because either one alone leaves a silent gap:
+    ///
+    /// 1. the rewind selector holds NO `Clear` — it must cover the area itself,
+    ///    by padding with REAL SPACES. An empty `Line::from("")` has no
+    ///    graphemes, so `render_line` writes no cells for it and the row keeps
+    ///    the previous frame's text. A `Clear` here would be the easy fix and
+    ///    would mask the pad's absence, which is precisely the regression the
+    ///    two stale-cell tests in `render/mod.rs` exist to catch. So this guard
+    ///    refuses it.
+    /// 2. the session hub DOES hold exactly one `Clear` on the full frame.
+    ///    Its panes each own only their own chunk, so a page-level clear is the
+    ///    only place that can fix the leak for the whole viewport.
+    ///
+    /// Both are source assertions because neither is reachable as a unit
+    /// behaviour: a single fresh-buffer frame paints identically either way.
+    /// Read this together with the RT-211 lesson — a WIDE glyph in a line whose
+    /// row can move has the same one-cell hole as an unpainted row, so the
+    /// selector's caption marker is deliberately narrow.
+    #[test]
+    fn only_the_session_hub_clears_the_whole_viewport() {
+        let selectors = body_of("fn paint_rewind_selector(");
+        assert!(
+            !selectors.contains("widgets::Clear"),
+            "the rewind selector must NOT clear the frame: it must cover the area \\
+             itself with real-space padding, or the pad's absence goes undetected \\
+             (both stale-cell regressions live in render/mod.rs)"
+        );
+
+        let hub = body_of("fn paint_session_hub(");
+        let clears = hub.matches("widgets::Clear").count();
+        assert_eq!(
+            clears, 1,
+            "the session hub must clear the viewport exactly once; the operator's \\
+             2026-11-02 stale-screen report is what one full-frame Clear fixes"
+        );
+    }
+
+    /// The BODY of one paint fn in this file. Source-level on purpose: the
+    /// invariant is about WHICH widget the function renders, which no buffer
+    /// comparison can see (a fresh TestBackend paints identically with and
+    /// without the Clear).
+    ///
+    /// The needle must be DECLARATION-SHAPED (`fn paint_x(`) and callers pass
+    /// the `fn ` prefix deliberately: a bare name matches the doc comments that
+    /// name these fns — including the comment in this very test — and the first
+    /// match wins, so the body extracted would be whatever prose comes first.
+    /// Measured: `paint_session_hub` without the prefix found this test's own
+    /// doc comment and reported two Clears. That is the same substring-guard
+    /// shape that has failed in this repo five times (RG/RT-209's history),
+    /// which is why the helper takes the prefix and the doc says so.
+    fn body_of(decl: &str) -> String {
+        let src = include_str!("operant_overlays.rs");
+        let start = src
+            .find(decl)
+            .unwrap_or_else(|| panic!("{decl} is not in operant_overlays.rs"));
+        let open = src[start..].find('{').expect("a paint fn has a body") + start;
+        let mut depth = 0usize;
+        let mut end = open;
+        for (offset, ch) in src[open..].char_indices() {
+            match ch {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = open + offset + 1;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        src[open..end].to_string()
+    }
 }
