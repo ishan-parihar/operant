@@ -673,3 +673,18 @@ shift-enter-newline) pass under the SAME snapshot and the same storm:
 OPEN: regenerating the corpus goldens for the 0.3.0 version + placeholder
 footer is a separate, fleet-visible task. Not taken here -- it rewrites ~68
 files another agent may be editing, and it is not the operator-reported bug.
+- **2026-11-03T07:27** — iter-1685/1687/1689 landed and deployed. The operator report is fully closed.
+
+SUMMARY OF THE CLOSE-OUT (all three iterations in one place):
+
+RT-211 (the rewind caption's stale cell), CLOSED iter-1685. Root cause is a WIDE-GLYPH diff hole -- the same family as the operator's stale-screen report but a different mechanism. The marker was U+23EA (wide); ratatui's Paragraph diff writes a wide grapheme at its column and does NOT rewrite its continuation cell. Closing the filter shrinks the header from two rows to one, so the caption's row slides up onto the row that held '  filter: ', and the caption's second space is served from that stale cell (the filter field's 'i'). Fix: a narrow marker ('>>'). Mutation-proven: restoring the wide glyph fails with the operator's own '  ⏪i Rewind to here ...' in the assertion message. Goldens refreshed as the row required.
+
+THE LEDGER'S OWN ROOT CAUSE WAS WRONG and is corrected in place (iter-1687): it pinned the defect on buffer_rows() reading the style dump. Measured: the TestBackend's cell really does hold the old text, so the probe was honest; the column arithmetic was right for the wrong reason. The defect is in the render.
+
+RT-210 (the fleet blocker), verified CLOSED by the peer's fix -- cargo check clean, no ListItem.content private-field access. Count prose Seven -> Five (RG-016).
+
+iter-1689 adds the whole-viewport guard: only_the_session_hub_clears_the_whole_viewport pins that the hub holds exactly one Clear and the selector holds NONE (it must pad with real spaces instead, or the pad's absence goes undetected). Mutation-proven both ways. The body extractor takes a DECLARATION-SHAPED needle because a bare name matched this test's own doc comment and counted two Clears -- the sixth substring-shaped guard defect in this repo's history, recorded at the site.
+
+DEPLOY: provenance gate caught a stale artifact first (mtime 06:34 predated the commit 06:54 because a bare touch does not invalidate cargo's fingerprint) -- rebuilt, artifact 07:20 postdates the commit, deployed to ~/.local/bin (the path the gateway unit actually executes; /usr/local/bin/operant is absent here and sudo is unavailable), gateway restarted 07:21 after the 07:21 deploy.
+
+LIVE VERIFICATION on the deployed binary: the caption renders '  >> Rewind to here . the prompt returns to the composer . 3 t...' -- no leaked cell, correct columns. Both caption-bearing corpus scenarios verify 0 drift. The two remaining rewind-scenario drifts are the PRE-EXISTING v0.2.1/v0.3.0 version-line staleness the peer root-caused in iter-1690 (the golden literally holds v0.2.1 while the binary emits v0.3.0), identical on the pristine base and not touched here.
