@@ -51,7 +51,7 @@ checklist = [
 never_commit = [".serena/**", "target/**", "**/*.genome-lock", ".genome/**"]
 
 [card]
-architecture = "AGENTS.md#Architecture Overview"
+architecture = "docs/ARCHITECTURE.md"
 status_into = "docs/handoff/STATE.md"
 
 [ops]
