@@ -628,3 +628,48 @@ FIX: a NARROW marker ('>>'), one cell wide, so the diff rewrites every column th
 GOLDENS: both populated-filter and populated-navigate carried the wide glyph and were refreshed, as the row required. The rewind-selector-filter drift is PRE-EXISTING and untouched -- it drifts on the pristine base too and its golden holds no caption at all.
 
 RT-210 (the fleet blocker) is closed by the peer's fix: cargo check -p operant-cli --bin operant finishes clean from the shared tree and render.rs holds no ListItem.content private-field access. Verified without touching the file. Ledger count prose corrected Seven -> Five (RG-016's lesson: the count and the checkboxes must be re-derived together).
+
+2026-11-03: the 68-scenario corpus drift storm is STALE GOLDENS, not a regression
+--------------------------------------------------------------------------------
+Full-corpus `python3 _run.py verify` reports 66-68 DRIFTs, and it is not a code
+regression. Two independent, pre-existing causes, both in the footer/status rows
+that EVERY scenario renders:
+
+  1. `- v0.2.1 / + v0.3.0` -- the workspace version bump from 0fb3cc58
+     (iter-1359). Every golden still carries v0.2.1.
+  2. `-1> / +  > Ask operant to do any...` -- the composer placeholder
+     (`operant_ui/composer.rs:60` PLACEHOLDER = "Ask operant to do anything"),
+     which is IDENTICAL at e3bcaabd and HEAD.
+
+Neither is in the three files the iter-1677 submit/newline fix touched
+(cmd_tui_debug.rs, app/messaging.rs, app/tests.rs). The deployed binary built
+from that push shows the same two lines, so the storm predates it.
+
+METHOD (the honest part, since two of my own intermediate conclusions were
+wrong and I am recording them):
+
+  - I first read the run as "the shared target/debug/operant was deleted by a
+    peer build mid-corpus" -- I had caught a real FileNotFoundError once, but
+    the storm reproduced against a stable /var/tmp snapshot, so that theory
+    died. Do not repeat it.
+  - I then diffed by hand with `--keys '<f8>'` in my real HOME and concluded
+    the config/env made it drift. WRONG: theme-screen needs a fresh fixture
+    HOME + PINNED_CONFIG. The corpus's own Fixture is the only valid setup.
+  - The correct method: drive `_run.py`'s own `render()` with
+    `gate_text`/`gate_style` and read the tool's unified diff (it prints
+    `@@ ...` plus the +/- rows). That is the artifact that names the cause.
+
+HOW TO AVOID THE TRAP: `verify` counts ANY nonzero rc as DRIFT, including a
+crash, so a disappearing binary, a permission-denied baseline path, or a stray
+`$R` unset in a subshell all masquerade as drift. Confirm the tool actually
+rendered (it prints "Simulation succeeded without errors") before believing a
+diff.
+
+WORKFLOW/CORRECTNESS NOTE: my two scenarios (failed-turn-no-duplicate-prompt,
+shift-enter-newline) pass under the SAME snapshot and the same storm:
+`verify --only failed-turn-no-duplicate-prompt --only shift-enter-newline`
+-> 2 gated, 0 drift. So the fix is proven and the storm is fleet-wide staleness.
+
+OPEN: regenerating the corpus goldens for the 0.3.0 version + placeholder
+footer is a separate, fleet-visible task. Not taken here -- it rewrites ~68
+files another agent may be editing, and it is not the operator-reported bug.
