@@ -11207,3 +11207,147 @@ fn published_tool_regions_start_at_the_prepared_frames_ranges() {
         );
     }
 }
+
+/// RT-211: the rewind selector's caption must survive a filter close.
+///
+/// The operator's report nets here into the "stale elements ... orphan text
+/// letters" family: closing the filter rendered the caption as
+/// `\u{23ea}i Rewind to here` instead of `  \u{23ea}  Rewind ...` — the `i` is
+/// the filter field's own, parked in the caption marker's continuation cell.
+///
+/// The mechanism, measured rather than inferred (two frames on one terminal,
+/// both through `draw_rewind_selector`): `⏪` is a WIDE glyph, so ratatui's
+/// `Paragraph` writes its grapheme at one column and treats the NEXT cell as
+/// the continuation WITHOUT rewriting it. Closing the filter shrinks the
+/// header from two rows to one, so the caption's row slides UP onto the row
+/// that held `  filter: ` — whose third character is `i` — and the caption's
+/// second space is served from that stale cell instead of being written. With
+/// a wide marker the whole caption also ends up one column right of where it
+/// belongs.
+///
+/// The fix is a NARROW marker. This test is what keeps it narrow: restoring
+/// the wide glyph makes it fail naming the leaked cell.
+#[test]
+fn the_rewind_caption_survives_a_filter_close() {
+    let mut app = make_app();
+    assert!(app.handle_tui_command("rewind", ""));
+    // The seeding recipe the selector's OWN render tests use (RT-205's), because
+    // two things must be true for the caption to be reachable at all, and
+    // seeding `entries` directly satisfies neither: the app needs user messages
+    // whose positions `user_prompt_index` can resolve a mark against, and
+    // `core_rewind_marks` must carry that mark source. Without them `sel_end`
+    // stays unresolved, the caption block is skipped entirely, and the test
+    // would be green over a frame with no caption in it.
+    let mut marks = Vec::new();
+    for i in 0..2 {
+        let prompt = format!("prompt number {i}");
+        app.messages
+            .push(crate::tui::adapter_types::types::Message {
+                role: crate::tui::adapter_types::types::Role::User,
+                content: crate::tui::adapter_types::types::MessageContent::Text(prompt.clone()),
+            });
+        marks.push((100 + i as u64, prompt));
+        app.messages
+            .push(crate::tui::adapter_types::types::Message {
+                role: crate::tui::adapter_types::types::Role::Assistant,
+                content: crate::tui::adapter_types::types::MessageContent::Text(format!(
+                    "answer number {i}"
+                )),
+            });
+    }
+    app.core_rewind_marks = Some(std::sync::Arc::new(
+        crate::tui::rewind_marks::RewindMarksSource::new(
+            marks
+                .into_iter()
+                .map(|(turn_id, text)| operant_core::agent::UserTurnMark {
+                    turn_id,
+                    conv_index: 0,
+                    conv_epoch: 1,
+                    text,
+                })
+                .collect(),
+            Some("sess-rt211".to_string()),
+            Vec::new(),
+        ),
+    ));
+    {
+        let source = app.core_rewind_marks.as_ref().expect("source").clone();
+        let display_texts = app.user_prompt_texts_for_filter();
+        source.set_conversation(display_texts.clone());
+        let collected: Vec<(u64, String)> = source
+            .marks()
+            .into_iter()
+            .map(|m| (m.turn_id, m.text))
+            .collect();
+        app.rewind_selector.sync_marks(collected, &display_texts);
+    }
+
+    let caption_row = |terminal: &ratatui::Terminal<ratatui::backend::TestBackend>| -> String {
+        let buf = terminal.backend().buffer();
+        // The caption is the first row of the middle chunk. With the filter
+        // open the header is two rows, so the caption sits at y=2; when it is
+        // closed the header is one row and the caption slides to y=1. Scan the
+        // top three rows so the test does not pin the arithmetic by hand.
+        (0..3u16)
+            .find(|y| {
+                let row: String = (0..40u16)
+                    .map(|x| buf.cell((x, *y)).unwrap().symbol().to_string())
+                    .collect();
+                row.contains("Rewind to here")
+            })
+            .and_then(|y| {
+                Some(
+                    (0..40u16)
+                        .map(|x| buf.cell((x, y)).unwrap().symbol().to_string())
+                        .collect::<String>(),
+                )
+            })
+            .unwrap_or_default()
+    };
+
+    // FRAME ONE: the filter is OPEN, so the header carries `  filter: `. This is
+    // the frame that owns the `i` the leak will try to keep.
+    app.rewind_selector.filter_open = true;
+    app.rewind_selector.filter = "second".to_string();
+    let mut terminal =
+        ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 24)).expect("test backend");
+    let open_frame = {
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                crate::tui::rewind_selector::draw_rewind_selector(frame, area, &app);
+            })
+            .expect("draw");
+        caption_row(&terminal)
+    };
+    assert!(
+        open_frame.contains("Rewind to here"),
+        "the caption must be painted with the filter open (the control): {open_frame:?}"
+    );
+
+    // FRAME TWO: the filter CLOSES. The header shrinks and the caption moves up
+    // onto the row that held `  filter: `, which is the leak's entire setup.
+    app.rewind_selector.filter_open = false;
+    app.rewind_selector.filter = String::new();
+    terminal
+        .draw(|frame| {
+            let area = frame.area();
+            crate::tui::rewind_selector::draw_rewind_selector(frame, area, &app);
+        })
+        .expect("draw");
+    let closed = caption_row(&terminal);
+
+    // The leak, named plainly: an `i` BEFORE "Rewind" in the caption's head,
+    // whose only source is the filter field's `  filter: `.
+    let head = closed.split("Rewind").next().unwrap_or("");
+    assert!(
+        !head.contains('i'),
+        "the caption's marker carries a stale cell from the closed filter — the \
+         marker must occupy exactly one cell so the diff rewrites every column \\
+         it covers. Rendered: {closed:?}"
+    );
+    assert!(
+        closed.contains("  >> Rewind to here"),
+        "the caption keeps its leading gap and lands on the right columns: {closed:?}"
+    );
+}

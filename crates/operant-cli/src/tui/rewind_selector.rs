@@ -327,8 +327,22 @@ pub fn draw_rewind_selector(frame: &mut Frame, area: Rect, app: &crate::tui::app
         } else {
             "nothing below to drop".to_string()
         };
+        // RT-211: the caption's marker is deliberately NARROW. It used to be
+        // `\u{23ea}` (PREVIOUS-PAGE-BUTTON, a WIDE glyph), and that one char
+        // was the whole operator-visible defect: ratatui's `Paragraph` diff
+        // writes a wide grapheme at its column and treats the next cell as its
+        // continuation WITHOUT rewriting it, so when the caption's row moves
+        // onto a row the previous frame wrote differently, the continuation
+        // cell keeps the old text. Measured with two frames on one terminal
+        // (filter open then closed, which shrinks `header` from two rows to one
+        // and slides the caption up onto the `  filter: ` row): with the wide
+        // glyph the row read `  \u{23ea}i Rewind to here ...` -- the `i` is the
+        // filter field's, parked in the wide glyph's continuation cell -- and
+        // with a narrow marker the identical sequence renders
+        // `  >> Rewind to here ...` correctly every time. So the glyph is not a
+        // style choice here: the marker must occupy exactly one cell.
         mid.push(Line::from(vec![Span::styled(
-            format!("  ⏪ Rewind to here · the prompt returns to the composer · {tail}"),
+            format!("  >> Rewind to here · the prompt returns to the composer · {tail}"),
             Style::default()
                 .fg(theme::accent_color())
                 .add_modifier(Modifier::BOLD),
