@@ -7220,8 +7220,17 @@ fn ctrl_o_expands_the_latest_tool_output_and_collapses_it_again() {
             .unwrap()
     };
     assert!(
-        !content(&app).contains("line 10"),
-        "collapsed shows the preview"
+        content(&app).contains("line 8"),
+        "collapsed shows the tail preview — line 8 is the first of the last 3 \
+         rows (codex's tail-3: exec_cell/compact.rs:114), so a build's verdict \
+         line is visible without expanding. got: {}",
+        content(&app)
+    );
+    assert!(
+        !content(&app).contains("line 7"),
+        "collapsed must NOT show the 7th of 10 rows — only the last 3 fit. \
+         got: {}",
+        content(&app)
     );
     app.handle_key_event(press_key(KeyCode::Char('o'), KeyModifiers::CONTROL));
     assert!(
@@ -7229,7 +7238,11 @@ fn ctrl_o_expands_the_latest_tool_output_and_collapses_it_again() {
         "expanded shows the full output"
     );
     app.handle_key_event(press_key(KeyCode::Char('o'), KeyModifiers::CONTROL));
-    assert!(!content(&app).contains("line 10"));
+    assert!(
+        !content(&app).contains("line 2\n"),
+        "collapsing again returns to the tail preview, not the head. got: {}",
+        content(&app)
+    );
 }
 
 #[test]
