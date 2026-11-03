@@ -226,7 +226,9 @@ pub fn render(env: &EnvSnapshot) -> String {
     );
     let _ = writeln!(
         out,
-        "Ctrl+J and Alt+Enter always work, with no configuration.\n"
+        "Ctrl+J and Alt+Enter always work, with no configuration, and so does a trailing \
+         backslash: type `foo\\` then Enter and operant consumes the backslash and inserts \
+         the newline.\n"
     );
 
     for item in &items {
@@ -377,6 +379,10 @@ mod tests {
 
     /// Ctrl+J is the route that needs no configuration, so it must be stated on
     /// every render regardless of what else was detected.
+    ///
+    /// The backslash route is asserted too, because the module doc claims "three
+    /// newline routes that need no configuration" while the render used to state
+    /// only two -- the doc and the output had drifted apart, and nothing failed.
     #[test]
     fn render_always_states_the_zero_config_routes() {
         for env in [
@@ -395,6 +401,10 @@ mod tests {
             assert!(
                 text.contains("Alt+Enter"),
                 "missing from render for {env:?}"
+            );
+            assert!(
+                text.contains("backslash"),
+                "the third zero-config route must be stated for {env:?}"
             );
         }
     }
