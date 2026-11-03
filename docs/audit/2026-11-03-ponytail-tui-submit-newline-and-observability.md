@@ -115,12 +115,53 @@ Three of the six plan rows are thin, and the audit is the evidence:
 | G-3 | 1 counter map + 1 subcommand | thin but load-bearing |
 | G-4 | 1 persist call + 1 read back | keep in plan, sequence last |
 | G-5 | ~100 lines | thin; ship or drop |
-| G-6 | probe + hint row | the only row with real design content |
+| G-6 | probe + hint row | **PARTLY CLOSED — the push half was already done and tested; the codex QUERY half is still a real gap** |
 
-**The one row worth more than its line count is G-6.** It is the production half of the
-operator's Shift+Enter report, and it is the only row that requires reading another
-codebase's protocol and mirroring it. Everything else on the list is plumbing between
-two places that already hold the number.
+**G-6, corrected 2026-11-03. I had recorded it as "the kitty protocol was
+pushed but never verified", which overstated a gap in our code -- and then, when
+I found the push was already built and tested, I nearly swung too far the other
+way and called it closed. The honest answer is a split:**
+
+**The push half is done, and it works.** `keyboard_enhancement.rs` pushes
+`DISAMBIGUATE_ESCAPE_CODES | REPORT_EVENT_TYPES | REPORT_ALTERNATE_KEYS` at
+`tui_app.rs:127`, ownership-gated, balanced by the pop in teardown and in the
+panic hook. Three tests pass, including `push_and_pop_write_the_kitty_sequences`,
+which pins the exact bytes (`CSI >7u` push, `CSI <1u` pop). And
+[`scripts/shift-enter-live.sh`](../../scripts/shift-enter-live.sh) drives the
+REAL `operant chat` on a REAL pty and writes the genuine kitty encoding
+`CSI 13 ; 2 u` at it:
+
+```
+REAL probe (kitty bytes)    -> PASS, exit 0
+MUTANT (that byte = a bare CR)  -> FAIL, exit 1
+```
+
+The mutation is what made the assertion trustworthy. My first two drafts judged
+"newline" by whether `hello` and `world` landed on ADJACENT ROWS -- and the
+mutant passed both, because a bare CR submits: `hello` moves into a transcript
+row while `world` lands in the emptied composer directly beneath it, adjacent
+rows again. The discriminator that actually separates them is CONCATENATION: a
+real newline leaves each word on its own row; a submit never advances the cursor
+off the line, so the follow-on text lands on the same row and the capture reads
+`1> helloworld`. Rewritten to that, the mutant fails as it must.
+
+So the app decodes correctly. **The gap that remains is that operant cannot know
+whether the terminal agreed to the push.** It sends the request and assumes.
+codex does not assume: `codex-rs/tui/src/terminal_probe.rs` (968 lines) sends
+`CSI ?u` and `CSI c` / `CSI 6n` / `OSC 10;?` / `OSC 11;?` under a bounded
+deadline, READS the replies, parses the flags with `find_keyboard_flags`, derives
+four states (`Supported`, `SupportedAndFallback`, `UnsupportedFallback`,
+`Pending`), runs as `Query` by default (`Skip` only when explicitly disabled), and
+gates its footer on the answer (`footer_insert_newline_key`,
+`chat_composer.rs:4431`) so Shift+Enter is only advertised when it really works.
+
+That matters concretely: a multiplexer stripping the sequence, an old terminal,
+or an SSH client that eats it all leave operant advertising a key that cannot
+work. The operator reports the same bug again with nothing to diagnose it by.
+The fallbacks that DO work configuration-free are already implemented and
+tested -- Ctrl+J and Alt+Enter -- and `terminal_setup.rs::advice` already names
+them. What is missing is the probe and the honest hint row.
+
 
 ---
 

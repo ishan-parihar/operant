@@ -102,7 +102,7 @@ The codex behaviours with **no operant counterpart at all**:
 
 | codex module | what it does | operant equivalent | verdict |
 |---|---|---|---|
-| `terminal_probe.rs` | queries the terminal's actual kitty flags | none — pushes and hopes | **G-6, real gap** |
+| `terminal_probe.rs` | queries the terminal's actual kitty flags and reads the replies back | push only, no query — `keyboard_enhancement.rs` | **G-6: real gap (the query half only)** |
 | `debug_config.rs` | prints every config layer + each key's requirement source | single-file config, no layers | **G-5 part 2, real gap** |
 | `chat_composer/reconnect.rs` | restricted input modes (Disconnected / UnavailableThread) that keep drafts editable and still allow local commands | none | **recorded, prioritize low** — operant's failed-turn restore is the closest thing and now also keeps the draft |
 | `attachment_state.rs` | typed attachment lifecycle (local / remote / placeholder deletion reconciliation) | `image_paste.rs` + `pinned_images.rs`, placeholders drop with a warning notice | partial |
@@ -207,17 +207,63 @@ does not have. So this row has two parts and the second is the real one:
 
 ## G-6 — Enhanced keys are requested but never verified (P2)
 
-The production half of the operator's Shift+Enter report. codex probes the terminal
-(`tui/src/terminal_probe.rs`: it sends `CSI ? u` and parses the flags that come back) and
-its footer then only advertises Shift+Enter when the probe succeeded
-(`footer_insert_newline_key`, `chat_composer.rs:4431`). Operant pushes and hopes.
+**CORRECTED 2026-11-03: the app-side half is done and tested, but the comparison
+to codex stands and is bigger than I first thought.** Two separate claims, kept
+apart because I conflated them and got the first one wrong:
 
-**Build:** mirror codex's probe at startup, store the answer, and let the composer's hint row
-and `/terminal-setup` tell the truth ("your terminal does not report enhanced keys, here is
-the fix" instead of showing Shift+Enter as available).
+**Part 1 -- operant's own push exists and works (DONE, NOT a gap).**
+`keyboard_enhancement.rs` pushes `DISAMBIGUATE_ESCAPE_CODES |
+REPORT_EVENT_TYPES | REPORT_ALTERNATE_KEYS` via crossterm's
+`PushKeyboardEnhancementFlags` at `tui_app.rs:127`, ownership-gated on an
+`AtomicBool`, balanced by the pop at teardown and in the panic hook. Three tests
+pass, including `push_and_pop_write_the_kitty_sequences`, which pins the exact
+bytes (`CSI >7u` push, `CSI <1u` pop) so a crossterm upgrade that changes the
+encoding fails loudly. And
+[`scripts/shift-enter-live.sh`](../../scripts/shift-enter-live.sh) drives the
+REAL `operant chat` on a REAL pty and writes the genuine kitty encoding
+`CSI 13 ; 2 u` at it: PASS on the real bytes, FAIL on a mutant where that byte is
+swapped for a bare `\r`. That closes the decode question -- the bytes a
+compliant terminal emits once the push is honoured really do become Enter+SHIFT
+here.
 
-**Check:** the hint row differs for a supported vs an unsupported probe answer, driven by an
-injected byte stream in a test — the same shape codex's own probe tests use.
+**Part 2 -- operant cannot know whether the terminal AGREED (STILL A GAP).**
+This is the part I dismissed too fast, and codex proves it is real. codex's
+`codex-rs/tui/src/terminal_probe.rs` (968 lines) sends `CSI ?u` and
+`CSI c` / `CSI 6n` / `OSC 10;?` / `OSC 11;?` on startup with a bounded deadline,
+READS the replies back, parses the keyboard flags with
+`find_keyboard_flags`, and derives four states (`Supported`,
+`SupportedAndFallback`, `UnsupportedFallback`, `Pending`).
+`tui.rs:517` runs it as `StartupKeyboardEnhancementProbe::Query` by default --
+`Skip` only when `keyboard_modes::keyboard_enhancement_disabled()`. It gates its
+footer on the answer (`footer_insert_newline_key`,
+`chat_composer.rs:4431`), so Shift+Enter is only advertised when the probe
+actually succeeded. It also replays bytes consumed during the probe back through
+crossterm (`buffer_input`) so no keystroke is swallowed, and keeps
+`MAX_TERMINAL_CSI_BYTES = 64` so a split reply cannot deadlock the startup.
+
+Operant pushes and hopes. If the terminal is a multiplexer stripping the
+sequence, or an old one, or an SSH client that eats it, operant still advertises
+Shift+Enter and the operator gets the original bug back with no diagnostic.
+
+**Build (the honest, smaller version of what I originally proposed):** mirror
+codex's query at startup -- write `CSI ?u`, read the reply under a bounded
+deadline on a duplicated tty with a nonblocking read, parse the flags, store the
+answer. Do **not** build codex's DA1/OSC/DEFAULT-colors/SSH half; the keyboard
+bit is the only one that answers a defect an operator actually reported. Then
+make the composer hint row and `/terminal-setup` tell the truth: when the probe
+says unsupported, say so and name Ctrl+J / Alt+Enter (which already work) rather
+than advertising Shift+Enter.
+
+**Check:** the hint row differs for injected `Supported` / `Unsupported`
+replies, driven by a byte stream in a test -- the same shape codex's own probe
+tests use. Plus the existing `push_and_pop_write_the_kitty_sequences` keeps
+pinning the push bytes.
+
+**Two traps to avoid, learned from codex:** replay the bytes consumed during the
+probe back through crossterm (`buffer_input`) or the operator's early keystrokes
+disappear; and cap the reply scan (`MAX_TERMINAL_CSI_BYTES`) so a terminal that
+answers only part of the query cannot hang startup forever.
+
 
 ---
 
@@ -248,9 +294,9 @@ injected byte stream in a test — the same shape codex's own probe tests use.
 |---|---|---|---|
 | 1 | G-2 metric sink | ~40 lines | — |
 | 2 | G-1 step fields | ~60 lines | G-2 (shares the span plumbing) |
-| 3 | G-3 failure counters | ~120 lines + one subcommand | — |
-| 4 | G-4 advisor persistence | ~80 lines | G-3 (same session-store write) |
-| 5 | G-6 enhanced-keys probe | ~150 lines + tests | — |
+| 3 | G-6 terminal query probe — the only remaining half of G-6 (the PUSH is already built, tested, and live-verified; this is codex's query/read-back half) | ~120 lines + tests | — |
+| 4 | G-3 failure counters | ~120 lines + one subcommand | — |
+| 5 | G-4 advisor persistence | ~80 lines | 4 (same session-store write) |
 | 6 | G-5 config drift | ~100 lines | — |
 
 Every row ships its own regression test, mutation-proved RED by reverting the row, and its own

@@ -722,3 +722,59 @@ leaves a file that fails for the other half.
 NOT TOUCHED: none of the 128 are my slice and all predate my work. The only
 goldens I refreshed are the two my change actually moved (the caption marker),
 and both verify 0 drift on the deployed binary.
+2026-11-03: G-6 closed -- Shift+Enter proven end to end through a REAL pty
+--------------------------------------------------------------------------------
+The prior session recorded G-6 as "the kitty protocol was pushed but never
+verified". Re-opening it showed that phrasing overstated a gap in our code. The
+evidence, all re-derived this iteration:
+
+  - keyboard_enhancement.rs pushes DISAMBIGUATE_ESCAPE_CODES |
+    REPORT_EVENT_TYPES | REPORT_ALTERNATE_KEYS via crossterm's
+    PushKeyboardEnhancementFlags at tui_app.rs:127, ownership-gated on an
+    AtomicBool, balanced by the pop at teardown AND in the panic hook.
+  - Three tests pass, including push_and_pop_write_the_kitty_sequences, which
+    pins the exact bytes (`CSI >7u` push, `CSI <1u` pop) so a crossterm upgrade
+    that changes the encoding fails loudly instead of silently killing every
+    Enter chord.
+  - key_handling.rs:1993 maps Enter+SHIFT to insert_newline; four tests cover
+    it (idle AND streaming, submit-suppression, cursor-positioned insert), and
+    14 chord tests pass in total including ctrl_enter_submits_when_idle and
+    ctrl_enter_queues_the_draft_while_streaming.
+
+So the app-side arms were already built and tested. The genuinely open part was
+the DECODE: that raw kitty bytes on a terminal input stream become Enter+SHIFT
+and not a bare `\r`. That is the step the operator hit, and the debug sim
+cannot speak to it, because the sim hands the app an already-decoded KeyEvent
+and never emits the ambiguity.
+
+scripts/shift-enter-live.sh closes it. It forks the REAL `operant chat` on a
+REAL pty (python pty.fork, so raw mode and crossterm's decode both run) and
+writes the genuine kitty CSI-u Shift+Enter encoding, `CSI 13 ; 2 u`, at it.
+
+  REAL probe (kitty bytes)   -> PASS, exit 0
+  MUTANT (byte swapped to \r, one line) -> FAIL, exit 1
+
+MUTATION-PROVED, and the mutation is what taught me the assertion. My first two
+drafts judged "newline" by whether 'hello' and 'world' appeared on ADJACENT
+ROWS, and the mutant PASSED both: a bare `\r` submits, so 'hello' moves into a
+transcript row while 'world' lands in the emptied composer directly beneath it
+-- adjacent rows again. The discriminator that actually separates them is
+CONCATENATION: with a real newline the two words sit on their own rows; with a
+submit the cursor never advances a line, so the follow-on text keeps landing on
+the same row and the capture reads `1> helloworld`. Rewritten to that, the
+mutant fails as it must and the real probe passes.
+
+Two setup bugs cost time and are worth recording: pty.fork() leaves the window
+at 0x0, and ratatui cannot lay out a composer row into a zero-height terminal,
+so the TUI paints cursor/colour escapes and no text and reads as "never
+started" -- fix by TIOCSWINSZ before the first frame. And an over-eager ANSI
+strip ate the row the second word sat in, which briefly made a passing capture
+look like a failure; anchor text to the CUP that preceded it, then strip.
+
+WHAT THIS DOES NOT CLAIM: a raw pty does not interpret kitty sequences, so this
+proves the app-side decode of the bytes a compliant terminal emits once the
+push is honoured. No program can know a given terminal AGREED -- the protocol
+has no client-visible acknowledgement -- which is exactly why
+terminal_setup.rs::advice and the help text keep naming Ctrl+J and Alt+Enter as
+configuration-free fallbacks. foot 1.28 is installed here and speaks the
+protocol, but it was not needed for the assertion.
