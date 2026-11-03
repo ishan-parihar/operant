@@ -383,6 +383,42 @@ the workspace build:
   (iter-1684's was bit-identical because its delta was tests-only). The artifact's
   mtime postdates the commit, so the provenance gate passes.
 
+**A second tautology, found while proving the extraction is behavior-preserving
+(2026-11-03, third pass).** The equivalence test below originally derived its
+baseline by MIRRORING the extracted function's own four fields. That is a
+tautology of exactly the kind this pass exists to catch: mutating `height` to read
+`textarea.width` passed 22/22. The baseline is now four independent, NAMED
+invariants about what an inset rect is (origin advance, extent shrink, no wrap on
+an over-large inset, containment when it fits), checked across >11,000 input
+combinations. The same mutation now fails.
+
+Writing those invariants also produced a genuine correction to my own
+understanding, recorded in the test: `saturating_add` does NOT clamp the origin to
+the dimension. With `height = 0` and `offset = 1` the origin advances to 1 and the
+extent shrinks to 0. My first two attempts at the containment invariant asserted
+the clamped form and failed on CORRECT code, the same failure mode as iter-1681's
+first footer test. **The code was right and the invariant was wrong — twice.**
+When validating geometry, derive the invariant from the semantics, and when it
+fails, suspect the invariant before the code.
+
+**Label collision, stated accurately.** iter-1689 is duplicated on `origin/main`
+(mine: `refactor` `cbf4cefd`; the peer's: `test` `cec3cfab`) because both of us
+picked it from a stale read of `origin/main` within minutes of each other. Both
+commits stay in history, append-only, per the duplicate-label doctrine — no
+rewrite. iter-1685 is NOT a duplicate: I renumbered my 1685 to 1686 before
+pushing, so only the peer's fix exists under that label. My feed post initially
+claimed both were duplicated and was corrected at F0264; verify a label against
+`git log origin/main --oneline | grep -c iter-N` before publishing it as fact.
+
+**One caveat for whoever validates the fill next:** the headless
+`run_headless` path never runs `app::init`'s theme wiring, so
+`theme_colors::panel_bg()` is not the process-global value there and
+`--dump-style` reports `reset/reset` for the band. The fill is real —
+`panel_bg` is `Rgb(26,26,46)` in the test binary and the blend yields
+`Rgb(53,53,71)` = `rgb:353547`, the colour iter-1637 measured — but it must be
+asserted through the unit tests or under a configured theme, never by reading a
+style dump out of the sim.
+
 Two other confirmations from this pass, both clean:
 
 - The vim-badge's absence is why `suggestions_offset` is 0 in the common case and
