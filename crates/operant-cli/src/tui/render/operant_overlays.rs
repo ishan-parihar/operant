@@ -839,9 +839,21 @@ mod tests {
     /// Read this together with the RT-211 lesson — a WIDE glyph in a line whose
     /// row can move has the same one-cell hole as an unpainted row, so the
     /// selector's caption marker is deliberately narrow.
+    ///
+    /// The preconditions are not decoration: without them a renamed paint fn
+    /// would make `body_of` return early garbage or an empty string, the
+    /// substring check would pass vacuously and the `assert_eq!(1)` would fail
+    /// as "expected 1, got 0" — a confusing message that names the wrong
+    /// problem. Both bodies are asserted to be the REAL one before either
+    /// invariant is measured, so a rename reports itself.
     #[test]
     fn only_the_session_hub_clears_the_whole_viewport() {
         let selectors = body_of("fn paint_rewind_selector(");
+        assert!(
+            assert_real_paint_body("paint_rewind_selector", &selectors),
+            "the selector body must be the real one before the no-Clear invariant \\
+             can mean anything"
+        );
         assert!(
             !selectors.contains("widgets::Clear"),
             "the rewind selector must NOT clear the frame: it must cover the area \\
@@ -850,12 +862,83 @@ mod tests {
         );
 
         let hub = body_of("fn paint_session_hub(");
+        assert!(
+            assert_real_paint_body("paint_session_hub", &hub),
+            "the hub body must be the real one before the Clear-count invariant \\
+             can mean anything"
+        );
         let clears = hub.matches("widgets::Clear").count();
         assert_eq!(
             clears, 1,
             "the session hub must clear the viewport exactly once; the operator's \\
              2026-11-02 stale-screen report is what one full-frame Clear fixes"
         );
+    }
+
+    /// A guard whose detector has never been tested is the exact defect this
+    /// repo keeps shipping (RT-209 recorded five substring-shaped guards that
+    /// passed while the behaviour they guarded was absent). So prove the
+    /// detector discriminates: a body from the WRONG fn must not satisfy the
+    /// selector's no-Clear check.
+    ///
+    /// THE DANGER THIS CLOSES: if `body_of` ever returned the same text for any
+    /// needle (a signature change, a broken extractor), both assertions above
+    /// would still hold while testing nothing.
+    #[test]
+    fn the_whole_viewport_guard_detects_a_wrong_body() {
+        // The command palette is a centred dialog that owns no Clear, so it is
+        // an honest "wrong body" for the selector's arm.
+        let wrong = body_of("fn paint_command_palette(");
+        assert!(
+            assert_real_paint_body("paint_command_palette", &wrong),
+            "the control body must be a real paint body"
+        );
+        // A body with NO Clear trivially satisfies the selector's arm, so the
+        // discriminator is not the arm alone — it is that the HUB body is
+        // distinguishable from it: the hub must carry the Clear this one lacks.
+        let hub = body_of("fn paint_session_hub(");
+        assert!(
+            hub.matches("widgets::Clear").count() > wrong.matches("widgets::Clear").count(),
+            "the hub body must be distinguishable from a Clear-free body, or the \\
+             selector and hub arms could both be reading the same text"
+        );
+    }
+
+    /// The precondition `assert_real_paint_body`: a paint body is a real one
+    /// when it is non-trivial, balanced, and delegates to a real painter.
+    /// Every check here exists because its absence let an earlier guard pass
+    /// while measuring nothing.
+    ///
+    /// "Delegates to a real painter" is deliberately NOT "calls frame.":
+    /// MEASURED at iter-1701, the paint fns that trip a naive check delegate in
+    /// one line -- `paint_rewind_selector`'s whole body is
+    /// `draw_rewind_selector(frame, ctx.size, app)`, and `paint_command_palette`'s
+    /// is `render_dialog_select(frame, &app.command_palette, ctx.size)`. Neither
+    /// contains `frame.` or `render_widget`, so requiring those would reject the
+    /// REAL bodies and fail the guard on correct code -- which is exactly the
+    /// "wrong invariant that fails on correct code" failure this repo has already
+    /// recorded twice in one week. The check is that the body names a painter
+    /// entry point (`draw_`/`render_`/`paint_`), which covers the one-line
+    /// delegators and the ones that build their own widgets.
+    fn assert_real_paint_body(_name: &str, body: &str) -> bool {
+        // Non-trivial: a body at or below the braces-plus-nothing threshold is a
+        // signature fragment, not a fn.
+        if body.lines().count() < 3 {
+            return false;
+        }
+        // Balanced braces: the extractor's end brace was found, so this IS a
+        // whole body rather than a truncation.
+        if body.matches('{').count() != body.matches('}').count() {
+            return false;
+        }
+        // Delegates to a real painter: every arm of the invariant is about which
+        // widget a fn renders, so a body that paints nothing can neither satisfy
+        // nor violate it.
+        body.contains("frame.")
+            || body.contains("render_widget")
+            || body.contains("draw_")
+            || body.contains("render_")
+            || body.contains("paint_")
     }
 
     /// The BODY of one paint fn in this file. Source-level on purpose: the
