@@ -100,18 +100,32 @@ git log origin/main -1 --oneline    # must print your new commit
 git rev-parse --short HEAD origin/main   # the two shas must match
 git status --porcelain                   # only the derived Cargo.lock and untracked files the build never reads may appear
 df -h /                                  # check space before the release build
+# (2026-11-03 iter-1707, MEASURED: scripts/build.sh can EXIT 0 while producing
+#  NOTHING -- its memory-wire lock advance gets OOM-killed on a memory-pressured
+#  box and the artifact left on disk is the PREVIOUS build. If the memory-wire
+#  sync cannot run, the sanctioned path is --offline; restore Cargo.lock with
+#  `git checkout -- Cargo.lock` FIRST if the dead `cargo update` half-rewrote it.
+#  What actually detects this is the mtime check in the provenance gate below.)
 scripts/build.sh --release
-# Deploy to BOTH install paths (2026-10-05 lesson): the user's PATH and the
-# gateway systemd unit resolve ~/.local/bin/operant; /usr/local/bin is the
-# convention target. A running daemon holds the old inode open — `cp` fails
-# with "Text file busy"; rename-over works: build to a temp name, then `mv`.
-# BOTH the cp AND the mv need sudo: a bare `cp ... /usr/local/bin/...` fails
-# EACCES before the `sudo mv` is ever reached.
-sudo cp target/release/operant /usr/local/bin/operant.new \
-  && sudo mv /usr/local/bin/operant.new /usr/local/bin/operant
+# Deploy to the install paths that actually exist (2026-10-05 lesson, REVISED
+# 2026-11-03 iter-1707: the recipe silently deployed NOTHING on this host).
+# MEASURED on this box: ~/.local/bin is FIRST in PATH and is what the gateway
+# unit resolves (`systemctl --user cat operant-gateway` shows
+# ExecStart=/home/ishanp/.local/bin/operant), while /usr/local/bin/operant DOES
+# NOT EXIST, and passwordless sudo is NOT configured (`sudo -n true` prints
+# "a password is required"). The old recipe ran `sudo cp ... && sudo mv ...`
+# FIRST in an &&-chain, so the EACCES aborted the whole chain before the
+# ~/.local/bin `cp` beneath it ever ran. Deploy the user path FIRST, then the
+# convention path only if it exists and sudo works without a prompt.
+# A running daemon holds the old inode open — `cp` fails with "Text file";
+# rename-over works: build to a temp name, then `mv`.
 cp target/release/operant ~/.local/bin/operant.new \
   && mv ~/.local/bin/operant.new ~/.local/bin/operant
-operant --version   # confirm the deployed binary matches
+if [ -e /usr/local/bin/operant ] && sudo -n true 2>/dev/null; then
+  sudo cp target/release/operant /usr/local/bin/operant.new \
+    && sudo mv /usr/local/bin/operant.new /usr/local/bin/operant
+fi
+command -v operant && operant --version   # confirm the deployed binary matches
 # PROVENANCE GATE — run this BEFORE restarting the daemon. A failed build
 # leaves the PREVIOUS target/release/operant on disk, so `cp` cheerfully
 # installs a stale binary and `operant --version` still prints 0.2.1. Observed
@@ -127,9 +141,11 @@ md5sum /proc/$(systemctl --user show -p MainPID --value operant-gateway)/exe
 ### R&D Protocol — Deploy After Every Push
 
 > **After EVERY iteration that touches code (not docs-only):**
-> Build the release binary and install it to `/usr/local/bin/operant` so the
-> user can immediately test the change. A commit that isn't deployable is not
-> done. If the build fails, fix it before moving on.
+> Build the release binary and install it so the user can immediately test the
+> change. A commit that isn't deployable is not done. If the build fails, fix it
+> before moving on. The install target is the PATH-resolved path that the
+> gateway's own `ExecStart` names -- on this host `~/.local/bin/operant` -- not
+> an assumed convention. See step 7 above for the measured deploy sequence.
 >
 > Docs-only iterations (AGENTS.md, README, CHANGELOG) skip the build step.
 
