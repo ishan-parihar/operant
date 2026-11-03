@@ -977,4 +977,42 @@ mod tests {
         }
         src[open..end].to_string()
     }
+
+    /// A precondition that always returns true is a precondition measuring
+    /// nothing, and MEASURED here: making `assert_real_paint_body` return
+    /// `true` unconditionally leaves BOTH tests above green, which means the
+    /// precondition's own three checks had no mutation-proof. This test is
+    /// that proof -- each rejection arm is driven with an input that must
+    /// fail it, so a vacuous predicate can no longer pass this suite.
+    ///
+    /// This is the fifth instance of one shape in this repo: a guard that
+    /// exists, whose detector was never itself tested.
+    #[test]
+    fn the_real_paint_body_precondition_rejects_a_body_that_paints_nothing() {
+        // Arm 1: too short to be a fn body at all (a signature fragment).
+        // The input MUST contain a painter token, or the painter arm below
+        // rejects it on its own and this arm proves nothing -- a redundant
+        // rejection is a checked arm that was never checked.
+        assert!(
+            !assert_real_paint_body("x", "{ render_widget(w, r); }"),
+            "a one-line fragment must not pass as a real paint body, even when it \
+             names a painter"
+        );
+        // Arm 2: unbalanced braces -- the extractor's end brace was never found,
+        // so this is a truncation of the file rather than a whole function.
+        assert!(
+            !assert_real_paint_body("x", "{\n    let a = {\n    render_widget(w, r);\n    \n"),
+            "an unbalanced body is a truncation, not a fn, and must not pass"
+        );
+        // Arm 3: balanced and long enough but paints NOTHING -- no painter entry
+        // point in any spelling. This is the arm the vacuous mutation slipped
+        // past, because every real fn in this file is long and balanced.
+        assert!(
+            !assert_real_paint_body(
+                "x",
+                "{\n    let one = 1;\n    let two = 2;\n    let _ = one + two;\n}"
+            ),
+            "a balanced body that names no painter must not pass as a paint body"
+        );
+    }
 }
