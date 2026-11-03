@@ -124,10 +124,6 @@ impl App {
             "focus": format!("{:?}", self.focus),
             "token_count": self.token_count,
             "any_modal_open": self.any_modal_open(),
-            overlays.insert(
-                "expanded_tool_id".to_string(),
-                serde_json::Value::String(self.expanded_tool_id.clone().unwrap_or_default()),
-            );
             "overlays": serde_json::Value::Object(overlays),
             // Non-modal surfaces, deliberately NOT in `overlays`:
             // `any_modal_open()` is derived from `overlay_flags()`, and both
@@ -161,6 +157,7 @@ impl App {
             // flip it, so a screen oracle is STRUCTURALLY impossible for
             // this feature. State is the only observable that reaches the
             // harness.
+            "expanded_tool_id": self.expanded_tool_id.clone(),
             "tool_full_outputs": self.tool_full_outputs.keys().cloned().collect::<Vec<_>>(),
             "tool_calls_seen": self
                 .tool_use_blocks
