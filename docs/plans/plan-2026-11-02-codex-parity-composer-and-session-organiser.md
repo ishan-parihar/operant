@@ -361,6 +361,28 @@ call site is not evidence about the call site.** Either call the real function o
 mutate the real one and watch the suite go red. My earlier "mutation caught"
 claims for the geometry tests were, strictly, claims about the harness.
 
+### 3.11 The deployed-binary validation, and one caveat about the sim
+
+Validated against the artifact actually installed at `~/.local/bin/operant`, not
+the workspace build:
+
+- `operant tui debug simulate --size 100x30 --keys '' --dump-screen` draws the
+  composer row as `  \u{203a} Ask operant to do anything` — byte-identical to what
+  `the_empty_composer_paints_the_placeholder_at_the_text_origin_beside_the_glyph`
+  asserts in the unit suite, with the footer row below it intact.
+- `operant tui debug simulate --dump-style` prints `reset/reset` for those cells,
+  so the FILL does not appear in the style grid from this environment. That is the
+  sim's environment, not the composer: `theme_colors::panel_bg()` resolves to
+  `Rgb(26, 26, 46)` inside the test binary (probed), so the fill is
+  `Rgb(53, 53, 71)` = `rgb:353547` — exactly the colour iter-1637 measured by hand.
+  The headless `run_headless` path does not run `app::init`'s theme wiring, so its
+  palette is not the process-global one. **Anyone validating the fill
+  out-of-process must assert it through the unit tests or configure a theme, not
+  read a `--dump-style` from the sim.**
+- iter-1689's rebuild changed the deployed md5 from `357a5060` to `61b6f6d9`
+  (iter-1684's was bit-identical because its delta was tests-only). The artifact's
+  mtime postdates the commit, so the provenance gate passes.
+
 Two other confirmations from this pass, both clean:
 
 - The vim-badge's absence is why `suggestions_offset` is 0 in the common case and
