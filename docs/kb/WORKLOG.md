@@ -942,3 +942,45 @@ have to go looking for the counter-case.
 What this leaves: route B (own our own fd, probe before crossterm's loop starts,
 with a surplus-byte policy) is the only buildable option, and ASKS Q4 now asks
 the owner to choose between building it and accepting the gap.
+
+2026-11-03: the concern behind ASKS Q4 is already answered -- Verified on the
+real binary, not inferred
+--------------------------------------------------------------------------------
+Before pushing the owner for a decision on route B, I asked what the actual user
+harm was: the composer advertises Shift+Enter and a terminal that ignores the
+kitty push cannot deliver it. Checking the tree rather than reasoning about it,
+that concern is ALREADY MITIGATED, three ways over, all unit-tested:
+
+  1. TRAILING-BACKSLASH CONTINUATION (key_handling.rs, the Enter arm gated on an
+     ODD trailing backslash). No keyboard protocol at all: plain Enter on a
+     draft ending in `\` consumes the backslash and inserts a newline. An EVEN
+     count is an escaped backslash and still submits. Covered by
+     odd_trailing_backslash_makes_enter_a_newline and
+     even_trailing_backslashes_still_submit.
+  2. Ctrl+J and Alt+Enter, which take the same newline branch.
+  3. A ONCE-PER-SESSION tip: the first time the user reaches for the fallback,
+     status_notice says "/terminal-setup explains making Shift+Enter insert
+     newlines directly", and /terminal-setup renders per-terminal advice with
+     the tmux extended-keys fix and the Ctrl+J/Alt+Enter fallbacks. Covered by
+     continuation_hint_is_shown_once_per_session, which asserts on the FLAG
+     rather than the notice text -- because status_notice returns the last set
+     message even when nothing new was set, so the accessor cannot prove
+     "shown once".
+
+LIVE VERIFICATION, and it caught a false negative first. I drove the real
+`operant chat` on a real pty with plain Enter (no kitty bytes at all) and it
+reported "continuation FAILS" -- then I looked at the capture and the reason was
+my own drain window dropping the second frame, not the product. Re-run with an
+ACCUMULATING capture: `line one\` + Enter lands `line two` on the NEXT row,
+nothing glued on one row. Works.
+
+The lesson about that false negative is the same one as the route-C withdrawal,
+from the other direction: a capture harness that silently drops reads will
+manufacture a failure. Accumulate, then judge.
+
+SO WHAT DOES THIS CHANGE: route B's benefit is now only that it can WARN a user
+who never discovers the fallback. The operator's actual reported symptom --
+"Shift+Enter does not add line breaks" -- has a working answer already shipped
+and live-verified. That materially weakens the case for ~120 lines plus a
+surplus-byte policy on the input path, and ASKS Q4 should be re-asked with this
+in view rather than as though the user were stuck.
