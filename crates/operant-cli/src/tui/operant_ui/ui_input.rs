@@ -2757,12 +2757,8 @@ pub(super) fn draw_input(
         //   (`wrap_input_text_gutter` paints `prompt_char` as the line's first
         //   span), so the placeholder must start `prompt_len` columns in or it
         //   overwrites the glyph.
-        let placeholder_rect = Rect {
-            x: padded.x.saturating_add(prompt_len as u16),
-            y: padded.y.saturating_add(suggestions_offset as u16),
-            width: padded.width.saturating_sub(prompt_len as u16),
-            height: padded.height.saturating_sub(suggestions_offset as u16),
-        };
+        let placeholder_rect =
+            composer::placeholder_rect(padded, prompt_len as u16, suggestions_offset as u16);
         composer::paint_placeholder(placeholder_rect, frame);
     }
 

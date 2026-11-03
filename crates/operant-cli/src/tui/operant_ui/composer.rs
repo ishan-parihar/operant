@@ -168,6 +168,36 @@ pub(crate) fn paint_placeholder(area: Rect, frame: &mut ratatui::Frame) {
     Paragraph::new(placeholder_line()).render(area, frame.buffer_mut());
 }
 
+/// The rect the placeholder paints into, derived from the textarea rect.
+///
+/// Extracted from the call site at `ui_input.rs:2760` so the arithmetic lives in
+/// ONE place that a test can call. While it was inline, a transcription of the
+/// same four lines passed while the real site was mutated — the copy and the
+/// original drifted silently. Keeping the rationale comment with the arithmetic
+/// is part of the extraction, not decoration.
+///
+/// Two offsets are required and both are load-bearing:
+///
+/// - ROW (`suggestions_offset`): the glyph row is that many rows into the padded
+///   rect, because a hint row precedes it when one is present (the
+///   `-- INSERT --` vim badge that used to sit here is gone since RT-144). The
+///   placeholder must skip those rows or it paints over the hint line.
+/// - COLUMN (`prompt_len`): the glyph is an in-line span at the START of that
+///   line (`wrap_input_text_gutter` paints `prompt_char` as the line's first
+///   span), so the placeholder must start `prompt_len` columns in or it
+///   overwrites the glyph.
+///
+/// Every inset is `saturating_sub`, so a band narrower or shorter than the
+/// offsets degrades to an empty rect rather than wrapping to a huge one.
+pub(crate) fn placeholder_rect(textarea: Rect, prompt_len: u16, suggestions_offset: u16) -> Rect {
+    Rect {
+        x: textarea.x.saturating_add(prompt_len),
+        y: textarea.y.saturating_add(suggestions_offset),
+        width: textarea.width.saturating_sub(prompt_len),
+        height: textarea.height.saturating_sub(suggestions_offset),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -501,6 +531,122 @@ mod tests {
                 buf[(0, y)].style().bg,
                 Some(fill),
                 "the {label} row of the band must carry the fill"
+            );
+        }
+    }
+
+    /// Replicates `draw_input`'s placeholder call site at `ui_input.rs:2763`
+    /// EXACTLY, including the two offsets the comment there says are both
+    /// required: the ROW offset (`suggestions_offset`) and the COLUMN offset
+    /// (`prompt_len`). My earlier harness hardcoded `padded.y` and therefore
+    /// could not see a regression that only fires when a hint row is present.
+    ///
+    /// `suggestions_offset` and `prompt_len` are parameters so the tests can
+    /// exercise the hint-row case, which is the case my earlier harness skipped.
+    fn call_site_placeholder_buffer(
+        width: u16,
+        height: u16,
+        suggestions_offset: u16,
+    ) -> ratatui::buffer::Buffer {
+        use ratatui::backend::TestBackend;
+        use ratatui::{Terminal, widgets::Block};
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal
+            .draw(|f| {
+                let area = f.area();
+                paint_band_fill(area, f);
+                f.render_widget(Block::default(), area);
+                let padded = textarea_rect(area);
+                // THE REAL FUNCTION, not a transcription. This is the whole point
+                // of the extraction: while the four inset lines were inline at
+                // the call site, a copy of them here passed while the real site
+                // was mutated, because the two drifted silently.
+                let prompt_len = GUTTER_COLS;
+                let placeholder_rect = placeholder_rect(padded, prompt_len, suggestions_offset);
+                paint_placeholder(placeholder_rect, f);
+            })
+            .unwrap();
+        terminal.backend().buffer().clone()
+    }
+
+    #[test]
+    fn the_placeholder_column_is_the_gutter_not_the_band_edge() {
+        // `prompt_len` (== GUTTER_COLS here) is the OFFSET FROM padded.x, so the
+        // placeholder's own x is padded.x + GUTTER_COLS, i.e. band.x + 2 *
+        // GUTTER_COLS. Getting this wrong paints the placeholder over the glyph.
+        let padded = textarea_rect(Rect::new(0, 0, 40, 4));
+        let placeholder_x = padded.x + GUTTER_COLS;
+        assert_eq!(
+            placeholder_x, 4,
+            "the placeholder must start one gutter past the band's left edge"
+        );
+        assert_eq!(
+            padded.x, 2,
+            "and the glyph row starts its own gutter in, at the text origin"
+        );
+        // The invariant that actually protects the glyph: the placeholder never
+        // starts LEFT of the text origin.
+        assert!(
+            placeholder_x >= padded.x,
+            "the placeholder must not start left of the glyph it shares a row with"
+        );
+    }
+
+    #[test]
+    fn a_hint_row_does_not_move_the_placeholders_row_onto_itself() {
+        // `suggestions_offset` is the ROW offset. With no hint it is 0 and the
+        // placeholder paints on the glyph row; with a hint it is 1 and the
+        // placeholder must move DOWN a row, not up onto the hint.
+        let no_hint = call_site_placeholder_buffer(40, 4, 0);
+        let with_hint = call_site_placeholder_buffer(40, 4, 1);
+        let find = |buf: &ratatui::buffer::Buffer| {
+            (0..4u16).find(|&y| {
+                (0..40u16)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+                    .contains("Ask operant")
+            })
+        };
+        let no_hint_row = find(&no_hint).expect("the placeholder must be painted");
+        let with_hint_row = find(&with_hint).expect("the placeholder must be painted");
+        assert_eq!(no_hint_row, 1, "no hint: the glyph row is padded.y+0");
+        assert_eq!(
+            with_hint_row, 2,
+            "a hint row pushes the placeholder DOWN one, never onto the hint"
+        );
+    }
+
+    #[test]
+    fn the_placeholder_survives_a_band_exactly_the_minimum_height() {
+        // The band is 3 rows minimum (`Constraint::Min(3)` in composer_layout and
+        // `input_padding_height = 2` on a one-line draft). `textarea_rect`'s
+        // `height - 2` is then 1, and the placeholder MUST still paint rather
+        // than silently disappearing at the smallest legal band.
+        let padded = textarea_rect(Rect::new(0, 0, 40, 3));
+        assert_eq!(padded.height, 1, "a 3-row band leaves exactly one text row");
+        let buf = call_site_placeholder_buffer(40, 3, 0);
+        let row: String = (0..40u16).map(|x| buf[(x, 1)].symbol()).collect::<String>();
+        assert!(
+            row.contains("Ask operant"),
+            "the placeholder must still paint in a minimum-height band, got {row:?}"
+        );
+    }
+
+    #[test]
+    fn a_band_shorter_than_the_textarea_degrade_instead_of_wrapping() {
+        // `textarea_rect`'s two `saturating_sub`s exist for this: a band whose
+        // height is under the 2 padding rows must yield a ZERO-HEIGHT rect, not
+        // a huge one from a subtraction that wrapped.
+        for h in [0u16, 1, 2] {
+            let padded = textarea_rect(Rect::new(0, 0, 40, h));
+            assert_eq!(
+                padded.height, 0,
+                "a {h}-row band has no text row; the rect must be empty, not wrapped"
+            );
+            assert_eq!(
+                padded.width,
+                40 - GUTTER_COLS - 1,
+                "width arithmetic is independent of the height"
             );
         }
     }

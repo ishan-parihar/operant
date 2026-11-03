@@ -331,6 +331,45 @@ validated instead by `paint_band_fill` being compiled in and the placeholder
 string being present. This is expected behaviour, recorded here so the next agent
 does not read a 0 as a failed deploy.
 
+### 3.10 The transcription trap, found on the third pass (2026-11-03)
+
+The four geometry tests above transcribe the call site's arithmetic into the
+harness. That is a trap, and it took a mutation of the REAL site to prove it:
+
+**Deleting the ROW offset from the actual `ui_input.rs` call site left the full
+suite green** (2095 passed; only the pre-existing peer failure). My
+`a_hint_row_does_not_move_the_placeholders_row_onto_itself` still passed, because
+it replicated the same four inset lines locally — mutating one copy never touches
+the other. The test verified that my copy of the arithmetic was correct, which
+was never the question.
+
+`placeholder_rect(textarea, prompt_len, suggestions_offset)` is now a real
+function in `composer.rs` and the call site calls it, so the arithmetic has ONE
+definition that a test can invoke. Re-applying the mutation now FAILS with:
+
+```text
+failures:
+    tui::operant_ui::composer::tests::a_hint_row_does_not_move_the_placeholders_row_onto_itself
+```
+
+The rationale comment moved with the code, because the two offsets are
+load-bearing for reasons (the vim-badge removal at RT-144, the glyph as the
+paragraph's first span) that are not visible in the arithmetic.
+
+**The lesson for anyone validating a buffer-level claim: a transcription of the
+call site is not evidence about the call site.** Either call the real function or
+mutate the real one and watch the suite go red. My earlier "mutation caught"
+claims for the geometry tests were, strictly, claims about the harness.
+
+Two other confirmations from this pass, both clean:
+
+- The vim-badge's absence is why `suggestions_offset` is 0 in the common case and
+  1 only when a hint row exists; that case is now exercised by name.
+- A 3-row band (the legal minimum, `Constraint::Min(3)`) still paints the
+  placeholder, and a band SHORTER than the two padding rows yields a zero-height
+  rect instead of wrapping — both `saturating_sub`s in `textarea_rect` and
+  `placeholder_rect` are pinned.
+
 ---
 
 ## Part 4 — codex's session-management system (the investigation)
