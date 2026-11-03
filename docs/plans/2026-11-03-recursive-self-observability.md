@@ -264,6 +264,40 @@ probe back through crossterm (`buffer_input`) or the operator's early keystrokes
 disappear; and cap the reply scan (`MAX_TERMINAL_CSI_BYTES`) so a terminal that
 answers only part of the query cannot hang startup forever.
 
+**BLOCKER, verified 2026-11-03 — do not plan this as a copy of codex's code.**
+codex reaches for `crossterm::event::buffer_input`, and that function does not
+exist in the crossterm we depend on. `codex-rs/Cargo.lock` pins
+`git+https://github.com/openai-oss-forks/crossterm?rev=ed1cdab335221515706178d68495bba2aed1924f`
+(`codex-rs/Cargo.toml:673`) — a **fork** that added it. We use upstream
+`crossterm = "0.29"`, whose whole event surface is `poll()` and `read()`
+(confirmed against the vendored 0.29.0 source: `event.rs` exposes nothing else,
+and no feature flag unlocks an inject path). Worse, `UnixInternalEventSource`
+(`event/source/unix/tty.rs`) owns the tty fd privately and offers no accessor,
+so there is no way to park bytes where crossterm will find them.
+
+The consequence is that codex's *design* ports but its *mechanism* does not. A
+correct operant version has to own its own tty: open `/dev/tty` (or dup stdin),
+set it nonblocking, read the `CSI ?u` reply directly, and only then hand the
+stream to crossterm. Two approaches, both with a real cost, and the choice is an
+owner decision rather than a detail:
+
+- **A. Probe on a SECOND fd.** Cheap to write, but the reply bytes may be
+  consumed by whichever reader wins the race, so you still need somewhere to
+  buffer a byte crossterm never saw — which is exactly the problem upstream
+  leaves us no API to solve. This can silently EAT the operator's first
+  keystrokes, which is a worse bug than the one it fixes.
+- **B. Probe BEFORE crossterm's event loop starts, on the one fd crossterm will
+  later use.** Cleaner ownership, no race. Needs an explicit policy for surplus
+  bytes typed during the probe (drop / queue / replay into the composer), plus a
+  bounded deadline and the capped scan codex uses.
+
+**Owner decision needed** (recorded in ASKS): adopt the upstream crossterm with
+a self-owned fd (B), or fork crossterm like codex did? A fork is a supply-chain
+and maintenance commitment on a hot path, so the default recommendation is B.
+Until that is settled, this row is not safely buildable — and building it blind
+risks losing input, which is far worse than an imprecise hint row.
+
+
 
 ---
 
@@ -294,7 +328,7 @@ answers only part of the query cannot hang startup forever.
 |---|---|---|---|
 | 1 | G-2 metric sink | ~40 lines | — |
 | 2 | G-1 step fields | ~60 lines | G-2 (shares the span plumbing) |
-| 3 | G-6 terminal query probe — the only remaining half of G-6 (the PUSH is already built, tested, and live-verified; this is codex's query/read-back half) | ~120 lines + tests | — |
+| 3 | G-6 terminal query probe — the only remaining half of G-6 (the PUSH is already built, tested, and live-verified; this is codex's query/read-back half) | **BLOCKED** pending the owner's crossterm decision below — do not build blind | the ASKS decision |
 | 4 | G-3 failure counters | ~120 lines + one subcommand | — |
 | 5 | G-4 advisor persistence | ~80 lines | 4 (same session-store write) |
 | 6 | G-5 config drift | ~100 lines | — |

@@ -778,3 +778,31 @@ has no client-visible acknowledgement -- which is exactly why
 terminal_setup.rs::advice and the help text keep naming Ctrl+J and Alt+Enter as
 configuration-free fallbacks. foot 1.28 is installed here and speaks the
 protocol, but it was not needed for the assertion.
+
+2026-11-03: G-6's remaining half is BLOCKED on an API we do not have -- verified,
+not assumed
+--------------------------------------------------------------------------------
+Went to build the query half of G-6 and found it is not a "~120 lines" row.
+codex reaches for crossterm::event::buffer_input, and that function does not
+exist in our dependency: codex-rs/Cargo.lock pins
+git+https://github.com/openai-oss-forks/crossterm?rev=ed1cdab335221515706178d68495bba2aed1924f
+(codex-rs/Cargo.toml:673). We use upstream crossterm 0.29, whose entire event
+surface is poll() and read() -- checked against the vendored 0.29.0 source, and
+no feature flag unlocks an inject path. And UnixInternalEventSource
+(event/source/unix/tty.rs) owns the tty fd privately with no accessor, so there
+is nowhere to park a byte where crossterm will find it.
+
+So codex's DESIGN ports but its MECHANISM does not. Two routes, recorded in the
+plan with their costs, and raised as ASKS Q4 for the owner rather than decided
+unilaterally:
+
+  A. own our own fd -- open /dev/tty, nonblocking, read the CSI ?u reply before
+     crossterm's loop starts, plus an explicit policy for surplus bytes typed
+     during the probe window. Recommended: no fork on a hot input path.
+  B. fork crossterm like codex did, purely to gain buffer_input. Rejected as the
+     default: supply-chain and maintenance cost for one function.
+
+NOT built. The failure mode of guessing is worse than the gap: probing on a
+second fd races crossterm for the reply and can silently EAT the operator's
+first keystrokes, which is a worse regression than an imprecise hint row. The
+row is marked BLOCKED in the plan's sequencing table.
