@@ -131,6 +131,17 @@ command -v operant && operant --version   # confirm the deployed binary matches
 # installs a stale binary and `operant --version` still prints 0.2.1. Observed
 # twice on 2026-10-06. The artifact's mtime must postdate your commit:
 ls --time-style=full-iso target/release/operant; git log -1 --format=%cI
+# 2026-11-03 iter-1717, MEASURED: the mtime check is HALF the gate and covers
+# only one of the two ways a deploy goes stale. CASE A (a build that failed and
+# left the previous artifact on disk) presents an mtime far older than the
+# commit, and the check above catches it. CASE B (stale CONTENT freshly copied over
+# the deploy path) is INVISIBLE here: `cp` stamps a new mtime on the destination,
+# so mtime >= ctime and this check passes it as fresh. `md5sum` of
+# deployed-vs-running does not close it either -- that is the stale copy compared
+# against itself. The only Case B detector is the CONTENT check, which is why the
+# `--version` line above sits AFTER every copy in the chain and is not optional.
+# Run it, and read the version it prints; do not treat an mtime that looks fresh as
+# proof of a fresh build.
 # Then restart the gateway daemon so it adopts the new inode:
 systemctl --user restart operant-gateway
 # and verify the RUNNING process actually executes the new binary:
