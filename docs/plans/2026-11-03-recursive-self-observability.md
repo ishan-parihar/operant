@@ -290,10 +290,29 @@ owner decision rather than a detail:
   later use.** Cleaner ownership, no race. Needs an explicit policy for surplus
   bytes typed during the probe (drop / queue / replay into the composer), plus a
   bounded deadline and the capped scan codex uses.
+- **C. Infer it at RUNTIME instead of probing at startup -- recommended, and it
+  needs no new fd and no fork.** Upstream crossterm makes the two cases
+  observably different in the decoded event: `parse.rs:92` maps a bare `\r` to
+  an **unmodified** `KeyCode::Enter`, while `:203` routes `CSI ... u` to
+  `parse_csi_u_encoded_key_code`, which yields keycode 13 **with** the shift
+  modifier (`:413`, `:1244`). So a chord the operator pressed and that arrived
+  as plain Enter IS the evidence. Record it once ("this terminal does not
+  report enhanced keys") and let the composer hint row and `/terminal-setup`
+  tell the truth from then on. No keystrokes can be eaten, because nothing is
+  read outside crossterm's own loop, and the only cost is that the first
+  Shift+Enter press behaves as today before the switch flips.
 
-**Owner decision needed** (recorded in ASKS): adopt the upstream crossterm with
-a self-owned fd (B), or fork crossterm like codex did? A fork is a supply-chain
-and maintenance commitment on a hot path, so the default recommendation is B.
+  Note what this is NOT: it is not a probe, so it cannot warn a user who never
+  presses Shift+Enter. That is acceptable -- the hint row only matters once the
+  operator reaches for the key anyway, and the Ctrl+J / Alt+Enter fallbacks are
+  advertised from the start regardless.
+
+**Owner decision needed** (recorded in ASKS Q4): build the runtime inference (C,
+recommended — no new fd, no fork, and no keystroke can be eaten), or do you want
+the codex-style startup probe, in which case its route must be chosen too (B owns
+our own fd; A is rejected because it can eat the operator's first keystrokes; a
+crossterm fork like codex's is rejected as a supply-chain and maintenance
+commitment on a hot input path, for one function).
 Until that is settled, this row is not safely buildable — and building it blind
 risks losing input, which is far worse than an imprecise hint row.
 
@@ -328,7 +347,7 @@ risks losing input, which is far worse than an imprecise hint row.
 |---|---|---|---|
 | 1 | G-2 metric sink | ~40 lines | — |
 | 2 | G-1 step fields | ~60 lines | G-2 (shares the span plumbing) |
-| 3 | G-6 terminal query probe — the only remaining half of G-6 (the PUSH is already built, tested, and live-verified; this is codex's query/read-back half) | **BLOCKED** pending the owner's crossterm decision below — do not build blind | the ASKS decision |
+| 3 | G-6 terminal enhanced-keys support — the only remaining half of G-6 (the PUSH is already built, tested, and live-verified; this is the "does the terminal agree" half) | **BLOCKED** on ASKS Q4's route choice — route C (runtime inference, recommended) is ~40 lines and needs no fd or fork; route B (own fd + startup probe) is ~120 and needs a surplus-byte policy | ASKS Q4 |
 | 4 | G-3 failure counters | ~120 lines + one subcommand | — |
 | 5 | G-4 advisor persistence | ~80 lines | 4 (same session-store write) |
 | 6 | G-5 config drift | ~100 lines | — |

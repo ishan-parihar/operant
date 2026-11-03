@@ -856,3 +856,44 @@ pre-change base (33552dfd) runs the test and it FAILS there too. The worktree wa
 then removed; its `vendor/` was tracked build provisioning rather than a peer's
 WIP, which I checked BEFORE force-removing (fleet rule 11), and the main repo's
 vendor/ is intact.
+
+2026-11-03: a THIRD route for G-6 that the blocker made visible -- infer it at
+runtime, no fd and no fork
+--------------------------------------------------------------------------------
+The previous entry framed G-6's remaining half as blocked between two options,
+both of which assume the answer must come from a STARTUP PROBE. Pushed one step
+further and found that assumption unnecessary.
+
+Upstream crossterm 0.29 already makes the two cases observably different in the
+DECODED EVENT, so the terminal's agreement can be inferred at runtime with no new
+fd, no fork, and no keystroke at risk:
+
+  parse.rs:92    -> a bare '\r' decodes to an UNMODIFIED KeyCode::Enter
+  parse.rs:203   -> a 'CSI ... u' route goes to parse_csi_u_encoded_key_code,
+                    which yields keycode 13 WITH the shift modifier
+                    (keycode table at :413, the enriched-key path at :1244)
+
+So a chord the operator pressed that arrives as a plain unmodified Enter IS the
+evidence that this terminal does not report enhanced keys. Record it once and the
+composer hint row and /terminal-setup can tell the truth from then on. Nothing is
+read outside crossterm's own loop, so no keystroke can be eaten -- which removes
+the exact hazard that made the probe routes dangerous.
+
+Its two honest costs: the FIRST Shift+Enter press behaves as today before the
+switch flips, and it cannot warn a user who never presses the key. Both are
+acceptable, because the hint row only matters once the operator reaches for the
+key, and Ctrl+J / Alt+Enter are advertised from the start regardless.
+
+Why I did not just build it: route C is ~40 lines and does change operator-facing
+copy (what the composer advertises), so the choice between it and codex's
+startup probe is a product decision rather than an implementation detail. ASKS Q4
+now carries all three routes with C recommended, and the sequencing row names the
+size of each. The three routes, for the record:
+
+  A probe on a SECOND fd  -- REJECTED. Races crossterm for the reply and can
+                            silently eat the operator's first keystrokes: a
+                            worse regression than the gap it closes.
+  B own our own fd, probe before crossterm's loop starts, surplus-byte policy.
+  C infer at runtime.     -- RECOMMENDED, see above.
+  (forking crossterm for buffer_input -- REJECTED: supply-chain and maintenance
+   cost on a hot input path, for one function.)
