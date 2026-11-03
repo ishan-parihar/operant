@@ -1,0 +1,19 @@
+{
+  "name": "tool-row-click-collapses",
+  "surface": "crates/operant-cli/src/tui/app/prompt.rs::toggle_tool_expansion_by_id",
+  "opens_with": "(/voice to clear the boot notice; three bash rows come from the agent script)",
+  "keys": "/voice<enter>",
+  "mouse": "<left,4,22><left,4,22>",
+  "size": "120x40",
+  "assert": [
+    "tool_calls_seen contains x1",
+    "expanded_tool_id == \"null\""
+  ],
+  "assert_screen": [
+    "contains:Running three commands"
+  ],
+  "notes": "2026-11-03, plan plan-2026-11-03-tool-row-click-expand-acceptance.md, Change 4, collapse half. The single most valuable assertion pair in this scenario is `expanded_tool_id == \"null\"`: a stale-state regression (the toggle sets the id but never clears it, or clears it only on a DIFFERENT row) expands correctly on the first click and then lies forever after. The expand scenario alone cannot catch that; it never issues a second click.\n\n`== \"null\"` is the DSL's Null comparison, not an empty string: evaluate_assertions (cmd_tui_debug.rs:1395) maps serde_json::Value::Null to the string \"null\" for ==. An empty-string comparison here would silently never match.\n\nSame row twice, by design. `toggle_tool_expansion_by_id` is the ONLY place that clears the id, so a second click on the SAME row is the one gesture that reaches the collapse branch. Clicking a different row instead would move the expansion and never collapse \u2014 that is a different contract, and it is pinned by clicking_a_tool_row_toggles_that_call_only in-process.\n\nBoth scenarios share agent_script tool-row-expansion.json so the two differ in exactly one dimension (the number of clicks) and nothing else. That is what makes the pair a guard rather than two independent greens.",
+  "agent_script": "tool-row-expansion.json",
+  "baseline": "tool-row-click-collapses.txt",
+  "style_baseline": "tool-row-click-collapses.style.txt"
+}

@@ -3,6 +3,29 @@
 Dated-frozen: published `2026-11-03`. Registered in `genome.toml`
 `core.living_plans`.
 
+## Landing status (updated 2026-11-03 — these rows are append-only history)
+
+| Part | State | Commit |
+|---|---|---|
+| Change 1 — tail-3 collapsed preview + `(no output)` row | **LANDED** | `feat(iter-1697)` `da9515e7` |
+| Change 2 — snapshot keys `expanded_tool_id` / `tool_full_outputs` / `tool_calls_seen` | **LANDED** | `feat(iter-1697)` `da9515e7` |
+| Change 3 — unit test pinning the keys | **LANDED** | `feat(iter-1697)` `da9515e7` |
+| ctrl+O collapse half re-pinned to tail-3 | **LANDED** | `test(iter-1699)` `6cc711ad` |
+| Change 4 — two corpus scenarios | **PENDING** | — |
+| Per-row diff expand/collapse | **DEFERRED** to a sibling plan; the blocker is now measured and written below | — |
+
+Verification at landing: full `operant-cli` suite **2098 passed / 1 failed**,
+the failure (`render_side_panel_markdown_without_native_protocol_shows_mermaid_source`)
+proven pre-existing — its file was last touched at iter-910, it failed
+identically before this work, and no file in these commits is reachable from
+it. `genome lint`: 0 errors, 5 warnings.
+
+Mutation-proven: deleting the `expanded_tool_id` line from the snapshot fails
+`debug_snapshot_exposes_tool_row_expansion_state` loudly. The *relocate-to-
+overlays* mutation was NOT run — two attempts failed to compile — so that half
+of the invariant rests on the static assertion that the key is absent from
+`overlays`, not on a compiled-and-caught mutation.
+
 ## The request
 
 Close the one gap that the RT-144/145/146 validation round (iters 1668 and
@@ -129,26 +152,62 @@ untouched.
 markers, `tool_output_looks_failed`, and the compaction-facing
 `output_preview` field's existence. Only *which lines* it holds changes.
 
-### Change 2 — the per-row diff expand
+### Change 2 — the per-row diff expand (deferred — it needs a cache-key
+change, and iter-1697 landed the tail-3 half without it)
 
-Deliberately deferred to a sibling plan. Reasons, measured not guessed:
+Measured on 2026-11-03 (iter-1697/1699), not guessed. The blocker is the
+message-lines cache, and it is a *different* cache from the one this plan
+originally named:
 
-- The diff render reads global `app.diff_mode()` and is reached through a
-  message-lines cache keyed on `(content_len, content_width, centered,
-  diff_mode, cached_len)` (`ui_prepare.rs:31-36, 168-173`). A per-row toggle has
-  to either thread a per-row state into that key or bypass the cache for the
-  expanded row. Both are real design decisions with blast radius across
-  `FullPrepCacheKey`, the head/tail prefix reuse at `ui_prepare.rs:2505-2522`,
-  and `ui_memory_estimates.rs`.
-- `FullInline` already delivers the *content* the operator asked for — every
-  edit's full diff, no truncation — without any new machinery. The missing
-  piece is that it is global, not that it is absent.
-- Shipping the tail-3 fix (high value, ~6 lines) in the same iteration as a
-  cache-key redesign would bury it.
+**The wrong claim, corrected.** This section used to say the cache was keyed
+on `(content_len, content_width, centered, diff_mode, cached_len)` at
+`ui_prepare.rs:31-36, 168-173`. That is not the operative cache. The real one
+is `MessageCacheKey` in `operant_ui/../operant_model/cache.rs:13-26`:
 
-The sibling plan's job is to make `DiffDisplayMode` per-row-capable by reusing
-`ToolRowRange` (already click-mapped) and `edit_tool_inline_diff_lines`
-(already parsed), with the cache-key change proven by a mutation test.
+```rust
+struct MessageCacheKey {
+    width, diff_mode, message_hash, content_len,
+    diagram_mode, centered, mermaid_epoch, mermaid_aspect_bucket,
+    show_agentgrep_output, show_bash_output, tool_call_details,
+}
+```
+
+There is no transcript version and no expanded-id in it. FullPrepCacheKey
+(`ui_prepare.rs:763-790`) is a *frame* cache, not this row cache, and it does
+not protect this path.
+
+**Why tool-OUTPUT expansion survives anyway.** `adapter.rs:388-389` puts the
+retained full text into `msg.content` for the expanded row, so `content_len`
+and `message_hash` both change and the key misses. Correct, but by accident of
+what the content happens to be.
+
+**Why a per-row DIFF expansion is NOT safe.** `edit_tool_inline_diff_lines`
+(`ui_messages.rs:3622`) parses the diff from `tc` (the tool call's input /
+patch text) plus `content`. Toggling only a diff's FULLNESS changes neither, so
+the key is unchanged and the renderer is handed a stale cached COLLAPSED row.
+That is the defect the sibling plan must close first.
+
+The fix has three parts, in order:
+1. `render_tool_message` (`ui_messages.rs:4111`) takes `diff_mode` as a plain
+   parameter and has no `app` in scope, so per-row state must arrive as an
+   argument from its production caller `ui_prepare.rs:1724` (which does hold
+   `app` and already reads `app.diff_mode()`).
+2. Add the per-row decision to `MessageCacheKey` (or bypass the cache for the
+   expanded row), carrying it through `MessageCacheContext` in
+   `ui_messages_cache.rs:9-49`.
+3. Keep the two existing global-mode gate sites consistent:
+   `ui_messages.rs:4582` (`full_inline = diff_mode.is_full_inline()`), and
+   `ui_viewport.rs:789` / `:812` (the `EditToolRange` click path, which already
+   conditions on `!app.diff_mode().is_full_inline()`).
+
+Prove step 2 with a mutation test: render once, toggle the row, assert the
+lines actually change. Without that test the stale cache returns and the
+feature silently no-ops — the exact failure mode this whole plan exists to
+prevent.
+
+`FullInline` already delivers the *content* the operator asked for — every
+edit's full diff, no truncation — without any new machinery; what it lacks is
+per-row-ness, and it stays the operator's knob in the meantime.
 
 No change is needed in `cmd_tui_debug.rs`: `evaluate_assertions`
 (`cmd_tui_debug.rs:1355`) navigates the snapshot by dot-path generically, so a

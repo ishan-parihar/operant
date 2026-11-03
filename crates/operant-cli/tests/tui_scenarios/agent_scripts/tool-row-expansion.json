@@ -1,0 +1,11 @@
+[
+  {"type":"content","text":"Running three commands so a collapsed preview and its expansion are both observable."},
+  {"type":"tool_start","id":"x1","name":"bash","arguments":"{\"command\":\"cargo build --release\"}"},
+  {"type":"tool_start","id":"x2","name":"bash","arguments":"{\"command\":\"cargo test --workspace\"}"},
+  {"type":"tool_start","id":"x3","name":"bash","arguments":"{\"command\":\"cargo clippy\"}"},
+  {"type":"tool_complete","id":"x1","name":"bash","output":"   Compiling operant-core v0.3.0\n   Compiling operant-cli v0.3.0\n    Finished `release` profile [warnings] target(s) in 41.22s"},
+  {"type":"tool_complete","id":"x2","name":"bash","output":"   Compiling operant-core v0.3.0\nrunning 2098 tests\nfailures:\noperant-cli bin: 1 failed, 2097 passed"},
+  {"type":"tool_complete","id":"x3","name":"bash","output":"warning: unused variable\n    Checking operant-core v0.3.0\n    Finished `dev` profile [unoptimized] target(s) in 12.06s"},
+  {"type":"content","text":"All three finished; the middle one failed."},
+  {"type":"done","text":"Done."}
+]

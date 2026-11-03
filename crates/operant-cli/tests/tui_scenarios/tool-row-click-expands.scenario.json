@@ -1,0 +1,20 @@
+{
+  "name": "tool-row-click-expands",
+  "surface": "crates/operant-cli/src/tui/app/prompt.rs::toggle_tool_expansion_by_id",
+  "opens_with": "(/voice to clear the boot notice; three bash rows come from the agent script)",
+  "keys": "/voice<enter>",
+  "mouse": "<left,4,22>",
+  "size": "120x40",
+  "assert": [
+    "tool_calls_seen contains x1",
+    "tool_full_outputs contains x1",
+    "expanded_tool_id == \"x1\""
+  ],
+  "assert_screen": [
+    "contains:Running three commands"
+  ],
+  "notes": "2026-11-03, plan plan-2026-11-03-tool-row-click-expand-acceptance.md, Change 4. The observability half of the click-to-expand feature: debug_snapshot now publishes expanded_tool_id / tool_full_outputs / tool_calls_seen (commands.rs, beside selection_*, NOT in overlays \u2014 an open tool row is not a modal and any_modal_open() gates error-modal precedence, toast suppression and key routing). Without them a regression that breaks click-to-expand leaves every scenario green, which is exactly what the RT-146 validation round could not see.\n\nDeliberately a STATE assertion, not a screen one. The collapsed preview body renders only under show_tool_call_details, and tests_show_bash_output_override is #[cfg(test)] in THIS crate \u2014 a separate shipped `operant tui debug simulate` process cannot flip it \u2014 so a screen oracle for this feature is structurally impossible. `contains:Running three commands` is the only screen assertion and it pins the seeded transcript arrived, not the expansion.\n\nThe click coordinate is the row-25 of the boot Notice-cleared frame; the row-map seam (ToolRowRange, published from the real prepared frame) is what makes a coordinate legitimately a tool row rather than a guess. Row membership is pinned by the unit test app_with_three_clickable_tools / clicking_a_tool_row_toggles_that_call_only; this scenario proves the SAME contract survives the trip through a real subprocess and its snapshot.\n\nMutation-proven sibling: deleting the `expanded_tool_id\"` line from the snapshot fails debug_snapshot_exposes_tool_row_expansion_state. The relocate-into-overlays mutation was NOT run (two attempts failed to compile); that half of the invariant rests on the static `snap[\"overlays\"].get(\"expanded_tool_id\").is_none()` assertion in the unit test.",
+  "agent_script": "tool-row-expansion.json",
+  "baseline": "tool-row-click-expands.txt",
+  "style_baseline": "tool-row-click-expands.style.txt"
+}
