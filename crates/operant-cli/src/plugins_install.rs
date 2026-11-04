@@ -1,8 +1,10 @@
-//! Plugin installation from Git repositories.
-//! Ported from operant-agent/operant_cli/plugins_cmd.py.
+//! Plugin installation from Git repositories and plugin scaffolding
+//! (`operant plugins new` / `operant plugins validate` — gap G7, the creator
+//! mode).
+//! The install half is ported from operant-agent/operant_cli/plugins_cmd.py.
 
 use anyhow::{Context, Result};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// Install a plugin from a git URL or owner/repo shorthand.
@@ -79,13 +81,184 @@ fn derive_plugin_name(identifier: &str) -> String {
         .unwrap_or_else(|| name.to_string())
 }
 
+/// Scaffold a new plugin project (gap G7 — the creator mode).
+///
+/// Writes a minimal, validator-accepted plugin directory at `dest`: the
+/// manifest (`manifest.toml`), the capability's export-contract README, and —
+/// for WASM capabilities — a `Cargo.toml` + `src/lib.rs` PDK stub. Returns
+/// the scaffold directory. Pure templating; nothing is installed.
+pub fn scaffold_plugin(name: &str, capability: &str, dest: &Path) -> Result<PathBuf> {
+    if !name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        anyhow::bail!(
+            "invalid plugin name '{name}': use letters, digits, '-' or '_' (it doubles as the directory name)"
+        );
+    }
+    match capability {
+        "tool" | "observer" | "memory" | "skill" => {}
+        other => {
+            anyhow::bail!("unknown capability '{other}': expected tool, observer, memory or skill")
+        }
+    }
+    if dest.exists() {
+        anyhow::bail!(
+            "'{}' already exists — refusing to overwrite",
+            dest.display()
+        );
+    }
+
+    let manifest = if capability == "skill" {
+        format!(
+            "name = \"{name}\"\nversion = \"0.1.0\"\ndescription = \"{name} — scaffolded by operant plugins new\"\ncapabilities = [\"skill\"]\n"
+        )
+    } else {
+        format!(
+            "name = \"{name}\"\nversion = \"0.1.0\"\ndescription = \"{name} — scaffolded by operant plugins new\"\ncapabilities = [\"{capability}\"]\nwasm_path = \"{name}.wasm\"\n# permissions = [\"http_client\"]  # request host permissions (docs/library/plugins.md)\n# [config]                       # optional free-form table; rides the observe envelope verbatim\n"
+        )
+    };
+    let skill_rel = format!("skills/{name}/SKILL.md");
+    let files: Vec<(&str, String)> = match capability {
+        "tool" | "observer" | "memory" => vec![
+            ("manifest.toml", manifest),
+            ("README.md", readme_for(name, capability)),
+            ("Cargo.toml", cargo_toml_for(name)),
+            ("src/lib.rs", lib_rs_for(name, capability)),
+        ],
+        // skill-only plugins carry no WASM payload; the manifest omits wasm_path
+        _ => vec![
+            ("manifest.toml", manifest),
+            ("README.md", readme_for(name, capability)),
+            (skill_rel.as_str(), skill_md_for(name)),
+        ],
+    };
+    for (rel, content) in &files {
+        let path = dest.join(rel);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("Failed to create {}", parent.display()))?;
+        }
+        std::fs::write(&path, content)
+            .with_context(|| format!("Failed to write {}", path.display()))?;
+    }
+    Ok(dest.to_path_buf())
+}
+
+/// The author's contract sheet: every WASM export the capability must provide,
+/// plus the build + install loop.
+fn readme_for(name: &str, capability: &str) -> String {
+    let mut s = format!(
+        "# {name}\n\nScaffolded by `operant plugins new {name} --capability {capability}`.\n\n"
+    );
+    match capability {
+        "tool" => s.push_str(
+            "## Export contract (WASM exports)\n\n\
+- `tool_metadata` — returns JSON `{\"name\", \"description\", \"parameters_schema\"}` \
+(parameters_schema is the tool's JSON Schema). Called once at discovery; a missing \
+export falls back to manifest defaults.\n\
+- `execute` — receives the tool-call arguments as JSON, returns \
+`{\"success\": bool, \"output\": string, \"error\": string?}`.\n",
+        ),
+        "observer" => s.push_str(
+            "## Export contract (WASM exports)\n\n\
+- `observe` — receives an interception event \
+`{\"point\": \"tools/pre-execute\"|\"tools/post-execute\", \"tool\", \"args\", \"result\", \"config\"}` \
+(`result` is null on pre-execute; `config` is the manifest `[config]` table verbatim). \
+Returns a verdict: `{\"action\":\"allow\"}` or `{\"action\":\"block\",\"reason\":\"...\"}`. \
+The host FAILS OPEN: a broken export, a failed module or a busy instance pool never \
+blocks a tool.\n",
+        ),
+        "memory" => s.push_str(
+            "## Export contract (WASM exports)\n\n\
+- `prefetch` — query in, memories out (an odd output degrades to an empty recall)\n\
+- `sync_turn` — per-turn write-back\n\
+- `tool_schemas` — the memory tools this provider contributes (read once at load)\n\n\
+Only ONE memory plugin may be active at a time. Exact JSON shapes: \
+`crates/operant-cli/src/plugin_memory.rs`.\n",
+        ),
+        "skill" => s.push_str(&format!(
+            "## Skill layout\n\n\
+`skills/{name}/SKILL.md` — agents.io-format skill: YAML frontmatter (`name` + \
+`description`), then the markdown instructions. No WASM required.\n"
+        )),
+        _ => {}
+    }
+    if capability == "skill" {
+        s.push_str(&format!(
+            "\n## Install\n\n```sh\noperant plugins install file://$PWD/{name}\n```\n"
+        ));
+    } else {
+        s.push_str(&format!(
+            "\n## Build & install\n\n```sh\nrustup target add wasm32-wasip1\ncargo build --release --target wasm32-wasip1\ncp target/wasm32-wasip1/release/{name}.wasm .\noperant plugins install file://$PWD/{name}\noperant plugins list   # verify\n```\n"
+        ));
+    }
+    s
+}
+
+fn cargo_toml_for(name: &str) -> String {
+    format!(
+        "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
+[lib]\ncrate-type = [\"cdylib\"]\n\n\
+[dependencies]\nextism-pdk = \"1\"\nserde = {{ version = \"1\", features = [\"derive\"] }}\nserde_json = \"1\"\n"
+    )
+}
+
+fn lib_rs_for(name: &str, capability: &str) -> String {
+    let header = format!("//! {name} — operant {capability} plugin (scaffold).\n");
+    match capability {
+        "tool" => format!(
+            "{header}//!\n//! Contract: `tool_metadata` returns the tool card, `execute` runs the tool.\n\
+use extism_pdk::{{plugin_fn, FnResult, Json}};\nuse serde::{{Deserialize, Serialize}};\n\n\
+#[derive(Serialize)]\nstruct ToolMetadata {{\n    name: String,\n    description: String,\n    parameters_schema: serde_json::Value,\n}}\n\n\
+#[derive(Serialize)]\nstruct ToolResult {{\n    success: bool,\n    output: String,\n    #[serde(skip_serializing_if = \"Option::is_none\")]\n    error: Option<String>,\n}}\n\n\
+#[plugin_fn]\npub fn tool_metadata(_input: String) -> FnResult<Json<ToolMetadata>> {{\n    \
+Ok(Json(ToolMetadata {{\n        name: \"{name}\".into(),\n        description: \"scaffolded demo tool — replace me\".into(),\n        \
+parameters_schema: serde_json::json!({{\"type\": \"object\", \"properties\": {{}}}}),\n    }}))\n}}\n\n\
+#[plugin_fn]\npub fn execute(input: String) -> FnResult<Json<ToolResult>> {{\n    \
+// `input` is the tool-call arguments JSON; do the work here.\n    \
+Ok(Json(ToolResult {{ success: true, output: format!(\"{name} received: {{input}}\"), error: None }}))\n}}\n"
+        ),
+        "observer" => format!(
+            "{header}//!\n//! Contract: `observe` receives the interception envelope and returns a verdict.\n\
+//! The host fails open — a broken observer never blocks a tool — so the scaffold\n\
+//! default is Allow.\n\
+use extism_pdk::{{plugin_fn, FnResult, Json}};\nuse serde::{{Deserialize, Serialize}};\n\n\
+#[derive(Deserialize)]\nstruct ObserveEvent {{\n    point: String,\n    tool: String,\n    args: serde_json::Value,\n    result: Option<serde_json::Value>,\n    config: serde_json::Value,\n}}\n\n\
+#[derive(Serialize)]\n#[serde(tag = \"action\", rename_all = \"snake_case\")]\nenum Verdict {{\n    Allow,\n    Block {{ reason: String }},\n}}\n\n\
+#[plugin_fn]\npub fn observe(event: Json<ObserveEvent>) -> FnResult<Json<Verdict>> {{\n    \
+let _ = event; // your policy here\n    Ok(Json(Verdict::Allow))\n}}\n"
+        ),
+        _ => format!(
+            "{header}//!\n//! Contract (graceful degradation): `prefetch`, `sync_turn`, `tool_schemas`.\n\
+//! A missing export or an odd output degrades to an empty recall / no-op sync.\n\
+//! Only ONE memory plugin may be active at a time.\n\
+use extism_pdk::{{plugin_fn, FnResult, Json}};\nuse serde::Deserialize;\n\n\
+#[derive(Deserialize)]\nstruct PrefetchQuery {{\n    query: String,\n}}\n\n\
+#[plugin_fn]\npub fn prefetch(_query: Json<PrefetchQuery>) -> FnResult<Json<serde_json::Value>> {{\n    \
+Ok(Json(serde_json::json!([])))\n}}\n\n\
+#[plugin_fn]\npub fn sync_turn(_input: String) -> FnResult<Json<serde_json::Value>> {{\n    \
+Ok(Json(serde_json::json!({{}})))\n}}\n\n\
+#[plugin_fn]\npub fn tool_schemas(_input: String) -> FnResult<Json<serde_json::Value>> {{\n    \
+Ok(Json(serde_json::json!([])))\n}}\n"
+        ),
+    }
+}
+
+fn skill_md_for(name: &str) -> String {
+    format!(
+        "---\nname: {name}\ndescription: scaffolded skill — replace this description\n---\n\n\
+# {name}\n\nInstructions the agent follows when this skill is invoked. Replace with real steps.\n"
+    )
+}
+
 /// Validate that a plugin directory has a usable manifest.
 ///
 /// `manifest.toml` is the ONE manifest authority (the WASM host's format —
 /// validated with the host's own parser, so an install-time rejection names
 /// the same defect discovery would); `plugin.yaml` / `__init__.py` are the
 /// python-era fallbacks kept for old installs.
-fn validate_plugin(plugin_dir: &Path) -> Result<()> {
+pub fn validate_plugin(plugin_dir: &Path) -> Result<()> {
     let manifest_path = plugin_dir.join("manifest.toml");
     if manifest_path.exists() {
         #[cfg(feature = "plugins-wasm")]
@@ -349,5 +522,104 @@ mod tests {
     fn test_check_git_available() {
         // This should be true in any dev environment with git installed
         assert!(check_git_available());
+    }
+
+    // ── scaffolding (gap G7, creator mode) ─────────────────────────────
+
+    #[test]
+    fn test_scaffold_tool_produces_a_validator_accepted_directory() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let dir = scaffold_plugin("demo", "tool", &tmp.path().join("demo")).unwrap();
+        // the gate: the installer's own validator accepts what `new` produced
+        validate_plugin(&dir).unwrap();
+        let manifest = fs::read_to_string(dir.join("manifest.toml")).unwrap();
+        assert!(manifest.contains("capabilities = [\"tool\"]"));
+        assert!(manifest.contains("wasm_path = \"demo.wasm\""));
+        assert!(dir.join("Cargo.toml").exists());
+        let lib = fs::read_to_string(dir.join("src/lib.rs")).unwrap();
+        assert!(lib.contains("pub fn tool_metadata"));
+        assert!(lib.contains("pub fn execute"));
+        let readme = fs::read_to_string(dir.join("README.md")).unwrap();
+        assert!(readme.contains("tool_metadata"));
+        assert!(readme.contains("parameters_schema"));
+        assert!(readme.contains("wasm32-wasip1"));
+    }
+
+    #[test]
+    fn test_scaffold_observer_names_the_envelope_and_verdict() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let dir = scaffold_plugin("watch", "observer", &tmp.path().join("watch")).unwrap();
+        validate_plugin(&dir).unwrap();
+        let readme = fs::read_to_string(dir.join("README.md")).unwrap();
+        // every contract element the envelope carries
+        for needle in [
+            "observe",
+            "pre-execute",
+            "post-execute",
+            "action",
+            "allow",
+            "block",
+            "config",
+        ] {
+            assert!(readme.contains(needle), "README missing '{needle}'");
+        }
+        let lib = fs::read_to_string(dir.join("src/lib.rs")).unwrap();
+        assert!(lib.contains("pub fn observe"));
+        assert!(lib.contains("Verdict::Allow"));
+    }
+
+    #[test]
+    fn test_scaffold_skill_has_no_wasm_and_carries_a_skill_md() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let dir = scaffold_plugin("guide", "skill", &tmp.path().join("guide")).unwrap();
+        validate_plugin(&dir).unwrap();
+        let manifest = fs::read_to_string(dir.join("manifest.toml")).unwrap();
+        assert!(manifest.contains("capabilities = [\"skill\"]"));
+        assert!(!manifest.contains("wasm_path"));
+        assert!(!dir.join("Cargo.toml").exists());
+        let skill = fs::read_to_string(dir.join("skills/guide/SKILL.md")).unwrap();
+        assert!(skill.contains("name: guide"));
+    }
+
+    #[test]
+    fn test_scaffold_memory_names_the_three_exports() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let dir = scaffold_plugin("mem", "memory", &tmp.path().join("mem")).unwrap();
+        validate_plugin(&dir).unwrap();
+        let readme = fs::read_to_string(dir.join("README.md")).unwrap();
+        for needle in ["prefetch", "sync_turn", "tool_schemas"] {
+            assert!(readme.contains(needle), "README missing '{needle}'");
+        }
+    }
+
+    #[test]
+    fn test_scaffold_refuses_existing_dir_bad_names_and_capabilities() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let dest = tmp.path().join("demo");
+        fs::create_dir(&dest).unwrap();
+        assert!(
+            scaffold_plugin("demo", "tool", &dest)
+                .unwrap_err()
+                .to_string()
+                .contains("already exists")
+        );
+        assert!(scaffold_plugin("a/b", "tool", &tmp.path().join("x")).is_err());
+        assert!(scaffold_plugin("demo", "banana", &tmp.path().join("y")).is_err());
+    }
+
+    #[test]
+    fn test_validate_rejects_a_broken_scaffold() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let dir = tmp.path().join("broken");
+        fs::create_dir(&dir).unwrap();
+        fs::write(dir.join("manifest.toml"), "not = [valid\n").unwrap();
+        let result = validate_plugin(&dir);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("not a valid plugin manifest")
+        );
     }
 }

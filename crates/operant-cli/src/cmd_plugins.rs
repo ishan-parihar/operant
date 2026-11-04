@@ -2,6 +2,8 @@
 //!
 //! Provides plugin lifecycle management:
 //! - `operant plugins list` — list installed plugins
+//! - `operant plugins new <name> --capability <c>` — scaffold a plugin project (creator mode)
+//! - `operant plugins validate <path>` — validate a plugin directory's manifest
 //! - `operant plugins install <identifier>` — install a plugin from git URL or path
 //! - `operant plugins remove <name>` — remove/uninstall a plugin
 //! - `operant plugins enable <name>` — enable a plugin
@@ -48,6 +50,19 @@ pub enum PluginsSubcommand {
         /// Plugin name to toggle
         name: String,
     },
+    /// Scaffold a new plugin project in the current directory (creator mode)
+    New {
+        /// Plugin name (also the directory name created here)
+        name: String,
+        /// Capability to scaffold: tool | observer | memory | skill
+        #[arg(long)]
+        capability: String,
+    },
+    /// Validate a plugin directory's manifest (the installer's own validator)
+    Validate {
+        /// Path to the plugin directory
+        path: String,
+    },
 }
 
 pub async fn handle_plugins_command(config: &AppConfig, cmd: PluginsSubcommand) -> Result<()> {
@@ -62,6 +77,8 @@ pub async fn handle_plugins_command(config: &AppConfig, cmd: PluginsSubcommand) 
         PluginsSubcommand::Enable { name } => enable_plugin(config, &name).await,
         PluginsSubcommand::Disable { name } => disable_plugin(config, &name).await,
         PluginsSubcommand::Toggle { name } => toggle_plugin(config, &name).await,
+        PluginsSubcommand::New { name, capability } => new_plugin(&name, &capability),
+        PluginsSubcommand::Validate { path } => validate_plugin_cmd(&path),
     }
 }
 
@@ -218,6 +235,34 @@ async fn toggle_plugin(config: &AppConfig, name: &str) -> Result<()> {
     } else {
         enable_plugin(config, name).await
     }
+}
+
+/// Scaffold a plugin project (creator mode, gap G7): write the directory,
+/// print the edit → build → install loop.
+fn new_plugin(name: &str, capability: &str) -> Result<()> {
+    let dest = std::env::current_dir()?.join(name);
+    let dir = crate::plugins_install::scaffold_plugin(name, capability, &dest)?;
+    println!("Scaffolded {capability} plugin at {}", dir.display());
+    println!("Next steps (the export contract is in README.md):");
+    if capability != "skill" {
+        println!("  1. edit src/lib.rs");
+        println!("  2. rustup target add wasm32-wasip1");
+        println!("  3. cargo build --release --target wasm32-wasip1");
+        println!("  4. cp target/wasm32-wasip1/release/{name}.wasm .");
+    } else {
+        println!("  1. edit skills/{name}/SKILL.md");
+    }
+    println!("  ?. operant plugins validate {}", dir.display());
+    println!("  ?. operant plugins install file://{}", dir.display());
+    Ok(())
+}
+
+/// Validate a plugin directory with the installer's own manifest validator.
+fn validate_plugin_cmd(path: &str) -> Result<()> {
+    let dir = PathBuf::from(path);
+    crate::plugins_install::validate_plugin(&dir)?;
+    println!("OK: {} has a valid manifest.toml.", dir.display());
+    Ok(())
 }
 
 /// Recursively compute the total size of a directory in bytes.

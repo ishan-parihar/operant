@@ -86,6 +86,23 @@ From git repositories or paths (`plugins_install.rs`);
 surface. `[plugins] plugin_dirs / signature_mode /
 trusted_publisher_keys / disabled` in the config is the policy surface.
 
+## Creating a plugin (creator mode, gap G7 — iter-1730)
+
+`operant plugins new <name> --capability <tool|observer|memory|skill>`
+scaffolds a project directory in the CWD: `manifest.toml` (with the chosen
+capability), the capability's export-contract `README.md`, and for WASM
+capabilities a `Cargo.toml` + `src/lib.rs` PDK stub (extism-pdk). Skill
+scaffolds write `skills/<name>/SKILL.md` and carry no WASM. The export
+contracts the scaffold names: tools export `tool_metadata` + `execute`;
+observers export `observe` (the interception envelope: point, tool, args,
+result, config — verdict `allow`/`block`, host fails open); memory exports
+`prefetch`/`sync_turn`/`tool_schemas` with graceful degradation. Build with
+`cargo build --release --target wasm32-wasip1`, copy the module next to the
+manifest, `operant plugins validate <dir>` (the installer's own manifest
+validator — one authority), then `operant plugins install file://<abs-path>`.
+A scaffold's directory passes the validator as-written; the loop after that
+is edit → validate → build → install.
+
 ## Intention
 
 Plugins are the answer to "extend without recompiling": the harness
