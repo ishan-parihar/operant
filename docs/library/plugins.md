@@ -52,10 +52,16 @@ with the host's own parser) with capabilities and, since iter-1721,
   gateway adapters are a compile-time registry, and no dynamic channel
   consumer exists yet.
 
-`requires` (deepseek-harness `inject` parity, collapsed): names of OTHER
-plugins that must be present. A plugin whose requires are unmet is
-skipped at discovery, transitively (A requires missing B drops A; C
-requiring A drops too); mutual requires are satisfied, not a deadlock.
+`requires` (deepseek-harness `inject` parity, collapsed): names that must
+be present at discovery — either ANOTHER PLUGIN's name or a service name
+another plugin `provides` (iter-1726; dsh composes on service names:
+`ctx.provide('memory.backend')` then `inject: ['memory.backend']` — operant
+collapses the seam to a name match, no fibers). A plugin whose requires
+are unmet is skipped at discovery, transitively (A requires missing B
+drops A; C requiring A drops too); mutual requires are satisfied, not a
+deadlock. `provides` declares the service names a plugin offers; the host
+never resolves them beyond this match — they are composition labels, not
+runtime objects.
 Shortcut: there is no fiber-reload when a provider returns (dsh's
 PENDING state) — a RESTART covers it. The hot-swap watcher does NOT
 cover it: it feeds only the kernel harness seam (`Harness::replace` of

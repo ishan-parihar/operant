@@ -327,7 +327,16 @@ pub fn list_plugin_tools(config: &AppConfig) -> Vec<(String, usize)> {
         Some(p) => p.to_path_buf(),
         None => return Vec::new(),
     };
-    let Ok(host) = operant_plugins::host::PluginHost::new(&parent) else {
+    // Same signature policy as the loader (iter-1726, audit F4): before
+    // this, `PluginHost::new` skipped verification, so under strict the CLI
+    // could LIST plugins the runtime refuses to load.
+    let signature_mode =
+        operant_plugins::host::PluginHost::parse_signature_mode(&config.plugins.signature_mode);
+    let Ok(host) = operant_plugins::host::PluginHost::with_security(
+        &parent,
+        signature_mode,
+        config.plugins.trusted_publisher_keys.clone(),
+    ) else {
         return Vec::new();
     };
     host.tool_plugin_details()
@@ -590,6 +599,7 @@ mod kernel_bridge_tests {
             signature: None,
             publisher_key: None,
             requires: Vec::new(),
+            provides: Vec::new(),
             config: Default::default(),
         }
     }
@@ -846,5 +856,46 @@ mod skill_roots_tests {
         let mut config = config_over(&ws);
         config.plugins.disabled = vec!["demo".to_string()];
         assert!(plugin_skill_roots(&config).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod list_tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    use super::list_plugin_tools;
+    use operant_core::config::AppConfig;
+
+    /// A minimal tool plugin; the module need not be valid — the list path
+    /// reads manifests only (metadata probing happens at boot).
+    fn tool_plugin_workspace() -> tempfile::TempDir {
+        let ws = tempfile::tempdir().expect("workspace");
+        let plugin_dir = ws.path().join("plugins").join("demo-tool");
+        std::fs::create_dir_all(&plugin_dir).expect("plugin tree");
+        std::fs::write(
+            plugin_dir.join("manifest.toml"),
+            "name = \"demo-tool\"\nversion = \"0.1.0\"\ncapabilities = [\"tool\"]\nwasm_path = \"t.wasm\"\n",
+        )
+        .expect("manifest");
+        std::fs::write(plugin_dir.join("t.wasm"), b"not wasm").expect("module");
+        ws
+    }
+
+    #[test]
+    fn the_list_path_enforces_the_same_signature_policy_as_the_loader() {
+        // iter-1726 (audit F4): under strict with NO trusted keys every
+        // plugin is Untrusted — the list must reflect that (empty) rather
+        // than advertising an inventory the runtime refuses to load.
+        let ws = tool_plugin_workspace();
+        let mut strict = AppConfig::default();
+        strict.plugins.plugin_dirs = vec![ws.path().join("plugins")];
+        strict.plugins.signature_mode = "strict".to_string();
+        assert!(list_plugin_tools(&strict).is_empty());
+
+        let mut disabled = AppConfig::default();
+        disabled.plugins.plugin_dirs = vec![ws.path().join("plugins")];
+        assert_eq!(
+            list_plugin_tools(&disabled),
+            vec![("demo-tool".to_string(), 1)]
+        );
     }
 }

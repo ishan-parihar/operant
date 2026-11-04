@@ -122,17 +122,29 @@ impl PluginHost {
         }
 
         // dsh `inject` parity, collapsed to a filter: a plugin whose
-        // `requires` name another plugin that is not present is skipped,
+        // `requires` name a name that is not present is skipped,
         // transitively (A requires missing B drops A; C requiring A then
-        // drops too). shortcut: no fiber reload when a provider returns
-        // (dsh's PENDING state); a restart or watcher re-scan covers it —
-        // upgrade only if live provider swap ever matters.
+        // drops too). A require is satisfied by another PLUGIN's name or by
+        // a service name another plugin `provides` (iter-1726) — the
+        // service-level half of dsh's provide/inject composition, still
+        // with no fibers. shortcut: no fiber reload when a provider returns
+        // (dsh's PENDING state); a RESTART covers it (the watcher feeds
+        // only the kernel harness seam — red-team audit S3); upgrade only
+        // if live provider swap ever matters.
         loop {
             let unmet: Vec<String> = {
                 // Borrow of `loaded` scoped to the collect — the removals
                 // below must run with it dead.
-                let names: std::collections::HashSet<&str> =
-                    self.loaded.keys().map(String::as_str).collect();
+                let names: std::collections::HashSet<&str> = self
+                    .loaded
+                    .keys()
+                    .map(String::as_str)
+                    .chain(
+                        self.loaded
+                            .values()
+                            .flat_map(|p| p.manifest.provides.iter().map(String::as_str)),
+                    )
+                    .collect();
                 self.loaded
                     .values()
                     .filter(|p| {
@@ -885,17 +897,25 @@ capabilities = ["tool"]
         assert!(host.memory_plugin_details().is_empty());
     }
 
-    /// Write a tool plugin whose manifest optionally declares `requires`.
+    /// Write a tool plugin whose manifest optionally declares `requires`
+    /// and `provides`.
     fn write_tool_plugin_with_requires(base: &Path, name: &str, requires: Option<&str>) {
+        write_tool_plugin(base, name, requires, None);
+    }
+
+    fn write_tool_plugin(base: &Path, name: &str, requires: Option<&str>, provides: Option<&str>) {
         let plugin_dir = base.join(name);
         std::fs::create_dir_all(&plugin_dir).unwrap();
         let req = requires
             .map(|r| format!("requires = [\"{r}\"]\n"))
             .unwrap_or_default();
+        let prov = provides
+            .map(|p| format!("provides = [\"{p}\"]\n"))
+            .unwrap_or_default();
         std::fs::write(
             plugin_dir.join("manifest.toml"),
             format!(
-                "name = \"{name}\"\nversion = \"0.1.0\"\nwasm_path = \"p.wasm\"\ncapabilities = [\"tool\"]\n{req}"
+                "name = \"{name}\"\nversion = \"0.1.0\"\nwasm_path = \"p.wasm\"\ncapabilities = [\"tool\"]\n{req}{prov}"
             ),
         )
         .unwrap();
@@ -929,5 +949,33 @@ capabilities = ["tool"]
         let host = PluginHost::new(dir.path()).unwrap();
         assert_eq!(host.list_plugins().len(), 4);
         assert_eq!(host.tool_plugins().len(), 4);
+    }
+
+    #[test]
+    fn a_require_naming_a_provided_service_is_satisfied() {
+        // iter-1726: the service half of dsh's provide/inject — a plugin
+        // composes on a NAME another plugin offers, not on a concrete
+        // plugin. "memory-backend" provides "memory.backend"; "policy"
+        // requires that service name and loads.
+        let dir = tempdir().unwrap();
+        let base = dir.path().join("plugins");
+        write_tool_plugin(&base, "memory-backend", None, Some("memory.backend"));
+        write_tool_plugin(&base, "policy", Some("memory.backend"), None);
+
+        let host = PluginHost::new(dir.path()).unwrap();
+        assert_eq!(host.list_plugins().len(), 2);
+    }
+
+    #[test]
+    fn a_require_naming_an_unprovided_service_skips_transitively() {
+        // Nobody provides "vector.store": the consumer drops, and anything
+        // requiring the CONSUMER drops with it.
+        let dir = tempdir().unwrap();
+        let base = dir.path().join("plugins");
+        write_tool_plugin(&base, "consumer", Some("vector.store"), None);
+        write_tool_plugin(&base, "second-order", Some("consumer"), None);
+
+        let host = PluginHost::new(dir.path()).unwrap();
+        assert!(host.list_plugins().is_empty());
     }
 }

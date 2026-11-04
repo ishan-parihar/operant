@@ -544,7 +544,11 @@ enabled = false
 # A plugin's manifest.toml can declare:
 #   capabilities = ["tool" | "memory" | "skill" | "observer" | "channel"]
 #   requires = ["other-plugin"]   # skipped at discovery while a named
-#                                 # plugin is absent (transitively)
+#                                 # plugin is absent (transitively); a
+#                                 # require may also name a service another
+#                                 # plugin `provides`
+#   provides = ["memory.backend"] # service names other plugins' requires
+#                                 # can match (composition labels only)
 #   [config]                      # free-form table, passed verbatim in the
 #                                 # observe envelope (policy observers read
 #                                 # their thresholds here; the host never

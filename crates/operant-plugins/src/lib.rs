@@ -47,9 +47,16 @@ pub struct PluginManifest {
     /// Names of OTHER plugins this plugin requires. A plugin whose requires
     /// are not all present at discovery is skipped with a warning
     /// (deepseek-harness `inject` parity, collapsed to a discovery filter —
-    /// see the shortcut note in `PluginHost::discover`).
+    /// see the shortcut note in `PluginHost::discover`). A require may name
+    /// either another plugin or a service name another plugin `provides`.
     #[serde(default)]
     pub requires: Vec<String>,
+    /// Service names this plugin offers, for other plugins' `requires` to
+    /// match (iter-1726 — deepseek-harness composes on service names:
+    /// `ctx.provide('memory.backend')` then `inject: ['memory.backend']`;
+    /// here they are composition LABELS only, never runtime objects).
+    #[serde(default)]
+    pub provides: Vec<String>,
     /// Free-form plugin configuration (`[config]` in manifest.toml), passed
     /// verbatim to capability surfaces that consume it — currently the
     /// observer envelope (iter-1725). deepseek-harness parity: its plugin
