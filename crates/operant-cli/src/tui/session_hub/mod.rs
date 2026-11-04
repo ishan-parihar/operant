@@ -620,11 +620,11 @@ impl SessionHubState {
     pub fn cycle_group(&mut self) {
         let keep = self.selected_row().map(|r| r.id.clone());
         self.group_mode = self.group_mode.next();
-        // Grouping is a view, so the flat visible_idx is unchanged — only the
-        // reading order moves. Find the kept row's new position in that flat
-        // list; it is still `selected`, so re-deriving it is a no-op in the
-        // flat model, but the lookup is what makes it correct if grouping ever
-        // grows into a reordering (sort is Stage E).
+        // Grouping now IS a reordering: contiguous sections (see
+        // apply_group_order). The row-id restore below is what keeps the
+        // cursor on the row the operator was reading — position-based
+        // preservation would move the highlight to a different session.
+        self.apply_group_order();
         if let Some(id) = keep
             && let Some(pos) = self.visible_idx.iter().position(|&i| self.rows[i].id == id)
         {
@@ -805,7 +805,35 @@ impl SessionHubState {
                 .visible_idx
                 .sort_by(|&a, &b| self.rows[a].tokens.cmp(&self.rows[b].tokens).reverse()),
         }
+        self.apply_group_order();
         self.clamp_selection();
+    }
+
+    /// Reorder the flat `visible_idx` into contiguous group sections whenever
+    /// a grouping is active (a no-op under `Auto`). Grouping used to be a
+    /// pure reading: the interposer drew a heading at each group's
+    /// first-appearance flat position, so a group whose rows were
+    /// non-contiguous in the flat order — the NORMAL case under
+    /// `updated_at DESC` ties or Status grouping — rendered some of its rows
+    /// AFTER a later group's heading, visually inside the wrong section, and
+    /// every heading-offset consumer had to model the interleaving (the old
+    /// take_while modelled it wrong; see group_heading_rows_above).
+    /// Contiguous sections make the drawn layout and the arithmetic coincide
+    /// by construction. Within a section the pre-grouping order is preserved
+    /// (visible_groups partitions in visible_idx order), so the sort key
+    /// still reads inside each section; groups keep first-appearance order,
+    /// which is what keeps the sections stable across refreshes.
+    fn apply_group_order(&mut self) {
+        if self.group_mode == HubGroupMode::Auto {
+            return;
+        }
+        let ordered: Vec<usize> = self
+            .visible_groups()
+            .into_iter()
+            .flat_map(|(_, idxs)| idxs)
+            .collect();
+        debug_assert_eq!(ordered.len(), self.visible_idx.len());
+        self.visible_idx = ordered;
     }
 
     fn clamp_selection(&mut self) {

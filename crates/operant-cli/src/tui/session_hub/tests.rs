@@ -1557,10 +1557,20 @@ fn cycling_group_keeps_the_cursor_on_the_same_session() {
 /// deeper, and the exact bug a flat `CHROME_ROWS + selected` reintroduces.
 #[test]
 fn the_highlight_accounts_for_group_headings_above_the_row() {
-    // Four rows, three groups. First-appearance order puts /one first (it holds
-    // rows 0 AND 3), then /two, then /three. So row 3 sits in the FIRST group
-    // and has NO heading above it, while row 2 (/three) has TWO — that is the
-    // case a flat `CHROME_ROWS + selected` gets wrong by two rows.
+    // Four rows, three groups, interleaved: /one holds rows 0 AND 3, /two row
+    // 1, /three row 2. The interposer draws a heading at each group's
+    // FIRST-ROW flat position — H(/one)@0, H(/two)@1, H(/three)@2 — so the
+    // drawn layout is [H1, a, H2, b, H3, c, d]: the row at flat 3 carries all
+    // THREE headings above it, and so does the row at flat 2 (H3 sits
+    // immediately above it). The old helper counted groups via
+    // take_while(!rows.contains(selected_row)) — it stopped at the containing
+    // group and never counted that group's own heading: 0 above `d`, 2 above
+    // `c`, an off-by-one in every non-Auto mode and wrong outright for this
+    // interleave. The corrected helper derives the count from the same
+    // first-row positions the interposer draws from, so the highlight offset
+    // matches the drawn layout by construction. This hand-built state is
+    // deliberately NOT contiguous — apply_group_order is what fixes the
+    // visual mis-grouping; the next test pins that.
     let mut hub = SessionHubState::new();
     hub.replace_rows(vec![
         row_with_cwd("a", "/one"),
@@ -1570,29 +1580,93 @@ fn the_highlight_accounts_for_group_headings_above_the_row() {
     ]);
     hub.group_mode = HubGroupMode::Directory;
 
-    // Row 3 (`d`) is in the first group: no heading above it.
-    hub.selected = 3;
-    let above_d = hub
-        .visible_groups()
-        .iter()
-        .take_while(|(_, rows)| !rows.contains(&row_index(&hub, "d")))
-        .count();
     assert_eq!(
-        above_d, 0,
-        "the first group's later rows have no heading above them"
+        render::group_heading_rows_above(&hub, 3),
+        3,
+        "the drawn layout carries three headings above the row at flat 3"
+    );
+    assert_eq!(
+        render::group_heading_rows_above(&hub, 2),
+        3,
+        "the containing group's own heading sits immediately above its first row"
+    );
+    // And the selection is untouched by the arithmetic.
+    hub.selected = 2;
+    assert_eq!(hub.selected_row().map(|r| r.id.as_str()), Some("c"));
+}
+
+/// With apply_group_order the sections are contiguous — a group's rows can
+/// never render under a later group's heading (the interleaved draw the
+/// previous test documents) — and the heading offset still matches the drawn
+/// layout. The cursor is preserved BY ROW ID through the reordering.
+///
+/// MUTATION-PROOF: deleting the apply_group_order call in cycle_group fails
+/// the contiguity assertion (the flat order stays a,b,c,d with /one split
+/// around /two and /three); deleting the offset fix fails the first test by
+/// name.
+#[test]
+fn grouping_reorders_into_contiguous_sections_and_keeps_the_cursor_on_its_row() {
+    let mut hub = SessionHubState::new();
+    hub.replace_rows(vec![
+        row_with_cwd("a", "/one"),
+        row_with_cwd("b", "/two"),
+        row_with_cwd("c", "/three"),
+        row_with_cwd("d", "/one"),
+    ]);
+    hub.group_mode = HubGroupMode::Directory;
+    hub.selected = 3; // `d`, in the /one group
+
+    // Drive the real path: cycle_group applies the reorder. Cycle a full
+    // revolution back to Directory — a mode where this fixture has THREE
+    // groups, so contiguity is a real claim (a single-group mode would pass
+    // it vacuously, which is exactly how the first mutation draft slipped a
+    // non-discriminating run past the Employee single-group).
+    for _ in 0..4 {
+        hub.cycle_group();
+        if hub.group_mode == HubGroupMode::Directory {
+            break;
+        }
+    }
+    assert_eq!(hub.group_mode, HubGroupMode::Directory);
+    // The id-based cursor restore kept the cursor ON `d` through the reorder.
+    assert_eq!(
+        hub.selected_row().map(|r| r.id.as_str()),
+        Some("d"),
+        "the cursor must survive the section reordering by row id"
     );
 
-    // Row 2 (`c`) is in the third group: two headings above it.
-    hub.selected = 2;
-    let above_c = hub
-        .visible_groups()
-        .iter()
-        .take_while(|(_, rows)| !rows.contains(&row_index(&hub, "c")))
-        .count();
-    assert_eq!(above_c, 2, "the third group opens below two headings");
+    // Contiguity: every group's rows occupy consecutive flat positions.
+    let groups = hub.visible_groups();
+    for (_, idxs) in &groups {
+        let mut flat: Vec<usize> = idxs
+            .iter()
+            .map(|&i| {
+                hub.visible_idx
+                    .iter()
+                    .position(|&v| v == i)
+                    .expect("in list")
+            })
+            .collect();
+        flat.sort_unstable();
+        assert_eq!(
+            flat,
+            (flat[0]..flat[0] + flat.len()).collect::<Vec<_>>(),
+            "a group's rows must be contiguous in visible_idx"
+        );
+    }
 
-    // And the row must still be the same one after all of it.
-    assert_eq!(hub.selected_row().map(|r| r.id.as_str()), Some("c"));
+    // And the offset still matches the drawn layout on the contiguous order:
+    // the last section's first row carries every heading above it.
+    let last_first_pos = groups
+        .last()
+        .and_then(|(_, idxs)| idxs.first())
+        .and_then(|&i| hub.visible_idx.iter().position(|&v| v == i))
+        .expect("non-empty");
+    assert_eq!(
+        render::group_heading_rows_above(&hub, last_first_pos),
+        groups.len(),
+        "every group's heading sits above the last section's first row"
+    );
 }
 
 /// The ROW index (into `hub.rows`) of `id` — the index space `visible_groups`

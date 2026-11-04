@@ -121,15 +121,26 @@ fn interpose_group_headings(
     out
 }
 
-/// How many group-heading rows the renderer draws ABOVE the body row at
-/// `selected`. One heading per group precedes that group's first row, so the
-/// count is the number of groups that open before it.
+/// How many group-heading rows the renderer draws ABOVE the body row at flat
+/// index `selected`.
+///
+/// The interposer draws one heading at each group's first row's FLAT position,
+/// immediately ABOVE that row (interpose_group_headings' `opens`), so the
+/// headings above the row at flat index `selected` are exactly the groups
+/// whose first-row flat position is `<= selected`. The containing group's own
+/// heading always qualifies — its first row sits at or above the selected row
+/// — which is what the old take_while-over-non-containing-groups missed: an
+/// off-by-one in every non-Auto mode, and wrong outright for interleaved
+/// groups, whose iteration order diverged from the drawn positions. With
+/// apply_group_order keeping sections contiguous, drawn layout and arithmetic
+/// coincide by construction; the position lookup is what keeps the count
+/// correct even for a hand-built non-contiguous state.
 ///
 /// This exists because `state.selected` indexes the flat `visible_idx` while
 /// the renderer draws a flattened list of headings + rows. Subtracting the
 /// headings from the rendered position is what keeps the highlight on the row
 /// the operator is on — the Stage A offset class, one level deeper.
-fn group_heading_rows_above(state: &SessionHubState, selected: usize) -> usize {
+pub(super) fn group_heading_rows_above(state: &SessionHubState, selected: usize) -> usize {
     if state.group_mode == HubGroupMode::Auto {
         return 0;
     }
@@ -137,8 +148,12 @@ fn group_heading_rows_above(state: &SessionHubState, selected: usize) -> usize {
     // every other mode renders one heading per group.
     state
         .visible_groups()
-        .into_iter()
-        .take_while(|(_, rows)| !rows.contains(&state.visible_idx[selected]))
+        .iter()
+        .filter_map(|(_, idxs)| {
+            let first = *idxs.first()?;
+            state.visible_idx.iter().position(|&i| i == first)
+        })
+        .filter(|pos| *pos <= selected)
         .count()
 }
 
