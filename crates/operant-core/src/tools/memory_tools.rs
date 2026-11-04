@@ -111,7 +111,7 @@ impl OperantTool for MemoryStoreTool {
     }
 
     fn description(&self) -> &str {
-        "Store a fact in long-term memory (the memory-wire store) so future sessions can recall it. Useful for remembering facts, preferences, or user information. `key` and `blockType` are kept as tags; the same store backs memory_save and memory_smart_search."
+        "Store a fact in long-term memory (the memory-wire store) so future sessions can recall it. Useful for remembering facts, preferences, or user information. `key` and `blockType` are kept as tags; the same store backs memory_save and memory_smart_search. The reserved tag `harness-lesson` marks a self-improvement lesson (component/cue/lesson/evidence) — such a write must state what was observed, never quote test output."
     }
 
     fn schema(&self) -> ToolSchema {
@@ -135,6 +135,28 @@ impl OperantTool for MemoryStoreTool {
         };
         if let Some(violation) = store_bound_violation(&args) {
             return ToolResult::error("memory_store", format!("Refused: {violation}."));
+        }
+
+        // (iter-1731) The harness-lesson tripwire: a lesson tagged for the
+        // self-improvement record must never quote validation output — an
+        // improver that sees the checker's verdict overfits to it. Refused
+        // with the marker named so the lesson can be restated from evidence.
+        if args
+            .tags
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .any(|tag| tag == crate::memory_wire::HARNESS_LESSON_TAG)
+            && let Some(marker) = crate::memory_wire::find_verdict_marker(&args.content)
+        {
+            return ToolResult::error(
+                "memory_store",
+                format!(
+                    "Refused: a harness-lesson must not carry validation output \
+                     (found {marker:?}). State what was observed and where instead \
+                     of quoting the checker's verdict."
+                ),
+            );
         }
 
         // W6 (audit O-22, invariant 4): a Holon run never writes the
@@ -1210,5 +1232,113 @@ mod background_review_memory_tests {
         assert!(!result.success);
         let refusal = result.error.unwrap_or_default();
         assert!(refusal.contains("background review"), "{refusal}");
+    }
+}
+
+#[cfg(test)]
+mod harness_lesson_tests {
+    use super::{
+        ACTIVE_MEMORY_PROVIDER, MemorySearchTool, MemoryStoreTool, OperantTool,
+        PROVIDER_TEST_GUARD, ToolContext, set_active_memory_provider,
+    };
+    use serde_json::json;
+
+    /// (iter-1731, plan gate) A lesson tagged `harness-lesson` round-trips:
+    /// stored through the tool, recalled by a situation-shaped query through
+    /// the same BM25 path the pre-turn prefetch rides.
+    #[tokio::test]
+    async fn harness_lesson_round_trips_store_then_recall() {
+        let _guard = PROVIDER_TEST_GUARD.lock().await;
+        let _origin_lock = crate::write_origin::origin_test_lock().await;
+        let _origin = crate::write_origin::WriteOriginGuard::new("user");
+        let dir = std::env::temp_dir().join(format!("operant-mw-lesson-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let provider =
+            std::sync::Arc::new(crate::memory_wire::MemoryWireProvider::new(dir.clone()).unwrap());
+        set_active_memory_provider(provider.clone()).await;
+
+        let store = MemoryStoreTool;
+        let result = store
+            .execute(
+                json!({
+                    "content": "component: word_nav\nlesson: when an edit lands mid-word, re-anchor the caret to the boundary before repainting",
+                    "tags": [crate::memory_wire::HARNESS_LESSON_TAG, "word_nav"]
+                }),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(result.success, "lesson store: {result:?}");
+
+        let search = MemorySearchTool;
+        let found = search
+            .execute(
+                json!({"query": "re-anchor the caret to the boundary before repainting", "maxResults": 3}),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(found.success, "lesson recall: {found:?}");
+        assert!(
+            found.content.contains("component: word_nav"),
+            "the lesson must surface by its situation shape: {found:?}"
+        );
+
+        *ACTIVE_MEMORY_PROVIDER.write().await = None;
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// (iter-1731, plan gate) A lesson quoting validation output is refused
+    /// with the marker named AND is not stored; the same body without the
+    /// reserved tag stores fine (the tripwire is tag-scoped, not global).
+    #[tokio::test]
+    async fn harness_lesson_carrying_a_verdict_marker_is_refused_and_not_stored() {
+        let _guard = PROVIDER_TEST_GUARD.lock().await;
+        let _origin_lock = crate::write_origin::origin_test_lock().await;
+        let _origin = crate::write_origin::WriteOriginGuard::new("user");
+        let dir = std::env::temp_dir().join(format!("operant-mw-tripwire-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let provider =
+            std::sync::Arc::new(crate::memory_wire::MemoryWireProvider::new(dir.clone()).unwrap());
+        set_active_memory_provider(provider.clone()).await;
+
+        let store = MemoryStoreTool;
+        let body =
+            "component: word_nav\nlesson: the fix works\n test result: FAILED. 0 passed; 1 failed";
+        let refused = store
+            .execute(
+                json!({"content": body, "tags": [crate::memory_wire::HARNESS_LESSON_TAG]}),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(!refused.success, "the tripwire must refuse: {refused:?}");
+        assert!(
+            refused
+                .error
+                .as_deref()
+                .unwrap_or_default()
+                .contains("validation output"),
+            "the refusal names the tripwire: {refused:?}"
+        );
+
+        // The refused lesson really is absent from the store (checked BEFORE
+        // the untagged control lands, whose body shares its tokens).
+        let provider_read = ACTIVE_MEMORY_PROVIDER.read().await.clone().unwrap();
+        let hits = provider_read.recall_scored("the fix works", 10);
+        assert!(
+            hits.is_empty(),
+            "a refused lesson must not be stored: {hits:?}"
+        );
+
+        // Negative control: the identical body without the reserved tag is
+        // an ordinary memory and stores.
+        let untagged = store
+            .execute(
+                json!({"content": body, "tags": ["notes"]}),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(untagged.success, "untagged body stores: {untagged:?}");
+
+        *ACTIVE_MEMORY_PROVIDER.write().await = None;
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

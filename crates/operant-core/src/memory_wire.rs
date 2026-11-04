@@ -66,6 +66,33 @@ use crate::error::{Error, Result};
 /// memory in one recallable namespace.
 pub const DEFAULT_BANK: &str = "operant";
 
+/// (plan 2026-11-05 RSI, iter-1731) Reserved tag marking a *harness lesson*:
+/// a self-improvement record (component / cue / lesson / evidence /
+/// confidence) about one harness component, in the shape distilled from the
+/// harness2 contrast audit. Retrieval is plain BM25 recall — the tag exists
+/// so lessons are addressable (`ids_tagged`) and scannable, not a new store.
+pub const HARNESS_LESSON_TAG: &str = "harness-lesson";
+
+/// Validation/verdict markers a harness lesson must never carry. Quoting the
+/// checker's output into the improvement record is how an improver overfits
+/// to the checker — the port of harness2's `assert_no_grader_verdicts`
+/// doctrine (docs/plans/2026-11-05-recursive-self-harnessing-…, invariant 1).
+const VERDICT_MARKERS: [&str; 6] = [
+    "test result:",
+    "FAILED (",
+    "panicked at",
+    "0 passed",
+    "test_command",
+    "cargo test",
+];
+
+/// The first verdict marker in `body`, if any. The `memory_store` tripwire
+/// refuses a `harness-lesson` write carrying one, naming the marker so the
+/// caller can restate the lesson from what was observed.
+pub fn find_verdict_marker(body: &str) -> Option<&'static str> {
+    VERDICT_MARKERS.iter().copied().find(|m| body.contains(*m))
+}
+
 /// (plan 11E) The memory scope a provider instance serves. Type, not string:
 /// a call site cannot accidentally pass a seat identity where a personal
 /// bank belongs — the wrong shape does not compile.
