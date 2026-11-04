@@ -468,6 +468,7 @@ mod kernel_bridge_tests {
             permissions: vec![],
             signature: None,
             publisher_key: None,
+            requires: Vec::new(),
         }
     }
 

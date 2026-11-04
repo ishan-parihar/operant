@@ -121,6 +121,44 @@ impl PluginHost {
             }
         }
 
+        // dsh `inject` parity, collapsed to a filter: a plugin whose
+        // `requires` name another plugin that is not present is skipped,
+        // transitively (A requires missing B drops A; C requiring A then
+        // drops too). shortcut: no fiber reload when a provider returns
+        // (dsh's PENDING state); a restart or watcher re-scan covers it —
+        // upgrade only if live provider swap ever matters.
+        loop {
+            let unmet: Vec<String> = {
+                // Borrow of `loaded` scoped to the collect — the removals
+                // below must run with it dead.
+                let names: std::collections::HashSet<&str> =
+                    self.loaded.keys().map(String::as_str).collect();
+                self.loaded
+                    .values()
+                    .filter(|p| {
+                        p.manifest
+                            .requires
+                            .iter()
+                            .any(|r| !names.contains(r.as_str()))
+                    })
+                    .map(|p| p.manifest.name.clone())
+                    .collect()
+            };
+            if unmet.is_empty() {
+                break;
+            }
+            for name in &unmet {
+                let Some(p) = self.loaded.remove(name) else {
+                    continue;
+                };
+                tracing::warn!(
+                    plugin = %name,
+                    requires = ?p.manifest.requires,
+                    "skipping plugin: unmet `requires`"
+                );
+            }
+        }
+
         Ok(())
     }
 
@@ -828,5 +866,51 @@ capabilities = ["tool"]
         // validate_manifest_shape rejects non-skill plugins without wasm_path.
         assert!(host.list_plugins().is_empty());
         assert!(host.memory_plugin_details().is_empty());
+    }
+
+    /// Write a tool plugin whose manifest optionally declares `requires`.
+    fn write_tool_plugin_with_requires(base: &Path, name: &str, requires: Option<&str>) {
+        let plugin_dir = base.join(name);
+        std::fs::create_dir_all(&plugin_dir).unwrap();
+        let req = requires
+            .map(|r| format!("requires = [\"{r}\"]\n"))
+            .unwrap_or_default();
+        std::fs::write(
+            plugin_dir.join("manifest.toml"),
+            format!(
+                "name = \"{name}\"\nversion = \"0.1.0\"\nwasm_path = \"p.wasm\"\ncapabilities = [\"tool\"]\n{req}"
+            ),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn test_unmet_requires_skip_the_plugin_transitively() {
+        // iter-1721: `requires` names another plugin that must be present.
+        // "dependent" requires "missing-provider" (absent) — it is skipped;
+        // "second-order" requires "dependent", which WAS discovered — but
+        // the drop cascades, so it is skipped too.
+        let dir = tempdir().unwrap();
+        let base = dir.path().join("plugins");
+        write_tool_plugin_with_requires(&base, "dependent", Some("missing-provider"));
+        write_tool_plugin_with_requires(&base, "second-order", Some("dependent"));
+
+        let host = PluginHost::new(dir.path()).unwrap();
+        assert!(host.list_plugins().is_empty());
+    }
+
+    #[test]
+    fn test_satisfied_requires_load_and_cycle_is_fine() {
+        let dir = tempdir().unwrap();
+        let base = dir.path().join("plugins");
+        write_tool_plugin_with_requires(&base, "provider", None);
+        write_tool_plugin_with_requires(&base, "consumer", Some("provider"));
+        // Mutual requires are satisfied on both sides — not a deadlock.
+        write_tool_plugin_with_requires(&base, "peer-a", Some("peer-b"));
+        write_tool_plugin_with_requires(&base, "peer-b", Some("peer-a"));
+
+        let host = PluginHost::new(dir.path()).unwrap();
+        assert_eq!(host.list_plugins().len(), 4);
+        assert_eq!(host.tool_plugins().len(), 4);
     }
 }

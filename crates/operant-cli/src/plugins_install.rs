@@ -79,23 +79,58 @@ fn derive_plugin_name(identifier: &str) -> String {
         .unwrap_or_else(|| name.to_string())
 }
 
-/// Validate that a plugin directory has a valid plugin.yaml manifest.
+/// Validate that a plugin directory has a usable manifest.
+///
+/// `manifest.toml` is the ONE manifest authority (the WASM host's format —
+/// validated with the host's own parser, so an install-time rejection names
+/// the same defect discovery would); `plugin.yaml` / `__init__.py` are the
+/// python-era fallbacks kept for old installs.
 fn validate_plugin(plugin_dir: &Path) -> Result<()> {
-    let manifest_path = plugin_dir.join("plugin.yaml");
-    if !manifest_path.exists() {
-        // Fallback: check for __init__.py
-        let init_path = plugin_dir.join("__init__.py");
-        if !init_path.exists() {
-            anyhow::bail!(
-                "No plugin.yaml or __init__.py found in {}. Is this a valid Operant plugin?",
-                plugin_dir.display()
-            );
-        }
+    let manifest_path = plugin_dir.join("manifest.toml");
+    if manifest_path.exists() {
+        #[cfg(feature = "plugins-wasm")]
+        return validate_manifest_toml(&manifest_path);
+        #[cfg(not(feature = "plugins-wasm"))]
         return Ok(());
     }
+    // Legacy order preserved: plugin.yaml was the historical primary,
+    // __init__.py the python-era fallback.
+    let yaml_path = plugin_dir.join("plugin.yaml");
+    if yaml_path.exists() {
+        return validate_plugin_yaml(&yaml_path);
+    }
+    let init_path = plugin_dir.join("__init__.py");
+    if !init_path.exists() {
+        anyhow::bail!(
+            "No manifest.toml, plugin.yaml or __init__.py found in {}. Is this a valid Operant plugin?",
+            plugin_dir.display()
+        );
+    }
+    Ok(())
+}
 
-    let content = std::fs::read_to_string(&manifest_path)
+/// Validate `manifest.toml` with the host's own manifest parser — one
+/// authority for what a valid plugin manifest is.
+#[cfg(feature = "plugins-wasm")]
+fn validate_manifest_toml(manifest_path: &Path) -> Result<()> {
+    let content = std::fs::read_to_string(manifest_path)
         .with_context(|| format!("Failed to read {}", manifest_path.display()))?;
+    let manifest: operant_plugins::PluginManifest = toml::from_str(&content).map_err(|e| {
+        anyhow::anyhow!(
+            "{} is not a valid plugin manifest: {e}",
+            manifest_path.display()
+        )
+    })?;
+    if manifest.name.trim().is_empty() {
+        anyhow::bail!("manifest.toml is missing a non-empty 'name' field.");
+    }
+    Ok(())
+}
+
+/// The legacy plugin.yaml check, extracted unchanged.
+fn validate_plugin_yaml(yaml_path: &Path) -> Result<()> {
+    let content = std::fs::read_to_string(yaml_path)
+        .with_context(|| format!("Failed to read {}", yaml_path.display()))?;
 
     // Basic YAML check: must have a name field
     if !content.contains("name:") && !content.contains("name :") {
@@ -226,7 +261,36 @@ mod tests {
             result
                 .unwrap_err()
                 .to_string()
-                .contains("No plugin.yaml or __init__.py")
+                .contains("No manifest.toml, plugin.yaml or __init__.py")
+        );
+    }
+
+    #[test]
+    fn test_validate_plugin_with_manifest_toml() {
+        // iter-1721: the WASM host's format is the one manifest authority —
+        // the installer validates it with the host's own parser.
+        let dir = tempfile::TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("manifest.toml"),
+            "name = \"wasm-plugin\"\nversion = \"0.1.0\"\ncapabilities = [\"tool\"]\nwasm_path = \"p.wasm\"\n",
+        )
+        .unwrap();
+        assert!(validate_plugin(dir.path()).is_ok());
+    }
+
+    #[test]
+    fn test_validate_plugin_rejects_invalid_manifest_toml() {
+        let dir = tempfile::TempDir::new().unwrap();
+        // `capabilities` is required by validate_manifest_shape at discovery;
+        // here the TOML itself must parse as a PluginManifest.
+        fs::write(dir.path().join("manifest.toml"), "not = [valid\n").unwrap();
+        let result = validate_plugin(dir.path());
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("not a valid plugin manifest")
         );
     }
 

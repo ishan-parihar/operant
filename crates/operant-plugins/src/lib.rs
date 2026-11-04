@@ -44,6 +44,12 @@ pub struct PluginManifest {
     /// Hex-encoded Ed25519 public key of the publisher who signed this manifest.
     #[serde(default)]
     pub publisher_key: Option<String>,
+    /// Names of OTHER plugins this plugin requires. A plugin whose requires
+    /// are not all present at discovery is skipped with a warning
+    /// (deepseek-harness `inject` parity, collapsed to a discovery filter —
+    /// see the shortcut note in `PluginHost::discover`).
+    #[serde(default)]
+    pub requires: Vec<String>,
 }
 
 /// What a plugin can do.
