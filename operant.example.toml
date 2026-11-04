@@ -545,6 +545,12 @@ enabled = false
 #   capabilities = ["tool" | "memory" | "skill" | "observer" | "channel"]
 #   requires = ["other-plugin"]   # skipped at discovery while a named
 #                                 # plugin is absent (transitively)
+#   [config]                      # free-form table, passed verbatim in the
+#                                 # observe envelope (policy observers read
+#                                 # their thresholds here; the host never
+#                                 # interprets it)
+# Tool and observer modules run on RESIDENT instances (one WASM compile per
+# module per process, iter-1725).
 # Capability seams: tool -> tool registry (KB-11: builtins win name
 # collisions), memory -> memory.provider = "plugin:<name>", skill ->
 # SkillManager extra root (operator pool wins collisions), observer ->

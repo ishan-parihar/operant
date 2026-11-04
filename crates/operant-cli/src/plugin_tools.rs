@@ -162,18 +162,37 @@ pub async fn register_plugin_tools(
     Ok(())
 }
 
+/// The observe-event envelope: what a WASM observer receives per
+/// interception (the iter-1722 contract, plus iter-1725's `config`
+/// passthrough — the manifest's free-form `[config]` table, serialized).
+pub(crate) fn observe_event_json(
+    point: &str,
+    tool: &str,
+    args: &Value,
+    result: Option<&Value>,
+    config: &Value,
+) -> Value {
+    serde_json::json!({
+        "point": point,
+        "tool": tool,
+        "args": args,
+        "result": result,
+        "config": config,
+    })
+}
+
 /// Register observer-capable plugins as tool-seam interceptors (iter-1722).
 /// The plugin's `observe` export receives every interception event
 /// (`pre_execute` before a tool runs, `post_execute` with the result) and
-/// may veto it. Fail-open: an observer that fails to load, errors, or
-/// returns garbage allows the call and logs — a broken observer must never
-/// brick the tool loop.
+/// may veto it. The module's instances are RESIDENT — a
+/// `runtime::PluginPool` checked out per event (iter-1725; the per-event
+/// instantiate this replaced is red-team audit F1), so a call pays no
+/// compile. Instance state persists on checked-out modules —
+/// deepseek-harness residency semantics.
 ///
-/// shortcut: the plugin instance is created per event (an `extism::Plugin`
-/// is not shareable across the interceptor's async boundary), so an
-/// observer's latency is one WASM load per tool call — acceptable for
-/// opt-in observers; a resident instance keyed by path is the upgrade if a
-/// hot observer ever ships.
+/// Fail-open: an observer that fails to load, errors, times out its pool
+/// checkout, or returns garbage allows the call and logs — a broken
+/// observer must never brick the tool loop.
 async fn register_observer_interceptors(
     registry: &ToolRegistry,
     host: &operant_plugins::host::PluginHost,
@@ -183,58 +202,67 @@ async fn register_observer_interceptors(
         if !config.plugins.is_enabled(&manifest.name) {
             continue;
         }
-        let wasm = wasm_path.to_path_buf();
-        let permissions = manifest.permissions.clone();
+        let pool = operant_plugins::runtime::PluginPool::new(wasm_path, &manifest.permissions);
         let plugin_name = manifest.name.clone();
+        // The manifest's `[config]` table, serialized once — it rides every
+        // observe envelope (dsh's config-driven policy plugins are the canon;
+        // without it a policy observer has nowhere to read its thresholds).
+        let plugin_config = serde_json::to_value(&manifest.config).unwrap_or_default();
         registry
             .register_tool_interceptor(Arc::new(move |event| {
-                let wasm = wasm.clone();
-                let permissions = permissions.clone();
+                let pool = pool.clone();
                 let plugin_name = plugin_name.clone();
+                let plugin_config = plugin_config.clone();
                 Box::pin(async move {
-                    let mut plugin =
-                        match operant_plugins::runtime::create_plugin(&wasm, &permissions) {
-                            Ok(plugin) => plugin,
-                            Err(e) => {
-                                tracing::warn!(
-                                    plugin = %plugin_name,
-                                    error = %e,
-                                    "observer plugin failed to load; allowing (fail-open)"
-                                );
-                                return operant_core::gateway_pipeline::PipelineAction::Allow;
-                            }
-                        };
                     let point = match event.point {
                         operant_core::tools::ToolInterceptPoint::PreExecute => "pre_execute",
                         operant_core::tools::ToolInterceptPoint::PostExecute => "post_execute",
                     };
-                    let event_json = serde_json::json!({
-                        "point": point,
-                        "tool": event.tool,
-                        "args": event.args,
-                        "result": event.result,
-                    });
-                    match operant_plugins::runtime::call_observe(
-                        &mut plugin,
-                        &event_json.to_string(),
-                    ) {
-                        Ok(operant_plugins::runtime::ObserveVerdict::Allow) => {
+                    let event_json = observe_event_json(
+                        point,
+                        &event.tool,
+                        &event.args,
+                        event.result.as_ref(),
+                        &plugin_config,
+                    )
+                    .to_string();
+                    // The pool checkout + extism call are blocking — hop to
+                    // the blocking pool (same boundary as WasmTool::execute).
+                    let verdict =
+                        tokio::task::spawn_blocking(move || pool.observe(&event_json)).await;
+                    match verdict {
+                        Ok(Ok(Some(operant_plugins::runtime::ObserveVerdict::Allow))) => {
                             operant_core::gateway_pipeline::PipelineAction::Allow
                         }
-                        Ok(operant_plugins::runtime::ObserveVerdict::Block { reason }) => {
-                            operant_core::gateway_pipeline::PipelineAction::Block(
-                                if reason.is_empty() {
-                                    format!("blocked by observer plugin {plugin_name}")
-                                } else {
-                                    reason
-                                },
-                            )
+                        Ok(Ok(Some(operant_plugins::runtime::ObserveVerdict::Block {
+                            reason,
+                        }))) => operant_core::gateway_pipeline::PipelineAction::Block(
+                            if reason.is_empty() {
+                                format!("blocked by observer plugin {plugin_name}")
+                            } else {
+                                reason
+                            },
+                        ),
+                        Ok(Ok(None)) => {
+                            tracing::warn!(
+                                plugin = %plugin_name,
+                                "observer pool busy past the wait ceiling; allowing (fail-open)"
+                            );
+                            operant_core::gateway_pipeline::PipelineAction::Allow
+                        }
+                        Ok(Err(e)) => {
+                            tracing::warn!(
+                                plugin = %plugin_name,
+                                error = %e,
+                                "observe call failed; allowing (fail-open)"
+                            );
+                            operant_core::gateway_pipeline::PipelineAction::Allow
                         }
                         Err(e) => {
                             tracing::warn!(
                                 plugin = %plugin_name,
                                 error = %e,
-                                "observe export failed; allowing (fail-open)"
+                                "observer task failed; allowing (fail-open)"
                             );
                             operant_core::gateway_pipeline::PipelineAction::Allow
                         }
@@ -244,7 +272,7 @@ async fn register_observer_interceptors(
             .await;
         tracing::info!(
             plugin = %manifest.name,
-            "registered WASM observer as tool-seam interceptor"
+            "registered WASM observer as tool-seam interceptor (resident pool)"
         );
     }
 }
@@ -562,6 +590,7 @@ mod kernel_bridge_tests {
             signature: None,
             publisher_key: None,
             requires: Vec::new(),
+            config: Default::default(),
         }
     }
 
@@ -651,6 +680,86 @@ mod kernel_bridge_tests {
             row_for_change(&change(m, valid())).unwrap_err(),
             KernelBridgeError::Unmapped(Unmapped::NoToolMetadata)
         ));
+    }
+}
+
+#[cfg(test)]
+mod observer_bridge_tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    use super::{observe_event_json, register_observer_interceptors};
+    use operant_core::config::AppConfig;
+    use operant_core::tools::ToolRegistry;
+    use operant_plugins::host::PluginHost;
+    use operant_plugins::signature::SignatureMode;
+    use std::time::Duration;
+
+    /// A workspace with one observer plugin whose module is garbage —
+    /// discovery passes (only the manifest shape is checked) but every
+    /// instantiate fails, which is exactly the fail-open leg a real broken
+    /// observer exercises.
+    fn broken_observer_workspace() -> tempfile::TempDir {
+        let ws = tempfile::tempdir().expect("workspace");
+        let plugin_dir = ws.path().join("plugins").join("broken-observer");
+        std::fs::create_dir_all(&plugin_dir).expect("plugin tree");
+        std::fs::write(
+            plugin_dir.join("manifest.toml"),
+            "name = \"broken-observer\"\nversion = \"0.1.0\"\ncapabilities = [\"observer\"]\nwasm_path = \"broken.wasm\"\n[config]\nthreshold = 3\n",
+        )
+        .expect("manifest");
+        std::fs::write(plugin_dir.join("broken.wasm"), b"not wasm").expect("garbage module");
+        ws
+    }
+
+    #[tokio::test]
+    async fn a_broken_observer_fails_open_and_the_tool_still_runs() {
+        // End-to-end at the registry level: the interceptor registered from
+        // an uninstantiable module lets every call through (iter-1725 pins
+        // this through the RESIDENT pool path, not just the old per-event
+        // creation).
+        let ws = broken_observer_workspace();
+        let mut config = AppConfig::default();
+        config.plugins.plugin_dirs = vec![ws.path().join("plugins")];
+        let parent = ws.path().to_path_buf();
+        let host =
+            PluginHost::with_security(&parent, SignatureMode::Disabled, Vec::new()).expect("host");
+        let registry = ToolRegistry::new(Duration::from_secs(5));
+        registry
+            .register(operant_core::tools::debug_helpers::EchoTool)
+            .await
+            .unwrap();
+        register_observer_interceptors(&registry, &host, &config).await;
+
+        let ran = registry
+            .execute(
+                "echo",
+                "call_1",
+                serde_json::json!({"message": "hello"}),
+                operant_core::tools::ToolContext::default(),
+            )
+            .await
+            .expect("fail-open: the call is allowed, not vetoed");
+        assert!(
+            ran.success,
+            "the tool must have RUN (allowed), got: {ran:?}"
+        );
+    }
+
+    #[test]
+    fn the_observe_envelope_carries_config_and_null_result_on_pre_execute() {
+        // The envelope contract a plugin author codes against: pre_execute
+        // has no result (null), the manifest's [config] table rides along.
+        let envelope = observe_event_json(
+            "pre_execute",
+            "file_write",
+            &serde_json::json!({"path": "x"}),
+            None,
+            &serde_json::json!({"threshold": 3}),
+        );
+        assert_eq!(envelope["point"], "pre_execute");
+        assert_eq!(envelope["tool"], "file_write");
+        assert_eq!(envelope["args"]["path"], "x");
+        assert!(envelope["result"].is_null());
+        assert_eq!(envelope["config"]["threshold"], 3);
     }
 }
 

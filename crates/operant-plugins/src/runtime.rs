@@ -251,6 +251,74 @@ fn handle_env_read(
 
 // ── Plugin creation and invocation ────────────────────────────────
 
+/// How long a caller waits for a free instance before a resident checkout
+/// gives up (`Ok(None)`). Not a tuned threshold — a ceiling against every
+/// instance of a module being stuck in a hung call; extism calls themselves
+/// are unbounded (pre-existing behavior, unchanged by pooling).
+pub(crate) const PLUGIN_POOL_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// A resident pool of plugin instances for ONE WASM module (red-team audit
+/// F1, iter-1725). Both the tool bridge (`wasm_tool`) and the observer
+/// bridge used to instantiate a fresh `extism::Plugin` per call — one
+/// compile + instantiate per tool invocation. `extism::Plugin` is Send +
+/// Sync (upstream unsafe impls, extism-1.41.0/src/plugin.rs:188-189 — the
+/// "Plugin is !Send" comment that justified the old per-call loads was
+/// stale) and ships `Pool` for exactly this pattern: instances are created
+/// lazily up to `available_parallelism` and reused.
+///
+/// All methods are SYNC (extism calls block); async callers own the hop to
+/// `spawn_blocking` (see `wasm_tool::WasmTool::execute`).
+#[derive(Clone)]
+pub struct PluginPool {
+    pool: extism::Pool,
+}
+
+impl PluginPool {
+    /// A pool whose instances are created from `wasm_path` with the given
+    /// permissions. Nothing is compiled until the first call; a module that
+    /// fails to instantiate fails that call, and the callers' policies
+    /// decide what surfaces (tools → error result, observers → fail-open).
+    pub fn new(wasm_path: &Path, permissions: &[PluginPermission]) -> Self {
+        let wasm_path = wasm_path.to_path_buf();
+        let permissions = permissions.to_vec();
+        Self {
+            pool: extism::Pool::new(move || {
+                create_plugin(&wasm_path, &permissions)
+                    .map_err(|e| extism::Error::msg(format!("{e:#}")))
+            }),
+        }
+    }
+
+    /// Call the `observe` export on a checked-out instance. `Ok(None)`:
+    /// every instance was busy past `PLUGIN_POOL_WAIT`. `Err`: the module
+    /// failed to instantiate or the call failed — the caller decides the
+    /// fail-open policy.
+    pub fn observe(&self, event_json: &str) -> Result<Option<ObserveVerdict>> {
+        let event_json = event_json.to_string();
+        match self.pool.with_plugin(PLUGIN_POOL_WAIT, |plugin| {
+            call_observe(plugin, &event_json).map_err(|e| extism::Error::msg(format!("{e:#}")))
+        }) {
+            Err(e) => Err(e.context("plugin module failed to load")),
+            Ok(None) => Ok(None),
+            Ok(Some(verdict)) => Ok(Some(verdict)),
+        }
+    }
+
+    /// Call the `execute` export on a checked-out instance (same contract
+    /// as `observe`; the tool bridge surfaces `Ok(None)` as a plain error
+    /// result to the model).
+    pub fn execute(&self, args_json: &[u8]) -> Result<Option<ToolResult>> {
+        let args_json = args_json.to_vec();
+        match self.pool.with_plugin(PLUGIN_POOL_WAIT, |plugin| {
+            call_execute(plugin, &args_json).map_err(|e| extism::Error::msg(format!("{e:#}")))
+        }) {
+            Err(e) => Err(e.context("plugin module failed to load")),
+            Ok(None) => Ok(None),
+            Ok(Some(result)) => Ok(Some(result)),
+        }
+    }
+}
+
 /// Create an Extism plugin from a WASM file with the given permissions.
 pub fn create_plugin(wasm_path: &Path, permissions: &[PluginPermission]) -> Result<extism::Plugin> {
     let perm_set: HashSet<PluginPermission> = permissions.iter().cloned().collect();
@@ -370,6 +438,19 @@ mod tests {
     fn missing_wasm_file_returns_error() {
         let result = create_plugin(Path::new("/nonexistent/plugin.wasm"), &[]);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn pool_on_a_module_that_fails_to_instantiate_errors_cleanly() {
+        // iter-1725: the resident pool's source closure failing (broken or
+        // missing module) surfaces as a typed Err, not a panic — both
+        // callers' policies (tool error result, observer fail-open) key
+        // off this.
+        let pool = PluginPool::new(Path::new("/nonexistent/pool-test.wasm"), &[]);
+        let err = pool.observe(r#"{"point":"pre_execute"}"#).unwrap_err();
+        assert!(err.to_string().contains("failed to load"), "{err:#}");
+        let err = pool.execute(b"{}").unwrap_err();
+        assert!(err.to_string().contains("failed to load"), "{err:#}");
     }
 
     #[test]

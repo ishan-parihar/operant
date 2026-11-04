@@ -38,8 +38,16 @@ with the host's own parser) with capabilities and, since iter-1721,
   skills.
 - **observer** — the module exports `observe`; it is registered as a
   tool-seam interceptor and may veto any tool call
-  (pre-execute before dispatch, post-execute with the result). Fail-open:
-  a broken observer allows and logs, never bricks the tool loop.
+  (pre-execute before dispatch, post-execute with the result). The module's
+  instances are RESIDENT — a `runtime::PluginPool` checked out per event, so
+  a call pays no WASM compile (iter-1725 replaced the per-call instantiate;
+  `extism::Plugin` is Send + Sync, and extism ships `Pool` for exactly
+  this). Instance state persists on checked-out modules. The manifest's
+  free-form `[config]` table rides every observe envelope as `"config"`
+  (deepseek-harness parity: its policy plugins are all config-driven;
+  schema-free here — the host never interprets the table). Fail-open: a
+  broken observer, a failed call, or a pool checkout past the 10 s wait
+  ceiling allows and logs, never bricks the tool loop.
 - **channel** — messaging platform integrations. Deliberately deferred:
   gateway adapters are a compile-time registry, and no dynamic channel
   consumer exists yet.
@@ -49,7 +57,16 @@ plugins that must be present. A plugin whose requires are unmet is
 skipped at discovery, transitively (A requires missing B drops A; C
 requiring A drops too); mutual requires are satisfied, not a deadlock.
 Shortcut: there is no fiber-reload when a provider returns (dsh's
-PENDING state) — a restart or watcher re-scan covers it.
+PENDING state) — a RESTART covers it. The hot-swap watcher does NOT
+cover it: it feeds only the kernel harness seam (`Harness::replace` of
+ArchitectureRows), so a newly-installed plugin never appears as a live
+tool/skill/observer registration without a restart (red-team audit S3,
+2026-11-05); live re-registration is the named upgrade.
+
+Plugin tools and observer calls run on RESIDENT module instances
+(`runtime::PluginPool`, iter-1725): one WASM compile per module per
+process, instances checked out up to `available_parallelism`, reused
+across calls — the deepseek-harness residency semantics without fibers.
 
 The host (`crates/operant-plugins/src/host.rs`) owns the lifecycle:
 discovery, signature checks, and a watcher for live reload. Skill

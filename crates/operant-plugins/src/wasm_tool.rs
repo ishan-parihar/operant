@@ -2,6 +2,7 @@
 
 use crate::PluginPermission;
 use crate::runtime;
+use anyhow::Context as _;
 use async_trait::async_trait;
 use operant_api::tool::{Tool, ToolResult};
 use serde_json::Value;
@@ -12,8 +13,10 @@ pub struct WasmTool {
     name: String,
     description: String,
     parameters_schema: Value,
-    wasm_path: PathBuf,
-    permissions: Vec<PluginPermission>,
+    /// Resident instance pool for the module — one compile per process,
+    /// reused across calls (iter-1725; the per-call instantiate this
+    /// replaces is red-team audit F1).
+    pool: runtime::PluginPool,
 }
 
 impl WasmTool {
@@ -28,8 +31,7 @@ impl WasmTool {
             name,
             description,
             parameters_schema,
-            wasm_path,
-            permissions,
+            pool: runtime::PluginPool::new(&wasm_path, &permissions),
         }
     }
 
@@ -74,8 +76,7 @@ impl WasmTool {
             name,
             description,
             parameters_schema: schema,
-            wasm_path,
-            permissions,
+            pool: runtime::PluginPool::new(&wasm_path, &permissions),
         }
     }
 }
@@ -111,15 +112,19 @@ impl Tool for WasmTool {
     }
 
     async fn execute(&self, args: Value) -> anyhow::Result<ToolResult> {
-        let wasm_path = self.wasm_path.clone();
-        let permissions = self.permissions.clone();
+        let pool = self.pool.clone();
         let args_json = serde_json::to_vec(&args)?;
 
-        // Extism Plugin is !Send, so we must create it inside spawn_blocking.
-        tokio::task::spawn_blocking(move || {
-            let mut plugin = runtime::create_plugin(&wasm_path, &permissions)?;
-            runtime::call_execute(&mut plugin, &args_json)
-        })
-        .await?
+        // The pool checkout + extism call are blocking; they run on the
+        // blocking pool (same boundary the per-call path used).
+        let checked_out = tokio::task::spawn_blocking(move || pool.execute(&args_json))
+            .await
+            .context("plugin execution task failed")?;
+        match checked_out? {
+            Some(result) => Ok(result),
+            None => Err(anyhow::anyhow!(
+                "plugin instance pool busy — no free instance within the wait ceiling"
+            )),
+        }
     }
 }

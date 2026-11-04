@@ -50,6 +50,13 @@ pub struct PluginManifest {
     /// see the shortcut note in `PluginHost::discover`).
     #[serde(default)]
     pub requires: Vec<String>,
+    /// Free-form plugin configuration (`[config]` in manifest.toml), passed
+    /// verbatim to capability surfaces that consume it — currently the
+    /// observer envelope (iter-1725). deepseek-harness parity: its plugin
+    /// Config schema reaches `apply(ctx, config)`; operant stays schema-free
+    /// — the host never interprets the table.
+    #[serde(default)]
+    pub config: toml::Table,
 }
 
 /// What a plugin can do.

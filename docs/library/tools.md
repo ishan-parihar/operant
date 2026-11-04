@@ -35,7 +35,10 @@ runs, and a `post-execute` handler can replace a result with an error —
 deepseek-harness `tools/pre-execute` / `tools/post-execute` waterfall
 parity, reusing the vestigial `PipelineAction` verdicts. The emit-only
 HookRegistry cannot veto; only this seam can. Consumers: WASM observer
-plugins (see [plugins.md](plugins.md)). An empty interceptor list is the
+plugins (see [plugins.md](plugins.md)) — resident module instances since
+iter-1725 (`runtime::PluginPool`: one WASM compile per module per process,
+fail-open on any load/call/pool-wait failure), each event envelope carrying
+the plugin manifest's `[config]` table. An empty interceptor list is the
 default and stays allocation-free; first Block wins; a veto is a typed
 error RESULT to the model (`blocked by interceptor: <reason>`), not a
 loop error.
