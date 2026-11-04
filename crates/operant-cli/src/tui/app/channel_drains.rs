@@ -579,6 +579,14 @@ impl App {
                 true
             }
             Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
+                // The live tails were never committed: flushing them here is
+                // what keeps the partial answer the operator was reading —
+                // without it the Streaming section closes (is_streaming is
+                // the gate) and the next Content/Thinking event clears the
+                // buffers, so a task that panicked or was watchdog-aborted
+                // mid-stream erased its own partial with no trace. Idempotent
+                // on the /stop path, which already flushed.
+                self.flush_streamed_assistant_message();
                 self.is_streaming = false;
                 self.run_error_surfaced = false;
                 self.run_complete_rx = None;

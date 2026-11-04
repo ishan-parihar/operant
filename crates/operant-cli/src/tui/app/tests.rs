@@ -11982,3 +11982,29 @@ fn a_text_response_turn_stays_notice_free() {
         "a normal completion must not carry the early-exit card"
     );
 }
+
+/// A task that dies without a terminal event — the oneshot sender dropped
+/// (panic) or the watchdog aborted it — must not erase the live tails: the
+/// Closed arm cleared is_streaming without flushing, so the Streaming section
+/// closed and the next Content/Thinking event cleared the buffers, taking the
+/// partial answer the operator was reading with it, no trace.
+///
+/// MUTATION-PROOF: deleting the flush_streamed_assistant_message call in the
+/// Closed arm fails the transcript assertion by name.
+#[test]
+fn a_task_dying_without_a_terminal_event_still_flushes_the_live_tails() {
+    let mut app = make_app();
+    app.is_streaming = true;
+    app.streaming_text = "the partial answer the operator was reading".to_string();
+    let (tx, rx) = tokio::sync::oneshot::channel::<operant_core::error::Result<()>>();
+    drop(tx); // the task died without resolving — the sender is gone
+    app.run_complete_rx = Some(rx);
+    assert!(app.drain_run_complete());
+    assert!(!app.is_streaming);
+    assert!(
+        app.messages.iter().any(|m| m
+            .text_content()
+            .contains("the partial answer the operator was reading")),
+        "the live tails must be committed to the transcript before the state clears"
+    );
+}
