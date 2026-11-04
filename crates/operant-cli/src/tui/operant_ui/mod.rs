@@ -1622,6 +1622,27 @@ impl CopyViewportSnapshot {
             CopyViewportData::ChatFrame { prepared } => prepared.wrapped_copy_offset(abs_line),
         }
     }
+
+    /// The wrapped-row → logical-line map, used to resolve a selection endpoint
+    /// back to the RAW text the user typed (jcode's `raw_selection_point`).
+    fn wrapped_line_map(&self, abs_line: usize) -> Option<WrappedLineMap> {
+        match &self.data {
+            CopyViewportData::Dense {
+                wrapped_line_map, ..
+            } => wrapped_line_map.get(abs_line).copied(),
+            CopyViewportData::ChatFrame { prepared } => prepared.wrapped_line_map(abs_line),
+        }
+    }
+
+    /// How many logical (raw) lines the pane holds.
+    fn raw_plain_line_count(&self) -> usize {
+        match &self.data {
+            CopyViewportData::Dense {
+                raw_plain_lines, ..
+            } => raw_plain_lines.len(),
+            CopyViewportData::ChatFrame { prepared } => prepared.raw_plain_line_count(),
+        }
+    }
 }
 
 #[derive(Clone, Default)]
@@ -2027,6 +2048,263 @@ pub(crate) fn copy_viewport_line_text(abs_line: usize) -> Option<String> {
         crate::tui::operant_ui::copy_selection::CopySelectionPane::Chat,
         abs_line,
     )
+}
+
+/// Map a screen cell to the copy-selection point it lands on, across every
+/// pane that published a snapshot this frame.
+///
+/// This is jcode's `ui.rs:2140` `copy_point_from_screen`, ported. operant had
+/// the CHAT pane's snapshot machinery but no screen→point resolver at all, so
+/// the composer's snapshot — recorded every frame by
+/// `record_input_copy_snapshot` — was written and never read. The text being
+/// typed was therefore unreachable by the mouse: a drag over the composer
+/// selected nothing, and a click over it only moved focus.
+///
+/// The pane order matches jcode's (chat, side, then input): the composer is
+/// checked LAST, so a transcript that happens to overlap the input's rect
+/// still wins, and a cell outside every snapshot resolves to `None`.
+pub(crate) fn copy_point_from_screen(
+    column: u16,
+    row: u16,
+) -> Option<crate::tui::operant_ui::copy_selection::CopySelectionPoint> {
+    use crate::tui::operant_ui::copy_selection::CopySelectionPane;
+    for pane in [
+        CopySelectionPane::Chat,
+        CopySelectionPane::SidePane,
+        CopySelectionPane::Input,
+    ] {
+        if let Some(snapshot) = copy_snapshot_for_pane(pane)
+            && let Some(point) = copy_point_from_snapshot(&snapshot, column, row)
+        {
+            return Some(point);
+        }
+    }
+    None
+}
+
+/// The screen cell → pane point mapping for ONE pane's snapshot.
+///
+/// jcode `ui/copy_selection.rs:9` `copy_point_from_snapshot`, ported. The
+/// point's `column` is a DISPLAY column within the line's text (the gutter
+/// prefix is excluded via the per-row left margin), and `abs_line` is the
+/// scroll-stable wrapped-row index.
+fn copy_point_from_snapshot(
+    snapshot: &CopyViewportSnapshot,
+    column: u16,
+    row: u16,
+) -> Option<crate::tui::operant_ui::copy_selection::CopySelectionPoint> {
+    let area = snapshot.content_area;
+    if row < area.y
+        || row >= area.y.saturating_add(area.height)
+        || column < area.x
+        || column >= area.x.saturating_add(area.width)
+    {
+        return None;
+    }
+
+    let rel_row = row.saturating_sub(area.y) as usize;
+    let abs_line = snapshot.scroll.saturating_add(rel_row);
+    if abs_line >= snapshot.visible_end {
+        return None;
+    }
+    let text = snapshot.wrapped_plain_line(abs_line)?;
+    let wrapped_line_count = match &snapshot.data {
+        CopyViewportData::Dense {
+            wrapped_plain_lines,
+            ..
+        } => wrapped_plain_lines.len(),
+        CopyViewportData::ChatFrame { prepared } => prepared.wrapped_plain_line_count(),
+    };
+    if abs_line >= wrapped_line_count {
+        return None;
+    }
+
+    let left_margin = snapshot.left_margins.get(rel_row).copied().unwrap_or(0);
+    let content_x = area.x.saturating_add(left_margin);
+    let rel_col = column.saturating_sub(content_x) as usize;
+    let copy_start = snapshot.wrapped_copy_offset(abs_line).unwrap_or(0);
+    Some(crate::tui::operant_ui::copy_selection::CopySelectionPoint {
+        pane: snapshot.pane,
+        abs_line,
+        column: clamp_display_col(text, rel_col).max(copy_start),
+    })
+}
+
+/// The text a copy-selection between two points resolves to, for ANY pane.
+///
+/// jcode's `ui/copy_selection.rs` `copy_selection_text_from_raw_lines`, in the
+/// form operant's chat path needs: whole LOGICAL lines are copied, so a
+/// selection spanning a soft wrap yields the original text without injected
+/// line breaks. The composer's raw lines are its `\n`-separated input lines
+/// (`input_copy_snapshot_parts`), so dragging across a wrapped composer row
+/// copies the source text, not the visual wrap.
+///
+/// `None` when the selection cannot be resolved (no snapshot, an endpoint with
+/// no line map) — the caller then falls back to the displayed-text path.
+pub(crate) fn copy_selection_text(
+    start: crate::tui::operant_ui::copy_selection::CopySelectionPoint,
+    end: crate::tui::operant_ui::copy_selection::CopySelectionPoint,
+) -> Option<String> {
+    if start.pane != end.pane {
+        return None;
+    }
+    let snapshot = copy_snapshot_for_pane(start.pane)?;
+    let (first, last) = if (start.abs_line, start.column) <= (end.abs_line, end.column) {
+        (start, end)
+    } else {
+        (end, start)
+    };
+    copy_selection_text_from_raw_lines(&snapshot, first, last)
+}
+
+/// The raw-logical-line copy path, ported from jcode's
+/// `copy_selection_text_from_raw_lines_base`.
+///
+/// Both endpoints map through the snapshot's `wrapped_line_map` to (logical
+/// line, column); whole LOGICAL lines between them are copied verbatim.
+fn copy_selection_text_from_raw_lines(
+    snapshot: &CopyViewportSnapshot,
+    start: crate::tui::operant_ui::copy_selection::CopySelectionPoint,
+    end: crate::tui::operant_ui::copy_selection::CopySelectionPoint,
+) -> Option<String> {
+    let raw_count = match &snapshot.data {
+        CopyViewportData::Dense {
+            raw_plain_lines, ..
+        } => raw_plain_lines.len(),
+        CopyViewportData::ChatFrame { prepared } => prepared.raw_plain_line_count(),
+    };
+    if raw_count == 0 {
+        return None;
+    }
+    let start_raw = raw_selection_point(snapshot, start)?;
+    let end_raw = raw_selection_point(snapshot, end)?;
+    if start_raw.0 >= raw_count || end_raw.0 >= raw_count {
+        return None;
+    }
+
+    let mut out = String::new();
+    for raw_line in start_raw.0..=end_raw.0 {
+        if raw_line > start_raw.0 {
+            out.push('\n');
+        }
+        let text = match &snapshot.data {
+            CopyViewportData::Dense {
+                raw_plain_lines, ..
+            } => raw_plain_lines.get(raw_line)?,
+            CopyViewportData::ChatFrame { prepared } => prepared.raw_plain_line(raw_line)?,
+        };
+        let width = line_display_width(text);
+        let from = if raw_line == start_raw.0 {
+            start_raw.1.min(width)
+        } else {
+            0
+        };
+        let to = if raw_line == end_raw.0 {
+            end_raw.1.min(width)
+        } else {
+            width
+        };
+        if to > from {
+            out.push_str(&display_col_slice(text, from, to));
+        }
+    }
+    Some(out.trim_end().to_string())
+}
+
+/// A pane point → (raw logical line, column within it).
+fn raw_selection_point(
+    snapshot: &CopyViewportSnapshot,
+    point: crate::tui::operant_ui::copy_selection::CopySelectionPoint,
+) -> Option<(usize, usize)> {
+    let wrapped_text = snapshot.wrapped_plain_line(point.abs_line)?;
+    let map = snapshot.wrapped_line_map(point.abs_line)?;
+    let display_copy_start = snapshot
+        .wrapped_copy_offset(point.abs_line)
+        .unwrap_or(0)
+        .min(line_display_width(wrapped_text));
+    let local_col = clamp_display_col(wrapped_text, point.column).max(display_copy_start);
+    let segment_width = map.end_col.saturating_sub(map.start_col);
+    Some((
+        map.raw_line,
+        map.start_col
+            + local_col
+                .saturating_sub(display_copy_start)
+                .min(segment_width),
+    ))
+}
+
+/// The RAW character offset in the composer's text that a selection point
+/// lands on.
+///
+/// The composer's copy snapshot maps each WRAPPED row to the logical
+/// (`\n`-separated) line it came from and to the column range it covers, so a
+/// display column resolves to a character offset in the original text. This is
+/// what makes a click place the caret where the user pointed and a drag copy
+/// the text under the pointer — both from ONE map.
+///
+/// `None` when the point is not in the composer or the map has no entry for
+/// the row.
+pub(crate) fn input_char_offset_at_point(
+    point: crate::tui::operant_ui::copy_selection::CopySelectionPoint,
+) -> Option<usize> {
+    use crate::tui::operant_ui::copy_selection::CopySelectionPane;
+    if point.pane != CopySelectionPane::Input {
+        return None;
+    }
+    let snapshot = copy_snapshot_for_pane(CopySelectionPane::Input)?;
+    // Resolve the point to (logical line, display column within THAT line).
+    //
+    // `raw_selection_point` is the only correct resolver for a wrapped row: a
+    // continuation row's display column is relative to the SEGMENT's start,
+    // not to the logical line's start, so the segment's `start_col` has to be
+    // added back. Resolving the column against the raw line directly would
+    // land the caret at the wrong character on every row past the first.
+    let (raw_line, display_col) = raw_selection_point(&snapshot, point)?;
+    let text = match &snapshot.data {
+        CopyViewportData::Dense {
+            raw_plain_lines, ..
+        } => raw_plain_lines.get(raw_line)?,
+        CopyViewportData::ChatFrame { prepared } => prepared.raw_plain_line(raw_line)?,
+    };
+    // The byte offset of the logical line's start in the composer's text.
+    let line_start: usize = match &snapshot.data {
+        CopyViewportData::Dense {
+            raw_plain_lines, ..
+        } => raw_plain_lines
+            .iter()
+            .take(raw_line)
+            .map(|line| line.len() + 1)
+            .sum(),
+        CopyViewportData::ChatFrame { prepared } => prepared
+            .raw_plain_lines()
+            .iter()
+            .take(raw_line)
+            .map(|line| line.len() + 1)
+            .sum(),
+    };
+    // `display_col` is a DISPLAY column; convert it to a char index within
+    // the logical line.
+    let char_index = display_col_to_char_index(text, display_col);
+    let byte_offset = text
+        .char_indices()
+        .nth(char_index)
+        .map(|(byte, _)| byte)
+        .unwrap_or(text.len());
+    Some(line_start + byte_offset)
+}
+
+/// The number of CHARACTERS that fit in the first `display_col` display
+/// columns of `text`.
+fn display_col_to_char_index(text: &str, display_col: usize) -> usize {
+    use unicode_width::UnicodeWidthChar;
+    let mut used = 0usize;
+    for (index, ch) in text.chars().enumerate() {
+        if used >= display_col {
+            return index;
+        }
+        used += ch.width().unwrap_or(0);
+    }
+    text.chars().count()
 }
 
 /// Copy text of one chat content line between two SCREEN columns

@@ -352,6 +352,31 @@ impl PreparedChatFrame {
             .map(String::as_str)
     }
 
+    /// How many WRAPPED (display) rows the frame holds.
+    pub fn wrapped_plain_line_count(&self) -> usize {
+        self.total_wrapped_lines
+    }
+
+    /// How many LOGICAL (raw) lines the frame holds.
+    pub fn raw_plain_line_count(&self) -> usize {
+        self.sections
+            .iter()
+            .map(|section| section.prepared.raw_plain_lines.len())
+            .sum()
+    }
+
+    /// The frame's logical lines, in order.
+    ///
+    /// Used by the copy path to compute a logical line's byte offset in the
+    /// frame's raw text — the composer resolves a click to a character offset
+    /// that way.
+    pub fn raw_plain_lines(&self) -> Vec<&str> {
+        self.sections
+            .iter()
+            .flat_map(|section| section.prepared.raw_plain_lines.iter().map(String::as_str))
+            .collect()
+    }
+
     pub fn wrapped_copy_offset(&self, abs_line: usize) -> Option<usize> {
         let (section, local) = self.line_section(abs_line)?;
         section.prepared.wrapped_copy_offsets.get(local).copied()

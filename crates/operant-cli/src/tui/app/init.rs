@@ -344,6 +344,8 @@ impl App {
             last_render_content_pos: Cell::new(None),
             last_resolved_scroll: Cell::new(None),
             selection_anchor: None,
+            input_selection_anchor: None,
+            input_selection_focus: None,
             selection_focus: None,
             selection_text: RefCell::new(String::new()),
             last_row_text: RefCell::new(std::collections::HashMap::new()),

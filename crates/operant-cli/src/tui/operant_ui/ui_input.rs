@@ -488,7 +488,14 @@ pub(super) fn wrapped_input_line_count(
 ) -> usize {
     let reserved_width = send_mode_reserved_width(app);
     let prompt_len = input_gutter_cols(app);
-    let line_width = (area_width as usize).saturating_sub(prompt_len + reserved_width);
+    // The SAME rect `draw_input` paints into, so the measured row count and
+    // the painted rows can never disagree. The old arithmetic subtracted
+    // `prompt_len` from the raw area width while the paint subtracted
+    // `prompt_len + 1` from it (the gutter plus codex's right inset), so the
+    // band was measured against rows that were one column wider than the ones
+    // actually painted.
+    let padded = composer::textarea_rect(Rect::new(0, 0, area_width, u16::MAX));
+    let line_width = (padded.width as usize).saturating_sub(reserved_width);
     if line_width == 0 {
         return 1;
     }
@@ -2528,7 +2535,14 @@ pub(super) fn draw_input(
     // The codex-parity gutter: two columns, no prompt index.
     let prompt_len = input_gutter_cols(app);
     let reserved_width = send_mode_reserved_width(app);
-    let line_width = (area.width as usize).saturating_sub(prompt_len + reserved_width);
+    // The text's width is the TEXTAREA RECT's width — the glyph lives in the
+    // gutter (codex's arrangement), so the rect holds text only. Deriving the
+    // wrap width from the SAME rect the text is painted into is what makes
+    // "wrapped to width" and "painted at width" the same number by
+    // construction; the two used to be computed independently and disagreed by
+    // `prompt_len + 1` columns, clipping the tail of every wrapped row.
+    let padded = composer::textarea_rect(area);
+    let line_width = (padded.width as usize).saturating_sub(reserved_width);
 
     if line_width == 0 {
         return None;
@@ -2617,12 +2631,9 @@ pub(super) fn draw_input(
 
     let suggestions_offset = lines.len();
     let total_input_lines = all_lines.len();
-    // The band carries one blank row above and below the text, and the gutter
-    // columns on the left — codex's `composer_layout.rs:105-110` inset
-    // (`tlbr(1, LIVE_PREFIX_COLS, 1, 1)`). Everything below measures and paints
-    // against this inset rect, so the band's own top row stays as the fill's
+    // `padded` is the text rect, computed once above (from the same rect the
+    // wrap width came from) so the band's own top row stays as the fill's
     // breathing space and its bottom row is free for the footer's send icon.
-    let padded = composer::textarea_rect(area);
     let visible_height = padded.height as usize;
 
     let scroll_offset = if total_input_lines + suggestions_offset <= visible_height {
@@ -2647,10 +2658,12 @@ pub(super) fn draw_input(
     let centered = app.centered_mode();
 
     // Register the composer's visible rows with the shared copy-selection
-    // machinery so mouse drags can select and copy the text being typed
-    // The prompt prefix / continuation indent is excluded via
-    // per-row left margins, so hit-testing and the copied text only ever
-    // cover the typed text, never the prompt decoration.
+    // machinery so mouse drags can select and copy the text being typed.
+    //
+    // The text rect holds TEXT ONLY (the glyph moved into the gutter), so the
+    // left margin is 0 in the normal case: the first column of the rect IS the
+    // text origin. In centered mode the rows are shifted right, so the margin
+    // carries that shift.
     if visible_input_rows > 0 {
         let (wrapped_plain, raw_plain, line_map) =
             input_copy_snapshot_parts(input_text, line_width);
@@ -2661,10 +2674,11 @@ pub(super) fn draw_input(
                     .get(abs)
                     .map(|text| unicode_width::UnicodeWidthStr::width(text.as_str()))
                     .unwrap_or(0);
-                let mut margin = prompt_len;
-                if centered {
-                    margin += (padded.width as usize).saturating_sub(prompt_len + text_width) / 2;
-                }
+                let margin = if centered {
+                    (padded.width as usize).saturating_sub(text_width) / 2
+                } else {
+                    0
+                };
                 margin.min(padded.width as usize) as u16
             })
             .collect();
@@ -2687,7 +2701,7 @@ pub(super) fn draw_input(
 
     // Highlight an active copy selection over the composer text, mirroring the
     // chat/side-pane selection rendering. Columns are selection-space (typed
-    // text only), so shift them right by the prompt width for display.
+    // text only) and the text rect holds text only, so they need no shift.
     if let Some(range) = app.copy_selection_range().filter(|range| {
         range.start.pane == super::copy_selection::CopySelectionPane::Input
             && range.end.pane == super::copy_selection::CopySelectionPane::Input
@@ -2706,12 +2720,12 @@ pub(super) fn draw_input(
             }
             if let Some(line) = lines.get_mut(suggestions_offset + rel) {
                 let start_col = if abs == start.abs_line {
-                    prompt_len + start.column
+                    start.column
                 } else {
-                    prompt_len
+                    0
                 };
                 let end_col = if abs == end.abs_line {
-                    prompt_len + end.column
+                    end.column
                 } else {
                     line.width()
                 };
@@ -2744,21 +2758,27 @@ pub(super) fn draw_input(
         Paragraph::new(lines.clone())
     };
     frame.render_widget(paragraph, padded);
+
+    // The prompt glyph lives in the GUTTER, to the LEFT of the text rect —
+    // codex's arrangement (`chat_composer.rs:4928-4935`). It is painted
+    // separately from the text so the text rect keeps every column for the
+    // typed characters; an in-line glyph would have charged the gutter twice.
+    let glyph_area = composer::glyph_rect(area);
+    if glyph_area.width > 0 && glyph_area.height > 0 {
+        let glyph = Line::from(Span::styled(
+            prompt_char.to_string(),
+            Style::default().fg(caret_color),
+        ));
+        frame.render_widget(Paragraph::new(glyph), glyph_area);
+    }
+
     if input_text.is_empty() && !has_suggestions {
         // codex's empty state is `› Ask Codex to do anything` — the placeholder
         // sits on the GLYPH's own row, past the gutter, never on a row of its own.
-        // Two offsets, both required:
-        //
-        // - ROW: the glyph row is `suggestions_offset` rows into the padded rect
-        //   (a hint row precedes it when one is present — the `-- INSERT --`
-        //   vim badge that used to sit here is gone since RT-144), so the
-        //   placeholder must skip those rows or it paints over the hint line.
-        // - COLUMN: the glyph is an in-line span at the START of that line
-        //   (`wrap_input_text_gutter` paints `prompt_char` as the line's first
-        //   span), so the placeholder must start `prompt_len` columns in or it
-        //   overwrites the glyph.
-        let placeholder_rect =
-            composer::placeholder_rect(padded, prompt_len as u16, suggestions_offset as u16);
+        // Only a ROW offset is required: the glyph is in the gutter now, so the
+        // text rect's first column IS the placeholder's start and the two can
+        // never overlap.
+        let placeholder_rect = composer::placeholder_rect(padded, suggestions_offset as u16);
         composer::paint_placeholder(placeholder_rect, frame);
     }
 
@@ -2769,12 +2789,11 @@ pub(super) fn draw_input(
         let actual_line_width = lines
             .get(cursor_screen_line)
             .map(|l| l.width())
-            .unwrap_or(prompt_len);
+            .unwrap_or(0);
         let center_offset = (padded.width as usize).saturating_sub(actual_line_width) / 2;
-        let cursor_offset = prompt_len + cursor_col;
-        padded.x + center_offset as u16 + cursor_offset as u16
+        padded.x + center_offset as u16 + cursor_col as u16
     } else {
-        padded.x + prompt_len as u16 + cursor_col as u16
+        padded.x + cursor_col as u16
     };
 
     let cursor = Position::new(cursor_x, cursor_y);
@@ -2991,10 +3010,27 @@ pub(crate) fn wrap_input_text<'a>(
 /// mode glyph, so the composer's left edge aligns with the transcript's status
 /// rows instead of drifting right as the index grows from 9 to 10 to 100.
 ///
-/// The gutter's WIDTH is still supplied by the caller as `prompt_len`: the two
-/// policies differ only in what is painted, never in the reserved columns, so
-/// `draw_input`'s copy-selection margins and cursor maths are unchanged between
-/// them.
+/// ## The returned lines carry TEXT ONLY
+///
+/// The prompt glyph is NOT painted here any more. codex paints it in the
+/// gutter, to the LEFT of the textarea rect (`chat_composer.rs:4928-4935`),
+/// and operant now does the same (see `composer::glyph_rect`).
+///
+/// This matters because the glyph used to be an in-line span on the first row,
+/// and every continuation row carried a `" ".repeat(prompt_len)` indent to
+/// line up under it. Both charged the gutter's columns AGAIN, on top of the
+/// `line_width` that had already subtracted them: the wrap produced rows
+/// `line_width` columns wide, the paragraph then prefixed `prompt_len` columns
+/// of indent, and the whole thing was painted into a rect that was
+/// `prompt_len + 1` columns narrower than the text needed. Every wrapped row
+/// therefore lost its last three characters to the clip.
+///
+/// With the glyph in the gutter, the text rect's full width is the text's
+/// width: `line_width` is exactly the rect's width, the rows carry no indent,
+/// and the two can never disagree.
+///
+/// The `prompt_len` parameter survives for the historic `num_str` policy,
+/// whose index-plus-glyph prefix still occupies the first row's columns.
 #[allow(clippy::too_many_arguments)]
 fn wrap_input_text_gutter<'a>(
     input: &str,
@@ -3034,30 +3070,21 @@ fn wrap_input_text_gutter<'a>(
             found_cursor = true;
         }
 
+        let mut spans: Vec<Span<'a>> = Vec::new();
         if idx == 0 {
-            // Under the codex-parity gutter (`num_str == None`) the line paints
-            // only the mode glyph, and the continuation-row indent
-            // (`" ".repeat(prompt_len)`) carries the alignment — so a wrapped
-            // first row and its continuations keep one left edge without a
-            // numbered index drifting it.
-            let mut spans: Vec<Span<'a>> = Vec::new();
+            // The historic `num_str` policy painted a prompt INDEX in the first
+            // row's columns. The codex-parity policy (`num_str == None`) paints
+            // no prefix at all here — its glyph lives in the gutter, painted
+            // separately by `draw_input`.
             if let Some(num) = num_str {
                 spans.push(Span::styled(
                     num.to_string(),
                     Style::default().fg(rainbow_prompt_color(0)),
                 ));
             }
-            spans.push(Span::styled(
-                prompt_char.to_string(),
-                Style::default().fg(caret_color),
-            ));
-            spans.extend(selected_text_spans(segment, sel_chars));
-            lines.push(Line::from(spans));
-        } else {
-            let mut spans = vec![Span::raw(" ".repeat(prompt_len))];
-            spans.extend(selected_text_spans(segment, sel_chars));
-            lines.push(Line::from(spans));
         }
+        spans.extend(selected_text_spans(segment, sel_chars));
+        lines.push(Line::from(spans));
     }
 
     if !found_cursor {
@@ -3067,6 +3094,11 @@ fn wrap_input_text_gutter<'a>(
             .map(|segment| segment.display_width)
             .unwrap_or(0);
     }
+
+    // `prompt_char` / `caret_color` / `prompt_len` are retained in the
+    // signature so the historic `num_str` policy keeps compiling and so the
+    // call sites stay explicit about the glyph they no longer paint here.
+    let _ = (prompt_char, caret_color, prompt_len);
 
     (lines, cursor_line, cursor_col)
 }
@@ -3162,4 +3194,131 @@ pub(crate) fn visual_line_move(
         input,
         target.start_char + chars_in,
     ))
+}
+
+// ---- Composer copy-selection regressions (iter-1719) ----------------------
+//
+// The composer was never selectable: `record_input_copy_snapshot` wrote a
+// snapshot every frame and NOTHING read it (no screen→point resolver existed),
+// so a drag over the draft selected nothing and a click over it only moved
+// focus. These tests pin the three properties the fix must hold:
+//
+//   1. the snapshot's wrapped rows map back to the LOGICAL line they came
+//      from, so a selection spanning a soft wrap copies the source text;
+//   2. a screen column resolves to the RIGHT character on every wrapped row
+//      (the continuation rows' columns are relative to the segment's start);
+//   3. the composer's text rect holds text ONLY, so a row of `line_width`
+//      columns fits the rect and loses nothing to the clip.
+
+#[cfg(test)]
+mod copy_selection_tests {
+    use super::*;
+    use crate::tui::operant_ui::copy_selection::{CopySelectionPane, CopySelectionPoint};
+    use ratatui::prelude::Rect;
+
+    /// Record a composer snapshot for `input` laid out at `line_width`, with
+    /// the text rect at `area`, and return the screen→point resolver's view.
+    fn record_and_resolve(input: &str, line_width: usize, area: Rect) {
+        let (wrapped_plain, raw_plain, line_map) = input_copy_snapshot_parts(input, line_width);
+        let row_count = wrapped_plain.len();
+        let left_margins = vec![0u16; row_count];
+        super::super::record_input_copy_snapshot(
+            wrapped_plain,
+            raw_plain,
+            line_map,
+            0,
+            row_count,
+            area,
+            &left_margins,
+        );
+    }
+
+    #[test]
+    fn a_drag_across_a_soft_wrap_copies_the_source_text_not_the_visual_rows() {
+        let input = "hello brave new world";
+        let line_width = 10;
+        let area = Rect::new(0, 0, 40, 6);
+        record_and_resolve(input, line_width, area);
+
+        // Drag from the first row's column 0 to the third row's column 5.
+        let start = CopySelectionPoint {
+            pane: CopySelectionPane::Input,
+            abs_line: 0,
+            column: 0,
+        };
+        let end = CopySelectionPoint {
+            pane: CopySelectionPane::Input,
+            abs_line: 2,
+            column: 5,
+        };
+        let copied = super::super::copy_selection_text(start, end).expect("selection resolves");
+        assert_eq!(
+            copied, "hello brave new world",
+            "a selection spanning a soft wrap must copy the ORIGINAL text"
+        );
+    }
+
+    #[test]
+    fn a_click_on_a_continuation_row_resolves_to_the_character_under_the_pointer() {
+        // 24 chars at width 10 → rows "0123456789", "abcdefghij", "klmnopqrst".
+        let input = "0123456789abcdefghijklmnopqrst";
+        let line_width = 10;
+        let area = Rect::new(0, 0, 40, 6);
+        record_and_resolve(input, line_width, area);
+
+        // Row 1 is the CONTINUATION row: its column 0 is input char 10 ('a'),
+        // not char 0. Resolving the column against the logical line instead of
+        // the segment would land the caret on '0' — the classic off-by-a-row
+        // bug when a wrapped composer is clicked.
+        let point = CopySelectionPoint {
+            pane: CopySelectionPane::Input,
+            abs_line: 1,
+            column: 0,
+        };
+        let offset = super::super::input_char_offset_at_point(point).expect("point resolves");
+        assert_eq!(offset, 10, "row 1 column 0 is the 11th character");
+
+        // Column 3 on row 1 is input char 13 ('d').
+        let point = CopySelectionPoint {
+            pane: CopySelectionPane::Input,
+            abs_line: 1,
+            column: 3,
+        };
+        let offset = super::super::input_char_offset_at_point(point).expect("point resolves");
+        assert_eq!(offset, 13);
+    }
+
+    #[test]
+    fn the_composer_text_rect_holds_text_only_so_a_full_width_row_is_not_clipped() {
+        // codex paints the `›` glyph in the GUTTER, left of the text rect, so
+        // the rect's full width is the text's width. operant used to charge
+        // the gutter twice (once in the wrap width, once as a continuation
+        // indent) and clip the tail of every wrapped row.
+        let area = Rect::new(0, 0, 80, 20);
+        let text_rect = composer::textarea_rect(area);
+        let glyph_rect = composer::glyph_rect(area);
+
+        assert_eq!(text_rect.x, glyph_rect.x + glyph_rect.width);
+        assert!(glyph_rect.x >= area.x);
+        assert!(glyph_rect.x + glyph_rect.width <= text_rect.x);
+
+        // The wrap width IS the text rect's width (minus the send-icon
+        // reservation), so a row of that width fits the rect exactly and loses
+        // nothing to the clip.
+        let line_width = text_rect.width as usize;
+        let text = "x".repeat(line_width);
+        let (lines, _, _) = wrap_input_text_gutter(
+            &text,
+            text.len(),
+            line_width,
+            None,
+            "›",
+            Color::Reset,
+            2,
+            None,
+        );
+        assert_eq!(lines.len(), 1, "a full-width row must not wrap");
+        let painted: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(painted, text, "no character may be clipped");
+    }
 }

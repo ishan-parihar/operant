@@ -874,6 +874,21 @@ pub struct App {
     pub selection_focus: Option<(u16, usize)>,
     /// Text extracted from the current selection (updated each render frame).
     pub selection_text: RefCell<String>,
+    /// Selection anchor INSIDE THE COMPOSER, as a pane point (the wrapped-row
+    /// index and the display column within the row).
+    ///
+    /// The transcript's selection is stored in content-line space
+    /// (`selection_anchor` above), which the chat's scroll-stable line index
+    /// makes stable across scrolls. The composer has no such index — its
+    /// wrapped rows scroll with the draft — so its selection is stored in the
+    /// pane-point space the composer's copy snapshot publishes, and resolved
+    /// to raw character offsets when the text is extracted.
+    ///
+    /// `None` means "no composer selection"; a click in the composer sets it
+    /// to the clicked point, and a drag extends it.
+    pub input_selection_anchor: Option<crate::tui::operant_ui::copy_selection::CopySelectionPoint>,
+    /// The moving end of the composer selection.
+    pub input_selection_focus: Option<crate::tui::operant_ui::copy_selection::CopySelectionPoint>,
     /// Cache of row -> rendered text within the selectable area, refreshed
     /// each frame. Used by double/triple-click word and paragraph detection
     /// (issue #149 follow-up: prior word-boundary detection was a placeholder).
@@ -1082,6 +1097,16 @@ impl App {
     /// store's global mutex and may hit the filesystem, and a list changes on
     /// a human timescale. When the fingerprint matches, the payload is left
     /// untouched so the render cache is not invalidated either.
+    ///
+    /// An EMPTY disk read never clears a live list. The tool result is the
+    /// authoritative producer (it carries the whole list, and the tool may
+    /// have written it under a key this tick is not reading yet), so a tick
+    /// that reads nothing is a tick that has not SEEN the list — not a tick
+    /// that has learned the list is gone. Before this, the band and the
+    /// Overview widget appeared with the tool result and then VANISHED one
+    /// second later, at the tick, because the read came back empty and the
+    /// tick adopted it as "the list is now empty" (measured: the tick saw
+    /// `disk_items=0` while the live list held 2 items).
     pub(super) fn refresh_todos_if_needed(&mut self) -> bool {
         const REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_millis(1000);
         if self
@@ -1095,6 +1120,13 @@ impl App {
             .into_iter()
             .map(crate::tui::operant_app::todo::TodoItem::from)
             .collect::<Vec<_>>();
+        if items.is_empty() && !self.todos.is_empty() {
+            // The store has nothing for this session (or the write landed
+            // under a different key), but the live list is not empty. Keep
+            // what is on screen: an empty read is missing information, not a
+            // deletion.
+            return false;
+        }
         let fingerprint = todos_fingerprint(&items);
         if fingerprint == self.todos_fingerprint {
             return false;

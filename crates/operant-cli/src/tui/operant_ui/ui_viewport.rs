@@ -1711,11 +1711,19 @@ fn compute_max_scroll_with_prompt_preview(
     area: Rect,
     pinned_todo_lines: u16,
 ) -> usize {
-    let mut max_scroll = total_lines.saturating_sub(area.height as usize);
+    // The rows the BODY can occupy: the area minus the pinned band's rows.
+    // The band is painted at the top of the area, so it takes rows the
+    // transcript cannot use.
+    let content_height = area.height.saturating_sub(pinned_todo_lines) as usize;
+    let mut max_scroll = total_lines.saturating_sub(content_height);
     let preview_enabled = crate::tui::operant_app::config_shim::config()
         .display
         .prompt_preview;
-    if max_scroll == 0 || (!preview_enabled && pinned_todo_lines == 0) {
+    // The band and the prompt preview both shrink the body window, so the
+    // first estimate has to be refined. The refinement must run even when the
+    // first estimate is 0: a body exactly as tall as the area, with a band
+    // taking rows from it, still has a tail to scroll to.
+    if !preview_enabled && pinned_todo_lines == 0 {
         return max_scroll;
     }
 
@@ -1805,6 +1813,33 @@ mod tests {
             Some("\x1b[s\x1b_L;x\x1b\\\x1b[u\x1b[1C")
         );
         assert!(super::handterm_native_latex_cell_symbol("x\x1by", 1, 1).is_none());
+    }
+
+    #[test]
+    fn the_pinned_band_shrinks_the_body_window_so_the_tail_stays_reachable() {
+        // The pinned todo band is painted at the top of the transcript area,
+        // so the body gets fewer rows than the area has. `max_scroll` must
+        // account for that, or the tail of the conversation is scrolled out of
+        // view and CANNOT be reached — the scroll bound says there is nothing
+        // below.
+        //
+        // The case that caught it: a body exactly as tall as the area, with a
+        // 3-row band taking 3 rows from it. The old first estimate was
+        // `total - area.height` = 0, and the `max_scroll == 0` early return
+        // short-circuited the refinement that would have subtracted the band.
+        let area = ratatui::layout::Rect::new(0, 0, 80, 28);
+        let total = 28usize;
+        let band = 3u16;
+
+        let max_scroll = super::compute_max_scroll_with_prompt_preview(total, &[], &[], area, band);
+        assert_eq!(
+            max_scroll, 3,
+            "the band takes 3 rows from the body, so 3 body rows are below the fold"
+        );
+
+        // With no band, the body gets every row and nothing is below the fold.
+        let max_scroll = super::compute_max_scroll_with_prompt_preview(total, &[], &[], area, 0);
+        assert_eq!(max_scroll, 0, "without a band the body fills the area");
     }
 
     #[test]

@@ -119,6 +119,92 @@ impl App {
         *self.selection_text.borrow_mut() = String::new();
     }
 
+    /// The text the composer's current selection covers.
+    ///
+    /// Resolved through the composer's copy snapshot, so a selection that
+    /// spans a soft wrap yields the ORIGINAL text (no injected line breaks) —
+    /// the same promise the transcript's copy makes.
+    ///
+    /// The selection is also mirrored into `PromptInputState`'s own
+    /// selection anchor so the composer paints it as reverse video, the way
+    /// jcode paints its textarea selection.
+    pub(super) fn input_selection_text(&self) -> String {
+        let (Some(anchor), Some(focus)) = (self.input_selection_anchor, self.input_selection_focus)
+        else {
+            return String::new();
+        };
+        if anchor == focus {
+            return String::new();
+        }
+        crate::tui::operant_ui::copy_selection_text(anchor, focus).unwrap_or_default()
+    }
+
+    /// Mirror the composer's mouse selection into `PromptInputState`, so the
+    /// existing reverse-video painting path (and the Ctrl+C copy) sees it.
+    ///
+    /// The composer's selection lives in pane-point space (the copy
+    /// snapshot's wrapped rows); `PromptInputState` speaks RAW byte offsets.
+    /// Both endpoints are resolved through the same snapshot map, so the
+    /// highlight lands on exactly the characters the copy would return.
+    pub(super) fn sync_input_selection_to_prompt_input(&mut self) {
+        let (Some(anchor), Some(focus)) = (self.input_selection_anchor, self.input_selection_focus)
+        else {
+            self.prompt_input.selection_clear();
+            return;
+        };
+        if anchor == focus {
+            self.prompt_input.selection_clear();
+            return;
+        }
+        let anchor_offset = crate::tui::operant_ui::input_char_offset_at_point(anchor).unwrap_or(0);
+        let focus_offset = crate::tui::operant_ui::input_char_offset_at_point(focus).unwrap_or(0);
+        let (lo, hi) = if anchor_offset <= focus_offset {
+            (anchor_offset, focus_offset)
+        } else {
+            (focus_offset, anchor_offset)
+        };
+        let hi = hi.min(self.prompt_input.text.len());
+        let lo = lo.min(hi);
+        self.prompt_input.sel_anchor = Some(lo);
+        self.prompt_input.cursor = hi;
+    }
+
+    /// Place the composer's caret at the character under a screen cell.
+    ///
+    /// The click is resolved through the composer's copy snapshot — the same
+    /// wrapped-row → raw-line map a drag-selection uses — so "where is this
+    /// column" has ONE answer in the composer, whichever feature asks.
+    ///
+    /// Clicking past the end of a row puts the caret at that row's end, the
+    /// way every text editor behaves; clicking on a row's trailing blank
+    /// space therefore lands at the end of the text on that row, not at the
+    /// end of the whole buffer.
+    pub(super) fn place_caret_in_input(&mut self, column: u16, row: u16) {
+        use crate::tui::operant_ui::copy_selection::CopySelectionPane;
+        let Some(point) = crate::tui::operant_ui::copy_point_from_screen(column, row) else {
+            return;
+        };
+        if point.pane != CopySelectionPane::Input {
+            return;
+        }
+        let Some(offset) = crate::tui::operant_ui::input_char_offset_at_point(point) else {
+            return;
+        };
+        self.prompt_input.cursor = offset.min(self.prompt_input.text.len());
+        // Snap to a char boundary: the map resolves DISPLAY columns, which can
+        // land inside a multi-byte character.
+        while self.prompt_input.cursor > 0
+            && !self
+                .prompt_input
+                .text
+                .is_char_boundary(self.prompt_input.cursor)
+        {
+            self.prompt_input.cursor -= 1;
+        }
+        self.prompt_input.selection_clear();
+        self.refresh_prompt_input();
+    }
+
     // ---- Content-space selection points (iter-672) ------------------------
     //
     // `selection_anchor`/`selection_focus` store `(col, content_line)`, where
@@ -1075,6 +1161,32 @@ impl App {
                 if in_input {
                     self.focus = FocusTarget::Input;
                     self.clear_selection();
+                    // A click inside the composer places the CARET, exactly like
+                    // jcode (which routes the composer's clicks through the
+                    // same pane-aware hit-test the transcript uses). Before
+                    // this, a click over the composer only moved focus: the
+                    // caret stayed wherever the keyboard had left it, so
+                    // clicking into the middle of a long draft and typing
+                    // inserted the text at the old position.
+                    //
+                    // The caret is placed by resolving the click to a RAW
+                    // character offset through the composer's copy snapshot
+                    // (the same map that lets a drag copy the right text), so
+                    // the two can never disagree about where a column is.
+                    self.place_caret_in_input(mouse_event.column, mouse_event.row);
+                    // Arm the composer selection at the clicked point. A drag
+                    // extends it; a release without a drag collapses it back
+                    // to the caret (jcode's `copy_selection_pending_anchor`
+                    // model: a press alone is not a selection).
+                    self.input_selection_anchor = crate::tui::operant_ui::copy_point_from_screen(
+                        mouse_event.column,
+                        mouse_event.row,
+                    )
+                    .filter(|point| {
+                        point.pane
+                            == crate::tui::operant_ui::copy_selection::CopySelectionPane::Input
+                    });
+                    self.input_selection_focus = self.input_selection_anchor;
                 } else if selectable_area.width == 0 || selectable_area.height == 0 {
                     self.click_count = 0;
                 } else if in_selectable {
@@ -1143,6 +1255,39 @@ impl App {
                 // Dismiss context menu on drag
                 self.dismiss_context_menu();
 
+                // A drag that started in the COMPOSER extends the composer's
+                // own selection. It is handled FIRST, before the transcript's
+                // drag path: the transcript's path anchors on
+                // `selection_anchor` and clamps to the chat area, which would
+                // swallow the drag and select chat text instead of the draft
+                // the user is dragging over.
+                if self.input_selection_anchor.is_some() {
+                    let point = crate::tui::operant_ui::copy_point_from_screen(
+                        mouse_event.column,
+                        mouse_event.row,
+                    )
+                    .filter(|point| {
+                        point.pane
+                            == crate::tui::operant_ui::copy_selection::CopySelectionPane::Input
+                    });
+                    if let Some(point) = point {
+                        self.input_selection_focus = Some(point);
+                        self.click_count = 0;
+                        // Mirror the selection into the composer so it paints
+                        // the reverse-video highlight live, the way jcode
+                        // paints its textarea selection.
+                        self.sync_input_selection_to_prompt_input();
+                        self.refresh_prompt_input();
+                        // Stream the selection to the clipboard as it grows, in
+                        // copy mode only — a normal drag copies on release.
+                        if self.copy_mode_active() {
+                            let sel_text = self.input_selection_text();
+                            crate::tui::clipboard::copy_selection_live(&sel_text);
+                        }
+                        return;
+                    }
+                }
+
                 // Continue drag — clamp to the selectable frame bounds so dragging
                 // outside extends selection to the edge rather than cancelling.
                 if self.selection_anchor.is_some() {
@@ -1181,6 +1326,35 @@ impl App {
                 }
             }
             MouseEventKind::Up(MouseButton::Left) => {
+                // A release that ends a COMPOSER drag copies the selected text
+                // out of the draft. This runs BEFORE the transcript's release
+                // path so a drag over the composer never falls through to the
+                // chat's selection (which would be empty there anyway).
+                if self.input_selection_anchor.is_some() {
+                    let anchor = self.input_selection_anchor;
+                    let focus = self.input_selection_focus;
+                    // A press with no drag is a click, not a selection: keep
+                    // the caret where the click put it and select nothing.
+                    if anchor == focus {
+                        self.input_selection_anchor = None;
+                        self.input_selection_focus = None;
+                        self.prompt_input.selection_clear();
+                        self.refresh_prompt_input();
+                        return;
+                    }
+                    let sel_text = self.input_selection_text();
+                    self.input_selection_anchor = None;
+                    self.input_selection_focus = None;
+                    if !sel_text.is_empty() {
+                        let outcome = crate::tui::clipboard::copy(&sel_text);
+                        if outcome.is_copied() {
+                            self.push_notice(NotificationKind::Info, outcome.status_message());
+                        } else {
+                            self.push_notice(NotificationKind::Warning, outcome.status_message());
+                        }
+                    }
+                    return;
+                }
                 // Copy mode stays on across clicks so a second drag can start
                 // without re-entering; Esc or Ctrl+T leaves it. Flush the final
                 // selection first — the last drag frame may not have moved the

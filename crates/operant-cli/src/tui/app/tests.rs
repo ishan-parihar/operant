@@ -10038,6 +10038,139 @@ fn unique_session(tag: &str) -> String {
     format!("tick-{tag}-{}", std::process::id())
 }
 
+/// The todo tool's "what changed" delta must survive the pinned band.
+///
+/// The pinned band is the canonical todo PRESENTATION, so the todo tool's
+/// duplicate CARD is suppressed from the transcript while `pin_todos` is on.
+/// But the DELTA is not a duplicate of the band: the band shows the list's
+/// current state, while the delta says what THIS call changed. Suppressing
+/// the whole message suppressed the delta too, so a todo write left no trace
+/// in the transcript at all — the operator could not see what the agent had
+/// just planned.
+///
+/// MUTATION PROVEN: restoring the bare `return` in the todo branch of
+/// `render_message_into` makes this test red — the delta lines vanish from
+/// the prepared body.
+#[test]
+fn a_todo_write_leaves_its_change_delta_in_the_transcript() {
+    let mut app = make_app();
+    app.handle_agent_event(AgentEvent::ToolStart {
+        tool_call_id: "call_delta".to_string(),
+        name: "todo".to_string(),
+        arguments: serde_json::json!({
+            "todos": [
+                {"id": "d1", "content": "Audit the composer", "status": "pending"},
+                {"id": "d2", "content": "Fix the todo band", "status": "in_progress"}
+            ]
+        })
+        .to_string(),
+    });
+    app.handle_agent_event(AgentEvent::ToolComplete {
+        result: operant_core::tools::ToolResult {
+            tool_call_id: "call_delta".to_string(),
+            name: "todo".to_string(),
+            success: true,
+            content: serde_json::json!({
+                "sessionId": "default",
+                "todos": [
+                    {"id": "d1", "content": "Audit the composer", "status": "pending"},
+                    {"id": "d2", "content": "Fix the todo band", "status": "in_progress"}
+                ]
+            })
+            .to_string(),
+            error: None,
+            timed_out: false,
+        },
+    });
+
+    let prepared = crate::tui::operant_ui::prepare::prepare_body_for_overlay(&app, 120);
+    let body: Vec<String> = prepared
+        .wrapped_lines
+        .iter()
+        .map(|l| l.spans.iter().map(|s| s.content.to_string()).collect())
+        .collect();
+    let joined = body.join("\n");
+
+    assert!(
+        joined.contains("2 added"),
+        "the delta's header must reach the transcript:\n{joined}"
+    );
+    assert!(
+        joined.contains("+ Audit the composer"),
+        "the first added item must reach the transcript:\n{joined}"
+    );
+    assert!(
+        joined.contains("+ Fix the todo band"),
+        "the second added item must reach the transcript:\n{joined}"
+    );
+}
+
+/// The tick must NOT clear a live list when the store read comes back empty.
+///
+/// This is the operator's report: the todo band and the Overview widget
+/// appeared with the tool's result and then VANISHED one second later, at the
+/// live tick. The tick reads the persisted store, and the tool result is
+/// authoritative NOW — but the store may hold nothing for this session (the
+/// write landed under a different key, or the process never persisted it).
+///
+/// An empty read is MISSING INFORMATION, not a deletion. The tick used to
+/// adopt it as "the list is now empty" and wipe the card.
+///
+/// MUTATION PROVEN: removing the `items.is_empty() && !self.todos.is_empty()`
+/// guard in `refresh_todos_if_needed` makes this test red — the tick adopts
+/// the empty read and the card payload goes blank.
+#[test]
+fn an_empty_tick_read_cannot_wipe_a_live_todo_list() {
+    let _store = TodoStoreGuard::new("empty-read");
+    let session = unique_session("empty-read");
+
+    let mut app = make_app();
+    app.todos_session_id = session.clone();
+
+    // The tool result puts the list on App. Nothing was persisted for this
+    // session, so the tick's store read comes back empty.
+    app.handle_agent_event(AgentEvent::ToolComplete {
+        result: operant_core::tools::ToolResult {
+            tool_call_id: "call_empty_read".to_string(),
+            name: "todo".to_string(),
+            success: true,
+            content: serde_json::json!({
+                "sessionId": session,
+                "todos": [{
+                    "id": "e1",
+                    "content": "still on screen",
+                    "status": "pending"
+                }]
+            })
+            .to_string(),
+            error: None,
+            timed_out: false,
+        },
+    });
+    assert_eq!(app.todos.len(), 1, "the tool result lands on App");
+    let payload = app.todos_card_payload.clone();
+    assert!(
+        payload.contains("still on screen"),
+        "and the card payload carries it: {payload}"
+    );
+
+    // The tick fires a second later and reads an EMPTY store.
+    app.todos_tick_at = None;
+    assert!(
+        !app.refresh_todos_if_needed(),
+        "an empty read reports no change"
+    );
+    assert_eq!(
+        app.todos.len(),
+        1,
+        "the live list must survive an empty store read"
+    );
+    assert_eq!(
+        app.todos_card_payload, payload,
+        "and so must the card payload: an empty read is missing information, not a deletion"
+    );
+}
+
 /// The tick must pick up a list the parent's event stream never carried.
 ///
 /// This is the operator's report in one assertion: a subagent writes the list

@@ -1594,6 +1594,16 @@ fn render_message_into(
     // The pinned band is the canonical todo presentation while enabled. Keep
     // todo tool messages in display_messages for history/session fidelity, but
     // omit their duplicate cards from the prepared transcript.
+    //
+    // The "what changed" DELTA is NOT a duplicate of the band: the band shows
+    // the list's CURRENT state, while the delta says what THIS call changed.
+    // Dropping the whole message dropped the delta too, so a todo write left
+    // no trace in the transcript at all — the operator could not see what the
+    // agent just planned. jcode has the same suppression, but jcode's tool
+    // rows render the delta through a different path.
+    //
+    // So: suppress the CARD, keep the DELTA. The delta is the only thing the
+    // transcript can say about the call that the band cannot.
     if role == "tool"
         && crate::tui::operant_app::config_shim::config()
             .display
@@ -1603,6 +1613,30 @@ fn render_message_into(
             .as_ref()
             .is_some_and(|tool| tools_ui::canonical_tool_name(&tool.name) == "todo")
     {
+        let delta = todo_change_lines(ctx.messages, msg_global_idx, msg, width);
+        if delta.is_empty() {
+            // Nothing changed (a read, or a no-op write): there is no row to
+            // show. Push the zero-length boundary so the incremental cache's
+            // message indices stay aligned with the transcript (jcode does the
+            // same for its suppressed todo messages).
+            acc.segments.push((
+                msg.stable_cache_hash(),
+                acc.lines.len(),
+                acc.raw_plain_lines.len(),
+                acc.user_prompt_texts.len(),
+            ));
+            return;
+        }
+        let align = default_message_alignment(role, centered);
+        for line in delta {
+            acc.push_auto(align_if_unset(line, align));
+        }
+        acc.segments.push((
+            msg.stable_cache_hash(),
+            acc.lines.len(),
+            acc.raw_plain_lines.len(),
+            acc.user_prompt_texts.len(),
+        ));
         return;
     }
     let align = default_message_alignment(role, centered);

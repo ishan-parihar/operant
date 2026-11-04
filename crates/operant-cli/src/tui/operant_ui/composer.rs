@@ -128,8 +128,27 @@ pub(crate) fn paint_band_fill(area: Rect, frame: &mut ratatui::Frame) {
 /// so it is `tlbr(1, GUTTER_COLS, 1, 1)`.
 ///
 /// The left gutter is inset here (not painted as padding inside the paragraph)
-/// so the band's own left edge stays at the transcript's shared gutter and the
-/// glyph — an in-line span at the start of the first line — lands exactly in it.
+/// so the band's own left edge stays at the transcript's shared gutter.
+///
+/// ## The rect holds TEXT ONLY
+///
+/// codex paints the `›` glyph at `textarea_rect.x - LIVE_PREFIX_COLS`
+/// (`chat_composer.rs:4928-4935`) — in the GUTTER, to the LEFT of the textarea
+/// rect — so the rect's full width is available to the typed text.
+///
+/// operant used to paint the glyph as an in-line span at the START of the
+/// first line, which made the rect carry both the glyph and the text while
+/// the wrapping arithmetic reserved the glyph's columns a SECOND time
+/// (`wrap_input_segments`' `line_width` subtracted `prompt_len`, and the
+/// paragraph then prefixed every row with `prompt_len` of indent). The two
+/// disagreed by `GUTTER_COLS + 1` columns, so every wrapped row lost its last
+/// three characters to the clip (measured: at width 80, rows 78 columns wide
+/// were painted into a 75-column space). The text was not merely "overflowing"
+/// — it was being TRUNCATED, character by character, at the right edge.
+///
+/// The fix is structural, not arithmetic: the glyph now lives in the gutter
+/// (codex's arrangement), so `textarea_rect` is exactly the text area and the
+/// wrap width and the paint width are the same number by construction.
 pub(crate) fn textarea_rect(area: Rect) -> Rect {
     // Arithmetic rather than `Rect::inner(Margin)`: `Margin::new` applies the
     // same inset on both axes and the four sides here are asymmetric. The
@@ -143,14 +162,30 @@ pub(crate) fn textarea_rect(area: Rect) -> Rect {
     }
 }
 
+/// The rect the prompt glyph is painted into: the gutter to the LEFT of the
+/// textarea rect, exactly where codex puts it.
+///
+/// codex: `buf.set_span(textarea_rect.x - LIVE_PREFIX_COLS, textarea_rect.y,
+/// &prompt, textarea_rect.width)` (`chat_composer.rs:4928-4935`). The glyph
+/// occupies the band's left gutter and the textarea rect keeps every column
+/// for the typed text.
+pub(crate) fn glyph_rect(area: Rect) -> Rect {
+    let textarea = textarea_rect(area);
+    Rect {
+        x: textarea.x.saturating_sub(GUTTER_COLS),
+        y: textarea.y,
+        width: GUTTER_COLS.min(area.x.saturating_add(area.width)),
+        height: 1,
+    }
+}
+
 /// The dimmed placeholder line, painted at `area`'s origin.
 ///
 /// codex paints the placeholder into the textarea rect (`chat_composer.rs:4976`)
 /// while the `›` glyph is drawn to its LEFT, at `textarea_rect.x -
-/// LIVE_PREFIX_COLS`. Operant's glyph is an in-line span instead, so the caller
-/// insets `area` by the gutter width before calling: see the `placeholder_rect`
-/// in `draw_input`. Either way the placeholder starts at the text origin and
-/// never overwrites the glyph.
+/// LIVE_PREFIX_COLS`. operant now uses codex's arrangement too (the glyph in
+/// the gutter), so the placeholder starts at the text origin and never
+/// overwrites the glyph.
 pub(crate) fn placeholder_line() -> Line<'static> {
     Line::from(Span::styled(
         PLACEHOLDER.to_string(),
@@ -176,24 +211,25 @@ pub(crate) fn paint_placeholder(area: Rect, frame: &mut ratatui::Frame) {
 /// original drifted silently. Keeping the rationale comment with the arithmetic
 /// is part of the extraction, not decoration.
 ///
-/// Two offsets are required and both are load-bearing:
+/// ONE offset is required and it is load-bearing:
 ///
-/// - ROW (`suggestions_offset`): the glyph row is that many rows into the padded
-///   rect, because a hint row precedes it when one is present (the
+/// - ROW (`suggestions_offset`): the text's first row is that many rows into the
+///   padded rect, because a hint row precedes it when one is present (the
 ///   `-- INSERT --` vim badge that used to sit here is gone since RT-144). The
 ///   placeholder must skip those rows or it paints over the hint line.
-/// - COLUMN (`prompt_len`): the glyph is an in-line span at the START of that
-///   line (`wrap_input_text_gutter` paints `prompt_char` as the line's first
-///   span), so the placeholder must start `prompt_len` columns in or it
-///   overwrites the glyph.
+///
+/// There is deliberately NO column offset any more. The glyph moved into the
+/// gutter (codex's arrangement), so the textarea rect's first column IS the
+/// text origin — the placeholder starts there and the glyph is painted
+/// separately, in the gutter, and cannot be overwritten.
 ///
 /// Every inset is `saturating_sub`, so a band narrower or shorter than the
 /// offsets degrades to an empty rect rather than wrapping to a huge one.
-pub(crate) fn placeholder_rect(textarea: Rect, prompt_len: u16, suggestions_offset: u16) -> Rect {
+pub(crate) fn placeholder_rect(textarea: Rect, suggestions_offset: u16) -> Rect {
     Rect {
-        x: textarea.x.saturating_add(prompt_len),
+        x: textarea.x,
         y: textarea.y.saturating_add(suggestions_offset),
-        width: textarea.width.saturating_sub(prompt_len),
+        width: textarea.width,
         height: textarea.height.saturating_sub(suggestions_offset),
     }
 }
@@ -536,13 +572,13 @@ mod tests {
     }
 
     /// Replicates `draw_input`'s placeholder call site at `ui_input.rs:2763`
-    /// EXACTLY, including the two offsets the comment there says are both
-    /// required: the ROW offset (`suggestions_offset`) and the COLUMN offset
-    /// (`prompt_len`). My earlier harness hardcoded `padded.y` and therefore
-    /// could not see a regression that only fires when a hint row is present.
+    /// EXACTLY, including the offset the comment there says is required: the
+    /// ROW offset (`suggestions_offset`). My earlier harness hardcoded
+    /// `padded.y` and therefore could not see a regression that only fires
+    /// when a hint row is present.
     ///
-    /// `suggestions_offset` and `prompt_len` are parameters so the tests can
-    /// exercise the hint-row case, which is the case my earlier harness skipped.
+    /// `suggestions_offset` is a parameter so the tests can exercise the
+    /// hint-row case, which is the case my earlier harness skipped.
     fn call_site_placeholder_buffer(
         width: u16,
         height: u16,
@@ -561,8 +597,7 @@ mod tests {
                 // of the extraction: while the four inset lines were inline at
                 // the call site, a copy of them here passed while the real site
                 // was mutated, because the two drifted silently.
-                let prompt_len = GUTTER_COLS;
-                let placeholder_rect = placeholder_rect(padded, prompt_len, suggestions_offset);
+                let placeholder_rect = placeholder_rect(padded, suggestions_offset);
                 paint_placeholder(placeholder_rect, f);
             })
             .unwrap();
@@ -570,25 +605,20 @@ mod tests {
     }
 
     #[test]
-    fn the_placeholder_column_is_the_gutter_not_the_band_edge() {
-        // `prompt_len` (== GUTTER_COLS here) is the OFFSET FROM padded.x, so the
-        // placeholder's own x is padded.x + GUTTER_COLS, i.e. band.x + 2 *
-        // GUTTER_COLS. Getting this wrong paints the placeholder over the glyph.
+    fn the_placeholder_starts_at_the_text_origin() {
+        // The glyph moved into the gutter (codex's arrangement), so the text
+        // rect's FIRST column is the text origin and the placeholder starts
+        // there. There is no second gutter offset any more: the old code
+        // charged the gutter twice, which is what clipped the text.
         let padded = textarea_rect(Rect::new(0, 0, 40, 4));
-        let placeholder_x = padded.x + GUTTER_COLS;
-        assert_eq!(
-            placeholder_x, 4,
-            "the placeholder must start one gutter past the band's left edge"
-        );
         assert_eq!(
             padded.x, 2,
-            "and the glyph row starts its own gutter in, at the text origin"
+            "the text origin is one gutter past the band's left edge"
         );
-        // The invariant that actually protects the glyph: the placeholder never
-        // starts LEFT of the text origin.
-        assert!(
-            placeholder_x >= padded.x,
-            "the placeholder must not start left of the glyph it shares a row with"
+        let placeholder_x = placeholder_rect(padded, 0).x;
+        assert_eq!(
+            placeholder_x, padded.x,
+            "the placeholder must start exactly at the text origin"
         );
     }
 
@@ -661,72 +691,55 @@ mod tests {
         // which is a tautology: mutating `height` to read `width` passed. The
         // semantics below are independent statements about what an inset rect IS:
         //
-        //   1. the origin advances by exactly the inset, as far as the dimension
-        //      allows, and no further than that;
-        //   2. the extent shrinks by exactly what the inset actually consumed;
-        //   3. the inset RETRACTS: it is measured against the EDGE the origin was
-        //      pushed from, so an over-large inset yields a zero extent rather
-        //      than one that wraps or overshoots;
-        //   4. when the inset fits, the rect is strictly contained and consumes
-        //      the whole dimension.
+        //   1. the ORIGIN is unchanged — the glyph moved into the gutter, so the
+        //      text rect's first column is the text origin and the placeholder
+        //      starts there. There is deliberately no column inset left: a
+        //      second gutter offset is exactly the double-count that clipped
+        //      the composer's text.
+        //   2. the origin advances DOWN by exactly the row inset;
+        //   3. the extent shrinks by exactly what the row inset consumed, while
+        //      the WIDTH is preserved in full;
+        //   4. the inset RETRACTS: it is measured against the EDGE the origin
+        //      was pushed from, so an over-large inset yields a zero extent
+        //      rather than one that wraps or overshoots;
+        //   5. when the inset fits, the rect is contained and spans the rest.
         //
         // Each is checked separately so a mutation breaks a NAMED invariant.
         let mut cases = 0usize;
-        let mut violations: Vec<(Rect, u16, u16, Rect, &'static str)> = Vec::new();
+        let mut violations: Vec<(Rect, u16, Rect, &'static str)> = Vec::new();
         for &x in &[0u16, 1, 2, 7, 39] {
             for &y in &[0u16, 1, 5] {
                 for &w in &[0u16, 1, 3, 4, 12, 40, 80] {
                     for &h in &[0u16, 1, 2, 3, 4, 10] {
                         let textarea = Rect::new(x, y, w, h);
-                        for &prompt_len in &[0u16, 1, 2, 3, 5, 9] {
-                            for &off in &[0u16, 1, 2, 4, 7] {
-                                let r = placeholder_rect(textarea, prompt_len, off);
-                                let mut bad = |why: &'static str| {
-                                    violations.push((textarea, prompt_len, off, r, why))
-                                };
-                                // 1. the origin always advances by the inset.
-                                //    NOTE it is NOT clamped by the dimension:
-                                //    `saturating_add` moves the origin even when the
-                                //    inset exceeds it, and the extent absorbs the
-                                //    difference by shrinking to zero. Asserting the
-                                //    clamped form here is the mistake this test made
-                                //    twice; the code is right and the invariant was
-                                //    wrong.
-                                let inset_x = prompt_len;
-                                let inset_y = off;
-                                if r.x != x.saturating_add(inset_x)
-                                    || r.y != y.saturating_add(inset_y)
-                                {
-                                    bad("origin advance")
-                                }
-                                // 2. the extent shrinks by exactly what was consumed
-                                if r.width != w.saturating_sub(prompt_len)
-                                    || r.height != h.saturating_sub(off)
-                                {
-                                    bad("extent shrink")
-                                }
-                                // 3. an over-large inset yields a zero extent, never a wrap
-                                if prompt_len > w && r.width != 0 {
-                                    bad("width wrap")
-                                }
-                                if off > h && r.height != 0 {
-                                    bad("height wrap")
-                                }
-                                // 4. when it fits, the rect is contained and spans the rest
-                                if prompt_len <= w && off <= h {
-                                    if r.x < textarea.x
-                                        || r.y < textarea.y
-                                        || r.x + r.width > textarea.x + w
-                                        || r.y + r.height > textarea.y + h
-                                    {
-                                        bad("escaped the textarea")
-                                    }
-                                    if r.width != w - prompt_len || r.height != h - off {
-                                        bad("contained span")
-                                    }
-                                }
-                                cases += 1;
+                        for &off in &[0u16, 1, 2, 4, 7] {
+                            let r = placeholder_rect(textarea, off);
+                            let mut bad =
+                                |why: &'static str| violations.push((textarea, off, r, why));
+                            // 1+2. the origin advances DOWN only.
+                            if r.x != x || r.y != y.saturating_add(off) {
+                                bad("origin advance")
                             }
+                            // 3. the height shrinks by the inset, the width in full
+                            if r.width != w || r.height != h.saturating_sub(off) {
+                                bad("extent shrink")
+                            }
+                            // 4. an over-large inset yields a zero extent, never a wrap
+                            if off > h && r.height != 0 {
+                                bad("height wrap")
+                            }
+                            // 5. when it fits, the rect is contained and spans the rest
+                            if off <= h
+                                && (r.x < textarea.x
+                                    || r.y < textarea.y
+                                    || r.x + r.width > textarea.x + w
+                                    || r.y + r.height > textarea.y + h
+                                    || r.width != w
+                                    || r.height != h - off)
+                            {
+                                bad("escaped the textarea")
+                            }
+                            cases += 1;
                         }
                     }
                 }
@@ -738,7 +751,7 @@ mod tests {
             violations.len(),
             violations[0]
         );
-        assert!(cases > 1000, "exhaustive check actually ran {cases} cases");
+        assert!(cases > 100, "exhaustive check actually ran {cases} cases");
     }
 
     fn the_extraction_is_really_in_the_render_path_not_only_in_the_tests() {
