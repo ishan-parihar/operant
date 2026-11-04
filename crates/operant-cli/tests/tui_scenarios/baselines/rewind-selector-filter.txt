@@ -11,17 +11,17 @@
 
 
 
- operant · replay
- operant
- /model to switch · Offline Capture
- v0.2.1
- /login to add provider
- ● anthropic(key)
- ~
 
 
-1>
-                                                                                               ~ API key Offline Capture
+
+
+
+
+
+
+
+
+
 
 
 

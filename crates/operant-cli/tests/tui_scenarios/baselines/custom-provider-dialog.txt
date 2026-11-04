@@ -14,16 +14,16 @@
  operant · replay     ┌──────────────────────────────────────────────────────────────────────────┐
  operant              │ Connect Custom OpenAI-Compatible                                         │
  /model to switch · Of│ URL:                                                                     │
- v0.2.1               │ https://your-openai-compatible-endpoint/v1_                              │
+ v0.3.0               │ https://your-openai-compatible-endpoint/v1_                              │
  /login to add provide│                                                                          │
  ● anthropic(key)     │ API Key:                                                                 │
  ~                    │ paste your API key here...                                               │
                       │                                                                          │
                       │ tab switch field   fill URL field                                        │
-1>                    │                                                                          │
-                      │                                                                          │PI key Offline Capture
                       │                                                                          │
-                      └──────────────────────────────────────────────────────────────Esc to close┘
+› Ask operant to do an│                                                                          │
+                      │                                                                          │
+                      └──────────────────────────────────────────────────────────────Esc to close┘PI key Offline Capture
 
 
 

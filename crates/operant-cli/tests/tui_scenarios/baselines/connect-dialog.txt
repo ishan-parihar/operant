@@ -14,16 +14,16 @@
  operant · replay          │ OpenAI (API key)                                              │
  operant                   │ Anthropic (API key)                                           │
  /model to switch · Offline│ Google AI Studio (API key)                                    │
- v0.2.1                    │ xAI (API key)                                                 │
+ v0.3.0                    │ xAI (API key)                                                 │
  /login to add provider    │ Mistral (API key)                                             │
  ● anthropic(key)          │ Groq (API key)                                                │
  ~                         │ DeepSeek (API key)                                            │
                            │ NVIDIA NIM (API key)                                          │
                            │ OpenRouter (API key)                                          │
-1>                         │ Together AI (API key)                                         │
-                           │ Vercel AI Gateway (API key)                                   │   ~ API key Offline Capture
+                           │ Together AI (API key)                                         │
+› Ask operant to do anythin│ Vercel AI Gateway (API key)                                   │
                            │                                                               │
-                           │ International                                                 │
+                           │ International                                                 │   ~ API key Offline Capture
                            │ Z.AI / GLM (API key)                                          │
                            │ Kimi / Kimi Coding Plan (API key)                             │
                            │ Kimi / Moonshot (China) (API key)                             │

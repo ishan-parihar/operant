@@ -6,16 +6,16 @@
  operant│/ █                                                           │
  operant│──────────────────────────────────────────────────────────────│
  /model │                                                              │
- v0.2.1 │                                                              │
+ v0.3.0 │                                                              │
  /login │                                                              │
  ● anthr│                                                              │
  ~      │                                                              │
         │                                                              │
         │                                                              │
-1>      │                                                              │
+        │                                                              │
+› Ask op│                                                              │
+        │                                                              │
         │                                                              │ Capture
-        │                                                              │
-        │                                                              │
         │                                                              │
         │Type to search                                                │
         └───────────────Esc to close  ·  Enter: insert  ·  ↑↓: navigate┘

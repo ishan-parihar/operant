@@ -14,16 +14,16 @@
  operant · replay          Choose a theme                                                esc
  operant                   Applies immediately — the whole TUI repaints in this palette.
  /model to switch · Offli            Default     Operant default — dark background, cyan accen
- v0.2.1
+ v0.3.0
  /login to add provider              Dark        High-contrast dark theme
  ● anthropic(key)
  ~                                   Light       Light background with dark text
 
                                      Solarized   Solarized Dark — warm tones with blue accents
-1>
-                                     Nord        Nord — cool blue-grey palette                 ~ API key Offline Capture
 
-                                     Dracula     Dracula — purple/pink dark theme
+› Ask operant to do anyth            Nord        Nord — cool blue-grey palette
+
+                                     Dracula     Dracula — purple/pink dark theme              ~ API key Offline Capture
                            ↑↓ navigate  ·  enter apply  ·  esc cancel
 
 

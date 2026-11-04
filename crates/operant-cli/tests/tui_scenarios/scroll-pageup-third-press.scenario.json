@@ -1,0 +1,19 @@
+{
+  "name": "scroll-pageup-third-press",
+  "surface": "crates/operant-cli/src/tui/operant_ui/ui_viewport.rs (scroll resolve) + app/tui_state_impl.rs (pending_resize_anchor)",
+  "opens_with": "The long transcript at 80x24, then THREE pageups — the third-press ladder rung",
+  "keys": "list them<enter><pageup><pageup><pageup>",
+  "size": "80x24",
+  "deterministic": false,
+  "baseline": "scroll-pageup-third-press.txt",
+  "style_baseline": "scroll-pageup-third-press.style.txt",
+  "nondeterminism": {
+    "reason": "The third pageup's landing line is not machine-stable in the corpus harness: the plain render path coalesces events per frame (mod.rs's is_simulating branch), so WHERE the pageups land inside the mock transcript's arrival window varies with wall-clock load. The base scenario's own notes document this shape since iter-1213 ('the keys arrive early by harness construction'), and the same assert that passes standalone at a quiet moment failed 6/6 under the corpus-repair prove's load and twice inside full verify runs — measured, not assumed. The landing-line coverage for the third press is authoritative in the unit tests (`tui::app::tests::repeated_page_up_climbs_monotonically_and_stops_at_the_real_ceiling`, `repeated_wheel_up_climbs_monotonically_and_stops_at_the_real_ceiling`, `keyboard_scroll_reachability_tests` — all mutation-proven per the iter-1200/1213 history in scroll-pageup-moves-viewport.scenario.json), so this scenario keeps the deterministic state asserts and drops the landing-line screen assert and its goldens. UNBLOCK: a `<wait:ms>` token in cmd_tui_debug.rs's parse_key_sequence (unknown tokens currently type literally) would let the keys drain AFTER the content lands, making the landing deterministic — at which point this scenario can re-pin contains:L0xx and re-prove goldens."
+  },
+  "agent_script": "long-transcript.json",
+  "assert": [
+    "messages == 2",
+    "is_streaming == false"
+  ],
+  "notes": "The 80x24 third-press variant of scroll-pageup-moves-viewport, split out by the tui-bugfix campaign's corpus repair. History: iter-1200 added this variant to pin the third press (the iter-1192 residual threw the reader back to the tail on press three — mutation-proven by restoring the pre-fix arithmetic and watching exactly this variant fail with the same 'expected to contain L061'); iter-1213 corrected the base notes' harness-blame to the real root cause (PgUp was focus-gated; it is unconditional now). The contains:L061 screen assert, however, was never machine-stable: it depends on where three coalesced pageups land inside the transcript's arrival window. It passed standalone during the campaign's triage, then failed inside the full verify run, inside prove, and 6/6 in a load-measurement loop — the coalesce race, not the scroll ladder. The ladder itself is pinned by the mutation-proven unit tests named in the nondeterminism reason; this scenario keeps them company in the corpus with the state asserts only."
+}

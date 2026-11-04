@@ -14,16 +14,16 @@
  operant · repl││ airtable                                1││Use /memory to manage MEMORY.md directly. ││
  operant       ││ architecture-diagram                    1││                                          ││
  /model to swit││ arxiv                                   1││                                          ││
- v0.2.1        ││ ascii-art                               4││                                          ││
+ v0.3.0        ││ ascii-art                               4││                                          ││
  /login to add ││ ascii-video                             0││                                          ││
  ● anthropic(ke││ autonomous-loops                        0││                                          ││
  ~             ││ axi                                     0││                                          ││
                ││ baoyu-infographic                       1││                                          ││
                ││ blogwatcher                             2││                                          ││
-1>             ││ calendar                 productivity   1││                                          ││
-               ││ claude-code                             2││                                          ││Offline Capture
+               ││ calendar                 productivity   1││                                          ││
+› Ask operant t││ claude-code                             2││                                          ││
                ││ claude-design                           1││                                          ││
-               ││ codebase-inspection                     1││                                          ││
+               ││ codebase-inspection                     1││                                          ││Offline Capture
                ││ codex                                   1││                                          ││
                ││ comfyui                  creative       5││                                          ││
                ││                                          ││                                          ││

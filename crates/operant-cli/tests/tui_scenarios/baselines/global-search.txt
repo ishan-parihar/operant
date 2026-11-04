@@ -14,16 +14,16 @@
  operant · r│                                                                                              │
  operant    │                                                                                              │
  /model to s│                                                                                              │
- v0.2.1     │                                                                                              │
+ v0.3.0     │                                                                                              │
  /login to a│                                                                                              │
  ● anthropic│                                                                                              │
  ~          │                                                                                              │
             │                                                                                              │
             │                                                                                              │
-1>          │                                                                                              │
+            │                                                                                              │
+› Ask operan│                                                                                              │
+            │                                                                                              │
             │                                                                                              │line Capture
-            │                                                                                              │
-            │                                                                                              │
             │                                                                                              │
             │                                                                                              │
             │                                                                                              │

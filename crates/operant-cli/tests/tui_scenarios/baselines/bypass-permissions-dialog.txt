@@ -14,16 +14,16 @@
  operant · replay       │In Bypass Permissions mode, Operant will NOT ask for your             │
  operant                │approval before running potentially dangerous commands.               │
  /model to switch · Offl│                                                                      │
- v0.2.1                 │This mode should only be used in a sandboxed container or VM          │
+ v0.3.0                 │This mode should only be used in a sandboxed container or VM          │
  /login to add provider │that has restricted internet access and can easily be restored        │
  ● anthropic(key)       │if damaged.                                                           │
  ~                      │                                                                      │
                         │By proceeding, you accept all responsibility for actions taken        │
                         │while running in Bypass Permissions mode.                             │
-1>                      │                                                                      │
-                        │                                                                      │ API key Offline Capture
-                        │  [1] No, exit          [2] Yes, I accept                             │
                         │                                                                      │
+› Ask operant to do anyt│                                                                      │
+                        │  [1] No, exit          [2] Yes, I accept                             │
+                        │                                                                      │ API key Offline Capture
                         │  ↑↓ or 1/2 to select  ·  Enter to confirm                            │
                         │                                                                      │
                         │                                                                      │

@@ -14,7 +14,7 @@
  operant · replay
  operant
  /model to switch · Offline Capture
- v0.2.1
+ v0.3.0
  /login to add provider
  ● anthropic(key)
  ~
@@ -26,10 +26,10 @@
 
  2› /voice                                                                                                             │
 
-3>
+
+› Ask operant to do anything
+
                                                                          ~ 27/200k ▱▱▱▱▱▱▱▱▱▱ 0% API key Offline Capture
-
-
 
 
 

@@ -14,16 +14,16 @@
  operant · replay
  operant
  /model to switch · Offline Capture
- v0.2.1
+ v0.3.0
   ○ low                     reasoning · effort
 ▸ ◐ normal default current  reasoning · effort
   ◕ high                    reasoning · effort
   ● max                     reasoning · effort
 ↑↓ choose · Enter select · Esc cancel · Ctrl+O set default · Ctrl+N favorite · Shift+Tab switch active model to next fav
-1>
+
+› Ask operant to do anything
+
                                                                                                ~ API key Offline Capture
-
-
 
 
 

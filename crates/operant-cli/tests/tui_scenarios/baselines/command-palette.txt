@@ -14,16 +14,16 @@
  operant · replay          │ /commands Alias for /help                                     │
  operant                   │                                                               │
  /model to switch · Offline│ Model & Provider                                              │
- v0.2.1                    │ /model List or switch models                                  │
+ v0.3.0                    │ /model List or switch models                                  │
  /login to add provider    │                                                               │
  ● anthropic(key)          │ Other                                                         │
  ~                         │ /models Alias for /model                                      │
                            │ /refresh-model-list Refresh provider model catalogs           │
                            │                                                               │
-1>                         │ Tools                                                         │
-                           │ /agents Configure models for agent roles                      │   ~ API key Offline Capture
+                           │ Tools                                                         │
+› Ask operant to do anythin│ /agents Configure models for agent roles                      │
                            │                                                               │
-                           │ Other                                                         │
+                           │ Other                                                         │   ~ API key Offline Capture
                            │ /todos Show the session todo list as a card in the chat       │
                            │ /todo Alias for /todos                                        │
                            │ /hotkeys List hotkeys with your personal usage                │

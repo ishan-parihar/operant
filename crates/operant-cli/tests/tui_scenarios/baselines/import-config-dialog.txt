@@ -14,16 +14,16 @@
  operant · rep
  operant
  /model to swi
- v0.2.1
+ v0.3.0
  /login to add
  ● anthropic(k
  ~
 
 
-1>
+
+› Ask operant
+
                                                                                                           ffline Capture
-
-
 
 
 

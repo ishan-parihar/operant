@@ -6,16 +6,16 @@
  operant
  operant     ► Max Tokens                              0
  /model        Auto-compact                            false
- v0.2.1        Desktop notifications                   false
+ v0.3.0        Desktop notifications                   false
  /login        Show turn duration                      false
  ● anthr       Output Style                            default
  ~
            Maximum tokens per response.
 
-1>
+
+› Ask op
+
                                                                          Capture
-
-
 
 
                    ↑↓ navigate   Enter toggle/edit   Esc close

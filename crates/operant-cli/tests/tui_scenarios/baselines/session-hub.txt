@@ -1,6 +1,9 @@
-┌ Sessions [all] ──────────────────────────────┐┌ Preview ─────────────────────────────────────────────────────────────┐
-│  ⏳  Loading sessions…                        ││                                                                      │
-│     scanning local sessions and live subagent││                                                                      │
+┌──────────────────────────────────────────────┐┌ Preview ─────────────────────────────────────────────────────────────┐
+│ Sessions  0 rows  s cycle  Group: all  g     ││No sessions to show.                                                  │
+│ all 0 cur 0 emp 0 live 0 br 0 arch 0 recent  ││                                                                      │
+│ Tasks  Status  Updated                       ││                                                                      │
+│  No sessions match                           ││                                                                      │
+│     s cycles filters · Esc closes            ││                                                                      │
 │                                              ││                                                                      │
 │                                              ││                                                                      │
 │                                              ││                                                                      │
@@ -11,17 +14,14 @@
 │                                              ││                                                                      │
 │                                              ││                                                                      │
 │                                              ││                                                                      │
-│operant · replay                              ││                                                                      │
-│operant                                       ││                                                                      │
-│/model to switch · Offline Capture            ││                                                                      │
-│v0.3.0                                        ││                                                                      │
-│/login to add provider                        ││                                                                      │
-│● anthropic(key)                              ││                                                                      │
-│~                                             ││                                                                      │
 │                                              ││                                                                      │
 │                                              ││                                                                      │
-│>                                             ││                                                                      │
-│                                              ││                                              ~ API key Offline Captur│
+│                                              ││                                                                      │
+│                                              ││                                                                      │
+│                                              ││                                                                      │
+│                                              ││                                                                      │
+│                                              ││                                                                      │
+│                                              ││                                                                      │
 │                                              ││                                                                      │
 │                                              ││                                                                      │
 │                                              ││                                                                      │

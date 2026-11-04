@@ -6,16 +6,16 @@
  operan│ Search                                                        │
  operan│                                                               │
  /model│                                                               │
- v0.2.1│ Popular                                                       │
+ v0.3.0│ Popular                                                       │
  /login│ Free Mode OpenCode Zen → OpenRouter free fallback (no spend) F│
  ● anth│ Custom OpenAI-Compatible Custom URL + API key                 │
  ~     │ OpenAI (API key)                                              │
        │ Anthropic (API key)                                           │
        │ Google AI Studio (API key)                                    │
-1>     │ xAI (API key)                                                 │
-       │ Mistral (API key)                                             │ Capture
+       │ xAI (API key)                                                 │
+› Ask o│ Mistral (API key)                                             │
        │ Groq (API key)                                                │
-       │ DeepSeek (API key)                                            │
+       │ DeepSeek (API key)                                            │ Capture
        │ NVIDIA NIM (API key)                                          │
        │ OpenRouter (API key)                                          │
        └───────────────────────────────────────────────────Esc to close┘

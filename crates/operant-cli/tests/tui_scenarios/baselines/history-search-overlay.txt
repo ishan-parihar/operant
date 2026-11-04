@@ -14,17 +14,17 @@
  operant · replay
  operant
  /model to switch · Offline Capture
- v0.2.1
+ v0.3.0
  /login to add provider
  ● anthropic(key)
  ~
 
 
-1>
+
+› Ask operant to do anything
+
 (history search) █  ↑↓ select · ↵ insert · Esc cancel
   type to search history
-
-
 
 
 

@@ -14,16 +14,16 @@
  operant · replay
  operant
  /model to switch · Offline Ca┌──────────────────────────────────────────────────────────┐
- v0.2.1                       │ Connect Anthropic                                        │
+ v0.3.0                       │ Connect Anthropic                                        │
  /login to add provider       │ API Key:                                                 │
  ● anthropic(key)             │ paste your API key here..._                              │
  ~                            │                                                          │
                               │ enter confirm                                            │
                               │                                                          │
-1>                            │                                                          │
-                              └──────────────────────────────────────────────Esc to close┘     ~ API key Offline Capture
+                              │                                                          │
+› Ask operant to do anything  └──────────────────────────────────────────────Esc to close┘
 
-
+                                                                                               ~ API key Offline Capture
 
 
 

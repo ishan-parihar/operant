@@ -14,13 +14,15 @@
  operant · replay
  operant
  /model to switch · Offline Capture
- v0.2.1
+ v0.3.0
  /login to add provider
  ● anthropic(key)
  ~
 
 
-1> /
+
+› /
+
 /help  Show help and keyboard shortcuts
 /?  Show help and keyboard shortcuts
 /commands  Alias for /help
@@ -28,9 +30,7 @@
 /models  Alias for /model
 /refresh-model-list  Refresh provider model catalogs
 /agents  Configure models for agent roles
-/todos  Show the session todo list as a card in the chat  +102 more
-
-
+/todos  Show the session todo list as a card in the chat  +103 more
 
 
 

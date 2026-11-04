@@ -6,7 +6,7 @@
  operant · replay
  operant
  /model to switch · Offline Capture
- v0.2.1
+ v0.3.0
  /login to add provider
  ● anthropic(key)
  ~
@@ -15,10 +15,10 @@
  (untitled) · messages: 0 · tokens: 0 · cost: $0.0000 · idle
 
 Session status — model: offline-capture · provider: (default) · title: (untitled
-1>
+
+› Ask operant to do anything
+
                                                        ~ API key Offline Capture
-
-
 
 
 

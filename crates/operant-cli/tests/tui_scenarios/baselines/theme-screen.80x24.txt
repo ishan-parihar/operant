@@ -6,16 +6,16 @@
  oper  Choose a theme                                                esc
  oper  Applies immediately — the whole TUI repaints in this palette.
  /mod            Default     Operant default — dark background, cyan accen
- v0.2
+ v0.3
  /log            Dark        High-contrast dark theme
  ● an
  ~               Light       Light background with dark text
 
                  Solarized   Solarized Dark — warm tones with blue accents
-1>
-                 Nord        Nord — cool blue-grey palette                 pture
 
-                 Dracula     Dracula — purple/pink dark theme
+› Ask            Nord        Nord — cool blue-grey palette
+
+                 Dracula     Dracula — purple/pink dark theme              pture
        ↑↓ navigate  ·  enter apply  ·  esc cancel
 
 

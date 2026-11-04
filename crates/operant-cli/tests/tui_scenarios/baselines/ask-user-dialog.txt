@@ -14,7 +14,7 @@
  operant · replay              ┌────────────────────────────────────────────────────────┐
  operant                       │ Question                                               │
  /model to switch · Offline Cap│Which database should the migration target?             │
- v0.2.1                        │                                                        │
+ v0.3.0                        │                                                        │
  /login to add provider        │▶ 1 sqlite                                              │
  ● anthropic(key)              │  2 postgres                                            │
  ~                             │  3 qdrant                                              │
@@ -22,10 +22,10 @@
  1› Which database should I poi│  type to fill custom answer…                           │                              │
                                │                                                        │
 Empty reply — the provider stre│  type: custom   ↑↓/Tab: options   Enter: confirm   Esc:│
-2>                             │                                                        │
-                               │                                                        │▱▱▱▱ 0% API key Offline Capture
+                               │                                                        │
+› Ask operant to do anything   │                                                        │
                                └────────────────────────────────────────────Esc to close┘
-
+                                                                         ~ 11/200k ▱▱▱▱▱▱▱▱▱▱ 0% API key Offline Capture
 
 
 

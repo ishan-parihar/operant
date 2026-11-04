@@ -14,17 +14,17 @@
  operant · replay
  operant
  /model to switch · Offline Capture
- v0.2.1
+ v0.3.0
  /login to add provider
  ● anthropic(key)
  ~
+
 ▸ offline-capture current  openai-compatible · chat/completions
 ↑↓ choose · Enter select · Esc cancel · Ctrl+O set default · Ctrl+N favorite · Shift+Tab switch active model to next fav
-1>
+
+› Ask operant to do anything
+
                                                                                                ~ API key Offline Capture
-
-
-
 
 
 

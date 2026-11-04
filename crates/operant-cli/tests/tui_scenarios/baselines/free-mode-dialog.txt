@@ -14,16 +14,16 @@
  operant · replay │ ▸ Groq            console.groq.com                                               │
  operant          │     paste your API key here..._                                                  │
  /model to switch │   Cerebras        cloud.cerebras.ai                                              │
- v0.2.1           │     paste your API key here...                                                   │
+ v0.3.0           │     paste your API key here...                                                   │
  /login to add pro│   Google Gemini   aistudio.google.com                                            │
  ● anthropic(key) │     paste your API key here...                                                   │
  ~                │   Mistral         console.mistral.ai                                             │
                   │     paste your API key here...                                                   │
                   │   ↓ 1 more                                                                       │
-1>                │                                                                                  │
-                  │ ↑/↓ next field    paste at least 1 key — as many as you can add is better        │ey Offline Capture
                   │                                                                                  │
+› Ask operant to d│ ↑/↓ next field    paste at least 1 key — as many as you can add is better        │
                   │                                                                                  │
+                  │                                                                                  │ey Offline Capture
                   │                                                                                  │
                   │                                                                                  │
                   │                                                                                  │

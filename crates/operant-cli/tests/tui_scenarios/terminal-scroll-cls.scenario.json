@@ -9,10 +9,10 @@
   "assert": [
     "terminal_clear_collapsed == true",
     "terminal_scroll_mode == true",
-    "scroll_cls_divider == true",
+    "scroll_cls_divider == false",
     "messages == 1"
   ],
   "baseline": "terminal-scroll-cls.txt",
   "style_baseline": "terminal-scroll-cls.style.txt",
-  "notes": "P5-4 scroll-mode golden (second of two). /cls in scroll mode arms the one-shot native-scrollback divider (iter-762) AND collapses the live window (iter-761 capture). The divider flag stays armed until the NEXT settled content arrives — with no post-/cls emission in this scenario it must read exactly true. The state assertions pin both the collapse and the armed divider; the text golden pins the collapsed frame (no transcript rows). K-3 re-prove (iter-839): the emitted watermark is now clamped to the MESSAGE-final boundary and is body-relative — the old committed boundary wrongly counted header chrome rows, so the live-region floor shifted and this golden was re-proven (the pinned ↑22 encoded the defect)."
+  "notes": "P5-4 scroll-mode golden (second of two). /cls in scroll mode arms the one-shot native-scrollback divider (iter-762) AND collapses the live window (iter-761 capture). CONSUMPTION SEMANTICS re-pinned by the tui-bugfix campaign: the emitter consumes the divider on the FIRST emit pass after /cls — deliberately independent of the watermark delta (scroll_emit.rs: 'the divider is not a transcript row') — so on a live terminal the boundary row lands in native history immediately, whether or not more content ever follows, and the flag always reads false by snapshot time. The old assert demanded `== true` ('armed until the NEXT settled content'), written at iter-767 and last re-proven at iter-839, two days BEFORE iter-887's plan-07 emitter refactor moved the divider block above the watermark-delta check; the assert has been red ever since. The state assertions pin the collapse, the consumed divider and the one settled script message; the text golden pins the collapsed frame (no transcript rows). K-3 re-prove (iter-839): the emitted watermark is now clamped to the MESSAGE-final boundary and is body-relative — the old committed boundary wrongly counted header chrome rows, so the live-region floor shifted and this golden was re-proven (the pinned ↑22 encoded the defect)."
 }

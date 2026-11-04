@@ -1,0 +1,40 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+ operant · replay
+ operant
+ /model to switch · Offline Capture
+ v0.3.0
+ /login to add provider
+ ● anthropic(key)
+ ~
+
+ Running three commands so a collapsed preview and its expansion are both observable.
+   ✓ bash $ cargo build --release · 31 tok
+   ✓ bash $ cargo test --workspace · 21 tok
+   ✓ bash $ cargo clippy · 29 tok
+
+ All three finished; the middle one failed.
+
+ 1› /voice                                                                                                             │
+
+
+› Ask operant to do anything
+
+                                                                        ~ 139/200k ▱▱▱▱▱▱▱▱▱▱ 0% API key Offline Capture
+
+
+
+
+
+

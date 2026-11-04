@@ -12,10 +12,10 @@
  ~││ ascii-art                         ││                                   ││
   ││ ascii-video                       ││                                   ││
   ││ autonomous-loops                  ││                                   ││
-1>││ axi                               ││                                   ││
-  ││ baoyu-infographic                 ││                                   ││re
+  ││ axi                               ││                                   ││
+› ││ baoyu-infographic                 ││                                   ││
   ││ blogwatcher                       ││                                   ││
-  ││                                   ││                                   ││
+  ││                                   ││                                   ││re
   ││                                   ││                                   ││
   │└───────────────────────────────────┘└───────────────────────────────────┘│
   │↑/↓ navigate · Tab switch · Esc close · [Skills] │ 100 skills · 0 memory ·│

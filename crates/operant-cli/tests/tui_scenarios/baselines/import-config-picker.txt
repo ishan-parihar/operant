@@ -14,16 +14,16 @@
  operant · replay
  operant
  /model to switch · Offline Capture
- v0.2.1                    ┌───────────────────────────────────────────────────────────────┐
+ v0.3.0                    ┌───────────────────────────────────────────────────────────────┐
  /login to add provider    │ Import config                                                 │
  ● anthropic(key)          │ Search                                                        │
  ~                         │                                                               │
                            │ CLAUDE.md Import ~/.claude/CLAUDE.md                          │
                            │ settings.json Import ~/.claude/settings.json                  │
-1>                         │ Both Import both CLAUDE.md and settings.json              SAFE│
-                           └───────────────────────────────────────────────────Esc to close┘   ~ API key Offline Capture
+                           │ Both Import both CLAUDE.md and settings.json              SAFE│
+› Ask operant to do anythin└───────────────────────────────────────────────────Esc to close┘
 
-
+                                                                                               ~ API key Offline Capture
 
 
 

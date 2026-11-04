@@ -14,16 +14,16 @@
  operant · replay         Context window
  operant                  [░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░]  0%  (0 / 200.0k)
  /model to switch · Offl
- v0.2.1                   Rate limits
+ v0.3.0                   Rate limits
  /login to add provider   5-hour   no data
  ● anthropic(key)         7-day    no data
  ~
                           Session cost:  $0.0000
 
-1>
+
+› Ask operant to do anyt
+
                                                                                                  API key Offline Capture
-
-
 
 
                           enter/esc close

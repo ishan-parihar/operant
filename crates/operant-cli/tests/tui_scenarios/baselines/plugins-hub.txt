@@ -14,16 +14,16 @@
  operant · replay       │                                                                      │
  operant                │Plugins are git repositories cloned into your operant                 │
  /model to switch · Offl│plugins directory. Install one with:                                  │
- v0.2.1                 │                                                                      │
+ v0.3.0                 │                                                                      │
  /login to add provider │  operant plugins install <git-url>                                   │
  ● anthropic(key)       │                                                                      │
  ~                      │Press Esc to close.                                                   │
                         │                                                                      │
                         │                                                                      │
-1>                      │                                                                      │
+                        │                                                                      │
+› Ask operant to do anyt│                                                                      │
+                        │                                                                      │
                         │                                                                      │ API key Offline Capture
-                        │                                                                      │
-                        │                                                                      │
                         │                                                                      │
                         │                                                                      │
                         │                                                                      │

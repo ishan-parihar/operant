@@ -14,16 +14,16 @@
  operant · r       Verbose logging                         false
  operant           Cursor blinking                         false
  /model to s       Show current directory                  false
- v0.2.1            Show git branch                         false
+ v0.3.0            Show git branch                         false
  /login to a       Auto-compact threshold                  0
  ● anthropic       Auto-commits                            false
  ~
                Maximum tokens per response.
 
-1>
+
+› Ask operan
+
                                                                                                             line Capture
-
-
 
 
 
