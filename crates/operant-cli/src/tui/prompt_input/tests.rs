@@ -2024,6 +2024,74 @@ fn parse_file_ref_token_forms() {
     );
 }
 
+/// The token terminates where the expander's grammar does —
+/// `@kind:(quoted|\S+)` — and a popup token must END at the cursor: a
+/// completed mention followed by prose leaves no live token. The old
+/// unbounded token ran from the `@` to end-of-input, which kept the ghost
+/// gate suppressed for the rest of any message that contained an `@`,
+/// spawned a fuzzy walk on every later keystroke, and let a space-free
+/// tail reopen the popup mid-prose where Enter accepts a file instead of
+/// submitting.
+///
+/// MUTATION-PROOF: reverting parse_file_ref_token to the unbounded tail
+/// (`raw = &input[at_idx..]`, no termination) fails all three `is_none`
+/// assertions.
+#[test]
+fn parse_file_ref_token_terminates_at_whitespace_and_requires_a_live_token() {
+    // The mention is complete and the cursor is in prose.
+    assert!(parse_file_ref_token("use @file:src/main.rs and summar").is_none());
+    assert!(parse_file_ref_token("see @src/ma and then prose").is_none());
+    // A closed quoted value ends the token too.
+    assert!(parse_file_ref_token("see @file:\"a b\" done").is_none());
+    // Still live while the user is inside the mention.
+    assert!(parse_file_ref_token("use @file:src/main.rs").is_some());
+    assert!(parse_file_ref_token("see @src/ma").is_some());
+    // An OPEN quote runs to the end of the input while it stays open —
+    // that is what keeps a directory whose name contains a space drillable.
+    let open = parse_file_ref_token("see @folder:\"my dir/").expect("open quote");
+    assert_eq!(open.path, "my dir/");
+    let closed = parse_file_ref_token("see @folder:\"my dir\"").expect("closed quote");
+    assert_eq!(closed.raw, "@folder:\"my dir\"");
+    assert_eq!(closed.path, "my dir");
+}
+
+/// An accepted directory chains as `@folder:<dir>/`; the immediate tier
+/// must list THAT directory's children. The old immediate tier fed the raw
+/// token to suggest_files verbatim — it statted a literal path named
+/// `folder:…`, the popup blanked, and the fuzzy tier could not rescue it
+/// because an empty tail after the last `/` disables the walk: the chained
+/// browse flow was dead since the grammar shipped.
+///
+/// MUTATION-PROOF: reverting compute_file_suggestions to the raw-token
+/// feed fails the non-empty assertion.
+#[test]
+fn compute_file_suggestions_relists_the_chained_directory() {
+    let chained = compute_file_suggestions(
+        "@folder:src/",
+        TEST_FILE_AUTOCOMPLETE_LIMIT,
+        TEST_FILE_AUTOCOMPLETE_SHOW_HIDDEN,
+    );
+    assert!(
+        !chained.is_empty(),
+        "the chained directory must re-list its children"
+    );
+    for s in &chained {
+        assert_eq!(s.source, TypeaheadSource::FileRef);
+    }
+    // The grammar is not part of the path: a bare typed directory lists
+    // the same children.
+    let bare = compute_file_suggestions(
+        "@src/",
+        TEST_FILE_AUTOCOMPLETE_LIMIT,
+        TEST_FILE_AUTOCOMPLETE_SHOW_HIDDEN,
+    );
+    assert_eq!(
+        chained.iter().map(|s| &s.text).collect::<Vec<_>>(),
+        bare.iter().map(|s| &s.text).collect::<Vec<_>>(),
+        "the kind prefix must not change what the immediate tier lists"
+    );
+}
+
 #[test]
 fn active_file_query_strips_kind_prefix() {
     let q = active_file_query("read @file:crates/ope").expect("query");

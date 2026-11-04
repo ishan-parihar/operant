@@ -132,13 +132,59 @@ pub fn parse_file_ref_token(input: &str) -> Option<FileRefToken<'_>> {
     if !at_word_boundary {
         return None;
     }
-    let raw = &input[at_idx..];
-    let after_at = &raw[1..];
-    let path = after_at
+    let tail = &input[at_idx..];
+    let after_at = &tail[1..];
+    // Terminate the token where the expander's grammar does —
+    // `@kind:(quoted|\S+)` (`context_references::REFERENCE_PATTERN`): a
+    // bare value ends at the first whitespace, a quoted value at its
+    // closing quote (an open quote runs to the end of the input while it
+    // stays open). The popup token is what the user is STILL typing, so it
+    // must also reach the end of `input`: a terminated token that ends
+    // earlier means the mention is complete and the cursor is in ordinary
+    // prose. Without this, every message that ever contained an `@` kept a
+    // token alive for its whole remaining length — the ghost gate
+    // suppressed completions from the mention onward, every later
+    // keystroke spawned a fuzzy walk, and a space-free tail could reopen
+    // the popup mid-prose where Enter accepts a file instead of
+    // submitting.
+    let stripped_kind = after_at
         .strip_prefix("file:")
         .or_else(|| after_at.strip_prefix("folder:"))
         .unwrap_or(after_at);
-    let path = path.strip_prefix('"').unwrap_or(path);
+    let (value_end, quote_closed) = if stripped_kind.starts_with('"') {
+        match stripped_kind[1..].find('"') {
+            // +2: skip the opening quote and include the closing one.
+            Some(i) => (i + 2, true),
+            None => (stripped_kind.len(), false),
+        }
+    } else {
+        (
+            stripped_kind
+                .find(char::is_whitespace)
+                .unwrap_or(stripped_kind.len()),
+            false,
+        )
+    };
+    if value_end < stripped_kind.len() {
+        // The mention is closed and the cursor moved on — no live token.
+        return None;
+    }
+    let raw = tail;
+    let quoted = stripped_kind.starts_with('"');
+    let path = &stripped_kind[..value_end];
+    let path = if quoted {
+        // Strip the opening quote, and the closing one when the value
+        // terminated at it (an open quote runs to the end of the input,
+        // so there is nothing to strip there).
+        let inner = &path[1..];
+        if quote_closed {
+            &inner[..inner.len() - 1]
+        } else {
+            inner
+        }
+    } else {
+        path
+    };
     Some(FileRefToken { raw, path })
 }
 
@@ -366,28 +412,21 @@ pub(super) fn compute_file_suggestions(
     file_autocomplete_limit: usize,
     file_autocomplete_show_hidden: bool,
 ) -> Vec<TypeaheadSuggestion> {
-    let mut suggestions = Vec::new();
-
-    if let Some(at_idx) = input.rfind('@') {
-        // Only suggest files if @ is at a word boundary (preceded by whitespace or start of string)
-        let at_word_boundary = at_idx == 0
-            || input[..at_idx]
-                .chars()
-                .last()
-                .map(|c| c.is_whitespace())
-                .unwrap_or(false);
-
-        if at_word_boundary {
-            let file_prefix = &input[at_idx + 1..];
-            suggestions = suggest_files(
-                file_prefix,
-                file_autocomplete_limit,
-                file_autocomplete_show_hidden,
-            );
-        }
+    // Parse FIRST, then list the parsed path: the grammar (kind prefix,
+    // opening quote) is not part of the path, and an accepted directory
+    // chains as `@folder:<dir>/` — feeding that string to suggest_files
+    // verbatim statted a literal path named `folder:…` and blanked the
+    // popup (the chain was dead since the grammar shipped; the fuzzy tier
+    // could not rescue it either, because an empty tail after the last `/`
+    // disables the walk).
+    match parse_file_ref_token(input) {
+        Some(token) => suggest_files(
+            token.path,
+            file_autocomplete_limit,
+            file_autocomplete_show_hidden,
+        ),
+        None => Vec::new(),
     }
-
-    suggestions
 }
 
 /// Suggest files matching a path prefix.
