@@ -1982,7 +1982,16 @@ pub(crate) fn register_tui_command_handlers(
             if ctx.args.is_empty() {
                 CommandResult::message("Usage: /provider <name> — switch LLM provider")
             } else {
-                CommandResult::message(format!("Provider switched to: {}", ctx.args))
+                // (tui-bugfix audit) This handler only SAID it switched — no
+                // provider change happens here. The real paths are /connect
+                // (credentials) and /model (endpoint + model). The old green
+                // confirmation left the operator on the old provider and key
+                // through the next turn.
+                CommandResult::message(format!(
+                    "The provider is not switched here — use /connect for credentials \
+                     or /model for the endpoint and model (requested: {})",
+                    ctx.args
+                ))
             }
         }
     }

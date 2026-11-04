@@ -427,6 +427,31 @@ pub fn draw_rewind_selector(frame: &mut Frame, area: Rect, app: &crate::tui::app
     ])
     .split(area);
 
+    // (RT-205 sibling, tui-bugfix audit) The chat chrome paints the whole
+    // frame first and the diff writes only the cells a widget touches, so
+    // every header/footer row must be erased to full width exactly like the
+    // body above — the body pad fixed the rows but the header and footer
+    // were never given the treatment: the footer's leading `Line::from("")`
+    // has no graphemes and writes NO cells (the file's own body-pad note
+    // documents this exact failure mode), and every title/filter/stats/
+    // notice row is shorter than the pane, so banner/composer/status cells
+    // showed through around the overlay.
+    let pane_w = area.width as usize;
+    let blank_full = " ".repeat(pane_w);
+    let pad_to_pane = |lines: &mut Vec<Line<'static>>| {
+        for line in lines.iter_mut() {
+            let used: usize = line.spans.iter().map(|s| s.content.chars().count()).sum();
+            if used < pane_w {
+                line.spans.push(Span::styled(
+                    blank_full[used..].to_string(),
+                    Style::default(),
+                ));
+            }
+        }
+    };
+    pad_to_pane(&mut header);
+    pad_to_pane(&mut footer);
+
     frame.render_widget(Paragraph::new(header), chunks[0]);
 
     let body_h = chunks[1].height as usize;

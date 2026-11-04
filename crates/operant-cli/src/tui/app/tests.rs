@@ -12008,3 +12008,82 @@ fn a_task_dying_without_a_terminal_event_still_flushes_the_live_tails() {
         "the live tails must be committed to the transcript before the state clears"
     );
 }
+
+/// Esc dismisses the completion popup first (OMP contract). Without this,
+/// editing the token was the only way to close it, and Enter auto-accepted
+/// whatever was highlighted — a popup hovering mid-prose turned a submit
+/// into a file insertion.
+///
+/// MUTATION-PROOF: deleting the dismissal arm leaves the suggestions armed
+/// after Esc — the emptiness assertion fails by name.
+#[test]
+fn esc_dismisses_the_completion_popup_before_any_double_escape_meaning() {
+    let mut app = make_app();
+    app.prompt_input.text = "look at @src/ma".to_string();
+    app.prompt_input.cursor = 15;
+    app.prompt_input.suggestions = vec![crate::tui::prompt_input::TypeaheadSuggestion {
+        text: "@folder:src/".to_string(),
+        display: "@folder:src/".to_string(),
+        description: "directory".to_string(),
+        source: crate::tui::prompt_input::TypeaheadSource::FileRef,
+    }];
+    app.prompt_input.suggestion_index = Some(0);
+
+    app.handle_key_event(press_key(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(
+        app.prompt_input.suggestions.is_empty(),
+        "Esc must dismiss the popup"
+    );
+    assert_eq!(
+        app.prompt_input.text, "look at @src/ma",
+        "dismissal must not edit the draft"
+    );
+}
+
+/// Tools run up to 8 in parallel and their events drain as one batch: a
+/// success landing AFTER a failure in the same batch used to wipe the error
+/// notice before its 3-second TTL (`else { self.status_message = None }`).
+/// Errors route through set_status_notice with their own TTL; success leaves
+/// whatever notice is up alone.
+///
+/// MUTATION-PROOF: restoring the `else { self.status_message = None }` arm
+/// fails the persistence assertion by name.
+#[test]
+fn a_successful_tool_event_does_not_wipe_a_standing_error_notice() {
+    use operant_core::agent::AgentEvent;
+    let mut app = make_app();
+    app.handle_agent_event(AgentEvent::ToolComplete {
+        result: operant_core::tools::ToolResult {
+            tool_call_id: "t1".to_string(),
+            name: "bash".to_string(),
+            success: false,
+            content: String::new(),
+            error: Some("exit 1: permission denied".to_string()),
+            ..Default::default()
+        },
+    });
+    assert!(
+        app.status_message
+            .as_deref()
+            .unwrap_or("")
+            .contains("Tool error"),
+        "the error notice is up"
+    );
+    app.handle_agent_event(AgentEvent::ToolComplete {
+        result: operant_core::tools::ToolResult {
+            tool_call_id: "t2".to_string(),
+            name: "read".to_string(),
+            success: true,
+            content: "ok".to_string(),
+            error: None,
+            ..Default::default()
+        },
+    });
+    assert!(
+        app.status_message
+            .as_deref()
+            .unwrap_or("")
+            .contains("Tool error"),
+        "a parallel success must not erase the standing error notice"
+    );
+}

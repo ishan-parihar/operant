@@ -225,10 +225,14 @@ impl App {
                 // joins (the AG|ENTS.md seam) because ToolStart no longer
                 // flushes.
                 self.flush_streamed_assistant_message();
+                // Errors route through set_status_notice with its own TTL.
+                // A success does NOT wipe the notice: tools run up to 8 in
+                // parallel, their events drain as one batch, and one success
+                // landing after a failure in the same batch erased the error
+                // (and any RateLimit/StreamCorrupted warning) before its
+                // 3-second TTL elapsed.
                 if is_error {
                     self.set_status_notice(format!("Tool error: {}", result_text));
-                } else {
-                    self.status_message = None;
                 }
                 // P4-3 (2026-10-09 v2 outline): the todo tool's result carries
                 // the full list; keep it on App so the info-widget Todos band,
