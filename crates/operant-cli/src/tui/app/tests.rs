@@ -5630,6 +5630,51 @@ fn a_failed_turn_restores_the_prompt_without_leaving_it_in_the_transcript() {
     );
 }
 
+/// A turn that dies after a tool call started must not leave that call
+/// pending: the next turn's Done sweep marks every pending block Done, and
+/// with `output_preview: None` the adapter renders a Done block with the
+/// success glyph — a call that never ran, claiming `✓ completed` under the
+/// NEXT prompt. The Error arm cancels this turn's pending blocks (the same
+/// loop shape as cancel_streaming_turn) and re-anchors them to the
+/// post-restore transcript length: the restore removed the user row, which
+/// leaves `after_index` pointing past the transcript, so the next pushed
+/// prompt would otherwise own the row.
+///
+/// MUTATION-PROOF: deleting the cancel loop in the Error arm fails the
+/// status assertion (the block stays pending until a later Done sweep marks
+/// it Done); deleting the anchor clamp fails the after_index one.
+#[test]
+fn a_failed_turn_cancels_its_still_pending_tool_calls_and_reanchors_them() {
+    let mut app = make_app();
+    app.set_prompt_text("run the doomed turn".to_string());
+    let submitted = app.take_input();
+    app.add_message(Role::User, submitted);
+    assert_eq!(app.messages.len(), 1, "the submit pushed a user row");
+
+    // A tool call started; the turn then died before the tool settled.
+    app.handle_agent_event(AgentEvent::ToolStart {
+        tool_call_id: "call_doomed".to_string(),
+        name: "bash".to_string(),
+        arguments: r#"{"command":"sleep 5"}"#.to_string(),
+    });
+    assert_eq!(app.tool_use_blocks.len(), 1);
+    assert!(app.tool_use_blocks[0].status.is_pending());
+
+    app.handle_agent_event(AgentEvent::Error {
+        error: "provider overloaded_error (529)".to_string(),
+    });
+
+    assert_eq!(
+        app.tool_use_blocks[0].status,
+        ToolStatus::Cancelled,
+        "a call the failed turn started must never render as completed"
+    );
+    assert!(
+        app.tool_use_blocks[0].after_index <= app.messages.len(),
+        "the anchor must not point past the transcript, or the next prompt owns the row"
+    );
+}
+
 /// The row removal is bounded to the FAILED submission: a transcript that
 /// legitimately holds the same prompt twice keeps its earlier copy, and only
 /// the tail row goes away. Without the bound, a repeat question would

@@ -406,6 +406,19 @@ impl App {
                 // readable above the card instead of vanishing.
                 self.flush_streamed_assistant_message();
                 self.invalidate_transcript();
+                // The turn died mid-flight: any tool call it started never
+                // ran to completion. Mark this turn's still-pending blocks
+                // cancelled — the same loop shape as cancel_streaming_turn —
+                // so a later Done sweep cannot claim them: with
+                // output_preview: None the adapter renders a pending/Done
+                // block as a phantom "✓ completed" row. Idempotent with
+                // cancel_streaming_turn on the /stop path, where the blocks
+                // are already Cancelled.
+                for block in &mut self.tool_use_blocks {
+                    if block.status.is_pending() {
+                        block.status = ToolStatus::Cancelled;
+                    }
+                }
                 // A user stop is not a failure: one quiet notice, no error
                 // card, no prompt restore.
                 if is_user_interrupt(&error) {
@@ -417,6 +430,16 @@ impl App {
                 // the arm the error modal is drawn from, so the message and the
                 // recovery land in the same frame.
                 self.restore_failed_input_to_composer();
+                // The restore removed the user row, which leaves every
+                // after_index stamped this turn pointing past the
+                // transcript — the next pushed prompt would otherwise own
+                // the row. Clamp to the post-restore length (the flush's
+                // own release arm in flush_streamed_assistant_message
+                // mirrors this shape). No row is removed on the /stop path
+                // above, so its anchors stay valid unclamped.
+                for block in &mut self.tool_use_blocks {
+                    block.after_index = block.after_index.min(self.messages.len());
+                }
                 let err_msg = format!("Error: {}", error);
                 // Single source of truth per event (P4-2 spec step 4): the
                 // inline Error card is THE transcript surface — no duplicate
