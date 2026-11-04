@@ -92,6 +92,14 @@ From git repositories or paths (`plugins_install.rs`);
 surface. `[plugins] plugin_dirs / signature_mode /
 trusted_publisher_keys / disabled` in the config is the policy surface.
 
+`operant plugins status` (gap G9 — iter-1734) is the per-plugin
+discovery view of the process that runs it: manifest, capabilities,
+signature verdict, enabled state, wasm module size, and (probed from the
+module's own `tool_metadata` export) the tool name it registers. The
+RUNNING gateway's live registry state — which tools actually registered,
+which interceptors are active — lives in that process; status says so
+rather than faking it.
+
 ## Creating a plugin (creator mode, gap G7 — iter-1730)
 
 `operant plugins new <name> --capability <tool|observer|memory|skill>`

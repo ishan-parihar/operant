@@ -63,6 +63,8 @@ pub enum PluginsSubcommand {
         /// Path to the plugin directory
         path: String,
     },
+    /// Per-plugin status: discovery view of this process (gap G9)
+    Status,
 }
 
 pub async fn handle_plugins_command(config: &AppConfig, cmd: PluginsSubcommand) -> Result<()> {
@@ -79,6 +81,7 @@ pub async fn handle_plugins_command(config: &AppConfig, cmd: PluginsSubcommand) 
         PluginsSubcommand::Toggle { name } => toggle_plugin(config, &name).await,
         PluginsSubcommand::New { name, capability } => new_plugin(&name, &capability),
         PluginsSubcommand::Validate { path } => validate_plugin_cmd(&path),
+        PluginsSubcommand::Status => status_plugins(config).await,
     }
 }
 
@@ -263,6 +266,115 @@ fn validate_plugin_cmd(path: &str) -> Result<()> {
     crate::plugins_install::validate_plugin(&dir)?;
     println!("OK: {} has a valid manifest.toml.", dir.display());
     Ok(())
+}
+
+/// Per-plugin status (gap G9): what THIS process can honestly know —
+/// discovery (manifest, capabilities, signature verdict, enabled state,
+/// wasm module present + the tool name its `tool_metadata` export would
+/// register). The running gateway's live registry state (registered tools,
+/// active interceptors) lives in that process — say so instead of faking it.
+async fn status_plugins(config: &AppConfig) -> Result<()> {
+    #[cfg(feature = "plugins-wasm")]
+    {
+        let plugin_dirs = &config.plugins.plugin_dirs;
+        if plugin_dirs.is_empty() {
+            println!("No plugin dirs configured ([plugins] plugin_dirs).");
+            return Ok(());
+        }
+        let parent = plugin_dirs[0]
+            .parent()
+            .context("plugins dir has no parent — cannot build plugin host")?;
+        let signature_mode =
+            operant_plugins::host::PluginHost::parse_signature_mode(&config.plugins.signature_mode);
+        let host = operant_plugins::host::PluginHost::with_security(
+            parent,
+            signature_mode,
+            config.plugins.trusted_publisher_keys.clone(),
+        )?;
+        let infos = host.list_plugins();
+        if infos.is_empty() {
+            println!("No plugins discovered in {}.", plugin_dirs[0].display());
+            return Ok(());
+        }
+        println!(
+            "Plugin status ({}) — discovery view (signature mode: {}):",
+            infos.len(),
+            config.plugins.signature_mode
+        );
+        println!();
+        for info in &infos {
+            let enabled = if config.plugins.is_enabled(&info.name) {
+                "enabled"
+            } else {
+                "disabled"
+            };
+            let caps: Vec<String> = info
+                .capabilities
+                .iter()
+                .map(|c| {
+                    serde_json::to_value(c)
+                        .ok()
+                        .and_then(|v| v.as_str().map(str::to_string))
+                        .unwrap_or_else(|| format!("{c:?}"))
+                })
+                .collect();
+            let wasm = info
+                .wasm_path
+                .as_ref()
+                .map(|p| {
+                    if p.exists() {
+                        format!(
+                            "{}K",
+                            std::fs::metadata(p).map(|m| m.len()).unwrap_or(0) / 1024
+                        )
+                    } else {
+                        "MISSING".to_string()
+                    }
+                })
+                .unwrap_or_else(|| "none (skill-only)".to_string());
+            println!(
+                "  {:<22} v{:<8} caps=[{}] {} wasm={}",
+                info.name,
+                info.version,
+                caps.join(","),
+                enabled,
+                wasm
+            );
+            // The tool name a tool-capable module would register comes from
+            // its `tool_metadata` export — one throwaway probe instance, the
+            // same cost discovery already pays at boot.
+            #[cfg(feature = "plugins-wasm")]
+            use operant_plugins::PluginTool as _;
+            #[cfg(feature = "plugins-wasm")]
+            if info.loaded
+                && info
+                    .capabilities
+                    .contains(&operant_plugins::PluginCapability::Tool)
+                && let Some(p) = &info.wasm_path
+            {
+                let tool = operant_plugins::wasm_tool::WasmTool::from_wasm(
+                    p.clone(),
+                    Vec::new(),
+                    info.name.clone(),
+                    String::new(),
+                );
+                println!(
+                    "      tool: {} (registers at boot; live re-registration under the watcher)",
+                    tool.name()
+                );
+            }
+        }
+        println!();
+        println!(
+            "Live registry state (registered tools, active interceptors) is owned by the running gateway process — check its logs or the dashboard."
+        );
+        return Ok(());
+    }
+    #[cfg(not(feature = "plugins-wasm"))]
+    {
+        println!("plugins-wasm feature is not enabled in this build.");
+        Ok(())
+    }
 }
 
 /// Recursively compute the total size of a directory in bytes.
