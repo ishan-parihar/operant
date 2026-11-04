@@ -2320,3 +2320,56 @@ fn vim_escape_dot_repeat_survives_a_mid_char_start() {
     s.cursor = 1; // inside/behind a multi-byte replacement's boundary
     s.vim_command("Escape"); // must not panic
 }
+
+/// The ghost is armed from refresh_prompt_input only, so cursor moves (which
+/// run sync_legacy_prompt_fields without a refresh) leave it armed-but-
+/// invisible; an accept then inserted the stale suffix at the moved caret —
+/// 'read the par' + Left + Right produced 'read the paserr', and Home + TAB
+/// injected the suffix at line start. The accept now validates that the
+/// caret still sits at the ghost's prefix end and invalidates instead of
+/// inserting; Right's existing move_right fallback keeps the key meaningful.
+///
+/// MUTATION-PROOF: deleting the ends_with validation in accept_ghost fails
+/// both assertions (the stale suffix reappears in the text).
+#[test]
+fn a_stale_ghost_is_never_accepted_at_the_wrong_position() {
+    let mut s = nav_state("read the par", "read the par".len());
+    s.show_ghost("par".to_string(), "ser".to_string());
+    s.move_left();
+    assert_eq!(s.cursor, "read the par".len() - 1);
+    // Right: accept must fail and fall back to the plain move.
+    assert!(!s.accept_ghost(false), "a stale ghost refuses to accept");
+    assert_eq!(
+        s.text, "read the par",
+        "no stale suffix may be inserted at the moved caret"
+    );
+    // Right's move_right fallback for the refused accept lives in the key
+    // handler (key_handling.rs: `if !accept_ghost(false) { move_right() }`)
+    // and is untouched here — the refusal is what this pins.
+}
+
+/// A suggestion accepted with no anchor `@` under the caret — reachable via
+/// Home with a stale popup, which had no Esc dismissal either — used to
+/// REPLACE THE WHOLE BUFFER with the bare suggestion value, destroying the
+/// draft. It is nothing to apply: the text stays, the popup clears.
+///
+/// MUTATION-PROOF: restoring the old fallback (rewrite the buffer with
+/// s.text + tail) fails the equality by name.
+#[test]
+fn accepting_a_suggestion_with_no_anchor_never_clobbers_the_buffer() {
+    let mut s = nav_state("look at @src/ma", 15);
+    s.suggestions = vec![TypeaheadSuggestion {
+        text: "@folder:src/".to_string(),
+        display: "@folder:src/".to_string(),
+        description: "directory".to_string(),
+        source: TypeaheadSource::FileRef,
+    }];
+    s.suggestion_index = Some(0);
+    s.cursor = 0; // moved before the @ — no anchor under the caret
+    s.accept_suggestion();
+    assert_eq!(
+        s.text, "look at @src/ma",
+        "the draft must survive an anchor-less accept"
+    );
+    assert!(s.suggestions.is_empty(), "the popup still dismisses");
+}

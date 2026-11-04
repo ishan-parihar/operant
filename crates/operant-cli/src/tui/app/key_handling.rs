@@ -1340,6 +1340,20 @@ impl App {
             // prompt-jump arm below) and must not arm the double-tap clock
             // or anything else.
             KeyCode::Esc if !self.is_streaming && key.modifiers == KeyModifiers::NONE => {
+                // OMP contract: Esc dismisses the completion popup FIRST.
+                // Without this, editing the token was the only way to close
+                // it, and Enter auto-accepted whatever was highlighted — so
+                // a popup hovering mid-prose turned a submit into a file
+                // insertion. The ghost goes with it (the popup owns the
+                // composer's attention while open). The double-Esc rewind
+                // below keeps its own meaning once the popup is gone.
+                if !self.prompt_input.suggestions.is_empty() {
+                    self.prompt_input.suggestions.clear();
+                    self.prompt_input.suggestion_index = None;
+                    self.prompt_input.clear_ghost();
+                    self.last_esc_at = None;
+                    return false;
+                }
                 let now = std::time::Instant::now();
                 let double = self
                     .last_esc_at

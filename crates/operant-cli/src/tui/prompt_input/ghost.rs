@@ -99,11 +99,21 @@ impl PromptInputState {
 
     /// Accept the shown ghost at the caret. `with_space` appends the
     /// trailing space (TAB); Right accepts without it. Returns false when
-    /// no ghost is shown.
+    /// no ghost is shown — or when the caret no longer sits at the ghost's
+    /// prefix end: the ghost is armed from refresh_prompt_input only, so
+    /// cursor moves (Left/Home/End/Alt+B run sync_legacy_prompt_fields
+    /// without a refresh) leave it armed-but-invisible, and an accept then
+    /// inserted the stale suffix at the wrong position ('read the par' +
+    /// Left + Right produced 'read the paserr'). Invalidate instead of
+    /// insert; the Right arm's existing move_right fallback keeps the key
+    /// meaningful.
     pub fn accept_ghost(&mut self, with_space: bool) -> bool {
         let Some(g) = self.ghost.take() else {
             return false;
         };
+        if !self.text[..self.cursor].ends_with(&g.prefix) {
+            return false;
+        }
         for c in g.suffix.chars() {
             self.insert_char(c);
         }

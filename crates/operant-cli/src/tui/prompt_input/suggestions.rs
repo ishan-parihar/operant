@@ -177,11 +177,15 @@ impl PromptInputState {
                         self.text = new_text;
                         cursor
                     } else {
-                        let mut new_text = s.text.clone();
-                        let cursor = new_text.len();
-                        new_text.push_str(&tail);
-                        self.text = new_text;
-                        cursor
+                        // The anchor `@` is gone — the cursor moved before
+                        // the popup's token (reachable via Home with a stale
+                        // popup, which had no Esc dismissal either). The old
+                        // fallback REPLACED THE WHOLE BUFFER with the bare
+                        // suggestion value, destroying the draft. A
+                        // suggestion with no anchor is nothing to apply:
+                        // leave the text alone; the popup clear below
+                        // dismisses it.
+                        self.cursor
                     }
                 }
             };
