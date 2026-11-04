@@ -10271,6 +10271,21 @@ fn an_empty_tick_read_cannot_wipe_a_live_todo_list() {
         app.todos_card_payload, payload,
         "and so must the card payload: an empty read is missing information, not a deletion"
     );
+
+    // The BAND is a DIFFERENT surface from the list: `pinned_todos_band_lines`
+    // renders `app.pinned_todos_payload()`, which is the info widget's
+    // `╭ Overview · todos ─╮` card. The operator's report was that THIS card
+    // appeared and then vanished a second later, so the band accessor must
+    // still answer after the empty read — not just the list behind it.
+    //
+    // Asserting only `app.todos` would miss a regression that emptied the
+    // payload while leaving the list alone, and vice versa.
+    let band_payload = crate::tui::operant_app::tui_state::TuiState::pinned_todos_payload(&app)
+        .expect("the band still has its payload after an empty store read");
+    assert!(
+        band_payload.contains("still on screen"),
+        "the pinned band must still render the list: {band_payload}"
+    );
 }
 
 /// The tick must pick up a list the parent's event stream never carried.
