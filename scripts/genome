@@ -54,10 +54,15 @@ except ImportError:  # Windows: Guarded falls back to an exclusive-create lock f
 # ---------------------------------------------------------------- constants
 
 JSON_CMDS = {"ask", "lint", "doctor", "new", "show", "find", "graph", "place", "card", "impact"}  # commands with a --json form
-MODULES = ("core", "records", "research", "ops", "agents", "outline")
+MODULES = ("core", "records", "research", "ops", "agents", "outline", "integrity")
 PROFILES = {
-    "software": ["core", "records"],
-    "research": ["core", "records", "research", "ops"],
+    # `integrity` is in every profile but `team`: a project-grade repo should always be
+    # able to answer "does it still build", "are its required docs there" and "is its
+    # declared shape intact", and those questions are what the module asks. A team
+    # coordination repo has no build, so `init --profile team` leaves it out and the
+    # silence is honest — a repo with no `[app]` gets no app finding at all.
+    "software": ["core", "records", "integrity"],
+    "research": ["core", "records", "research", "ops", "integrity"],
     "team": ["core", "records", "agents"],
     "full": list(MODULES),
 }
@@ -109,6 +114,11 @@ MODULE_ROLES = {
     "ops": ["ownership_map"],
     "agents": ["feed", "workflows"],
     "outline": ["agents"],
+    # integrity owns NO role path: it validates `[app]`'s toolchain, `[docs]`'s required
+    # documents and the ops-declared dirs, all of which already live in another
+    # module's space. Scaffolding a dir for it would create an empty one, which E606
+    # then reports. An empty list is the honest entry, and `genome init` needs it.
+    "integrity": [],
 }
 APPEND_ONLY = ("ledger", "worklog", "feed", "prereg", "quarantine")
 TOMBSTONE = re.compile(r"<!--\s*kb: tombstone target=\"([^\"]+)\"")
@@ -142,7 +152,7 @@ ERR = 2
 MIN_CHUNK = 5  # lines; `ask` hits narrower than this point at a lead line without its content
 HUB_NODE_CAP = 3000  # nodes; above this `graph hubs` ranks by degree and says betweenness was not computed
 _TMP_SEQ = itertools.count()  # makes each atomic_write temp name unique within this process too
-VERSION = "2026.11.02-43"
+VERSION = "2026.11.02-74"
 # every key genome reads: an unknown key is a typo that would silently switch a check off (E017)
 CONFIG_KEYS = {
     "genome": {"modules", "schema_version"},
@@ -157,7 +167,16 @@ CONFIG_KEYS = {
     "research": {"classes", "figure_pattern", "hyp_prefix", "hyp_statuses", "surfaces", "quarantine_surfaces"},
     "ops": {"bulk_allow", "bulk_globs", "code_globs", "code_roots", "jobs", "link_prefixes", "link_surfaces",
             "max_bytes", "owner_exempt", "owner_globs", "py_paths", "secrets", "root_files", "dir_suffixes",
-            "dir_requires", "stale_terms", "stale_exempt", "external_ok"},
+            "dir_requires", "dir_globs", "stale_terms", "stale_exempt", "external_ok",
+            "dir_name_patterns", "dir_name_exempt"},
+    # `app` is the language-agnostic application/system-integrity declaration. A repo
+    # writes what its toolchain IS (python, cargo, npm...) and genome runs the check
+    # that toolchain defines, instead of the operator hand-writing one shell string
+    # that no other command can inspect. Every key is optional: an undeclared toolchain
+    # is simply not checked, and the fingerprint is reported as info, never as an error.
+    "app": {"toolchain", "build", "test", "typecheck", "lint", "fmt", "doc", "install_script", "install_probe",
+            "entry", "requires", "provides", "manifest", "readme", "agents", "architecture"},
+    "docs": {"required", "sections", "max_lines", "require_toc"},
     "outline": {"zones"},
 }
 STALE_DOCS = ("*.md", "*.yaml", "*.yml", "*.toml", "*.txt", "*.rst")  # stale paths matter where people read
@@ -171,6 +190,7 @@ CONVENTIONAL_ROOT_DOCS = {
     "NOTICE.md", "SKILL.md",
 }
 SEVERITIES = ("Critical", "High", "Medium", "Low")
+SEVERITY = {"E": "error", "W": "warning", "I": "info"}  # only `E` fails a build; see cmd_lint
 STOP = set("the and for what where which how does did are was were this that with from into when who why "
            "should can its it's our your about have has not any all in is it of on or to we an as at by do if "
            "me my no so up us be he".split())
@@ -256,7 +276,7 @@ class Cfg:
         self.declared = {k for k in raw if isinstance(raw[k], str)}
         self.zones_declared = "zones" in data.get("records", {})
         self.paths = {**DEFAULT_PATHS, **{k: v for k, v in raw.items() if isinstance(v, str)}}
-        self.sec = {s: dict(data.get(s, {})) for s in ("core", "records", "research", "ops", "card", "federation", "drift", "index")}
+        self.sec = {s: dict(data.get(s, {})) for s in ("core", "records", "research", "ops", "card", "federation", "drift", "index", "app", "docs")}
         self.schema_version = int(g.get("schema_version", 0))
         self.kinds = dict(data.get("kinds", {}))
         self.views = dict(data.get("views", {}))
@@ -1339,6 +1359,11 @@ def lint_core(cfg: Cfg) -> list[str]:
                    f"{SCHEMA_VERSION} — `genome migrate` (an unmigrated repo reads every "
                    f"membership glob with the old dialect, so its checks read the wrong patterns)")
     out += lint_layout(cfg)   # root placement is a core invariant, not an ops option
+    # A directory's NAME is a core invariant too: a collision is a defect with no config to
+    # declare it, so it runs everywhere. The tracked-but-ignored contradiction is likewise a fact
+    # about git, not an option, so it runs everywhere too.
+    out += lint_dir_names(cfg)
+    out += lint_tracked_but_ignored(cfg)
     out += [f"W507 [paths] {k} is retired (no role uses it); `genome migrate` removes it" for k in RETIRED_PATHS
             if k in cfg.declared]
     if cfg.schema_version < 2:  # the one-dialect change: say what `genome migrate` will rewrite
@@ -1832,6 +1857,117 @@ def lint_root_placement(cfg: Cfg) -> list[str]:
             for f in misplaced_paths(cfg)]
 
 
+def lint_dir_names(cfg: Cfg) -> list[str]:
+    """E308: a directory whose name breaks a declared pattern, or collides with a sibling.
+
+    The absorbed workspace-lint validator carried two checks genome had no answer
+    for. Both are about a directory's NAME, not its contents, so neither belongs
+    in `dir_suffixes` (what may live inside) or `dir_requires` (what must exist).
+
+    **Patterns** (`ops.dir_name_patterns`) catch names that are illegal by
+    convention rather than by placement: leading/trailing whitespace, a stray
+    prefix left by a copy, an unnormalized unicode dash. A pattern like
+    `^\\s|\\s$` is the usual one, but any regex the repo declares is honoured, so
+    a project with its own naming law states it once instead of in prose.
+
+    **Collisions** (`ops.dir_name_exempt` may name one) are surfaced separately
+    because they are the half people do not expect. Two directories whose names
+    differ only by case, whitespace or a zero-width mark are one directory to a
+    reader and two to git: `PHANTOM` beside `phantom`, or `Docs` beside `docs`.
+    Git tracks both, they never merge, and every agent that opens one wonders
+    which is live. No config declares a collision, which is why it is reported
+    with no pattern at all — but the exemption still applies, because a repo that
+    carries `fonts/Font` and `fonts/font` on purpose has said so, and a gate that
+    cannot be satisfied stops being read.
+    """
+    out = []
+    pats = cfg.get("ops", "dir_name_patterns", [])
+    exempt = cfg.get("ops", "dir_name_exempt", [])
+
+    def pattern_bad(d: str) -> str | None:
+        for p in pats:
+            try:
+                if re.search(p, d):
+                    return p
+            except re.error:
+                continue    # a bad pattern is a config error reported by lint, not a crash here
+        return None
+
+    # Siblings are grouped and THEN judged, rather than judged in walk order. Two
+    # directories that normalize to one name are a group, and a group is reported
+    # once: naming every member would print N lines for one defect, and reporting
+    # only the pair the readdir happened to yield first would make the answer
+    # depend on the filesystem. os.walk's order is the directory's, not ours.
+    for dirpath, dirnames, _ in os.walk(cfg.root):
+        dirnames[:] = sorted(d for d in dirnames if not d.startswith((".", "__")))
+        groups: dict[str, list[str]] = {}
+        for d in dirnames:
+            # Case, whitespace and the invisible marks are folded, because
+            # `PHANTOM-PHASE` and `PHANTOM\u2010PHASE` are one directory to a reader
+            # and two to git. `\u200b` is stripped rather than normalized to keep the
+            # CLI import-free for the class that actually occurs.
+            groups.setdefault(d.casefold().strip().replace(" ", "").replace("\u200b", ""), []).append(d)
+        for norm, members in groups.items():
+            rels = [cfg.rel(Path(dirpath) / d) for d in members]
+            # A colliding group is judged on its NON-EXEMPT members. Exempting one
+            # name is a statement about that name, not about its siblings: a repo with
+            # `fonts/Font` and `fonts/font` on purpose exempts them, and a stray third
+            # is still reported. Fewer than two non-exempt members is not a defect.
+            live = [(r, d) for r, d in zip(rels, members)
+                    if not any(gmatch(r, g, cfg) for g in exempt)]
+            if not live:                     # the whole group is exempt: nothing to judge
+                continue
+            if len(live) == 1:
+                # the pattern half: a NAME the project forbids, wherever it sits
+                p = pattern_bad(live[0][1])
+                if p:
+                    out.append(f"E308 {live[0][0]}/ matches ops.dir_name_patterns `{p}` — rename it")
+                continue
+            # the collision half: one group, one line, every non-exempt member named
+            names = ", ".join(f"{r}/" for r, _ in live)
+            out.append(f"E308 {names} normalize to the same directory name — merge them, "
+                       f"rename one, or add an ops.dir_name_exempt entry")
+            # a pattern in a colliding group is still worth saying: fixing the
+            # spelling does not fix the collision, but it is the same file's fault
+            for r, d in live:
+                p = pattern_bad(d)
+                if p:
+                    out.append(f"E308 {r}/ matches ops.dir_name_patterns `{p}` — rename it")
+    return out
+
+
+def lint_tracked_but_ignored(cfg: Cfg) -> list[str]:
+    """E309: a file git tracks and .gitignore ignores at the same time.
+
+    `git ls-files -i -c --exclude-standard` names tracked files matching an
+    ignore pattern. Both facts are true simultaneously, which is the defect:
+    tracking wins on `git status`, so the file is committed and diffed as normal,
+    while the ignore rule that supposedly excludes it applies to nothing. Every
+    generator that writes that path produces an untracked sibling beside a
+    tracked one, and the next `git add` of the directory adds the wrong file.
+
+    This is NOT E305 (regenerable bulk in git) and NOT E306 (misplaced file):
+    both of those run `ls-files -co` and answer what is tracked; only `-i` names
+    the contradiction, which is why the check did not exist. Genome never passed
+    `-i`, so no lint path could see it.
+
+    The remedy is the one the absorbed validator gave, and it is a git decision,
+    not a rename: `git rm --cached` keeps the working file and stops tracking
+    it, which is what an ignore rule that already matches it wants.
+    """
+    out = []
+    allow = set(cfg.get("ops", "bulk_allow", []))
+    for f in sh(cfg.root, "git", "ls-files", "-i", "-c", "--exclude-standard", "-z").split("\0"):
+        f = f.strip()
+        if not f or not (cfg.root / f).exists():
+            continue    # a staged deletion is already the resolution
+        if f in allow or any(gmatch(f, g, cfg) for g in allow):
+            continue
+        out.append(f"E309 {f} is tracked and also matches .gitignore — `git rm --cached {f}` "
+                   f"(keeps the file, stops the contradiction)")
+    return out
+
+
 def lint_layout(cfg: Cfg) -> list[str]:
     """Where files may live: root allow-list, per-directory suffixes, required per-directory files, stale terms."""
     out = []
@@ -1910,26 +2046,438 @@ def cmd_lint(args) -> None:
     if args.only:
         cfg.need(args.only)
     found = run_lint(cfg, args.only)
+    unfiltered_n = len(found)  # pre-filter total; a --code filter must not be able to claim "clean"
+    hidden_counts = None      # set only when a filter hid actionable findings; carried in --json
     if args.code:
-        found = [f for f in found if f.startswith(tuple(args.code))]
+        # A code that matches nothing is a fact the caller needs. Measured 2026-11-03: this
+        # repo's own `core.gate` listed `E601 E603 E604 E605 E606 E607 E608` after the
+        # integrity module took the E65x range, and every one of them matched NOTHING — the
+        # gate looked green and was checking eight conditions that no longer existed. A typo'd
+        # or retired code in a gate makes it weaker in silence, which is the one failure a gate
+        # must not have. The test is deliberately unfiltered-relative rather than against a
+        # hardcoded registry: a registry would itself drift, and "this filter matched nothing
+        # while findings exist" is the fact that matters.
+        filtered = [f for f in found if f.startswith(tuple(args.code))]
+        # The note fires only when the unfiltered lint holds an ACTIONABLE finding. An I651
+        # fingerprint is not one: a repo whose only finding is the toolchain info line is
+        # effectively clean, and nagging it about a filter would be the same defect the note
+        # exists to prevent — a message nobody can act on. `--code I` matches those.
+        if not filtered and any(f.startswith(("E", "W")) for f in found):
+            # The note names no code at all. A code in the text would be matched by the very
+            # filter that did not match: `lint --code E015` on an E015-free tree would read
+            # "E015" in the note and conclude the stale finding was present. Measured
+            # 2026-11-03 — the first form of this note broke redteam3 exactly that way.
+            #
+            # The severity COUNTS are safe to name (they are counts, not codes) and they are
+            # the whole point: a gate that reads "lint: clean" while the tree holds a real
+            # error is the silent weakening this note exists to prevent. Measured 2026-11-03.
+            hid_e = sum(1 for f in found if f.startswith("E"))
+            hid_w = sum(1 for f in found if f.startswith("W"))
+            hid = [f"{hid_e} error(s)", f"{hid_w} warning(s)"]
+            hid = ", ".join(p for p in hid if not p.startswith("0"))
+            # JSON stdout is a CONTRACT: an agent pipes it into json.loads(). Measured
+            # 2026-11-04 — this note was printed to stdout ahead of the document, so
+            # `lint --json --code <dead>` emitted two lines and every consumer's
+            # json.loads(stdout) raised. The defect predates -72; the fix does not.
+            #
+            # The note stays on STDOUT in the text form — that is where it has always
+            # been, and redteam3 reads stdout for it. Only the JSON form moves it to
+            # stderr, because there stdout is the document and nothing else may share
+            # it. The counts travel INSIDE the document as `hidden`, where a consumer
+            # can act on them instead of merely reading them.
+            if args.json:
+                hidden_counts = {"errors": hid_e, "warnings": hid_w}
+                print(f"note: the given --code filter matched no finding — the unfiltered lint reports "
+                      f"{hid} (`genome lint --all` to see them)", file=sys.stderr)
+            else:
+                hidden_counts = None
+                print(f"note: the given --code filter matched no finding — the unfiltered lint reports "
+                      f"{hid} (`genome lint --all` to see them)")
+        else:
+            hidden_counts = None
+        found = filtered
+    # Three severities, and only one of them stops the build. An `I` finding is a
+    # fact an operator should see (this repo declares a Rust build but no cargo
+    # binary is on PATH) that no check can call a defect: flagging it as a warning
+    # would train the reader to ignore warnings, and as an error it would block a
+    # commit for something the environment, not the repo, owns.
     errs = [f for f in found if f.startswith("E")]
+    infos = [f for f in found if f.startswith("I")]
+    warns = [f for f in found if f.startswith("W")]
     if args.json:
-        jprint({"errors": len(errs), "warnings": len(found) - len(errs), "modules": sorted(cfg.modules),
-                "findings": [{"code": f[:4], "severity": "error" if f[0] == "E" else "warning", "text": f[5:]} for f in sorted(found)]})
+        doc = {"errors": len(errs), "warnings": len(warns), "info": len(infos), "modules": sorted(cfg.modules),
+               "findings": [{"code": f[:4], "severity": SEVERITY[f[0]], "text": f[5:]} for f in sorted(found)]}
+        # The hidden counts ride along so a JSON consumer sees what the filter hid, rather
+        # than reading an empty findings list as a clean tree. Absent, not zero, when
+        # nothing was hidden — "hidden: {errors: 0}" would read as "the filter hid nothing
+        # worth naming" and blur the difference between no filter and a clean tree.
+        if hidden_counts:
+            doc["hidden"] = hidden_counts
+        jprint(doc)
         raise SystemExit(ERR if errs and not args.advisory else 0)
     by: dict[str, list[str]] = {}
-    for f in sorted(found, key=lambda s: (s[0] == "E", s)):
+    for f in sorted(found):
         by.setdefault(f[:4], []).append(f)
     for code, items in by.items():  # capped per code: lint output is read by agents, every line costs
         for f in items if args.all else items[:5]:
             print(f)
         if not args.all and len(items) > 5:
             print(f"{code} ... {len(items) - 5} more (`genome lint --code {code} --all`)")
-    print(f"lint: {len(errs)} error(s), {len(found) - len(errs)} warning(s) [{', '.join(sorted(cfg.modules))}]"
-          if found else f"lint: clean [{', '.join(sorted(cfg.modules))}]")
+    parts = [f"{len(errs)} error(s)"]
+    if warns:
+        parts.append(f"{len(warns)} warning(s)")
+    if infos:
+        parts.append(f"{len(infos)} info")
+    # "clean" is a claim about the tree, not about the filter. When a --code filter is
+    # in force and something was hidden by it, saying "clean" is a lie a gate log will be
+    # read as truth — the exact failure this path is documented against. Measured 2026-11-03.
+    hidden = bool(args.code) and len(found) < unfiltered_n
+    print(f"lint: {', '.join(parts)} [{', '.join(sorted(cfg.modules))}]"
+          if found else f"lint: clean{' (filtered)' if hidden else ''} [{', '.join(sorted(cfg.modules))}]")
     raise SystemExit(ERR if errs and not args.advisory else 0)
 
 
+# ---------------------------------------------------------------- integrity
+
+APP_KINDS = {
+    # The manifest that identifies a toolchain, and the command that checks it. A repo
+    # declares its toolchain by NAME and genome knows the rest, so "is this Rust
+    # project's build broken" is one question every Rust repo answers the same way,
+    # rather than one shell string each operator hand-writes. `probe` is what proves
+    # the tool exists: `cargo --version` failing means the check cannot run, which is
+    # an I, not an E — the repo is fine and the machine is not.
+    "python": {"manifest": ["pyproject.toml", "setup.py", "requirements.txt", "setup.cfg"],
+               "probe": ["python3", "--version"],
+               "build": "python3 -m compileall -q .",
+               "test": "python3 -m pytest -q",
+               "lint": "python3 -m ruff check .",
+               "fmt": "python3 -m ruff format --check .",
+               "doc": "python3 -m pydoc -w ."},
+    "rust": {"manifest": ["Cargo.toml"], "probe": ["cargo", "--version"],
+             "build": "cargo build --workspace --locked",
+             "test": "cargo test --workspace",
+             "lint": "cargo clippy --workspace -- -D warnings",
+             "fmt": "cargo fmt --check"},
+    "node": {"manifest": ["package.json"], "probe": ["node", "--version"],
+             "build": "npm run build", "test": "npm test",
+             "lint": "npx eslint .", "doc": "npx typedoc"},
+    "typescript": {"manifest": ["tsconfig.json"], "probe": ["node", "--version"],
+                   # NOT `npx tsc --version`: with no node_modules, npx resolves the name from the
+                   # registry and prints "This is not the tsc command you are looking for",
+                   # which exits 0 and looks like a working toolchain. Measured 2026-11-03. The
+                   # honest probe is node itself; whether tsc is a local dependency is a question
+                   # `npm run build` answers when it actually runs.
+                   "build": "npx tsc --noEmit", "test": "npm test",
+                   "lint": "npx eslint .", "doc": "npx typedoc"},
+    "go": {"manifest": ["go.mod"], "probe": ["go", "version"],
+           "build": "go build ./...", "test": "go test ./...", "lint": "go vet ./...",
+           "fmt": "test -z \"$(gofmt -l .)\""},
+    "java": {"manifest": ["pom.xml", "build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts"],
+             # settings.gradle(.kts) as well as build.gradle: a multi-module Gradle project
+             # declares its modules in settings and can carry NO root build script at all, so
+             # the build-file-only list left exactly the shape a large project takes
+             # unrecognised. Measured 2026-11-03 — a repo with settings.gradle + src/
+             # inferred no toolchain and answered "clean", which is the silence that reads as
+             # a green build.
+             #
+             # The default build prefers the WRAPPER (`./gradlew`) over a system `gradle` or
+             # `mvn`: it pins the toolchain version, which is why a repo vendors one, and a
+             # wrapper-less Gradle project is unusual enough that `./gradlew` failing is a
+             # fact worth an E651 rather than a silent fallback. So the Maven command is the
+             # default `test` only, not `build`, and a repo choosing either writes `[app]`.
+             "probe": ["java", "-version"],
+             "build": "./gradlew build -x test", "test": "mvn -q test"},
+    "shell": {"manifest": [], "probe": ["bash", "--version"], "lint": "bash -n"},
+}
+
+APP_PHASES = ("build", "test", "typecheck", "lint", "fmt", "doc")  # `fmt` and `doc` are probes, not gates
+
+
+def app_kind(cfg: Cfg) -> str | None:
+    """The toolchain this repo declares, or the one its manifest reveals.
+
+    The declaration wins. `app.toolchain = "rust"` in a repo that also has a
+    package.json is a statement about what this project IS, and a nested JS tool in a
+    Rust workspace must not reclassify the repo.
+
+    Otherwise the manifest decides, and only one may match: two manifests is a
+    monorepo question the operator answers by writing the key, because a guess here
+    would run the wrong toolchain's checks and report a clean build for a repo that
+    was never compiled.
+    """
+    declared = cfg.get("app", "toolchain")
+    if declared:
+        return str(declared)
+    hits = [k for k, v in APP_KINDS.items() if any((cfg.root / m).exists() for m in v["manifest"])]
+    # `python` and `typescript` both recognise a nested package.json/tsconfig, which is
+    # how a Python CLI with a bundled frontend reads; python is the conservative answer
+    # because its checks are the ones that cannot silently pass on the other language.
+    order = ["rust", "go", "java", "typescript", "node", "python", "shell"]
+    hits.sort(key=order.index)
+    return hits[0] if hits else None
+
+
+def _run_ok(cmd, cwd: Path) -> tuple[bool, str]:
+    """(ok, tail) for one integrity command. Never raises: an absent binary is a fact."""
+    try:
+        r = subprocess.run(cmd, shell=True, cwd=cwd, capture_output=True, text=True, timeout=int(os.environ.get("GENOME_APP_TIMEOUT", "300")))
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return (False, str(e)[:200])
+    tail = (r.stdout + r.stderr).strip().splitlines()[-3:]
+    return (r.returncode == 0, "\n       ".join(t for t in tail if t.strip()))
+
+
+def lint_app(cfg: Cfg) -> list[str]:
+    """E651..: application/system integrity — the app builds, tests, lints and installs.
+
+    This is the check the three absorbed skills each needed and none of them had.
+    `doc` validated prose, `install-script-creator` generated an installer, and
+    `workspace-lint` checked the tree. None of them could answer *does this thing
+    still build*, because a skill is not a build.
+
+    Genome answers it from the repo's own declaration, in whatever language the repo
+    is written, so it is the same question with the same answer everywhere:
+
+    - **E651** the declared phase fails. `cargo test` failing is a defect in the code,
+      and it is the one integrity fact that must stop a commit — everything else here
+      is about the tree, this is about the program.
+    - **E652** the `entry` or `manifest` named in `genome.toml` does not exist. A
+      declaration pointing at nothing is worse than no declaration: it reads as
+      checked and is not. (The install script has its own checks — E657/E658/W655.)
+    - **I651** the toolchain is undeclared AND unmanifested, or a probe cannot run.
+      A repo with no toolchain (a KB, a notes repo) is not broken; a Rust repo on a
+      machine with no cargo is a fact about the machine. Neither is an error.
+
+    Silence is the default. A repo that declares nothing AND has no manifest gets
+    nothing at all: a knowledge base and a notes repo have no build, and that is not a
+    finding. The one info worth printing is a toolchain genome found but could not run.
+    """
+    out: list[str] = []
+    kind = app_kind(cfg)
+    spec = APP_KINDS.get(kind, {}) if kind else {}
+    declared_cmds = {p: cfg.get("app", p) for p in APP_PHASES if cfg.get("app", p)}
+
+    # The probe first: a toolchain that cannot run on this machine is the ONE info that
+    # is worth a line, and it is worth one because the alternative is silence about a
+    # check that never ran. Measured 2026-11-03, an earlier "no toolchain declared and
+    # none inferred" line broke every `assert "lint: clean"` in the suite — a KB
+    # legitimately has no build, so the line fired on every healthy notes repo and made
+    # that assertion unusable. An info that is not informational is a defect.
+    probe = cfg.get("app", "install_probe") or (spec.get("probe") if spec else None)
+    if probe:
+        pcmd = probe if isinstance(probe, str) else " ".join(probe)
+        ok, tail = _run_ok(pcmd, cfg.root)
+        if not ok:
+            return [f"I651 `{pcmd}` did not run — the {kind or 'declared'} toolchain is absent or "
+                    f"broken on this machine, so its build/test phases were skipped (a fact about "
+                    f"the environment, not the repo)"]
+    elif not kind and not declared_cmds:
+        return []
+
+    # a repo with a toolchain and no declared phases still gets one line: it names what
+    # was checked, so the estate view can answer "what is this repo" from the lint.
+    if kind:
+        out.append(f"I651 app integrity: toolchain {kind}, "
+                   + (f"{len(declared_cmds)} declared phase(s)" if declared_cmds
+                      else "no phase declared — [app] build/test/lint would run its defaults"))
+
+    # each declared phase runs, and only a failure is an E
+    for phase in APP_PHASES:
+        cmd = cfg.get("app", phase)
+        if cmd is None:
+            continue
+        if isinstance(cmd, str):
+            cmds = [cmd]
+        elif isinstance(cmd, list):
+            cmds = [c for c in cmd if isinstance(c, str) and c.strip()]
+        else:
+            out.append(f"E652 [app] {phase} is neither a string nor a list of strings")
+            continue
+        for c in cmds:
+            ok, tail = _run_ok(c, cfg.root)
+            if not ok:
+                label = phase if phase not in ("fmt", "doc") else f"{phase} (advisory phase)"
+                if phase in ("fmt", "doc"):
+                    # a formatter and a doc build are advisory: failing them is a W at
+                    # most, because the app still builds and runs without prettier.
+                    out.append(f"W654 [app] {label} `{c}` failed:\n       {tail}")
+                else:
+                    out.append(f"E651 [app] {label} `{c}` failed:\n       {tail}")
+
+    # declared paths that must exist. The install script is NOT here: `lint_install_script`
+    # owns that question whole (existence, executable bit, verification step), and a
+    # second report for one missing file reads as two broken things instead of one.
+    for key, label in (("entry", "entry"), ("manifest", "manifest")):
+        v = cfg.get("app", key)
+        if not v:
+            continue
+        paths = [v] if isinstance(v, str) else [p for p in v if isinstance(p, str)]
+        for p in paths:
+            if not (cfg.root / p).exists():
+                out.append(f"E652 [app] {label} `{p}` does not exist — a declaration pointing at "
+                           f"nothing reads as checked and is not")
+    return out
+
+
+def lint_docs_required(cfg: Cfg) -> list[str]:
+    """E653: a document genome.toml declares, per kb, that this repo must carry.
+
+    A project-grade repo owes its readers certain documents, and which ones is a
+    property of the project, not of genome: a CLI owes a README and an ARCHITECTURE,
+    a library owes API docs, a skill owes SKILL.md. So the repo writes the list in
+    `[docs] required` and `genome lint` is what enforces it — the same way E306
+    enforces the tree, one declaration and one gate.
+
+    An empty or near-empty required document is the half that matters most and is the
+    half a naive existence check misses: a README.md holding only a title satisfies
+    "exists" and tells a reader nothing. So a required doc must carry real content,
+    which is measured here rather than assumed.
+
+    - **E653** a required document is absent, or holds no content beyond its heading.
+    - **W653** a required document is shorter than the band its class expects — thin,
+      which is a judgement the operator makes, not a broken gate.
+    - **E654** a required section (`[docs] sections`) is missing from a required doc.
+    - **W651** a required doc has no table of contents yet is long enough to need one.
+    """
+    out: list[str] = []
+    req = cfg.get("docs", "required", [])
+    if not req:
+        return out
+    # a required doc is either "every doc named" or a per-file map of {path = "class"};
+    # a plain list names the paths, and a path may carry its class after a colon, so
+    # the common case stays one line: required = ["README.md", "AGENTS.md", "docs/ARCHITECTURE.md"]
+    entries: list[tuple[str, str]] = []
+    for item in req:
+        if isinstance(item, str):
+            path, _, cls = item.partition(":")
+            entries.append((path.strip(), cls.strip()))
+        elif isinstance(item, dict):
+            entries += [(str(p), str(c)) for p, c in item.items()]
+    need_sections = cfg.get("docs", "sections", {})
+    max_lines = int(cfg.get("docs", "max_lines", 0) or 0)
+    # A repo that wants the thin-doc WARNING at all opts in by naming a minimum length.
+    # Measured 2026-11-03: with a hardcoded band, a fresh `genome init` tree whose
+    # README.md is a three-line stub was reported as thin, on every new repo, on its
+    # first lint. A warning that fires on the tool's own scaffolding is a warning the
+    # reader learns to skip, which is the same failure as having no check.
+    min_lines = int(cfg.get("docs", "min_lines", 0) or 0)
+    for path, cls in entries:
+        p = cfg.root / path
+        if not p.exists():
+            out.append(f"E653 {path} is declared required by [docs] and does not exist")
+            continue
+        text = read(p)
+        # a heading and nothing else is an absent document that happens to exist
+        body = [l for l in text.splitlines() if l.strip() and not l.lstrip().startswith("#")]
+        if not body:
+            out.append(f"E653 {path} is declared required and holds no content beyond its heading")
+            continue
+        if min_lines and len(text.splitlines()) < min_lines:
+            out.append(f"W653 {path} is declared required and is {len(text.splitlines())} line(s) — "
+                       f"under [docs] min_lines = {min_lines}, a required doc this thin tells a "
+                       f"reader nothing")
+        if need_sections and path in need_sections:
+            for sec in need_sections[path] if isinstance(need_sections[path], list) else [need_sections[path]]:
+                if not re.search(rf"^#+\s+.*{re.escape(str(sec))}", text, re.M):
+                    out.append(f"E654 {path} is missing the required section `{sec}`")
+        if max_lines and len(text.splitlines()) > max_lines and not re.search(r"^##+ +Contents", text, re.M):
+            out.append(f"W651 {path} is {len(text.splitlines())} lines with no table of contents "
+                       f"(over [docs] max_lines = {max_lines})")
+    return out
+
+
+def lint_dirs_declared(cfg: Cfg) -> list[str]:
+    """E655: a directory genome.toml declares must exist, and must not be empty.
+
+    The inverse of E306, which asks "a directory that exists holds the file it must".
+    This asks "a directory I declared is there at all" — and the second half is the one
+    that actually bites, because a declared directory that exists but holds nothing is
+    indistinguishable at a glance from a real one: `docs/audit/` with no reports in it
+    either means the audit never ran or means its reports were lost.
+
+    - **E655** a declared directory (`ops.dir_globs`) does not exist.
+    - **E656** a declared directory that is NOT a genome role's home exists and is empty.
+      An empty directory is invisible to git, so it is also invisible to every check
+      that reads the index — which is why this one walks the filesystem rather than
+      `git ls-files`. A role dir is exempt, because `genome init` creates those empty and
+      they fill as the work happens.
+    """
+    out: list[str] = []
+    globs = cfg.get("ops", "dir_globs", [])
+    if not globs:
+        return out
+    # A genome role dir is created EMPTY by `genome init` and fills as the work happens,
+    # so its emptiness is the project's lifecycle, not a defect: `docs/plans/` holds
+    # nothing on a new repo until the first plan. Measured 2026-11-03, checking every
+    # declared dir for emptiness reported E656 on `docs/audit` of a fresh tree — because
+    # `audits` is a DEFAULT role pointing there — which made the check fire on the tool's
+    # own scaffolding. So emptiness is scoped to declared dirs that are NOT a role's
+    # mapped home: a role dir's emptiness is its lifecycle, a stranger dir's emptiness is
+    # a directory git does not track and no reader can see.
+    role_homes = {cfg.rel(cfg.path(r)).rstrip("/") for r in cfg.paths}
+    for pat in globs:
+        pat = str(pat)
+        for d in sorted(p for p in cfg.root.glob(pat.rstrip("/")) if p.is_dir() and not p.name.startswith((".", "__"))):
+            rel = cfg.rel(d)
+            if rel not in role_homes and not any(d.iterdir()):
+                out.append(f"E656 {rel}/ is declared by ops.dir_globs and is empty — git does not "
+                           f"track empty directories, so this one exists on this machine only")
+        # a declared dir that matches NOTHING is the more common failure: a typo, or a
+        # dir an emitter was supposed to create. `genome init` creates the roles; a repo
+        # that renames one by hand and forgets the key gets a silent no-match here.
+        matches = [p for p in cfg.root.glob(pat.rstrip("/")) if p.is_dir() and not p.name.startswith((".", "__"))]
+        if not matches and not (cfg.root / pat.rstrip("/")).exists():
+            out.append(f"E655 {pat} is declared by ops.dir_globs and does not exist")
+    return out
+
+
+def lint_install_script(cfg: Cfg) -> list[str]:
+    """E657: a project-grade repo's installer, when the repo declares it has one.
+
+    A distribution question, not a code question: a repo that ships a one-line install
+    must be able to install, and an installer that cannot be found is a broken release.
+    The repo declares where its installer lives (`app.install_script`), or genome
+    infers it from the conventional names, and then enforces the two things that make
+    an installer real:
+
+    - **E657** the declared or inferred install script does not exist.
+    - **E658** the install script is not executable.
+    - **W655** the install script does not name a verification step. An installer with
+      no `verify` is one that reports success when the install half-happened, which is
+      the failure mode `install-script-creator` wrote `verify_install.sh` to catch.
+
+    Silence by default: a knowledge base and a notes repo have no installer, and this
+    check asks nothing of them unless they declare one.
+    """
+    out: list[str] = []
+    declared = cfg.get("app", "install_script")
+    # inference is deliberately NARROW: only the name this project's own installer uses.
+    # A repo that vendors a third-party install.sh is not shipping that installer, and
+    # flagging it would be a false positive on every vendored dependency.
+    candidates = [declared] if declared else []
+    if not candidates:
+        for name in ("install.sh", "install.ps1"):
+            if (cfg.root / name).exists():
+                candidates.append(name)
+    if not candidates:
+        return out
+    for name in candidates:
+        p = cfg.root / name
+        if not p.exists():
+            out.append(f"E657 install script `{name}` is declared by [app] and does not exist")
+            continue
+        if name.endswith(".sh"):
+            if not os.access(p, os.X_OK):
+                out.append(f"E658 {name} is not executable — `chmod +x {name}`")
+            text = read(p)
+            if not re.search(r"\b(verify|check|--version|--help)\b", text):
+                out.append(f"W655 {name} has no verification step — an installer that reports success "
+                           f"when the install half-happened is the failure mode verify_install.sh catches")
+    return out
+
+
+CHECKS["integrity"] = lambda cfg: lint_app(cfg) + lint_docs_required(cfg) + lint_dirs_declared(cfg) \
+    + lint_install_script(cfg)
 # ---------------------------------------------------------------- doctor
 
 def py_imports(cfg: Cfg, script: Path) -> set[Path]:
@@ -2361,7 +2909,14 @@ def cmd_close(args) -> None:
         print(f"emit   genome zones refreshed: {', '.join(changed)}")
     lint = run_lint(cfg)
     errs = [f for f in lint if f.startswith("E")]
-    print(f"lint   {len(errs)} error(s), {len(lint) - len(errs)} warning(s)")
+    warns = [f for f in lint if f.startswith("W")]
+    infos = [f for f in lint if f.startswith("I")]
+    counts = [f"{len(errs)} error(s)"]
+    if warns:
+        counts.append(f"{len(warns)} warning(s)")
+    if infos:
+        counts.append(f"{len(infos)} info")
+    print(f"lint   {', '.join(counts)}")
     for f in errs[:20]:
         print(f"       {f}")
     red |= bool(errs)
@@ -2511,6 +3066,22 @@ def cmd_init(args) -> None:
                                 ("package.json", "npm test"), ("go.mod", "go test ./...")) if (root / f).is_file()), "")
     write("genome.toml", genome_toml(mods, gate) + (f'\n[card]\nprivacy = "{bp_privacy(chain)}"\n' if bp_privacy(chain) else ""))
     write("AGENTS.md", agents_tpl(mods, gate))
+    # The readme role is mapped in every config genome.toml emits, but until 2026-11-03 no
+    # scaffold wrote it. Measured: `genome init` produced a tree whose genome.toml said
+    # `readme = "README.md"`, no README existed, and the first thing an operator did — add
+    # `[docs] required = ["README.md"]`, which the integrity module invites — was fail with
+    # E653 on a file the tool itself was supposed to create. A role that is declared and not
+    # filled is worse than one that is filled, so the scaffold now writes it. The stub is
+    # honest about being a stub, so W651 does not call it thin-and-toc-less on a repo with
+    # a README that is already long. `write` keeps an existing one, so this only ever adds.
+    # A module-scaffolded docs page IS linked, but only when its module wrote it: a
+    # README pointing at docs/OUTLINE.md on a `core`-only repo is a pointer at a file
+    # that does not exist, which is the same defect as a role nobody fills. Outward pages
+    # are the ones W009 watches, so this is the set that decides.
+    readme = README_TPL.replace("{{NAME}}", root.name)
+    if "outline" in mods:
+        readme += "\n- [docs/OUTLINE.md](docs/OUTLINE.md) — the architecture and the reading order\n"
+    write("README.md", readme)
     files = {
         "core": [("TODO.md", REGISTER_TPL), ("docs/handoff/README.md", ENTRY_TPL),
                  ("docs/handoff/STATE.md", STATE_TPL), ("docs/RUNBOOK.md", RUNBOOK_TPL),
@@ -2565,6 +3136,7 @@ MODULE_HELP = {
     "ops": "secrets + lint gates: ownership map, links, unreachable code, tracked bulk, running-job guard",
     "agents": "wf new|add|list, claim, done, claim-register, post, feed (parallel agents)",
     "outline": "outline | outline-check (the stack zone in AGENTS.md, derived from the tree)",
+    "integrity": "app build/test/lint by toolchain, [docs] required docs and sections, ops.dir_globs",
 }
 
 
@@ -3901,7 +4473,7 @@ def resolve_kb(target: str) -> Path:
     die(f"no knowledge base named '{target}' ({len(rows)} registered — `genome kb list`)", ERR)
 
 
-def kb_lint_one(path: Path) -> tuple[int, int, list[str]]:
+def kb_lint_one(path: Path) -> tuple[int, int, int, list[str]]:
     """Lint one KB by running ITS OWN vendored CLI, so the check is the KB's own rules.
 
     A KB that vendors no CLI cannot lint itself; that is reported as 'no CLI here'
@@ -3912,26 +4484,30 @@ def kb_lint_one(path: Path) -> tuple[int, int, list[str]]:
     carries 100 warnings across 79 KBs and the cap turned that into 11 rows of bare
     counts with no code and no remedy — the aggregation that hides both the finding
     and its fix, which is the same defect the per-repo post-upgrade list was built to
-    stop. The caller counts; the codes are the point."""
+    stop. The caller counts; the codes are the point.
+
+    An older CLI that emits no `info` key reports 0, which is the right answer for it:
+    a KB at an older release has no info-level checks to run."""
     script = _script_of(path)
     if not script.is_file():
-        return (0, 0, ["no CLI in this KB — nothing to lint with"])
+        return (0, 0, 0, ["no CLI in this KB — nothing to lint with"])
     try:
         r = subprocess.run([sys.executable, str(script), "lint", "--json"],
                            cwd=str(path), capture_output=True, text=True, timeout=180)
     except (OSError, subprocess.TimeoutExpired) as e:
-        return (0, 0, [f"lint failed to run: {e}"])
+        return (0, 0, 0, [f"lint failed to run: {e}"])
     out = r.stdout.strip()
     if not out:
-        return (0, 0, [(r.stderr.strip().splitlines() or ["lint produced no output"])[-1]])
+        return (0, 0, 0, [(r.stderr.strip().splitlines() or ["lint produced no output"])[-1]])
     try:
         j = json.loads(out)
     except ValueError:
-        return (0, 0, [f"lint output was not JSON: {out[:120]}"])
+        return (0, 0, 0, [f"lint output was not JSON: {out[:120]}"])
     errs = int(j.get("errors", 0))
     warns = int(j.get("warnings", 0))
+    infos = int(j.get("info", 0))
     findings = [f"{f.get('code','?')} {f.get('text','')}" for f in j.get("findings", [])]
-    return (errs, warns, findings)
+    return (errs, warns, infos, findings)
 
 
 def _remedies_for(codes) -> str:
@@ -4031,14 +4607,15 @@ def cmd_kb(args) -> None:
             targets = [resolve_kb(args.target)]
         else:
             targets = [find_cfg().root]
-        total_e = total_w = 0
+        total_e = total_w = total_i = 0
         failures = []
         no_cli = []
         codes: dict[str, list[str]] = {}  # code -> the KBs carrying it, for the remedy summary
         for t in targets:
-            errs, warns, findings = kb_lint_one(t)
+            errs, warns, infos, findings = kb_lint_one(t)
             total_e += errs
             total_w += warns
+            total_i += infos
             label = _kb_label(t)
             if findings and findings[0].startswith("no CLI"):
                 # a KB with no local CLI is UNLINTED, not clean: saying 'ok' here
@@ -4047,7 +4624,10 @@ def cmd_kb(args) -> None:
                 print(f"skip  {label:34} no CLI in this KB — nothing to lint with")
                 continue
             status = "ok" if not errs and not findings else ("FAIL" if errs else "warn")
-            print(f"{status:5} {label:34} {errs} error(s), {warns} warning(s)")
+            # an `info` finding does not change the status: it is a fact to see, and
+            # one KB reporting it must not make the estate read as failing
+            tail = f", {infos} info" if infos else ""
+            print(f"{status:5} {label:34} {errs} error(s), {warns} warning(s){tail}")
             # EVERY finding, not the first three. Measured 2026-10-31, the cap hid the
             # 4th and later ones and the codes with them, so a per-KB line was a count
             # with no way to act on it — the same defect `_post_upgrade_findings` was
@@ -4061,6 +4641,7 @@ def cmd_kb(args) -> None:
             if errs:
                 failures.append(label)
         print(f"\nkb lint: {len(targets)} KB(s), {total_e} error(s), {total_w} warning(s)"
+              + (f", {total_i} info" if total_i else "")
               + (f", {len(no_cli)} with no CLI to lint with" if no_cli else ""))
         # THE REMEDY IS THE POINT. A numbered list of codes without the command that
         # clears each one turns a lint into another thing to research, so the
@@ -4510,6 +5091,30 @@ Status: LIVE (current truth) · EVIDENCE (dated measured verdict) · PLAN-ACTIVE
 
 | File | Status | Owns | Not for |
 |---|---|---|---|
+"""
+# The readme genome.toml maps as a role but no scaffold wrote until 2026-11-03. Kept short on
+# purpose: it is a door, and a door that is worth reading is the whole product. A real repo
+# replaces this in the first commit; what matters is that `[docs] required = ["README.md"]`
+# has a file to check on the day it is declared. AGENTS.md stays the agent-facing contract
+# and never links out to this one as though it were a substitute. Deliberately under any
+# plausible `[docs] max_lines`, so W651 ("long, no table of contents") cannot fire on it.
+# The docs pointer names the ENTRY page, which `core` always writes. Pages a module
+# scaffolds (`docs/OUTLINE.md`, the ops ownership map) are linked by `cmd_init` only when
+# that module is on, because a stub that links a file the config has not created is the
+# same defect the E653 half of this change repairs.
+README_TPL = """# {{NAME}}
+
+One paragraph: what this is and who it is for.
+
+## Install
+
+## Usage
+
+## The docs
+
+The documentation set lives in `docs/`, and its entry point is
+[docs/handoff/README.md](docs/handoff/README.md) — that page says which file answers which
+question, so it is the one to read before any other.
 """
 FEED_TPL = """# Agent feed
 
