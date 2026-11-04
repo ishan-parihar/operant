@@ -11892,3 +11892,34 @@ fn a_clicked_file_edit_row_untruncates_its_diff() {
 fn app_diff_mode_for_test() -> crate::tui::operant_app::config_shim::DiffDisplayMode {
     make_app().diff_mode()
 }
+
+/// /split and /split-view routed to a "splitview" arm that was never built:
+/// no such arm exists, and neither name is in any registry, so both fell
+/// through every dispatch gate and reached the model as prompt text — the
+/// exact fall-through the interceptor's no-unwired catch-all exists to
+/// prevent (the catch-all only nets REGISTERED names, which is why these two
+/// escaped it). The arm now refuses honestly.
+///
+/// MUTATION-PROOF: restoring the old alias routing (dispatch to the
+/// nonexistent "splitview" name) makes handle_tui_command return false and
+/// the refusal never appears.
+#[test]
+fn split_and_split_view_refuse_instead_of_reaching_the_model() {
+    for cmd in ["split", "split-view"] {
+        let mut app = make_app();
+        assert!(
+            app.handle_tui_command(cmd, "left pane"),
+            "{cmd} must be intercepted"
+        );
+        assert!(
+            app.system_annotations
+                .iter()
+                .any(|a| a.text.contains("No split view")),
+            "{cmd} must refuse with a system message, not fall through"
+        );
+        assert!(
+            !app.messages.iter().any(|m| m.role == Role::User),
+            "{cmd} must never reach the model as prompt text"
+        );
+    }
+}

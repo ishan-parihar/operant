@@ -346,7 +346,18 @@ impl App {
             "commands" => self.intercept_slash_command_with_args_impl("help", args),
             "models" => self.intercept_slash_command_with_args_impl("model", args),
             "split" | "split-view" => {
-                self.intercept_slash_command_with_args_impl("splitview", args)
+                // The alias tier routed these to a "splitview" arm that was
+                // never built: no such arm exists, and neither name is in any
+                // registry, so both fell through every dispatch gate and
+                // reached the model as prompt text — the exact fall-through
+                // this match exists to prevent (the no-unwired catch-all only
+                // nets REGISTERED names). There is no split view in this
+                // build, so refuse honestly instead of pretending.
+                self.push_system_message(
+                    String::from("No split view in this build — the transcript and composer panes are fixed."),
+                    SystemMessageStyle::Info,
+                );
+                true
             }
 
             "config" | "settings" => {
