@@ -249,6 +249,68 @@ Act on whichever of the two dimensions has real signal. If \
 genuinely nothing stands out on either, say 'Nothing to save.' \
 and stop — but don't reach for that conclusion as a default.";
 
+/// (plan 2026-11-05 RSI, iter-B) The harness-lesson discipline, appended to
+/// the skills lanes by `build_review_prompt`. This ports harness2's
+/// propose–reflect discipline to operant's shape: there are no candidate
+/// rollouts to probe — the NEXT REAL TURNS are the probe — so contrast
+/// attribution is weaker than a same-task A/B, hence confounded-preferred
+/// verdicts and the NO_ENTRY-expected rule. The lesson record rides the
+/// skill it concerns: this fork is KB-3-blocked from memory writes, so the
+/// durable-memory lane (`harness-lesson` tag) belongs to the live turn.
+pub const HARNESS_LESSON_DISCIPLINE: &str = "\
+## The two dimensions of a harness edit
+
+Every edit you make serves exactly one dimension; do not blur them:
+  • INV — how the agent WORKS: procedure, tool use, completion. Match each \
+failure to the cheapest effective component: a tool error gets ONE bounded \
+fallback and a stop condition (never blind repetition); mechanical \
+repetition gets a scripts/<name> support file; a triggered multi-step \
+workflow gets a skill whose trigger is named; an ignored invariant earns a \
+defensive check only with REPEATED evidence, and it must never block valid \
+completion; ordinary sequencing gets concise SKILL.md guidance — no code \
+for a one-off.
+  • DOM — what a PRACTITIONER knows: the artifact contract, audience and \
+decision rules of this class of work. State knowledge the agent can APPLY \
+and CHECK ('before finishing, confirm X covers A, B, C'), not background \
+reading; never invent an authority, identifier or citation; never store \
+this session's specific facts as durable knowledge.
+
+## Verdict discipline
+
+The next real turns under your edits are the probe. Attribute honestly, \
+and remember adoption is NOT proof an edit helped:
+
+For EVERY edit you make, your reply carries one line:
+  edit-verdict: component=<name> verdict=helped|hurt|no observed \
+effect|confounded observed=<what the transcript shows changed, and where>
+Use `confounded` — and prefer it — whenever the transcript cannot isolate \
+one edit's effect or a single exchange is all that stands behind the \
+difference. A confounded row is a useful record; an invented attribution \
+poisons the library.
+
+## The lesson record
+
+At most ONE durable lesson per review, and NONE is the expected outcome — \
+skip entirely when nothing durable emerged; a noisy lesson is worse than \
+no lesson. If the transcript shows no concrete reusable contrast, write \
+NO_ENTRY in your reply and make no lesson edit.
+
+A lesson rides the skill it concerns: a `## Lessons` section in that \
+SKILL.md (or its own references/ file) with four lines — component:, cue: \
+(the SHAPE OF SITUATION it fires on, not this session's facts), lesson: \
+(the operation, stated so it can be applied and checked, naming the \
+component), evidence: (the transcript moment behind it). Too generic is \
+useless; too specific never fires again.
+
+Before editing a component, read what is already recorded: memory_search \
+over the component's territory, and the skill's existing Lessons section — \
+an edit that contradicts a recorded lesson must say why.
+
+Never quote validation output (test results, pass counts, panics, \
+compiler errors) into any lesson or skill — state what was observed and \
+where instead. An improver that sees the checker's verdict overfits to \
+it.";
+
 // ---------------------------------------------------------------------------
 // Notification mode
 // ---------------------------------------------------------------------------
@@ -329,6 +391,12 @@ pub fn build_review_prompt(review_memory: bool, review_skills: bool) -> String {
              worse than no lesson. Skills and memories stay in their existing \
              lanes; never put them in the harness.",
         );
+    }
+    // (plan 2026-11-05 RSI, iter-B) the harness-lesson discipline rides the
+    // skills lanes only: memory-only reviews do not edit the harness.
+    if review_skills {
+        base.push_str("\n\n");
+        base.push_str(HARNESS_LESSON_DISCIPLINE);
     }
     base
 }
@@ -878,6 +946,38 @@ mod tests {
     fn test_build_prompt_memory_only() {
         let prompt = build_review_prompt(true, false);
         assert!(prompt.contains("saving to memory"));
+    }
+
+    /// (iter-1732, plan gate) The skills lanes carry the harness-lesson
+    /// discipline: the INV/DOM dimension split, the confounded-preferred
+    /// verdict rule, the NO_ENTRY-expected outcome, the lessons-ride-the-skill
+    /// record, the read-before-edit retrieval instruction, and the
+    /// validation-output prohibition.
+    #[test]
+    fn test_skills_lane_carries_the_harness_lesson_discipline() {
+        let prompt = build_review_prompt(false, true);
+        for needle in [
+            "INV — how the agent WORKS",
+            "DOM — what a PRACTITIONER knows",
+            "verdict=helped|hurt|no observed effect|confounded",
+            "NO_ENTRY",
+            "## Lessons",
+            "memory_search",
+            "Never quote validation output",
+        ] {
+            assert!(prompt.contains(needle), "skills lane must carry `{needle}`");
+        }
+    }
+
+    /// (iter-1732, plan gate) The memory-only lane does NOT carry the
+    /// discipline — it does not edit the harness, and the discipline must
+    /// not dilute a memory review.
+    #[test]
+    fn test_memory_lane_does_not_carry_the_harness_lesson_discipline() {
+        let prompt = build_review_prompt(true, false);
+        assert!(!prompt.contains("NO_ENTRY"));
+        assert!(!prompt.contains("edit-verdict"));
+        assert!(!prompt.contains("## The lesson record"));
     }
 
     #[test]
