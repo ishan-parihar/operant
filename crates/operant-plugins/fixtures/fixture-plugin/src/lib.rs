@@ -36,6 +36,8 @@ struct ToolArgs {
 struct ObserveEvent {
     tool: String,
     #[serde(default)]
+    args: serde_json::Value,
+    #[serde(default)]
     config: serde_json::Value,
 }
 
@@ -71,6 +73,21 @@ pub fn execute(args: Json<ToolArgs>) -> FnResult<Json<ToolResult>> {
 #[plugin_fn]
 pub fn observe(event: Json<ObserveEvent>) -> FnResult<Json<Verdict>> {
     let event = event.0;
+    // gap G1: on the turn pre-step seam (config turn_gate = true), a query
+    // containing `block_query_contains` is vetoed whole.
+    if let Some(serde_json::Value::String(needle)) = event.config.get("block_query_contains") {
+        if let Some(query) = event
+            .args
+            .get("query")
+            .and_then(|q| q.as_str())
+        {
+            if query.contains(needle.as_str()) {
+                return Ok(Json(Verdict::Block {
+                    reason: format!("fixture: query contains {needle}"),
+                }));
+            }
+        }
+    }
     // gap G2: config.replace_content = "<text>" makes the fixture emit a
     // Replace verdict — the redaction/enrichment seat, exercised for real.
     if let Some(serde_json::Value::String(content)) = event.config.get("replace_content") {

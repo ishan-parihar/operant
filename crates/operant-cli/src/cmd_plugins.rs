@@ -368,7 +368,7 @@ async fn status_plugins(config: &AppConfig) -> Result<()> {
         println!(
             "Live registry state (registered tools, active interceptors) is owned by the running gateway process — check its logs or the dashboard."
         );
-        return Ok(());
+        Ok(())
     }
     #[cfg(not(feature = "plugins-wasm"))]
     {

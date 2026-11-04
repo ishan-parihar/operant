@@ -3915,6 +3915,43 @@ mod tests {
         (agent, event_rx)
     }
 
+    /// gap G1: a turn-level Block verdict ends the turn BEFORE the model
+    /// is called — run() returns the veto text, the client (whose endpoint
+    /// points nowhere) is never reached.
+    #[tokio::test]
+    async fn a_turn_veto_returns_before_any_model_call() {
+        use crate::gateway_pipeline::PipelineAction;
+        let (agent, _rx) = agent_with_event_rx();
+        agent
+            .registry
+            .register_turn_interceptor(
+                "policy",
+                Arc::new(|event| {
+                    Box::pin(async move {
+                        if event.args["query"]
+                            .as_str()
+                            .unwrap_or_default()
+                            .contains("forbidden")
+                        {
+                            PipelineAction::Block("no forbidden requests".into())
+                        } else {
+                            PipelineAction::Allow
+                        }
+                    })
+                }),
+            )
+            .await;
+        let msg = agent
+            .run("forbidden request please".into())
+            .await
+            .expect("the veto path returns Ok, not a provider error");
+        assert!(
+            msg.content.contains("vetoed by policy"),
+            "expected the veto text, got: {:?}",
+            msg.content
+        );
+    }
+
     fn call(id: usize, name: &str) -> ToolCall {
         ToolCall {
             id: format!("call_{id}"),

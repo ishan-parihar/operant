@@ -458,6 +458,11 @@ pub enum ToolInterceptPoint {
     PreExecute,
     /// After the run: a Block verdict replaces the result with an error.
     PostExecute,
+    /// Turn level (gap G1 — dsh's agent/pre-step, collapsed to once per
+    /// turn): consulted before the agent loop's first model call. `args`
+    /// carries `{"query": ...}`; a Block verdict vetoes the whole turn, a
+    /// Replace verdict rewrites the user query.
+    TurnPreStep,
 }
 
 /// One interception visit. `result` carries the executed tool's content on
@@ -515,6 +520,10 @@ pub struct ToolRegistry {
     /// registration by key instead of stacking a second copy — the
     /// anonymous `interceptors` list has no identity to remove.
     plugin_interceptors: Arc<RwLock<Vec<(String, ToolInterceptHandler)>>>,
+    /// Turn-level interceptors (gap G1 — dsh's agent/pre-step), keyed by
+    /// plugin name like the tool seam. Consulted once per turn before the
+    /// agent loop's first model call; a Block verdict vetoes the turn.
+    turn_interceptors: Arc<RwLock<Vec<(String, ToolInterceptHandler)>>>,
 }
 
 /// The retired-name → surviving-name aliases for the consolidated memory
@@ -547,6 +556,7 @@ impl Clone for ToolRegistry {
             },
             interceptors: Arc::clone(&self.interceptors),
             plugin_interceptors: Arc::clone(&self.plugin_interceptors),
+            turn_interceptors: Arc::clone(&self.turn_interceptors),
         }
     }
 }
@@ -561,6 +571,7 @@ impl ToolRegistry {
             executor: ToolExecutor::new(timeout),
             interceptors: Arc::new(RwLock::new(Vec::new())),
             plugin_interceptors: Arc::new(RwLock::new(Vec::new())),
+            turn_interceptors: Arc::new(RwLock::new(Vec::new())),
         }
     }
 
@@ -841,6 +852,58 @@ impl ToolRegistry {
     /// observability surface, gap G9, and the no-stack test oracle).
     pub async fn plugin_interceptor_count(&self) -> usize {
         self.plugin_interceptors.read().await.len()
+    }
+
+    /// Register a turn-level interceptor by plugin name (gap G1). Replace
+    /// semantics like the tool seam: re-registration never stacks.
+    pub async fn register_turn_interceptor(&self, plugin: &str, handler: ToolInterceptHandler) {
+        let mut list = self.turn_interceptors.write().await;
+        list.retain(|(name, _)| name != plugin);
+        list.push((plugin.to_string(), handler));
+    }
+
+    /// Remove a plugin's turn interceptor registration.
+    pub async fn unregister_turn_interceptors(&self, plugin: &str) -> bool {
+        let mut list = self.turn_interceptors.write().await;
+        let before = list.len();
+        list.retain(|(name, _)| name != plugin);
+        before != list.len()
+    }
+
+    /// How many turn interceptors are registered (the G9 surface).
+    pub async fn turn_interceptor_count(&self) -> usize {
+        self.turn_interceptors.read().await.len()
+    }
+
+    /// Consult the turn-level seam (gap G1): once per turn, before the
+    /// agent loop's first model call. The first decisive verdict wins
+    /// (dsh's serial waterfall collapsed); an all-allow set is `None` —
+    /// the zero-cost default keeps the no-plugin path byte-identical.
+    pub async fn consult_turn_interceptors(&self, query: &str) -> Option<PipelineAction> {
+        let handlers: Vec<ToolInterceptHandler> = self
+            .turn_interceptors
+            .read()
+            .await
+            .clone()
+            .into_iter()
+            .map(|(_, handler)| handler)
+            .collect();
+        if handlers.is_empty() {
+            return None;
+        }
+        let event = ToolInterceptEvent {
+            point: ToolInterceptPoint::TurnPreStep,
+            tool: "turn".to_string(),
+            args: serde_json::json!({ "query": query }),
+            result: None,
+        };
+        for handler in &handlers {
+            match handler(event.clone()).await {
+                PipelineAction::Allow => {}
+                decisive => return Some(decisive),
+            }
+        }
+        None
     }
 
     #[instrument(skip(self, args, context), fields(tool = % tool_name))]
@@ -1264,6 +1327,90 @@ mod tests {
             json!("find the parser"),
             "the real arguments ride alongside the label"
         );
+    }
+
+    // ── Turn-level seam (gap G1, dsh agent/pre-step parity) ───────────────
+
+    #[tokio::test]
+    async fn turn_seam_is_none_when_no_interceptors_are_registered() {
+        let registry = ToolRegistry::new(Duration::from_secs(5));
+        assert!(
+            registry
+                .consult_turn_interceptors("anything")
+                .await
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_turn_block_verdict_vetoes_the_query() {
+        let registry = ToolRegistry::new(Duration::from_secs(5));
+        registry
+            .register_turn_interceptor(
+                "policy",
+                Arc::new(|event| {
+                    Box::pin(async move {
+                        if event.args["query"] == json!("forbidden request") {
+                            PipelineAction::Block("no forbidden requests".into())
+                        } else {
+                            PipelineAction::Allow
+                        }
+                    })
+                }),
+            )
+            .await;
+        assert_eq!(registry.turn_interceptor_count().await, 1);
+        let verdict = registry
+            .consult_turn_interceptors("forbidden request")
+            .await
+            .expect("decisive verdict");
+        assert_eq!(
+            verdict,
+            PipelineAction::Block("no forbidden requests".into())
+        );
+        // a clean query passes (all-allow = None)
+        assert!(registry.consult_turn_interceptors("fine").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn a_turn_replace_verdict_rewrites_the_query() {
+        let registry = ToolRegistry::new(Duration::from_secs(5));
+        registry
+            .register_turn_interceptor(
+                "rewriter",
+                Arc::new(|_event| {
+                    Box::pin(async move { PipelineAction::Replace("cleaned".into()) })
+                }),
+            )
+            .await;
+        assert_eq!(
+            registry.consult_turn_interceptors("raw input").await,
+            Some(PipelineAction::Replace("cleaned".into()))
+        );
+    }
+
+    #[tokio::test]
+    async fn turn_interceptor_reregistration_replaces_and_unregisters() {
+        let registry = ToolRegistry::new(Duration::from_secs(5));
+        registry
+            .register_turn_interceptor(
+                "p",
+                Arc::new(|_e| Box::pin(async move { PipelineAction::Allow })),
+            )
+            .await;
+        registry
+            .register_turn_interceptor(
+                "p",
+                Arc::new(|_e| Box::pin(async move { PipelineAction::Allow })),
+            )
+            .await;
+        assert_eq!(
+            registry.turn_interceptor_count().await,
+            1,
+            "replace, not stack"
+        );
+        assert!(registry.unregister_turn_interceptors("p").await);
+        assert_eq!(registry.turn_interceptor_count().await, 0);
     }
 
     // ── Tool-seam interception (iter-1722, dsh waterfall parity) ──────────

@@ -82,6 +82,26 @@ fn observe_blocks_by_tool_name_through_the_real_module() {
     }
 }
 
+/// gap G1: on the turn pre-step envelope, the REAL module vetoes a query
+/// containing the configured needle.
+#[test]
+fn observe_vetoes_a_turn_through_the_real_fixture_module() {
+    let pool = PluginPool::new(&fixture_wasm(), &[]);
+    let event = json!({
+        "point": "agent/pre-step",
+        "tool": "turn",
+        "args": {"query": "please do the forbidden thing"},
+        "result": serde_json::Value::Null,
+        "config": {"turn_gate": true, "block_query_contains": "forbidden"}
+    });
+    match pool.observe(&event.to_string()).expect("observe call") {
+        Some(operant_plugins::runtime::ObserveVerdict::Block { reason }) => {
+            assert!(reason.contains("forbidden"), "unexpected reason: {reason}");
+        }
+        other => panic!("expected a Block verdict, got {other:?}"),
+    }
+}
+
 /// gap G2: the module emits a Replace verdict when the envelope config asks
 /// — the post-execute replace seat, driven by REAL WASM.
 #[test]

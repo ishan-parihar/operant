@@ -27,7 +27,7 @@ use tracing::debug;
 // Message Pipeline (pre-agent filtering)
 // ---------------------------------------------------------------------------
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum PipelineAction {
     Allow,
     Block(String),

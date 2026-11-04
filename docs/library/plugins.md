@@ -110,7 +110,15 @@ scaffolds write `skills/<name>/SKILL.md` and carry no WASM. The export
 contracts the scaffold names: tools export `tool_metadata` + `execute`;
 observers export `observe` (the interception envelope: point, tool, args,
 result, config — verdict `allow`/`block`/`replace`, host fails open;
-`replace` rewrites the tool result at post-execute, gap G2); memory exports
+`replace` rewrites the tool result at post-execute, gap G2). An observer
+that opts in with `[config] turn_gate = true` ALSO sits on the turn-level
+pre-step seam (gap G1, iter-1740 — dsh's `agent/pre-step`): once per turn,
+before the agent loop's first model call, the envelope is
+`{"point":"agent/pre-step","tool":"turn","args":{"query":...},...}`; a
+Block verdict vetoes the whole turn (the query never persists; the agent
+returns "Turn vetoed by policy: ..."), a Replace verdict rewrites the
+query. Deliberate opt-in — a result redactor must not silently start
+vetoing turns; memory exports
 `prefetch`/`sync_turn`/`tool_schemas` with graceful degradation. Build with
 `cargo build --release --target wasm32-wasip1`, copy the module next to the
 manifest, `operant plugins validate <dir>` (the installer's own manifest

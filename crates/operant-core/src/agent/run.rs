@@ -392,6 +392,26 @@ impl OperantAgent {
         // Handles: interrupt flag reset, session ID resolution, evolution
         // state hydration, user message dedup, DB persistence, message
         // building. Matches hermes-agent's build_turn_context() pattern.
+        //
+        // gap G1 (dsh's agent/pre-step, collapsed to once per turn): the
+        // turn-level seam vetoes or rewrites the turn BEFORE the context
+        // prologue — a vetoed query never persists, and a Replace verdict
+        // rewrites the query the whole turn runs on. dsh fires per step;
+        // the collapsed equivalent is once per turn (a mid-turn veto has
+        // the same outcome — the turn ends).
+        let user_query = match self.registry.consult_turn_interceptors(&user_query).await {
+            Some(crate::gateway_pipeline::PipelineAction::Block(reason)) => {
+                warn!(reason = %reason, "turn vetoed by the pre-step policy seam");
+                return Ok(Message::assistant(format!(
+                    "Turn vetoed by policy: {reason}"
+                )));
+            }
+            Some(crate::gateway_pipeline::PipelineAction::Replace(query)) => {
+                info!("turn query rewritten by the pre-step policy seam");
+                query
+            }
+            _ => user_query,
+        };
         let turn_ctx = turn_context::build_turn_context(self, &user_query).await?;
         let session_id = turn_ctx.session_id;
 

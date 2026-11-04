@@ -209,11 +209,27 @@ async fn register_observer_interceptors(
         let plugin_config = serde_json::to_value(&manifest.config).unwrap_or_default();
         registry
             .register_tool_interceptor(observe_interceptor_handler(
-                pool,
+                pool.clone(),
                 manifest.name.clone(),
-                plugin_config,
+                plugin_config.clone(),
             ))
             .await;
+        // gap G1: an observer that opts in via [config] turn_gate = true
+        // also sits on the turn-level pre-step seam (dsh's agent/pre-step).
+        // Deliberate opt-in: a result redactor must not silently start
+        // vetoing turns.
+        if plugin_config.get("turn_gate") == Some(&serde_json::Value::Bool(true)) {
+            registry
+                .register_turn_interceptor(
+                    &manifest.name,
+                    observe_interceptor_handler(pool, manifest.name.clone(), plugin_config),
+                )
+                .await;
+            tracing::info!(
+                plugin = %manifest.name,
+                "registered WASM observer on the turn pre-step seam (config turn_gate)"
+            );
+        }
         tracing::info!(
             plugin = %manifest.name,
             "registered WASM observer as tool-seam interceptor (resident pool)"
@@ -326,6 +342,7 @@ fn observe_interceptor_handler(
             let point = match event.point {
                 operant_core::tools::ToolInterceptPoint::PreExecute => "pre_execute",
                 operant_core::tools::ToolInterceptPoint::PostExecute => "post_execute",
+                operant_core::tools::ToolInterceptPoint::TurnPreStep => "agent/pre-step",
             };
             let event_json = observe_event_json(
                 point,
@@ -497,9 +514,19 @@ pub async fn apply_plugin_changes(
             registry
                 .register_plugin_interceptor(
                     name,
-                    observe_interceptor_handler(pool, name.clone(), plugin_config),
+                    observe_interceptor_handler(pool.clone(), name.clone(), plugin_config.clone()),
                 )
                 .await;
+            // gap G1: the turn seam, same [config] turn_gate opt-in as boot.
+            if plugin_config.get("turn_gate") == Some(&serde_json::Value::Bool(true)) {
+                registry
+                    .register_turn_interceptor(
+                        name,
+                        observe_interceptor_handler(pool, name.clone(), plugin_config),
+                    )
+                    .await;
+                tracing::info!(plugin = %name, "watcher: turn pre-step interceptor applied live");
+            }
             tracing::info!(plugin = %name, "watcher: observer interceptor applied live");
         }
     }
@@ -1322,9 +1349,51 @@ mod live_registration_tests {
             .await
             .expect("execute");
         assert!(
-            !result.success == false && result.content.contains("REPLACED BY POLICY"),
+            result.success && result.content.contains("REPLACED BY POLICY"),
             "post-execute Replace rewrites the content: {:?}",
             result.content
+        );
+    }
+
+    /// gap G1: a turn_gate observer lands on the turn seam too — and the
+    /// REAL fixture module vetoes a matching query end-to-end through
+    /// consult_turn_interceptors.
+    #[tokio::test]
+    async fn a_turn_gate_observer_vetoes_matching_turns() {
+        let (ws, manifest_path) = change_workspace();
+        let config = test_config(&ws);
+        let registry = ToolRegistry::new(Duration::from_secs(5));
+        let mut change = change_with(
+            &manifest_path,
+            vec![operant_plugins::PluginCapability::Observer],
+        );
+        let mut cfg = toml::Table::new();
+        cfg.insert("turn_gate".into(), toml::Value::Boolean(true));
+        cfg.insert(
+            "block_query_contains".into(),
+            toml::Value::String("forbidden".into()),
+        );
+        change.manifest.config = cfg;
+        apply_plugin_changes(&registry, &config, std::slice::from_ref(&change))
+            .await
+            .expect("apply");
+        assert_eq!(registry.turn_interceptor_count().await, 1);
+        let verdict = registry
+            .consult_turn_interceptors("please do the forbidden thing")
+            .await
+            .expect("decisive verdict from the real module");
+        match verdict {
+            operant_core::gateway_pipeline::PipelineAction::Block(reason) => {
+                assert!(reason.contains("forbidden"), "reason: {reason}");
+            }
+            other => panic!("expected Block, got {other:?}"),
+        }
+        // a clean query passes
+        assert!(
+            registry
+                .consult_turn_interceptors("all clear")
+                .await
+                .is_none()
         );
     }
 
