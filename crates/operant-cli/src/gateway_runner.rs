@@ -5706,6 +5706,9 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                         PipelineAction::Queue => {
                             // Queue not yet wired — allow through for now.
                         }
+                        // Replace is tool-seam semantics; the message
+                        // pipeline has nothing to replace here.
+                        PipelineAction::Replace(_) => {}
                         PipelineAction::Allow => {}
                     }
 

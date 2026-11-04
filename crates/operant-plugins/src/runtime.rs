@@ -60,8 +60,12 @@ struct PluginToolResult {
 }
 
 /// Verdict returned by the `observe` export (iter-1722): a plugin declaring
-/// the `observer` capability receives interception events and may veto.
-/// `{"action":"allow"}` or `{"action":"block","reason":"..."}`.
+/// the `observer` capability receives interception events and may veto or
+/// replace. `{"action":"allow"}`, `{"action":"block","reason":"..."}`, or —
+/// gap G2 (dsh's post-execute replace seat) — `{"action":"replace",
+/// "content":"..."}`: the content the tool result should carry instead.
+/// The host applies a Replace only at post-execute (at pre-execute there is
+/// nothing to replace yet; it passes through).
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum ObserveVerdict {
@@ -69,6 +73,10 @@ pub enum ObserveVerdict {
     Block {
         #[serde(default)]
         reason: String,
+    },
+    Replace {
+        #[serde(default)]
+        content: String,
     },
 }
 
@@ -467,6 +475,17 @@ mod tests {
             block,
             ObserveVerdict::Block {
                 reason: "no writes on sundays".into()
+            }
+        );
+
+        // gap G2: the replace verdict — the post-execute replace seat.
+        let replace: ObserveVerdict =
+            serde_json::from_str(r#"{"action":"replace","content":"[redacted by policy]"}"#)
+                .expect("replace parses");
+        assert_eq!(
+            replace,
+            ObserveVerdict::Replace {
+                content: "[redacted by policy]".into()
             }
         );
 

@@ -349,6 +349,9 @@ fn observe_interceptor_handler(
                         reason
                     })
                 }
+                Ok(Ok(Some(operant_plugins::runtime::ObserveVerdict::Replace { content }))) => {
+                    operant_core::gateway_pipeline::PipelineAction::Replace(content)
+                }
                 Ok(Ok(None)) => {
                     tracing::warn!(
                         plugin = %plugin_name,
@@ -1281,6 +1284,47 @@ mod live_registration_tests {
                 .contains("blocked-tool"),
             "the block reason names the fixture's verdict: {:?}",
             result.error
+        );
+    }
+
+    /// gap G2: the module's Replace verdict rewrites the tool result
+    /// through the real dispatch — and at pre-execute it passes through
+    /// (nothing to replace yet), so only the post-execute seat applies.
+    #[tokio::test]
+    async fn an_observer_replace_verdict_rewrites_the_tool_result() {
+        let (ws, manifest_path) = change_workspace();
+        let config = test_config(&ws);
+        let registry = ToolRegistry::new(Duration::from_secs(5));
+        let mut change = change_with(
+            &manifest_path,
+            vec![operant_plugins::PluginCapability::Observer],
+        );
+        let mut cfg = toml::Table::new();
+        cfg.insert(
+            "replace_content".into(),
+            toml::Value::String("REPLACED BY POLICY".into()),
+        );
+        change.manifest.config = cfg;
+        apply_plugin_changes(&registry, &config, std::slice::from_ref(&change))
+            .await
+            .expect("apply");
+        registry
+            .register_dyn(std::sync::Arc::new(NamedOkTool("some-tool".into())))
+            .await
+            .expect("register stub");
+        let result = registry
+            .execute(
+                "some-tool",
+                "call-1",
+                serde_json::json!({}),
+                ToolContext::default(),
+            )
+            .await
+            .expect("execute");
+        assert!(
+            !result.success == false && result.content.contains("REPLACED BY POLICY"),
+            "post-execute Replace rewrites the content: {:?}",
+            result.content
         );
     }
 

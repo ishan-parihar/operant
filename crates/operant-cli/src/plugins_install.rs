@@ -165,7 +165,8 @@ export falls back to manifest defaults.\n\
 - `observe` — receives an interception event \
 `{\"point\": \"tools/pre-execute\"|\"tools/post-execute\", \"tool\", \"args\", \"result\", \"config\"}` \
 (`result` is null on pre-execute; `config` is the manifest `[config]` table verbatim). \
-Returns a verdict: `{\"action\":\"allow\"}` or `{\"action\":\"block\",\"reason\":\"...\"}`. \
+Returns a verdict: `{\"action\":\"allow\"}`, `{\"action\":\"block\",\"reason\":\"...\"}`, or \
+`{\"action\":\"replace\",\"content\":\"...\"}` (rewrites the tool result at post-execute). \
 The host FAILS OPEN: a broken export, a failed module or a busy instance pool never \
 blocks a tool.\n",
         ),

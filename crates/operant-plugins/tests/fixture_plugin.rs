@@ -32,7 +32,10 @@ async fn execute_runs_against_the_real_fixture_module() {
     assert_eq!(tool.name(), "fixture-echo");
     assert_eq!(tool.description(), "in-tree fixture module (plan gap G8)");
 
-    let result = tool.execute(json!({"text": "ping"})).await.expect("execute");
+    let result = tool
+        .execute(json!({"text": "ping"}))
+        .await
+        .expect("execute");
     assert!(result.success);
     assert_eq!(result.output, "fixture echo: ping");
 }
@@ -70,9 +73,32 @@ fn observe_blocks_by_tool_name_through_the_real_module() {
     });
     match pool.observe(&event.to_string()).expect("observe call") {
         Some(operant_plugins::runtime::ObserveVerdict::Block { reason }) => {
-            assert!(reason.contains("blocked-tool"), "unexpected reason: {reason}");
+            assert!(
+                reason.contains("blocked-tool"),
+                "unexpected reason: {reason}"
+            );
         }
         other => panic!("expected a Block verdict, got {other:?}"),
+    }
+}
+
+/// gap G2: the module emits a Replace verdict when the envelope config asks
+/// — the post-execute replace seat, driven by REAL WASM.
+#[test]
+fn observe_replaces_through_the_real_fixture_module() {
+    let pool = PluginPool::new(&fixture_wasm(), &[]);
+    let event = json!({
+        "point": "tools/post-execute",
+        "tool": "any-tool",
+        "args": {},
+        "result": {"content": "sensitive"},
+        "config": {"replace_content": "[redacted by policy]"}
+    });
+    match pool.observe(&event.to_string()).expect("observe call") {
+        Some(operant_plugins::runtime::ObserveVerdict::Replace { content }) => {
+            assert_eq!(content, "[redacted by policy]");
+        }
+        other => panic!("expected a Replace verdict, got {other:?}"),
     }
 }
 
@@ -91,7 +117,10 @@ fn observe_honors_the_envelope_config_through_the_real_module() {
     });
     match pool.observe(&event.to_string()).expect("observe call") {
         Some(operant_plugins::runtime::ObserveVerdict::Block { reason }) => {
-            assert!(reason.contains("config.block_all"), "unexpected reason: {reason}");
+            assert!(
+                reason.contains("config.block_all"),
+                "unexpected reason: {reason}"
+            );
         }
         other => panic!("expected a Block verdict, got {other:?}"),
     }

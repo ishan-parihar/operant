@@ -44,6 +44,7 @@ struct ObserveEvent {
 enum Verdict {
     Allow,
     Block { reason: String },
+    Replace { content: String },
 }
 
 #[plugin_fn]
@@ -70,6 +71,13 @@ pub fn execute(args: Json<ToolArgs>) -> FnResult<Json<ToolResult>> {
 #[plugin_fn]
 pub fn observe(event: Json<ObserveEvent>) -> FnResult<Json<Verdict>> {
     let event = event.0;
+    // gap G2: config.replace_content = "<text>" makes the fixture emit a
+    // Replace verdict — the redaction/enrichment seat, exercised for real.
+    if let Some(serde_json::Value::String(content)) = event.config.get("replace_content") {
+        return Ok(Json(Verdict::Replace {
+            content: content.clone(),
+        }));
+    }
     if event.config.get("block_all") == Some(&serde_json::Value::Bool(true)) {
         return Ok(Json(Verdict::Block {
             reason: "fixture: config.block_all".into(),

@@ -32,6 +32,11 @@ pub enum PipelineAction {
     Allow,
     Block(String),
     Queue,
+    /// Post-execute result replacement (gap G2 — dsh's tools/post-execute
+    /// replace seat): the interceptor supplies the content the tool result
+    /// should carry instead (the redaction/enrichment case). Tool-seam
+    /// semantics: the message pipeline treats it as pass-through.
+    Replace(String),
 }
 
 // (iter-148: MessageFilter trait deleted — 0 implementations.

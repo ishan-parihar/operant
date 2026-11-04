@@ -904,11 +904,11 @@ impl ToolRegistry {
                         ));
                     }
                 }
-                let result = self
+                let mut result = self
                     .executor
                     .execute_with_timeout(tool, name.clone(), id.clone(), args.clone(), context)
                     .await;
-                let result_value: Value = serde_json::from_str(&result.content)
+                let mut result_value: Value = serde_json::from_str(&result.content)
                     .unwrap_or(Value::String(result.content.clone()));
                 for handler in &handlers {
                     let event = ToolInterceptEvent {
@@ -917,13 +917,25 @@ impl ToolRegistry {
                         args: Value::Null,
                         result: Some(result_value.clone()),
                     };
-                    if let PipelineAction::Block(reason) = handler(event).await {
-                        warn!(tool = %name, reason = %reason, "tool result blocked by interceptor (post-execute)");
-                        return Ok(ToolResult::error_with_name(
-                            &name,
-                            &id,
-                            format!("blocked by interceptor: {reason}"),
-                        ));
+                    // gap G2 (dsh's post-execute replace seat): a Replace
+                    // verdict overwrites the result content, and later
+                    // handlers observe the replaced value (waterfall).
+                    match handler(event).await {
+                        PipelineAction::Block(reason) => {
+                            warn!(tool = %name, reason = %reason, "tool result blocked by interceptor (post-execute)");
+                            return Ok(ToolResult::error_with_name(
+                                &name,
+                                &id,
+                                format!("blocked by interceptor: {reason}"),
+                            ));
+                        }
+                        PipelineAction::Replace(content) => {
+                            info!(tool = %name, "tool result replaced by interceptor (post-execute)");
+                            result.content = content.clone();
+                            result_value =
+                                serde_json::from_str(&content).unwrap_or(Value::String(content));
+                        }
+                        _ => {}
                     }
                 }
                 Ok(result)
