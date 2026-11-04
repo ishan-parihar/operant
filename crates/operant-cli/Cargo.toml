@@ -86,7 +86,12 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 tempfile = { workspace = true }
 
 [features]
-default = []
+# `plugins-wasm` is on by default (iter-1720): the Extism host, manifests,
+# discovery and the capability adapters are shipped product code, and a
+# default-off gate meant the whole plugin architecture ran in no build the
+# operator actually launches. CI can still build without it via
+# --no-default-features.
+default = ["plugins-wasm"]
 
 # Major subsystems
 #

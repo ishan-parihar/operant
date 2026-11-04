@@ -1015,6 +1015,12 @@ async fn handle_runtime_command(
             // rescan that silently dropped integration skills would make
             // /skill ponytail-review fail right after a reload.
             mgr.add_extra_root(operant_core::ponytail::installed_skills_dir());
+            // iter-1720: same duty for skill-plugin roots — a rescan must
+            // not drop a plugin's skills.
+            #[cfg(feature = "plugins-wasm")]
+            for root in handler.wasm_plugin_skill_roots.clone() {
+                mgr.add_extra_root(Some(root));
+            }
             match mgr.load_all() {
                 Ok(loaded) => {
                     let count = loaded.len();
@@ -2264,6 +2270,14 @@ struct GatewayMessageHandler {
     queue_waits: tokio::sync::Mutex<QueueWaitStats>,
     /// RT-175 — the configured skills root for `/reload-skills`' rescan.
     skills_root_dir: std::path::PathBuf,
+    /// iter-1720 — skill-plugin `skills/` dirs captured at gateway start
+    /// (the handler has no config handle, same reason as
+    /// `summary_ttl_minutes`). `/reload-skills` re-adds them so a rescan
+    /// does not silently drop plugin skills; plugin INSTALL/REMOVE still
+    /// needs a gateway restart, matching how plugin tools behave (the
+    /// registry is built once at startup).
+    #[cfg(feature = "plugins-wasm")]
+    wasm_plugin_skill_roots: Vec<std::path::PathBuf>,
 }
 
 impl GatewayMessageHandler {
@@ -4111,6 +4125,8 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
             })
             .collect(),
         skills_root_dir: app_config.skills.root_dir.clone(),
+        #[cfg(feature = "plugins-wasm")]
+        wasm_plugin_skill_roots: crate::plugin_tools::plugin_skill_roots(app_config),
         queue_waits: tokio::sync::Mutex::new(QueueWaitStats::default()),
     });
     gateway = gateway.with_handler(handler.clone());

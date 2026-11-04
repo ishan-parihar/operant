@@ -183,6 +183,8 @@ async fn record_feed_routes_channel_posts_through_the_seat_map() {
         mcp_manager: operant_core::mcp::McpManager::new(),
         mcp_server_configs: Vec::new(),
         skills_root_dir: dir.path().join("skills-absent"),
+        #[cfg(feature = "plugins-wasm")]
+        wasm_plugin_skill_roots: Vec::new(),
         queue_waits: tokio::sync::Mutex::new(Default::default()),
     };
 
@@ -360,6 +362,8 @@ fn slow_echo_handler(dir: &tempfile::TempDir, delay_ms: u64) -> Arc<GatewayMessa
         mcp_manager: operant_core::mcp::McpManager::new(),
         mcp_server_configs: Vec::new(),
         skills_root_dir: dir.path().join("skills-absent"),
+        #[cfg(feature = "plugins-wasm")]
+        wasm_plugin_skill_roots: Vec::new(),
         queue_waits: tokio::sync::Mutex::new(Default::default()),
     })
 }
@@ -1369,6 +1373,8 @@ async fn gateway_effort_settles_into_the_agents_live_cell() {
         mcp_manager: operant_core::mcp::McpManager::new(),
         mcp_server_configs: Vec::new(),
         skills_root_dir: dir.path().join("skills-absent"),
+        #[cfg(feature = "plugins-wasm")]
+        wasm_plugin_skill_roots: Vec::new(),
         queue_waits: tokio::sync::Mutex::new(Default::default()),
     };
 
@@ -1501,6 +1507,8 @@ async fn gateway_export_writes_this_sessions_transcript_as_markdown() {
         mcp_manager: operant_core::mcp::McpManager::new(),
         mcp_server_configs: Vec::new(),
         skills_root_dir: dir.path().join("skills-absent"),
+        #[cfg(feature = "plugins-wasm")]
+        wasm_plugin_skill_roots: Vec::new(),
         queue_waits: tokio::sync::Mutex::new(Default::default()),
     };
 
@@ -1631,6 +1639,8 @@ async fn gateway_memory_reports_the_live_provider_and_recalls_through_it() {
         mcp_manager: operant_core::mcp::McpManager::new(),
         mcp_server_configs: Vec::new(),
         skills_root_dir: dir.path().join("skills-absent"),
+        #[cfg(feature = "plugins-wasm")]
+        wasm_plugin_skill_roots: Vec::new(),
         queue_waits: tokio::sync::Mutex::new(Default::default()),
     };
 
@@ -1727,6 +1737,8 @@ async fn gateway_skill_expands_a_real_installed_skill() {
         mcp_manager: operant_core::mcp::McpManager::new(),
         mcp_server_configs: Vec::new(),
         skills_root_dir: skills_root.clone(),
+        #[cfg(feature = "plugins-wasm")]
+        wasm_plugin_skill_roots: Vec::new(),
         queue_waits: tokio::sync::Mutex::new(Default::default()),
     };
 
@@ -1820,6 +1832,8 @@ async fn gateway_search_drives_the_session_search_tool_over_the_real_store() {
         mcp_manager: operant_core::mcp::McpManager::new(),
         mcp_server_configs: Vec::new(),
         skills_root_dir: dir.path().join("skills-absent"),
+        #[cfg(feature = "plugins-wasm")]
+        wasm_plugin_skill_roots: Vec::new(),
         queue_waits: tokio::sync::Mutex::new(Default::default()),
     };
 

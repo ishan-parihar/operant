@@ -1685,6 +1685,14 @@ async fn build_agent_core_with_memory(
     // collisions. None (integration absent) is a no-op.
     if !operant_core::platform::is_holon_run() {
         skill_manager.add_extra_root(operant_core::ponytail::installed_skills_dir());
+        // dsh capability-map (iter-1720): a plugin declaring the `skill`
+        // capability contributes its `skills/` dir as an extra root. Holon
+        // runs skip it the way they skip the ponytail root — org bodies do
+        // not carry personal integrations.
+        #[cfg(feature = "plugins-wasm")]
+        for root in plugin_tools::plugin_skill_roots(config) {
+            skill_manager.add_extra_root(Some(root));
+        }
     }
     if let Err(e) = skill_manager.load_all() {
         warn!(

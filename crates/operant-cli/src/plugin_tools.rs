@@ -8,8 +8,8 @@
 //! This is the missing half of the plugin architecture: `operant-plugins`
 //! already shipped a `PluginHost` (discovery, manifests, signature
 //! verification) and `WasmTool`/`runtime` bridges, but nothing wired them
-//! into the live agent. Feature-gated behind `plugins-wasm` (default-off;
-//! `ci-all` enables it).
+//! into the live agent. Feature-gated behind `plugins-wasm` (on by default
+//! since iter-1720; CI builds with `--no-default-features` to skip it).
 
 use anyhow::Context as _;
 use operant_core::config::AppConfig;
@@ -216,6 +216,42 @@ pub fn list_plugin_tools(config: &AppConfig) -> Vec<(String, usize)> {
         .iter()
         .filter(|(m, _)| config.plugins.is_enabled(&m.name))
         .map(|(m, _)| (m.name.clone(), 1))
+        .collect()
+}
+
+/// Skill-capable plugins contribute their `skills/` subdirectory as a
+/// `SkillManager` extra root — the `skill` capability is content, not a
+/// provider (deepseek-harness capability-map parity). Best-effort: a host
+/// that cannot initialize returns no roots. Operator-pool skills win name
+/// collisions by load order — the same rule the ponytail root follows, so
+/// skill names are NOT re-namespaced here (the `plugin:<name>/<skill>`
+/// namespacing `skill_plugin_details` suggests would need SkillManager
+/// changes the extra-root pattern does not).
+///
+/// Skill content is gated by the same signature policy as tool code: the
+/// host only discovers plugins that pass verification, so a strict-mode
+/// deployment does not load an unsigned plugin's skills either.
+pub fn plugin_skill_roots(config: &AppConfig) -> Vec<std::path::PathBuf> {
+    let plugin_dirs = &config.plugins.plugin_dirs;
+    if plugin_dirs.is_empty() {
+        return Vec::new();
+    }
+    let Some(parent) = plugin_dirs[0].parent() else {
+        return Vec::new();
+    };
+    let signature_mode =
+        operant_plugins::host::PluginHost::parse_signature_mode(&config.plugins.signature_mode);
+    let Ok(host) = operant_plugins::host::PluginHost::with_security(
+        parent,
+        signature_mode,
+        config.plugins.trusted_publisher_keys.clone(),
+    ) else {
+        return Vec::new();
+    };
+    host.skill_plugin_details()
+        .into_iter()
+        .filter(|(m, _)| config.plugins.is_enabled(&m.name))
+        .map(|(_, dir)| dir)
         .collect()
 }
 
@@ -555,5 +591,57 @@ mod name_collision_tests {
             .await
             .expect("built-in still registered");
         assert_ne!(kept.description(), "impostor");
+    }
+}
+
+#[cfg(test)]
+mod skill_roots_tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    use super::plugin_skill_roots;
+    use operant_core::config::AppConfig;
+
+    /// A workspace with one skill plugin: manifest (skill-only, no wasm) +
+    /// one bundle-valid `skills/<name>/SKILL.md`.
+    fn skill_plugin_workspace() -> tempfile::TempDir {
+        let ws = tempfile::tempdir().expect("workspace");
+        let plugin_dir = ws.path().join("plugins").join("demo");
+        std::fs::create_dir_all(plugin_dir.join("skills").join("greet")).expect("plugin tree");
+        std::fs::write(
+            plugin_dir.join("manifest.toml"),
+            "name = \"demo\"\nversion = \"0.1.0\"\ncapabilities = [\"skill\"]\n",
+        )
+        .expect("manifest");
+        std::fs::write(
+            plugin_dir.join("skills").join("greet").join("SKILL.md"),
+            "---\nname: greet\ndescription: demo skill\n---\n\nHello from the plugin.",
+        )
+        .expect("skill");
+        ws
+    }
+
+    fn config_over(ws: &tempfile::TempDir) -> AppConfig {
+        let mut config = AppConfig::default();
+        config.plugins.plugin_dirs = vec![ws.path().join("plugins")];
+        config
+    }
+
+    #[test]
+    fn a_skill_plugin_contributes_its_skills_dir() {
+        // iter-1720: the unmapped `skill` capability becomes a SkillManager
+        // extra root (the dsh capability-map's skill seam).
+        let ws = skill_plugin_workspace();
+        assert_eq!(
+            plugin_skill_roots(&config_over(&ws)),
+            vec![ws.path().join("plugins").join("demo").join("skills")]
+        );
+    }
+
+    #[test]
+    fn a_disabled_plugin_contributes_no_roots() {
+        // [plugins].disabled must reach the skill seam, not just the tool seam.
+        let ws = skill_plugin_workspace();
+        let mut config = config_over(&ws);
+        config.plugins.disabled = vec!["demo".to_string()];
+        assert!(plugin_skill_roots(&config).is_empty());
     }
 }
