@@ -27,6 +27,19 @@ changes the agent's toolset.
 `tool_describe`, `tool_call` — the model can discover and call tools
 without every schema riding the prompt (hermes tool_search parity).
 
+## The interception seam (iter-1722)
+
+`ToolRegistry::register_tool_interceptor` is the VETO-capable path
+around `execute`: a `pre-execute` handler can stop a tool before it
+runs, and a `post-execute` handler can replace a result with an error —
+deepseek-harness `tools/pre-execute` / `tools/post-execute` waterfall
+parity, reusing the vestigial `PipelineAction` verdicts. The emit-only
+HookRegistry cannot veto; only this seam can. Consumers: WASM observer
+plugins (see [plugins.md](plugins.md)). An empty interceptor list is the
+default and stays allocation-free; first Block wins; a veto is a typed
+error RESULT to the model (`blocked by interceptor: <reason>`), not a
+loop error.
+
 ## The builtin families (`tools/`, registered in `builtin.rs`)
 
 - **File**: `file_read`, `file_write`, `file_search`, `file_list`,

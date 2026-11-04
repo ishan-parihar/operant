@@ -505,6 +505,31 @@ These are the user's intentional design choices. Do not replace, remove, or
   turn and must never silently enable.
 - **LifeOS**: NOT INTEGRATED. The 22 Notion-backed life-management tools were ported at iter-47/48 and are gone from the tree — there is no `lifeos` cargo feature, no tool module, and no `lifeos_enabled` config key (the key was removed because it gated nothing; `config.rs::lifeos_key_is_gone_from_config` locks its absence). The Notion surface that DOES exist is the `ntn` CLI, used by the `notion` skill (`skills/productivity/notion`) — a skill, not a built-in tool. Do not add a LifeOS claim here without the code behind it.
 
+### WASM plugins (the capability-seam plugin architecture — iters 1720-1722)
+- The `operant-plugins` Extism host is ON by default (`plugins-wasm` in
+  operant-cli's default features; CI may build `--no-default-features`).
+- ONE manifest authority: `manifest.toml` (the host's parser validates it
+  at install AND discovery). `plugin.yaml`/`__init__.py` are legacy
+  installer fallbacks only.
+- `PluginCapability {Tool, Channel, Memory, Observer, Skill}` maps onto
+  the core seams: tool → `ToolRegistry` (builtins win KB-11), memory →
+  `memory.provider = "plugin:<name>"`, skill → `SkillManager` extra root
+  (operator pool wins; Holon runs skip), observer → tool-seam
+  interception (`ToolRegistry::register_tool_interceptor`, the
+  veto-capable seam — the emit-only `HookRegistry` cannot veto).
+  Channel is deferred (gateway adapters are compile-time).
+- `PluginManifest.requires` = other plugin names; unmet requires skip a
+  plugin at discovery, transitively (deepseek-harness `inject` parity,
+  collapsed — no fiber state machine; restart/watcher re-scan covers
+  live reload).
+- The architecture is a ponytail port of deepseek-harness's
+  "everything is a plugin" (dsh): capability seams + requires gating +
+  pre/post-execute waterfalls were carried over; Cordis's
+  service-store/fiber machine, its serial/bail dispatch modes, and its
+  patch language were deliberately NOT ported. Do not re-add them
+  without a measured need; see `docs/library/plugins.md` +
+  `docs/plans/2026-11-05-import-deepseek-harness-plugin-mechanism-architecture-into-o.md`.
+
 ### Context Management
 - **Tiered eviction + decay curve** ported from `cortexkit/magic-context`
   (`context_management.rs`)

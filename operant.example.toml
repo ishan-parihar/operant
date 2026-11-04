@@ -538,6 +538,19 @@ enabled = false
 # and `operant plugins enable <name>` removes it; a change takes effect on the
 # next start. Every installed plugin loads unless it is listed (AD-023).
 # disabled = []
+#
+# The WASM plugin host is ON by default (iter-1720: the plugins-wasm cargo
+# feature is in the default build; CI builds with --no-default-features).
+# A plugin's manifest.toml can declare:
+#   capabilities = ["tool" | "memory" | "skill" | "observer" | "channel"]
+#   requires = ["other-plugin"]   # skipped at discovery while a named
+#                                 # plugin is absent (transitively)
+# Capability seams: tool -> tool registry (KB-11: builtins win name
+# collisions), memory -> memory.provider = "plugin:<name>", skill ->
+# SkillManager extra root (operator pool wins collisions), observer ->
+# tool-seam interception (the observe export may veto any tool call,
+# fail-open), channel -> deferred (gateway adapters are compile-time).
+# See docs/library/plugins.md.
 
 [tools.kernel]
 # Persistent kernel — session-persistent Python execution and learned state.
