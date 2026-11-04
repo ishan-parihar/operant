@@ -136,6 +136,33 @@ wasm32-wasip1`) exports `tool_metadata` + `execute` (echo) + `observe`
 exercises all of it — execute roundtrip, metadata read, allow/block
 verdicts, config passthrough — without serde-only pins.
 
+## Deliberate decisions (gaps G3/G4/G5/G11 — recorded 2026-11-05)
+
+- **G4 channel capability — descoped.** The gateway registry is
+  compile-time (7 adapters); a dynamic channel seam needs adapter traits
+  behind an Arc plus config plumbing, and no consumer exists.
+  `PluginCapability::Channel` stays declared and unmapped; the upgrade
+  trigger is a real plugin-channel consumer.
+- **G5 config reach — free-form stands.** The manifest `[config]` table
+  reaches the observe envelope (tool seam and, opt-in, the turn seam);
+  tool/memory surfaces receive nothing; nothing validates it. dsh
+  validates a typed schema; operant stays schema-free until a second
+  consumer appears or a validation failure story exists.
+- **G3 ask escalation — deferred.** dsh's pre-execute escalates to its
+  approval service; operant observers can Block, which covers the
+  operator's need today. The upgrade trigger is a consumer asking for a
+  human-in-the-loop verdict.
+- **G11 inventory/marketplace — marginal.** No second publisher exists;
+  installs come from git/path. Revisit only when one does.
+
+The web surface is the dashboard `/api/plugins` route (gap G10,
+iter-1743): the same discovery view `operant plugins status` prints, as
+JSON, behind the dashboard's session token. The first-party page does
+NOT fetch it (the RT-44 contract test pins the page's fetch set — the
+bundle defect was a page calling routes the server never served); the
+route serves scripts and curl. The full dsh web UI remains opt-in
+(import plan Phase 5, multi-iteration).
+
 ## Intention
 
 Plugins are the answer to "extend without recompiling": the harness

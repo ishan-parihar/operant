@@ -109,6 +109,7 @@ pub fn build_app(
         .route("/api/boards", get(handle_boards))
         .route("/api/health", get(handle_health))
         .route("/api/config", get(handle_config))
+        .route("/api/plugins", get(handle_plugins))
         .route("/", get(handle_index))
         .with_state(state.clone())
         // The middleware reads the allowed hosts from the state, and it is
@@ -550,6 +551,98 @@ fn read_os_release() -> Option<String> {
     text.lines()
         .find_map(|line| line.strip_prefix("PRETTY_NAME="))
         .map(|value| value.trim_matches('"').to_string())
+}
+
+/// Gap G10: the plugin inventory as JSON — the same discovery view
+/// `operant plugins status` prints, on the existing dashboard server. The
+/// page deliberately does NOT fetch it (the RT-44 contract test pins the
+/// page's fetch set); this route serves scripts and the operator's curl.
+/// Honesty note rides in the payload: the LIVE registry state (which tools
+/// actually registered, which interceptors are active — the surfaces gap
+/// G6 made live) is owned by the running gateway process, not this one.
+#[derive(Serialize)]
+struct PluginStatusEntry {
+    name: String,
+    version: String,
+    capabilities: Vec<String>,
+    enabled: bool,
+    wasm_present: bool,
+    /// The tool name the module's own `tool_metadata` export registers.
+    tool: Option<String>,
+}
+
+#[derive(Serialize)]
+struct PluginsResponse {
+    signature_mode: String,
+    plugins: Vec<PluginStatusEntry>,
+    note: String,
+}
+
+async fn handle_plugins(State(state): State<DashboardState>, headers: HeaderMap) -> Response {
+    if let Err(e) = check_auth(&state, &headers) {
+        return *e;
+    }
+    let config = &state.app_config;
+    let mut plugins: Vec<PluginStatusEntry> = Vec::new();
+
+    #[cfg(feature = "plugins-wasm")]
+    {
+        use operant_plugins::PluginTool as _;
+        if let Some(parent) = config.plugins.plugin_dirs.first().and_then(|d| d.parent()) {
+            let signature_mode = operant_plugins::host::PluginHost::parse_signature_mode(
+                &config.plugins.signature_mode,
+            );
+            if let Ok(host) = operant_plugins::host::PluginHost::with_security(
+                parent,
+                signature_mode,
+                config.plugins.trusted_publisher_keys.clone(),
+            ) {
+                for info in host.list_plugins() {
+                    let mut entry = PluginStatusEntry {
+                        name: info.name.clone(),
+                        version: info.version.clone(),
+                        capabilities: info
+                            .capabilities
+                            .iter()
+                            .filter_map(|c| {
+                                serde_json::to_value(c)
+                                    .ok()
+                                    .and_then(|v| v.as_str().map(str::to_string))
+                            })
+                            .collect(),
+                        enabled: config.plugins.is_enabled(&info.name),
+                        wasm_present: info.wasm_path.as_ref().is_some_and(|p| p.exists()),
+                        tool: None,
+                    };
+                    if info.loaded
+                        && info
+                            .capabilities
+                            .contains(&operant_plugins::PluginCapability::Tool)
+                        && let Some(p) = &info.wasm_path
+                    {
+                        entry.tool = Some(
+                            operant_plugins::wasm_tool::WasmTool::from_wasm(
+                                p.clone(),
+                                Vec::new(),
+                                info.name.clone(),
+                                String::new(),
+                            )
+                            .name()
+                            .to_string(),
+                        );
+                    }
+                    plugins.push(entry);
+                }
+            }
+        }
+    }
+
+    Json(PluginsResponse {
+        signature_mode: config.plugins.signature_mode.clone(),
+        plugins,
+        note: "discovery view of this process; live registry state is owned by the running gateway process".to_string(),
+    })
+    .into_response()
 }
 
 async fn handle_status(State(state): State<DashboardState>, headers: HeaderMap) -> Response {
