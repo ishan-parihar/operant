@@ -1894,6 +1894,108 @@ async fn the_hub_enter_switches_session_and_rebuilds_the_display_in_frame() {
     );
 }
 
+// ---- (iter-1719) a click in the composer places the CARET ----
+//
+// The composer's mouse work has two halves: a drag SELECTS (covered by the
+// copy-selection tests in operant_ui), and a click PLACES THE CARET. The
+// second half had no test at all, and it is the half an operator feels first:
+// clicking into the middle of a long draft and typing must insert at the
+// click, not wherever the keyboard had left the caret.
+//
+// The caret placement resolves a screen column to a RAW character offset
+// through the composer's copy snapshot — the same map the drag uses — so the
+// two can never disagree about where a column is.
+//
+// MUTATION PROVEN: deleting the `self.prompt_input.cursor = offset...` line
+// in `place_caret_in_input` makes this test red — the cursor stays at 0.
+
+/// The composer snapshot the screen→point resolver reads.
+///
+/// The snapshot's `content_area` is the composer's TEXT RECT, not the whole
+/// band: the `›` glyph lives in the gutter at columns 0-1 and the text starts
+/// at column 2 (`composer::textarea_rect` insets by `GUTTER_COLS`). The
+/// resolver subtracts `content_area.x` before resolving a column, so seeding
+/// the raw band here would answer a different question than the painter does.
+fn seed_composer_snapshot(app: &mut App, input: &str, line_width: usize) {
+    // `textarea_rect` insets by (1, GUTTER_COLS, 1, 1): the band's top row is
+    // breathing space and the glyph's gutter is 2 columns wide, so text row 0
+    // sits at band row 1 and band column 2.
+    let band = ratatui::prelude::Rect::new(0, 0, 80, 12);
+    let text_rect = crate::tui::operant_ui::composer::textarea_rect(band);
+    let (wrapped_plain, raw_plain, line_map) =
+        crate::tui::operant_ui::input_ui::input_copy_snapshot_parts(input, line_width);
+    let row_count = wrapped_plain.len();
+    let left_margins = vec![0u16; row_count];
+    crate::tui::operant_ui::record_input_copy_snapshot(
+        wrapped_plain,
+        raw_plain,
+        line_map,
+        0,
+        row_count,
+        text_rect,
+        &left_margins,
+    );
+    app.last_input_area.set(band);
+}
+
+#[test]
+fn a_click_in_the_composer_places_the_caret_at_the_clicked_character() {
+    let mut app = make_app();
+    let input = "0123456789abcdefghijklmnopqrst";
+    app.prompt_input.text = input.to_string();
+    app.prompt_input.cursor = 0;
+    app.refresh_prompt_input();
+    // Width 10 → rows "0123456789", "abcdefghij", "klmnopqrst". Text row 0 is
+    // band row 1 and input char 0 is band column 2.
+    seed_composer_snapshot(&mut app, input, 10);
+
+    // Click band column 5 on row 1 → input char 3 ('3').
+    app.place_caret_in_input(5, 1);
+    assert_eq!(
+        app.prompt_input.cursor, 3,
+        "the caret must land on the character under the pointer"
+    );
+
+    // Click band column 4 on row 2 → input char 12 ('c'). The continuation
+    // row's column 0 is input char 10 ('a'), so its column 2 is char 12. A
+    // resolver that ignored the wrap would answer char 2.
+    app.place_caret_in_input(4, 2);
+    assert_eq!(
+        app.prompt_input.cursor, 12,
+        "a click on a continuation row must resolve against the SEGMENT"
+    );
+
+    // A click in the EMPTY space to the right of a wrapped row lands at that
+    // row's end — the display column clamps to the row's own text width, not
+    // to the whole draft's. Row 0 is "0123456789" (10 chars), so a click at
+    // the last column of the text rect is char 10.
+    app.place_caret_in_input(78, 1);
+    assert_eq!(
+        app.prompt_input.cursor, 10,
+        "a click past the row's text lands at the row's end"
+    );
+
+    // A click on the LAST wrapped row lands at the draft's end: row 2 is
+    // "klmnopqrst" (chars 20..30), so its end is char 30.
+    app.place_caret_in_input(78, 3);
+    assert_eq!(
+        app.prompt_input.cursor,
+        input.len(),
+        "a click past the last row's text lands at the draft's end"
+    );
+
+    // A click OUTSIDE the text rect (column 79, past its right edge) resolves
+    // to no point at all, so the caret does not move. This is the same
+    // "outside the pane" contract the transcript's hit test honours.
+    app.place_caret_in_input(5, 1);
+    assert_eq!(app.prompt_input.cursor, 3, "the caret is at char 3");
+    app.place_caret_in_input(79, 1);
+    assert_eq!(
+        app.prompt_input.cursor, 3,
+        "a click outside the text rect must not move the caret"
+    );
+}
+
 // ---- (plan 2026-10-28 iter-D, G5) the ←← session-hub gesture ----
 //
 // omp agent-hub.ts: a second ← within [40ms, 500ms) on an empty composer

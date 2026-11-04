@@ -2815,7 +2815,11 @@ struct WrappedInputSegment {
 /// (the same function that lays out the rendered rows), while raw lines are
 /// the logical `\n`-separated input lines, so copying a selection that spans
 /// a soft wrap yields the original text without injected line breaks.
-fn input_copy_snapshot_parts(
+///
+/// `pub(crate)` so the app-layer test can seed the same snapshot the painter
+/// records: the caret-placement path resolves a screen column through THIS
+/// map, and a test that seeded a different one would be testing a fiction.
+pub(crate) fn input_copy_snapshot_parts(
     input: &str,
     line_width: usize,
 ) -> (Vec<String>, Vec<String>, Vec<super::WrappedLineMap>) {
