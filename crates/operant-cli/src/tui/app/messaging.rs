@@ -360,6 +360,15 @@ impl App {
             return false;
         };
         self.messages.remove(idx);
+        // The row was final when submitted, so the scrollback emitter already
+        // counted it; the removal shifts every later row's index down by one
+        // and the watermark no longer matches the transcript. Without the
+        // replay, the partial reply a failed turn flushed before dying sits
+        // inside the emitted prefix — invisible in native scrollback AND
+        // swallowed by the viewport's already-emitted floor — while the
+        // dropped prompt lingers in history. (A no-op outside
+        // terminal-scroll mode: the emitter returns before reading the flag.)
+        self.request_native_replay();
         // Keep the turn-attribution columns index-aligned: they are derived
         // from the user-message count (see `sync_turn_metadata_to_messages`),
         // so a row leaving behind an orphan entry would shift every later

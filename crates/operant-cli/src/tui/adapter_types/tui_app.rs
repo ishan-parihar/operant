@@ -1169,6 +1169,15 @@ impl TuiApp {
                 content: MessageContent::Text(m.content),
             });
         }
+        // (plan 07 §2) every rebuild replaces committed transcript content,
+        // and the emitter's watermark counted the OLD rows: native scrollback
+        // must replay from zero or it keeps the discarded future and skips
+        // the rebuilt transcript. The rewind-selector arm was the one caller
+        // that missed this — its /clear, /new, session-switch and /undo
+        // siblings all replayed explicitly — so the request is carried HERE,
+        // where the five callers cannot drift apart again. A no-op outside
+        // terminal-scroll mode (the emitter returns before reading it).
+        app.request_native_replay();
         app.invalidate_transcript();
     }
 
@@ -1328,10 +1337,7 @@ impl TuiApp {
                 app.scroll_offset = 0;
                 app.auto_scroll = true;
                 app.new_messages_while_scrolled = 0;
-                // Native-scroll reset (07 §2 lands the full replay; until
-                // then a cleared conversation must not re-emit the old
-                // rows).
-                app.request_native_replay();
+                // (Native-scroll reset now rides rebuild_display_from_agent.)
                 app.invalidate_transcript();
                 app.set_status_notice("Conversation cleared.".to_string());
             }
@@ -1377,7 +1383,6 @@ impl TuiApp {
                 app.auto_scroll = true;
                 app.new_messages_while_scrolled = 0;
                 app.token_count = 0;
-                app.request_native_replay();
                 app.invalidate_transcript();
                 let short: String = fresh.chars().take(8).collect();
                 app.set_status_notice(format!(
@@ -1404,7 +1409,6 @@ impl TuiApp {
                 app.system_annotations.clear();
                 // TUI-2: the previous session's title must not label the new one.
                 app.session_title = None;
-                app.request_native_replay();
                 app.invalidate_transcript();
                 let short: String = session_id.chars().take(8).collect();
                 app.set_status_notice(format!("Switched to session {short}"));
@@ -1430,7 +1434,6 @@ impl TuiApp {
                             Self::rebuild_display_from_agent(app, conv);
                             app.clear_tool_blocks();
                             app.system_annotations.clear();
-                            app.request_native_replay();
                             app.invalidate_transcript();
                             // Same rule as the selector's rewind above: the
                             // composer is about to receive the rewound prompt,
@@ -2121,5 +2124,44 @@ mod shell_out_tests {
             shell_return_message(&killed),
             "Returned to operant (the command was killed)."
         );
+    }
+}
+
+#[cfg(test)]
+mod rebuild_replay_tests {
+    use super::*;
+
+    /// Every rebuild replaces committed transcript content the scrollback
+    /// emitter's watermark already counted, so the rebuild itself must
+    /// schedule the native replay. The rewind-selector arm was the one
+    /// caller that never did — its /clear, /new, session-switch and /undo
+    /// siblings all replayed explicitly — so the request is carried inside
+    /// rebuild_display_from_agent where the callers cannot drift apart
+    /// again: with the watermark stale, native scrollback keeps the
+    /// discarded future and skips the rebuilt transcript's first turns
+    /// (terminal-scroll mode).
+    ///
+    /// MUTATION-PROOF: deleting the request_native_replay call inside
+    /// rebuild_display_from_agent fails this by name.
+    #[test]
+    fn rebuild_display_from_agent_schedules_a_native_replay() {
+        let mut app = crate::tui::app::tests::make_app();
+        assert!(!app.pending_native_replay.get(), "clean start");
+
+        TuiApp::rebuild_display_from_agent(
+            &mut app,
+            vec![
+                operant_core::client::Message::new(operant_core::client::Role::User, "kept"),
+                operant_core::client::Message::new(
+                    operant_core::client::Role::Assistant,
+                    "kept answer",
+                ),
+            ],
+        );
+        assert!(
+            app.pending_native_replay.get(),
+            "the rebuild must schedule the scrollback replay"
+        );
+        assert_eq!(app.messages.len(), 2);
     }
 }

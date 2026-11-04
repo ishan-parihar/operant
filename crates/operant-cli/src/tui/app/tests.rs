@@ -5675,6 +5675,30 @@ fn a_failed_turn_cancels_its_still_pending_tool_calls_and_reanchors_them() {
     );
 }
 
+/// Removing a committed row shifts every later message's index down by one,
+/// so the scrollback emitter's watermark no longer matches the transcript:
+/// the partial reply a failed turn flushed sits inside the emitted prefix,
+/// invisible in native scrollback AND swallowed by the viewport's
+/// already-emitted floor, while the dropped prompt lingers in history. The
+/// drop therefore requests a native replay (a no-op outside terminal-scroll
+/// mode, where the emitter returns before reading the flag).
+///
+/// MUTATION-PROOF: deleting the request_native_replay call in
+/// drop_transcript_user_row_matching fails the assertion by name.
+#[test]
+fn dropping_a_committed_user_row_requests_a_native_replay() {
+    let mut app = make_app();
+    app.add_message(Role::User, "the doomed prompt".to_string());
+    assert!(!app.pending_native_replay.get(), "clean start");
+
+    assert!(app.drop_transcript_user_row_matching("the doomed prompt"));
+    assert!(
+        app.pending_native_replay.get(),
+        "a committed-row removal must schedule the scrollback replay"
+    );
+    assert_eq!(app.messages.len(), 0);
+}
+
 /// The row removal is bounded to the FAILED submission: a transcript that
 /// legitimately holds the same prompt twice keeps its earlier copy, and only
 /// the tail row goes away. Without the bound, a repeat question would
