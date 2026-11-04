@@ -63,11 +63,17 @@ deadlock. `provides` declares the service names a plugin offers; the host
 never resolves them beyond this match — they are composition labels, not
 runtime objects.
 Shortcut: there is no fiber-reload when a provider returns (dsh's
-PENDING state) — a RESTART covers it. The hot-swap watcher does NOT
-cover it: it feeds only the kernel harness seam (`Harness::replace` of
-ArchitectureRows), so a newly-installed plugin never appears as a live
-tool/skill/observer registration without a restart (red-team audit S3,
-2026-11-05); live re-registration is the named upgrade.
+PENDING state). The hot-swap watcher now feeds BOTH seams (gap G6,
+iter-1733): the kernel harness seam (`Harness::replace`/`mount` of
+ArchitectureRows) AND the agent surfaces — `apply_plugin_changes`
+(plugin_tools.rs) re-registers the plugin's tool (replacing its own
+registration; a name the plugin does not already own is still refused,
+KB-11) and its observer (named interceptor, replace semantics — a
+changed module never stacks a second copy) on the LIVE registry, so a
+plugin installed while the gateway runs becomes callable/active without
+a restart. Skill roots are the remaining restart-bound surface
+(SkillManager is a boot-scanned owned struct; live roots need it
+shareable — the named upgrade).
 
 Plugin tools and observer calls run on RESIDENT module instances
 (`runtime::PluginPool`, iter-1725): one WASM compile per module per

@@ -1790,6 +1790,11 @@ async fn build_harness_host(
     if !config.harness.enabled {
         return None;
     }
+    // A sharing clone for the watcher: ToolRegistry is Arc-field-backed, so
+    // registrations made through this handle are live on the agent's own
+    // registry (gap G6 — live plugin re-registration).
+    #[cfg(feature = "plugins-wasm")]
+    let watcher_registry = registry.clone();
 
     use operant_core::harness_adapters::ToolSeam;
     use operant_core::harness_seams_r3::{GatewayCommandSeam, MemoryProviderSeam};
@@ -1931,7 +1936,7 @@ async fn build_harness_host(
     // a swap EXECUTES the module on every scan).
     #[cfg(feature = "plugins-wasm")]
     if config.harness.watch_wasm {
-        spawn_wasm_watcher(config, host.harness().clone());
+        spawn_wasm_watcher(config, host.harness().clone(), watcher_registry);
     }
 
     Some((host.harness().clone(), prompt_slot, hook_slot))
@@ -1939,17 +1944,24 @@ async fn build_harness_host(
 
 /// C2 — start the plugin-directory watcher and hot-swap verified plugins
 /// into the running kernel. `harness` must be the live harness Arc so
-/// `Harness::replace` affects the agent's actual providers.
+/// `Harness::replace` affects the agent's actual providers; `registry` is
+/// a sharing handle on the agent's tool registry so a change also
+/// re-registers the plugin's tool/observer surfaces live (gap G6 —
+/// installed-while-running becomes callable without a restart).
 ///
 /// Trusted publisher keys come from `[plugins.security]` — an empty key set
 /// under `SignatureMode::Strict` would mark every signed plugin `Untrusted`
 /// and the watcher would never swap anything, so an empty set is refused up
 /// front rather than left as a silent no-op.
 #[cfg(feature = "plugins-wasm")]
-fn spawn_wasm_watcher(config: &AppConfig, harness: std::sync::Arc<operant_harness::Harness>) {
+fn spawn_wasm_watcher(
+    config: &AppConfig,
+    harness: std::sync::Arc<operant_harness::Harness>,
+    registry: operant_core::tools::ToolRegistry,
+) {
     use operant_plugins::{host::PluginHost, signature::SignatureMode, watcher::Watcher};
 
-    use crate::plugin_tools::row_for_change;
+    use crate::plugin_tools::{apply_plugin_changes, row_for_change};
 
     let Some(dir) = config.plugins.plugin_dirs.first().cloned() else {
         warn!("harness: watch_wasm enabled but plugins.plugin_dirs is empty — no watcher");
@@ -1992,10 +2004,26 @@ fn spawn_wasm_watcher(config: &AppConfig, harness: std::sync::Arc<operant_harnes
     let mut watcher = Watcher::new(host, operant_plugins::watcher::WatcherConfig::default())
         .with_signature(SignatureMode::Strict, trusted_keys);
     let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
+    // owned for the 'static watcher task; cloned per change batch below
+    let watcher_config = config.clone();
     tokio::spawn(async move {
         tracing::info!(dir = %dir.display(), "harness: wasm watcher started");
         watcher
             .run_until(stop_rx, |changes| {
+                // Gap G6 — the agent surfaces re-register live: the plugin's
+                // tool replaces its own registration, its observer re-keys by
+                // name. Applied even when the kernel bridge refuses the
+                // change (an observer-only plugin has no ArchitectureRow but
+                // IS live agent surface), so this runs before the kernel
+                // match below.
+                let registry = registry.clone();
+                let config = watcher_config.clone();
+                let batch: Vec<operant_plugins::watcher::ManifestChange> = changes.to_vec();
+                tokio::spawn(async move {
+                    if let Err(e) = apply_plugin_changes(&registry, &config, &batch).await {
+                        warn!(error = %e, "harness: live plugin re-registration failed");
+                    }
+                });
                 for change in changes {
                     match row_for_change(change) {
                         Ok(bridged) => {

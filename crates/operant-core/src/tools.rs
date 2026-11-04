@@ -510,6 +510,11 @@ pub struct ToolRegistry {
     /// Tool-seam interceptors (iter-1722), consulted in `execute` before and
     /// after every tool run. Empty = zero overhead (the common case).
     interceptors: Arc<RwLock<Vec<ToolInterceptHandler>>>,
+    /// Plugin interceptors keyed by plugin name (gap G6, live
+    /// re-registration): the hot-swap watcher replaces a changed observer's
+    /// registration by key instead of stacking a second copy — the
+    /// anonymous `interceptors` list has no identity to remove.
+    plugin_interceptors: Arc<RwLock<Vec<(String, ToolInterceptHandler)>>>,
 }
 
 /// The retired-name → surviving-name aliases for the consolidated memory
@@ -541,6 +546,7 @@ impl Clone for ToolRegistry {
                 overrides: Arc::clone(&self.executor.overrides),
             },
             interceptors: Arc::clone(&self.interceptors),
+            plugin_interceptors: Arc::clone(&self.plugin_interceptors),
         }
     }
 }
@@ -554,6 +560,7 @@ impl ToolRegistry {
             aliases: Arc::new(std::sync::RwLock::new(builtin_tool_aliases())),
             executor: ToolExecutor::new(timeout),
             interceptors: Arc::new(RwLock::new(Vec::new())),
+            plugin_interceptors: Arc::new(RwLock::new(Vec::new())),
         }
     }
 
@@ -811,6 +818,31 @@ impl ToolRegistry {
         self.interceptors.write().await.push(handler);
     }
 
+    /// Register a PLUGIN interceptor by name (gap G6, live
+    /// re-registration). Replace semantics: an existing registration under
+    /// the same plugin name is removed first, so a hot-swapped observer
+    /// re-registers instead of stacking.
+    pub async fn register_plugin_interceptor(&self, plugin: &str, handler: ToolInterceptHandler) {
+        let mut list = self.plugin_interceptors.write().await;
+        list.retain(|(name, _)| name != plugin);
+        list.push((plugin.to_string(), handler));
+    }
+
+    /// Remove a plugin's interceptor registration. Returns true when one
+    /// existed (the watcher's change-undo path).
+    pub async fn unregister_plugin_interceptors(&self, plugin: &str) -> bool {
+        let mut list = self.plugin_interceptors.write().await;
+        let before = list.len();
+        list.retain(|(name, _)| name != plugin);
+        before != list.len()
+    }
+
+    /// How many plugin interceptors are registered (the `plugins status`
+    /// observability surface, gap G9, and the no-stack test oracle).
+    pub async fn plugin_interceptor_count(&self) -> usize {
+        self.plugin_interceptors.read().await.len()
+    }
+
     #[instrument(skip(self, args, context), fields(tool = % tool_name))]
     pub async fn execute(
         &self,
@@ -839,7 +871,16 @@ impl ToolRegistry {
                 // the pre-interceptor path: args move into the executor, no
                 // clones. The clone-heavy branches below only run when an
                 // operator actually registered an interceptor.
-                let handlers: Vec<ToolInterceptHandler> = self.interceptors.read().await.clone();
+                let mut handlers: Vec<ToolInterceptHandler> =
+                    self.interceptors.read().await.clone();
+                handlers.extend(
+                    self.plugin_interceptors
+                        .read()
+                        .await
+                        .clone()
+                        .into_iter()
+                        .map(|(_, handler)| handler),
+                );
                 if handlers.is_empty() {
                     let result = self
                         .executor
