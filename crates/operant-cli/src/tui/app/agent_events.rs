@@ -299,7 +299,9 @@ impl App {
                 // (iter-209: refresh_turn_diff_from_history removed)
             }
 
-            AgentEvent::Done { message, .. } => {
+            AgentEvent::Done {
+                message, reason, ..
+            } => {
                 // Turn complete — the agent finished.
                 // (iter-210: fix BACKEND_TUI_AUDIT.md §3 bug #2 — Done.message
                 // was previously discarded with `message: _`. If the agent
@@ -360,6 +362,45 @@ impl App {
                 } else {
                     self.flush_streamed_assistant_message();
                 }
+                // (BUGS.md S5, the tui-bugfix audit) Only TextResponse is a
+                // normal completion: a GraceCall/BudgetExhausted/
+                // CircuitBreaker reason means the agent STOPPED EARLY and the
+                // message is a best-effort partial (possibly empty after the
+                // S1 grace quality gate). The core contract says consumers
+                // that surface the message to an operator MUST check the
+                // reason — the gateway_runner does; the TUI discarded it, so
+                // a budget-exhausted turn rendered with the normal completion
+                // verb and no notice, and an S1-rejected empty partial hit
+                // the "corrupted provider stream" misdiagnosis below. The
+                // Interrupted reason already has its own surface (the
+                // "Turn stopped." arm of the Error event).
+                let early_notice = match reason {
+                    operant_core::agent::TurnExitReason::TextResponse
+                    | operant_core::agent::TurnExitReason::Interrupted => None,
+                    operant_core::agent::TurnExitReason::BudgetExhausted => Some(
+                        "⚠️ Turn ended early — iteration budget exhausted. The answer \
+                             shown is a best-effort partial; break the task into smaller \
+                             steps or raise `max_iterations`.",
+                    ),
+                    operant_core::agent::TurnExitReason::GraceCall => Some(
+                        "⚠️ Turn ended early — the wrap-up ran out of room mid-summary. \
+                             The answer shown is a best-effort partial; reply 'continue' \
+                             to resume.",
+                    ),
+                    operant_core::agent::TurnExitReason::CircuitBreaker => Some(
+                        "⚠️ Turn ended early — the model looped the same failing call \
+                             until the circuit breaker stopped it. Partial work may be \
+                             complete; ask to continue.",
+                    ),
+                    operant_core::agent::TurnExitReason::Error => {
+                        Some("⚠️ Turn ended with an error — check the logs for details.")
+                    }
+                };
+                let stopped_early = early_notice.is_some();
+                if let Some(notice) = early_notice {
+                    self.push_system_message(notice.to_string(), SystemMessageStyle::Info);
+                    self.set_status_notice("Turn ended early — partial answer.");
+                }
                 // 2026-10-10 forced-repro finding: a corrupted provider
                 // stream (SSE events the parser must drop) ends the turn
                 // with NO text and NO tool rows — an empty reply that used
@@ -369,9 +410,13 @@ impl App {
                 // `before` unchanged means neither branch pushed a message —
                 // tool rows are session-lifetime state, so they say nothing
                 // about THIS turn and must not gate the notice.
+                // A stopped-early turn with an empty partial is NOT a
+                // corrupted stream — the wire was fine, the budget ran out —
+                // and the stopped-early card above already explains it, so
+                // the misdiagnosis stays suppressed there.
                 let turn_gained_nothing =
                     self.messages.len() == before && self.streaming_text.trim().is_empty();
-                if turn_gained_nothing {
+                if turn_gained_nothing && !stopped_early {
                     self.set_status_notice(
                         "Empty reply — the provider stream may be corrupted; \
                          retry or switch model"

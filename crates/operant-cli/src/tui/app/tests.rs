@@ -11923,3 +11923,62 @@ fn split_and_split_view_refuse_instead_of_reaching_the_model() {
         );
     }
 }
+
+/// (BUGS.md S5) A stopped-early turn (GraceCall — budget/wall-clock
+/// exhaustion, the S1 gate rejecting a degenerate wrap-up) must not present
+/// itself as a normal completion, and its empty partial must not be
+/// misdiagnosed as a corrupted provider stream: the TUI discarded Done.reason
+/// entirely, so the completion verb looked normal and the empty-partial case
+/// hit the "provider stream may be corrupted" notice — a false diagnosis (the
+/// wire was fine; the budget ran out). The core contract (agent/mod.rs, the
+/// Done doc) says consumers that surface the message to an operator MUST
+/// check the reason; the gateway_runner does, the TUI now does too.
+///
+/// MUTATION-PROOF: reverting the Done match to `Done { message, .. }`
+/// (reason discarded) removes both the early-exit card and the
+/// misdiagnosis guard — the card assertion fails by name.
+#[test]
+fn a_stopped_early_turn_announces_itself_and_is_not_misdiagnosed_as_corruption() {
+    let mut app = make_app();
+    app.is_streaming = true;
+    // The S1-gate shape: the grace call produced nothing usable.
+    app.handle_agent_event(AgentEvent::Done {
+        message: operant_core::client::Message::new(operant_core::client::Role::Assistant, ""),
+        reason: operant_core::agent::TurnExitReason::GraceCall,
+    });
+    assert!(
+        app.system_annotations
+            .iter()
+            .any(|a| a.text.contains("best-effort partial")),
+        "a stopped-early turn must carry the early-exit card"
+    );
+    assert!(
+        !app.status_message
+            .as_deref()
+            .unwrap_or("")
+            .contains("corrupted"),
+        "an empty stopped-early partial is not a corrupted stream"
+    );
+}
+
+/// A normal completion stays notice-free: the early-exit card must not fire
+/// on the healthy path.
+#[test]
+fn a_text_response_turn_stays_notice_free() {
+    let mut app = make_app();
+    app.is_streaming = true;
+    app.streaming_text = "the full answer".to_string();
+    app.handle_agent_event(AgentEvent::Done {
+        message: operant_core::client::Message::new(
+            operant_core::client::Role::Assistant,
+            "the full answer",
+        ),
+        reason: operant_core::agent::TurnExitReason::TextResponse,
+    });
+    assert!(
+        !app.system_annotations
+            .iter()
+            .any(|a| a.text.contains("Turn ended early")),
+        "a normal completion must not carry the early-exit card"
+    );
+}
