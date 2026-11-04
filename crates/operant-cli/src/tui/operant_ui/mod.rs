@@ -488,6 +488,14 @@ struct BodyCacheKey {
     messages_version: u64,
     diagram_mode: crate::tui::operant_app::config_shim::DiagramDisplayMode,
     centered: bool,
+    /// RT-146: the tool call whose row the operator expanded, if any.
+    /// Per-row expansion changes the rendered body of THAT row (its diff
+    /// un-truncates) without changing any message, so `messages_version`
+    /// cannot detect it and this body — or the whole frame — would be served
+    /// stale with the diff still truncated. Held as the id rather than a
+    /// bool because a second click collapses to the same key the first click
+    /// found, which is what makes toggle round-trips cacheable.
+    expanded_tool_id: Option<String>,
     /// Mermaid render geometry depends on the scoped transcript/pane aspect
     /// profile as well as width. A vertical terminal resize can change this
     /// bucket without changing `width`, so it must invalidate the prepared body.
@@ -583,6 +591,9 @@ impl BodyCacheState {
                     && entry.key.images_signature == key.images_signature
                     && entry.key.expanded_images_version == key.expanded_images_version
                     && entry.key.swarm_members_signature == key.swarm_members_signature
+                    // RT-146: a base rendered with a different row expanded must
+                    // not be reused: its prefix carries that rendering.
+                    && entry.key.expanded_tool_id == key.expanded_tool_id
             })
             .max_by_key(|(_, entry)| entry.msg_count)
             .map(|(idx, entry)| (false, idx, entry.msg_count));
@@ -605,6 +616,9 @@ impl BodyCacheState {
                     && entry.key.images_signature == key.images_signature
                     && entry.key.expanded_images_version == key.expanded_images_version
                     && entry.key.swarm_members_signature == key.swarm_members_signature
+                    // RT-146: a base rendered with a different row expanded must
+                    // not be reused: its prefix carries that rendering.
+                    && entry.key.expanded_tool_id == key.expanded_tool_id
             })
             .max_by_key(|(_, entry)| entry.msg_count)
             .map(|(idx, entry)| (true, idx, entry.msg_count));
@@ -774,6 +788,10 @@ struct FullPrepCacheKey {
     messages_version: u64,
     diagram_mode: crate::tui::operant_app::config_shim::DiagramDisplayMode,
     centered: bool,
+    /// RT-146: same reason as `BodyCacheKey::expanded_tool_id` — this cache
+    /// sits ABOVE the body cache, so keying only the body would still serve a
+    /// collapsed frame on a click. Both must carry it.
+    expanded_tool_id: Option<String>,
     /// The scoped Mermaid profile can also change when pane geometry changes
     /// while the transcript rectangle stays the same.
     mermaid_aspect_bucket: Option<u16>,

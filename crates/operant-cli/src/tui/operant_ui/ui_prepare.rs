@@ -775,6 +775,7 @@ pub(crate) fn prepare_messages(
             )),
         diagram_mode: app.diagram_mode(),
         centered: app.centered_mode(),
+        expanded_tool_id: app.expanded_tool_id().map(str::to_string),
         mermaid_aspect_bucket:
             crate::tui::operant_app::mermaid::current_preferred_aspect_ratio_bucket(),
         is_processing: app.is_processing(),
@@ -1249,6 +1250,7 @@ fn prepare_body_cached(app: &dyn TuiState, width: u16) -> Arc<PreparedMessages> 
             )),
         diagram_mode: app.diagram_mode(),
         centered: app.centered_mode(),
+        expanded_tool_id: app.expanded_tool_id().map(str::to_string),
         mermaid_aspect_bucket:
             crate::tui::operant_app::mermaid::current_preferred_aspect_ratio_bucket(),
         pin_images: app.pin_images(),

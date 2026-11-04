@@ -123,7 +123,36 @@ where
         return render(msg, width, diff_mode, row_expanded);
     }
 
-    let key = MessageCacheKey {
+    let mut cache = match message_cache().lock() {
+        Ok(c) => c,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    let key = message_cache_key(msg, width, diff_mode, row_expanded, context);
+    if let Some(lines) = cache.get(&key) {
+        return lines;
+    }
+
+    let lines = render(msg, width, diff_mode, row_expanded);
+    cache.insert(key, lines.clone());
+    lines
+}
+
+/// The cache lookup key for one transcript row.
+///
+/// Split out of `get_cached_message_lines` for one reason: that function
+/// short-circuits under `cfg!(test)` (line 122), so no in-process test can
+/// exercise a cache HIT and therefore no test could observe a key that omits
+/// a field. Factoring the derivation out lets a unit test call the SAME
+/// construction site the production path calls, which is the only way the
+/// key's completeness is provable at all.
+fn message_cache_key(
+    msg: &DisplayMessage,
+    width: u16,
+    diff_mode: DiffDisplayMode,
+    row_expanded: bool,
+    context: MessageCacheContext,
+) -> MessageCacheKey {
+    MessageCacheKey {
         width,
         diff_mode,
         message_hash: msg.stable_cache_hash(),
@@ -136,19 +165,7 @@ where
         show_agentgrep_output: context.show_agentgrep_output,
         show_bash_output: context.show_bash_output,
         tool_call_details: context.tool_call_details,
-    };
-
-    let mut cache = match message_cache().lock() {
-        Ok(c) => c,
-        Err(poisoned) => poisoned.into_inner(),
-    };
-    if let Some(lines) = cache.get(&key) {
-        return lines;
     }
-
-    let lines = render(msg, width, diff_mode, row_expanded);
-    cache.insert(key, lines.clone());
-    lines
 }
 
 #[cfg(test)]
@@ -168,5 +185,78 @@ mod tests {
         left_pad_lines_for_centered_mode(&mut lines, 9);
         assert_eq!(lines[0].to_string(), "   abc");
         assert_eq!(lines[0].alignment, Some(Alignment::Left));
+    }
+
+    /// RT-146: a row toggle must MISS the cache.
+    ///
+    /// This calls `message_cache_key` — the SAME construction site the
+    /// production path uses — because `get_cached_message_lines`
+    /// short-circuits under `cfg!(test)` and therefore no test can reach a
+    /// cache HIT. An earlier draft built the struct literal inline instead
+    /// and stayed GREEN when the construction site was mutated to pin
+    /// `row_expanded: false`; it proved the field existed in the type, not
+    /// that it was populated, which is the assurance this test exists for.
+    ///
+    /// It matters for diffs specifically. Tool-OUTPUT expansion can afford a
+    /// content-derived key because adapter.rs swaps the retained full text
+    /// into `msg.content`, moving `content_len` and `message_hash`. A DIFF
+    /// is parsed from the tool call's INPUT plus that content — neither
+    /// changes when only a row's FULLNESS toggles. Without `row_expanded`
+    /// in the key the two states are byte-identical keys and the cache
+    /// serves the collapsed body to an expanded row, silently swallowing
+    /// the click.
+    #[test]
+    fn a_row_toggle_changes_the_cache_key() {
+        // A tool row whose INPUT carries the diff and whose content is the
+        // tool's output text. Both stay byte-identical across the toggle,
+        // which is the whole reason the key needs the flag.
+        fn msg() -> DisplayMessage {
+            DisplayMessage {
+                role: "tool".to_string(),
+                content: "Edited demo.txt".to_string(),
+                tool_calls: Vec::new(),
+                duration_secs: None,
+                title: Some("demo.txt".to_string()),
+                tool_data: Some(crate::tui::operant_model::vendor_types::ToolCall {
+                    id: "call_row".to_string(),
+                    name: "edit".to_string(),
+                    input: serde_json::json!({
+                        "file_path": "demo.txt",
+                        "old_string": "a\n",
+                        "new_string": "b\n",
+                    }),
+                    intent: None,
+                    thought_signature: None,
+                }),
+            }
+        }
+        let context = MessageCacheContext {
+            diagram_mode: DiagramDisplayMode::default(),
+            centered: false,
+            mermaid_epoch: 0,
+            mermaid_aspect_bucket: None,
+            show_agentgrep_output: false,
+            show_bash_output: false,
+            tool_call_details: false,
+        };
+        let collapsed = message_cache_key(&msg(), 80, DiffDisplayMode::Inline, false, context);
+        let expanded = message_cache_key(&msg(), 80, DiffDisplayMode::Inline, true, context);
+
+        assert_ne!(
+            collapsed, expanded,
+            "a collapsed and an expanded row must be different cache entries, \
+             or the cache returns the truncated diff for a row the operator \
+             expanded"
+        );
+
+        // And the rest of the key is untouched: the same row in the same
+        // expansion state must still collide, or the cache would grow one
+        // entry per render and never hit.
+        assert_eq!(
+            expanded,
+            message_cache_key(&msg(), 80, DiffDisplayMode::Inline, true, context),
+            "the same expansion state must collide — the key must not carry \
+             anything per-render"
+        );
     }
 }
