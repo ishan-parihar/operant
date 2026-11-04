@@ -160,9 +160,15 @@ impl App {
         match key.code {
             KeyCode::Char(c) => {
                 if let Some(digit) = c.to_digit(10) {
-                    let idx = (digit as usize).saturating_sub(1);
-                    if idx < pr.options.len() {
-                        pr.selected_option = idx;
+                    // '0' is not an option key (options number from 1): the
+                    // old saturating_sub mapped it to index 0, silently
+                    // selecting the FIRST option — the one action '0' most
+                    // plausibly was not meant to take.
+                    if digit >= 1 {
+                        let idx = (digit as usize).saturating_sub(1);
+                        if idx < pr.options.len() {
+                            pr.selected_option = idx;
+                        }
                     }
                 } else {
                     // Check if any option matches this key.

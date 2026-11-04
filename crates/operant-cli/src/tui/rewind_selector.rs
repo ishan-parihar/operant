@@ -234,8 +234,13 @@ impl RewindSelectorState {
 /// on the first 64 chars is the honest comparison available without storing
 /// display-side turn ids.
 fn prompt_texts_match(display: &str, mark: &str) -> bool {
-    let d: String = display.chars().take(64).collect();
-    let m: String = mark.chars().take(64).collect();
+    // rewind_marks keeps its marks under the TRIMMED full-equality rule and
+    // documents that stored prompts differ from committed ones only in
+    // incidental whitespace. Matching untrimmed here flagged live turns
+    // "compacted" and refused them ("pick a later one") for a turn that was
+    // on screen.
+    let d: String = display.trim().chars().take(64).collect();
+    let m: String = mark.trim().chars().take(64).collect();
     !d.is_empty() && d == m
 }
 
@@ -887,5 +892,35 @@ mod tests {
             "a zone fully inside the viewport leaves the scroll exactly where \
              the operator left it"
         );
+    }
+}
+
+#[cfg(test)]
+mod matcher_tests {
+    use super::prompt_texts_match;
+
+    /// rewind_marks keeps its marks under the TRIMMED full-equality rule and
+    /// documents that stored prompts differ from committed ones only in
+    /// incidental whitespace. The selector matched untrimmed, so a prompt
+    /// differing from its mark only by whitespace was flagged "compacted"
+    /// and refused — arrows skipped it and Enter said "pick a later one"
+    /// for a turn that was on screen.
+    ///
+    /// MUTATION-PROOF: removing the two .trim() calls fails the first
+    /// assertion by name.
+    #[test]
+    fn the_prompt_matcher_trims_before_comparing() {
+        assert!(prompt_texts_match(
+            "  fix the login bug",
+            "fix the login bug"
+        ));
+        assert!(prompt_texts_match(
+            "fix the login bug",
+            "  fix the login bug  "
+        ));
+        assert!(!prompt_texts_match(
+            "fix the login bug",
+            "fix the signup bug"
+        ));
     }
 }

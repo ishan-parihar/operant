@@ -12087,3 +12087,46 @@ fn a_successful_tool_event_does_not_wipe_a_standing_error_notice() {
         "a parallel success must not erase the standing error notice"
     );
 }
+
+/// '0' is not an option key (options number from 1): the old
+/// saturating_sub mapped it to index 0, silently selecting the FIRST option —
+/// the one action '0' most plausibly was not meant to take. Pressing '0' now
+/// selects nothing; the selection stays where it was.
+///
+/// MUTATION-PROOF: restoring the unguarded saturating_sub fails the
+/// selection assertion by name.
+#[test]
+fn the_zero_key_selects_nothing_in_the_permission_dialog() {
+    use crate::tui::dialogs::permission::{
+        PermissionDialogKind, PermissionOption, PermissionRequest,
+    };
+    let mut app = make_app();
+    app.permission_request = Some(PermissionRequest {
+        tool_name: "bash".to_string(),
+        description: "run a command".to_string(),
+        danger_explanation: String::new(),
+        input_preview: Some("ls".to_string()),
+        kind: PermissionDialogKind::Bash {
+            command: "ls".to_string(),
+            suggested_prefix: None,
+        },
+        options: vec![
+            PermissionOption {
+                label: "Yes".to_string(),
+                key: 'y',
+            },
+            PermissionOption {
+                label: "No".to_string(),
+                key: 'n',
+            },
+        ],
+        selected_option: 1,
+    });
+
+    app.handle_permission_key(press_key(KeyCode::Char('0'), KeyModifiers::NONE));
+    let pr = app.permission_request.as_ref().expect("dialog still open");
+    assert_eq!(
+        pr.selected_option, 1,
+        "'0' must not select the first option"
+    );
+}

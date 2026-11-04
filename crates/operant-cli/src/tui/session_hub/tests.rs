@@ -2354,3 +2354,35 @@ fn buf_bg(buf: &ratatui::buffer::Buffer, x: u16, y: u16) -> ratatui::style::Colo
         .bg
         .unwrap_or(ratatui::style::Color::Reset)
 }
+
+/// The hub search haystack lowercases id/source/employee with the rest:
+/// the tokens are lowercased, so an exact-case id search used to find
+/// nothing while title/cwd/goal searches were case-insensitive — per-field
+/// behavior nobody could predict.
+///
+/// MUTATION-PROOF: reverting the haystack fields to their raw case fails
+/// the find by name.
+#[test]
+fn search_finds_ids_and_employees_regardless_of_case() {
+    let mut hub = SessionHubState::new();
+    hub.replace_rows(vec![
+        row("AbC-123", None, Some("Premiere")),
+        row("other", Some("unrelated"), None),
+    ]);
+    hub.search_query = "abc-123".to_string();
+    hub.rebuild_visible();
+    let ids: Vec<&str> = hub.visible_rows().iter().map(|r| r.id.as_str()).collect();
+    assert_eq!(
+        ids,
+        vec!["AbC-123"],
+        "a lowercase id query must find the row"
+    );
+    hub.search_query = "premiere".to_string();
+    hub.rebuild_visible();
+    let ids: Vec<&str> = hub.visible_rows().iter().map(|r| r.id.as_str()).collect();
+    assert_eq!(
+        ids,
+        vec!["AbC-123"],
+        "employee search stays case-insensitive"
+    );
+}

@@ -749,11 +749,15 @@ impl SessionHubState {
                 if tokens.is_empty() {
                     return true;
                 }
+                // id/source/employee lowercase with the rest: the tokens are
+                // lowercased, so an exact-case id search found nothing while
+                // title/cwd/goal searches were case-insensitive — per-field
+                // behavior nobody could predict.
                 let mut hay = format!(
                     "{} {} {}",
-                    r.id,
-                    r.source,
-                    r.employee_id.clone().unwrap_or_default()
+                    r.id.to_lowercase(),
+                    r.source.to_lowercase(),
+                    r.employee_id.clone().unwrap_or_default().to_lowercase()
                 );
                 if let Some(t) = &r.title {
                     hay.push(' ');
