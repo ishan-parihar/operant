@@ -59,6 +59,19 @@ struct PluginToolResult {
     error: Option<String>,
 }
 
+/// Verdict returned by the `observe` export (iter-1722): a plugin declaring
+/// the `observer` capability receives interception events and may veto.
+/// `{"action":"allow"}` or `{"action":"block","reason":"..."}`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case")]
+pub enum ObserveVerdict {
+    Allow,
+    Block {
+        #[serde(default)]
+        reason: String,
+    },
+}
+
 // ── Host function implementations ─────────────────────────────────
 
 /// Whether an address is one a plugin may not reach (KB-17): loopback, private,
@@ -288,6 +301,16 @@ pub fn call_execute(plugin: &mut extism::Plugin, args_json: &[u8]) -> Result<Too
     })
 }
 
+/// Call the `observe` export with an interception-event JSON and parse the
+/// verdict. A plugin without the export errors here; the caller decides the
+/// fail-open policy (the tool seam allows on error).
+pub fn call_observe(plugin: &mut extism::Plugin, event_json: &str) -> Result<ObserveVerdict> {
+    let output = plugin
+        .call::<&str, String>("observe", event_json)
+        .context("failed to call observe export")?;
+    serde_json::from_str(&output).context("failed to parse observe verdict JSON")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -347,6 +370,38 @@ mod tests {
     fn missing_wasm_file_returns_error() {
         let result = create_plugin(Path::new("/nonexistent/plugin.wasm"), &[]);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn observe_verdict_parses_allow_and_block() {
+        // iter-1722: the `observe` export's contract, pinned without WASM.
+        let allow: ObserveVerdict =
+            serde_json::from_str(r#"{"action":"allow"}"#).expect("allow parses");
+        assert_eq!(allow, ObserveVerdict::Allow);
+
+        let block: ObserveVerdict =
+            serde_json::from_str(r#"{"action":"block","reason":"no writes on sundays"}"#)
+                .expect("block parses");
+        assert_eq!(
+            block,
+            ObserveVerdict::Block {
+                reason: "no writes on sundays".into()
+            }
+        );
+
+        // A block without a reason is still a block (empty reason).
+        let block_no_reason: ObserveVerdict =
+            serde_json::from_str(r#"{"action":"block"}"#).expect("bare block parses");
+        assert_eq!(
+            block_no_reason,
+            ObserveVerdict::Block {
+                reason: String::new()
+            }
+        );
+
+        // Anything else is an error — the caller fails open.
+        assert!(serde_json::from_str::<ObserveVerdict>(r#"{"action":"pause"}"#).is_err());
+        assert!(serde_json::from_str::<ObserveVerdict>("not json").is_err());
     }
 
     /// Integration tests that load the actual image-gen WASM plugin.

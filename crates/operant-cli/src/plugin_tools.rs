@@ -17,6 +17,7 @@ use operant_core::schema::ToolSchema;
 use operant_core::tools::{OperantTool, ToolContext, ToolRegistry};
 use operant_plugins::PluginTool as _;
 use serde_json::Value;
+use std::sync::Arc;
 
 /// Adapter that presents a WASM-backed plugin tool through the core
 /// `OperantTool` trait. `WasmTool` implements `operant_api::tool::Tool`;
@@ -156,7 +157,96 @@ pub async fn register_plugin_tools(
         register_plugin_tool(registry, tool, &manifest.name).await;
     }
 
+    register_observer_interceptors(registry, &host, config).await;
+
     Ok(())
+}
+
+/// Register observer-capable plugins as tool-seam interceptors (iter-1722).
+/// The plugin's `observe` export receives every interception event
+/// (`pre_execute` before a tool runs, `post_execute` with the result) and
+/// may veto it. Fail-open: an observer that fails to load, errors, or
+/// returns garbage allows the call and logs — a broken observer must never
+/// brick the tool loop.
+///
+/// shortcut: the plugin instance is created per event (an `extism::Plugin`
+/// is not shareable across the interceptor's async boundary), so an
+/// observer's latency is one WASM load per tool call — acceptable for
+/// opt-in observers; a resident instance keyed by path is the upgrade if a
+/// hot observer ever ships.
+async fn register_observer_interceptors(
+    registry: &ToolRegistry,
+    host: &operant_plugins::host::PluginHost,
+    config: &AppConfig,
+) {
+    for (manifest, wasm_path) in host.observer_plugin_details() {
+        if !config.plugins.is_enabled(&manifest.name) {
+            continue;
+        }
+        let wasm = wasm_path.to_path_buf();
+        let permissions = manifest.permissions.clone();
+        let plugin_name = manifest.name.clone();
+        registry
+            .register_tool_interceptor(Arc::new(move |event| {
+                let wasm = wasm.clone();
+                let permissions = permissions.clone();
+                let plugin_name = plugin_name.clone();
+                Box::pin(async move {
+                    let mut plugin =
+                        match operant_plugins::runtime::create_plugin(&wasm, &permissions) {
+                            Ok(plugin) => plugin,
+                            Err(e) => {
+                                tracing::warn!(
+                                    plugin = %plugin_name,
+                                    error = %e,
+                                    "observer plugin failed to load; allowing (fail-open)"
+                                );
+                                return operant_core::gateway_pipeline::PipelineAction::Allow;
+                            }
+                        };
+                    let point = match event.point {
+                        operant_core::tools::ToolInterceptPoint::PreExecute => "pre_execute",
+                        operant_core::tools::ToolInterceptPoint::PostExecute => "post_execute",
+                    };
+                    let event_json = serde_json::json!({
+                        "point": point,
+                        "tool": event.tool,
+                        "args": event.args,
+                        "result": event.result,
+                    });
+                    match operant_plugins::runtime::call_observe(
+                        &mut plugin,
+                        &event_json.to_string(),
+                    ) {
+                        Ok(operant_plugins::runtime::ObserveVerdict::Allow) => {
+                            operant_core::gateway_pipeline::PipelineAction::Allow
+                        }
+                        Ok(operant_plugins::runtime::ObserveVerdict::Block { reason }) => {
+                            operant_core::gateway_pipeline::PipelineAction::Block(
+                                if reason.is_empty() {
+                                    format!("blocked by observer plugin {plugin_name}")
+                                } else {
+                                    reason
+                                },
+                            )
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                plugin = %plugin_name,
+                                error = %e,
+                                "observe export failed; allowing (fail-open)"
+                            );
+                            operant_core::gateway_pipeline::PipelineAction::Allow
+                        }
+                    }
+                })
+            }))
+            .await;
+        tracing::info!(
+            plugin = %manifest.name,
+            "registered WASM observer as tool-seam interceptor"
+        );
+    }
 }
 
 /// Registers one plugin tool unless its name is already taken (KB-11). A
@@ -272,8 +362,11 @@ use operant_plugins::watcher::ManifestChange;
 pub enum Unmapped {
     /// Skill-only bundle: skills are markdown files, not providers.
     SkillOnly,
-    /// The capability has no kernel seam (observers register outside the
-    /// harness, in the ObserverRegistry).
+    /// The capability has no kernel ArchitectureRow. Observers DO have a
+    /// real seam since iter-1722 (tool-seam interceptors, registered at
+    /// boot) — what they lack is a kernel row: the harness mounts
+    /// providers, not interceptors, so an observer manifest cannot become
+    /// one and the watcher refuses it here.
     NoKernelSeam(&'static str),
     /// A `Tool` plugin whose module exposes no usable `tool_metadata`
     /// export. We never guess a tool name from the directory: a guessed

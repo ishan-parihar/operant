@@ -137,6 +137,8 @@ pub use todo_tool::{todo_counts_for_session, todo_list_for_session};
 pub use verification_tool::VerifyTaskTool;
 
 use std::collections::{HashMap, HashSet};
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -148,6 +150,7 @@ use tokio::time::timeout;
 use tracing::{debug, error, info, instrument, warn};
 
 use crate::error::{Error, Result};
+use crate::gateway_pipeline::PipelineAction;
 use crate::schema::ToolSchema;
 
 /// Result of tool execution
@@ -439,6 +442,44 @@ impl ToolExecutor {
     }
 }
 
+// ── Tool-seam interception (deepseek-harness waterfall parity) ────────────
+//
+// dsh exposes `tools/pre-execute` (allow/deny) and `tools/post-execute`
+// (replace/block) as veto-capable waterfalls on the tool path. operant's
+// HookRegistry is emit-only, so the veto lives HERE, on the seam where a
+// veto has a concrete meaning. Verdicts reuse the existing `PipelineAction`
+// (Allow/Queue pass, Block vetoes — Queue is a message-pipeline verdict
+// with no tool meaning).
+
+/// Where in the tool path an interceptor runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolInterceptPoint {
+    /// Before dispatch: a Block verdict stops the tool from running.
+    PreExecute,
+    /// After the run: a Block verdict replaces the result with an error.
+    PostExecute,
+}
+
+/// One interception visit. `result` carries the executed tool's content on
+/// PostExecute (`None` on PreExecute).
+#[derive(Debug, Clone)]
+pub struct ToolInterceptEvent {
+    pub point: ToolInterceptPoint,
+    pub tool: String,
+    pub args: Value,
+    /// PostExecute only: the tool result content parsed as JSON (a string
+    /// Value when the content is not JSON).
+    pub result: Option<Value>,
+}
+
+/// A veto-capable interceptor handler. Async because the shipped consumers
+/// (WASM observer plugins, shell hooks) are I/O-bound.
+pub type ToolInterceptHandler = Arc<
+    dyn Fn(ToolInterceptEvent) -> Pin<Box<dyn Future<Output = PipelineAction> + Send>>
+        + Send
+        + Sync,
+>;
+
 pub struct ToolRegistry {
     tools: Arc<RwLock<HashMap<String, Arc<dyn OperantTool>>>>,
     disabled_names: Arc<RwLock<HashSet<String>>>,
@@ -466,6 +507,9 @@ pub struct ToolRegistry {
     /// Additive state: a registry that declares nothing has an empty map and
     /// every method below that predates this field behaves exactly as it did.
     executor: ToolExecutor,
+    /// Tool-seam interceptors (iter-1722), consulted in `execute` before and
+    /// after every tool run. Empty = zero overhead (the common case).
+    interceptors: Arc<RwLock<Vec<ToolInterceptHandler>>>,
 }
 
 /// The retired-name → surviving-name aliases for the consolidated memory
@@ -496,6 +540,7 @@ impl Clone for ToolRegistry {
                 timeout: self.executor.timeout,
                 overrides: Arc::clone(&self.executor.overrides),
             },
+            interceptors: Arc::clone(&self.interceptors),
         }
     }
 }
@@ -508,6 +553,7 @@ impl ToolRegistry {
             disabled_toolsets: Arc::new(RwLock::new(HashSet::new())),
             aliases: Arc::new(std::sync::RwLock::new(builtin_tool_aliases())),
             executor: ToolExecutor::new(timeout),
+            interceptors: Arc::new(RwLock::new(Vec::new())),
         }
     }
 
@@ -758,6 +804,13 @@ impl ToolRegistry {
         tools.is_empty()
     }
 
+    /// Register a tool-seam interceptor (iter-1722, dsh waterfall parity).
+    /// Order is registration order; the first Block verdict wins and later
+    /// interceptors do not run.
+    pub async fn register_tool_interceptor(&self, handler: ToolInterceptHandler) {
+        self.interceptors.write().await.push(handler);
+    }
+
     #[instrument(skip(self, args, context), fields(tool = % tool_name))]
     pub async fn execute(
         &self,
@@ -779,10 +832,59 @@ impl ToolRegistry {
                 let name = resolved;
                 let id = tool_call_id.to_string();
                 debug!(tool = %name, args = ?args, "Executing tool");
+                // iter-1722 (dsh tools/pre-execute + tools/post-execute
+                // parity): consult the veto seam around dispatch. Handlers
+                // are Arc-cloned out so no lock is held across awaits. The
+                // empty-registry case (the default) stays byte-identical to
+                // the pre-interceptor path: args move into the executor, no
+                // clones. The clone-heavy branches below only run when an
+                // operator actually registered an interceptor.
+                let handlers: Vec<ToolInterceptHandler> = self.interceptors.read().await.clone();
+                if handlers.is_empty() {
+                    let result = self
+                        .executor
+                        .execute_with_timeout(tool, name, id, args, context)
+                        .await;
+                    return Ok(result);
+                }
+                for handler in &handlers {
+                    let event = ToolInterceptEvent {
+                        point: ToolInterceptPoint::PreExecute,
+                        tool: name.clone(),
+                        args: args.clone(),
+                        result: None,
+                    };
+                    if let PipelineAction::Block(reason) = handler(event).await {
+                        warn!(tool = %name, reason = %reason, "tool blocked by interceptor (pre-execute)");
+                        return Ok(ToolResult::error_with_name(
+                            &name,
+                            &id,
+                            format!("blocked by interceptor: {reason}"),
+                        ));
+                    }
+                }
                 let result = self
                     .executor
-                    .execute_with_timeout(tool, name, id, args, context)
+                    .execute_with_timeout(tool, name.clone(), id.clone(), args.clone(), context)
                     .await;
+                let result_value: Value = serde_json::from_str(&result.content)
+                    .unwrap_or(Value::String(result.content.clone()));
+                for handler in &handlers {
+                    let event = ToolInterceptEvent {
+                        point: ToolInterceptPoint::PostExecute,
+                        tool: name.clone(),
+                        args: Value::Null,
+                        result: Some(result_value.clone()),
+                    };
+                    if let PipelineAction::Block(reason) = handler(event).await {
+                        warn!(tool = %name, reason = %reason, "tool result blocked by interceptor (post-execute)");
+                        return Ok(ToolResult::error_with_name(
+                            &name,
+                            &id,
+                            format!("blocked by interceptor: {reason}"),
+                        ));
+                    }
+                }
                 Ok(result)
             }
             None => {
@@ -1108,6 +1210,99 @@ mod tests {
             args["query"],
             json!("find the parser"),
             "the real arguments ride alongside the label"
+        );
+    }
+
+    // ── Tool-seam interception (iter-1722, dsh waterfall parity) ──────────
+
+    #[tokio::test]
+    async fn pre_execute_block_stops_the_tool_from_running() {
+        let registry = ToolRegistry::new(Duration::from_secs(5));
+        registry.register(TestTool).await.unwrap();
+        registry
+            .register_tool_interceptor(Arc::new(|event| {
+                Box::pin(async move {
+                    if event.point == ToolInterceptPoint::PreExecute
+                        && event.tool == "test_tool"
+                        && event.args["query"] == json!("forbidden")
+                    {
+                        PipelineAction::Block("policy denies this query".into())
+                    } else {
+                        PipelineAction::Allow
+                    }
+                })
+            }))
+            .await;
+
+        let blocked = registry
+            .execute(
+                "test_tool",
+                "call_1",
+                json!({"query": "forbidden"}),
+                ToolContext::default(),
+            )
+            .await
+            .expect("a block is a result, not an error");
+        assert!(!blocked.success, "the vetoed call must not succeed");
+        let blocked_error = blocked.error.unwrap_or_default();
+        assert!(
+            blocked_error.contains("blocked by interceptor: policy"),
+            "the reason reaches the model: {blocked_error}"
+        );
+
+        // The allow path still runs the tool.
+        let allowed = registry
+            .execute(
+                "test_tool",
+                "call_2",
+                json!({"query": "fine"}),
+                ToolContext::default(),
+            )
+            .await
+            .unwrap();
+        assert!(allowed.success);
+    }
+
+    #[tokio::test]
+    async fn post_execute_block_replaces_the_result() {
+        let registry = ToolRegistry::new(Duration::from_secs(5));
+        registry.register(TestTool).await.unwrap();
+        registry
+            .register_tool_interceptor(Arc::new(|event| {
+                Box::pin(async move {
+                    if event.point == ToolInterceptPoint::PostExecute
+                        && let Some(result) = &event.result
+                        && result["result"] == json!("Processed: secret")
+                    {
+                        PipelineAction::Block("result contained a secret".into())
+                    } else {
+                        PipelineAction::Allow
+                    }
+                })
+            }))
+            .await;
+
+        let result = registry
+            .execute(
+                "test_tool",
+                "call_1",
+                json!({"query": "secret"}),
+                ToolContext::default(),
+            )
+            .await
+            .unwrap();
+        assert!(!result.success, "post-execute veto replaces the result");
+        assert!(
+            !result.content.contains("Processed: secret"),
+            "the original content must not leak past the veto"
+        );
+        assert!(
+            result
+                .error
+                .as_deref()
+                .unwrap_or_default()
+                .contains("blocked by interceptor: result contained a secret"),
+            "the veto reason reaches the model"
         );
     }
 }

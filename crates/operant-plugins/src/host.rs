@@ -358,6 +358,23 @@ impl PluginHost {
             .collect()
     }
 
+    /// Get observer-capable plugins with their resolved WASM file paths
+    /// (iter-1722): the `observer` capability bridges to the tool registry's
+    /// interception seam — the plugin's `observe` export receives every
+    /// interception event and may veto. Observers without a `wasm_path` are
+    /// skipped.
+    pub fn observer_plugin_details(&self) -> Vec<(&PluginManifest, &Path)> {
+        self.loaded
+            .values()
+            .filter(|p| {
+                p.manifest
+                    .capabilities
+                    .contains(&PluginCapability::Observer)
+            })
+            .filter_map(|p| p.wasm_path.as_deref().map(|wp| (&p.manifest, wp)))
+            .collect()
+    }
+
     /// Get skill-capable plugins paired with the absolute path to their `skills/`
     /// directory. Plugins without an existing `skills/` subdirectory are skipped.
     ///
