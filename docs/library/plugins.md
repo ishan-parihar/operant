@@ -103,6 +103,16 @@ validator — one authority), then `operant plugins install file://<abs-path>`.
 A scaffold's directory passes the validator as-written; the loop after that
 is edit → validate → build → install.
 
+An in-tree fixture module pins the live contracts against REAL WASM
+(gap G8 — iter-1732): `crates/operant-plugins/fixtures/fixture.wasm`
+(source: `fixtures/fixture-plugin/`, rebuild with
+`scripts/build-plugin-fixture.sh`, needs `rustup target add
+wasm32-wasip1`) exports `tool_metadata` + `execute` (echo) + `observe`
+(allow by default; blocks on tool name or on the envelope's
+`config.block_all`), and `crates/operant-plugins/tests/fixture_plugin.rs`
+exercises all of it — execute roundtrip, metadata read, allow/block
+verdicts, config passthrough — without serde-only pins.
+
 ## Intention
 
 Plugins are the answer to "extend without recompiling": the harness
