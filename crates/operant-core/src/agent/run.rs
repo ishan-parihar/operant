@@ -2492,6 +2492,23 @@ impl OperantAgent {
                                 .await;
                             }
                         } else {
+                            // The tool RAN and failed. The refusal paths
+                            // (not found, bad arguments, blocked, denied) log
+                            // themselves, but a tool that executed and
+                            // returned an error left nothing in the agent's
+                            // own log: the failure was visible to the model
+                            // and to the operator, and invisible to whoever
+                            // reads the log after the fact. One line, with
+                            // the tool, the call id, the duration and the
+                            // error — the four facts a post-mortem needs.
+                            warn!(
+                                tool = %result.name,
+                                tool_call_id = %result.tool_call_id,
+                                duration_ms =
+                                    self.tool_duration_for(&result.tool_call_id).as_millis() as u64,
+                                error = %result.error.as_deref().unwrap_or("unknown error"),
+                                "Tool call failed"
+                            );
                             self.emit(AgentEvent::ToolError {
                                 tool_call_id: result.tool_call_id.clone(),
                                 name: result.name.clone(),
