@@ -7281,6 +7281,16 @@ fn highlight_covers_only_the_text_a_copy_carries() {
     // 2026-10-13: the selection painted every row edge to edge — the `1›`
     // gutter, padding lit up although copy drops them.
     let mut app = make_app();
+    // The palette is PROCESS-GLOBAL, and this test reads the DIFFERENCE
+    // between two consecutive frames' STYLES — so a concurrent `App::new`
+    // resetting the palette between the two renders changes the row's style
+    // and the difference reads as a selection highlight (the gutter
+    // assertion then fails on a perfectly good selection). The lock is taken
+    // AFTER `make_app`, which takes and releases it itself: holding it across
+    // `make_app` would deadlock on the same mutex.
+    let _palette = crate::tui::theme_colors::tests::ACTIVE_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     app.messages
         .push(Message::user("PROMPTTEXT here".to_string()));
     app.tool_use_blocks.push(ToolUseBlock {
