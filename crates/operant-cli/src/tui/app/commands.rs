@@ -15,12 +15,24 @@ pub(crate) const DEFAULT_COPY_MESSAGES: usize = 1;
 /// because the argument is advisory and the command's job is still useful
 /// without it. `0` means "nothing to copy", not "the default", so an
 /// explicit `0` is honoured rather than silently upgraded.
-pub(crate) fn parse_last_n(args: &str, default: usize) -> usize {
+/// Parse a count argument for the commands that take one (`/copy [N]`,
+/// `/undo [N]`).
+///
+/// (iter-1772) The old parse fell back to the default for anything
+/// unparseable, so "/copy abc", "/copy -3" and an overflowing number all
+/// quietly became "one message" — the operator's number vanished with no
+/// word. A count the operator typed is either a count or an error; it is
+/// never silently a different count. Zero stays a real answer for `/copy`
+/// (it copies nothing — see `copy_zero_is_honoured_not_replaced_by_the
+/// default`), so only the unparseable cases are errors here.
+pub(crate) fn parse_last_n(args: &str, default: usize) -> Result<usize, String> {
     let trimmed = args.trim();
     if trimmed.is_empty() {
-        return default;
+        return Ok(default);
     }
-    trimmed.parse::<usize>().unwrap_or(default)
+    trimmed
+        .parse::<usize>()
+        .map_err(|_| format!("\"{trimmed}\" is not a count — use a whole number"))
 }
 
 /// The role label a copied message carries, so a pasted multi-message
@@ -743,8 +755,24 @@ impl App {
             // the full context and every later turn "remembered" the
             // undone exchange).
             "undo" => {
-                let n: usize = args.trim().parse().unwrap_or(1);
-                let n = n.max(1);
+                // (iter-1772) A count the operator typed is either a count or
+                // an error. The old parse turned "abc", "-3" and an
+                // overflowing number into "one turn" — silently undoing a
+                // turn the operator did not name — and clamped "0" to one
+                // turn as well, which undid MORE than was asked for.
+                let n = match parse_last_n(args, 1) {
+                    Ok(0) => {
+                        self.set_status_notice(
+                            "/undo needs at least one turn — nothing was undone.".to_string(),
+                        );
+                        return true;
+                    }
+                    Ok(n) => n,
+                    Err(reason) => {
+                        self.set_status_notice(format!("/undo: {reason}."));
+                        return true;
+                    }
+                };
                 if self.is_streaming {
                     self.status_message =
                         Some("Cannot undo while a turn is running. Stop first.".to_string());
@@ -974,7 +1002,27 @@ impl App {
                 // message. jcode has no `/copy` at all, so these semantics are
                 // operant's own — last-N-by-recency, matching how an operator
                 // reads the tail of a conversation.
-                let n = parse_last_n(args, DEFAULT_COPY_MESSAGES);
+                let n = match parse_last_n(args, DEFAULT_COPY_MESSAGES) {
+                    Ok(n) => n,
+                    Err(reason) => {
+                        // (iter-1772) The count the operator typed is either a
+                        // count or an error. It used to fall back to 1 — so
+                        // "/copy abc" copied one message and said nothing
+                        // about the argument it could not read.
+                        self.push_notice(NotificationKind::Warning, format!("/copy: {reason}."));
+                        return true;
+                    }
+                };
+                if n == 0 {
+                    // Zero is a real answer (copy nothing) — but it is NOT the
+                    // empty transcript, and saying so sent the operator
+                    // hunting for a transcript that had messages in it.
+                    self.push_notice(
+                        NotificationKind::Warning,
+                        "Nothing to copy: the count was 0.".to_string(),
+                    );
+                    return true;
+                }
                 let selected = self
                     .messages
                     .iter()

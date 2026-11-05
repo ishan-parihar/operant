@@ -31,4 +31,5 @@
 | tui-bugfix-campaign-025 | done | B29: the catalogue's Prompt-context rows were a stale second copy — /keys printed one chord as two features — and the guard's 'at least one row matches' hole is closed | — | [2026-11-05] origin/main iter-1768 |
 | tui-bugfix-campaign-026 | done | B30: the vim modes' catalogue rows were in the wrong context, and Ctrl+C in a vim mode wiped the composer's text | — | [2026-11-06] origin/main iter-1770 |
 | tui-bugfix-campaign-027 | done | B31: the visual corpus is green again — the context-window slice landed without re-proving the goldens, so the gate was red at HEAD | — | [2026-11-06] origin/main iter-1771 |
+| tui-bugfix-campaign-028 | done | B32: a count argument was silently turned into a different count, and /copy 0 blamed an empty transcript | — | [2026-11-06] origin/main iter-1772 |
 | tui-bugfix-campaign-018 | done | B23: the per-row diff expansion scenario had no committed golden, so the corpus verify failed on every run | claimed-by `agent-omarchy` since 2026-11-05T13:13 | [2026-11-05] origin/main iter-1758 |

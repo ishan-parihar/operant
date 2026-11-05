@@ -8480,7 +8480,8 @@ mod approval_gate_tests {
             let n = super::super::commands::parse_last_n(
                 args,
                 super::super::commands::DEFAULT_COPY_MESSAGES,
-            );
+            )
+            .expect("a count argument parses");
             let selected = app
                 .messages
                 .iter()
@@ -8495,20 +8496,86 @@ mod approval_gate_tests {
 
     /// An explicit `0` copies nothing rather than silently becoming the
     /// default — `0` is a real answer, not a parse failure.
+    ///
+    /// (iter-1772) And the notice it prints must not blame an empty
+    /// transcript: `/copy 0` on a transcript with six messages in it used to
+    /// say "No messages to copy — the transcript is empty.", which sends the
+    /// operator hunting for a transcript that is right there.
     #[test]
-    fn copy_zero_is_honoured_not_replaced_by_the_default() {
+    fn copy_zero_is_honoured_and_does_not_blame_an_empty_transcript() {
         let mut app = make_app();
         seed_messages(&mut app, 3);
-        let n = super::super::commands::parse_last_n("0", 1);
+        let n = super::super::commands::parse_last_n("0", 1).expect("0 parses");
         assert_eq!(n, 0);
-        let selected = app
-            .messages
-            .iter()
-            .rev()
-            .filter(|m| !m.get_all_text().trim().is_empty())
-            .take(n)
-            .count();
-        assert_eq!(selected, 0);
+
+        let mut app = make_app();
+        seed_messages(&mut app, 6);
+        assert!(app.handle_tui_command("copy", "0"));
+        let notice = app.status_message.clone().unwrap_or_default();
+        assert!(
+            notice.contains("count was 0"),
+            "the zero case must say what it is: {notice:?}"
+        );
+        assert!(
+            !notice.contains("transcript is empty"),
+            "a full transcript is not empty: {notice:?}"
+        );
+    }
+
+    /// A count the operator typed is either a count or an error.
+    ///
+    /// (iter-1772) "abc", "-3" and an overflowing number all used to fall
+    /// back to 1 — `/copy abc` copied one message and never mentioned the
+    /// argument it could not read, and `/undo abc` silently undid ONE TURN
+    /// the operator never asked to undo. Both now name the argument.
+    #[test]
+    fn an_unreadable_count_is_an_error_not_silently_the_default() {
+        for (args, reason) in [
+            ("abc", "not a count"),
+            ("-3", "not a count"),
+            ("99999999999999999999", "not a count"),
+        ] {
+            let mut app = make_app();
+            seed_messages(&mut app, 6);
+            assert!(app.handle_tui_command("copy", args), "copy {args}");
+            let notice = app.status_message.clone().unwrap_or_default();
+            assert!(
+                notice.contains(reason),
+                "copy with {args:?} must say {reason:?}: {notice:?}"
+            );
+
+            let mut app = make_app();
+            assert!(app.handle_tui_command("undo", args), "undo {args}");
+            assert!(
+                app.pending_undo.is_none(),
+                "undo with {args:?} must not pend an undo the operator did not name"
+            );
+            assert!(
+                app.status_message
+                    .as_deref()
+                    .unwrap_or_default()
+                    .contains(reason),
+                "undo with {args:?} must say {reason:?}: {:?}",
+                app.status_message
+            );
+        }
+
+        // And zero for /undo: the old code CLAMPED it to one turn, which
+        // rewound a message the operator did not ask to rewind.
+        let mut app = make_app();
+        assert!(app.handle_tui_command("undo", "0"));
+        assert!(
+            app.pending_undo.is_none(),
+            "undo 0 must not rewind anything"
+        );
+        assert!(
+            app.status_message
+                .as_deref()
+                .unwrap_or_default()
+                .contains("at least one turn"),
+            "undo 0 must say why it did nothing: {:?}",
+            app.status_message
+        );
     }
 
     /// `/rewind <n>` resolves to the Nth-last prompt, not the Nth from the
