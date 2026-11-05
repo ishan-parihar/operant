@@ -1225,10 +1225,7 @@ mod tests {
         };
         assert_eq!(
             openai_reset_status_hint(AuthMethod::OpenAIOAuth, &usage, Some("work")),
-            Some(
-                "2 resets available · expiry unknown (2 resets) · /reset usage limits openai"
-                    .to_owned()
-            )
+            Some("2 resets available · expiry unknown (2 resets)".to_owned())
         );
         for auth in [
             AuthMethod::OpenAIApiKey,
@@ -1281,14 +1278,14 @@ mod tests {
         };
         assert_eq!(
             openai_reset_status_hint(AuthMethod::OpenAIOAuth, &usage, None).unwrap(),
-            "4 resets available · expires 2099-05-01 00:30 UTC, expires 2099-06-01 00:00 UTC, expiry unknown (2 resets) · /reset usage limits openai"
+            "4 resets available · expires 2099-05-01 00:30 UTC, expires 2099-06-01 00:00 UTC, expiry unknown (2 resets)"
         );
         let credits = usage.openai_reset_credits.as_mut().unwrap();
         credits.available_count = 1;
         credits.available_expirations = vec![None];
         assert_eq!(
             openai_reset_status_hint(AuthMethod::OpenAIOAuth, &usage, None).unwrap(),
-            "1 reset available · expiry unknown (1 reset) · /reset usage limits openai"
+            "1 reset available · expiry unknown (1 reset)"
         );
         usage.openai_reset_credits.as_mut().unwrap().available_count = 0;
         assert!(openai_reset_status_hint(AuthMethod::OpenAIOAuth, &usage, None).is_none());
@@ -1962,7 +1959,13 @@ pub(crate) fn openai_reset_status_hint(
         ));
     }
     Some(format!(
-        "{count} {noun} available · {} · /reset usage limits openai",
+        // (iter-1767) The old hint ended with a "/reset …" pointer — a jcode
+        // command (another vendored string, rebranded but not re-pointed).
+        // Operant has no `/reset` command, and the core has no banked-reset
+        // action either: the credits are display-only data from the provider's
+        // usage report. So the hint states the facts it has and stops, instead
+        // of pointing the operator at a command that does not exist.
+        "{count} {noun} available · {}",
         details.join(", ")
     ))
 }

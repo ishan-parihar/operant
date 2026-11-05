@@ -2001,8 +2001,16 @@ pub(crate) fn register_tui_command_handlers(
     #[async_trait::async_trait]
     impl CommandHandler for ToolsHandler {
         async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
+            // (iter-1767) The old reply ended "Use /toolsets for the full
+            // list" — a jcode command (the vendored string, rebranded but not
+            // re-pointed). Operant has no `/toolsets`: it is in neither the
+            // TUI's command table nor the handler registry, so the model that
+            // reads this reply tried a command that does not exist and asked
+            // again. The MCP panel's tool pane is NOT the list either — it
+            // holds the MCP servers' tools, not the agent's own. So the reply
+            // states the true facts and stops.
             CommandResult::message(
-                "Available tools: memory, web_search, web_fetch, bash, and more. Use /toolsets for the full list.",
+                "Available tools: memory, web_search, web_fetch, bash, and more.",
             )
         }
     }

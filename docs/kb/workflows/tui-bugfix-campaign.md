@@ -27,4 +27,5 @@
 | tui-bugfix-campaign-021 | done | B25: the tips strip advertised three chords that no longer do what the tips say (Ctrl+G, Ctrl+T, the PageUp step) | — | [2026-11-05] origin/main iter-1762 |
 | tui-bugfix-campaign-022 | done | B26: the scroll-bookmark notice told the operator to press Ctrl+G to return — Ctrl+G is the external editor | — | [2026-11-05] origin/main iter-1763 |
 | tui-bugfix-campaign-023 | done | B27: four of the /help overlay's 111 command descriptions were stale (/branch, /logout, /save, /effort) — the table had no guard, unlike the chord catalogue | — | [2026-11-05] origin/main iter-1766 |
+| tui-bugfix-campaign-024 | done | B28: two vendored messages pointed at commands operant does not have — /toolsets and /reset — and the class now has a scan guard | — | [2026-11-05] origin/main iter-1767 |
 | tui-bugfix-campaign-018 | done | B23: the per-row diff expansion scenario had no committed golden, so the corpus verify failed on every run | claimed-by `agent-omarchy` since 2026-11-05T13:13 | [2026-11-05] origin/main iter-1758 |

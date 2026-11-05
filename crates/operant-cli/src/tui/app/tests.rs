@@ -739,6 +739,114 @@ fn shift_tab_never_changes_permission_mode() {
     );
 }
 
+/// A user-facing string that points at a command must name a command that
+/// exists.
+///
+/// (iter-1767) Two vendored messages pointed at jcode commands operant never
+/// had: the `/tools` handler said "Use /toolsets for the full list", and the
+/// OpenAI usage hint ended with a `/reset …` pointer. Both were rebranded
+/// jcode → operant while the COMMANDS stayed jcode's — so the model and the
+/// operator were sent to commands that do not exist.
+///
+/// This scans the TUI's own strings for command references and checks each
+/// against the command table and the handler registry. The scan is
+/// deliberately narrow — a token that looks like a command (a slash and a
+/// lowercase word) sitting in PROSE (after a space, a bullet, a dash or a
+/// bracket) — so paths like "/tmp/x", which sit at the start of a literal,
+/// do not trip it. A token that does trip it is either a command or a new
+/// dead pointer.
+#[test]
+fn every_command_a_user_facing_string_points_at_exists() {
+    use std::collections::BTreeSet;
+    use std::path::{Path, PathBuf};
+
+    fn collect_rs_files(dir: &Path, out: &mut Vec<PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                collect_rs_files(&path, out);
+            } else if path.extension().is_some_and(|extension| extension == "rs")
+                && !path
+                    .file_name()
+                    .is_some_and(|name| name.to_string_lossy().contains("tests"))
+            {
+                out.push(path);
+            }
+        }
+    }
+
+    // The commands that exist: the TUI's table (public AND hidden) plus the
+    // CORE's handler registry — a handler is a command the model can run, so
+    // a message may point at one.
+    let mut known: BTreeSet<String> =
+        crate::tui::operant_app::app::registered_command_names_including_hidden()
+            .map(|name| name.to_string())
+            .collect();
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let handler_source = std::fs::read_to_string(manifest.join("src/tui/adapter_types/tui_app.rs"))
+        .expect("the TUI's source sits next to the test");
+    let handler_re =
+        regex::Regex::new(r#"register_handler\("([a-z][a-z0-9-]*)""#).expect("a valid regex");
+    for capture in handler_re.captures_iter(&handler_source) {
+        known.insert(format!("/{}", &capture[1]));
+    }
+
+    // Path fragments that are not commands. Keep this list short — every
+    // entry is a decision to leave a string alone, and a dead pointer must
+    // never be added here.
+    let not_commands = BTreeSet::from(["/tmp"]);
+
+    let literal_re = regex::Regex::new(r#""((?:[^"\\]|\\.)*)""#).expect("a valid regex");
+    // The token's preceding character is captured with it: the `regex` crate
+    // has no look-behind, and the prose check needs that character anyway.
+    let token_re =
+        regex::Regex::new(r#"(^|[^A-Za-z0-9_/])(/[a-z][a-z0-9-]{1,24})\b"#).expect("a valid regex");
+
+    let mut files = Vec::new();
+    collect_rs_files(&manifest.join("src/tui"), &mut files);
+    let mut dead = Vec::new();
+    for file in files {
+        let Ok(text) = std::fs::read_to_string(&file) else {
+            continue;
+        };
+        for (index, line) in text.lines().enumerate() {
+            if line.trim_start().starts_with("//") {
+                continue;
+            }
+            for literal in literal_re.captures_iter(line) {
+                let literal = &literal[1];
+                for capture in token_re.captures_iter(literal) {
+                    let before = &capture[1];
+                    let token = &capture[2];
+                    let whole = capture.get(0).expect("the whole match");
+                    // A token followed by "/" is a PATH ("/proc/1/status"), not
+                    // a command reference.
+                    let is_path = literal[whole.end()..].starts_with('/');
+                    let prose = before.ends_with(' ')
+                        || before.ends_with('·')
+                        || before.ends_with('—')
+                        || before.ends_with('(')
+                        || before.ends_with('`');
+                    if !prose || is_path || known.contains(token) || not_commands.contains(token) {
+                        continue;
+                    }
+                    dead.push(format!("{}:{}: {token}", file.display(), index + 1));
+                }
+            }
+        }
+    }
+    assert!(
+        dead.is_empty(),
+        "these strings point at commands that do not exist:\n{}\n\
+         Either register the command or drop the pointer — a pointer to a \
+         missing command sends the operator (and the model) in circles.",
+        dead.join("\n")
+    );
+}
+
 /// The `/help` overlay prints the REGISTRY's descriptions, so a description
 /// that no longer says what the command does is a lie the operator reads
 /// BEFORE pressing the key.
@@ -12352,5 +12460,128 @@ fn the_zero_key_selects_nothing_in_the_permission_dialog() {
     assert_eq!(
         pr.selected_option, 1,
         "'0' must not select the first option"
+    );
+}
+
+// ---- context occupancy, session totals, session boundaries ----
+
+/// The context overlay must show the PROMPT the provider just billed — the
+/// live occupancy of the window — not the sum of every request the session
+/// ever made. The old accumulator made a 200k window read "full" after one
+/// long turn.
+///
+/// MUTATION-PROVEN: restoring the accumulation fails the first assertion by
+/// name (the second request's prompt is 150k, the accumulated spend 275k).
+#[test]
+fn the_context_overlay_shows_the_prompt_occupancy_not_the_cumulative_spend() {
+    let mut app = make_app();
+    app.handle_agent_event(AgentEvent::Usage {
+        input_tokens: 120_000,
+        output_tokens: 2_000,
+        total_tokens: 122_000,
+    });
+    app.handle_agent_event(AgentEvent::Usage {
+        input_tokens: 150_000,
+        output_tokens: 3_000,
+        total_tokens: 153_000,
+    });
+    assert_eq!(
+        app.context_used_tokens, 150_000,
+        "the overlay must show the latest prompt occupancy, not the session's spend"
+    );
+}
+
+/// The "session: Nk in, Nk out" line must describe the SESSION: cumulative
+/// input and cumulative output. The output side used to be the CURRENT
+/// turn's output, which `begin_turn` zeroes — so the session figure changed
+/// on every turn.
+#[test]
+fn the_session_totals_are_cumulative_input_and_output() {
+    let mut app = make_app();
+    app.handle_agent_event(AgentEvent::Usage {
+        input_tokens: 1_000,
+        output_tokens: 100,
+        total_tokens: 1_100,
+    });
+    app.handle_agent_event(AgentEvent::Usage {
+        input_tokens: 2_000,
+        output_tokens: 200,
+        total_tokens: 2_200,
+    });
+    // A new turn zeroes the PER-TURN counters; the session totals survive.
+    app.begin_turn();
+    assert_eq!(app.turn_output_tokens, 0);
+    let (input, output) = app.total_session_tokens().expect("session totals");
+    assert_eq!(
+        (input, output),
+        (3_000, 300),
+        "the session totals must be the cumulative input and output"
+    );
+}
+
+/// Every session boundary (clear, new, switch) must zero the per-session
+/// counters: a counter that survives labels the NEW session with the OLD
+/// session's numbers.
+#[test]
+fn a_session_boundary_resets_the_counters() {
+    let mut app = make_app();
+    app.handle_agent_event(AgentEvent::Usage {
+        input_tokens: 5_000,
+        output_tokens: 500,
+        total_tokens: 5_500,
+    });
+    assert!(app.context_used_tokens > 0);
+    assert!(app.last_observed_prompt_tokens.is_some());
+
+    app.reset_session_counters();
+
+    assert_eq!(app.context_used_tokens, 0, "the occupancy must not survive");
+    assert_eq!(app.token_count, 0);
+    assert_eq!(app.turn_input_tokens, 0);
+    assert_eq!(app.turn_output_tokens, 0);
+    assert_eq!(app.cost_usd, 0.0);
+    assert_eq!(app.cost_tracker.input_tokens, 0);
+    assert_eq!(app.cost_tracker.output_tokens, 0);
+    assert!(
+        app.last_observed_prompt_tokens.is_none(),
+        "the stale prompt measurement must not survive"
+    );
+}
+
+/// `/stop` clears `is_streaming` immediately, but the cancelled task keeps
+/// committing its tail. A session-boundary command that lands in that window
+/// wipes the session the tail is still writing into — so the boundary waits
+/// for the task.
+///
+/// MUTATION-PROVEN: gating on `is_streaming` alone fails the second
+/// assertion (the task is still live).
+#[tokio::test]
+async fn a_session_boundary_waits_for_the_agent_task() {
+    let mut app = make_app();
+    assert!(
+        app.session_boundary_ready(),
+        "an idle app is ready for a boundary command"
+    );
+
+    let (_tx, rx) =
+        tokio::sync::oneshot::channel::<std::result::Result<(), operant_core::error::Error>>();
+    let handle = tokio::spawn(async move {
+        let _ = rx.await;
+    });
+    app.agent_task_handle = Some(handle);
+    // A live agent: the cancel triggers the interrupt flag and the task keeps
+    // running until it returns — that is the window this guard covers.
+    app.agent_interrupt = Some(operant_core::interrupt::InterruptFlag::new());
+    app.is_streaming = true;
+
+    app.cancel_streaming_turn();
+
+    assert!(
+        !app.is_streaming,
+        "sanity: /stop clears the streaming flag"
+    );
+    assert!(
+        !app.session_boundary_ready(),
+        "the boundary must wait while the cancelled task is still committing its tail"
     );
 }
