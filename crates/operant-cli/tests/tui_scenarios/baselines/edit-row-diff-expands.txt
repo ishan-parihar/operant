@@ -1,0 +1,40 @@
+ │ 171+ let new_171 = 171;                                                                                      ↑394
+ │ 172+ let new_172 = 172;
+ │ 173+ let new_173 = 173;
+ │ 174+ let new_174 = 174;
+ │ 175+ let new_175 = 175;
+ │ 176+ let new_176 = 176;
+ │ 177+ let new_177 = 177;
+ │ 178+ let new_178 = 178;
+ │ 179+ let new_179 = 179;
+ │ 180+ let new_180 = 180;
+ │ 181+ let new_181 = 181;
+ │ 182+ let new_182 = 182;
+ │ 183+ let new_183 = 183;
+ │ 184+ let new_184 = 184;
+ │ 185+ let new_185 = 185;
+ │ 186+ let new_186 = 186;
+ │ 187+ let new_187 = 187;
+ │ 188+ let new_188 = 188;
+ │ 189+ let new_189 = 189;
+ │ 190+ let new_190 = 190;
+ │ 191+ let new_191 = 191;
+ │ 192+ let new_192 = 192;
+ │ 193+ let new_193 = 193;
+ │ 194+ let new_194 = 194;
+ │ 195+ let new_195 = 195;
+ │ 196+ let new_196 = 196;
+ │ 197+ let new_197 = 197;
+ │ 198+ let new_198 = 198;
+ │ 199+ let new_199 = 199;
+ │ 200+ let new_200 = 200;
+ └─
+
+ alpha now uses scaled-up constants.
+
+ 1› /voice                                                                                                             │
+
+
+› Ask operant to do anything
+
+                                                                       ~ 2.2k/200k ▱▱▱▱▱▱▱▱▱▱ 1% API key Offline Capture

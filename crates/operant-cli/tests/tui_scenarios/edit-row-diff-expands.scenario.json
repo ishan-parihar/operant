@@ -1,0 +1,21 @@
+{
+  "name": "edit-row-diff-expands",
+  "surface": "crates/operant-cli/src/tui/operant_ui/ui_messages.rs::render_tool_message (per-row diff expansion)",
+  "opens_with": "(/voice to clear the boot notice; the edit row comes from the agent script)",
+  "keys": "/voice<enter>",
+  "mouse": "<left,4,15>",
+  "size": "120x40",
+  "assert": [
+    "tool_calls_seen contains e1",
+    "expanded_tool_id == \"e1\""
+  ],
+  "assert_screen": [
+    "count:more changes==0",
+    "contains:let new_171 = 171"
+  ],
+  "notes": "2026-11-03. The per-row half of click-to-expand, and the reason this scenario exists at all: a UNIT TEST CANNOT PROVE IT. operant_model/cache.rs:122 has `if cfg!(test) { return render(...) }` at the top of get_cached_message_lines, so every in-process test bypasses the row cache entirely. Mutating the cache key (row_expanded: false) and re-running render_tool_message_row_expansion_uncollapses_the_diff proves it: the test still PASSES. So the cache-key half of this feature is only observable in a real process, which is exactly what this scenario supplies.\n\nThe screen assertions are the load-bearing ones: `count:more changes==0` (the truncation row '... N more changes ...' is gone once the row is expanded) and `contains:let g = 77` (a line the truncated middle and dropped head both hid). The state assertion `expanded_tool_id == \"e1\"` pins that the click landed on the row rather than falling through to a text selection.\n\nRow coordinate measured from a frame dump, not assumed. See the sibling tool-row-click-expands scenario for the method.",
+  "agent_script": "edit-row-diff-expansion.json",
+  "baseline": "edit-row-diff-expands.txt",
+  "style_baseline": "edit-row-diff-expands.style.txt",
+  "flags": []
+}
