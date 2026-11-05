@@ -27,7 +27,12 @@ use crate::tui::operant_model::ContentPos;
 pub(crate) use scroll_anchor::ScrollMemory;
 
 #[cfg(test)]
+pub(crate) mod debug_log_tests;
+#[cfg(test)]
 pub(crate) mod session_counter_tests;
+pub(crate) mod session_display;
+#[cfg(test)]
+pub(crate) mod session_display_tests;
 #[cfg(test)]
 pub(crate) mod tests;
 pub use enums::*;
@@ -1591,21 +1596,13 @@ impl App {
         conv: Vec<operant_core::client::Message>,
         session_id: &str,
     ) {
-        self.messages.clear();
-        use crate::tui::adapter_types::types::{Message, MessageContent, Role};
-        for m in conv {
-            let role = match m.role {
-                operant_core::client::Role::User => Role::User,
-                operant_core::client::Role::Assistant => Role::Assistant,
-                operant_core::client::Role::System => Role::System,
-                operant_core::client::Role::Tool => Role::System,
-            };
-            self.messages.push(Message {
-                role,
-                content: MessageContent::Text(m.content),
-            });
-        }
-        self.clear_tool_blocks();
+        // ONE converter (the sibling module) for both rebuild paths: the
+        // frame loop's session switch and the outer drain's rebuild. The
+        // inline conversion that used to live here dropped the assistant's
+        // reasoning and turned every tool row into a bare system line, so a
+        // restored session showed NONE of the turn's activity — no tool rows,
+        // no thinking.
+        session_display::apply_conversation_to_display(self, conv);
         self.system_annotations.clear();
         // TUI-2: the previous session's title must not label the new one.
         self.session_title = None;

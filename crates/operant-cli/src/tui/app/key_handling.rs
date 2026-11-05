@@ -46,6 +46,19 @@ impl App {
             return false;
         }
 
+        // Publish key event to debug bus (no-op when disabled).
+        //
+        // BEFORE the inline picker: the picker owns the keyboard while it is
+        // open and returns early, so a publication below its gate never
+        // happened — the picker's keys were the ONE surface the debug log
+        // could not see, which is exactly the surface a bug report about
+        // "the picker ate my key" needs.
+        self.debug_hub.publish(crate::tui::debug::TuiEvent::Key {
+            code: format!("{:?}", key.code),
+            modifiers: key.modifiers.bits(),
+            at: crate::tui::debug::event_bus::now_secs(),
+        });
+
         // ── (plan 05B) the unified inline picker owns the keyboard while it
         // is open — nav/filter/Enter/Esc, exactly jcode's semantics — before
         // any other surface (the composer must not eat its letters as
@@ -55,13 +68,6 @@ impl App {
         {
             return false;
         }
-
-        // Publish key event to debug bus (no-op when disabled).
-        self.debug_hub.publish(crate::tui::debug::TuiEvent::Key {
-            code: format!("{:?}", key.code),
-            modifiers: key.modifiers.bits(),
-            at: crate::tui::debug::event_bus::now_secs(),
-        });
 
         // Count this press against the binding registry (feeds /hotkeys).
         // Placed here so every accepted key is counted exactly once, ahead of
@@ -1824,6 +1830,15 @@ impl App {
             KeyCode::Delete if key.modifiers.contains(KeyModifiers::ALT) => {
                 self.prompt_input.delete_word_forward();
                 self.refresh_prompt_input();
+            }
+            KeyCode::Char('v') if key.modifiers.contains(KeyModifiers::ALT) => {
+                // (iter-1774) The catalogue has advertised "Alt+v — Toggle
+                // Vim mode" in the Prompt context since the table was written,
+                // and NOTHING dispatched it: only the `/vim` command toggled
+                // the mode, so the operator's Alt+V did nothing at all. The
+                // same shape as iter-1758's Ctrl+Q — an advertised chord with
+                // no arm — so the fix is the same: dispatch it.
+                self.toggle_vim_mode();
             }
             KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::ALT) => {
                 self.prompt_input.move_word_backward();

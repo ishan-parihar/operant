@@ -107,25 +107,48 @@ impl ModelClient for OpenAIModelClient {
                 crate::client::ReasoningShape::Auto,
             )
             .await?;
-        // Corrupted-SSE accounting: clone the drop counter before the
-        // response is moved into the mapped stream; the terminal chunk
-        // below reports the total so the agent can surface stream
-        // corruption instead of silently rendering a truncated turn.
-        let dropped = stream.dropped_counter();
+        Ok(map_sse_stream(stream))
+    }
+}
 
-        // Map each ChatStreamEvent into a StreamChunk.  Tool-call deltas are
-        // passed through as partial ToolCall objects; the receiving agent
-        // (process_stream in agent/mod.rs) merges incremental arguments
-        // across events using the tool-call ID.
-        //
-        // OpenAI-compatible streaming providers only emit the tool-call ID
-        // (and `function.name`) in the FIRST delta for each `index`; later
-        // deltas carry only `function.arguments` fragments.  We therefore
-        // keep a per-stream `index -> id` map (`StreamToolCallIndex`) so
-        // every emitted ToolCall reuses the original ID and the agent's
-        // `merge_stream_tool_call` correctly appends incremental arguments
-        // instead of producing many disjoint partial calls.
-        let mapped = stream.scan(StreamToolCallIndex::default(), |state, event_result| {
+/// Map a provider's SSE stream into the agent's chunks, with the terminal
+/// chunk that reports how the stream ENDED.
+///
+/// Split out of `chat_streaming` so the end of a stream — the part that
+/// separates "the provider answered" from "the body just stopped" — is
+/// testable without an HTTP server.
+fn map_sse_stream(
+    stream: crate::client::ChatStreamResponse,
+) -> BoxStream<'static, Result<StreamChunk>> {
+    // Corrupted-SSE accounting: clone the drop counter before the
+    // response is moved into the mapped stream; the terminal chunk
+    // below reports the total so the agent can surface stream
+    // corruption instead of silently rendering a truncated turn.
+    let dropped = stream.dropped_counter();
+    // Whether the provider's terminal `[DONE]` marker was seen, and
+    // whether ANY chunk carried a finish reason. Together they separate
+    // "the provider said this stream is over" from "the body just ended"
+    // — the difference between a complete answer and one that was cut
+    // off mid-sentence with no signal at all.
+    let saw_done = stream.done_flag();
+    let saw_finish_reason = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let saw_finish_reason_for_scan = std::sync::Arc::clone(&saw_finish_reason);
+
+    // Map each ChatStreamEvent into a StreamChunk.  Tool-call deltas are
+    // passed through as partial ToolCall objects; the receiving agent
+    // (process_stream in agent/mod.rs) merges incremental arguments
+    // across events using the tool-call ID.
+    //
+    // OpenAI-compatible streaming providers only emit the tool-call ID
+    // (and `function.name`) in the FIRST delta for each `index`; later
+    // deltas carry only `function.arguments` fragments.  We therefore
+    // keep a per-stream `index -> id` map (`StreamToolCallIndex`) so
+    // every emitted ToolCall reuses the original ID and the agent's
+    // `merge_stream_tool_call` correctly appends incremental arguments
+    // instead of producing many disjoint partial calls.
+    let mapped = stream.scan(
+        StreamToolCallIndex::default(),
+        move |state, event_result| {
             let chunk = match event_result {
                 Ok(event) => {
                     let choice = &event.choices.first();
@@ -134,6 +157,10 @@ impl ModelClient for OpenAIModelClient {
                     let tool_calls = extract_tool_calls_from_stream_event(&event, state);
                     let extra_content = choice.and_then(|c| c.delta.extra_content.clone());
                     let finish_reason = choice.and_then(|c| c.finish_reason.clone());
+                    if finish_reason.is_some() {
+                        saw_finish_reason_for_scan
+                            .store(true, std::sync::atomic::Ordering::Relaxed);
+                    }
 
                     Ok(StreamChunk {
                         content,
@@ -148,26 +175,35 @@ impl ModelClient for OpenAIModelClient {
                 Err(e) => Err(e),
             };
             futures::future::ready(Some(chunk))
-        });
+        },
+    );
 
-        // Terminal chunk: carries the stream's dropped-payload count (set
-        // only when > 0) so `process_stream` can emit StreamCorrupted at
-        // stream end. Chained after the source so it never precedes real
-        // content.
-        let fin = futures::stream::once(async move {
-            let n = dropped.load(std::sync::atomic::Ordering::Relaxed) as u32;
-            Ok(StreamChunk {
-                content: None,
-                reasoning: None,
-                tool_calls: None,
-                extra_content: None,
-                usage: None,
-                finish_reason: None,
-                dropped_events: (n > 0).then_some(n),
-            })
-        });
-        Ok(Box::pin(mapped.chain(fin)))
-    }
+    // Terminal chunk: carries the stream's dropped-payload count (set
+    // only when > 0) so `process_stream` can emit StreamCorrupted at
+    // stream end. Chained after the source so it never precedes real
+    // content.
+    let fin = futures::stream::once(async move {
+        let n = dropped.load(std::sync::atomic::Ordering::Relaxed) as u32;
+        // The stream ended with NO completion signal at all: the body
+        // closed without the terminal `[DONE]` marker and without a
+        // finish reason. The answer may be cut off mid-sentence, and
+        // until now the agent had no way to know — it treated the
+        // partial as a complete answer. "incomplete" is the same
+        // vocabulary jcode uses for an incomplete response; the agent
+        // decides whether to ask for a continuation.
+        let incomplete = !saw_done.load(std::sync::atomic::Ordering::Relaxed)
+            && !saw_finish_reason.load(std::sync::atomic::Ordering::Relaxed);
+        Ok(StreamChunk {
+            content: None,
+            reasoning: None,
+            tool_calls: None,
+            extra_content: None,
+            usage: None,
+            finish_reason: incomplete.then(|| "incomplete".to_string()),
+            dropped_events: (n > 0).then_some(n),
+        })
+    });
+    Box::pin(mapped.chain(fin))
 }
 
 /// Per-stream state mapping tool-call `index` to the canonical `id` issued
@@ -281,6 +317,76 @@ mod tests {
             }],
             usage: None,
         }
+    }
+
+    /// A stream whose body ends WITHOUT the terminal `[DONE]` marker and
+    /// without a finish reason carries NO completion signal: the provider
+    /// simply stopped. The answer may be cut off mid-sentence, and until the
+    /// marker was surfaced the agent had no way to tell that from a finished
+    /// reply — it took the partial as final.
+    #[tokio::test]
+    async fn a_stream_that_ends_without_a_completion_signal_is_marked_incomplete() {
+        use futures::StreamExt;
+        let body = "data: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"half a senten\"},\"finish_reason\":null}]}\n\n";
+        let stream = crate::client::ChatStreamResponse::new(futures::stream::iter(vec![Ok(
+            bytes::Bytes::from(body),
+        )]));
+        let chunks: Vec<_> = map_sse_stream(stream).collect().await;
+
+        let terminal = chunks
+            .last()
+            .expect("the terminal chunk is always emitted")
+            .as_ref()
+            .expect("the terminal chunk is not an error");
+        assert_eq!(
+            terminal.finish_reason.as_deref(),
+            Some("incomplete"),
+            "a stream with no completion signal must say so"
+        );
+    }
+
+    /// The terminal `[DONE]` marker IS a completion signal: a stream that
+    /// ends with it is finished, whatever the chunks said.
+    #[tokio::test]
+    async fn a_stream_that_ends_with_the_done_marker_is_not_marked_incomplete() {
+        use futures::StreamExt;
+        let body = "data: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"a whole answer\"},\"finish_reason\":null}]}\n\ndata: [DONE]\n\n";
+        let stream = crate::client::ChatStreamResponse::new(futures::stream::iter(vec![Ok(
+            bytes::Bytes::from(body),
+        )]));
+        let chunks: Vec<_> = map_sse_stream(stream).collect().await;
+
+        let terminal = chunks
+            .last()
+            .expect("the terminal chunk is always emitted")
+            .as_ref()
+            .expect("the terminal chunk is not an error");
+        assert_eq!(
+            terminal.finish_reason, None,
+            "the marker said the stream is over — nothing is incomplete"
+        );
+    }
+
+    /// A finish reason on a chunk IS a completion signal too: a provider
+    /// that omits `[DONE]` but reports `stop` finished its answer.
+    #[tokio::test]
+    async fn a_stream_that_reports_a_finish_reason_is_not_marked_incomplete() {
+        use futures::StreamExt;
+        let body = "data: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"a whole answer\"},\"finish_reason\":\"stop\"}]}\n\n";
+        let stream = crate::client::ChatStreamResponse::new(futures::stream::iter(vec![Ok(
+            bytes::Bytes::from(body),
+        )]));
+        let chunks: Vec<_> = map_sse_stream(stream).collect().await;
+
+        let terminal = chunks
+            .last()
+            .expect("the terminal chunk is always emitted")
+            .as_ref()
+            .expect("the terminal chunk is not an error");
+        assert_eq!(
+            terminal.finish_reason, None,
+            "the chunk's own finish reason said the answer is done"
+        );
     }
 
     #[test]

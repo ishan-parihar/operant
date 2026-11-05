@@ -18,6 +18,20 @@ use tracing::{debug, error, info, instrument, warn};
 
 use super::*;
 
+/// Whether the answer ended WITHOUT any completion signal and looks cut off.
+///
+/// A provider that closes its SSE body without the terminal `[DONE]` marker
+/// and without a finish reason is distinguishable from one that answered
+/// completely — but only when the text itself does not close the sentence:
+/// a reply ending on punctuation is finished, one ending mid-word is not.
+/// This is what keeps a provider that omits the marker from being charged a
+/// pointless continuation on every turn.
+fn truncated_without_a_completion_signal(finish_reason: Option<&str>, response_text: &str) -> bool {
+    finish_reason == Some("incomplete")
+        && !response_text.trim().is_empty()
+        && !turn_end_heuristics::has_natural_response_ending(response_text)
+}
+
 /// Prompt-meta key for the context limit learned from an overflow (plan 06 P1).
 fn learned_limit_key(provider: &str, model: &str) -> String {
     format!("context_limit:{provider}:{model}")
@@ -1246,6 +1260,16 @@ impl OperantAgent {
                                     max = retry_state.max_retries,
                                     "Stream dropped mid-read — re-issuing LLM request"
                                 );
+                                // The replayed stream re-emits every ToolStart
+                                // the dropped one already announced, under the
+                                // SAME call ids. Without clearing the
+                                // dedup set the replay's ToolStart events are
+                                // suppressed as duplicates, so the turn's tool
+                                // rows never appear — the recovered turn ran
+                                // the tools invisibly.
+                                if let Ok(mut set) = self.stream_emitted_tool_starts.lock() {
+                                    set.clear();
+                                }
                                 let tools = self.tools_for_turn(&messages).await;
                                 let retry_request =
                                     self.fitted_request(&self.effective_model(), &messages, tools);
@@ -1474,6 +1498,10 @@ impl OperantAgent {
                         && length_continue_retries < MAX_LENGTH_CONTINUE_RETRIES
                     {
                         let truncated = finish_reason.as_deref() == Some("length")
+                            || truncated_without_a_completion_signal(
+                                finish_reason.as_deref(),
+                                &response_text,
+                            )
                             || turn_end_heuristics::should_treat_stop_as_truncated(
                                 &self.config.model,
                                 finish_reason.as_deref(),

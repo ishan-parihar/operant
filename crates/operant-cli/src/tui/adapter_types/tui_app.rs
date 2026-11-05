@@ -1153,20 +1153,12 @@ impl TuiApp {
         app: &mut crate::tui::app::App,
         conv: Vec<operant_core::client::Message>,
     ) {
-        app.messages.clear();
-        use crate::tui::adapter_types::types::{Message, MessageContent, Role};
-        for m in conv {
-            let role = match m.role {
-                operant_core::client::Role::User => Role::User,
-                operant_core::client::Role::Assistant => Role::Assistant,
-                operant_core::client::Role::System => Role::System,
-                operant_core::client::Role::Tool => Role::System,
-            };
-            app.messages.push(Message {
-                role,
-                content: MessageContent::Text(m.content),
-            });
-        }
+        // ONE converter for both rebuild paths (the frame loop's session
+        // switch uses the same one). The inline conversion that used to
+        // live here dropped the assistant's reasoning and turned every tool
+        // row into a bare system line, so a restored session showed none of
+        // the turn's activity.
+        crate::tui::app::session_display::apply_conversation_to_display(app, conv);
         // (plan 07 §2) every rebuild replaces committed transcript content,
         // and the emitter's watermark counted the OLD rows: native scrollback
         // must replay from zero or it keeps the discarded future and skips
@@ -1549,10 +1541,17 @@ fn run_app_loop(
     terminal: &mut ratatui::Terminal<ratatui::backend::CrosstermBackend<std::io::Stdout>>,
 ) -> anyhow::Result<Option<String>> {
     use tokio::runtime::{Handle, RuntimeFlavor};
-    match Handle::try_current().map(|h| h.runtime_flavor()) {
+    let result = match Handle::try_current().map(|h| h.runtime_flavor()) {
         Ok(RuntimeFlavor::MultiThread) => tokio::task::block_in_place(|| app.run(terminal)),
         _ => app.run(terminal),
+    };
+    // A TERMINAL error exit (the terminal read or the draw failed) never
+    // reached the clean-exit teardown, so the event log was never dumped —
+    // the one run whose log the operator wanted was the one that was lost.
+    if result.is_err() {
+        app.debug_hub.dump_on_exit();
     }
+    result
 }
 
 /// Suspend the TUI, run a shell command with inherited stdio, then resume.

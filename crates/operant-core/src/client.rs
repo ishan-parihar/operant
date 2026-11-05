@@ -1511,6 +1511,12 @@ pub struct ChatStreamResponse {
     /// the user otherwise (observed live: corrupted streams yield empty or
     /// truncated turns with zero signal).
     dropped: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    /// Whether the stream's terminal `[DONE]` marker was seen. Surfaced via
+    /// `done_flag()` so the adapter can tell "the provider said this stream is
+    /// over" from "the body just ended" — without it a provider that closes
+    /// the connection without a `finish_reason` is indistinguishable from one
+    /// that answered completely.
+    saw_done: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Longest silence tolerated between body chunks; `None` = unbounded.
     idle_timeout: Option<Duration>,
     /// Armed while waiting for the next chunk; re-armed on every chunk.
@@ -1528,6 +1534,7 @@ impl ChatStreamResponse {
             buffer: String::new(),
             pending_bytes: Vec::new(),
             dropped: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            saw_done: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             idle_timeout: None,
             idle_deadline: None,
             stalled: false,
@@ -1548,6 +1555,13 @@ impl ChatStreamResponse {
     pub fn dropped_counter(&self) -> std::sync::Arc<std::sync::atomic::AtomicUsize> {
         self.dropped.clone()
     }
+
+    /// Shared flag set when the stream's terminal `[DONE]` marker is parsed.
+    /// Clone BEFORE consuming the stream and read after it ends, exactly like
+    /// [`Self::dropped_counter`].
+    pub fn done_flag(&self) -> std::sync::Arc<std::sync::atomic::AtomicBool> {
+        self.saw_done.clone()
+    }
 }
 
 impl Stream for ChatStreamResponse {
@@ -1561,10 +1575,16 @@ impl Stream for ChatStreamResponse {
 
         loop {
             let mut dropped_here = 0u32;
-            let parsed = try_parse_next_sse_event(&mut this.buffer, false, &mut dropped_here);
+            let mut saw_done = false;
+            let parsed =
+                try_parse_next_sse_event(&mut this.buffer, false, &mut dropped_here, &mut saw_done);
             if dropped_here > 0 {
                 this.dropped
                     .fetch_add(dropped_here as usize, std::sync::atomic::Ordering::Relaxed);
+            }
+            if saw_done {
+                this.saw_done
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
             }
             if let Some(event) = parsed {
                 return Poll::Ready(Some(event));
@@ -1622,8 +1642,17 @@ impl Stream for ChatStreamResponse {
                     // terminates.
                     loop {
                         let mut dropped_tail = 0u32;
-                        let final_event =
-                            try_parse_next_sse_event(&mut this.buffer, true, &mut dropped_tail);
+                        let mut saw_done_tail = false;
+                        let final_event = try_parse_next_sse_event(
+                            &mut this.buffer,
+                            true,
+                            &mut dropped_tail,
+                            &mut saw_done_tail,
+                        );
+                        if saw_done_tail {
+                            this.saw_done
+                                .store(true, std::sync::atomic::Ordering::Relaxed);
+                        }
                         if dropped_tail > 0 {
                             this.dropped.fetch_add(
                                 dropped_tail as usize,
@@ -1741,6 +1770,7 @@ fn try_parse_next_sse_event(
     buffer: &mut String,
     allow_partial: bool,
     dropped: &mut u32,
+    done: &mut bool,
 ) -> Option<crate::error::Result<ChatStreamEvent>> {
     normalize_sse_buffer(buffer);
 
@@ -1771,6 +1801,10 @@ fn try_parse_next_sse_event(
     }
 
     if payload.trim() == "[DONE]" {
+        // The provider's terminal marker: the stream is over BY ITS OWN
+        // SIGNAL. Recorded (not just dropped) so the agent can tell a
+        // completed stream from one whose body simply ended.
+        *done = true;
         return None;
     }
 
@@ -2144,7 +2178,7 @@ mod tests {
     #[test]
     fn streaming_parser_handles_crlf_events() {
         let mut buffer = "data: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"demo\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hello\"},\"finish_reason\":null}]}\r\n\r\n".to_string();
-        let event = try_parse_next_sse_event(&mut buffer, false, &mut 0)
+        let event = try_parse_next_sse_event(&mut buffer, false, &mut 0, &mut false)
             .expect("event should parse")
             .expect("event should not be an error");
 
@@ -2156,7 +2190,7 @@ mod tests {
     #[test]
     fn streaming_parser_handles_partial_final_event() {
         let mut buffer = "data: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"demo\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Done\"},\"finish_reason\":\"stop\"}]}".to_string();
-        let event = try_parse_next_sse_event(&mut buffer, true, &mut 0)
+        let event = try_parse_next_sse_event(&mut buffer, true, &mut 0, &mut false)
             .expect("trailing event should parse")
             .expect("event should not be an error");
 
@@ -2457,7 +2491,7 @@ Connection: close
         // alias and re-parses.
         let mut buffer = "data: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"demo\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"The\",\"reasoning\":\"R\",\"reasoning_details\":[{\"type\":\"reasoning.text\",\"text\":\"R\"}],\"reasoning_content\":\"R\"},\"finish_reason\":null}]}\n\n".to_string();
         let mut dropped = 0u32;
-        let event = try_parse_next_sse_event(&mut buffer, false, &mut dropped)
+        let event = try_parse_next_sse_event(&mut buffer, false, &mut dropped, &mut false)
             .expect("salvaged event should parse")
             .expect("should not be an error envelope");
         assert_eq!(dropped, 0, "collision must not count as a drop");
@@ -2472,7 +2506,7 @@ Connection: close
         // that must keep flowing through the salvage path too.
         let mut buffer = "data: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"demo\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hi\",\"reasoning\":\"thinking\"},\"finish_reason\":null}]}\n\n".to_string();
         let mut dropped = 0u32;
-        let event = try_parse_next_sse_event(&mut buffer, false, &mut dropped)
+        let event = try_parse_next_sse_event(&mut buffer, false, &mut dropped, &mut false)
             .expect("event should parse")
             .expect("not an error envelope");
         assert_eq!(dropped, 0);
@@ -3074,7 +3108,7 @@ Connection: close
 
 "#,
         );
-        let event = try_parse_next_sse_event(&mut buffer, false, &mut 0)
+        let event = try_parse_next_sse_event(&mut buffer, false, &mut 0, &mut false)
             .expect("null-name delta must parse into an SSE event")
             .expect("event should not be an error");
         let deltas = &event.choices[0].delta.tool_calls;
@@ -3104,7 +3138,7 @@ Connection: close
         let mut buffer = String::from(
             "data: {\"error\":{\"message\":\"rate limit reached\",\"type\":\"rate_limit_error\",\"status\":429}}\n\n",
         );
-        let parsed = try_parse_next_sse_event(&mut buffer, false, &mut 0)
+        let parsed = try_parse_next_sse_event(&mut buffer, false, &mut 0, &mut false)
             .expect("error event must surface, not be dropped");
         let err = parsed.expect_err("must be a classified error");
         assert!(
@@ -3123,7 +3157,7 @@ Connection: close
         let mut buffer = String::from(
             "data: {\"error\":{\"message\":\"invalid api key\",\"type\":\"invalid_api_key\",\"status\":401}}\n\n",
         );
-        let parsed = try_parse_next_sse_event(&mut buffer, false, &mut 0)
+        let parsed = try_parse_next_sse_event(&mut buffer, false, &mut 0, &mut false)
             .expect("error event must surface, not be dropped");
         let err = parsed.expect_err("must be a classified error");
         assert!(
@@ -3141,7 +3175,7 @@ Connection: close
         let mut buffer = String::from(
             "data: {\"error\":{\"message\":\"This model's maximum context length is 128000 tokens\",\"type\":\"context_length_exceeded\",\"code\":\"context_length_exceeded\",\"status\":413}}\n\n",
         );
-        let parsed = try_parse_next_sse_event(&mut buffer, false, &mut 0)
+        let parsed = try_parse_next_sse_event(&mut buffer, false, &mut 0, &mut false)
             .expect("error event must surface, not be dropped");
         let err = parsed.expect_err("must be a classified error");
         assert!(
@@ -3156,7 +3190,7 @@ Connection: close
         // must still be skipped (not surfaced as a bogus Provider error).
         let mut buffer = String::from("data: {\"unexpected\":true}\n\n");
         assert!(
-            try_parse_next_sse_event(&mut buffer, false, &mut 0).is_none(),
+            try_parse_next_sse_event(&mut buffer, false, &mut 0, &mut false).is_none(),
             "non-envelope JSON must be dropped silently"
         );
     }

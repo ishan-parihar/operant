@@ -490,6 +490,11 @@ impl App {
                     block.after_index = block.after_index.min(self.messages.len());
                 }
                 let err_msg = format!("Error: {}", error);
+                // The debug bus carries the LIVE failure, not just the keys
+                // and the renders: an event log that records everything the
+                // operator did and nothing the agent failed at is no record
+                // of the failure.
+                self.debug_hub.record_error("agent", &error);
                 // Single source of truth per event (P4-2 spec step 4): the
                 // inline Error card is THE transcript surface — no duplicate
                 // assistant row, no modal. The status line carries recovery.
@@ -793,7 +798,11 @@ const TOOL_PREVIEW_LINES: usize = 3;
 /// Before this took the tail it took `all_lines[..3]` — the FIRST three rows,
 /// which for a build or a test run is the `Compiling` preamble and never the
 /// verdict line.
-fn tool_output_preview(result_text: &str, is_error: bool) -> String {
+///
+/// `pub(super)` because the session-display converter (a sibling module)
+/// builds the same preview for a restored tool row as the live
+/// `ToolComplete` path does — one preview rule, both callers.
+pub(super) fn tool_output_preview(result_text: &str, is_error: bool) -> String {
     let all_lines: Vec<&str> = result_text.lines().collect();
     if all_lines.is_empty() {
         // Codex says so with a dim row (`compact.rs:127`). The empty-failure
