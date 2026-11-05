@@ -7493,6 +7493,37 @@ fn jcode_only_commands_are_not_registered() {
     }
 }
 
+/// `BehaviorSettings` is CONFIG, not a TUI panel. AGENTS.md used to claim a
+/// "Behavior" management panel beside MCP and Skills (inside a "workspace
+/// view" with Conversation/Reasoning/Activity panes that this TUI has never
+/// had); the agent's behaviour settings are the `[agent]` table in
+/// `operant.toml`, edited with `operant config set` or by hand.
+///
+/// This pins the claim so the doc cannot drift back into promising a surface
+/// the TUI does not have — and so a real behaviour panel, if one is ever
+/// built, is an explicit decision (a registered command plus this test plus
+/// the doc, together) rather than an accident. A HIDDEN panel would be worse
+/// than a missing command, because nothing would advertise it, so the
+/// dispatch arm is checked too.
+#[test]
+fn behaviour_config_is_not_a_panel() {
+    let registered: Vec<&str> = crate::tui::operant_app::app::registered_command_entries()
+        .map(|(name, _)| name)
+        .collect();
+    for name in ["/behavior", "/behaviour", "/behaviors", "/behaviours"] {
+        assert!(
+            !registered.contains(&name),
+            "{name} is registered — if the behaviour settings really became a panel, \
+             this test and AGENTS.md must change together"
+        );
+    }
+    let dispatch = include_str!("commands.rs");
+    assert!(
+        !dispatch.contains("\"behavior\" =>") && !dispatch.contains("\"behaviour\" =>"),
+        "a behaviour dispatch arm appeared — there is no behaviour panel to open"
+    );
+}
+
 /// 2026-10-14 batch, plan 02: no REGISTERED command may sit unwired — the
 /// class the iter-811 sweep found printing "/x is registered but not wired
 /// in operant yet" (groups A/B) and "not yet wired to a handler" (group C).

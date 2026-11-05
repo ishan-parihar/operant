@@ -19,3 +19,4 @@
 | tui-bugfix-campaign-013 | in-progress | phase-3: the corpus's 8 UNGATED scenarios (the `<wait:ms>` unblock the scroll-pageup notes name), the live path, and the management panels' live data | claimed-by `agent-omarchy` since 2026-11-05T09:30 | — |
 | tui-bugfix-campaign-014 | in-progress | phase-4: the corpus's own validator drift (B17) + the scroll counter that overwrites transcript text (B18) + the missing golden | claimed-by `agent-omarchy` since 2026-11-05T10:06 | — |
 | tui-bugfix-campaign-015 | done | B19-B20: the harness had no idle-frame token (so the scroll ladder's third rung could not be pinned) and the registry described a DELETED MCP-approval dialog as a live product gap | — | [2026-11-05] origin/main iter-1751 |
+| tui-bugfix-campaign-016 | done | B21: AGENTS.md claimed a TUI workspace view and a Behavior panel that do not exist, and its module count was stale | — | [2026-11-05] origin/main iter-1752 |

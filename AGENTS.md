@@ -377,8 +377,16 @@ gitignore is doing its job; leave them alone.
 - Autonomous runtime writes repo-local `autonomous-status.toml` state and
   reloads repeated-failure pause state across restarts; keep that workflow
   documented when changing autonomous behavior
-- The workspace view has `Conversation`, `Reasoning`, `Activity`, and management
-  panels for `MCP`, `Skills`, and `Behavior`
+- The transcript carries the three row kinds an operator reads — conversation
+  messages, reasoning traces, and activity rows (tool blocks, background
+  tasks). The management panels are `MCP` (`/mcp`), `Skills` (`/skills`,
+  opened bare or via `/skill <name>`), `Plugins` (`/plugins`), Journey
+  (`/journey`), the session hub (`/session`) and the agents menu
+  (`/agents`); `/config` opens the VISUAL settings and never the agent
+  behaviour. **`BehaviorSettings` is NOT a panel**: it is config-only
+  (its TOML case is `[agent]`), edited with `operant config set` or a
+  hand-edit, so there is no Behavior surface to open — the guard is
+  `tui::app::tests::behaviour_config_is_not_a_panel`.
 - When config fields change, update `operant.example.toml` in the repo root in
   the same change
 - When user-facing behavior changes, update `README.md`, `docs/CHANGELOG.md`, and
@@ -591,7 +599,7 @@ operant/
 │       ├── src/
 │       │   ├── main.rs        # CLI entry point, Clap enum, agent setup
 │       │   ├── mcp_serve.rs   # Operant as an MCP SERVER over stdio (`operant mcp serve`); the CLIENT lives in operant-core/src/mcp.rs
-│       │   ├── tui/           # 64 TUI modules (303 .rs files) — (app, render, prompt_input, dialogs)
+│       │   ├── tui/           # 66 TUI modules (328 .rs files) — (app, render, prompt_input, dialogs)
 │       │   ├── gateway_runner.rs # Gateway mode agent handler
 │       │   ├── autonomous.rs  # Autonomous coding mode
 │       │   ├── config.rs      # CLI config
