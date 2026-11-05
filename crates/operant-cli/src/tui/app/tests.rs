@@ -971,6 +971,10 @@ fn every_advertised_binding_dispatches() {
         ),
         ("Alt+g", "Toggle scroll bookmark"),
         ("Alt+p", "Cycle configured models"),
+        // (iter-1768) The copy mode's entry chord. The catalogue's Prompt
+        // copy of this row still claimed a "yank pop" that no arm implements
+        // (Ctrl+Y is the kill-ring yank).
+        ("Alt+y", "Toggle copy mode"),
         ("Ctrl+o", "Expand latest tool output"),
         ("Ctrl+x", "Recall queued message"),
         ("Ctrl+t", "Toggle thinking display"),
@@ -993,17 +997,37 @@ fn every_advertised_binding_dispatches() {
         // Ctrl+R's history search lives in the Prompt context (where it
         // applies); everything else is Global. Accept either — the help
         // overlay renders both sections from the same table.
-        let found = catalogue.iter().any(|(context, binding)| {
-            (matches!(context, BindingContext::Global | BindingContext::Prompt))
-                && binding.chord() == *chord
-                && binding.description.as_deref() == Some(expected_desc)
-        });
+        //
+        // (iter-1768) EVERY Global/Prompt row for the chord must carry the
+        // pinned description, not merely one of them: the catalogue keeps a
+        // second copy of a chord for the Prompt context, and the stale copy
+        // is what /keys printed — "Ctrl+t — Copy mode" right beside "Ctrl+t —
+        // Toggle thinking display", and "Alt+Up — Scroll transcript up a page"
+        // for a chord that scrolls 20 rows. "At least one matches" could not
+        // see any of that.
+        let rows: Vec<_> = catalogue
+            .iter()
+            .filter(|(context, binding)| {
+                matches!(context, BindingContext::Global | BindingContext::Prompt)
+                    && binding.chord() == *chord
+            })
+            .collect();
         assert!(
-            found,
-            "chord {chord} must be catalogued as {expected_desc:?} — the \
-             help overlay generates from this table, so a missing row means \
-             a silently unadvertised feature (plan 10)"
+            !rows.is_empty(),
+            "chord {chord} must be catalogued — the help overlay generates from \
+             this table, so a missing row means a silently unadvertised feature \
+             (plan 10)"
         );
+        for (context, binding) in rows {
+            assert_eq!(
+                binding.description.as_deref(),
+                Some(*expected_desc),
+                "chord {chord} is catalogued as {:?} in the {context:?} context, but it \
+                 must be {expected_desc:?} in EVERY context — one chord must mean one \
+                 thing, or /keys prints two different features under one key",
+                binding.description
+            );
+        }
     }
 
     // The known lies must be gone from the catalogue entirely: if one of

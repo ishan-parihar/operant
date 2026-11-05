@@ -1098,7 +1098,7 @@ impl KeyBindingRegistry {
                 modifiers: KeyModifiers::ALT,
                 action: KeyAction::Custom(8),
                 context: BindingContext::Prompt,
-                description: "Cycle configured models (model + fallback_models)",
+                description: "Cycle configured models",
             },
             DefaultBinding {
                 key: KeyCode::F(5),
@@ -1122,7 +1122,7 @@ impl KeyBindingRegistry {
                 modifiers: KeyModifiers::CONTROL,
                 action: KeyAction::Custom(10),
                 context: BindingContext::Prompt,
-                description: "Expand / collapse the latest tool output",
+                description: "Expand latest tool output",
             },
             DefaultBinding {
                 key: KeyCode::Char('l'),
@@ -1143,14 +1143,27 @@ impl KeyBindingRegistry {
                 modifiers: KeyModifiers::CONTROL,
                 action: KeyAction::Custom(13),
                 context: BindingContext::Prompt,
-                description: "Recall the queued message",
+                description: "Recall queued message",
             },
+            // (iter-1768) The Prompt-context rows below were a stale second
+            // copy of an older catalogue: Ctrl+T still claimed "copy mode"
+            // (the copy mode moved to Alt+Y at plan 08 and Ctrl+T became the
+            // thinking toggle), Alt+Y claimed a "yank pop" that no arm
+            // implements (Ctrl+Y is the kill-ring yank), and the scroll rows
+            // named amounts the dispatch never used — Alt+Up/Down scroll 20
+            // rows and Ctrl+Up/Down scroll 3, not "a page". /keys printed
+            // both copies, so the operator saw Ctrl+T as two different
+            // features and Alt+Up as a page jump that moved 20 rows. Every
+            // Prompt row now says what its Global twin says — the context
+            // column already says where each applies — and
+            // `every_advertised_binding_dispatches` now requires that
+            // agreement instead of accepting either copy.
             DefaultBinding {
                 key: KeyCode::Char('t'),
                 modifiers: KeyModifiers::CONTROL,
                 action: KeyAction::Custom(14),
                 context: BindingContext::Prompt,
-                description: "Copy mode (drag-select with the keyboard)",
+                description: "Toggle thinking display",
             },
             DefaultBinding {
                 key: KeyCode::Char('d'),
@@ -1164,7 +1177,7 @@ impl KeyBindingRegistry {
                 modifiers: KeyModifiers::ALT,
                 action: KeyAction::Custom(16),
                 context: BindingContext::Prompt,
-                description: "Yank pop",
+                description: "Toggle copy mode",
             },
             DefaultBinding {
                 key: KeyCode::Char('b'),
@@ -1185,28 +1198,28 @@ impl KeyBindingRegistry {
                 modifiers: KeyModifiers::ALT,
                 action: KeyAction::Custom(19),
                 context: BindingContext::Prompt,
-                description: "Scroll transcript up a page",
+                description: "Fast scroll up 20",
             },
             DefaultBinding {
                 key: KeyCode::Down,
                 modifiers: KeyModifiers::ALT,
                 action: KeyAction::Custom(20),
                 context: BindingContext::Prompt,
-                description: "Scroll transcript down a page",
+                description: "Fast scroll down 20",
             },
             DefaultBinding {
                 key: KeyCode::Up,
                 modifiers: KeyModifiers::CONTROL,
                 action: KeyAction::Custom(21),
                 context: BindingContext::Prompt,
-                description: "Scroll transcript up",
+                description: "Fine scroll up 3",
             },
             DefaultBinding {
                 key: KeyCode::Down,
                 modifiers: KeyModifiers::CONTROL,
                 action: KeyAction::Custom(22),
                 context: BindingContext::Prompt,
-                description: "Scroll transcript down",
+                description: "Fine scroll down 3",
             },
         ];
 
