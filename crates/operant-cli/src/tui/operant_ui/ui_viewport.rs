@@ -525,6 +525,14 @@ pub(super) fn draw_messages(
         .collect();
 
     let mut visible_lines = prepared.materialize_line_slice(scroll, visible_end);
+    // Rendered width of every visible row, captured BEFORE `visible_lines` is
+    // moved into the transcript Paragraph. The ↑/↓ scroll counters need it to
+    // find a row with trailing room for themselves — see the counter blocks
+    // below, which paint chrome into that room instead of over the text.
+    let visible_line_widths: Vec<u16> = visible_lines
+        .iter()
+        .map(|line| line.width() as u16)
+        .collect();
     let stability_hash = super::viewport_stability_hash(
         &visible_lines,
         &visible_user_indices,
@@ -1283,19 +1291,43 @@ pub(super) fn draw_messages(
 
     if !show_native_scrollbar && scroll > 0 {
         let indicator = format!("↑{}", scroll);
-        let indicator_area = Rect {
-            x: render_area.x + render_area.width.saturating_sub(indicator.len() as u16 + 2),
-            y: render_area.y,
-            width: indicator.len() as u16,
-            height: 1,
-        };
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![Span::styled(
-                indicator,
-                Style::default().fg(dim_color()),
-            )])),
-            indicator_area,
+        let indicator_width = indicator.len() as u16;
+        // Same rule as the ↓ counter below: chrome never eats content. This
+        // row is the TOP row of the render area, which is the FIRST transcript
+        // row when no top band is reserved — the old code overwrote that
+        // line's tail. (When a band IS reserved, the band and the prompt
+        // preview paint over this counter afterwards, which is the layering
+        // jcode's own test documents.)
+        //
+        // The counter KEEPS its designed home: the right edge of the render
+        // area, at the exact column the old formula computed, so a frame whose
+        // counter had room keeps its pixel position (and its golden). It moves
+        // only when the text at that row reaches the edge: then the counter is
+        // placed immediately after the text instead of on top of it.
+        let placement = scroll_counter_placement(
+            &visible_line_widths,
+            content_area.width,
+            content_area.x,
+            render_area.x,
+            render_area.width,
+            indicator_width,
+            false,
         );
+        if let Some((rel_idx, x)) = placement {
+            let indicator_area = Rect {
+                x,
+                y: content_area.y.saturating_add(rel_idx as u16),
+                width: indicator_width,
+                height: 1,
+            };
+            frame.render_widget(
+                Paragraph::new(Line::from(vec![Span::styled(
+                    indicator,
+                    Style::default().fg(dim_color()),
+                )])),
+                indicator_area,
+            );
+        }
     }
 
     if pinned_todo_lines > 0 {
@@ -1396,19 +1428,48 @@ pub(super) fn draw_messages(
 
     if !show_native_scrollbar && app.auto_scroll_paused() && scroll < max_scroll {
         let indicator = format!("↓{}", max_scroll - scroll);
-        let indicator_area = Rect {
-            x: render_area.x + render_area.width.saturating_sub(indicator.len() as u16 + 2),
-            y: render_area.y + render_area.height.saturating_sub(1),
-            width: indicator.len() as u16,
-            height: 1,
-        };
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![Span::styled(
-                indicator,
-                Style::default().fg(queued_color()),
-            )])),
-            indicator_area,
+        let indicator_width = indicator.len() as u16;
+        // The counter is chrome, and chrome must not eat content. The row it
+        // used to paint on (`render_area`'s last row) is INSIDE the transcript
+        // whenever no top band is reserved, so the old code overwrote the last
+        // visible line's tail: "scroll test line" rendered as "scroll test↓40ne"
+        // (measured in the corpus: scroll-pageup-moves-viewport row 24 and
+        // scroll-pageup-third-press row 18). A reader scrolled back in history
+        // therefore saw CORRUPTED transcript text, not a counter.
+        //
+        // The fix paints the counter only into a row's TRAILING whitespace, and
+        // only if that row has room for it. The search starts at the last row
+        // (the counter's old home) and walks UP, because the bottom rows are
+        // the ones the reader is looking at. A row with no trailing room is
+        // skipped rather than truncated: the counter is a hint, and the text is
+        // the content.
+        // `visible_line_widths` is indexed from the TOP of the content area, and
+        // the counter's old home is the LAST row of the RENDER area — which is
+        // the last row of the CONTENT area only when no top band is reserved.
+        let placement = scroll_counter_placement(
+            &visible_line_widths,
+            content_area.width,
+            content_area.x,
+            render_area.x,
+            render_area.width,
+            indicator_width,
+            true,
         );
+        if let Some((rel_idx, x)) = placement {
+            let indicator_area = Rect {
+                x,
+                y: content_area.y.saturating_add(rel_idx as u16),
+                width: indicator_width,
+                height: 1,
+            };
+            frame.render_widget(
+                Paragraph::new(Line::from(vec![Span::styled(
+                    indicator,
+                    Style::default().fg(queued_color()),
+                )])),
+                indicator_area,
+            );
+        }
     }
 
     if let Some(scrollbar_area) = scrollbar_area {
@@ -1704,6 +1765,51 @@ fn compute_prompt_preview_line_count(
     if display_width > content_width { 2 } else { 1 }
 }
 
+/// The scroll counters' placement rule, as a pure function.
+///
+/// The counter is CHROME and the transcript is CONTENT: chrome must never
+/// paint over a glyph. A row can host the counter only if the row's text
+/// leaves room for it at the counter's own column; the counter's designed
+/// home is the right edge of the RENDER area (the exact column the old
+/// formula computed, so an unaffected frame keeps its pixels), and when the
+/// text reaches that edge the counter goes immediately after the text
+/// instead.
+///
+/// Returns the row's relative index and the column to paint at, or `None`
+/// when no row has room.
+fn scroll_counter_placement(
+    line_widths: &[u16],
+    content_width: u16,
+    content_x: u16,
+    render_x: u16,
+    render_width: u16,
+    indicator_width: u16,
+    from_bottom: bool,
+) -> Option<(usize, u16)> {
+    let fits = |text_width: u16| -> bool {
+        (text_width as usize + 1 + indicator_width as usize) <= content_width as usize
+    };
+    let last = line_widths.len().saturating_sub(1);
+    let target_row = if from_bottom {
+        (0..=last)
+            .rev()
+            .find(|rel| line_widths.get(*rel).copied().is_some_and(fits))
+    } else {
+        (0..=last).find(|rel| line_widths.get(*rel).copied().is_some_and(fits))
+    }?;
+    let text_width = line_widths[target_row];
+    let designed_x = render_x
+        .saturating_add(render_width)
+        .saturating_sub(indicator_width + 2);
+    let after_text_x = content_x.saturating_add(text_width).saturating_add(1);
+    let x = if designed_x >= after_text_x {
+        designed_x
+    } else {
+        after_text_x
+    };
+    Some((target_row, x))
+}
+
 fn compute_max_scroll_with_prompt_preview(
     total_lines: usize,
     wrapped_user_prompt_starts: &[usize],
@@ -1923,5 +2029,217 @@ mod tests {
             "Option"
         );
         assert_eq!(super::copy_badge_alt_label_from_config("⌥"), "⌥");
+    }
+
+    #[test]
+    fn the_scroll_counter_is_placed_where_it_cannot_cover_text() {
+        // The placement rule, directly. The rendered-frame test below proves
+        // the OUTCOME (the words survive); this one proves the RULE (the
+        // counter never lands on a row whose text reaches it), so a mutation
+        // that restores the old geometry fails here even in a frame shape
+        // where the text happens not to reach the edge.
+        //
+        // Geometry: content at x=1, 99 wide (a 100-column frame with a
+        // one-column left inset), the render area at x=0, 100 wide, and a
+        // three-column counter ("↓40").
+        let (content_x, content_width, render_x, render_width, indicator) =
+            (1u16, 99u16, 0u16, 100u16, 3u16);
+
+        // A row whose text is 90 wide leaves room: the counter sits at its
+        // designed home (the render area's right edge, minus the counter and
+        // its gap), which is the OLD column — so an unaffected frame keeps
+        // its pixels.
+        let roomy = vec![90u16];
+        let (row, x) = super::scroll_counter_placement(
+            &roomy,
+            content_width,
+            content_x,
+            render_x,
+            render_width,
+            indicator,
+            true,
+        )
+        .expect("a roomy row hosts the counter");
+        assert_eq!(row, 0, "the only roomy row must be chosen");
+        assert_eq!(
+            x,
+            render_x + render_width - indicator - 2,
+            "a counter with room keeps its designed column"
+        );
+
+        // A row whose text is 97 wide leaves ONE column: the counter does not
+        // fit there, and the rule must REFUSE it rather than paint over the
+        // text.
+        let tight = vec![97u16];
+        assert!(
+            super::scroll_counter_placement(
+                &tight,
+                content_width,
+                content_x,
+                render_x,
+                render_width,
+                indicator,
+                true,
+            )
+            .is_none(),
+            "a row whose text leaves no room for the counter must be refused, \
+             not painted over"
+        );
+
+        // With a roomy row BETWEEN two tight ones, the ↓ counter takes it
+        // (it searches upward from the bottom) and the ↑ counter takes it
+        // (it searches downward from the top).
+        let mixed = vec![97u16, 40u16, 97u16];
+        let (down_row, _) = super::scroll_counter_placement(
+            &mixed,
+            content_width,
+            content_x,
+            render_x,
+            render_width,
+            indicator,
+            true,
+        )
+        .expect("the roomy middle row hosts the counter");
+        let (up_row, _) = super::scroll_counter_placement(
+            &mixed,
+            content_width,
+            content_x,
+            render_x,
+            render_width,
+            indicator,
+            false,
+        )
+        .expect("the roomy middle row hosts the counter");
+        assert_eq!(down_row, 1, "the ↓ counter walks up to the roomy row");
+        assert_eq!(up_row, 1, "the ↑ counter walks down to the roomy row");
+    }
+
+    /// The scroll-back counter is CHROME: it must never eat transcript text.
+    ///
+    /// The counter used to be painted at the render area's last row, which is
+    /// INSIDE the transcript whenever no top band is reserved — so a reader
+    /// scrolled back in history saw the last visible line's tail replaced by
+    /// the counter. Measured in the corpus: "scroll test line" rendered as
+    /// "scroll test↓40ne" (scroll-pageup-moves-viewport row 24) and
+    /// "L032 s↓51ll" (scroll-pageup-third-press row 18) — corrupted words, not
+    /// a counter. The same shape existed for the ↑ counter at the top row.
+    ///
+    /// Fixed by painting the counter only into a row's TRAILING whitespace and
+    /// only when it fits there. This test renders the real path (a long
+    /// transcript, paused auto-scroll, scrolled back) and asserts the text the
+    /// operator reads is byte-identical with the counter on and off.
+    #[test]
+    fn the_scroll_counter_never_overwrites_transcript_text() {
+        use crate::tui::adapter_types::types::{Message, MessageContent, Role};
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        /// Build an app whose transcript is ONE long assistant message (so its
+        /// wrapped lines fill the viewport with NO blank separator rows), paused
+        /// and scrolled back so the ↓ counter is live.
+        ///
+        /// The blank-row shape matters: with one message per line the renderer
+        /// puts a blank row between messages, and the viewport's LAST row is
+        /// then blank — which is why the defect is invisible in that shape and
+        /// only shows when the last row carries full-width text.
+        fn app_with(lines: usize, text: &str) -> crate::tui::app::App {
+            let mut app = crate::tui::app::App::new(
+                operant_core::config::AppConfig::default(),
+                crate::tui::adapter_types::Settings::default(),
+                std::sync::Arc::new(crate::tui::adapter_types::cost::CostTracker::new()),
+                crate::commands::CommandRegistry::new(),
+            );
+            let body = (0..lines)
+                .map(|i| format!("LINE{i:03} {text}\n"))
+                .collect::<String>();
+            app.messages.push(Message {
+                role: Role::Assistant,
+                content: MessageContent::Text(body),
+            });
+            app.auto_scroll = false;
+            app.scroll_offset = 20;
+            app
+        }
+
+        /// The painted frame's rows, as text, at a given width.
+        ///
+        /// The WIDTH matters: the defect needs the transcript's text to reach
+        /// the counter's column, and how far the text reaches depends on the
+        /// width (the renderer reserves a right margin for the info widgets,
+        /// and the reserved amount differs with the width). The corpus caught
+        /// it at 100 columns; the test therefore renders at several widths so
+        /// no single geometry can dodge the defect.
+        fn rows_at(app: &crate::tui::app::App, width: u16) -> Vec<String> {
+            let mut terminal = Terminal::new(TestBackend::new(width, 40)).expect("test backend");
+            terminal
+                .draw(|f| crate::tui::render::render_app(f, app))
+                .expect("draw");
+            let buf = terminal.backend().buffer().clone();
+            buf.content
+                .chunks(buf.area.width as usize)
+                .map(|row| row.iter().map(|c| c.symbol()).collect())
+                .collect()
+        }
+
+        // (1) The defect itself: the counter is chrome, so the transcript's
+        // words must come out WHOLE. Two shapes of corruption, and the
+        // invariant covers both: (a) the counter lands mid-word and the
+        // arrow is spliced between two letters — the corpus's
+        // "scroll test↓40ne"; (b) the counter lands at the text's end and
+        // TRUNCATES it — "scroll test line" rendered as "scroll test lin↓40".
+        //
+        // The assertion is therefore on the TEXT, not on the arrow's
+        // neighbourhood: a rendered line that carries the phrase must carry
+        // it WHOLE. A frame whose counter was painted over a word cannot
+        // contain that word.
+        //
+        // The widths matter: how far the transcript's text reaches depends on
+        // the width, so one width can leave room where another has none. The
+        // corpus caught the defect at 100 columns.
+        let full = app_with(
+            200,
+            "scroll test line with enough characters to completely fill the \
+             entire width of the chat area and leave no room at all",
+        );
+        let mut violations = Vec::new();
+        for width in [80u16, 100, 120] {
+            let full_rows = rows_at(&full, width);
+            for (y, text) in full_rows.iter().enumerate() {
+                if text.contains("scroll test") && !text.contains("scroll test line") {
+                    violations.push(format!(
+                        "width {width} row {y}: the phrase was broken — {text:?}"
+                    ));
+                }
+                // The arrow must never sit between two word characters.
+                for (x, _) in text.match_indices('↓') {
+                    let before = text[..x].chars().next_back();
+                    let after = text[x + '↓'.len_utf8()..].chars().next();
+                    let embedded = matches!(before, Some(c) if c.is_alphanumeric())
+                        && matches!(after, Some(c) if c.is_alphanumeric());
+                    if embedded {
+                        violations.push(format!("width {width} row {y} col {x}: {text:?}"));
+                    }
+                }
+            }
+        }
+        assert!(
+            violations.is_empty(),
+            "the scroll counter overwrote transcript text: {violations:?}"
+        );
+
+        // (2) The anti-vacuity half: with SHORT rows there IS trailing room,
+        // so the counter must still be drawn. Without this arm, arm (1)
+        // would also pass if the fix had simply stopped drawing the counter —
+        // which would silence the "there is more below" cue the operator
+        // relies on while reading history.
+        let short = app_with(200, "short");
+        let drawn_somewhere = [80u16, 100, 120]
+            .iter()
+            .any(|width| rows_at(&short, *width).iter().any(|row| row.contains('↓')));
+        assert!(
+            drawn_somewhere,
+            "the ↓ scroll counter disappeared entirely — the fix must move it \
+             into the row's trailing room, not suppress it"
+        );
     }
 }
