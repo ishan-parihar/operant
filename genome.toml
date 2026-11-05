@@ -34,7 +34,7 @@ asks = "docs/kb/ASKS.md"
 
 [core]
 dated_pattern = "^(plan-\\d{4}-\\d{2}-\\d{2}|\\d{4}-\\d{2}-\\d{2}-)"
-pointer_ignore = "SKILL.md autonomous-status.toml settings.json auth.json"
+pointer_ignore = "SKILL.md autonomous-status.toml settings.json auth.json manifest.toml plugin.yaml"
 # Living plans carry a maintained 'Resume here' section instead of
 # same-day v3 churn: an execution plan with open iterations is amended in
 # place under this key, per the dated-frozen header's own escape clause.
