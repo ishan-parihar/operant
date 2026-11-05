@@ -137,7 +137,21 @@ trap cleanup EXIT INT TERM
 CONFIG_ARGS=()
 CHILD_ENV=()
 if [ "$CONFIG_MODE" = "pin" ]; then
-  PIN_HOME="$(mktemp -d "${TMPDIR:-/tmp}/operant-tui-capture.XXXXXX")"
+  # A FAILED mktemp must not silently become the filesystem root. This script
+  # runs `set -uo pipefail` WITHOUT `-e`, so an empty PIN_HOME turns every path
+  # below into "/operant.toml" and "/.operant": the config write fails, the
+  # child TUI runs with NO pinned config and a broken HOME, and the tool still
+  # reports "wrote ... capture" and exits 0. Measured 2026-11-05 with a TMPDIR
+  # that is not writable. A capture that silently lost its determinism controls
+  # is worse than no capture, so this fails loud (2 = the usage-error code).
+  PIN_HOME="$(mktemp -d "${TMPDIR:-/tmp}/operant-tui-capture.XXXXXX")" || {
+    echo "tui-capture: cannot create a temp HOME under '${TMPDIR:-/tmp}' (is it writable?)" >&2
+    exit 2
+  }
+  if [ -z "$PIN_HOME" ] || [ ! -d "$PIN_HOME" ]; then
+    echo "tui-capture: mktemp did not produce a directory (got '${PIN_HOME}')" >&2
+    exit 2
+  fi
   # Fixed, minimal config: an unroutable endpoint and an explicit theme, so
   # nothing depends on what the developer has in ~/.operant.
   cat >"$PIN_HOME/operant.toml" <<'TOML'
@@ -181,12 +195,22 @@ fi
 #   --wait-text : poll until the substring appears in the pane
 #   default     : poll until two consecutive pane dumps are identical and
 #                 non-empty (the TUI has finished painting / gone quiet)
+#
+# The text wait is checked WHERE IT CAN SUCCEED. With --keys, the text can
+# only appear AFTER the keys are typed, so the PRE-key wait uses the
+# quiescence strategy (the TUI must be up and quiet before it is driven) and
+# the text wait runs after the submit. The old order waited for the overlay's
+# text BEFORE typing the command that opens it, so `--keys ... --wait-text
+# ...` could only ever time out — which is exactly what the file's own
+# example does. Measured 2026-11-05: the corrected recipe finds the help
+# overlay's `Commands` section and the assertion passes.
 wait_done=0
 prev=""
 deadline=$(( $(date +%s) + TIMEOUT ))
 while [ "$(date +%s)" -lt "$deadline" ]; do
   pane="$(tui capture-pane -p -t "$SESSION" 2>/dev/null || true)"
-  if [ -n "$WAIT_TEXT" ]; then
+  if [ -n "$WAIT_TEXT" ] && [ -z "$KEYS" ]; then
+    # No keys to send: the text can only appear on its own.
     if printf '%s' "$pane" | grep -qF -- "$WAIT_TEXT"; then wait_done=1; break; fi
   else
     if [ -n "$pane" ] && [ "$pane" = "$prev" ]; then wait_done=1; break; fi
@@ -196,7 +220,7 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
 done
 
 if [ "$wait_done" -eq 0 ]; then
-  if [ -n "$WAIT_TEXT" ]; then
+  if [ -n "$WAIT_TEXT" ] && [ -z "$KEYS" ]; then
     echo "tui-capture: timed out after ${TIMEOUT}s waiting for '$WAIT_TEXT'" >&2
   else
     echo "tui-capture: pane never stabilised within ${TIMEOUT}s; capturing anyway" >&2
@@ -207,16 +231,26 @@ fi
 if [ -n "$KEYS" ]; then
   tui send-keys -t "$SESSION" -l -- "$KEYS"
   [ "$ENTER" = true ] && tui send-keys -t "$SESSION" Enter
-  # Give the TUI a moment to paint the result of the key(s) — same
-  # stabilisation poll, so this is still not a blind sleep.
+  # Wait for the RESULT: the requested text when one was asked for (it can
+  # only be there now that the keys are in), otherwise the same stabilisation
+  # poll. Still not a blind sleep.
   prev=""
   deadline=$(( $(date +%s) + TIMEOUT ))
   while [ "$(date +%s)" -lt "$deadline" ]; do
     pane="$(tui capture-pane -p -t "$SESSION" 2>/dev/null || true)"
-    [ -n "$pane" ] && [ "$pane" = "$prev" ] && break
+    if [ -n "$WAIT_TEXT" ]; then
+      if printf '%s' "$pane" | grep -qF -- "$WAIT_TEXT"; then break; fi
+    else
+      [ -n "$pane" ] && [ "$pane" = "$prev" ] && break
+    fi
     prev="$pane"
     sleep 0.25
   done
+  if [ -n "$WAIT_TEXT" ]; then
+    pane="$(tui capture-pane -p -t "$SESSION" 2>/dev/null || true)"
+    printf '%s' "$pane" | grep -qF -- "$WAIT_TEXT" || \
+      echo "tui-capture: timed out after ${TIMEOUT}s waiting for '$WAIT_TEXT' after the keys" >&2
+  fi
 fi
 
 # ── Capture (ANSI escapes preserved) ─────────────────────────────────────

@@ -165,8 +165,16 @@ Each clause is `contains:TEXT` or `not-contains:TEXT`, matched against the full
 rendered screen text:
 
 ```
---assert-screen "contains:Shortcuts,not-contains:Error"
+--assert-screen "contains:Commands,not-contains:Error"
 ```
+
+**The needle must be text the surface actually renders.** The help overlay's
+sections are `Commands`, `Session` and `Memory & Swarm` — there is no
+`Shortcuts` section, and this file used to name one in three examples (two
+headless, one live). The live example waited for it, so it TIMED OUT and its
+`--assert-contains` failed against a perfectly good help overlay. Measured
+2026-11-05; the corpus golden `baselines/help-overlay.txt` agrees with the
+live frame, so the overlay is the authority and the prose was stale.
 
 **A needle may not contain a comma** — `,` is the clause separator, so
 `contains:Yes, allow once` silently becomes the two clauses `contains:Yes` and
@@ -249,10 +257,16 @@ assert `any_modal_open`.
 ### Example: verify a dialog opens and renders
 
 ```bash
+# The credential pin matters: without one the first-run "Connect a provider"
+# dialog opens, it is MODAL, and it swallows the typed command — `/help`
+# lands in its search field and the help overlay never opens. Measured
+# 2026-11-05, live and headless alike; the corpus and scripts/tui-capture.sh
+# both pin the same placeholder.
+export ANTHROPIC_API_KEY=offline-capture-not-a-real-key
 operant tui debug simulate \
   --keys "/help<enter>" \
   --assert "overlays.help_overlay == true,any_modal_open == true" \
-  --assert-screen "contains:Shortcuts" \
+  --assert-screen "contains:Commands" \
   --dump-screen /tmp/help.txt
 ```
 
@@ -416,11 +430,14 @@ scripts/tui-capture.sh --help
 scripts/tui-capture.sh --out baseline/chat.landing.txt
 
 # Drive it: type /help, submit, wait for the overlay, capture, and gate.
+# The wait needle must be text the overlay RENDERS: its sections are
+# `Commands`, `Session` and `Memory & Swarm` (there is no `Shortcuts`
+# section — see the --assert-screen note above).
 scripts/tui-capture.sh \
   --keys '/help' --enter \
-  --wait-text 'Shortcuts' \
+  --wait-text 'Commands' \
   --out baseline/chat.help.txt \
-  --assert-contains 'Shortcuts'
+  --assert-contains 'Commands'
 ```
 
 It starts `operant chat` in a detached tmux session at a fixed size (default
