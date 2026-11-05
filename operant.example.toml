@@ -55,6 +55,28 @@ tool_timeout_secs = 30
 request_timeout_secs = 120
 stream = true
 context_window = 128000
+# Context caps — BOTH axes bind, and the SMALLER one wins.
+#
+# The soft cap is the turn-boundary compaction trigger: crossing it compacts
+# the history BEFORE the next request goes out. The hard cap is the line every
+# request must stay under; crossing it mid-turn compacts the request list
+# before the next provider call, and a context that cannot be compacted under
+# it fails typed instead of being sent.
+#
+# Absolute tokens:
+#   context_soft_cap_tokens = 350000   # soft cap in tokens
+#   context_hard_cap_tokens = 400000   # hard cap in tokens
+# Percentage of `context_window` (fractions, 0.80 = 80%):
+#   context_soft_cap_percent = 0.80
+#   context_hard_cap_percent = 0.95
+#
+# With the defaults, a 1M window compacts at 350k and never exceeds 400k;
+# a 128k window compacts at 102k (80%) and never exceeds 121k (95%).
+# Set an axis to 0 to disable it (0 tokens / 0.0 percent = that axis is off).
+# context_soft_cap_tokens = 350000
+# context_soft_cap_percent = 0.80
+# context_hard_cap_tokens = 400000
+# context_hard_cap_percent = 0.95
 # The most trajectory files to keep in `~/.operant/trajectories`.
 # 0 (the default) keeps them ALL. The bound exists so the directory cannot
 # grow without limit, but `operant trajectory export` collects these files as

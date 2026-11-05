@@ -3,7 +3,7 @@
 use crate::client::{Message, Role, Usage};
 use crate::schema::ToolSchema;
 use std::sync::Arc;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 use super::*;
 
@@ -455,6 +455,98 @@ impl OperantAgent {
         }
     }
 
+    /// Compact a request list back under the hard context cap.
+    ///
+    /// Decay-render + tiered eviction, then repair the tool-call pairing a
+    /// cut may have broken. The second element says whether the cap was
+    /// actually met: the protected head (the system prompt) and the live
+    /// tail are never evicted, so a history whose protected parts alone
+    /// exceed the budget cannot be made to fit.
+    pub(crate) fn compact_to_hard_cap(
+        &self,
+        messages: Vec<Message>,
+        budget_tokens: usize,
+    ) -> (Vec<Message>, bool) {
+        let (mut compacted, outcome) =
+            crate::context_management::manage_context_reporting(messages, budget_tokens, 0);
+        let orphans = crate::agent::message_safety::drop_orphaned_tool_messages(&mut compacted);
+        if orphans > 0 {
+            info!(
+                repairs = orphans,
+                "Dropped tool-call halves orphaned by hard-cap compaction"
+            );
+        }
+        let sequence = crate::agent::message_safety::repair_message_sequence(&mut compacted);
+        if sequence > 0 {
+            info!(
+                repairs = sequence,
+                "Repaired message sequence violations after hard-cap compaction"
+            );
+        }
+        (compacted, outcome.within_budget)
+    }
+
+    /// Enforce the hard context cap mid-turn.
+    ///
+    /// A no-op when the cap is disabled or the request is under it.
+    /// Otherwise the request list is compacted back under the cap and the
+    /// compaction is reported through the same events the turn-boundary
+    /// ladder uses, so the TUI and the logs show the mid-turn cut. When even
+    /// the protected context does not fit, the turn fails typed instead of
+    /// sending a request the provider rejects with a 400.
+    pub(crate) async fn enforce_hard_cap(
+        &self,
+        messages: &mut Vec<Message>,
+        limits: crate::context_management::ContextCapLimits,
+    ) -> crate::error::Result<()> {
+        if limits.hard == 0 {
+            return Ok(());
+        }
+        let tokens = crate::context_management::estimate_total_tokens(messages);
+        if !limits.over_hard(tokens) {
+            return Ok(());
+        }
+        warn!(
+            tokens,
+            hard = limits.hard,
+            "Hard context cap reached mid-turn — compacting before the next request"
+        );
+        let messages_before = messages.len();
+        self.emit(AgentEvent::CompactionStarted {
+            tokens_before: tokens,
+        })
+        .await;
+        let taken = std::mem::take(messages);
+        let (compacted, within_budget) = self.compact_to_hard_cap(taken, limits.hard);
+        *messages = compacted;
+        let tokens_after = crate::context_management::estimate_total_tokens(messages);
+        self.emit(AgentEvent::CompactionCompleted {
+            tokens_before: tokens,
+            tokens_after,
+            messages_before,
+            messages_after: messages.len(),
+        })
+        .await;
+        if !within_budget {
+            error!(
+                tokens = tokens_after,
+                hard = limits.hard,
+                "Hard context cap could not be met mid-turn — the protected context alone exceeds it"
+            );
+            return Err(crate::error::Error::ContextExhausted {
+                tokens: tokens_after,
+                window: limits.window,
+            });
+        }
+        info!(
+            tokens_before = tokens,
+            tokens_after,
+            hard = limits.hard,
+            "Compacted the request list back under the hard context cap"
+        );
+        Ok(())
+    }
+
     /// Access the underlying model client (useful for tools needing direct
     /// access to the concrete provider client).
     pub fn client(&self) -> &Arc<dyn ModelClient> {
@@ -591,8 +683,7 @@ impl OperantAgent {
         content: String,
     ) -> String {
         let budget = self
-            .config
-            .context_window
+            .effective_context_window()
             .saturating_sub(RESPONSE_RESERVE_TOKENS);
         let max_share = self.config.max_tool_result_share;
         let limit = crate::context_management::tool_result_token_limit(budget, max_share);

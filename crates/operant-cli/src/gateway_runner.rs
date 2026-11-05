@@ -2729,7 +2729,10 @@ impl MessageHandler for GatewayMessageHandler {
             )
         };
 
-        let user_content = message.content.clone();
+        // The raw operator text is no longer written to the transcript here:
+        // the core persists the user message it actually runs on (before the
+        // model call), so a second copy would show the operator's message
+        // twice. `message.content` is what the query is built from above.
 
         // (P0.4) Apply a `/connect` or `/model` made in the TUI since the last turn.
         if let Some(endpoint) = endpoint_changed_on_disk() {
@@ -3211,16 +3214,13 @@ impl MessageHandler for GatewayMessageHandler {
 
                 // Turn persistence to long-term memory happens inside
                 // agent.run() via the agent's memory provider (sync_turn).
-
-                // Save user message and assistant response to DB
-                let _ = self
-                    .agent
-                    .db()
-                    .save_message(&session_id, "user", &user_content, &now);
-                let _ = self
-                    .agent
-                    .db()
-                    .save_message(&session_id, "assistant", &content, &now);
+                //
+                // The TRANSCRIPT is the core's job: `agent.run()` persists the
+                // user message (before the model call) and every assistant
+                // message it produces — the answer, the grace summary, the
+                // circuit-breaker notice. The gateway used to write the same
+                // two rows again, so every turn showed the operator's message
+                // and the bot's answer TWICE in the resumed session.
 
                 // Wave 3 (ORGANISM-ARCHITECTURE §3): write the ROLLING
                 // summary — every completed turn upserts ONE row per
@@ -3309,11 +3309,10 @@ impl MessageHandler for GatewayMessageHandler {
                     "Gateway turn end: agent run failed"
                 );
 
-                // Still save the user message on error
-                let _ = self
-                    .agent
-                    .db()
-                    .save_message(&session_id, "user", &user_content, &now);
+                // The prompt is already in the transcript: the core persists
+                // the user message BEFORE the model call, so a failed turn
+                // still shows what the operator asked. Writing it again here
+                // duplicated it.
 
                 // `user_message()`, not `Display`. `Display` double-prefixed the
                 // text ("Error: Agent error: ...") and, for a provider failure,

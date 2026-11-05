@@ -8,8 +8,7 @@ use self::turn_finalizer::{
 use self::turn_rules::{AssistantTurn, EmptyResponseCounter, is_degenerate_final_text};
 use crate::client::{Message, Role};
 use crate::context_management::{
-    BustFingerprint, BustPermission, CONTEXT_EXHAUSTED_PERCENT, bust_permission,
-    natural_bust_reason,
+    BustFingerprint, BustPermission, bust_permission, natural_bust_reason,
 };
 use crate::error::{Error, Result};
 use crate::observer::{Observer, ObserverEvent, ObserverMetric};
@@ -112,7 +111,7 @@ impl OperantAgent {
     ) -> Vec<crate::schema::ToolSchema> {
         let visible = self
             .registry
-            .get_schemas_for_request(&self.config.tool_search, self.config.context_window)
+            .get_schemas_for_request(&self.config.tool_search, self.effective_context_window())
             .await;
         let catalog = self.registry.get_schemas().await;
         let schemas = crate::tools::tool_search::deferred::materialise(
@@ -163,18 +162,57 @@ impl OperantAgent {
         final_response: Option<&Message>,
         review_fired: bool,
     ) -> Result<Message> {
-        let grace_request = self.fitted_request(&self.effective_model(), messages, Vec::new());
+        // The wrap-up is the LAST call of a budget-exhausted turn, so a
+        // summary that runs out of room is CONTINUED (bounded) instead of
+        // being returned half-written — the generic recovery jcode uses for
+        // an incomplete response, not a TODO-specific poke.
+        let mut summary = String::new();
+        let mut grace_messages = messages.to_vec();
+        let mut continuations = 0usize;
+        let mut finish_reason: Option<String> = None;
 
-        let grace_result = if self.config.stream {
-            let stream = self.client.chat_streaming(grace_request).await?;
-            let (text, reasoning, _tcs, _extra, _finish_reason, _usage) =
-                self.process_stream(stream).await?;
-            Ok((text, reasoning))
-        } else {
-            let response = self.client.chat(grace_request).await?;
-            self.process_response(response)
-                .await
-                .map(|(t, r, _, _, _)| (t, r))
+        let grace_result: Result<(String, String)> = loop {
+            let grace_request =
+                self.fitted_request(&self.effective_model(), &grace_messages, Vec::new());
+            // The request and the parse stay inside the block so a provider
+            // failure lands in the Err arm below — with the turn diagnostics
+            // and the error event — instead of escaping through `?` as a raw
+            // transport error.
+            let attempt: Result<(String, String, Option<String>)> = async {
+                if self.config.stream {
+                    let stream = self.client.chat_streaming(grace_request).await?;
+                    let (text, reasoning, _tcs, _extra, reason, _usage) =
+                        self.process_stream(stream).await?;
+                    Ok((text, reasoning, reason))
+                } else {
+                    let response = self.client.chat(grace_request).await?;
+                    let (text, reasoning, _tcs, reason, _usage) =
+                        self.process_response(response).await?;
+                    Ok((text, reasoning, reason))
+                }
+            }
+            .await;
+
+            let (text, reasoning, reason) = match attempt {
+                Ok(parts) => parts,
+                Err(e) => break Err(e),
+            };
+            summary.push_str(&text);
+            finish_reason = reason.clone();
+            if reason.as_deref() != Some("length") || continuations >= MAX_GRACE_CONTINUE_RETRIES {
+                break Ok((summary, reasoning));
+            }
+            continuations += 1;
+            warn!(
+                continuations,
+                max = MAX_GRACE_CONTINUE_RETRIES,
+                summary_chars = summary.len(),
+                "Grace summary was cut off mid-summary — continuing the wrap-up"
+            );
+            grace_messages.push(Message::assistant(&text));
+            grace_messages.push(Message::user(
+                turn_end_heuristics::continuation_prompt_with_partial(&summary),
+            ));
         };
 
         match grace_result {
@@ -184,10 +222,25 @@ impl OperantAgent {
                 // Surface the empty message and let the gateway's existing
                 // empty-content fallback speak to the operator.
                 let result = if is_degenerate_final_text(&text) {
+                    warn!(
+                        chars = text.len(),
+                        "Grace summary rejected by the quality gate — nothing persisted"
+                    );
                     Message::assistant(String::new())
                 } else {
                     Message::assistant(&text)
                 };
+                // ── Keep the summary ──────────────────────────────────────
+                // The wrap-up IS this turn's answer: it belongs in the
+                // conversation (so the next turn sees what was said) and in
+                // the session transcript (so a resume keeps it). Without
+                // this the summary was returned to the caller and then
+                // dropped on the floor.
+                if !result.content.trim().is_empty() {
+                    self.add_message(result.clone()).await;
+                    self.persist_assistant_message(session_id, &result, finish_reason.clone())
+                        .await;
+                }
                 if self.record_trajectories {
                     self.save_trajectory(
                         session_id,
@@ -267,6 +320,31 @@ impl OperantAgent {
             }
             Err(e) => {
                 warn!(error = %e, "Grace call failed — returning hard error");
+                // ── Turn diagnostics (error exit) ─────────────────────────
+                // The wrap-up failed, so the turn ended in an ERROR, not in
+                // a graceful stop: the log line must say so, and the error
+                // must reach the operator's surface like every other turn
+                // failure. Before this the streaming path escaped through
+                // `?` with a raw transport error and neither happened.
+                warn!(
+                    "{}",
+                    TurnDiagnostics {
+                        exit_reason: TurnExitReason::Error,
+                        model: self.model(),
+                        api_calls: iterations,
+                        max_iterations: self.config.max_iterations,
+                        budget_used: self.iteration_budget.used(),
+                        budget_max: self.iteration_budget.max_total(),
+                        tool_turns: tool_calls,
+                        response_len: 0,
+                        session_id: session_id.to_string(),
+                    }
+                    .log_message()
+                );
+                self.emit(AgentEvent::Error {
+                    error: e.user_message(),
+                })
+                .await;
                 // Emit AgentEnd observer event for failure
                 if let Some(ref obs) = self.observer {
                     let cost = self.session_cost_usd.read().map(|c| *c).unwrap_or(0.0);
@@ -619,6 +697,11 @@ impl OperantAgent {
         let mut empty_content_retries = EmptyResponseCounter::new(self.config.max_retries);
         // Truncation-continuation retries (T1 — hermes caps at 4).
         let mut length_continue_retries: usize = 0;
+        // The text the model produced before the output limit cut it off.
+        // It rides the continuation prompt (so the model continues instead of
+        // restarting) and it is prepended to the final answer (so the first
+        // half of a long answer is not lost).
+        let mut truncated_prefix = String::new();
         // Whether we've already tried a fallback model after empty retries.
         let mut fallback_attempted = false;
         // Degenerate-loop circuit breaker: consecutive iterations whose tool
@@ -840,6 +923,15 @@ impl OperantAgent {
                 max = self.config.max_iterations,
                 "Requesting LLM response"
             );
+
+            // ── Hard context cap (mid-turn) ───────────────────────────
+            // The turn grew past the hard cap — tool output, a long
+            // continuation, a big tool result. Compaction at the turn
+            // boundary already ran, so the cap is enforced HERE, before
+            // the next provider call: a request over the cap is a request
+            // the provider rejects with a 400.
+            let limits = self.context_cap_limits();
+            self.enforce_hard_cap(&mut messages, limits).await?;
 
             // Get tool schemas
             let tools = self.tools_for_turn(&messages).await;
@@ -1404,9 +1496,16 @@ impl OperantAgent {
                                 ));
                             }
                             length_continue_retries += 1;
+                            // Keep the cut-off text: it rides the continuation
+                            // prompt so the model continues instead of
+                            // restarting, and it is prepended to the final
+                            // answer so the first half is not lost.
+                            truncated_prefix.push_str(&response_text);
                             self.metrics.record_truncation_continuation();
                             warn!(
                                 finish_reason = ?finish_reason,
+                                partial_chars = response_text.len(),
+                                kept_chars = truncated_prefix.len(),
                                 "Response truncated — requesting continuation ({}/{})",
                                 length_continue_retries,
                                 MAX_LENGTH_CONTINUE_RETRIES
@@ -1418,8 +1517,11 @@ impl OperantAgent {
                                 ),
                             })
                             .await;
-                            let continue_msg =
-                                Message::user(turn_end_heuristics::continuation_prompt());
+                            let continue_msg = Message::user(
+                                turn_end_heuristics::continuation_prompt_with_partial(
+                                    &truncated_prefix,
+                                ),
+                            );
                             messages.push(continue_msg.clone());
                             self.add_message(continue_msg).await;
                             // Refund the consumed iteration — the LLM call
@@ -1576,10 +1678,18 @@ impl OperantAgent {
                     // Add assistant message to conversation
                     // When tool calls are present, any text before them is typically
                     // model thinking/planning that shouldn't be shown to the user.
+                    //
+                    // A truncated answer is REASSEMBLED: the text the provider
+                    // cut off is prepended to the continuation's text, so the
+                    // answer the operator gets (and the row the session keeps)
+                    // is the whole thing — the first half used to be dropped
+                    // on the floor.
                     let effective_text = if !tool_calls.is_empty() {
                         String::new()
-                    } else {
+                    } else if truncated_prefix.is_empty() {
                         response_text.clone()
+                    } else {
+                        format!("{truncated_prefix}{response_text}")
                     };
                     let mut assistant_msg = Message::assistant(&effective_text);
                     if !reasoning_text.is_empty() {
@@ -1598,52 +1708,16 @@ impl OperantAgent {
                     messages.push(assistant_msg.clone());
                     self.add_message(assistant_msg.clone()).await;
 
-                    // Persist assistant message — use save_message_full when
-                    // the message has tool_calls so they're not lost on reload.
-                    // Previously save_message (4-arg) dropped tool_calls, which
-                    // meant reloaded sessions lost the assistant's tool-call
-                    // context (the tool results became orphaned).
-                    let timestamp = chrono::Utc::now().to_rfc3339();
-                    if assistant_msg.tool_calls.is_some() {
-                        let tool_calls_json = assistant_msg
-                            .tool_calls
-                            .as_ref()
-                            .and_then(|tcs| serde_json::to_string(tcs).ok());
-                        let msg_data = crate::database::MessageData {
-                            id: 0,
-                            session_id: session_id.clone(),
-                            role: "assistant".to_string(),
-                            content: Some(effective_text.clone()),
-                            tool_call_id: None,
-                            tool_calls: tool_calls_json,
-                            tool_name: None,
-                            timestamp,
-                            token_count: None,
-                            // T1: persist the provider's real finish reason
-                            // (previously hardcoded to "tool_calls").
-                            finish_reason: finish_reason.clone(),
-                            reasoning: assistant_msg.reasoning.clone(),
-                            reasoning_content: None,
-                            reasoning_details: None,
-                            codex_reasoning_items: None,
-                            codex_message_items: None,
-                            platform_message_id: None,
-                            observed: None,
-                            active: 1,
-                        };
-                        if let Err(e) = self.database.save_message_full(&msg_data) {
-                            tracing::warn!(error = %e, "failed to persist assistant message");
-                        }
-                    } else {
-                        if let Err(e) = self.database.save_message(
-                            &session_id,
-                            "assistant",
-                            &effective_text,
-                            &timestamp,
-                        ) {
-                            tracing::warn!(error = %e, "failed to persist assistant message");
-                        }
-                    }
+                    // Persist every assistant message through the full
+                    // writer. The short writer drops reasoning and
+                    // finish_reason, so a resumed session silently loses
+                    // both even when the turn used no tools.
+                    self.persist_assistant_message(
+                        &session_id,
+                        &assistant_msg,
+                        finish_reason.clone(),
+                    )
+                    .await;
                     self.database
                         .save_session(
                             &session_id,
@@ -2101,6 +2175,11 @@ impl OperantAgent {
                             identical_streak, detail
                         ));
                         self.add_message(abort_msg.clone()).await;
+                        // The abort notice IS this turn's answer — it belongs
+                        // in the transcript like every other assistant
+                        // message, or a resumed session loses it.
+                        self.persist_assistant_message(&session_id, &abort_msg, None)
+                            .await;
                         // S5: stamp the real exit reason — the operator must
                         // see that the turn was broken off, not answered.
                         self.emit(AgentEvent::Done {
@@ -2172,6 +2251,11 @@ impl OperantAgent {
                             consecutive_failed_iters, detail
                         ));
                         self.add_message(abort_msg.clone()).await;
+                        // The abort notice IS this turn's answer — it belongs
+                        // in the transcript like every other assistant
+                        // message, or a resumed session loses it.
+                        self.persist_assistant_message(&session_id, &abort_msg, None)
+                            .await;
                         // S5: stamp the real exit reason — the operator must
                         // see that the turn was broken off, not answered.
                         self.emit(AgentEvent::Done {
@@ -2302,14 +2386,37 @@ impl OperantAgent {
                             self.notify_delegation(&task_desc, &result.content);
                         }
 
-                        // Persist tool result (truncated)
-                        if let Err(e) = self.database.save_message(
-                            &session_id,
-                            "tool",
-                            &content,
-                            &chrono::Utc::now().to_rfc3339(),
-                        ) {
-                            tracing::warn!(error = %e, "failed to persist tool result");
+                        // Persist the tool result with its call id and tool
+                        // name. The four-argument writer stores only the
+                        // content, which makes the row impossible to pair
+                        // with the assistant's tool request after a resume.
+                        let msg_data = crate::database::MessageData {
+                            id: 0,
+                            session_id: session_id.clone(),
+                            role: "tool".to_string(),
+                            content: Some(content.clone()),
+                            tool_call_id: Some(result.tool_call_id.clone()),
+                            tool_calls: None,
+                            tool_name: Some(result.name.clone()),
+                            timestamp: chrono::Utc::now().to_rfc3339(),
+                            token_count: None,
+                            finish_reason: None,
+                            reasoning: None,
+                            reasoning_content: None,
+                            reasoning_details: None,
+                            codex_reasoning_items: None,
+                            codex_message_items: None,
+                            platform_message_id: None,
+                            observed: None,
+                            active: 1,
+                        };
+                        if let Err(e) = self.database.save_message_full(&msg_data) {
+                            tracing::warn!(
+                                error = %e,
+                                tool_call_id = %result.tool_call_id,
+                                tool = %result.name,
+                                "failed to persist tool result"
+                            );
                         }
                         self.database
                             .save_session(
@@ -2389,6 +2496,9 @@ impl OperantAgent {
                         let reply = Message::assistant(guardrail_halt_reply(&summary));
                         messages.push(reply.clone());
                         self.add_message(reply.clone()).await;
+                        // The halt reply is the turn's answer — persist it.
+                        self.persist_assistant_message(&session_id, &reply, None)
+                            .await;
                         warn!(
                             "{}",
                             TurnDiagnostics {
@@ -2574,6 +2684,18 @@ impl OperantAgent {
         }
     }
 
+    /// The configured context window, lowered by a limit a prior overflow
+    /// taught us for this provider and model. Public because CLI and TUI
+    /// surfaces must report the same denominator the agent uses.
+    pub fn context_window(&self) -> usize {
+        self.effective_context_window()
+    }
+
+    /// Effective absolute/percentage context caps for the active window.
+    pub(crate) fn context_cap_limits(&self) -> crate::context_management::ContextCapLimits {
+        self.context_caps.resolve(self.effective_context_window())
+    }
+
     /// The window this agent builds against: the configured one, lowered to
     /// the limit a prior overflow taught us for this provider and model.
     pub(crate) fn effective_context_window(&self) -> usize {
@@ -2609,6 +2731,7 @@ impl OperantAgent {
         system: &str,
         estimated: usize,
         window: usize,
+        soft_cap: usize,
     ) -> BustPermission {
         let now = BustFingerprint {
             model: self.model(),
@@ -2628,7 +2751,7 @@ impl OperantAgent {
         let explicit = self
             .explicit_bust
             .swap(false, std::sync::atomic::Ordering::AcqRel);
-        bust_permission(estimated, window, natural, explicit)
+        bust_permission(estimated, window, natural, explicit, soft_cap)
     }
 
     /// Build messages including system prompt.
@@ -2755,6 +2878,10 @@ impl OperantAgent {
         // prompt cache keeps hitting. The context-engine assemble is not
         // gated: it is the lossless recall path and runs every turn.
         let window = self.effective_context_window();
+        // Absolute + percentage caps for this window. The soft cap is the
+        // turn-boundary compaction trigger; the hard cap is the line every
+        // request must stay under (both axes — whichever binds is smaller).
+        let limits = self.context_caps.resolve(window);
         // `messages[0]` is the frozen prefix pushed above (moved into it).
         let frozen_text = messages[0].content.as_str();
         let request_tokens = {
@@ -2762,7 +2889,7 @@ impl OperantAgent {
             crate::context_management::estimate_total_tokens(&conv)
         } + crate::context_management::estimate_tokens(frozen_text)
             + turn_context_tokens;
-        let bust = self.compute_bust_permission(frozen_text, request_tokens, window);
+        let bust = self.compute_bust_permission(frozen_text, request_tokens, window, limits.soft);
         let may_rewrite = bust != BustPermission::None;
         debug!(?bust, request_tokens, window, "Bust permission decided");
 
@@ -2842,7 +2969,15 @@ impl OperantAgent {
             .saturating_sub(turn_context_tokens);
 
         let mut estimated_tokens = self.estimate_current_tokens(&messages) + turn_context_tokens;
-        let preflight_threshold = budget * PREFLIGHT_THRESHOLD_PERCENT as usize / 100;
+        // The soft cap IS the preflight threshold: the ladder compacts the
+        // history at the turn boundary, before the hard cap is reached. A
+        // disabled soft cap (both axes zero) keeps the legacy window
+        // percentage so the overflow guard still has a trigger.
+        let preflight_threshold = if limits.soft > 0 {
+            limits.soft
+        } else {
+            budget * PREFLIGHT_THRESHOLD_PERCENT as usize / 100
+        };
         let mut ladder_fired = false;
         let mut frozen_prefix: Vec<Message> = Vec::new();
         // RT-182: the ladder's own before-numbers, captured at the same
@@ -3025,14 +3160,54 @@ impl OperantAgent {
             .await;
         }
 
-        // ── Context exhausted (plan 06 P1) ───────────────────────────────
-        // Every rung that may fold has run and the head + tail still sit at
-        // or above the hard line: fail typed rather than send a request the
-        // provider rejects with a 400. Uses the heuristic estimate, not the
-        // reported usage, which can predate the fold just above.
-        let final_tokens =
+        // ── Hard context cap ─────────────────────────────────────────────
+        // The ladder's own eviction sizes against the WINDOW; the hard cap
+        // is the line this agent guarantees to stay under (400k by default,
+        // or 95% of a smaller window). Compact once more when the request is
+        // still over it, then fail typed if even the protected head and tail
+        // do not fit.
+        //
+        // Uses the heuristic estimate, not the reported usage, which can
+        // predate the fold just above.
+        let mut final_tokens =
             crate::context_management::estimate_total_tokens(&messages) + turn_context_tokens;
-        if final_tokens * 100 >= window * CONTEXT_EXHAUSTED_PERCENT {
+        if limits.over_hard(final_tokens) {
+            let tokens_before = final_tokens;
+            let messages_before = messages.len();
+            warn!(
+                tokens = tokens_before,
+                hard = limits.hard,
+                "Request is over the hard context cap — compacting before it is sent"
+            );
+            self.emit(AgentEvent::CompactionStarted { tokens_before })
+                .await;
+            // The turn context rides the tail and is not part of `messages`
+            // yet, so it is charged against the cap here.
+            let hard_budget = limits.hard.saturating_sub(turn_context_tokens);
+            let (compacted, within_budget) = self.compact_to_hard_cap(messages, hard_budget);
+            messages = compacted;
+            final_tokens =
+                crate::context_management::estimate_total_tokens(&messages) + turn_context_tokens;
+            self.emit(AgentEvent::CompactionCompleted {
+                tokens_before,
+                tokens_after: final_tokens,
+                messages_before,
+                messages_after: messages.len(),
+            })
+            .await;
+            if !within_budget {
+                error!(
+                    tokens = final_tokens,
+                    hard = limits.hard,
+                    "Hard context cap could not be met — the protected context alone exceeds it"
+                );
+                return Err(Error::ContextExhausted {
+                    tokens: final_tokens,
+                    window,
+                });
+            }
+        }
+        if limits.over_hard(final_tokens) {
             return Err(Error::ContextExhausted {
                 tokens: final_tokens,
                 window,

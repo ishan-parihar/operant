@@ -638,6 +638,20 @@ pub struct BehaviorSettings {
     pub session_reset: SessionResetMode,
     pub context_compression: bool,
     pub context_compression_threshold: f64,
+    /// Absolute soft-compaction limit in tokens. Whichever of this and
+    /// `context_soft_cap_percent` is smaller binds first.
+    #[serde(default = "default_context_soft_cap_tokens")]
+    pub context_soft_cap_tokens: usize,
+    /// Soft-compaction limit as a fraction of `context_window`.
+    #[serde(default = "default_context_soft_cap_percent")]
+    pub context_soft_cap_percent: f64,
+    /// Absolute hard-compaction limit in tokens. Whichever of this and
+    /// `context_hard_cap_percent` is smaller binds first.
+    #[serde(default = "default_context_hard_cap_tokens")]
+    pub context_hard_cap_tokens: usize,
+    /// Hard-compaction limit as a fraction of `context_window`.
+    #[serde(default = "default_context_hard_cap_percent")]
+    pub context_hard_cap_percent: f64,
     /// Char ceiling for one LLM compaction summary. `u32::MAX` (the default)
     /// = the summarizer's own output bound (historically unbounded on the
     /// gateway path). u32 not usize: the value serialises to TOML, whose
@@ -852,6 +866,22 @@ fn default_max_tool_result_share() -> f64 {
     crate::context_management::DEFAULT_MAX_TOOL_RESULT_SHARE
 }
 
+fn default_context_soft_cap_tokens() -> usize {
+    crate::context_management::ContextCaps::default().soft_tokens
+}
+
+fn default_context_soft_cap_percent() -> f64 {
+    crate::context_management::ContextCaps::default().soft_percent
+}
+
+fn default_context_hard_cap_tokens() -> usize {
+    crate::context_management::ContextCaps::default().hard_tokens
+}
+
+fn default_context_hard_cap_percent() -> f64 {
+    crate::context_management::ContextCaps::default().hard_percent
+}
+
 /// Default for `context_compression_summary_max_chars`: `u32::MAX` —
 /// effectively the compressor's historical unbounded summary, but still
 /// serialisable to TOML (i64 integers). The example TOML shows how to
@@ -881,6 +911,10 @@ impl Default for BehaviorSettings {
             session_reset: SessionResetMode::Never,
             context_compression: false,
             context_compression_threshold: 0.5,
+            context_soft_cap_tokens: default_context_soft_cap_tokens(),
+            context_soft_cap_percent: default_context_soft_cap_percent(),
+            context_hard_cap_tokens: default_context_hard_cap_tokens(),
+            context_hard_cap_percent: default_context_hard_cap_percent(),
             context_compression_summary_max_chars: default_summary_max_chars(),
             max_tool_result_share: default_max_tool_result_share(),
             max_consecutive_tool_only: 90,

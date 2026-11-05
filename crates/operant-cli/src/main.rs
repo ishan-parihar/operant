@@ -2192,6 +2192,12 @@ pub(crate) async fn create_runtime_agent_with(
             tracing::info!("Ctrl-C received — triggering agent interrupt flag");
             handler_flag.trigger();
         });
+        let context_caps = operant_core::context_management::ContextCaps {
+            soft_tokens: config.agent.context_soft_cap_tokens,
+            soft_percent: config.agent.context_soft_cap_percent,
+            hard_tokens: config.agent.context_hard_cap_tokens,
+            hard_percent: config.agent.context_hard_cap_percent,
+        };
         let mut agent = OperantAgent::with_events(
             core.agent_config,
             model_client,
@@ -2199,6 +2205,7 @@ pub(crate) async fn create_runtime_agent_with(
             core.database,
             event_tx,
         )
+        .with_context_caps(context_caps)
         .with_memory_manager(core.memory_manager)
         .with_skill_manager(core.skill_manager)
         .with_harness_prompt_slot_opt(core.harness_prompt_slot)
@@ -2309,12 +2316,19 @@ pub(crate) async fn create_agent_without_events(
             tracing::info!("Ctrl-C received — triggering agent interrupt flag");
             handler_flag.trigger();
         });
+        let context_caps = operant_core::context_management::ContextCaps {
+            soft_tokens: config.agent.context_soft_cap_tokens,
+            soft_percent: config.agent.context_soft_cap_percent,
+            hard_tokens: config.agent.context_hard_cap_tokens,
+            hard_percent: config.agent.context_hard_cap_percent,
+        };
         let mut agent = OperantAgent::new(
             core.agent_config,
             model_client,
             core.registry,
             core.database,
         )
+        .with_context_caps(context_caps)
         .with_memory_manager(core.memory_manager)
         .with_skill_manager(core.skill_manager)
         .with_harness_prompt_slot_opt(core.harness_prompt_slot)

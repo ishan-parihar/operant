@@ -202,6 +202,45 @@ impl OperantAgent {
         conv.push(message);
     }
 
+    /// Persist an assistant message with every model-visible field intact.
+    ///
+    /// Tool calls, reasoning, and the provider finish reason are part of the
+    /// transcript contract. The short database writer drops them, which is why
+    /// a resumed tool-using turn used to lose the tool result context.
+    pub(crate) async fn persist_assistant_message(
+        &self,
+        session_id: &str,
+        message: &Message,
+        finish_reason: Option<String>,
+    ) {
+        let data = crate::database::MessageData {
+            id: 0,
+            session_id: session_id.to_string(),
+            role: "assistant".to_string(),
+            content: Some(message.content.clone()),
+            tool_call_id: None,
+            tool_calls: message
+                .tool_calls
+                .as_ref()
+                .and_then(|calls| serde_json::to_string(calls).ok()),
+            tool_name: None,
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            token_count: None,
+            finish_reason,
+            reasoning: message.reasoning.clone(),
+            reasoning_content: None,
+            reasoning_details: None,
+            codex_reasoning_items: None,
+            codex_message_items: None,
+            platform_message_id: None,
+            observed: None,
+            active: 1,
+        };
+        if let Err(e) = self.database.save_message_full(&data) {
+            tracing::warn!(error = %e, session_id = %session_id, "failed to persist assistant message");
+        }
+    }
+
     /// (2026-10-14 batch, plan 04) Commit the interrupted tail: the partial
     /// assistant text plus synthetic "Cancelled…" tool results for calls
     /// that never finished. Runs under ONE conversation write so the store

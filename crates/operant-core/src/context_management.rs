@@ -553,6 +553,111 @@ pub async fn semantic_compaction_cutoff(
 }
 
 // ---------------------------------------------------------------------------
+// Context caps
+// ---------------------------------------------------------------------------
+
+/// Absolute and percentage limits that trigger context compaction.
+///
+/// Both axes are enforced: the absolute token limit and the percentage of the
+/// active context window. Whichever is smaller binds first. Percentages are
+/// fractions (`0.80` means 80%), matching the existing configuration style.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ContextCaps {
+    /// Absolute soft-compaction limit in tokens.
+    pub soft_tokens: usize,
+    /// Soft-compaction limit as a fraction of the context window.
+    pub soft_percent: f64,
+    /// Absolute hard-compaction limit in tokens.
+    pub hard_tokens: usize,
+    /// Hard-compaction limit as a fraction of the context window.
+    pub hard_percent: f64,
+}
+
+impl Default for ContextCaps {
+    fn default() -> Self {
+        Self {
+            soft_tokens: 350_000,
+            soft_percent: 0.80,
+            hard_tokens: 400_000,
+            hard_percent: 0.95,
+        }
+    }
+}
+
+impl ContextCaps {
+    /// Resolve the effective limits for `window` tokens.
+    ///
+    /// A zero absolute limit disables that axis. A zero percentage disables
+    /// that axis. The hard limit is never below the soft limit, because a
+    /// "hard" threshold below the "soft" threshold would invert the intended
+    /// order.
+    pub fn resolve(self, window: usize) -> ContextCapLimits {
+        let percentage = |fraction: f64| -> usize {
+            if fraction <= 0.0 || window == 0 {
+                0
+            } else {
+                ((window as f64) * fraction).floor() as usize
+            }
+        };
+        let soft_percent_tokens = percentage(self.soft_percent);
+        let hard_percent_tokens = percentage(self.hard_percent);
+        let soft = match (self.soft_tokens, soft_percent_tokens) {
+            (0, 0) => 0,
+            (0, pct) => pct,
+            (abs, 0) => abs,
+            (abs, pct) => abs.min(pct),
+        };
+        let hard = match (self.hard_tokens, hard_percent_tokens) {
+            (0, 0) => 0,
+            (0, pct) => pct,
+            (abs, 0) => abs,
+            (abs, pct) => abs.min(pct),
+        };
+        let hard = hard.max(soft);
+        ContextCapLimits {
+            soft,
+            hard,
+            window,
+            soft_tokens: self.soft_tokens,
+            soft_percent: self.soft_percent,
+            hard_tokens: self.hard_tokens,
+            hard_percent: self.hard_percent,
+        }
+    }
+}
+
+/// Effective context-compaction limits for one model window.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ContextCapLimits {
+    /// Effective soft limit in tokens; zero disables the soft cap.
+    pub soft: usize,
+    /// Effective hard limit in tokens; zero disables the hard cap.
+    pub hard: usize,
+    /// The context window the limits were resolved against.
+    pub window: usize,
+    /// Configured absolute soft limit.
+    pub soft_tokens: usize,
+    /// Configured soft percentage.
+    pub soft_percent: f64,
+    /// Configured absolute hard limit.
+    pub hard_tokens: usize,
+    /// Configured hard percentage.
+    pub hard_percent: f64,
+}
+
+impl ContextCapLimits {
+    /// Whether `tokens` reached the soft limit.
+    pub fn over_soft(self, tokens: usize) -> bool {
+        self.soft > 0 && tokens >= self.soft
+    }
+
+    /// Whether `tokens` reached the hard limit.
+    pub fn over_hard(self, tokens: usize) -> bool {
+        self.hard > 0 && tokens >= self.hard
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Bust permission (plan 06 P1): the gate every history rewrite passes through
 // ---------------------------------------------------------------------------
 
@@ -573,7 +678,8 @@ pub enum BustPermission {
     /// or system prompt changed, or idle past the TTL), so a rewrite costs no
     /// extra cache miss.
     Natural(&'static str),
-    /// The estimate is at or above `FORCE_BUST_PERCENT` of the window.
+    /// The estimate is at or above the soft compaction cap, or at or above
+    /// `FORCE_BUST_PERCENT` of the window.
     Force,
     /// The user asked for compaction (`/compact`).
     Explicit,
@@ -608,15 +714,24 @@ pub fn natural_bust_reason(
 
 /// Pure decision behind [`BustPermission`]. `Explicit` wins, then `Force`,
 /// then `natural`.
+///
+/// `soft_cap` is the resolved soft-compaction limit (absolute + percentage,
+/// whichever binds). Reaching it forces a rewrite: the soft cap exists to
+/// compact the history BEFORE the hard cap, so it must be able to bust the
+/// prompt cache. Zero disables that trigger and leaves the legacy
+/// window-percentage force line in charge.
 pub fn bust_permission(
     estimated: usize,
     window: usize,
     natural: Option<&'static str>,
     explicit: bool,
+    soft_cap: usize,
 ) -> BustPermission {
     if explicit {
         BustPermission::Explicit
-    } else if estimated * 100 >= window * FORCE_BUST_PERCENT {
+    } else if (soft_cap > 0 && estimated >= soft_cap)
+        || estimated * 100 >= window * FORCE_BUST_PERCENT
+    {
         BustPermission::Force
     } else if let Some(reason) = natural {
         BustPermission::Natural(reason)
@@ -2418,7 +2533,7 @@ mod tests {
     fn bust_permission_is_none_below_the_force_line_without_a_natural_reason() {
         // 84% of a 10k window: one token under the force line.
         assert_eq!(
-            bust_permission(8_400, 10_000, None, false),
+            bust_permission(8_400, 10_000, None, false, 0),
             BustPermission::None
         );
     }
@@ -2426,11 +2541,11 @@ mod tests {
     #[test]
     fn bust_permission_forces_at_the_force_line() {
         assert_eq!(
-            bust_permission(8_500, 10_000, None, false),
+            bust_permission(8_500, 10_000, None, false, 0),
             BustPermission::Force
         );
         assert_eq!(
-            bust_permission(9_900, 10_000, None, false),
+            bust_permission(9_900, 10_000, None, false, 0),
             BustPermission::Force
         );
     }
@@ -2438,7 +2553,7 @@ mod tests {
     #[test]
     fn bust_permission_is_natural_when_the_cache_is_cold_anyway() {
         assert_eq!(
-            bust_permission(1_000, 10_000, Some("model changed"), false),
+            bust_permission(1_000, 10_000, Some("model changed"), false, 0),
             BustPermission::Natural("model changed")
         );
     }
@@ -2446,13 +2561,89 @@ mod tests {
     #[test]
     fn bust_permission_explicit_wins_over_every_other_reason() {
         assert_eq!(
-            bust_permission(9_900, 10_000, Some("model changed"), true),
+            bust_permission(9_900, 10_000, Some("model changed"), true, 0),
             BustPermission::Explicit
         );
         assert_eq!(
-            bust_permission(0, 10_000, None, true),
+            bust_permission(0, 10_000, None, true, 0),
             BustPermission::Explicit
         );
+    }
+
+    /// The soft cap is the trigger that lets the compaction ladder run before
+    /// the hard cap is reached, so reaching it must force a rewrite even
+    /// though the window-percentage force line is nowhere near.
+    #[test]
+    fn bust_permission_forces_at_the_soft_cap() {
+        assert_eq!(
+            bust_permission(3_500, 1_000_000, None, false, 3_500),
+            BustPermission::Force
+        );
+        assert_eq!(
+            bust_permission(3_499, 1_000_000, None, false, 3_500),
+            BustPermission::None
+        );
+    }
+
+    // ── context caps ─────────────────────────────────────────────────────
+
+    #[test]
+    fn context_caps_default_to_350k_soft_and_400k_hard() {
+        let caps = ContextCaps::default();
+        assert_eq!(caps.soft_tokens, 350_000);
+        assert_eq!(caps.hard_tokens, 400_000);
+        let limits = caps.resolve(1_000_000);
+        assert_eq!(limits.soft, 350_000);
+        assert_eq!(limits.hard, 400_000);
+    }
+
+    /// Both axes bind: whichever is SMALLER for the active window wins.
+    #[test]
+    fn context_caps_take_the_stricter_of_absolute_and_percentage() {
+        let caps = ContextCaps::default();
+        // A 100k window: 80% / 95% are stricter than 350k / 400k.
+        let small = caps.resolve(100_000);
+        assert_eq!(small.soft, 80_000);
+        assert_eq!(small.hard, 95_000);
+        // A 1M window: the absolute caps are stricter than 80% / 95%.
+        let large = caps.resolve(1_000_000);
+        assert_eq!(large.soft, 350_000);
+        assert_eq!(large.hard, 400_000);
+    }
+
+    /// A zero axis is disabled, and the hard limit never sits below the soft
+    /// one (an inverted pair would compact at the hard cap before the soft
+    /// cap ever fired).
+    #[test]
+    fn context_caps_disable_zero_axes_and_keep_the_order() {
+        let only_percent = ContextCaps {
+            soft_tokens: 0,
+            soft_percent: 0.5,
+            hard_tokens: 0,
+            hard_percent: 0.9,
+        }
+        .resolve(1_000_000);
+        assert_eq!(only_percent.soft, 500_000);
+        assert_eq!(only_percent.hard, 900_000);
+
+        let inverted = ContextCaps {
+            soft_tokens: 300_000,
+            soft_percent: 0.0,
+            hard_tokens: 100_000,
+            hard_percent: 0.0,
+        }
+        .resolve(1_000_000);
+        assert_eq!(inverted.soft, 300_000);
+        assert_eq!(inverted.hard, 300_000);
+    }
+
+    #[test]
+    fn context_cap_limits_report_the_crossings() {
+        let limits = ContextCaps::default().resolve(1_000_000);
+        assert!(!limits.over_soft(349_999));
+        assert!(limits.over_soft(350_000));
+        assert!(!limits.over_hard(399_999));
+        assert!(limits.over_hard(400_000));
     }
 
     #[test]

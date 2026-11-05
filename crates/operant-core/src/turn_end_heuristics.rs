@@ -155,6 +155,23 @@ pub fn continuation_prompt() -> &'static str {
      restart or repeat prior text. Finish the answer directly.]"
 }
 
+/// [`continuation_prompt`] carrying the text that WAS produced.
+///
+/// A bare "continue" prompt makes the model restart the answer from
+/// scratch: it cannot continue what it cannot see. The partial output rides
+/// the prompt so the cut is continued rather than repeated — the first half
+/// of the answer is lost without it.
+pub fn continuation_prompt_with_partial(partial: &str) -> String {
+    if partial.trim().is_empty() {
+        return continuation_prompt().to_string();
+    }
+    format!(
+        "{prompt}\n\n[Your output so far — continue from exactly where it stops, do not \
+         repeat it]\n{partial}",
+        prompt = continuation_prompt()
+    )
+}
+
 // ── Deterministic tool-loop anomaly detectors ──────────────────
 //
 // A turn can "look" finished while resting on a tool result the model
@@ -387,6 +404,21 @@ mod tests {
         ));
         assert!(!thinking_exhausted("<thinking>r</thinking>visible answer"));
         assert!(!thinking_exhausted("no tags at all"));
+    }
+
+    /// The continuation prompt must carry the cut-off text — a bare
+    /// "continue" makes the model restart the answer from scratch.
+    #[test]
+    fn the_continuation_prompt_carries_the_truncated_text() {
+        let prompt = continuation_prompt_with_partial("the first half of the answer");
+        assert!(prompt.contains("the first half of the answer"));
+        assert!(prompt.contains("Continue exactly where you left off"));
+        // No text yet → the bare prompt, unchanged.
+        assert_eq!(
+            continuation_prompt_with_partial("   "),
+            continuation_prompt(),
+            "an empty partial must not change the prompt"
+        );
     }
 
     #[test]

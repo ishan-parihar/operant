@@ -485,8 +485,10 @@ async fn truncated_stop_continues_with_prompt_and_refunds_the_iteration() {
         .expect("a truncated answer must be continued, not surfaced or errored");
 
     assert_eq!(
-        result.content, " second half, so the whole answer is finally complete.",
-        "the turn must end on the continuation's answer, not the truncated one"
+        result.content,
+        "Here is the first half of the answer, and then the second half, so the whole \
+         answer is finally complete.",
+        "the turn must end on the WHOLE answer — the truncated first half must not be lost"
     );
     assert_eq!(
         client.requests(),
@@ -500,6 +502,17 @@ async fn truncated_stop_continues_with_prompt_and_refunds_the_iteration() {
             .iter()
             .any(|m| m.contains(CONTINUATION)),
         "the continuation request must carry the truncation prompt, got: {:?}",
+        client.messages_of(1)
+    );
+    // AND it carried the truncated text itself: a bare "continue" prompt
+    // makes the model restart the answer from scratch, and the first half is
+    // lost twice — once from the model's view, once from the operator's.
+    assert!(
+        client
+            .messages_of(1)
+            .iter()
+            .any(|m| m.contains("Here is the first half of the answer")),
+        "the continuation request must carry the truncated output, got: {:?}",
         client.messages_of(1)
     );
     assert_eq!(

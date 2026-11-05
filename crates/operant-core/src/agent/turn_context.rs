@@ -69,7 +69,7 @@ pub async fn build_turn_context(agent: &OperantAgent, user_query: &str) -> Resul
     // gateway, cron, autonomous, sub-agents) gets identical expansion. Mirrors
     // hermes agent/context_references.py (R1). Warnings are surfaced to the
     // user via the AgentEvent channel below.
-    let context_window = agent.config.context_window;
+    let context_window = agent.effective_context_window();
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let ctx =
         context_references::preprocess_context_references(user_query, &cwd, context_window).await;
@@ -209,18 +209,25 @@ pub async fn build_turn_context(agent: &OperantAgent, user_query: &str) -> Resul
     }
 
     // Persist user message
-    agent
-        .database
-        .save_message(
-            &session_id,
-            "user",
-            &effective_query,
-            &chrono::Utc::now().to_rfc3339(),
-        )
-        .map_err(|e| {
-            warn!(error = %e, "Failed to persist user message");
-            e
-        })?;
+    //
+    // EXACTLY ONCE per user message. The dedup check above skips a
+    // re-added query (the healing retry, the context-exhausted retry), and
+    // this write used to run anyway — so a retried turn left the operator's
+    // message in the transcript TWICE.
+    if !already_added {
+        agent
+            .database
+            .save_message(
+                &session_id,
+                "user",
+                &effective_query,
+                &chrono::Utc::now().to_rfc3339(),
+            )
+            .map_err(|e| {
+                warn!(error = %e, "Failed to persist user message");
+                e
+            })?;
+    }
 
     // ── 6. Message building (system prompt + preflight compression) ──
     // Pass the resolved session key so the context engine's DAG ingestion

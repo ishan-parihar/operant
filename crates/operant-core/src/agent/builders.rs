@@ -169,6 +169,7 @@ impl OperantAgent {
             iteration_budget: Arc::new(IterationBudget::new(max_iter)),
             metrics: Arc::new(crate::runtime_metrics::RuntimeMetrics::new()),
             cache_tracker: crate::agent::clients::cache_monitor::PrefixTracker::new(),
+            context_caps: crate::context_management::ContextCaps::default(),
             llm_compressor: None,
             context_engine: None,
             semantic_embedder: None,
@@ -265,6 +266,7 @@ impl OperantAgent {
             iteration_budget: Arc::new(IterationBudget::new(max_iter)),
             metrics: Arc::new(crate::runtime_metrics::RuntimeMetrics::new()),
             cache_tracker: crate::agent::clients::cache_monitor::PrefixTracker::new(),
+            context_caps: crate::context_management::ContextCaps::default(),
             llm_compressor: None,
             context_engine: None,
             semantic_embedder: None,
@@ -856,6 +858,12 @@ impl OperantAgent {
     /// saves it to `~/.operant/trajectories/<session_id>.json`.
     pub fn with_trajectory_recording(mut self, enabled: bool) -> Self {
         self.record_trajectories = enabled;
+        self
+    }
+
+    /// Set the absolute and percentage context-compaction limits.
+    pub fn with_context_caps(mut self, caps: crate::context_management::ContextCaps) -> Self {
+        self.context_caps = caps;
         self
     }
 

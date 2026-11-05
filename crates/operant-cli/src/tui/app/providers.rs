@@ -364,24 +364,15 @@ impl App {
         self.context_used_tokens = 0;
     }
 
-    /// Update the context window size for the current model. The models.dev
-    /// cache is the source (`limit.context`); the per-provider defaults are the
-    /// offline fallback.
+    /// Update the context window size for the current model.
+    ///
+    /// The configured `[agent] context_window` is authoritative because it is
+    /// also the value the core agent budgets against. Resolving a display-only
+    /// value from models.dev created two denominators: a custom model such as
+    /// `large-stack` showed 200k here while the agent correctly used the
+    /// configured 1M.
     pub fn refresh_context_window_size(&mut self) {
-        let provider = self.active_provider.as_deref().unwrap_or("anthropic");
-        let model_id = self
-            .model_name
-            .strip_prefix(&format!("{}/", provider))
-            .unwrap_or(&self.model_name);
-        self.context_window_size =
-            operant_core::models_dev::cached_capabilities(provider, model_id)
-                .and_then(|caps| caps.context_window)
-                .unwrap_or(match provider {
-                    "anthropic" => 200_000,
-                    "openai" => 128_000,
-                    "google" => 1_048_576,
-                    _ => 128_000,
-                });
+        self.context_window_size = self.config.agent.context_window.max(1) as u64;
     }
 
     /// Resolve a stale `provider/default` model name to the best actual model

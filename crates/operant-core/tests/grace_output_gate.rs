@@ -150,6 +150,32 @@ fn text_response(content: &str) -> ChatResponse {
     }
 }
 
+/// A response the provider cut off at the output limit (`finish_reason =
+/// "length"`). Drives the wrap-up continuation.
+fn truncated_response(content: &str) -> ChatResponse {
+    ChatResponse {
+        id: "resp".to_string(),
+        object: "chat.completion".to_string(),
+        created: 0,
+        model: "demo".to_string(),
+        choices: vec![Choice {
+            index: 0,
+            message: MessageDelta {
+                role: Some(Role::Assistant),
+                content: Some(content.to_string()),
+                reasoning_content: None,
+                tool_calls: None,
+            },
+            finish_reason: Some("length".to_string()),
+        }],
+        usage: Usage {
+            prompt_tokens: 1,
+            completion_tokens: 1,
+            total_tokens: 2,
+        },
+    }
+}
+
 fn tool_call_response(tool: &str, arguments: &str) -> ChatResponse {
     ChatResponse {
         id: "resp".to_string(),
@@ -229,15 +255,17 @@ async fn build_agent(
     client: Arc<ScriptedClient>,
     max_iterations: usize,
     db_path: std::path::PathBuf,
-) -> OperantAgent {
+) -> (OperantAgent, Arc<Database>) {
     let registry = ToolRegistry::new(Duration::from_secs(5));
     registry.register(FailingTool).await.unwrap();
-    OperantAgent::new(
+    let db = Arc::new(Database::init(db_path).unwrap());
+    let agent = OperantAgent::new(
         test_config(max_iterations),
         Box::new(ScriptedClientHandle(client)),
         registry,
-        Arc::new(Database::init(db_path).unwrap()),
-    )
+        Arc::clone(&db),
+    );
+    (agent, db)
 }
 
 /// Lets the shared [`Arc<ScriptedClient>`] survive the `Box<dyn ModelClient>`
@@ -274,7 +302,7 @@ async fn degenerate_grace_output_returns_empty_message() {
     let mut responses = varying_calls("fail_probe", 3);
     responses.push(text_response(GARBAGE_GRACE));
     let client = Arc::new(ScriptedClient::new(responses));
-    let agent = build_agent(
+    let (agent, _db) = build_agent(
         Arc::clone(&client),
         3,
         temp.path().join("grace_gate.sqlite"),
@@ -305,7 +333,7 @@ async fn valid_grace_output_passes_the_gate_verbatim() {
     let mut responses = varying_calls("fail_probe", 3);
     responses.push(text_response(VALID_GRACE));
     let client = Arc::new(ScriptedClient::new(responses));
-    let agent = build_agent(
+    let (agent, _db) = build_agent(
         Arc::clone(&client),
         3,
         temp.path().join("grace_control.sqlite"),
@@ -319,4 +347,71 @@ async fn valid_grace_output_passes_the_gate_verbatim() {
 
     assert_eq!(result.content, VALID_GRACE);
     assert_eq!(client.requests(), 4, "the grace call costs one extra turn");
+}
+
+/// The wrap-up that ran out of room mid-summary is CONTINUED, and the two
+/// halves are joined: the operator gets the whole summary instead of the
+/// first half with a "reply continue" notice.
+///
+/// The continuation is bounded — this script ends the summary on the second
+/// call, so the bound is not what stops it here.
+#[tokio::test]
+async fn truncated_grace_summary_is_continued_and_joined() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut responses = varying_calls("fail_probe", 3);
+    responses.push(truncated_response("summary so far: two of the three "));
+    responses.push(text_response("checks are done."));
+    let client = Arc::new(ScriptedClient::new(responses));
+    let (agent, _db) = build_agent(
+        Arc::clone(&client),
+        3,
+        temp.path().join("grace_continuation.sqlite"),
+    )
+    .await;
+
+    let result = agent
+        .run("do some work".to_string())
+        .await
+        .expect("a continued grace call returns Ok");
+
+    assert_eq!(
+        result.content, "summary so far: two of the three checks are done.",
+        "the wrap-up must be continued and joined, not cut off mid-summary"
+    );
+    assert_eq!(
+        client.requests(),
+        5,
+        "3 tool turns + the cut-off wrap-up + its continuation"
+    );
+}
+
+/// The wrap-up IS the turn's answer: it must be in the session transcript,
+/// or a resume loses the summary the operator already saw.
+#[tokio::test]
+async fn the_grace_summary_is_persisted_in_the_session() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut responses = varying_calls("fail_probe", 3);
+    responses.push(text_response(VALID_GRACE));
+    let client = Arc::new(ScriptedClient::new(responses));
+    let (agent, db) = build_agent(
+        Arc::clone(&client),
+        3,
+        temp.path().join("grace_persisted.sqlite"),
+    )
+    .await;
+
+    agent
+        .run("do some work".to_string())
+        .await
+        .expect("a successful grace call returns Ok");
+
+    let session_id = agent.session_id().expect("the turn has a session");
+    let rows = db
+        .get_session_messages_full(&session_id)
+        .expect("the session transcript must be readable");
+    assert!(
+        rows.iter()
+            .any(|row| row.role == "assistant" && row.content.as_deref() == Some(VALID_GRACE)),
+        "the wrap-up summary must be in the transcript, got: {rows:#?}"
+    );
 }

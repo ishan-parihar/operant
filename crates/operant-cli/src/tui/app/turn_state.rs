@@ -44,6 +44,39 @@ impl App {
         self.turn_output_tokens = self.turn_output_tokens.saturating_add(output_tokens as u64);
     }
 
+    /// Whether a session-boundary command (`/clear`, `/new`, a session
+    /// switch) may be applied right now.
+    ///
+    /// Not while a turn is streaming, and not while the agent task is still
+    /// running. `is_streaming` alone was not enough: `/stop` clears it
+    /// IMMEDIATELY, while the cancelled task keeps committing its tail for a
+    /// moment — a `/clear` that landed in that window wiped the session the
+    /// tail was still writing into.
+    pub(crate) fn session_boundary_ready(&self) -> bool {
+        !self.is_streaming && self.agent_task_handle.is_none()
+    }
+
+    /// Reset the per-session counters at a session boundary — `/clear`,
+    /// `/new`, a session switch.
+    ///
+    /// A counter that survives the boundary labels the NEW session with the
+    /// OLD session's numbers: the context overlay kept showing the previous
+    /// session's occupancy, and the "session: Nk in, Nk out" line kept
+    /// counting the old turn's spend. One helper, one shape, every boundary.
+    pub(crate) fn reset_session_counters(&mut self) {
+        self.context_used_tokens = 0;
+        self.token_count = 0;
+        self.turn_input_tokens = 0;
+        self.turn_output_tokens = 0;
+        self.last_observed_prompt_tokens = None;
+        self.cost_usd = 0.0;
+        if let Some(tracker) = std::sync::Arc::get_mut(&mut self.cost_tracker) {
+            tracker.input_tokens = 0;
+            tracker.output_tokens = 0;
+            tracker.total_cost = 0.0;
+        }
+    }
+
     pub(crate) fn current_agent_mode_snapshot(&self) -> String {
         self.agent_mode
             .clone()

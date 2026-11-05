@@ -506,7 +506,14 @@ impl TuiState for App {
     }
 
     fn total_session_tokens(&self) -> Option<(u64, u64)> {
-        Some((self.context_used_tokens, self.turn_output_tokens))
+        // The session totals are the CUMULATIVE input and output. The
+        // output side used to be the CURRENT turn's output (reset at every
+        // turn), so the "session: Nk in, Nk out" line changed on every
+        // turn and never described the session.
+        Some((
+            u64::from(self.cost_tracker.input_tokens),
+            u64::from(self.cost_tracker.output_tokens),
+        ))
     }
 
     fn session_compaction_count(&self) -> usize {

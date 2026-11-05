@@ -202,6 +202,11 @@ pub struct AgentConfig {
 /// `conversation_loop.py` uses the same limit of 4).
 pub const MAX_LENGTH_CONTINUE_RETRIES: usize = 4;
 
+/// Cap on wrap-up (grace) summary continuations. The wrap-up is the LAST
+/// call of a budget-exhausted turn: it has no tool turn left to recover
+/// with, so its continuation is bounded tighter than the main answer's.
+pub const MAX_GRACE_CONTINUE_RETRIES: usize = 2;
+
 impl Default for AgentConfig {
     fn default() -> Self {
         Self::from(&runtime_config().agent)
@@ -700,6 +705,10 @@ pub struct OperantAgent {
     /// eligibility for a request WITHOUT the provider reporting anything.
     /// See `clients::cache_monitor`. Cheap to clone; per-agent state.
     cache_tracker: crate::agent::clients::cache_monitor::PrefixTracker,
+    /// Absolute and percentage limits for proactive context compaction.
+    /// Kept on the agent rather than `AgentConfig` so existing embedders that
+    /// construct `AgentConfig` literally keep compiling.
+    context_caps: crate::context_management::ContextCaps,
     /// LLM-based context compressor. When set, context overflow errors
     /// trigger LLM summarization (summarize middle turns via auxiliary model)
     /// before falling back to deterministic decay/eviction. Matches
@@ -2286,11 +2295,21 @@ mod tests {
         }
     }
 
+    /// Crossing the soft cap rewrites the store — and the turns AFTER the
+    /// rewrite append again instead of rewriting every turn.
+    ///
+    /// The rewrite count is no longer pinned to one: the soft cap sits at
+    /// 80% of the window (or the absolute cap, whichever is stricter), so a
+    /// long session can cross it, fold, regrow and cross it again. What must
+    /// hold is that a rewrite is never STICKY — the fold takes the store
+    /// below the fold threshold, so the next turn appends and the previous
+    /// request stays a prefix of the new one.
     #[tokio::test]
     async fn crossing_the_force_line_rewrites_once_then_appends_again() {
         let (agent, _dir) = bust_test_agent(50_000);
         let mut previous: Option<Vec<Message>> = None;
         let mut rewrites = 0;
+        let mut consecutive_rewrites = 0;
         for i in 0..70 {
             agent
                 .add_message(Message::new(Role::User, format!("question {i}")))
@@ -2299,11 +2318,15 @@ mod tests {
             let built = agent.build_messages("bust-crossing").await.unwrap();
             if agent.conv_epoch.load(std::sync::atomic::Ordering::Acquire) != epoch {
                 rewrites += 1;
-            } else if let Some(prev) = &previous {
-                assert!(
-                    is_prefix_of_request(prev, &built),
-                    "turn {i}: an append-only turn changed the prefix"
-                );
+                consecutive_rewrites += 1;
+            } else {
+                consecutive_rewrites = 0;
+                if let Some(prev) = &previous {
+                    assert!(
+                        is_prefix_of_request(prev, &built),
+                        "turn {i}: an append-only turn changed the prefix"
+                    );
+                }
             }
             previous = Some(built);
             agent
@@ -2313,9 +2336,14 @@ mod tests {
                 ))
                 .await;
         }
+        assert!(
+            rewrites >= 1,
+            "crossing the soft cap must rewrite the store at least once"
+        );
         assert_eq!(
-            rewrites, 1,
-            "crossing the 85% force line rewrites exactly once"
+            consecutive_rewrites, 0,
+            "a rewrite must not repeat on the next turn — the store is folded below \
+             the threshold, so the turn after it appends again"
         );
     }
 
@@ -3411,7 +3439,11 @@ mod tests {
             .run("do the thing".to_string())
             .await
             .expect("ungoverned run");
-        assert_eq!(response.content, "second call answer");
+        assert_eq!(
+            response.content, "partial answer cut offsecond call answer",
+            "the turn must return the WHOLE answer: the truncated first half is \
+             prepended to the continuation, not dropped"
+        );
         assert_eq!(
             calls.load(std::sync::atomic::Ordering::SeqCst),
             2,

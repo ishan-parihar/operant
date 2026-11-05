@@ -165,6 +165,12 @@ model = "gpt-4"
 fallback_models = ["gpt-4o-mini"]   # tried in order when the primary fails
 max_iterations = 20
 show_reasoning = true # TUI: thinking stays until your next prompt; /thinking-display full|current|off
+context_window = 128000
+# Context caps — BOTH axes bind and the SMALLER one wins.
+context_soft_cap_tokens = 350000     # compact at the turn boundary
+context_soft_cap_percent = 0.80      # ...or at 80% of the window, whichever is smaller
+context_hard_cap_tokens = 400000     # never send a request over this
+context_hard_cap_percent = 0.95      # ...or over 95% of the window, whichever is smaller
 
 [memory]
 provider = "memory-wire"      # the only engine; other names warn + are ignored
@@ -177,6 +183,25 @@ autoload = true
 ```
 
 See [`operant.example.toml`](operant.example.toml) for the full reference — every section is annotated.
+
+### Context caps
+
+The agent keeps its context under two limits, and **both axes count**: an
+absolute token limit and a percentage of `context_window`. Whichever is
+smaller binds first.
+
+- The **soft cap** (350k tokens / 80% by default) is the turn-boundary
+  trigger: crossing it compacts the history before the next request goes out.
+- The **hard cap** (400k tokens / 95% by default) is the line no request
+  crosses: a turn that grows past it mid-stream — a big tool result, a long
+  answer — compacts the request list before the next provider call. A
+  context that cannot be compacted under the cap fails with a typed
+  `ContextExhausted` instead of being sent and rejected by the provider.
+
+With the defaults a 1M-token window compacts at 350k and never exceeds 400k;
+a 128k window keeps the old 80%/95% behaviour (102k / 121k). Set an axis to
+`0` to disable it. The compaction rewrites the request, never the stored
+transcript — a resumed session still has its whole history.
 
 ### What wins: environment, `.env`, or `operant.toml`
 

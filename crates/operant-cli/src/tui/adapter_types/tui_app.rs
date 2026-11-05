@@ -1312,10 +1312,15 @@ impl TuiApp {
             }
         }
         // ── (plan 03 §2) the deferred context commands ────────────────────
-        // Consumed only when the turn has fully finished (`!app.is_streaming`);
-        // while a stopping turn is still committing its tail they stay set
-        // and the loop-top drain calls here again.
-        if !app.is_streaming {
+        // Consumed only when the turn has fully finished (`!app.is_streaming`)
+        // AND the agent task is no longer running (`agent_task_handle` is
+        // cleared when the run completes). `is_streaming` alone was not
+        // enough: `/stop` clears it IMMEDIATELY while the cancelled task is
+        // still committing its tail, so a `/clear` or `/new` that landed in
+        // that window wiped the session the tail was still writing into.
+        // While a stopping turn is still committing its tail the commands
+        // stay pending and the loop-top drain applies them later.
+        if app.session_boundary_ready() {
             if std::mem::take(&mut app.pending_clear) {
                 let Some(agent) = agent else {
                     app.set_status_notice("No agent attached — cannot clear.".to_string());
@@ -1331,7 +1336,7 @@ impl TuiApp {
                 app.clear_tool_blocks();
                 app.system_annotations.clear();
                 app.turn_metadata.clear();
-                app.cost_usd = 0.0;
+                app.reset_session_counters();
                 app.scroll_offset = 0;
                 app.auto_scroll = true;
                 app.new_messages_while_scrolled = 0;
@@ -1350,12 +1355,11 @@ impl TuiApp {
                     app.clear_tool_blocks();
                     app.turn_metadata.clear();
                     app.session_goal = None;
-                    app.cost_usd = 0.0;
+                    app.reset_session_counters();
                     app.session_title = None;
                     app.scroll_offset = 0;
                     app.auto_scroll = true;
                     app.new_messages_while_scrolled = 0;
-                    app.token_count = 0;
                     app.request_native_replay();
                     app.invalidate_transcript();
                     app.set_status_notice("New session started.".to_string());
@@ -1375,12 +1379,11 @@ impl TuiApp {
                 app.system_annotations.clear();
                 app.turn_metadata.clear();
                 app.session_goal = None;
-                app.cost_usd = 0.0;
+                app.reset_session_counters();
                 app.session_title = None;
                 app.scroll_offset = 0;
                 app.auto_scroll = true;
                 app.new_messages_while_scrolled = 0;
-                app.token_count = 0;
                 app.invalidate_transcript();
                 let short: String = fresh.chars().take(8).collect();
                 app.set_status_notice(format!(
@@ -1407,6 +1410,9 @@ impl TuiApp {
                 app.system_annotations.clear();
                 // TUI-2: the previous session's title must not label the new one.
                 app.session_title = None;
+                // The previous session's tokens and cost must not label the
+                // new one either.
+                app.reset_session_counters();
                 app.invalidate_transcript();
                 let short: String = session_id.chars().take(8).collect();
                 app.set_status_notice(format!("Switched to session {short}"));
@@ -1496,8 +1502,10 @@ impl TuiApp {
                 tracker.set_model(&applied);
             }
             app.refresh_context_window_size();
-            // Context is fresh on a new model.
+            // Context is fresh on a new model — and the old model's prompt
+            // measurement is stale, so the warning bar must not keep it.
             app.context_used_tokens = 0;
+            app.last_observed_prompt_tokens = None;
             match operant_core::config::persist_config_key("agent.model", &applied) {
                 Ok(path) => app.set_status_notice(format!(
                     "Model: {applied} (persisted to {})",

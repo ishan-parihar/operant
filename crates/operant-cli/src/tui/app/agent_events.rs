@@ -510,8 +510,13 @@ impl App {
                 // agent's authoritative total_tokens, which may include
                 // cached/reasoning tokens that input+output misses.)
                 let turn_tokens = total_tokens.max(input_tokens + output_tokens);
-                self.context_used_tokens =
-                    self.context_used_tokens.saturating_add(turn_tokens as u64);
+                // The CONTEXT OCCUPANCY is the prompt the provider just
+                // billed — the window is not a running meter of everything
+                // the session ever spent. This used to ACCUMULATE the turn
+                // totals, so the context overlay showed the session's
+                // cumulative spend as if it were the live context size (a
+                // 200k window read "full" after one long turn).
+                self.context_used_tokens = u64::from(input_tokens);
                 // Per-turn footer deltas. Cache tokens aren't reported by this
                 // event, so the cache counters stay at 0 and the footer hides
                 // them (see the App field docs).

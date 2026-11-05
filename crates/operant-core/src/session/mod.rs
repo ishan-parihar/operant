@@ -461,11 +461,31 @@ impl SessionStore {
         // of the byte walk is to cut a session the count bound would wave
         // through (14 MB of cron turns under a 2000-message count).
         let kept = count_bound.min(self.count_that_fits_byte_budget(&rows, byte_bound));
-        let start = rows.len().saturating_sub(kept);
-        rows.into_iter()
+        let total = rows.len();
+        let start = total.saturating_sub(kept);
+        let messages: Vec<Message> = rows
+            .into_iter()
             .skip(start)
             .filter_map(row_to_message)
-            .collect()
+            .collect();
+        // The truncation was SILENT: a resumed session that started at the
+        // newest window gave no sign that earlier turns existed. The counts
+        // are the only record of what was dropped, so they are logged.
+        let dropped = total.saturating_sub(start);
+        let unconvertible = kept.saturating_sub(messages.len());
+        if dropped > 0 || unconvertible > 0 {
+            tracing::warn!(
+                session = key.id(),
+                rows_total = total,
+                rows_kept = kept,
+                rows_dropped = dropped,
+                rows_unconvertible = unconvertible,
+                count_bound,
+                byte_bound,
+                "session rehydration dropped rows — the resumed transcript starts mid-session"
+            );
+        }
+        messages
     }
 
     /// How many trailing rows of `rows` fit inside `byte_bound`.
@@ -515,14 +535,16 @@ fn message_row_bytes(row: &MessageData) -> usize {
 
 /// Convert a persisted row back into a client [`Message`].
 ///
-/// Only user and assistant rows carry conversation meaning; tool and system
-/// rows belong to a different table. A row whose role is neither is skipped by
-/// the caller-visible behaviour of this mapping: it becomes a user message with
-/// empty content would be worse than dropping it, so unknown roles drop.
+/// User, assistant, tool, and system rows all carry conversation meaning.
+/// Tool rows are especially important: without their `tool_call_id`, a
+/// resumed assistant tool request becomes an orphan and the request builder
+/// strips the whole tool turn from the model's context.
 fn row_to_message(row: MessageData) -> Option<Message> {
     let role = match row.role.as_str() {
         "user" => Role::User,
         "assistant" => Role::Assistant,
+        "tool" => Role::Tool,
+        "system" => Role::System,
         _ => return None,
     };
     let content = row.content.unwrap_or_default();
@@ -538,7 +560,7 @@ fn row_to_message(row: MessageData) -> Option<Message> {
         role,
         content,
         reasoning,
-        name: None,
+        name: row.tool_name,
         tool_call_id: row.tool_call_id,
         tool_calls,
         extra_content: None,
@@ -852,13 +874,14 @@ mod tests {
         assert_eq!(kept[1].content, "newest", "the latest turn is the last row");
     }
 
-    /// The one gap the operator flagged: the truncation is SILENT.
+    /// The truncated window's SHAPE, and the fact that the drop is now
+    /// REPORTED.
     ///
-    /// `load_from_db` returns a `Vec<Message>` and nothing else, so when the
-    /// byte bound drops 12,000 turns the resumed session simply starts at the
-    /// newest window with no marker that earlier turns existed. This test pins
-    /// the CURRENT behaviour so the silence is a recorded decision, not an
-    /// oversight a future agent has to re-derive.
+    /// `load_from_db` used to return a `Vec<Message>` and nothing else, so
+    /// when the byte bound dropped 12,000 turns the resumed session simply
+    /// started at the newest window with no marker that earlier turns
+    /// existed. The drop is now logged with the counts (total, kept,
+    /// dropped, unconvertible); this test pins the window the load produces.
     ///
     /// The bound itself is correct and already covered by
     /// `the_byte_bound_truncates_a_session_the_count_bound_would_wave_through`
@@ -867,7 +890,7 @@ mod tests {
     /// messages (or a sentinel), and no caller would lose information if that
     /// changed.
     #[test]
-    fn a_truncated_rehydrate_reports_nothing_about_what_it_dropped() {
+    fn a_truncated_rehydrate_keeps_the_newest_window_and_reports_the_drop() {
         let (db, store) = store_with_window(10, 2000, 8 * 1024);
         let key = SessionKey::new("silent-truncation");
         // 20 messages of ~1 KiB: the 8 KiB budget keeps ~8, drops ~12.
