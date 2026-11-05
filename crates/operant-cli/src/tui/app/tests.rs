@@ -9467,7 +9467,6 @@ fn the_overlay_body_does_not_emit_a_spans_final_character_twice() {
 /// the previous buffer. So a short line leaves the tail of the previous longer
 /// line in place, symbol intact, and the overlay's fullscreen contract (see the
 /// paint-site comment in `render/operant_overlays.rs`) is what makes that a bug.
-#[test]
 /// RT-205, the STALE-CELL half: opening the rewind selector must ERASE the
 /// cells the previous frame painted, not merely paint its own content over the
 /// top.
@@ -11602,7 +11601,7 @@ fn tool_row_hit_test_uses_the_frames_own_scroll() {
 /// publishes 5,000 regions and every click pays for the whole list.
 #[test]
 fn published_tool_regions_start_at_the_prepared_frames_ranges() {
-    let app = app_with_three_clickable_tools();
+    let _app = app_with_three_clickable_tools();
     let regions = crate::tui::operant_ui::viewport::tool_row_regions();
     for region in &regions {
         assert!(
@@ -11702,14 +11701,9 @@ fn the_rewind_caption_survives_a_filter_close() {
                     .map(|x| buf.cell((x, *y)).unwrap().symbol().to_string())
                     .collect();
                 row.contains("Rewind to here")
-            })
-            .and_then(|y| {
-                Some(
-                    (0..40u16)
+            }).map(|y| (0..40u16)
                         .map(|x| buf.cell((x, y)).unwrap().symbol().to_string())
-                        .collect::<String>(),
-                )
-            })
+                        .collect::<String>())
             .unwrap_or_default()
     };
 
@@ -11776,7 +11770,7 @@ fn the_rewind_caption_survives_a_filter_close() {
 #[test]
 fn a_clicked_file_edit_row_untruncates_its_diff() {
     use crate::tui::adapter_types::types::Message;
-    use crate::tui::operant_app::config_shim::DiffDisplayMode;
+    
 
     // The global mode must be the collapsed default: this test is about the
     // per-row flag, and `FullInline` would render the whole diff whether or

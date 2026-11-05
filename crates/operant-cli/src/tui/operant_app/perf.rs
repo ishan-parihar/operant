@@ -29,6 +29,12 @@ impl PerformanceTier {
         }
     }
 
+    /// RT-145: the retired idle animation's original gate calls this, and that
+    /// gate is kept (commented out) so the animation can be restored.
+    #[expect(
+        dead_code,
+        reason = "RT-145: the retired idle animation's restore path"
+    )]
     pub fn idle_animation_enabled(self) -> bool {
         matches!(self, Self::Full)
     }

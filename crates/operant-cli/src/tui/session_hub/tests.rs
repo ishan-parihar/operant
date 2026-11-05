@@ -1240,7 +1240,7 @@ fn ctrl_b_reads_the_anchor_from_the_agents_live_session_id() {
     app.core_session_switch = Some(Arc::new(
         crate::tui::session_switch::SessionSwitchSource::new(
             |_| {},
-            || Vec::new(),
+            Vec::new,
             || Some("sess-live-from-agent".to_string()),
         ),
     ));
@@ -1667,17 +1667,6 @@ fn grouping_reorders_into_contiguous_sections_and_keeps_the_cursor_on_its_row() 
         groups.len(),
         "every group's heading sits above the last section's first row"
     );
-}
-
-/// The ROW index (into `hub.rows`) of `id` — the index space `visible_groups`
-/// actually returns. Under a filter this differs from the row's position in
-/// `visible_idx`, which is exactly the distinction the heading-offset code has
-/// to honour (see `interpose_group_headings`, which translates between them).
-fn row_index(hub: &SessionHubState, id: &str) -> usize {
-    hub.rows
-        .iter()
-        .position(|r| r.id == id)
-        .unwrap_or_else(|| panic!("{id} must exist"))
 }
 
 /// Status grouping falls back to a label the read-only API already owns, so

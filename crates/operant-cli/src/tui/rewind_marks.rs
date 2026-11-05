@@ -229,7 +229,6 @@ mod tests {
     /// The regression the whole module exists for: with a loaded session, the
     /// selector gets marks at all. Reverting the handle wiring (or leaving
     /// `marks()` unfiltered-and-empty) turns this red.
-    #[test]
     /// (iter-1544) THE OPERATOR'S LIVE DEFECT, FIXED.
     ///
     /// A real TUI run sent three prompts. The model merged two of them into ONE

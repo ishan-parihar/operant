@@ -151,8 +151,8 @@ pub fn parse_file_ref_token(input: &str) -> Option<FileRefToken<'_>> {
         .strip_prefix("file:")
         .or_else(|| after_at.strip_prefix("folder:"))
         .unwrap_or(after_at);
-    let (value_end, quote_closed) = if stripped_kind.starts_with('"') {
-        match stripped_kind[1..].find('"') {
+    let (value_end, quote_closed) = if let Some(quoted_value) = stripped_kind.strip_prefix('"') {
+        match quoted_value.find('"') {
             // +2: skip the opening quote and include the closing one.
             Some(i) => (i + 2, true),
             None => (stripped_kind.len(), false),

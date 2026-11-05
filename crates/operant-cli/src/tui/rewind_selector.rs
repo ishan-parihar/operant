@@ -639,24 +639,26 @@ mod tests {
     /// highlighted turn cannot drift apart again.
     #[test]
     fn arrow_keys_move_the_selection_the_highlight_follows() {
-        let mut st = RewindSelectorState::default();
-        st.entries = vec![
-            RewindEntry {
-                turn_id: 1,
-                compacted: false,
-                text: "first prompt".to_string(),
-            },
-            RewindEntry {
-                turn_id: 2,
-                compacted: false,
-                text: "second prompt".to_string(),
-            },
-            RewindEntry {
-                turn_id: 3,
-                compacted: false,
-                text: "third prompt".to_string(),
-            },
-        ];
+        let mut st = RewindSelectorState {
+            entries: vec![
+                RewindEntry {
+                    turn_id: 1,
+                    compacted: false,
+                    text: "first prompt".to_string(),
+                },
+                RewindEntry {
+                    turn_id: 2,
+                    compacted: false,
+                    text: "second prompt".to_string(),
+                },
+                RewindEntry {
+                    turn_id: 3,
+                    compacted: false,
+                    text: "third prompt".to_string(),
+                },
+            ],
+            ..Default::default()
+        };
         st.selected = 0;
 
         st.select_next();
@@ -691,24 +693,26 @@ mod tests {
     /// navigates silently moves their selection.
     #[test]
     fn a_resync_keeps_the_cursor_on_the_same_turn() {
-        let mut st = RewindSelectorState::default();
-        st.entries = vec![
-            RewindEntry {
-                turn_id: 11,
-                compacted: false,
-                text: "a".into(),
-            },
-            RewindEntry {
-                turn_id: 12,
-                compacted: false,
-                text: "b".into(),
-            },
-            RewindEntry {
-                turn_id: 13,
-                compacted: false,
-                text: "c".into(),
-            },
-        ];
+        let mut st = RewindSelectorState {
+            entries: vec![
+                RewindEntry {
+                    turn_id: 11,
+                    compacted: false,
+                    text: "a".into(),
+                },
+                RewindEntry {
+                    turn_id: 12,
+                    compacted: false,
+                    text: "b".into(),
+                },
+                RewindEntry {
+                    turn_id: 13,
+                    compacted: false,
+                    text: "c".into(),
+                },
+            ],
+            ..Default::default()
+        };
         st.selected = 1; // on turn 12
 
         // The agent's mark list re-reads the same turns (this is what

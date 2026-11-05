@@ -1635,6 +1635,7 @@ impl CopyViewportSnapshot {
     }
 
     /// How many logical (raw) lines the pane holds.
+    #[expect(dead_code, reason = "no production caller yet")]
     fn raw_plain_line_count(&self) -> usize {
         match &self.data {
             CopyViewportData::Dense {
@@ -2205,7 +2206,7 @@ fn copy_selection_text_from_raw_lines(
             width
         };
         if to > from {
-            out.push_str(&display_col_slice(text, from, to));
+            out.push_str(display_col_slice(text, from, to));
         }
     }
     Some(out.trim_end().to_string())
@@ -3426,8 +3427,21 @@ fn visual_debug_overlay_enabled() -> bool {
 //   operant-config-types/src/display.rs:58), and its default is `false`
 //   (display.rs:141), so the decorative-idle gate resolves to the same value
 //   upstream ships by default — wire at config_shim::DisplayConfig.
+//
+// RT-145 retired the radar-pulse idle animation. Its original gate is kept
+// (commented out, in `idle_animation_active_with_policy`) so a future operator
+// can restore it, and the helpers that gate reads are kept with it — hence
+// the dead-code expectations on the three items below.
+#[expect(
+    dead_code,
+    reason = "RT-145: the retired idle animation's restore path"
+)]
 const REDRAW_DEEP_IDLE_AFTER: Duration = Duration::from_secs(30);
 
+#[expect(
+    dead_code,
+    reason = "RT-145: the retired idle animation's restore path"
+)]
 fn deep_idle_dormant(state: &dyn TuiState) -> bool {
     let stream_dormant = state
         .time_since_activity()
@@ -3447,6 +3461,10 @@ fn deep_idle_dormant(state: &dyn TuiState) -> bool {
 /// non-conversational notices (e.g. the "run /login when you're ready" system
 /// message left after onboarding is declined) is still "idle", so the decorative
 /// animation should keep playing until the user actually starts chatting.
+#[expect(
+    dead_code,
+    reason = "RT-145: the retired idle animation's restore path"
+)]
 fn has_started_conversation(state: &dyn TuiState) -> bool {
     state
         .display_messages()

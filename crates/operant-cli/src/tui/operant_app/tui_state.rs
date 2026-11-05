@@ -95,6 +95,18 @@ pub(crate) fn hash_rendered_image_signature_fields(
 /// workspace, diagram pane, diff pane, side panel, inline, overlay, copy
 /// selection, onboarding, misc). See `docs/TUISTATE_TRAIT_DECOMPOSITION.md` for
 /// the incremental plan to split these into composable sub-traits.
+///
+/// Four accessors here have no production caller: `time_since_activity`,
+/// `client_focused` and `remote_startup_phase_active` are read by RT-145's
+/// RETIRED idle animation, whose original gate is kept (commented out, in
+/// `operant_ui::idle_animation_active_with_policy`) so the animation can be
+/// restored, and `vim_mode_label` belongs to the vim badge retired at
+/// iter-1668. Rustc reports the trait's dead methods as ONE diagnostic, so the
+/// expectation belongs on the trait, not on the individual methods.
+#[expect(
+    dead_code,
+    reason = "RT-145 / iter-1668: accessors whose consumers were retired"
+)]
 pub trait TuiState {
     // ---- Transcript ----
     fn display_messages(&self) -> &[DisplayMessage];
@@ -278,6 +290,8 @@ pub trait TuiState {
     fn subagent_status(&self) -> Option<String>;
     /// Progress of a currently-running batch tool call.
     fn batch_progress(&self) -> Option<crate::tui::operant_app::bus::BatchProgress>;
+    /// RT-145: the retired idle animation's original gate reads this, and that
+    /// gate is kept (commented out) so the animation can be restored.
     fn time_since_activity(&self) -> Option<Duration>;
     /// Whether the client terminal currently has focus. Decorative animations and
     /// periodic idle redraws pause while unfocused so backgrounded windows/tabs do

@@ -55,7 +55,7 @@ pub fn set_core_file_size_limit_to_zero() -> std::io::Result<()> {
 ///
 /// Used by the test to prove the write landed rather than asserting on the
 /// return code of the call that made it.
-#[cfg(unix)]
+#[cfg(all(test, unix))]
 pub fn core_file_soft_limit() -> Option<u64> {
     let mut out = libc::rlimit {
         rlim_cur: 0,

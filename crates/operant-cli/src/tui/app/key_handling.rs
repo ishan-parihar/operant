@@ -754,7 +754,15 @@ impl App {
                 KeyCode::Char('y') | KeyCode::Char('Y')
                     if self.session_hub.pending_archive.is_some() =>
                 {
-                    let id = self.session_hub.pending_archive.take().unwrap();
+                    let id = match self.session_hub.pending_archive.take() {
+                        Some(id) => id,
+                        // Unreachable: this arm's guard proved the pending
+                        // archive is set, and nothing between the guard and
+                        // here can clear it. Spelled out rather than unwrapped
+                        // so the arm cannot panic and the clippy gate's
+                        // `unwrap_used` has nothing to flag.
+                        None => return false,
+                    };
                     let db_path = self.config.database_path.clone();
                     // Determine current archived state to toggle.
                     let was_archived = self
