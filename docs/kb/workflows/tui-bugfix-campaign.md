@@ -12,7 +12,8 @@
 | tui-bugfix-campaign-006 | done | B7: /split fallthrough | — | [2026-11-05] origin/main iter-1734 |
 | tui-bugfix-campaign-007 | done | B8: Done.reason consumer | — | [2026-11-05] origin/main iter-1735 |
 | tui-bugfix-campaign-008 | done | B9: Closed arm flush | — | [2026-11-05] origin/main iter-1736 |
-| tui-bugfix-campaign-009 | in-progress | phase-2 fresh sweep: corpus verify + unit tests + ledger triage, fix all found | claimed-by `agent-omarchy` since 2026-11-05T06:05 | — |
+| tui-bugfix-campaign-009 | done | phase-2 fresh sweep: corpus verify + unit tests + ledger triage, fix all found | claimed-by `agent-omarchy` since 2026-11-05T06:05 | [2026-11-05] origin/main iters 1746-1748 (ledger RT-212/RT-213/RT-214) |
 | tui-bugfix-campaign-010 | done | B10-B13: the TUI gate's own defects — ambient colour depth, an unlocked palette read, a no-op protocol override, a source guard with no `#[test]` | — | [2026-11-05] origin/main iter-1746 |
 | tui-bugfix-campaign-011 | done | B14-B15: the TUI crate's lint gate — a duplicated `#[test]` that registered a test twice, and the crate's only production `unwrap` | — | [2026-11-05] origin/main iter-1747 |
 | tui-bugfix-campaign-012 | done | B16: the TUI's command sweep called a simulator that could not start 98 broken commands (no hermetic HOME, no error class) | — | [2026-11-05] origin/main iter-1748 |
+| tui-bugfix-campaign-013 | in-progress | phase-3: the corpus's 8 UNGATED scenarios (the `<wait:ms>` unblock the scroll-pageup notes name), the live path, and the management panels' live data | claimed-by `agent-omarchy` since 2026-11-05T09:30 | — |
