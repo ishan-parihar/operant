@@ -928,6 +928,31 @@ impl KeyBindingRegistry {
                 context: BindingContext::VimVisualBlock,
                 description: "Delete block",
             },
+            // (iter-1770) Ctrl+C leaves the visual modes too — the dispatch
+            // sends it to the same "exit to Normal" path as the command and
+            // search modes, so the catalogue names it in every context where
+            // it means that.
+            DefaultBinding {
+                key: KeyCode::Char('c'),
+                modifiers: KeyModifiers::CONTROL,
+                action: KeyAction::VimEnterNormal,
+                context: BindingContext::VimVisual,
+                description: "Exit to Normal mode",
+            },
+            DefaultBinding {
+                key: KeyCode::Char('c'),
+                modifiers: KeyModifiers::CONTROL,
+                action: KeyAction::VimEnterNormal,
+                context: BindingContext::VimVisualLine,
+                description: "Exit to Normal mode",
+            },
+            DefaultBinding {
+                key: KeyCode::Char('c'),
+                modifiers: KeyModifiers::CONTROL,
+                action: KeyAction::VimEnterNormal,
+                context: BindingContext::VimVisualBlock,
+                description: "Exit to Normal mode",
+            },
             // Vim Command mode bindings
             DefaultBinding {
                 key: KeyCode::Esc,
@@ -970,20 +995,29 @@ impl KeyBindingRegistry {
                 modifiers: KeyModifiers::NONE,
                 action: KeyAction::VimRepeatLast,
                 context: BindingContext::VimSearch,
-                description: "Next match",
+                // (iter-1770) Enter in the search line runs the search from
+                // the start (skip = 0), so it finds the FIRST match — "Next
+                // match" named a repeat that did not happen.
+                description: "Find the pattern",
             },
+            // (iter-1770) `n` and `N` repeat the last search, and the dispatch
+            // accepts them in NORMAL mode (`vim_mode == VimMode::Normal`) —
+            // in the search line they are ordinary characters and type an
+            // "n"/"N" into the pattern. These rows used to sit in the
+            // VimSearch context, so /keys told the operator that pressing `n`
+            // in the search line finds the next match: it typed a letter.
             DefaultBinding {
                 key: KeyCode::Char('n'),
                 modifiers: KeyModifiers::NONE,
                 action: KeyAction::VimRepeatLast,
-                context: BindingContext::VimSearch,
+                context: BindingContext::VimNormal,
                 description: "Next match",
             },
             DefaultBinding {
                 key: KeyCode::Char('N'),
                 modifiers: KeyModifiers::SHIFT,
                 action: KeyAction::VimRepeatFindReverse,
-                context: BindingContext::VimSearch,
+                context: BindingContext::VimNormal,
                 description: "Previous match",
             },
             // Completion menu bindings

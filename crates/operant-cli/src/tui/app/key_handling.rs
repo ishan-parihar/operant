@@ -1382,6 +1382,22 @@ impl App {
             KeyCode::Char(c)
                 if (c == 'c' || c == 'C') && key.modifiers.contains(KeyModifiers::CONTROL) =>
             {
+                if !matches!(
+                    self.prompt_input.vim_mode,
+                    VimMode::Insert | VimMode::Normal
+                ) {
+                    self.prompt_input.vim_command("Escape");
+                    self.refresh_prompt_input();
+                    return false;
+                }
+                // (iter-1770) In a vim mode other than Insert/Normal, Ctrl+C
+                // means "leave this mode" — the catalogue's VimCommand and
+                // VimSearch rows have always said "Exit to Normal mode". The
+                // arm below instead CLEARED the composer's text and started
+                // the quit confirmation: an operator who hit Ctrl+C to abort a
+                // half-typed vim command lost their whole prompt and was
+                // asked whether they wanted to quit. Leaving the mode is what
+                // the catalogue promises and what vim does.
                 // Composer shift-selection (jcode textarea selection): the
                 // in-input selection wins — copy it and stop, never exit.
                 if let Some(sel) = self.prompt_input.selection_text()

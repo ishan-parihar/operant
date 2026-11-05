@@ -939,6 +939,82 @@ fn the_help_overlay_descriptions_match_what_the_arms_do() {
     );
 }
 
+/// Ctrl+C in a vim mode other than Insert/Normal leaves the mode — it does
+/// not clear the composer and it does not start the quit confirmation.
+///
+/// (iter-1770) The catalogue's VimCommand and VimSearch rows have always said
+/// "Exit to Normal mode", but the app's Ctrl+C arm cleared the composer's text
+/// and asked the operator whether they wanted to quit: an operator who hit
+/// Ctrl+C to abort a half-typed vim command lost their whole prompt.
+#[test]
+fn ctrl_c_leaves_a_vim_mode_without_touching_the_prompt() {
+    use crate::tui::prompt_input::VimMode;
+
+    for mode in [VimMode::Command, VimMode::Search, VimMode::Visual] {
+        let mut app = make_app();
+        app.prompt_input.vim_enabled = true;
+        app.prompt_input.vim_mode = mode;
+        app.prompt_input.text = "half-typed prompt".to_string();
+        app.prompt_input.cursor = app.prompt_input.text.len();
+        app.handle_key_event(press_key(KeyCode::Char('c'), KeyModifiers::CONTROL));
+        assert_eq!(
+            app.prompt_input.vim_mode,
+            VimMode::Normal,
+            "Ctrl+C must leave {mode:?} for Normal mode"
+        );
+        assert_eq!(
+            app.prompt_input.text, "half-typed prompt",
+            "Ctrl+C must not clear the composer when it leaves a vim mode"
+        );
+        assert!(
+            !app.status_message
+                .as_deref()
+                .unwrap_or_default()
+                .to_lowercase()
+                .contains("exit"),
+            "Ctrl+C must not start the quit confirmation while leaving a vim mode: {:?}",
+            app.status_message
+        );
+    }
+}
+
+/// The vim catalogue rows are pinned per (context, chord).
+///
+/// (iter-1770) The vim contexts had rows in the WRONG context: `n`/`N`
+/// repeat the last search, and the dispatch accepts them in NORMAL mode — in
+/// the search line they are ordinary characters and type an "n"/"N" into the
+/// pattern. The context column is what tells the operator which mode a chord
+/// belongs to, so a row in the wrong context is a lie about WHERE the chord
+/// works.
+#[test]
+fn the_vim_catalogue_rows_are_pinned_per_context() {
+    use crate::tui::keybindings::DEFAULT_KEYBINDINGS;
+
+    let pinned: &[(&str, &str, &str)] = &[
+        ("VimNormal", "n", "Next match"),
+        ("VimNormal", "N", "Previous match"),
+        ("VimSearch", "Enter", "Find the pattern"),
+        ("VimCommand", "Ctrl+c", "Exit to Normal mode"),
+        ("VimSearch", "Ctrl+c", "Exit to Normal mode"),
+        ("VimVisual", "Ctrl+c", "Exit to Normal mode"),
+        ("VimVisualLine", "Ctrl+c", "Exit to Normal mode"),
+        ("VimVisualBlock", "Ctrl+c", "Exit to Normal mode"),
+    ];
+    let catalogue = DEFAULT_KEYBINDINGS.catalogue();
+    for (context, chord, description) in pinned {
+        let found = catalogue.iter().any(|(ctx, binding)| {
+            format!("{ctx:?}") == *context
+                && binding.chord() == *chord
+                && binding.description.as_deref() == Some(*description)
+        });
+        assert!(
+            found,
+            "the {context} context must catalogue {chord} as {description:?} — the context \
+             column is what tells the operator which mode the chord works in"
+        );
+    }
+}
+
 /// 2026-10-14 batch, plan 10: every advertised binding must dispatch to what
 /// its description says. The overlay and /keys generate from the registry,
 /// so pinning the catalogue pins every advertised chord. The (chord,

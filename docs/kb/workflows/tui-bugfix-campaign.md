@@ -29,4 +29,5 @@
 | tui-bugfix-campaign-023 | done | B27: four of the /help overlay's 111 command descriptions were stale (/branch, /logout, /save, /effort) — the table had no guard, unlike the chord catalogue | — | [2026-11-05] origin/main iter-1766 |
 | tui-bugfix-campaign-024 | done | B28: two vendored messages pointed at commands operant does not have — /toolsets and /reset — and the class now has a scan guard | — | [2026-11-05] origin/main iter-1767 |
 | tui-bugfix-campaign-025 | done | B29: the catalogue's Prompt-context rows were a stale second copy — /keys printed one chord as two features — and the guard's 'at least one row matches' hole is closed | — | [2026-11-05] origin/main iter-1768 |
+| tui-bugfix-campaign-026 | done | B30: the vim modes' catalogue rows were in the wrong context, and Ctrl+C in a vim mode wiped the composer's text | — | [2026-11-06] origin/main iter-1770 |
 | tui-bugfix-campaign-018 | done | B23: the per-row diff expansion scenario had no committed golden, so the corpus verify failed on every run | claimed-by `agent-omarchy` since 2026-11-05T13:13 | [2026-11-05] origin/main iter-1758 |
