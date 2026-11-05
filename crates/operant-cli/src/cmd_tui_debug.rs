@@ -1197,6 +1197,27 @@ fn parse_key_sequence(seq: &str) -> Vec<crossterm::event::KeyEvent> {
         {
             let name: String = chars[i + 1..i + close_idx].iter().collect();
             let lower = name.to_lowercase();
+            // The idle-frame token: `<wait:N>` costs N frames with NO key
+            // applied. It exists because the run loop paints BEFORE it applies
+            // an event, so a sequence's last key is invisible to
+            // `--dump-screen` (the corpus measured this: the plain path
+            // "paints the PREVIOUS frame"), and because queued mock content
+            // only lands on a frame that runs. N FRAMES, not milliseconds: a
+            // frame count is deterministic by construction, while a duration
+            // would put the corpus's verdict back on the machine's load.
+            if let Some(frames) = lower.strip_prefix("wait:") {
+                let frames: usize = frames.trim().parse().unwrap_or(1);
+                for _ in 0..frames.max(1) {
+                    events.push(KeyEvent {
+                        code: KeyCode::Null,
+                        modifiers: KeyModifiers::NONE,
+                        kind: KeyEventKind::Press,
+                        state: KeyEventState::NONE,
+                    });
+                }
+                i += close_idx + 1;
+                continue;
+            }
             let mut modifiers = KeyModifiers::NONE;
             let mut parsed = true;
             let code = match lower.as_str() {
@@ -2587,6 +2608,39 @@ mod tests {
                 (KeyCode::Esc, KeyModifiers::NONE),
             ]
         );
+    }
+
+    #[test]
+    fn a_wait_token_costs_idle_frames_and_the_rest_of_the_sequence_still_parses() {
+        // The token the corpus's ungated scenarios need: N frames with no key
+        // applied, so queued content lands and the FINAL frame settles (the
+        // run loop paints before it applies an event, so without it the last
+        // key never reaches `--dump-screen`).
+        use crossterm::event::KeyCode;
+        let events = parse_key_sequence("/x<wait:3><pageup>");
+        let shape: Vec<KeyCode> = events.iter().map(|e| e.code).collect();
+        assert_eq!(
+            shape,
+            vec![
+                KeyCode::Char('/'),
+                KeyCode::Char('x'),
+                KeyCode::Null,
+                KeyCode::Null,
+                KeyCode::Null,
+                KeyCode::PageUp,
+            ],
+            "the wait must cost exactly three idle frames and leave the rest alone"
+        );
+    }
+
+    #[test]
+    fn a_wait_token_with_a_bad_count_costs_one_frame() {
+        // A typo must not silently become a zero-frame wait (which would be
+        // the old behaviour: no settling at all).
+        use crossterm::event::KeyCode;
+        let events = parse_key_sequence("<wait:banana>");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].code, KeyCode::Null);
     }
 
     #[test]

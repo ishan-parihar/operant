@@ -17,3 +17,5 @@
 | tui-bugfix-campaign-011 | done | B14-B15: the TUI crate's lint gate — a duplicated `#[test]` that registered a test twice, and the crate's only production `unwrap` | — | [2026-11-05] origin/main iter-1747 |
 | tui-bugfix-campaign-012 | done | B16: the TUI's command sweep called a simulator that could not start 98 broken commands (no hermetic HOME, no error class) | — | [2026-11-05] origin/main iter-1748 |
 | tui-bugfix-campaign-013 | in-progress | phase-3: the corpus's 8 UNGATED scenarios (the `<wait:ms>` unblock the scroll-pageup notes name), the live path, and the management panels' live data | claimed-by `agent-omarchy` since 2026-11-05T09:30 | — |
+| tui-bugfix-campaign-014 | in-progress | phase-4: the corpus's own validator drift (B17) + the scroll counter that overwrites transcript text (B18) + the missing golden | claimed-by `agent-omarchy` since 2026-11-05T10:06 | — |
+| tui-bugfix-campaign-015 | done | B19-B20: the harness had no idle-frame token (so the scroll ladder's third rung could not be pinned) and the registry described a DELETED MCP-approval dialog as a live product gap | — | [2026-11-05] origin/main iter-1751 |

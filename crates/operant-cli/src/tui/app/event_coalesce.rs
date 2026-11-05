@@ -51,6 +51,15 @@ impl App {
     pub(super) fn apply_terminal_event(&mut self, event: Event) -> EventOutcome {
         match event {
             Event::Key(key) => {
+                // The headless harness's idle frame: `<wait:N>` in the key
+                // sequence parses to N Null key events, and each one costs a
+                // frame (so queued content lands and the final frame settles)
+                // while applying NOTHING. Simulator-only, so a real Null
+                // keypress keeps whatever path it had.
+                if self.is_simulating && key.code == crossterm::event::KeyCode::Null {
+                    return EventOutcome::Consumed;
+                }
+
                 // On Windows crossterm fires both Press and Release events;
                 // only the Press carries meaning here.
                 if key.kind != crossterm::event::KeyEventKind::Press {

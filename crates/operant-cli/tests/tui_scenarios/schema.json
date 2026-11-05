@@ -456,7 +456,6 @@
     "known_limitations": [
       "tool_start/tool_complete/tool_error only paint a tool block if the script leads with a `user` event \u2014 see the `user` variant above.",
       "`error` paints the error modal only while it is the LAST event; see `done` above.",
-      "The `mcp_approval` dialog cannot be produced by any script, because `McpApprovalDialogState::show` has no call site anywhere in the workspace (it is `#[allow(dead_code)]`). That is a product gap, not a harness one \u2014 see excluded.json.",
       "Setting agent_script sets is_mock, which SKIPS load_models_dev(). The model picker's list is therefore empty on the mock path \u2014 a model-picker scenario that wants a populated list must run without an agent_script and accept the network dependency."
     ],
     "library_entries": {

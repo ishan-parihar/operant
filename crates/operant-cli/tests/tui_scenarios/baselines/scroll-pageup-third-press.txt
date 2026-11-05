@@ -1,0 +1,24 @@
+                                                                          ↑3
+
+ operant · replay
+ operant
+ /model to switch · Offline Capture
+ v0.3.0
+ /login to add provider
+ ● anthropic(key)
+ ~
+
+ L001 scroll test line L002 scroll test line L003 scroll test line L004 scroll
+ test line L005 scroll test line L006 scroll test line L007 scroll test line
+ L008 scroll test line L009 scroll test line L010 scroll test line L011 scroll
+ test line L012 scroll test line L013 scroll test line L014 scroll test line
+ L015 scroll test line L016 scroll test line L017 scroll test line L018 scroll
+ test line L019 scroll test line L020 scroll test line L021 scroll test line
+ L022 scroll test line L023 scroll test line L024 scroll test line L025 scroll
+ test line L026 scroll test line L027 scroll test line L028 scroll test line
+ L029 scroll test line L030 scroll test line L031 scroll test line L032 s↓51ll
+
+
+› Ask operant to do anything
+
+                               ~ 1.1k/200k ▱▱▱▱▱▱▱▱▱▱ 1% API key Offline Capture

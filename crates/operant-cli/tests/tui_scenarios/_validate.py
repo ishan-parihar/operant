@@ -22,8 +22,26 @@ errors, warnings = [], []
 # generic grammars parse_generic_chord() adds on top of it.
 NAMED = {"enter", "esc", "escape", "tab", "up", "down", "left", "right",
          "pageup", "pgup", "pagedown", "pgdn", "backspace", "bs", "ctrl+a", "ctrl+c", "ctrl+t", "ctrl+r", "shift+tab"}
+# cmd_tui_debug.rs::parse_key_sequence — the `<wait:N>` idle-frame token
+# (iter-1751): N frames with NO key applied, so queued content lands and the
+# final frame settles. A prefix grammar rather than a named token, so it gets
+# its own pattern. Frames, not milliseconds: a frame count is deterministic by
+# construction, a duration would put the corpus's verdict back on the
+# machine's load.
+WAIT = re.compile(r"wait:\d+")
 GENERIC_CHORD = re.compile(r"(?:(?:ctrl|control|alt|meta|option|shift)\+)+[^<>,+\s]$")
 ESCAPES = set("nt\\")
+
+# cmd_tui_debug.rs::chord_key_code — the NON-CHARACTER key names a
+# `<mods+name>` chord may end with. Transcribed from that function, which
+# landed at iter-1677; this mirror did not, so `<shift+enter>` was rejected
+# here as an illegal token while the harness parsed it correctly. The
+# scenario that pins the operator's Shift+Enter chord could therefore never
+# pass validation, and the rejection message named only `<mods>+<char>`.
+CHORD_KEYS = {"enter", "return", "esc", "escape", "tab", "backtab", "up",
+              "down", "left", "right", "pageup", "pgup", "pagedown", "pgdn",
+              "backspace", "bs", "insert", "ins", "delete", "del", "home",
+              "end", "space"}
 
 # app/commands.rs::debug_snapshot()
 def _snapshot_top_keys():
@@ -159,7 +177,6 @@ SURFACES = [
     ("session hub", "session_hub/mod.rs::SessionHubState", "session-hub"),
     ("export dialog", "export_dialog.rs::render_export_dialog", "export-dialog"),
     ("context viz", "context_viz.rs::render_context_viz", "context-viz"),
-    ("mcp approval dialog", "dialogs/mcp_approval.rs::render_mcp_approval_dialog", "mcp-approval-dialog"),
     ("selection highlight", "render/selection.rs::apply_selection_highlight", "selection-highlight"),
     ("context menu", "render/selection.rs::render_context_menu", "context-menu"),
     ("thinking row (streaming)", "render/messages.rs::render_thinking_item", "thinking-block-streaming"),
@@ -168,7 +185,6 @@ SURFACES = [
     ("debug overlay", "debug/overlay.rs::render_debug_overlay", "debug-overlay"),
     # state-level alias of the permission branch (render_app tests `Option::is_some`)
     ("permission request (Option)", "dialogs/permission.rs::render_permission_dialog", "permission-request"),
-    ("mcp approval (state)", "dialogs/mcp_approval.rs::render_mcp_approval_dialog", "mcp-approval"),
     # second opener for the shared diff renderer
     ("diff viewer (turn mode)", "diff_viewer.rs::render_diff_dialog", "diff-viewer-turn"),
 ]
@@ -243,12 +259,22 @@ def check_keys(seq, where, errors):
             if j != -1:
                 tok = seq[i + 1:j].lower()
                 fkey = re.fullmatch(r"f([1-9]|1[0-2])", tok)
-                chord = GENERIC_CHORD.match(tok) and len(tok) - len(tok.rsplit("+", 1)[-1]) > 0
-                if tok not in NAMED and not fkey and not chord:
+                # A chord is `<mods>+<key>`: the key may be ONE character
+                # (GENERIC_CHORD) or one of the NAMED non-character keys
+                # (chord_key_code). The named set is checked FIRST, because
+                # GENERIC_CHORD cannot match a multi-character key at all.
+                mods, _, chord_key = tok.rpartition("+")
+                chord = bool(mods) and (
+                    chord_key in CHORD_KEYS
+                    or bool(GENERIC_CHORD.fullmatch(tok))
+                )
+                if tok not in NAMED and not fkey and not chord and not WAIT.fullmatch(tok):
                     errors.append(
                         f"{where}: '{seq[i:j+1]}' is NOT a parse_key_sequence token — it "
                         f"will be typed as literal characters. Legal: {sorted(NAMED)}, "
-                        f"<f1>..<f12>, <ctrl|alt|shift>+<char>")
+                        f"<f1>..<f12>, <ctrl|alt|shift>+<char>, "
+                        f"<ctrl|alt|shift>+{{{','.join(sorted(CHORD_KEYS))}}}, "
+                        f"<wait:N> (N idle frames)")
                 i = j + 1
                 continue
         if seq[i] == "\\":
