@@ -257,6 +257,14 @@ pub enum TuiDebugSubcommand {
         /// processed, so it cannot be reached from an agent script.
         #[arg(long)]
         bypass_permissions: bool,
+
+        /// The run is EXPECTED to log errors — a scenario that drives a turn
+        /// into a provider failure. The errors are still printed, but they do
+        /// not fail the simulation: without this, a scenario that deliberately
+        /// simulates an error could never be gated (the corpus's
+        /// failed-turn scenario is the one that needs it).
+        #[arg(long)]
+        expect_errors: bool,
     },
 }
 
@@ -305,6 +313,7 @@ pub async fn handle_tui_debug_command(config: &AppConfig, cmd: TuiDebugSubcomman
             capture_dir,
             frame_per_event,
             bypass_permissions,
+            expect_errors,
         } => {
             debug_simulate(
                 config,
@@ -326,6 +335,7 @@ pub async fn handle_tui_debug_command(config: &AppConfig, cmd: TuiDebugSubcomman
                     capture_dir,
                     frame_per_event,
                     bypass_permissions,
+                    expect_errors,
                 },
             )
             .await
@@ -1606,6 +1616,7 @@ struct SimulateArgs {
     capture_dir: Option<std::path::PathBuf>,
     frame_per_event: bool,
     bypass_permissions: bool,
+    expect_errors: bool,
 }
 
 async fn debug_simulate(config: &AppConfig, args: SimulateArgs) -> Result<()> {
@@ -1783,7 +1794,13 @@ async fn debug_simulate(config: &AppConfig, args: SimulateArgs) -> Result<()> {
         }
     }
 
-    if has_errors {
+    if args.expect_errors {
+        // "Expect errors" means the run MUST log at least one — otherwise a
+        // scenario that stopped simulating its failure would quietly pass.
+        if !has_errors {
+            anyhow::bail!("Simulation failed: --expect-errors was given, but no error was logged.");
+        }
+    } else if has_errors {
         anyhow::bail!("Simulation failed: Errors detected in TUI event log.");
     }
 

@@ -4,6 +4,41 @@
 
 use super::*;
 
+/// Run `f` with the operant home pointed at a throwaway directory.
+///
+/// (iter-1776) The settings screen's save writes the operator's REAL
+/// `~/.operant/settings.json` — so a test that saves rewrites the
+/// operator's configuration, and the NEXT run of the suite reads back
+/// whatever the last run wrote. That coupling is not hypothetical: the
+/// guard below (`every_settings_entry_has_an_applier`) compares two screens
+/// built from the ambient settings, and a test that had enabled file
+/// injection made the "default" screen offer the conditional rows too — so
+/// the guard started failing for a reason that had nothing to do with the
+/// guard.
+///
+/// The crate-wide `test_env_lock` serialises the env mutation (the same
+/// pattern `app/tests.rs` uses for the history sandbox), and the variable is
+/// restored below so a failure cannot leak the sandbox home.
+fn with_sandbox_home<T>(f: impl FnOnce() -> T) -> T {
+    let _env_lock = crate::config::test_env_lock();
+    let saved_home = std::env::var("HERMES_HOME").ok();
+    let sandbox = std::env::temp_dir().join(format!("operant-settings-test-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&sandbox);
+    // SAFETY: serialized by the crate-wide test_env_lock; restored below.
+    unsafe {
+        std::env::set_var("HERMES_HOME", &sandbox);
+    }
+    let out = f();
+    // SAFETY: still under test_env_lock.
+    unsafe {
+        match &saved_home {
+            Some(home) => std::env::set_var("HERMES_HOME", home),
+            None => std::env::remove_var("HERMES_HOME"),
+        }
+    }
+    out
+}
+
 /// Every entry the screen offers MUST be handled by `apply_and_save`.
 ///
 /// This test exists because it failed when it was written (iter-1176):
@@ -33,9 +68,18 @@ fn every_settings_entry_has_an_applier() {
     // edit is silently dropped. The assertion below keeps that hole closed:
     // if the conditional branch ever changes shape, this test fails instead of
     // quietly shrinking its own coverage.
-    let default_screen = SettingsScreen::new();
-    let mut injection_screen = SettingsScreen::new();
-    injection_screen.file_injection_enabled = true;
+    // (iter-1776) Both screens are built in a sandbox home AND with their
+    // conditional flag set explicitly: the default screen must NOT offer the
+    // file-injection rows, and the ambient settings.json used to decide that
+    // (a test that had enabled file injection made the "default" screen offer
+    // them too, and this guard failed for a reason unrelated to the guard).
+    let (default_screen, injection_screen) = with_sandbox_home(|| {
+        let mut default_screen = SettingsScreen::new();
+        default_screen.file_injection_enabled = false;
+        let mut injection_screen = SettingsScreen::new();
+        injection_screen.file_injection_enabled = true;
+        (default_screen, injection_screen)
+    });
     let entries = all_entries(&default_screen);
     let conditional = all_entries(&injection_screen);
     assert!(
@@ -93,53 +137,54 @@ fn every_settings_entry_has_an_applier() {
 /// clear.
 #[test]
 fn apply_and_save_preserves_unrelated_operator_preferences() {
-    let mut config = AppConfig::default();
-    // Constructed with the preferences already set rather than assigning to a
-    // `Default::default()` instance: clippy's `field_reassign_with_default`
-    // fires on that shape, and this iteration already produced a warning of
-    // its own in the same session (the clippy gate's whole job is to stop
-    // that), so the test is written the way the lint wants from the start.
-    let mut settings = Settings {
-        vim_enabled: true,
-        config: crate::tui::adapter_types::config::InnerConfig {
-            verbose: true,
-            cursor_blink_enabled: true,
-            disable_claude_mds: true,
+        with_sandbox_home(|| {
+        let mut config = AppConfig::default();
+        // Constructed with the preferences already set rather than assigning to a
+        // `Default::default()` instance: clippy's `field_reassign_with_default`
+        // fires on that shape, and this iteration already produced a warning of
+        // its own in the same session (the clippy gate's whole job is to stop
+        // that), so the test is written the way the lint wants from the start.
+        let mut settings = Settings {
+            vim_enabled: true,
+            config: crate::tui::adapter_types::config::InnerConfig {
+                verbose: true,
+                cursor_blink_enabled: true,
+                disable_claude_mds: true,
+                ..Default::default()
+            },
             ..Default::default()
-        },
-        ..Default::default()
-    };
+        };
 
-    let mut screen = SettingsScreen::new();
-    // A change to an UNRELATED entry: the settings screen is one screen, and
-    // the operator edits one row at a time.
-    screen
-        .pending_changes
-        .insert("notifications".to_string(), "true".to_string());
-    screen.apply_and_save(&mut config, &mut settings);
+        let mut screen = SettingsScreen::new();
+        // A change to an UNRELATED entry: the settings screen is one screen, and
+        // the operator edits one row at a time.
+        screen
+            .pending_changes
+            .insert("notifications".to_string(), "true".to_string());
+        screen.apply_and_save(&mut config, &mut settings);
 
-    assert!(
-        settings.vim_enabled,
-        "vim mode was cleared by saving an unrelated setting"
-    );
-    assert!(
-        settings.config.verbose,
-        "verbose output was cleared by saving an unrelated setting"
-    );
-    assert!(
-        settings.config.cursor_blink_enabled,
-        "cursor blink was cleared by saving an unrelated setting"
-    );
-    assert!(
-        settings.config.disable_claude_mds,
-        "disable_claude_mds was cleared by saving an unrelated setting"
-    );
-    assert!(
-        screen.settings_snapshot.vim_enabled,
-        "the snapshot written to settings.json also lost vim mode"
-    );
+        assert!(
+            settings.vim_enabled,
+            "vim mode was cleared by saving an unrelated setting"
+        );
+        assert!(
+            settings.config.verbose,
+            "verbose output was cleared by saving an unrelated setting"
+        );
+        assert!(
+            settings.config.cursor_blink_enabled,
+            "cursor blink was cleared by saving an unrelated setting"
+        );
+        assert!(
+            settings.config.disable_claude_mds,
+            "disable_claude_mds was cleared by saving an unrelated setting"
+        );
+        assert!(
+            screen.settings_snapshot.vim_enabled,
+            "the snapshot written to settings.json also lost vim mode"
+        );
+    })
 }
-
 /// The file-injection rows are only OFFERED when file injection is enabled,
 /// so the screen has a state where an operator edits a setting that
 /// `apply_and_save` does not handle: the value renders, lands in
@@ -152,38 +197,39 @@ fn apply_and_save_preserves_unrelated_operator_preferences() {
 /// the max size.
 #[test]
 fn the_file_injection_rows_apply_when_file_injection_is_enabled() {
-    let mut screen = SettingsScreen::new();
-    let mut config = AppConfig::default();
-    let mut settings = Settings::default();
+        with_sandbox_home(|| {
+        let mut screen = SettingsScreen::new();
+        let mut config = AppConfig::default();
+        let mut settings = Settings::default();
 
-    // Step 1: the operator enables file injection.
-    screen
-        .pending_changes
-        .insert("fileInjectionEnabled".to_string(), "true".to_string());
-    screen.apply_and_save(&mut config, &mut settings);
-    assert!(
-        screen.file_injection_enabled,
-        "precondition: file injection is on, so the max-size row is offered"
-    );
-    assert!(
-        all_entries(&screen)
-            .iter()
-            .any(|entry| entry.key == "fileInjectionMaxSize"),
-        "precondition: the screen offers the max-size row in this state"
-    );
+        // Step 1: the operator enables file injection.
+        screen
+            .pending_changes
+            .insert("fileInjectionEnabled".to_string(), "true".to_string());
+        screen.apply_and_save(&mut config, &mut settings);
+        assert!(
+            screen.file_injection_enabled,
+            "precondition: file injection is on, so the max-size row is offered"
+        );
+        assert!(
+            all_entries(&screen)
+                .iter()
+                .any(|entry| entry.key == "fileInjectionMaxSize"),
+            "precondition: the screen offers the max-size row in this state"
+        );
 
-    // Step 2: the operator edits the max size.
-    screen
-        .pending_changes
-        .insert("fileInjectionMaxSize".to_string(), "2048".to_string());
-    screen.apply_and_save(&mut config, &mut settings);
-    assert_eq!(
-        settings.config.file_injection_max_size, 2048,
-        "the edited max size was dropped on save — the screen showed the new \
-         value and the settings file kept the old one"
-    );
+        // Step 2: the operator edits the max size.
+        screen
+            .pending_changes
+            .insert("fileInjectionMaxSize".to_string(), "2048".to_string());
+        screen.apply_and_save(&mut config, &mut settings);
+        assert_eq!(
+            settings.config.file_injection_max_size, 2048,
+            "the edited max size was dropped on save — the screen showed the new \
+             value and the settings file kept the old one"
+        );
+    })
 }
-
 #[test]
 fn settings_screen_new_has_sensible_defaults() {
     let screen = SettingsScreen::new();
