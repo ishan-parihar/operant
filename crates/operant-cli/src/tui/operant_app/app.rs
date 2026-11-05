@@ -217,7 +217,11 @@ const REGISTERED_COMMANDS: &[RegisteredCommand] = &[
     // funnels through.
     RegisteredCommand::public(
         "/effort",
-        "Set reasoning effort (off|minimal|low|medium|high|xhigh)",
+        // (iter-1766) The picker offers FOUR rows — low | normal | high | max
+        // (`open_effort_picker_inline`). The old list named six wire values
+        // the picker has never shown, so `/help` told the operator about
+        // levels they could not choose.
+        "Pick the reasoning effort (low | normal | high | max)",
     ),
     RegisteredCommand::hidden("/effort-set", "Internal: set effort on the live agent"),
     RegisteredCommand::public(
@@ -269,12 +273,25 @@ const REGISTERED_COMMANDS: &[RegisteredCommand] = &[
     RegisteredCommand::public("/resume", "Open session picker"),
     RegisteredCommand::public("/sessions", "Alias for /resume"),
     RegisteredCommand::public("/session", "Alias for /resume"),
-    RegisteredCommand::public("/save", "Bookmark session for easy access"),
+    // (iter-1766) `/save` opens the EXPORT dialog (the operator wants the
+    // transcript on disk). The description promised a bookmark, which is a
+    // different feature entirely — and `/help` is what the operator reads
+    // before pressing the key.
+    RegisteredCommand::public(
+        "/save",
+        "Export the conversation to a file (same as /export)",
+    ),
     RegisteredCommand::public("/rename", "Rename current session"),
     RegisteredCommand::public("/quit", "Exit operant"),
     RegisteredCommand::public("/auth", "Show authentication status"),
     RegisteredCommand::public("/login", "Login to a provider"),
-    RegisteredCommand::public("/logout", "Log out of a provider"),
+    // (iter-1766) The TUI holds no credential material — the keys live in
+    // `~/.operant/.env` — so `/logout` says where they are and routes to
+    // `/login`. The description promised a logout that does not happen.
+    RegisteredCommand::public(
+        "/logout",
+        "Show where the provider keys live (run /login to change them)",
+    ),
     RegisteredCommand::remote(
         "/continue",
         "Continue every interrupted live session that would auto-resume",
@@ -286,7 +303,13 @@ const REGISTERED_COMMANDS: &[RegisteredCommand] = &[
     // working arm is a row here. (Rows that already exist above are not
     // repeated — agents, auth, changelog, context, diff, info, save,
     // session, sessions, skills, stats, update.)
-    RegisteredCommand::public("/branch", "Open the fork tree of this session's branches"),
+    // (iter-1766) The fork-tree overlay was replaced by the session hub on
+    // the branch filter (iter-1467), but the description still promised the
+    // overlay the operator can no longer reach.
+    RegisteredCommand::public(
+        "/branch",
+        "Open the session hub on this session's branch filter",
+    ),
     RegisteredCommand::public("/bundle", "Run a saved command bundle"),
     RegisteredCommand::public("/changes", "Show the current turn's diff"),
     RegisteredCommand::public("/connect", "Open the provider connect dialog"),

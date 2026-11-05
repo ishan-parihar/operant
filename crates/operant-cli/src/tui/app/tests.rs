@@ -739,6 +739,98 @@ fn shift_tab_never_changes_permission_mode() {
     );
 }
 
+/// The `/help` overlay prints the REGISTRY's descriptions, so a description
+/// that no longer says what the command does is a lie the operator reads
+/// BEFORE pressing the key.
+///
+/// (iter-1766) The CHORD catalogue has had this guard since plan 10
+/// (`every_advertised_binding_dispatches`); the COMMAND table did not, and a
+/// sweep of its 111 rows found four that no longer matched their arms:
+///   * `/branch` promised the fork-tree overlay the session hub replaced
+///     (iter-1467),
+///   * `/logout` promised a logout the TUI cannot do — the keys live in
+///     `~/.operant/.env`, and the command says where they are and routes to
+///     `/login`,
+///   * `/save` promised a bookmark and opens the EXPORT dialog,
+///   * `/effort` listed six wire values the picker has never shown (it offers
+///     low | normal | high | max).
+///
+/// This pins the four corrected descriptions to the registry AND to the arms'
+/// behaviour, so neither side can drift without this failing.
+#[test]
+fn the_help_overlay_descriptions_match_what_the_arms_do() {
+    let corrected: &[(&str, &str)] = &[
+        (
+            "/branch",
+            "Open the session hub on this session's branch filter",
+        ),
+        (
+            "/logout",
+            "Show where the provider keys live (run /login to change them)",
+        ),
+        (
+            "/save",
+            "Export the conversation to a file (same as /export)",
+        ),
+        (
+            "/effort",
+            "Pick the reasoning effort (low | normal | high | max)",
+        ),
+    ];
+    let entries: Vec<(&str, &str)> =
+        crate::tui::operant_app::app::registered_command_entries().collect();
+    for (name, expected) in corrected {
+        let found = entries
+            .iter()
+            .find(|(entry_name, _)| *entry_name == *name)
+            .map(|(_, description)| *description);
+        assert_eq!(
+            found,
+            Some(*expected),
+            "the /help description for {name} must say what the command does — \
+             the overlay generates from this table, so a stale description is a \
+             lie the operator reads before pressing the key"
+        );
+    }
+
+    // And the behavioural half: each corrected description must still be true.
+    let mut app = make_app();
+    assert!(app.handle_tui_command("branch", ""));
+    assert!(
+        app.session_hub.visible,
+        "/branch opens the session hub (the fork-tree overlay is gone)"
+    );
+    assert_eq!(
+        app.session_hub.filter_mode,
+        crate::tui::session_hub::HubFilterMode::CurrentBranch,
+        "/branch opens it on the branch filter"
+    );
+
+    let mut app = make_app();
+    assert!(app.handle_tui_command("save", ""));
+    assert!(
+        app.export_dialog.visible,
+        "/save opens the export dialog — it does not bookmark anything"
+    );
+
+    let mut app = make_app();
+    assert!(app.handle_tui_command("logout", ""));
+    assert!(
+        app.status_message
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Keys live in"),
+        "/logout says where the keys live — it cannot log the operator out"
+    );
+
+    let mut app = make_app();
+    assert!(app.handle_tui_command("effort", ""));
+    assert!(
+        app.inline_interactive.is_some(),
+        "/effort opens the effort picker"
+    );
+}
+
 /// 2026-10-14 batch, plan 10: every advertised binding must dispatch to what
 /// its description says. The overlay and /keys generate from the registry,
 /// so pinning the catalogue pins every advertised chord. The (chord,
