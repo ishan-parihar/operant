@@ -28,7 +28,7 @@ Thinking display is currently Current. off = never show thinking; full = keep ev
 
 › Ask operant to do anything
 
-                                                                          ~ 4/200k ▱▱▱▱▱▱▱▱▱▱ 0% API key Offline Capture
+                                                                          ~ 4/128k ▱▱▱▱▱▱▱▱▱▱ 0% API key Offline Capture
 
 
 

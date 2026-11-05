@@ -31,7 +31,7 @@ Tool error: make: *** [Makefile:42: build] Error 1
 
 › Ask operant to do anything
 
-                                                                         ~ 43/200k ▱▱▱▱▱▱▱▱▱▱ 0% API key Offline Capture
+                                                                         ~ 43/128k ▱▱▱▱▱▱▱▱▱▱ 0% API key Offline Capture
 
 
 

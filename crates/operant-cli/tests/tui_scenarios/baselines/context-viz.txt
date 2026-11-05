@@ -12,7 +12,7 @@
                           Context & usage                                        Esc to close
                           Token window, rate limits, and session cost.
  operant · replay         Context window
- operant                  [░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░]  0%  (0 / 200.0k)
+ operant                  [░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░]  0%  (0 / 128.0k)
  /model to switch · Offl
  v0.3.0                   Rate limits
  /login to add provider   5-hour   no data

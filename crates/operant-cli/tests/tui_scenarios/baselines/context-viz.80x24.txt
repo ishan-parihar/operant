@@ -4,7 +4,7 @@
       Context & usage                                        Esc to close
       Token window, rate limits, and session cost.
  ope  Context window
- ope  [░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░]  0%  (0 / 200.0k)
+ ope  [░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░]  0%  (0 / 128.0k)
  /mo
  v0.  Rate limits
  /lo  5-hour   no data

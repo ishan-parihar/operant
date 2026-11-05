@@ -25,7 +25,7 @@ Empty reply — the provider stre│  type: custom   ↑↓/Tab: options   Enter
                                │                                                        │
 › Ask operant to do anything   │                                                        │
                                └────────────────────────────────────────────Esc to close┘
-                                                                         ~ 11/200k ▱▱▱▱▱▱▱▱▱▱ 0% API key Offline Capture
+                                                                         ~ 11/128k ▱▱▱▱▱▱▱▱▱▱ 0% API key Offline Capture
 
 
 

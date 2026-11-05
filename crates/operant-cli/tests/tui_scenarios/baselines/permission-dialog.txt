@@ -25,7 +25,7 @@ Empty reply — the pr│    [n] No, deny                                       
                     │                                                                              │
 › Ask operant to do └──────────────────────────────────────────────────────────────────Esc to close┘
 
-                                                                          ~ 6/200k ▱▱▱▱▱▱▱▱▱▱ 0% API key Offline Capture
+                                                                          ~ 6/128k ▱▱▱▱▱▱▱▱▱▱ 0% API key Offline Capture
 
 
 
