@@ -514,6 +514,76 @@ fn test_exit_slash_command_sets_quit_flag() {
     assert!(app.should_exit);
 }
 
+/// The catalogue has advertised Ctrl+Q as "Quit application" since the Global
+/// table was written, and NOTHING dispatched it: the keybindings guard asks
+/// only whether the key TOKEN appears somewhere in `key_handling.rs`, and
+/// `KeyCode::Char('c')` does — so the lie survived every gate, and an
+/// operator pressing the chord the help screen promised got nothing.
+///
+/// This pins the BEHAVIOUR the help screen advertises: the first press asks
+/// for confirmation, the second exits. It is deliberately behavioural — the
+/// source-level guard cannot see a modifier, and the modifier is exactly what
+/// was missing here.
+#[test]
+fn ctrl_q_asks_for_confirmation_and_then_exits() {
+    let mut app = make_app();
+    assert!(!app.should_exit);
+    app.handle_key_event(press_key(KeyCode::Char('q'), KeyModifiers::CONTROL));
+    assert!(
+        !app.should_exit,
+        "the first Ctrl+Q must ask for confirmation, not exit"
+    );
+    app.handle_key_event(press_key(KeyCode::Char('q'), KeyModifiers::CONTROL));
+    assert!(app.should_exit, "the second Ctrl+Q must exit");
+}
+
+/// The exit-confirmation state machine has TWO halves that must agree, and
+/// nothing enforced it: the arms that call `handle_exit_key_confirmation`
+/// (they start and complete the sequence) and the reset list at the end of
+/// `handle_key_event` (it wipes the sequence for any key outside it). A chord
+/// the arms accept but the reset list does not name has its own state wiped
+/// between the two presses, so the chord looks like it does nothing — which is
+/// exactly how the catalogue's Ctrl+Q was a no-op for its whole life (and why
+/// the source-level keybindings guard, which only asks whether a key token
+/// appears in the file, never saw it).
+#[test]
+fn every_exit_chord_survives_the_key_handlers_reset() {
+    let src = include_str!("key_handling.rs");
+
+    // The chords the confirmation arms accept: the literal character argument
+    // of each `handle_exit_key_confirmation` call.
+    let mut accepted = std::collections::BTreeSet::new();
+    let mut rest = src;
+    while let Some(idx) = rest.find("handle_exit_key_confirmation('") {
+        let after = idx + "handle_exit_key_confirmation('".len();
+        if let Some(c) = rest[after..].chars().next() {
+            accepted.insert(c);
+        }
+        rest = &rest[after..];
+    }
+    assert!(
+        !accepted.is_empty(),
+        "no handle_exit_key_confirmation call site found — did it move?"
+    );
+
+    let reset = src
+        .split("let is_exit_key =")
+        .nth(1)
+        .expect("the exit-confirmation reset list — did it move?")
+        .split("if !is_exit_key")
+        .next()
+        .expect("the reset's use — did it move?");
+    for c in accepted {
+        let needle = format!("'{c}'");
+        assert!(
+            reset.contains(&needle),
+            "the exit chord {c} is accepted by a confirmation arm but missing from the \
+             reset list — the key handler wipes its own sequence between the two presses, \
+             so the chord looks like it does nothing"
+        );
+    }
+}
+
 #[test]
 fn test_vim_slash_command_toggles_vim() {
     let mut app = make_app();

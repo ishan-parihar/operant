@@ -1431,6 +1431,20 @@ impl App {
                     self.handle_exit_key_confirmation('c');
                 }
             }
+            // Ctrl+Q: the Global catalogue has advertised it as "Quit
+            // application" since the table was written, and NOTHING dispatched
+            // it — the keybindings guard asks only whether the key TOKEN
+            // appears in this file, and `KeyCode::Char('c')` does, so the lie
+            // survived every gate and the operator's chord did nothing.
+            //
+            // Same two-press confirmation as Ctrl+C, and unlike Ctrl+C it does
+            // NOT clear the composer: a chord pressed by accident must not
+            // destroy a typed prompt before the operator has confirmed the
+            // exit. (The confirmation message names the chord, so the second
+            // press is unambiguous.)
+            KeyCode::Char('q') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.handle_exit_key_confirmation('q');
+            }
             KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 // Ctrl+D on empty input: trigger two-press exit confirmation (like Ctrl+C).
                 if self.prompt_input.is_empty() {
@@ -2344,9 +2358,17 @@ impl App {
             _ => {}
         }
 
-        // Reset exit confirmation sequence if user presses any key other than Ctrl+C or Ctrl+D.
+        // Reset exit confirmation sequence if user presses any key other than
+        // the EXIT CHORDS (Ctrl+C, Ctrl+D, Ctrl+Q).
+        //
+        // The list must name every chord the confirmation arms accept, or the
+        // arm that just started the sequence has its own state wiped by this
+        // reset — the sequence can then never complete, and the chord looks
+        // like it does nothing at all. That is exactly how Ctrl+Q reached the
+        // catalogue with no dispatch arm AND no working confirmation.
         let is_exit_key = key.modifiers.contains(KeyModifiers::CONTROL)
-            && matches!(key.code, KeyCode::Char(c) if c == 'c' || c == 'd' || c == 'C' || c == 'D');
+            && matches!(key.code, KeyCode::Char(c) if c == 'c' || c == 'd' || c == 'q'
+                || c == 'C' || c == 'D' || c == 'Q');
         if !is_exit_key {
             self.last_exit_key_warning = None;
             self.exit_key_sequence_start = None;
@@ -2774,10 +2796,11 @@ impl App {
 
     fn handle_exit_key_confirmation(&mut self, mut key_char: char) {
         fn exit_message(key: char) -> &'static str {
-            if key == 'c' {
-                "Press Ctrl+C again to exit"
-            } else {
-                "Press Ctrl+D again to exit"
+            match key {
+                'c' => "Press Ctrl+C again to exit",
+                'd' => "Press Ctrl+D again to exit",
+                'q' => "Press Ctrl+Q again to exit",
+                _ => "Press the same chord again to exit",
             }
         }
 
