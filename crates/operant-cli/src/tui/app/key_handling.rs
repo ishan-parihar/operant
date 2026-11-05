@@ -1831,15 +1831,6 @@ impl App {
                 self.prompt_input.delete_word_forward();
                 self.refresh_prompt_input();
             }
-            KeyCode::Char('v') if key.modifiers.contains(KeyModifiers::ALT) => {
-                // (iter-1774) The catalogue has advertised "Alt+v — Toggle
-                // Vim mode" in the Prompt context since the table was written,
-                // and NOTHING dispatched it: only the `/vim` command toggled
-                // the mode, so the operator's Alt+V did nothing at all. The
-                // same shape as iter-1758's Ctrl+Q — an advertised chord with
-                // no arm — so the fix is the same: dispatch it.
-                self.toggle_vim_mode();
-            }
             KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::ALT) => {
                 self.prompt_input.move_word_backward();
                 self.sync_legacy_prompt_fields();

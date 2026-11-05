@@ -104,7 +104,6 @@ pub enum KeyAction {
     // App-level
     Submit,
     Cancel,
-    ToggleVimMode,
     ShowHelp,
     ShowCommandPalette,
     ShowContextMenu,

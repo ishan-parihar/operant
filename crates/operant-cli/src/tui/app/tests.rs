@@ -594,6 +594,29 @@ fn test_vim_slash_command_toggles_vim() {
     assert!(!app.prompt_input.vim_enabled);
 }
 
+/// Alt+V must stay UNCATALOGUED — the repo pinned the opposite on purpose.
+///
+/// (iter-1775) The catalogue advertised "Alt+v — Toggle Vim mode" in the
+/// Prompt context while the repo's own `test_alt_v_does_not_toggle_vim_mode`
+/// says Alt+V must never silently become a vim toggle (vim is reached via
+/// `/vim`). The two disagreed for years because nothing compared the
+/// catalogue against the dispatch — the same hole that let iter-1758's Ctrl+Q
+/// and iter-1770's wrong-context rows survive. The catalogue row is gone;
+/// this keeps it gone.
+#[test]
+fn alt_v_stays_uncatalogued() {
+    use crate::tui::keybindings::DEFAULT_KEYBINDINGS;
+
+    assert!(
+        !DEFAULT_KEYBINDINGS
+            .catalogue()
+            .iter()
+            .any(|(_, binding)| binding.chord().eq_ignore_ascii_case("Alt+v")),
+        "Alt+V must stay uncatalogued — the repo pinned that it must never become \
+         a vim toggle, and vim is reached via /vim"
+    );
+}
+
 #[test]
 fn test_model_slash_command_opens_picker() {
     // (plan 05B) the unified inline picker, not the legacy overlay.
@@ -1066,6 +1089,38 @@ fn every_advertised_binding_dispatches() {
         // Alt+[ / Alt+] dispatch arms in key_handling.rs.
         ("Alt+[", "Jump to previous user prompt"),
         ("Alt+]", "Jump to next user prompt"),
+        // (iter-1774) The Prompt context's rows, each verified against its
+        // dispatch arm in app/key_handling.rs. The table had pinned only the
+        // Global context's rows, so 35 Prompt rows — the composer's own
+        // chords — were unguarded: a repurposed chord there (Alt+V's "Toggle
+        // Vim mode" was advertised and dispatched by NOTHING) had nothing to
+        // fail. These are the Prompt rows, checked the same way.
+        ("Enter", "Submit prompt"),
+        ("Shift+Enter", "Insert newline"),
+        ("Esc", "Cancel"),
+        ("Tab", "Accept completion"),
+        ("Up", "History previous"),
+        ("Down", "History next"),
+        ("Ctrl+n", "History next"),
+        ("Ctrl+e", "Move to end"),
+        ("Ctrl+f", "Word right"),
+        ("Ctrl+w", "Delete word left"),
+        ("Ctrl+u", "Delete line"),
+        ("Ctrl+y", "Paste"),
+        ("Ctrl+z", "Undo"),
+        (
+            "F5",
+            "Retry: resubmit the composer, or refill it from the last failed turn",
+        ),
+        (
+            "Alt+r",
+            "Retry: resubmit the composer, or refill it from the last failed turn",
+        ),
+        ("Ctrl+l", "Clear view (terminal-style; context kept)"),
+        ("Ctrl+s", "Stash / restore the prompt"),
+        ("Ctrl+d", "Exit (empty prompt, press twice)"),
+        ("Alt+b", "Word left"),
+        ("Alt+d", "Delete word right"),
     ];
 
     let catalogue = DEFAULT_KEYBINDINGS.catalogue();
@@ -5761,7 +5816,11 @@ fn hotkey_usage_should_distinguish_used_from_never_used() {
     let mut usage = UsageStore::default();
     usage.record(&usage_key("Ctrl+p"));
     usage.record(&usage_key("Ctrl+p"));
-    usage.record(&usage_key("Alt+v"));
+    // (iter-1775) A chord the catalogue binds. This used to be "Alt+v",
+    // which the catalogue advertised as a vim toggle and then removed (the
+    // repo pins that Alt+V must never become one), so the synthetic chord
+    // has to be one the report can actually list.
+    usage.record(&usage_key("Ctrl+b"));
 
     let report = registry.usage_report(&usage);
     assert_eq!(report.used.len() + report.never_used.len(), report.total);
@@ -5779,7 +5838,7 @@ fn hotkey_usage_should_distinguish_used_from_never_used() {
             .iter()
             .map(|v| v.chord.as_str())
             .collect::<std::collections::BTreeSet<_>>(),
-        std::collections::BTreeSet::from(["Alt+v", "Ctrl+p"]),
+        std::collections::BTreeSet::from(["Ctrl+b", "Ctrl+p"]),
         "a chord bound in several contexts is one chord"
     );
     assert!(

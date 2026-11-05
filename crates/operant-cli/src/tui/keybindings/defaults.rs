@@ -410,13 +410,16 @@ impl KeyBindingRegistry {
             // exist. Removed rather than papered over; adding redo is a
             // feature, not a catalogue fix. The `KeyAction::Redo` variant
             // itself is kept so a future implementation has somewhere to land.
-            DefaultBinding {
-                key: KeyCode::Char('v'),
-                modifiers: KeyModifiers::ALT,
-                action: KeyAction::ToggleVimMode,
-                context: BindingContext::Prompt,
-                description: "Toggle Vim mode",
-            },
+            // (iter-1775) The "Alt+v — Toggle Vim mode" row is GONE, and it
+            // was the CATALOGUE that was wrong, not the dispatch. The repo
+            // pinned the opposite on purpose: `test_alt_v_does_not_toggle_vim_
+            // mode` says Alt+V must never silently become a vim toggle, and
+            // vim is reached through the `/vim` command. The row advertised a
+            // chord the app has always refused to bind — and nothing compared
+            // the catalogue against the dispatch, so the two disagreed for
+            // years. The registry's own rule (the legacy voice-mode chord
+            // above) applies: a chord with no action is left UNCATALOGUED
+            // rather than re-bound.
             // Vim Normal mode bindings
             DefaultBinding {
                 key: KeyCode::Esc,
