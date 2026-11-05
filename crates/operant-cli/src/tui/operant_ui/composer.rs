@@ -238,6 +238,18 @@ pub(crate) fn placeholder_rect(textarea: Rect, suggestions_offset: u16) -> Rect 
 mod tests {
     use super::*;
 
+    /// The band's fill and the placeholder's dim colour come from the
+    /// PROCESS-GLOBAL palette, and every writer of that palette holds the
+    /// shared lock. A test that reads it without the lock can see a DIFFERENT
+    /// theme between its render and its expectation — measured 2026-11-05: the
+    /// band was painted with Nord's surface while the expectation read the
+    /// default theme's, and the two did not match.
+    fn palette_guard() -> std::sync::MutexGuard<'static, ()> {
+        crate::tui::theme_colors::tests::ACTIVE_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     #[test]
     fn gutter_is_two_columns_for_every_prompt_mode() {
         // Every glyph operant's `input_prompt` can return is exactly two
@@ -315,6 +327,7 @@ mod tests {
         // The degrade path: a non-RGB surface colour yields the default (empty)
         // style and an RGB surface yields one carrying a bg. Either way the band
         // paints; only the fill is conditional.
+        let _palette = palette_guard();
         let style = composer_fill_style();
         if style != Style::default() {
             assert!(style.bg.is_some(), "a non-empty fill style must set a bg");
@@ -350,6 +363,7 @@ mod tests {
     fn the_band_fill_paints_every_column_of_the_row() {
         // The whole point of the fill over a border: it reaches the row's full
         // width, including the columns no text occupies.
+        let _palette = palette_guard();
         let width = 40u16;
         let buf = band_buffer(width, 3);
         let fill = composer_fill_style();
@@ -422,6 +436,8 @@ mod tests {
         // same render WITHOUT the band fill. The two footer rows must be equal.
         use ratatui::backend::TestBackend;
         use ratatui::{Terminal, widgets::Block};
+
+        let _palette = palette_guard();
 
         /// Footer row 3 with (or without) the band fill painted above it.
         fn footer_row(with_band_fill: bool) -> String {
@@ -558,6 +574,7 @@ mod tests {
         // iter-1681's reach test measured row 1 only. The band's blank top and
         // bottom rows are part of the look (`input_padding_height = 2`), and a
         // fill that stopped after the text row would be the old border box.
+        let _palette = palette_guard();
         let buf = empty_composer_buffer(40, 4);
         let fill = composer_fill_style()
             .bg
@@ -754,6 +771,7 @@ mod tests {
         assert!(cases > 100, "exhaustive check actually ran {cases} cases");
     }
 
+    #[test]
     fn the_extraction_is_really_in_the_render_path_not_only_in_the_tests() {
         // The transcription trap's mirror image: an extraction nobody calls. This
         // reads the SOURCE and asserts the call site routes through the function,

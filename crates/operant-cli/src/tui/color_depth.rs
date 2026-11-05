@@ -85,7 +85,40 @@ static DETECTED: OnceLock<ColorDepth> = OnceLock::new();
 
 /// The terminal's colour depth, detected once and cached for the process.
 pub fn detect() -> ColorDepth {
-    *DETECTED.get_or_init(|| detect_from(|key| std::env::var(key).ok()))
+    *DETECTED.get_or_init(detect_process)
+}
+
+/// The process-wide answer: the ambient environment in a real build, and the
+/// EXPLICIT override only in a test build.
+///
+/// A test binary's colours are ASSERTIONS, so the ambient environment must not
+/// decide them. Measured 2026-11-05: an operator's `NO_COLOR=1` (and a CI
+/// runner's `TERM=dumb`) collapsed the whole palette to `Reset` through
+/// [`quantize`], and four `theme_colors` assertions, the composer's band-fill
+/// assertions and the modal-scrim assertion went red for a reason that had
+/// nothing to do with the code under test — the suite's verdict depended on
+/// the developer's shell. The explicit override still applies: it is a
+/// deliberate choice, and the corpus already pins it to `truecolor`.
+fn detect_process() -> ColorDepth {
+    #[cfg(test)]
+    {
+        detect_for_tests(std::env::var(COLOR_DEPTH_OVERRIDE_VAR).ok().as_deref())
+    }
+    #[cfg(not(test))]
+    {
+        detect_from(|key| std::env::var(key).ok())
+    }
+}
+
+/// The depth a test build renders at: the explicit override, else truecolor.
+///
+/// Truecolor is the corpus's own pin (`OPERANT_COLOR_DEPTH=truecolor`), so the
+/// unit suite and the visual corpus agree on the palette they assert against.
+#[cfg(test)]
+fn detect_for_tests(override_value: Option<&str>) -> ColorDepth {
+    override_value
+        .and_then(parse_depth)
+        .unwrap_or(ColorDepth::Truecolor)
 }
 
 // There is exactly ONE depth answer in this process: this module's. The
@@ -344,6 +377,40 @@ mod tests {
                 .find(|(k, _)| *k == key)
                 .map(|(_, v)| (*v).to_string())
         }
+    }
+
+    /// The suite's colours are assertions, so the ambient environment must not
+    /// decide them. Measured 2026-11-05: an operator's `NO_COLOR=1` collapsed
+    /// the palette to `Reset` and took four `theme_colors` assertions, the
+    /// composer's three band-fill assertions and the modal-scrim assertion
+    /// down with it — a gate whose verdict depended on the developer's shell.
+    /// Only the EXPLICIT override applies in a test build, and its default is
+    /// the corpus's own pin.
+    #[test]
+    fn the_test_build_takes_its_depth_from_the_override_alone() {
+        assert_eq!(
+            detect_for_tests(None),
+            ColorDepth::Truecolor,
+            "a test build renders at truecolor unless the override says otherwise"
+        );
+        assert_eq!(detect_for_tests(Some("256")), ColorDepth::Palette256);
+        assert_eq!(detect_for_tests(Some("none")), ColorDepth::None);
+        // A typo falls through to the default rather than blanking the UI.
+        assert_eq!(detect_for_tests(Some("nonsense")), ColorDepth::Truecolor);
+    }
+
+    /// The process-wide answer agrees with the override, whatever the shell
+    /// says. Without this, `detect()` reading the ambient environment again is
+    /// invisible on a developer machine that happens to have no `NO_COLOR`.
+    #[test]
+    fn the_process_depth_agrees_with_the_test_build_rule() {
+        let expected = detect_for_tests(std::env::var(COLOR_DEPTH_OVERRIDE_VAR).ok().as_deref());
+        assert_eq!(
+            detect(),
+            expected,
+            "the process colour depth must come from the explicit override only, \
+             never from the developer's NO_COLOR/TERM"
+        );
     }
 
     #[test]

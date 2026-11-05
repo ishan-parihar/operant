@@ -64,9 +64,16 @@ pub fn is_mermaid_lang(lang: &str) -> bool {
     lang.eq_ignore_ascii_case("mermaid") || lang.eq_ignore_ascii_case("mmd")
 }
 
+/// Test-only: pin the native-renderer door for one scope.
+///
+/// The W9 cut made this a no-op, because the door did not exist yet. It does
+/// now (`operant_markdown::context`), and a no-op here left every caller
+/// believing it had closed a door that stayed open: the side-panel source
+/// fallback test asserted a source rendering it never created, and stayed red
+/// from the day the mermaid engine landed (iter-1608).
 #[cfg(test)]
-pub fn with_image_protocol_override<T>(_enabled: Option<bool>, f: impl FnOnce() -> T) -> T {
-    f()
+pub fn with_image_protocol_override<T>(enabled: Option<bool>, f: impl FnOnce() -> T) -> T {
+    crate::tui::operant_markdown::mermaid::with_image_protocol_override(enabled, f)
 }
 
 pub fn get_font_size() -> Option<(u16, u16)> {
