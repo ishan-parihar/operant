@@ -21,3 +21,4 @@
 | tui-bugfix-campaign-015 | done | B19-B20: the harness had no idle-frame token (so the scroll ladder's third rung could not be pinned) and the registry described a DELETED MCP-approval dialog as a live product gap | — | [2026-11-05] origin/main iter-1751 |
 | tui-bugfix-campaign-016 | done | B21: AGENTS.md claimed a TUI workspace view and a Behavior panel that do not exist, and its module count was stale | — | [2026-11-05] origin/main iter-1752 |
 | tui-bugfix-campaign-017 | done | B22: the live-verification tool lost its determinism controls on a failed mktemp, checked its wait where it could never succeed, and the doc named a help section that does not exist | — | [2026-11-05] origin/main iter-1753 |
+| tui-bugfix-campaign-018 | done | B23: the per-row diff expansion scenario had no committed golden, so the corpus verify failed on every run | claimed-by `agent-omarchy` since 2026-11-05T13:13 | [2026-11-05] origin/main iter-1756 |
