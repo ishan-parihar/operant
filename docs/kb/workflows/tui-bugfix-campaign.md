@@ -32,4 +32,5 @@
 | tui-bugfix-campaign-026 | done | B30: the vim modes' catalogue rows were in the wrong context, and Ctrl+C in a vim mode wiped the composer's text | — | [2026-11-06] origin/main iter-1770 |
 | tui-bugfix-campaign-027 | done | B31: the visual corpus is green again — the context-window slice landed without re-proving the goldens, so the gate was red at HEAD | — | [2026-11-06] origin/main iter-1771 |
 | tui-bugfix-campaign-028 | done | B32: a count argument was silently turned into a different count, and /copy 0 blamed an empty transcript | — | [2026-11-06] origin/main iter-1772 |
+| tui-bugfix-campaign-029 | done | B33: /output-style verbose cycled the style instead of setting it | — | [2026-11-06] origin/main iter-1773 |
 | tui-bugfix-campaign-018 | done | B23: the per-row diff expansion scenario had no committed golden, so the corpus verify failed on every run | claimed-by `agent-omarchy` since 2026-11-05T13:13 | [2026-11-05] origin/main iter-1758 |

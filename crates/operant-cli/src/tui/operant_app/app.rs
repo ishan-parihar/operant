@@ -331,7 +331,13 @@ const REGISTERED_COMMANDS: &[RegisteredCommand] = &[
     RegisteredCommand::public("/mcp", "Open the MCP servers panel"),
     RegisteredCommand::public("/mouse", "Show the mouse capture state"),
     RegisteredCommand::public("/new", "Start a new session (old one kept for /resume)"),
-    RegisteredCommand::public("/output-style", "Cycle output style (auto|stream|verbose)"),
+    // (iter-1773) The command now also accepts the level as an argument;
+    // the description says so, because an argument that names a level used to
+    // be ignored (the command cycled anyway).
+    RegisteredCommand::public(
+        "/output-style",
+        "Set the output style (auto|stream|verbose); no argument cycles it",
+    ),
     RegisteredCommand::public("/personality", "Show or set the assistant personality"),
     RegisteredCommand::public(
         "/ponytail",
@@ -364,7 +370,7 @@ const REGISTERED_COMMANDS: &[RegisteredCommand] = &[
     RegisteredCommand::public("/undo", "Rewind the last N turns"),
     RegisteredCommand::public(
         "/verbose",
-        "Cycle the output style (alias of /output-style)",
+        "Set the output style (auto|stream|verbose); no argument cycles it (alias of /output-style)",
     ),
     RegisteredCommand::public("/vim", "Toggle vim keybindings"),
     RegisteredCommand::public("/whoami", "Show the saved user profile"),

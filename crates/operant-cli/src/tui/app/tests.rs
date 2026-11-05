@@ -2771,6 +2771,37 @@ fn test_output_style_cycles() {
     assert_eq!(app.output_style, "auto");
 }
 
+/// An argument to `/output-style` names the level.
+///
+/// (iter-1773) The arm cycled whatever the argument was, so
+/// `/output-style verbose` moved the style to "stream" — the operator's level
+/// silently became the NEXT one. And an unknown level was accepted the same
+/// way, with no word about it.
+#[test]
+fn output_style_takes_a_level_argument() {
+    let mut app = make_app();
+    assert!(app.handle_tui_command("output-style", "verbose"));
+    assert_eq!(
+        app.output_style, "verbose",
+        "the named level must be set, not cycled past"
+    );
+
+    let mut app = make_app();
+    assert!(app.handle_tui_command("output-style", "loud"));
+    assert_eq!(
+        app.output_style, "auto",
+        "an unknown level must not change the style"
+    );
+    assert!(
+        app.status_message
+            .as_deref()
+            .unwrap_or_default()
+            .contains("not an output style"),
+        "an unknown level must be named: {:?}",
+        app.status_message
+    );
+}
+
 #[test]
 fn test_context_menu_fork_targets_clicked_message() {
     let mut app = make_app();

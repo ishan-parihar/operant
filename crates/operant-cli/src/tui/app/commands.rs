@@ -1078,12 +1078,32 @@ impl App {
                 true
             }
             "output-style" | "verbose" => {
-                self.output_style = match self.output_style.as_str() {
-                    "auto" => "stream".to_string(),
-                    "stream" => "verbose".to_string(),
-                    _ => "auto".to_string(),
-                };
-                self.set_status_notice(format!("Output style: {}.", self.output_style));
+                let requested = args.trim();
+                if requested.is_empty() {
+                    self.output_style = match self.output_style.as_str() {
+                        "auto" => "stream".to_string(),
+                        "stream" => "verbose".to_string(),
+                        _ => "auto".to_string(),
+                    };
+                    self.set_status_notice(format!("Output style: {}.", self.output_style));
+                    return true;
+                }
+                // (iter-1773) An argument names the level. The old arm cycled
+                // anyway, so "/output-style verbose" moved the style to
+                // "stream" — the operator's level silently became the NEXT
+                // one, the same class of silent-arg-substitution the count
+                // commands had (iter-1772).
+                match requested {
+                    "auto" | "stream" | "verbose" => {
+                        self.output_style = requested.to_string();
+                        self.set_status_notice(format!("Output style: {}.", self.output_style));
+                    }
+                    _ => {
+                        self.set_status_notice(format!(
+                            "\"{requested}\" is not an output style — use auto | stream | verbose."
+                        ));
+                    }
+                }
                 true
             }
             "effort" => {
