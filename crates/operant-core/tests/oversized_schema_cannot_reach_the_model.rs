@@ -706,8 +706,10 @@ const _: () = assert!(MIN_GROWTH > VACUOUS_GROWTH && MIN_GROWTH <= REAL_GROWTH);
 fn the_published_floor_range_matches_the_measured_regimes() {
     // The same two facts, at runtime, with a message that names what to do. The
     // const assertions above fail at compile time; this one explains itself.
+    // `std::hint::black_box` keeps the operands RUNTIME values: clippy refuses
+    // `assert!` over pure constants, and the point of this test is the message.
     assert!(
-        VACUOUS_GROWTH < MIN_GROWTH && MIN_GROWTH <= REAL_GROWTH,
+        std::hint::black_box(VACUOUS_GROWTH) < MIN_GROWTH && MIN_GROWTH <= REAL_GROWTH,
         "MIN_GROWTH ({MIN_GROWTH}) no longer sits between the measured regimes \
          ({VACUOUS_GROWTH} < floor <= {REAL_GROWTH}). A fixture change moved one \
          of them: re-measure both with `cargo test -p operant-core --test \

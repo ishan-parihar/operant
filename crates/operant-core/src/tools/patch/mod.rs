@@ -516,8 +516,8 @@ mod tests {
 
     #[test]
     fn an_out_of_range_occurrence_index_is_ambiguous_not_a_panic() {
-        assert_eq!(OccurrenceRule::resolve(3, Some(9)).is_allowed(), false);
-        assert_eq!(OccurrenceRule::resolve(3, Some(0)).is_allowed(), true);
+        assert!(!OccurrenceRule::resolve(3, Some(9)).is_allowed());
+        assert!(OccurrenceRule::resolve(3, Some(0)).is_allowed());
     }
 
     #[test]

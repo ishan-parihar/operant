@@ -389,10 +389,6 @@ impl OperantAgent {
         }
     }
 
-    #[expect(
-        clippy::expect_used,
-        reason = "poisoned lock: panic is the intended recovery"
-    )]
     /// Run the agent with a user query
     // `user_query` MUST be skipped. With only `self` skipped, `#[instrument]`
     // records the argument as a span field and the default formatter prints
@@ -458,6 +454,10 @@ impl OperantAgent {
         Some(TurnAttribution::of(breakdown))
     }
 
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
     #[instrument(skip(self, user_query), fields(model = % self.config.model))]
     pub async fn run(&self, user_query: String) -> Result<Message> {
         info!("Starting agent run");

@@ -4,6 +4,11 @@
 //! target; regenerate it with `scripts/build-plugin-fixture.sh` after
 //! editing `fixtures/fixture-plugin/src/lib.rs`.
 
+// Test targets carry the repo's standard lint exemptions: the gate denies
+// `unwrap_used`/`expect_used` in production code, and a test target is not
+// production code.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use operant_api::tool::Tool as _;
 use operant_plugins::runtime::PluginPool;
 use operant_plugins::wasm_tool::WasmTool;
