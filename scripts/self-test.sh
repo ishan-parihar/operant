@@ -89,8 +89,10 @@ run_test "Supply-chain advisories (scripts/supply-chain-gate.sh)" "bash scripts/
 
 # 3c. The build scripts have their own regression tests: the libclang
 # resolver (three scripts resolving libclang three different ways broke the
-# build) and the supply-chain gate's own fail-on-new-advisory contract.
-run_test "Build script tests" "bash scripts/tests/libclang_resolve_test.sh && bash scripts/tests/supply_chain_gate_test.sh 2>&1"
+# build), the supply-chain gate's own fail-on-new-advisory contract, and the
+# TUI command sweep's own contract (a simulator that cannot start used to be
+# reported as 98 broken commands).
+run_test "Build script tests" "bash scripts/tests/libclang_resolve_test.sh && bash scripts/tests/supply_chain_gate_test.sh 2>&1 && bash scripts/tests/command_sweep_test.sh 2>&1"
 
 # 4. Formatting
 run_test "Check formatting" "./scripts/check.sh fmt --all 2>&1"
