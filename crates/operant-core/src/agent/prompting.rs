@@ -779,6 +779,43 @@ If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
                 debug!(session_id = %session_id, "Background review daemon finished");
             }),
         );
+
+        // ── (plan 2026-11-05 RSI, iter-1744) the curator rides the same ──
+        // cadence: the fork edits skills, the curator owns their lifecycle
+        // afterwards (archive-after-idle, staleness — deterministic, no
+        // LLM). maybe_run_curator gates by its own interval (24h default,
+        // seeded on first call), so this is cheap per fire and a no-op
+        // between intervals. Detached: a curator miss is a log line, never
+        // a turn failure. Skills lane only — that is the lane that creates
+        // the agent-authored skills the curator manages.
+        if review_skills {
+            let skills_dir = crate::platform::operant_skills_dir();
+            tokio::spawn(async move {
+                let curator_dir = skills_dir.join(".curator");
+                let tracker = std::sync::Arc::new(crate::skill_usage::SkillUsageTracker::new(
+                    curator_dir.join("usage.json"),
+                ));
+                let engine = crate::curator::CuratorEngine::new(
+                    skills_dir,
+                    curator_dir.join("state.json"),
+                    tracker,
+                );
+                if engine.load_state().await.is_err() {
+                    debug!("curator auto-run skipped — state unreadable");
+                    return;
+                }
+                if engine.maybe_run_curator().await {
+                    match engine.apply_automatic_transitions().await {
+                        Ok(counts) => {
+                            info!(?counts, "curator auto-run applied lifecycle transitions");
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = %e, "curator auto-run failed");
+                        }
+                    }
+                }
+            });
+        }
     }
 }
 

@@ -124,6 +124,31 @@ pub async fn handle_status_command(config: &AppConfig, deep: bool, json: bool) -
                 .display()
                 .to_string()
         );
+        // (iter-1744, RSI plan iter-C) the self-improvement readout: how
+        // many harness lessons the store carries and where the curator's
+        // lifecycle stands. Both best-effort — a miss reads as zero/absent,
+        // never fails the status command.
+        let lesson_count = operant_core::memory_wire::MemoryWireProvider::new(
+            operant_core::platform::operant_home(),
+        )
+        .map(|p| p.count_tagged(operant_core::memory_wire::HARNESS_LESSON_TAG))
+        .unwrap_or(0);
+        let curator_state_path = operant_core::platform::operant_skills_dir()
+            .join(".curator")
+            .join("state.json");
+        let curator_archived =
+            std::fs::read_dir(operant_core::platform::operant_skills_dir().join(".archive"))
+                .map(|entries| entries.filter_map(Result::ok).count())
+                .unwrap_or(0);
+        let curator_last_run = std::fs::read_to_string(&curator_state_path)
+            .ok()
+            .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+            .and_then(|v| v["last_run_summary"].as_str().map(str::to_string));
+        status["self_improvement"] = json!({
+            "harness_lessons": lesson_count,
+            "curator_archived_skills": curator_archived,
+            "curator_last_summary": curator_last_run,
+        });
         status["mcp_servers"] = json!(config.mcp.servers.len());
         let active = operant_core::active_sessions::ActiveSessionTracker::new(
             operant_core::active_sessions::ActiveSessionTracker::default_dir(),
@@ -218,6 +243,12 @@ pub async fn handle_status_command(config: &AppConfig, deep: bool, json: bool) -
             }
             if let Some(mcp) = status.get("mcp_servers") {
                 println!("MCP servers: {} configured", mcp);
+            }
+            if let Some(si) = status.get("self_improvement") {
+                println!(
+                    "Self-improvement: {} harness lesson(s), {} curator-archived skill(s)",
+                    si["harness_lessons"], si["curator_archived_skills"]
+                );
             }
             if let Some(active) = status.get("active_sessions") {
                 let cap = status["max_concurrent_sessions"].as_u64().unwrap_or(0);

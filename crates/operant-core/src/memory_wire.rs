@@ -435,6 +435,28 @@ impl<S: Store> MemoryWireProvider<S> {
         Self::format_hits(&hits, limit)
     }
 
+    /// (iter-1744) Count the memories carrying one tag — the harness-lesson
+    /// counter `operant status` reads. Same contract as every read here: a
+    /// panic or store error degrades to 0, never a dead command.
+    pub fn count_tagged(&self, tag: &str) -> usize {
+        if tag.trim().is_empty() {
+            return 0;
+        }
+        let bank = self.bank.read().map(|b| b.clone()).unwrap_or_default();
+        let normalized = memory_wire::api::normalize_tags(&[tag.to_string()]);
+        if normalized.is_empty() {
+            return 0;
+        }
+        let svc = &self.service;
+        guard("count_tagged", || {
+            svc.store
+                .ids_tagged(&bank, &normalized)
+                .map(|ids| ids.len())
+                .map_err(ApiError::from)
+        })
+        .unwrap_or(0)
+    }
+
     /// Format scored memories into a compact, deterministic text block.
     fn format_hits(hits: &[ScoredMemory], limit: usize) -> String {
         let mut out = String::new();
@@ -1292,6 +1314,36 @@ mod tests {
             elapsed.as_millis() < 5_000,
             "100 inline memory_wire ops took {elapsed:?}; spawn_blocking may be warranted"
         );
+    }
+
+    /// (iter-1744, plan gate) `count_tagged` counts only rows carrying the
+    /// tag — the number `operant status` reports as harness lessons. A tag
+    /// that matches nothing (or an empty tag) reads as 0, matching the
+    /// degrade-to-zero contract of every other read here.
+    #[test]
+    fn count_tagged_counts_only_the_tagged_rows() {
+        let p = in_memory_provider();
+        assert_eq!(p.count_tagged(HARNESS_LESSON_TAG), 0, "empty store");
+        p.retain_fact(
+            "component: word_nav\nlesson: re-anchor before repaint",
+            &[HARNESS_LESSON_TAG.to_string()],
+        );
+        p.retain_fact(
+            "an ordinary fact with no reserved tag",
+            &["notes".to_string()],
+        );
+        assert_eq!(
+            p.count_tagged(HARNESS_LESSON_TAG),
+            1,
+            "only the tagged lesson counts"
+        );
+        p.retain_fact(
+            "component: typeahead\nlesson: chain the popup on directories",
+            &[HARNESS_LESSON_TAG.to_string()],
+        );
+        assert_eq!(p.count_tagged(HARNESS_LESSON_TAG), 2, "second lesson");
+        assert_eq!(p.count_tagged("no-such-tag"), 0, "unknown tag reads as 0");
+        assert_eq!(p.count_tagged("  "), 0, "blank tag reads as 0");
     }
 
     // -- Construction / naming ----------------------------------------------
