@@ -96,8 +96,13 @@ impl App {
         self.invalidate_transcript();
     }
 
-    /// Ctrl+G — arm a bookmark at the current position, or jump back to the
+    /// Alt+G — arm a bookmark at the current position, or jump back to the
     /// armed one and disarm it.
+    ///
+    /// (iter-1763) NOT Ctrl+G: Ctrl+G is the external editor — the bookmark
+    /// moved to Alt+G at iter-1267. This doc, the notice below and the tips
+    /// strip all named the old chord at some point, and an operator who
+    /// followed them got their editor instead of their place.
     pub(crate) fn toggle_scroll_bookmark(&mut self) {
         let armed = self.scroll_memory.bookmark.take();
         let max_scroll = self.scroll_memory.max_scroll;
@@ -121,7 +126,7 @@ impl App {
                 let at = self.scroll_offset;
                 self.scroll_memory.bookmark = Some(at);
                 self.status_message =
-                    Some(format!("Bookmark on at row {at} — Ctrl+G returns here."));
+                    Some(format!("Bookmark on at row {at} — Alt+G returns here."));
             }
         }
     }

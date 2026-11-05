@@ -6649,8 +6649,33 @@ fn ctrl_arrow_chords_scroll_transcript_in_fine_steps() {
     crate::tui::operant_ui::set_last_max_scroll(0);
 }
 
-// ── Composer shift-selection (jcode textarea selection, 2026-10-09 audit) ──
+/// The bookmark notice must name the chord that RETURNS to the bookmark.
+///
+/// (iter-1763) The notice said "Ctrl+G returns here", but Ctrl+G is the
+/// EXTERNAL EDITOR — the bookmark moved to Alt+G at iter-1267. An operator who
+/// followed the notice got their editor instead of their place in the
+/// transcript. The notice is the only place the chord is named at the moment
+/// the operator needs it, so a wrong chord here costs a scroll position.
+#[test]
+fn the_bookmark_notice_names_the_chord_that_returns_to_it() {
+    let mut app = make_app();
+    app.toggle_scroll_bookmark();
+    let notice = app
+        .status_message
+        .clone()
+        .expect("arming the bookmark sets a notice");
+    assert!(
+        notice.contains("Alt+G"),
+        "the notice must name Alt+G — that is the chord that returns: {notice:?}"
+    );
+    assert!(
+        !notice.contains("Ctrl+G"),
+        "Ctrl+G is the external editor; naming it sends the operator to the \
+         wrong feature: {notice:?}"
+    );
+}
 
+// ── Composer shift-selection (jcode textarea selection, 2026-10-09 audit) ──
 #[test]
 fn shift_arrows_select_composer_text_and_ctrl_c_wins_over_exit() {
     let mut app = make_app();
