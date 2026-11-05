@@ -307,9 +307,10 @@ impl TuiApp {
             .core_session_switch
             .as_ref()
             .and_then(|s| s.session_id())
-            && let Err(e) = operant_core::active_sessions::claim_session_here(&session_id) {
-                tracing::debug!(error = %e, "Failed to claim the session for this process");
-            }
+            && let Err(e) = operant_core::active_sessions::claim_session_here(&session_id)
+        {
+            tracing::debug!(error = %e, "Failed to claim the session for this process");
+        }
 
         // Create the user-question channel and register the sender with
         // operant_core::user_question. The clarify tool will push
@@ -968,9 +969,10 @@ impl TuiApp {
             .core_session_switch
             .as_ref()
             .and_then(|s| s.session_id())
-            && let Err(e) = operant_core::active_sessions::claim_session_here(&session_id) {
-                tracing::debug!(error = %e, "Failed to claim the session for this process");
-            }
+            && let Err(e) = operant_core::active_sessions::claim_session_here(&session_id)
+        {
+            tracing::debug!(error = %e, "Failed to claim the session for this process");
+        }
 
         // Skip the network models.dev fetch on the deterministic mock path.
         if !is_mock {

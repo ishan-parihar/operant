@@ -11701,9 +11701,12 @@ fn the_rewind_caption_survives_a_filter_close() {
                     .map(|x| buf.cell((x, *y)).unwrap().symbol().to_string())
                     .collect();
                 row.contains("Rewind to here")
-            }).map(|y| (0..40u16)
-                        .map(|x| buf.cell((x, y)).unwrap().symbol().to_string())
-                        .collect::<String>())
+            })
+            .map(|y| {
+                (0..40u16)
+                    .map(|x| buf.cell((x, y)).unwrap().symbol().to_string())
+                    .collect::<String>()
+            })
             .unwrap_or_default()
     };
 
@@ -11770,7 +11773,6 @@ fn the_rewind_caption_survives_a_filter_close() {
 #[test]
 fn a_clicked_file_edit_row_untruncates_its_diff() {
     use crate::tui::adapter_types::types::Message;
-    
 
     // The global mode must be the collapsed default: this test is about the
     // per-row flag, and `FullInline` would render the whole diff whether or
