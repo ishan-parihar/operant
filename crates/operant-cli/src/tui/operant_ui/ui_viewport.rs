@@ -2196,6 +2196,17 @@ mod tests {
         // The widths matter: how far the transcript's text reaches depends on
         // the width, so one width can leave room where another has none. The
         // corpus caught the defect at 100 columns.
+        // The process-global palette is shared and `App::new` resets it. A
+        // concurrent reset between a theme-asserting test's `set_active_theme`
+        // and its paint makes THAT test's frame come back in the default theme
+        // — the RT-149 flake, which iter-1758's sweep measured back in the TUI
+        // suite (1 failure in 2 full-suite runs, green in isolation). This
+        // file's own two App constructions are the resetters, so hold the lock
+        // for the whole test: the builds and every paint below.
+        let _palette = crate::tui::theme_colors::tests::ACTIVE_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
         let full = app_with(
             200,
             "scroll test line with enough characters to completely fill the \

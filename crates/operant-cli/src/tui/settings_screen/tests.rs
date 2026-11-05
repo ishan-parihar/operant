@@ -25,8 +25,25 @@ use super::*;
 /// applier handles fails here, which is exactly the drift it guards.
 #[test]
 fn every_settings_entry_has_an_applier() {
-    let screen = SettingsScreen::new();
-    let entries = all_entries(&screen);
+    // BOTH screens are checked, and the second one must really offer MORE
+    // rows. The file-injection rows are only offered when file injection is
+    // enabled, so a guard that looked only at the DEFAULT screen never checked
+    // them — which is exactly how `fileInjectionMaxSize` survived with no
+    // applier: the operator turns injection on, edits the max size, and the
+    // edit is silently dropped. The assertion below keeps that hole closed:
+    // if the conditional branch ever changes shape, this test fails instead of
+    // quietly shrinking its own coverage.
+    let default_screen = SettingsScreen::new();
+    let mut injection_screen = SettingsScreen::new();
+    injection_screen.file_injection_enabled = true;
+    let entries = all_entries(&default_screen);
+    let conditional = all_entries(&injection_screen);
+    assert!(
+        conditional.len() > entries.len(),
+        "the file-injection screen must offer MORE rows than the default one — \
+         otherwise this test silently stops checking the conditional entries"
+    );
+    let entries: Vec<&SettingsEntry> = entries.iter().chain(conditional.iter()).collect();
     assert!(
         !entries.is_empty(),
         "all_entries must offer settings; an empty list makes this test vacuous"
@@ -58,7 +75,6 @@ fn every_settings_entry_has_an_applier() {
             unhandled.push(entry.key);
         }
     }
-
     assert!(
         unhandled.is_empty(),
         "settings offered in /settings that apply_and_save silently discards: {unhandled:?} \
@@ -121,6 +137,50 @@ fn apply_and_save_preserves_unrelated_operator_preferences() {
     assert!(
         screen.settings_snapshot.vim_enabled,
         "the snapshot written to settings.json also lost vim mode"
+    );
+}
+
+/// The file-injection rows are only OFFERED when file injection is enabled,
+/// so the screen has a state where an operator edits a setting that
+/// `apply_and_save` does not handle: the value renders, lands in
+/// `pending_changes`, and is silently dropped on save — while the whole
+/// settings.json is rewritten from the snapshot. That is the RT-171 defect
+/// class, and it survived RT-171's own fix because the guard only ever looked
+/// at the DEFAULT screen, where those rows are not offered at all.
+///
+/// This test walks the operator's real path: turn file injection on, then edit
+/// the max size.
+#[test]
+fn the_file_injection_rows_apply_when_file_injection_is_enabled() {
+    let mut screen = SettingsScreen::new();
+    let mut config = AppConfig::default();
+    let mut settings = Settings::default();
+
+    // Step 1: the operator enables file injection.
+    screen
+        .pending_changes
+        .insert("fileInjectionEnabled".to_string(), "true".to_string());
+    screen.apply_and_save(&mut config, &mut settings);
+    assert!(
+        screen.file_injection_enabled,
+        "precondition: file injection is on, so the max-size row is offered"
+    );
+    assert!(
+        all_entries(&screen)
+            .iter()
+            .any(|entry| entry.key == "fileInjectionMaxSize"),
+        "precondition: the screen offers the max-size row in this state"
+    );
+
+    // Step 2: the operator edits the max size.
+    screen
+        .pending_changes
+        .insert("fileInjectionMaxSize".to_string(), "2048".to_string());
+    screen.apply_and_save(&mut config, &mut settings);
+    assert_eq!(
+        settings.config.file_injection_max_size, 2048,
+        "the edited max size was dropped on save — the screen showed the new \
+         value and the settings file kept the old one"
     );
 }
 

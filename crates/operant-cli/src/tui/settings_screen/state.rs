@@ -186,6 +186,18 @@ impl SettingsScreen {
                     settings.config.file_injection_enabled = on;
                     self.file_injection_enabled = on;
                 }
+                "fileInjectionMaxSize" => {
+                    // The row is only OFFERED when file injection is enabled,
+                    // which is why this arm went missing without the guard
+                    // noticing: `apply_and_save` had no case for it, so the
+                    // operator's edit rendered, landed in `pending_changes` and
+                    // was dropped on save (RT-171's defect class, one row
+                    // over).
+                    if let Ok(n) = value.parse::<usize>() {
+                        settings.config.file_injection_max_size = n;
+                        self.file_injection_max_size = value.clone();
+                    }
+                }
                 "auto_compact" => {
                     let on = matches!(value.as_str(), "true" | "on" | "1" | "yes");
                     settings.auto_compact = on;

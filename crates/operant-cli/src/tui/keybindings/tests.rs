@@ -270,6 +270,105 @@ fn global_bindings_should_be_dispatched_in_key_handling() {
     );
 }
 
+/// The MODIFIER half of the same guarantee, which the test above names as a
+/// known limit: it accepts a bare `x` arm for an advertised `Ctrl+X`.
+///
+/// That limit is not theoretical. iter-1758 found `Ctrl+Q → "Quit
+/// application"` in the Global table with NO dispatch arm at all, and the
+/// token check above passed it because `KeyCode::Char('c')` appears elsewhere
+/// in the file — so an operator pressed the chord the help screen promised and
+/// nothing happened. The modifier is half of the binding's identity: a
+/// catalogue entry for `Ctrl+G` is a promise about the CHORD, not about the
+/// letter.
+///
+/// Two arm shapes count as dispatching a modifier:
+///   1. `KeyCode::Char('x') if ... KeyModifiers::CONTROL ...` — the guard names
+///      the modifier on the arm or within the next two lines.
+///   2. `KeyCode::Char(c) if (c == 'x' || c == 'X') && ... CONTROL ...` — the
+///      generic-character arm whose guard names both the character and the
+///      modifier (this is how the Ctrl+C arm is written).
+///
+/// `KeyCode::BackTab` is listed as a known fold: crossterm reports Shift+Tab AS
+/// BackTab, so the modifier is not in the token and cannot be checked here.
+#[test]
+fn global_bindings_should_be_dispatched_with_their_modifier() {
+    let dispatch = include_str!("../app/key_handling.rs");
+    let lines: Vec<&str> = dispatch.lines().collect();
+    let globals = DEFAULT_KEYBINDINGS.get_bindings(BindingContext::Global);
+
+    let mut missing = Vec::new();
+    for binding in globals {
+        let token = format!("KeyCode::{:?}", binding.key);
+        // What modifier this binding promises, if any. A NONE binding has no
+        // modifier to check — the existing token test covers it.
+        let modifier = if binding.modifiers.contains(KeyModifiers::CONTROL) {
+            "CONTROL"
+        } else if binding.modifiers.contains(KeyModifiers::ALT) {
+            "ALT"
+        } else if binding.modifiers.contains(KeyModifiers::SHIFT) {
+            "SHIFT"
+        } else {
+            continue;
+        };
+        // crossterm folds Shift into BackTab; the modifier is not in the token.
+        if token == "KeyCode::BackTab" {
+            continue;
+        }
+
+        let mut handled = false;
+        // The character this binding promises, when it is a character at all —
+        // a generic `KeyCode::Char(c)` arm only dispatches THIS chord if its
+        // guard names THIS character.
+        let promised_char = token
+            .strip_prefix("KeyCode::Char('")
+            .and_then(|rest| rest.strip_suffix("')"))
+            .and_then(|c| c.chars().next());
+        for (index, line) in lines.iter().enumerate() {
+            if line.contains(&token) {
+                // Shape 1: the exact keycode, with the modifier in its guard
+                // (on this line or the guard lines that follow it).
+                let arm = lines[index..(index + 3).min(lines.len())].join("\n");
+                if arm.contains(modifier) {
+                    handled = true;
+                    break;
+                }
+                continue;
+            }
+            // Shape 2: a generic `KeyCode::Char(c)` arm whose guard names the
+            // character AND the modifier (this is how the Ctrl+C arm is
+            // written: `KeyCode::Char(c) if (c == 'c' || c == 'C') && CONTROL`).
+            if line.contains("KeyCode::Char(c)") {
+                let wider = lines[index..(index + 5).min(lines.len())].join("\n");
+                let names_this_char = promised_char.is_some_and(|c| {
+                    wider.contains(&format!("c == '{c}'"))
+                        || wider
+                            .contains(&format!("c == '{c}' || c == '{}'", c.to_ascii_uppercase()))
+                });
+                if wider.contains(modifier) && names_this_char {
+                    handled = true;
+                    break;
+                }
+            }
+        }
+
+        if !handled {
+            missing.push(format!(
+                "{token} + {modifier} ({:?}, described as {:?})",
+                binding.action, binding.description
+            ));
+        }
+    }
+
+    assert!(
+        missing.is_empty(),
+        "these Global bindings are advertised by /keys and /hotkeys with a \
+         MODIFIER, but no arm in tui/app/key_handling.rs dispatches that \
+         chord — a bare-key arm is not the same promise. Pressing the chord \
+         does nothing while the help screen claims otherwise:\n  {}",
+        missing.join("\n  ")
+    );
+}
+
 /// Every `VimNormal` entry in the catalogue must correspond to a string the vim
 /// state machine actually matches on.
 ///
