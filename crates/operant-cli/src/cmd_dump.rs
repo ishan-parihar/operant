@@ -56,7 +56,7 @@ pub async fn handle_dump_command(config: &AppConfig, all: bool, json: bool) -> R
             "database_path": config.database_path.display().to_string(),
             "config_dir": operant_core::platform::operant_config_dir().display().to_string(),
             "data_dir": operant_core::platform::operant_data_dir().display().to_string(),
-            "skills_dir": operant_core::platform::operant_skills_dir().display().to_string(),
+            "skills_dir": config.skills.root_dir.display().to_string(),
             "mcp_servers": config.mcp.servers.len(),
             "gateways": gateways,
         });
@@ -91,10 +91,7 @@ pub async fn handle_dump_command(config: &AppConfig, all: bool, json: bool) -> R
         "Data dir    : {}",
         operant_core::platform::operant_data_dir().display()
     );
-    println!(
-        "Skills dir  : {}",
-        operant_core::platform::operant_skills_dir().display()
-    );
+    println!("Skills dir  : {}", config.skills.root_dir.display());
     println!("MCP servers : {}", config.mcp.servers.len());
     println!(
         "Gateways    : {}",

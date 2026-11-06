@@ -789,7 +789,12 @@ If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
         // a turn failure. Skills lane only — that is the lane that creates
         // the agent-authored skills the curator manages.
         if review_skills {
-            let skills_dir = crate::platform::operant_skills_dir();
+            // The operator's CONFIGURED skills tree — the same one the skills
+            // tools write and the agent reads. The platform default is only
+            // the config's default value: with `[skills] root_dir` set, the
+            // curator used to manage the lifecycle of a tree the operator
+            // does not use (RT-265).
+            let skills_dir = crate::skills::configured_skills_dir();
             tokio::spawn(async move {
                 let curator_dir = skills_dir.join(".curator");
                 let tracker = std::sync::Arc::new(crate::skill_usage::SkillUsageTracker::new(

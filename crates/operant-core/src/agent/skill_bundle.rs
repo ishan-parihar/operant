@@ -347,9 +347,10 @@ pub fn build_bundle_invocation_message(
         }
         seen.insert(identifier.to_string());
 
-        // Try to load the skill content from the skills directory
-        // (config-aware; falls back to the default platform location).
-        let skills_dir = crate::platform::operant_skills_dir();
+        // Try to load the skill content from the operator's configured
+        // skills tree (config-aware; falls back to the default platform
+        // location when the setting is empty).
+        let skills_dir = crate::skills::configured_skills_dir();
         let skill_dir = skills_dir.join(identifier);
         let skill_file = skill_dir.join("SKILL.md");
 
@@ -509,5 +510,87 @@ mod tests {
                 std::env::remove_var("OPERANT_BUNDLES_DIR");
             }
         }
+    }
+
+    /// RT-265: the bundle loader must read the tree the operator CONFIGURED.
+    ///
+    /// It read `platform::operant_skills_dir()` — the platform DEFAULT —
+    /// while the comment above the call claimed "config-aware". With
+    /// `[skills] root_dir` set, every skill in a bundle was looked up in a
+    /// tree the operator does not use: all of them came back "missing" and
+    /// the bundle injected nothing.
+    #[test]
+    fn the_bundle_loader_reads_the_configured_skills_root() {
+        let _guard = bundles_env_lock().lock().unwrap();
+        let old = std::env::var("OPERANT_BUNDLES_DIR").ok();
+        let bundles = std::env::temp_dir().join(format!(
+            "operant_bundle_root_bundles_{}",
+            std::process::id()
+        ));
+        let skills =
+            std::env::temp_dir().join(format!("operant_bundle_root_skills_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&bundles);
+        let _ = std::fs::remove_dir_all(&skills);
+        std::fs::create_dir_all(&bundles).unwrap();
+        std::fs::create_dir_all(skills.join("demo-skill")).unwrap();
+        std::fs::write(
+            skills.join("demo-skill").join("SKILL.md"),
+            "the body of the demo skill",
+        )
+        .unwrap();
+        std::fs::write(
+            bundles.join("demo.yaml"),
+            "name: demo\ndescription: a bundle\nskills:\n  - demo-skill\n",
+        )
+        .unwrap();
+        // SAFETY: env var manipulation in single-threaded test context
+        unsafe {
+            std::env::set_var("OPERANT_BUNDLES_DIR", &bundles);
+        }
+
+        // The runtime config points the skills tree at the temp dir — the
+        // same shape as an operator's `[skills] root_dir`.
+        let previous = crate::config::runtime_config();
+        let mut crafted = crate::config::AppConfig::default();
+        crafted.skills.root_dir = skills.clone();
+
+        let fresh = refresh_skill_bundles();
+        // The runtime config is process-wide, so a parallel test may have
+        // installed its own while this one prepared the fixture. Install ours
+        // immediately before the call: the loader reads the config INSIDE
+        // that call, so the vulnerable window is the call itself, not the
+        // whole fixture setup.
+        crate::config::install_runtime_config(crafted);
+        let resolved = build_bundle_invocation_message("/demo", "");
+
+        // Restore the globals BEFORE asserting: a failing assertion must not
+        // leak a crafted config or an env var into the rest of the suite.
+        crate::config::install_runtime_config(previous);
+        // SAFETY: env var manipulation in single-threaded test context
+        unsafe {
+            if let Some(v) = old {
+                std::env::set_var("OPERANT_BUNDLES_DIR", v);
+            } else {
+                std::env::remove_var("OPERANT_BUNDLES_DIR");
+            }
+        }
+        let _ = std::fs::remove_dir_all(&bundles);
+        let _ = std::fs::remove_dir_all(&skills);
+
+        assert!(
+            fresh.contains_key("/demo"),
+            "the bundle file must be scanned: {:?}",
+            fresh.keys().collect::<Vec<_>>()
+        );
+        let (message, loaded, missing) = resolved.expect("the bundle must resolve");
+        assert!(
+            missing.is_empty(),
+            "the CONFIGURED skills tree must hold the bundle's skill: {missing:?}"
+        );
+        assert_eq!(loaded, vec!["demo-skill".to_string()]);
+        assert!(
+            message.contains("the body of the demo skill"),
+            "the bundle must inject the skill's body: {message}"
+        );
     }
 }

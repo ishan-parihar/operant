@@ -119,11 +119,10 @@ pub async fn handle_status_command(config: &AppConfig, deep: bool, json: bool) -
                 .display()
                 .to_string()
         );
-        status["skills_dir"] = json!(
-            operant_core::platform::operant_skills_dir()
-                .display()
-                .to_string()
-        );
+        // The operator's CONFIGURED skills tree (RT-264): the platform
+        // default is only the default of `[skills] root_dir`.
+        let skills_dir = &config.skills.root_dir;
+        status["skills_dir"] = json!(skills_dir.display().to_string());
         // (iter-1744, RSI plan iter-C) the self-improvement readout: how
         // many harness lessons the store carries and where the curator's
         // lifecycle stands. Both best-effort — a miss reads as zero/absent,
@@ -133,13 +132,10 @@ pub async fn handle_status_command(config: &AppConfig, deep: bool, json: bool) -
         )
         .map(|p| p.count_tagged(operant_core::memory_wire::HARNESS_LESSON_TAG))
         .unwrap_or(0);
-        let curator_state_path = operant_core::platform::operant_skills_dir()
-            .join(".curator")
-            .join("state.json");
-        let curator_archived =
-            std::fs::read_dir(operant_core::platform::operant_skills_dir().join(".archive"))
-                .map(|entries| entries.filter_map(Result::ok).count())
-                .unwrap_or(0);
+        let curator_state_path = skills_dir.join(".curator").join("state.json");
+        let curator_archived = std::fs::read_dir(skills_dir.join(".archive"))
+            .map(|entries| entries.filter_map(Result::ok).count())
+            .unwrap_or(0);
         let curator_last_run = std::fs::read_to_string(&curator_state_path)
             .ok()
             .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())

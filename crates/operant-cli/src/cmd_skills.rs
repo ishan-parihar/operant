@@ -362,7 +362,7 @@ fn copy_dir(src: &Path, dst: &Path) -> Result<()> {
 // Marketplace handlers (iter-133)
 // ---------------------------------------------------------------------------
 
-async fn handle_market_command(_config: &AppConfig, cmd: MarketCommand) -> Result<()> {
+async fn handle_market_command(config: &AppConfig, cmd: MarketCommand) -> Result<()> {
     let marketplace = operant_core::skill_marketplace::SkillMarketplace::new();
     match cmd {
         MarketCommand::Search { query } => {
@@ -382,7 +382,11 @@ async fn handle_market_command(_config: &AppConfig, cmd: MarketCommand) -> Resul
             }
         }
         MarketCommand::Install { name, force } => {
-            let skills_dir = operant_core::platform::operant_skills_dir();
+            // The operator's CONFIGURED skills tree: the platform default is
+            // only the default of `[skills] root_dir`, and installing into
+            // the default wrote the skill where the agent never looks
+            // (RT-264).
+            let skills_dir = config.skills.root_dir.clone();
             match marketplace.install(&name, &skills_dir, force).await {
                 Ok(path) => println!(
                     "{} Installed '{}' to {}",
@@ -414,8 +418,8 @@ async fn handle_market_command(_config: &AppConfig, cmd: MarketCommand) -> Resul
             );
         }
         MarketCommand::Updates => {
-            let skills_dir = operant_core::platform::operant_skills_dir();
-            let mut mgr = SkillManager::new(skills_dir);
+            // The configured tree, for the same reason as the install path.
+            let mut mgr = SkillManager::new(config.skills.root_dir.clone());
             let installed = mgr.load_all().unwrap_or_default();
             if installed.is_empty() {
                 println!("No installed skills to check.");

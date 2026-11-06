@@ -67,6 +67,31 @@ pub struct Skill {
     pub origin: SkillOrigin,
 }
 
+/// The skills tree the operator configured (RT-265).
+///
+/// `[skills] root_dir` is the operator's setting; the platform default is
+/// only its DEFAULT value. A caller that reaches for
+/// [`crate::platform::operant_skills_dir`] directly ignores an operator's
+/// setting and reads — or writes — a tree the agent never uses.
+///
+/// Seven callers did exactly that: the curator's auto-run archived the
+/// lifecycle of skills IN ANOTHER TREE, the skill-bundle loader reported
+/// every skill in a bundle as "missing", `skill marketplace install` wrote
+/// the skill where the agent never looks, and the status/dump panels
+/// displayed a directory nobody configured.
+///
+/// Empty means "unset": fall back to the platform default (also what a fresh
+/// config resolves to) — the same rule the kernel tool's config-aware branch
+/// has always applied.
+pub fn configured_skills_dir() -> PathBuf {
+    let root = crate::config::runtime_config().skills.root_dir;
+    if root.as_os_str().is_empty() {
+        crate::platform::operant_skills_dir()
+    } else {
+        root
+    }
+}
+
 /// Manages skill discovery, loading, and lifecycle.
 pub struct SkillManager {
     /// Root directory containing skill subdirectories
