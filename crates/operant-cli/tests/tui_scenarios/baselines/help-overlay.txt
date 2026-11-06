@@ -2,39 +2,39 @@
 │                                                                                                                      │
 │  Commands                                                                                                            │
 │                                                                                                                      │
-│    /help  Show this help overlay                                                                                     │
-│    /help <command>  Show details for one command                                                                     │
+│    /help  Show help and keyboard shortcuts (/help <text> filters)                                                    │
+│    /help <text>  Show the overlay filtered on the term                                                               │
 │    /model  List or switch models                                                                                     │
-│    /model <name>  Switch to a different model                                                                        │
 │    /agents  Configure models for agent roles                                                                         │
-│    /effort <level>  Set effort (none|minimal|low|medium|high|xhigh|max|swarm|swarm-deep)                             │
-│    /config  Show active configuration                                                                                │
-│    /config init  Create default config file                                                                          │
-│    /config edit  Open config in $EDITOR                                                                              │
+│    /effort  Pick the reasoning effort (low | normal | high | max)                                                    │
+│    /config  Open the settings screen                                                                                 │
 │    /context  Show the full session context snapshot                                                                  │
 │    /skills  Show loaded skills and operant-endorsed recommendations                                                  │
-│    /info  Show session info and token usage                                                                          │
-│    /keys  Show keybinding conflicts with your terminal/OS                                                            │
+│    /info  Show session info and tokens                                                                               │
+│    /keys  Show keybinding conflicts with your terminal and OS                                                        │
 │    /stats  Show session token and cost stats                                                                         │
-│    /version  Show version and build details                                                                          │
+│    /version  Show current version                                                                                    │
 │    /changelog  Show recent changes in this build                                                                     │
 │                                                                                                                      │
 │  ─────────────────────────────────────────────────                                                                   │
 │                                                                                                                      │
 │  Session                                                                                                             │
 │                                                                                                                      │
-│    /clear  Clear conversation and start fresh                                                                        │
-│    /compact  Summarize old messages to free context                                                                  │
-│    /rewind  Show numbered history, /rewind N to rewind                                                               │
-│    /fix  Attempt recovery when model cannot continue                                                                 │
-│    /plan [goal]  Draft a plan-only proposal as a plan card (no edits)                                                │
-│    /improve  Autonomously improve the repo until returns diminish                                                    │
-│    /improve resume  Resume the last saved improve loop/plan                                                          │
-│    /refactor  Run a safe refactor loop with independent review                                                       │
-│    /refactor resume  Resume the last saved refactor loop/plan                                                        │
-│    /resume  Browse and resume previous sessions                                                                      │
-│    /save [label]  Bookmark session for /resume                                                                       │
-│    /rename <name>|--clear  Set or clear current session name                                                         │
+│    /clear  Clear conversation history                                                                                │
+│    /compact  Compact context                                                                                         │
+│    /rewind  Rewind to the Nth-last prompt (forks the session; old path kept): /rewind [N]                            │
+│    /fix  Recover when the model cannot continue                                                                      │
+│    /plan  Toggle plan mode (read-only: gated tools are denied)                                                       │
+│    /improve  Autonomously improve the repository                                                                     │
+│    /refactor  Run a safe refactor loop                                                                               │
+│    /resume  Open the session hub (browse and resume sessions)                                                        │
+│    /save  Export the conversation to a file (same as /export)                                                        │
+│    /rename  Rename current session                                                                                   │
+│    /rename <name>  Set the current session name                                                                      │
 │                                                                                                                      │
 │  ─────────────────────────────────────────────────                                                                   │
+│                                                                                                                      │
+│  Memory & Swarm                                                                                                      │
+│                                                                                                                      │
+│    /memory  Memory-wire status; /memory <cmd> runs a memory subcommand                                               │
 └ Esc to close · mouse wheel/j/k scroll · Space/PageUp page · /help <cmd> for details ─────────────────────────────────┘

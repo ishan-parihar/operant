@@ -170,6 +170,24 @@ pub(super) fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: usize, ap
         ])
     };
 
+    // (iter-1786) A registered command's line reads its description from
+    // the REGISTRY — the one catalogue. The hand-written copies here were a
+    // SECOND table, and they drifted: `/save` promised a bookmark and opens
+    // the export dialog, `/reload` promised a binary update and reloads
+    // settings from disk, `/effort` listed nine levels the picker has never
+    // shown, `/plan` promised a plan card and toggles a read-only mode.
+    // (iter-1766 fixed four rows in the TABLE and this section kept the old
+    // text — the same defect, one copy further down.)
+    //
+    // A row whose NAME names an argument form is not a registered command,
+    // so its description stays hand-written — and only the forms the
+    // commands actually honour are listed (iter-1786).
+    let command_entry = |cmd: &str| -> Line<'static> {
+        let desc = crate::tui::operant_app::app::registered_command_help(cmd)
+            .unwrap_or("(no description — not a registered command)");
+        help_entry(cmd, desc)
+    };
+
     let _alt = crate::tui::operant_app::keybind::alt_chord;
     let key_entry = |key: &str, desc: &str| -> Line<'static> {
         Line::from(vec![
@@ -183,40 +201,22 @@ pub(super) fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: usize, ap
 
     lines.push(Line::from(Span::styled("  Commands", section_style)));
     lines.push(Line::from(""));
-    lines.push(help_entry("/help", "Show this help overlay"));
+    lines.push(command_entry("/help"));
     lines.push(help_entry(
-        "/help <command>",
-        "Show details for one command",
+        "/help <text>",
+        "Show the overlay filtered on the term",
     ));
-    lines.push(help_entry("/model", "List or switch models"));
-    lines.push(help_entry("/model <name>", "Switch to a different model"));
-    lines.push(help_entry("/agents", "Configure models for agent roles"));
-    lines.push(help_entry(
-        "/effort <level>",
-        "Set effort (none|minimal|low|medium|high|xhigh|max|swarm|swarm-deep)",
-    ));
-    lines.push(help_entry("/config", "Show active configuration"));
-    lines.push(help_entry("/config init", "Create default config file"));
-    lines.push(help_entry("/config edit", "Open config in $EDITOR"));
-    lines.push(help_entry(
-        "/context",
-        "Show the full session context snapshot",
-    ));
-    lines.push(help_entry(
-        "/skills",
-        "Show loaded skills and operant-endorsed recommendations",
-    ));
-    lines.push(help_entry("/info", "Show session info and token usage"));
-    lines.push(help_entry(
-        "/keys",
-        "Show keybinding conflicts with your terminal/OS",
-    ));
-    lines.push(help_entry("/stats", "Show session token and cost stats"));
-    lines.push(help_entry("/version", "Show version and build details"));
-    lines.push(help_entry(
-        "/changelog",
-        "Show recent changes in this build",
-    ));
+    lines.push(command_entry("/model"));
+    lines.push(command_entry("/agents"));
+    lines.push(command_entry("/effort"));
+    lines.push(command_entry("/config"));
+    lines.push(command_entry("/context"));
+    lines.push(command_entry("/skills"));
+    lines.push(command_entry("/info"));
+    lines.push(command_entry("/keys"));
+    lines.push(command_entry("/stats"));
+    lines.push(command_entry("/version"));
+    lines.push(command_entry("/changelog"));
 
     lines.push(Line::from(""));
     lines.push(separator());
@@ -224,45 +224,20 @@ pub(super) fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: usize, ap
 
     lines.push(Line::from(Span::styled("  Session", section_style)));
     lines.push(Line::from(""));
-    lines.push(help_entry("/clear", "Clear conversation and start fresh"));
-    lines.push(help_entry(
-        "/compact",
-        "Summarize old messages to free context",
-    ));
-    lines.push(help_entry(
-        "/rewind",
-        "Show numbered history, /rewind N to rewind",
-    ));
-    lines.push(help_entry(
-        "/fix",
-        "Attempt recovery when model cannot continue",
-    ));
-    lines.push(help_entry(
-        "/plan [goal]",
-        "Draft a plan-only proposal as a plan card (no edits)",
-    ));
-    lines.push(help_entry(
-        "/improve",
-        "Autonomously improve the repo until returns diminish",
-    ));
-    lines.push(help_entry(
-        "/improve resume",
-        "Resume the last saved improve loop/plan",
-    ));
-    lines.push(help_entry(
-        "/refactor",
-        "Run a safe refactor loop with independent review",
-    ));
-    lines.push(help_entry(
-        "/refactor resume",
-        "Resume the last saved refactor loop/plan",
-    ));
-    lines.push(help_entry("/resume", "Browse and resume previous sessions"));
-    lines.push(help_entry("/save [label]", "Bookmark session for /resume"));
-    lines.push(help_entry(
-        "/rename <name>|--clear",
-        "Set or clear current session name",
-    ));
+    lines.push(command_entry("/clear"));
+    lines.push(command_entry("/compact"));
+    lines.push(command_entry("/rewind"));
+    lines.push(command_entry("/fix"));
+    lines.push(command_entry("/plan"));
+    lines.push(command_entry("/improve"));
+    lines.push(command_entry("/refactor"));
+    lines.push(command_entry("/resume"));
+    lines.push(command_entry("/save"));
+    lines.push(command_entry("/rename"));
+    // `/rename --clear` was advertised and does not exist: the arm takes any
+    // non-empty argument as the new TITLE, so `/rename --clear` renames the
+    // session to the literal string "--clear". (iter-1786)
+    lines.push(help_entry("/rename <name>", "Set the current session name"));
 
     lines.push(Line::from(""));
     lines.push(separator());
@@ -270,10 +245,7 @@ pub(super) fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: usize, ap
 
     lines.push(Line::from(Span::styled("  Memory & Swarm", section_style)));
     lines.push(Line::from(""));
-    lines.push(help_entry(
-        "/memory",
-        "Memory-wire status; /memory <cmd> runs a memory subcommand",
-    ));
+    lines.push(command_entry("/memory"));
     lines.push(help_entry(
         "/memory <cmd>",
         "Run a memory subcommand (list|get|search|store|delete|stats|import|export|clear)",
@@ -285,11 +257,8 @@ pub(super) fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: usize, ap
 
     lines.push(Line::from(Span::styled("  Auth & Accounts", section_style)));
     lines.push(Line::from(""));
-    lines.push(help_entry("/auth", "Show authentication status"));
-    lines.push(help_entry(
-        "/login [provider]",
-        "Interactive or direct login",
-    ));
+    lines.push(command_entry("/auth"));
+    lines.push(command_entry("/login"));
 
     lines.push(Line::from(""));
     lines.push(separator());
@@ -297,14 +266,15 @@ pub(super) fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: usize, ap
 
     lines.push(Line::from(Span::styled("  System", section_style)));
     lines.push(Line::from(""));
-    lines.push(help_entry("/reload", "Reload to newer binary if available"));
+    lines.push(command_entry("/reload"));
     if app.is_remote_mode() {
-        lines.push(help_entry(
-            "/continue",
-            "Continue every interrupted live session that would auto-resume",
-        ));
+        // A bridge session forwards these to the far side; the registry
+        // carries their description.
+        for (name, desc) in crate::tui::operant_app::app::remote_only_command_rows() {
+            lines.push(help_entry(name, desc));
+        }
     }
-    lines.push(help_entry("/quit", "Exit operant"));
+    lines.push(command_entry("/quit"));
 
     // The sections above are hand-curated for ordering, but they drift as
     // commands are added. Anything registered and not already shown gets listed
@@ -319,9 +289,24 @@ pub(super) fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: usize, ap
                 .to_string()
         })
         .collect();
-    let uncovered: Vec<(&str, &str)> = crate::tui::operant_app::app::registered_command_entries()
-        .filter(|(name, _)| !shown.contains(*name))
-        .collect();
+    let uncovered: Vec<(&str, &str)> = {
+        // (iter-1786) The sweep used `registered_command_entries` — which
+        // INCLUDES the remote-only rows — so a LOCAL session's /help listed
+        // `/continue` and `/resumeall`, whose answer here is "registered but
+        // not wired in operant yet". The typeahead filters the same rows
+        // out; the help overlay now agrees with it: a local session lists
+        // local rows, and a remote session lists them all (the System
+        // section above already renders the remote rows in remote mode).
+        let registered: Vec<(&str, &str)> = if app.is_remote_mode() {
+            crate::tui::operant_app::app::registered_command_entries().collect()
+        } else {
+            crate::tui::operant_app::app::locally_visible_command_rows().collect()
+        };
+        registered
+            .into_iter()
+            .filter(|(name, _)| !shown.contains(*name))
+            .collect()
+    };
     if !uncovered.is_empty() {
         lines.push(Line::from(""));
         lines.push(separator());
@@ -616,6 +601,105 @@ mod tests {
 
     fn row(text: &'static str) -> Line<'static> {
         Line::from(text.to_string())
+    }
+
+    /// An App for the render guard. `App::new` writes the process-global
+    /// palette, so it takes the shared lock the other render tests take.
+    fn make_app() -> crate::tui::app::App {
+        let _guard = crate::tui::theme_colors::tests::ACTIVE_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let config = operant_core::config::AppConfig::default();
+        let settings = crate::tui::adapter_types::config::Settings::default();
+        let cost_tracker = std::sync::Arc::new(crate::tui::adapter_types::cost::CostTracker::new());
+        let command_registry = crate::commands::CommandRegistry::new();
+        crate::tui::app::App::new(config, settings, cost_tracker, command_registry)
+    }
+
+    /// The rendered `/help` overlay as text. The terminal is tall enough to
+    /// hold the WHOLE catalogue (the curated sections, the sweep and the two
+    /// generated key sections), because the guard is about every row.
+    fn rendered_help_text(app: &crate::tui::app::App) -> String {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        let mut terminal = Terminal::new(TestBackend::new(220, 400)).expect("terminal");
+        terminal
+            .draw(|frame| draw_help_overlay(frame, frame.area(), 0, app))
+            .expect("draw");
+        crate::tui::debug::debug_hub::buffer_rows(terminal.backend().buffer()).join("\n")
+    }
+
+    /// (iter-1786) The overlay's command rows read their descriptions from
+    /// the registry, and the registry is the ONE catalogue: every local
+    /// command's row must carry the table's own description, or the overlay
+    /// has drifted from the table again (iter-1766 fixed four rows in the
+    /// TABLE while this section kept the old text — the same defect, one
+    /// copy further down).
+    #[test]
+    fn every_local_command_shows_its_registry_description_in_the_overlay() {
+        let app = make_app();
+        let text = rendered_help_text(&app);
+        for (name, desc) in crate::tui::operant_app::app::locally_visible_command_rows() {
+            let row = format!("{name}  {desc}");
+            assert!(
+                text.contains(&row),
+                "the /help overlay must show {row:?} — the registry is the one catalogue"
+            );
+        }
+        assert!(
+            !text.contains("not a registered command"),
+            "a curated row names a command the registry does not have"
+        );
+    }
+
+    /// (iter-1786) The remote-only rows dispatch on the OTHER side of a
+    /// bridge session. A local `/help` listed them anyway, so an operator
+    /// who typed `/continue` got "registered but not wired in operant yet" —
+    /// while the typeahead, which filters the same rows out, did not offer
+    /// them.
+    #[test]
+    fn a_local_help_overlay_does_not_list_the_remote_only_commands() {
+        let app = make_app();
+        let text = rendered_help_text(&app);
+        for (name, _) in crate::tui::operant_app::app::remote_only_command_rows() {
+            assert!(
+                !text.contains(name),
+                "{name} forwards to the far side of a bridge session — a local /help \
+                 must not advertise a command that answers \"not wired\" here"
+            );
+        }
+    }
+
+    /// (iter-1786) The argument forms the overlay used to advertise — the
+    /// ones no arm reads. `/rename --clear` renamed the session to the
+    /// literal string "--clear"; `/save [label]` opened the export dialog
+    /// with the label ignored; `/model <name>`, `/effort <level>`,
+    /// `/config init`, `/config edit`, `/plan [goal]`, `/improve resume` and
+    /// `/refactor resume` were all ignored by their arms.
+    #[test]
+    fn the_overlay_no_longer_advertises_argument_forms_the_commands_ignore() {
+        let app = make_app();
+        let text = rendered_help_text(&app);
+        for gone in [
+            "/model <name>",
+            "/effort <level>",
+            "/config init",
+            "/config edit",
+            "/plan [goal]",
+            "/improve resume",
+            "/refactor resume",
+            "/save [label]",
+            "/rename <name>|--clear",
+            "/login [provider]",
+            "/help <command>",
+            "/memory [on|off]",
+        ] {
+            assert!(
+                !text.contains(gone),
+                "{gone} is advertised but no arm reads that argument — /help must \
+                 not promise a form the command ignores"
+            );
+        }
     }
 
     #[test]

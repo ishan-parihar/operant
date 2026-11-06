@@ -246,7 +246,14 @@ const REGISTERED_COMMANDS: &[RegisteredCommand] = &[
         "/rewind",
         "Rewind to the Nth-last prompt (forks the session; old path kept): /rewind [N]",
     ),
-    RegisteredCommand::public("/plan", "Create a plan-only response as a plan card"),
+    // (iter-1786) The arm TOGGLES plan mode — a read-only permission mode
+    // (gated tools are denied). It does not draft anything, and the plan
+    // CARD is a rendering of a ```plan block the model happened to emit,
+    // not something this command produces.
+    RegisteredCommand::public(
+        "/plan",
+        "Toggle plan mode (read-only: gated tools are denied)",
+    ),
     RegisteredCommand::public("/improve", "Autonomously improve the repository"),
     RegisteredCommand::public("/refactor", "Run a safe refactor loop"),
     RegisteredCommand::public("/compact", "Compact context"),
@@ -276,7 +283,9 @@ const REGISTERED_COMMANDS: &[RegisteredCommand] = &[
     // hidden alias instead of advertising "usage limits" it never shows.
     RegisteredCommand::public("/stats", "Show session token and cost stats"),
     RegisteredCommand::hidden("/usage", "Alias for /stats"),
-    RegisteredCommand::public("/config", "Show or edit configuration"),
+    // (iter-1786) The arm opens the TUI SETTINGS SCREEN; it does not show
+    // a configuration dump.
+    RegisteredCommand::public("/config", "Open the settings screen"),
     RegisteredCommand::public(
         "/keys",
         "Show keybinding conflicts with your terminal and OS",
@@ -284,7 +293,12 @@ const REGISTERED_COMMANDS: &[RegisteredCommand] = &[
     RegisteredCommand::public("/diff", "Open the git diff viewer"),
     RegisteredCommand::public("/reload", "Reload settings from disk"),
     RegisteredCommand::public("/update", "Show how to update operant (does not update it)"),
-    RegisteredCommand::public("/resume", "Open session picker"),
+    // (iter-1786) The arm opens the session HUB (iter-2026-10-28-B
+    // replaced the old browser modal), not a picker.
+    RegisteredCommand::public(
+        "/resume",
+        "Open the session hub (browse and resume sessions)",
+    ),
     RegisteredCommand::public("/sessions", "Alias for /resume"),
     RegisteredCommand::public("/session", "Alias for /resume"),
     // (iter-1766) `/save` opens the EXPORT dialog (the operator wants the
@@ -298,7 +312,9 @@ const REGISTERED_COMMANDS: &[RegisteredCommand] = &[
     RegisteredCommand::public("/rename", "Rename current session"),
     RegisteredCommand::public("/quit", "Exit operant"),
     RegisteredCommand::public("/auth", "Show authentication status"),
-    RegisteredCommand::public("/login", "Login to a provider"),
+    // (iter-1786) The arm runs `operant setup provider` — the setup
+    // WIZARD — in the terminal the TUI returns to.
+    RegisteredCommand::public("/login", "Run the provider setup wizard (log in)"),
     // (iter-1766) The TUI holds no credential material — the keys live in
     // `~/.operant/.env` — so `/logout` says where they are and routes to
     // `/login`. The description promised a logout that does not happen.
@@ -411,6 +427,39 @@ pub(crate) fn registered_command_entries() -> impl Iterator<Item = (&'static str
     REGISTERED_COMMANDS
         .iter()
         .filter(|command| !command.hidden)
+        .map(|command| (command.name, command.help))
+}
+
+/// The ONE table's description for ONE command name — the `/help` overlay
+/// reads its rows from here, so a hand-written copy of a description cannot
+/// drift from the catalogue (iter-1786). An EXACT name only: a row that
+/// names an argument form (`/effort <level>`) is not a registered command.
+pub(crate) fn registered_command_help(name: &str) -> Option<&'static str> {
+    REGISTERED_COMMANDS
+        .iter()
+        .find(|command| command.name == name && !command.hidden)
+        .map(|command| command.help)
+}
+
+/// The rows the `/help` overlay lists in a LOCAL session: every non-hidden
+/// command this session can actually run. The remote-only rows (`/continue`,
+/// `/resumeall`) dispatch on the OTHER side of a bridge session, so listing
+/// them locally advertised commands whose answer here is "registered but not
+/// wired in operant yet" — while the typeahead, which filters the same rows
+/// out, did not (iter-1786).
+pub(crate) fn locally_visible_command_rows() -> impl Iterator<Item = (&'static str, &'static str)> {
+    REGISTERED_COMMANDS
+        .iter()
+        .filter(|command| !command.hidden && !command.remote_only)
+        .map(|command| (command.name, command.help))
+}
+
+/// The remote-only rows — the commands a bridge session forwards to the far
+/// side. The `/help` overlay lists them ONLY in a remote session.
+pub(crate) fn remote_only_command_rows() -> impl Iterator<Item = (&'static str, &'static str)> {
+    REGISTERED_COMMANDS
+        .iter()
+        .filter(|command| command.remote_only)
         .map(|command| (command.name, command.help))
 }
 

@@ -2,23 +2,23 @@
 │                                                                              │
 │  Commands                                                                    │
 │                                                                              │
-│    /help  Show this help overlay                                             │
-│    /help <command>  Show details for one command                             │
+│    /help  Show help and keyboard shortcuts (/help <text> filters)            │
+│    /help <text>  Show the overlay filtered on the term                       │
 │    /model  List or switch models                                             │
-│    /model <name>  Switch to a different model                                │
 │    /agents  Configure models for agent roles                                 │
-│    /effort <level>  Set effort (none|minimal|low|medium|high|xhigh|max|swarm|│
-│    /config  Show active configuration                                        │
-│    /config init  Create default config file                                  │
-│    /config edit  Open config in $EDITOR                                      │
+│    /effort  Pick the reasoning effort (low | normal | high | max)            │
+│    /config  Open the settings screen                                         │
 │    /context  Show the full session context snapshot                          │
 │    /skills  Show loaded skills and operant-endorsed recommendations          │
-│    /info  Show session info and token usage                                  │
-│    /keys  Show keybinding conflicts with your terminal/OS                    │
+│    /info  Show session info and tokens                                       │
+│    /keys  Show keybinding conflicts with your terminal and OS                │
 │    /stats  Show session token and cost stats                                 │
-│    /version  Show version and build details                                  │
+│    /version  Show current version                                            │
 │    /changelog  Show recent changes in this build                             │
 │                                                                              │
 │  ─────────────────────────────────────────────────                           │
 │                                                                              │
+│  Session                                                                     │
+│                                                                              │
+│    /clear  Clear conversation history                                        │
 └ Esc to close · mouse wheel/j/k scroll · Space/PageUp page · /help <cmd> for d┘

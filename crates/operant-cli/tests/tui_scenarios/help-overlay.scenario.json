@@ -35,7 +35,7 @@
     "any_modal_open == true"
   ],
   "assert_screen": [
-    "contains:Show this help overlay",
+    "contains:Show help and keyboard shortcuts",
     "contains:Esc to close"
   ],
   "baseline": "help-overlay.txt",
