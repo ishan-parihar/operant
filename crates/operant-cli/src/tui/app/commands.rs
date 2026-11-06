@@ -1979,6 +1979,23 @@ impl App {
             || self.context_menu_state.is_some()
     }
 
+    /// Is any overlay in the catalogue open?
+    ///
+    /// The same question `any_modal_open()` answers, minus the two extras
+    /// that are not overlays: the context menu is a popup over the
+    /// transcript (the transcript may still scroll under it) and `show_help`
+    /// is the legacy twin of the `/help` overlay, which the catalogue
+    /// already carries.
+    ///
+    /// This is the PAINT gate rather than the INPUT gate, and it exists
+    /// because a second, hand-written list of overlays used to answer the
+    /// mouse's question — ten entries against the catalogue's 29, so
+    /// nineteen panels let the wheel through to the transcript behind them
+    /// (iter-1798).
+    pub(crate) fn any_overlay_open(&self) -> bool {
+        self.overlay_flags().iter().any(|(_, v)| *v)
+    }
+
     pub(super) fn dismiss_error_notifications(&mut self) {
         // P4-2: errors are inline transcript cards now — nothing to
         // dismiss; the modal and its scroll state are gone. Kept as a

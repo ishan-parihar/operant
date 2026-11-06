@@ -2905,6 +2905,169 @@ fn test_right_click_targets_row_message_instead_of_last_message() {
     ));
 }
 
+/// (iter-1798) The wheel must never scroll the transcript BEHIND an open
+/// overlay.
+///
+/// The mouse's overlay gate was a hand-written list of TEN overlays while the
+/// catalogue (`overlay_flags()`) has 29, so the nineteen the gate forgot let
+/// the wheel fall through to the transcript — behind the panel, where the
+/// operator cannot see it. The panel looked frozen, and the transcript had
+/// moved when the panel closed.
+///
+/// This table drives EVERY overlay in the catalogue, so a panel cannot fall
+/// through the gate by being forgotten in a second list: the gate reads the
+/// catalogue.
+#[test]
+fn the_wheel_never_scrolls_the_transcript_behind_an_open_overlay() {
+    let openers: Vec<(&str, fn(&mut App))> = vec![
+        ("help_overlay", |app| app.help_overlay.visible = true),
+        ("history_search_overlay", |app| {
+            app.history_search_overlay.visible = true
+        }),
+        ("global_search", |app| app.global_search.visible = true),
+        ("rewind_selector", |app| app.rewind_selector.visible = true),
+        ("settings_screen", |app| app.settings_screen.visible = true),
+        ("theme_screen", |app| app.theme_screen.visible = true),
+        ("stats_dialog", |app| app.stats_dialog.visible = true),
+        ("mcp_view", |app| app.mcp_view.visible = true),
+        ("agents_menu", |app| app.agents_menu.visible = true),
+        ("diff_viewer", |app| app.diff_viewer.visible = true),
+        ("memory_file_selector", |app| {
+            app.memory_file_selector.visible = true
+        }),
+        ("skills_view", |app| app.skills_view.visible = true),
+        ("plugins_hub", |app| app.plugins_hub.visible = true),
+        ("journey_view", |app| app.journey_view.visible = true),
+        ("session_hub", |app| app.session_hub.visible = true),
+        ("export_dialog", |app| app.export_dialog.visible = true),
+        ("context_viz", |app| app.context_viz.visible = true),
+        ("bypass_permissions_dialog", |app| {
+            app.bypass_permissions_dialog.visible = true
+        }),
+        ("permissions_picker", |app| {
+            app.permissions_picker.visible = true
+        }),
+        ("key_input_dialog", |app| {
+            app.key_input_dialog.visible = true
+        }),
+        ("custom_provider_dialog", |app| {
+            app.custom_provider_dialog.visible = true
+        }),
+        ("free_mode_dialog", |app| {
+            app.free_mode_dialog.visible = true
+        }),
+        ("connect_dialog", |app| app.connect_dialog.visible = true),
+        ("import_config_picker", |app| {
+            app.import_config_picker.visible = true
+        }),
+        ("import_config_dialog", |app| {
+            app.import_config_dialog.visible = true
+        }),
+        ("command_palette", |app| app.command_palette.visible = true),
+        ("ask_user_dialog", |app| app.ask_user_dialog.visible = true),
+    ];
+
+    for (name, open) in openers {
+        let mut app = make_app();
+        open(&mut app);
+        assert!(
+            app.any_overlay_open(),
+            "{name} is open but the catalogue does not see it"
+        );
+        app.scroll_offset = 10;
+        app.auto_scroll = false;
+
+        app.handle_mouse_event(MouseEvent {
+            kind: MouseEventKind::ScrollUp,
+            column: 10,
+            row: 5,
+            modifiers: KeyModifiers::empty(),
+        });
+
+        assert_eq!(
+            app.scroll_offset, 10,
+            "the wheel must not scroll the transcript behind the {name} panel"
+        );
+    }
+}
+
+/// The two overlays the catalogue tracks as `Option`s rather than a
+/// `.visible` flag: the inline picker and the permission request. They are
+/// panels too, so the wheel must not scroll the transcript behind them.
+#[test]
+fn the_wheel_never_scrolls_the_transcript_behind_an_option_shaped_overlay() {
+    use crate::tui::dialogs::PermissionRequest;
+    use crate::tui::operant_app::tui_fns::{InlineInteractiveState, PickerKind};
+
+    let mut app = make_app();
+    app.inline_interactive = Some(InlineInteractiveState {
+        kind: PickerKind::Model,
+        entries: Vec::new(),
+        filtered: Vec::new(),
+        selected: 0,
+        column: 0,
+        filter: String::new(),
+        loading: false,
+        preview: false,
+    });
+    app.scroll_offset = 10;
+    app.auto_scroll = false;
+    app.handle_mouse_event(MouseEvent {
+        kind: MouseEventKind::ScrollUp,
+        column: 10,
+        row: 5,
+        modifiers: KeyModifiers::empty(),
+    });
+    assert_eq!(
+        app.scroll_offset, 10,
+        "the wheel must not scroll the transcript behind the inline picker"
+    );
+
+    let mut app = make_app();
+    app.permission_request = Some(PermissionRequest::bash(
+        "Bash".to_string(),
+        "This will execute a shell command.".to_string(),
+        "git status".to_string(),
+        None,
+    ));
+    app.scroll_offset = 10;
+    app.auto_scroll = false;
+    app.handle_mouse_event(MouseEvent {
+        kind: MouseEventKind::ScrollUp,
+        column: 10,
+        row: 5,
+        modifiers: KeyModifiers::empty(),
+    });
+    assert_eq!(
+        app.scroll_offset, 10,
+        "the wheel must not scroll the transcript behind the permission request"
+    );
+}
+
+/// The control for the two tests above: with NO overlay open, the wheel still
+/// scrolls the transcript. Without this, "the wheel does nothing" would pass
+/// them.
+#[test]
+fn the_wheel_scrolls_the_transcript_when_no_overlay_is_open() {
+    let mut app = make_app();
+    assert!(!app.any_overlay_open());
+    app.scroll_offset = 10;
+    app.auto_scroll = false;
+
+    app.handle_mouse_event(MouseEvent {
+        kind: MouseEventKind::ScrollUp,
+        column: 10,
+        row: 5,
+        modifiers: KeyModifiers::empty(),
+    });
+
+    assert!(
+        app.scroll_offset < 10,
+        "the wheel must still scroll the transcript when nothing is open: {}",
+        app.scroll_offset
+    );
+}
+
 // ---- Help overlay -------------------------------------------------------
 
 #[test]

@@ -853,6 +853,48 @@ impl App {
     )]
     /// Detect if a click is a double-click based on timing and position.
     /// Returns true if the click is within ~500ms and ~5px of the last click.
+    /// The wheel belongs to the OPEN PANEL — never to the transcript behind
+    /// it.
+    ///
+    /// (iter-1798) The wheel used to fall through to the TRANSCRIPT unless
+    /// the open panel was one of the ten in the hand-written gate above, so
+    /// the nineteen panels the gate forgot — the MCP view, the skills view,
+    /// the journey view, the plugins hub, the agents menu, the diff viewer,
+    /// the theme screen, the permission picker, the ask-user dialog, the
+    /// permission request … — scrolled the transcript BEHIND themselves,
+    /// where the operator cannot see it: the panel looked frozen, and the
+    /// transcript had moved when the panel closed.
+    ///
+    /// The catalogue is `overlay_flags()` — ONE list of every overlay — so a
+    /// panel cannot fall through this gate by being forgotten in a second
+    /// list. The panels that scroll take the wheel (the `/help` overlay,
+    /// whose footer says so; the session hub's preview; the three list
+    /// dialogs, which the gate above already routes); the rest ABSORB it,
+    /// because a panel that cannot scroll must not move what is behind it.
+    fn wheel_scroll(&mut self, up: bool) {
+        if self.help_overlay.visible {
+            let step = self.scroll_step();
+            let max = self.help_overlay.max_scroll.get().min(u16::MAX as usize) as u16;
+            for _ in 0..step {
+                if up {
+                    self.help_overlay.scroll_up();
+                } else {
+                    self.help_overlay.scroll_down(max);
+                }
+            }
+            return;
+        }
+        if self.any_overlay_open() {
+            return;
+        }
+        let step = self.scroll_step();
+        if up {
+            self.scroll_up_rows(step);
+        } else {
+            self.scroll_down_rows(step);
+        }
+    }
+
     pub fn handle_mouse_event(&mut self, mouse_event: MouseEvent) {
         use crossterm::event::MouseButton;
 
@@ -987,34 +1029,12 @@ impl App {
             MouseEventKind::ScrollUp => {
                 // Don't consume Ctrl+Scroll — let the terminal handle zoom.
                 if !mouse_event.modifiers.contains(KeyModifiers::CONTROL) {
-                    // (iter-1795) The help overlay is a SCROLLABLE overlay and
-                    // its footer says the wheel scrolls it. It is not one of
-                    // the dialogs in the gate above, so the wheel used to fall
-                    // through to the TRANSCRIPT — behind the overlay, where
-                    // the operator cannot see it.
-                    if self.help_overlay.visible {
-                        let step = self.scroll_step();
-                        for _ in 0..step {
-                            self.help_overlay.scroll_up();
-                        }
-                    } else {
-                        let step = self.scroll_step();
-                        self.scroll_up_rows(step);
-                    }
+                    self.wheel_scroll(true);
                 }
             }
             MouseEventKind::ScrollDown => {
                 if !mouse_event.modifiers.contains(KeyModifiers::CONTROL) {
-                    if self.help_overlay.visible {
-                        let step = self.scroll_step();
-                        let max = self.help_overlay.max_scroll.get().min(u16::MAX as usize) as u16;
-                        for _ in 0..step {
-                            self.help_overlay.scroll_down(max);
-                        }
-                    } else {
-                        let step = self.scroll_step();
-                        self.scroll_down_rows(step);
-                    }
+                    self.wheel_scroll(false);
                 }
             }
             // ---- Right-click context menu ----------------------------------
