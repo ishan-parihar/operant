@@ -1,0 +1,30 @@
+
+
+
+
+
+
+
+
+ operant · replay
+ operant
+ /model to switch · Offline Capture
+ v0.3.0
+ /login to add provider
+ ● anthropic(key)
+ ~
+
+
+
+› /he
+
+/help  Show help and keyboard shortcuts (/help <text> filters)
+
+
+
+
+
+
+
+
+

@@ -8,6 +8,17 @@
     {
       "size": "80x24",
       "keys": "/"
+    },
+    {
+      "size": "100x30",
+      "keys": "/he",
+      "assert": [
+        "focus == Input"
+      ],
+      "assert_screen": [
+        "contains:/help  Show help and keyboard shortcuts",
+        "not-contains:/skills  Show loaded skills"
+      ]
     }
   ],
   "assert": [
@@ -18,5 +29,5 @@
   ],
   "baseline": "typeahead-suggestions.txt",
   "style_baseline": "typeahead-suggestions.style.txt",
-  "notes": "The typeahead popup is chunk[4] of the render_app layout \u2014 a separately budgeted row group that vanishes silently when suggestions go empty, taking the input's vertical position with it. ENV: the ORDER of the rows comes from ~/.operant/slash-usage.json (recency then frequency), so the text baseline is machine-specific; Post-cutover (iter-655): the ported chrome draws suggestions as `cmd  description` with no `[cmd]` badge; assert_screen checks a full description string, which fails if the description wiring drops to empty (it did \u2014 the TuiState seam returned &'static str and the adapter shipped \"\"). OBSERVED while authoring: two-or-more-character prefixes ('/sk', '/he', '/ex') currently paint zero rows while single-character prefixes ('/', '/s', '/h', '/st') do \u2014 a real inconsistency worth a follow-up, but not this scenario's job."
+  "notes": "The typeahead popup is chunk[4] of the render_app layout — a separately budgeted row group that vanishes silently when suggestions go empty, taking the input's vertical position with it. ENV: the ORDER of the rows comes from ~/.operant/slash-usage.json (recency then frequency), so the text baseline is machine-specific; Post-cutover (iter-655): the ported chrome draws suggestions as `cmd  description` with no `[cmd]` badge; assert_screen checks a full description string, which fails if the description wiring drops to empty (it did — the TuiState seam returned &'static str and the adapter shipped \"\"). (iter-1787) The note that used to sit here said \"two-or-more-character prefixes ('/sk', '/he', '/ex') currently paint zero rows while single-character prefixes do — a real inconsistency worth a follow-up\". MEASURED 2026-11-06 against the corpus's own pinned environment at both corpus sizes (120x40 and 80x24): the claim is FALSE. '/sk' paints the /skills row, '/he' paints the /help row, '/ex' paints the /exit row — the popup paints its rows for every prefix, one character or more. The note named a defect that does not exist, which is the expensive half: the next reader would have gone hunting in working code (or \"fixed\" the typeahead into a regression). The 100x30 variant is the PIN: it types a two-character prefix and asserts the matching row is painted, so the note cannot go stale silently again."
 }
