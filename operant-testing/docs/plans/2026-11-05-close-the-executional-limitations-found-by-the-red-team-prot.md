@@ -16,7 +16,7 @@ Work the register in `kb/gap-register.md`, one row per iteration, in this order:
 3. **G-007** — MCP-backed tools must not inherit the 30 s tool timeout.
 4. **G-009** — the TUI/gateway command-parity sweep (canonical RT-179). This is what makes
    the TUI the *entire* operator interface rather than nearly all of it.
-5. **G-005** — land and push the MCP drain fix (iter-1822; ready, 27/27 green).
+5. **G-005** — DONE: the MCP drain fix landed as iter-1822 (`092f53a0`).
 6. **G-004 / G-008 / G-013** — deploy and config, not code: re-deploy the aft bridge,
    prefix the cron job models, gitignore or delete the junk dirs.
 7. **G-011 / G-012** — make the index-backed search paths use the index (or say they did

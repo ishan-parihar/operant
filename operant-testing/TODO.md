@@ -15,7 +15,7 @@ is already done.
 | G-010 | open | Add a cron/scheduler pane to the TUI, registered in `App::overlay_flags()` | `/cron` exists as a command (`operant_app/app.rs:409`) with no pane. Register it in the ONE catalogue — never a second list (RT-251). |
 | G-007 | open | MCP-backed tools must not inherit the 30 s tool timeout | Tool timeout `cmd_setup.rs:979`; MCP HTTP timeout `mcp.rs:418` (60 s). Give MCP tools the MCP budget. |
 | G-009 | open | Register the 72 TUI-only commands as gateway commands | Canonical ledger RT-179. This is what makes the TUI the *entire* interface. |
-| G-005 | open | Land and push the MCP drain-until-match fix | iter-1822, in this workspace; `cargo test -p operant-core --lib mcp::` = 27 passed. Needs its own commit + push. |
+| G-005 | done | Land and push the MCP drain-until-match fix → [2026-11-06] `kb/red-team/05-mcp-correlation.md` | Pushed as iter-1822 (`092f53a0`): the drain-until-match loop, the parked-response buffer (cap 64) and the bounded drain (64 lines / 5 s per line). `cargo test -p operant-core --lib mcp::` = 27 passed, 0 failed. |
 | G-004 | open | Re-deploy the aft bridge (v0.63.5 predates the iter-1799 fix) | DEPLOY gap: the source is fixed, the binary is stale. |
 | G-008 | open | Prefix the 13 paused cron job models (or route them through `resolve_model`) | DEPLOY/config gap. The scheduler itself works — a no-agent probe job ran on schedule. |
 | G-011 | open | Make `aft_grep`/`aft_glob` use the index, or say they did not | Index-backed search silently degrades to a 50k-file walk. RT-195 family. |

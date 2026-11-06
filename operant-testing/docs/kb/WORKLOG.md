@@ -42,3 +42,22 @@ so the next executor does not re-fix closed work.
 asymmetry (G-006), the 30 s tool timeout vs 60 s MCP timeout (G-007), three DEPLOY gaps
 (G-004, G-008, G-013), the TUI lifecycle asymmetry (G-009, G-010), and the silent
 index-degradation in `aft_grep`/`aft_glob` (G-011).
+
+## 2026-11-06 — the fix landed, and the knowledge base landed with it
+
+**iter-1822** (`092f53a0`) — the MCP drain-until-match fix, pushed to `origin/main`.
+`cargo test -p operant-core --lib mcp::` → 27 passed, 0 failed. `cargo check -p operant-core --lib`
+green. Only `crates/operant-core/src/mcp.rs` was staged; the peers' in-flight WIP in nine other
+files was left untouched, because the shared tree carries their work.
+
+**iter-1823** (`7e3253a6`) — the knowledge base itself: 41 files under `operant-testing/`, a
+nested project-genome whose `lint` is clean and whose `doctor` reports healthy.
+
+**iter-1824** (`5633d84a`) — the verify harness distinguished OPEN from FAIL. It had been
+reporting a known-open gap (the junk dirs) as a failure, so the gate could never be green.
+Only a regressed CLOSED finding now exits non-zero.
+
+**The lesson the KB now carries.** The first report said operant had no auto-poke; upstream
+had ported one five days earlier. Seven of fourteen rows were closed before the
+reconciliation ran. A gap register is not a document — it is a live claim about a moving
+tree, and it is only worth what its reconciliation discipline is worth.

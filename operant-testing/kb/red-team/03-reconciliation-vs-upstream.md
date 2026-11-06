@@ -16,7 +16,7 @@ A row counts as closed only when `docs/audit/2026-06-19-BUGS.md` carries a `CLOS
 
 | Contribution | Where it lives now |
 |---|---|
-| The MCP stdio client had **no drain/resync path** — one foreign stdout line wedged it permanently | G-005; fixed by iter-1822 in this workspace (`mcp.rs:1355`) |
+| The MCP stdio client had **no drain/resync path** — one foreign stdout line wedged it permanently | G-005; **fixed and pushed as iter-1822** (`092f53a0`) — the drain loop, the parked-response buffer and the bounded drain |
 | The MCP client's `id` is `u64`; the server's is `Value` — a string-echo server cannot be deserialised | G-006 |
 | Two timeout budgets disagree: tool 30 s vs MCP HTTP 60 s — every MCP tool is cut off early | G-007 |
 | A source fix is not a deployed fix — three distinct DEPLOY gaps | G-004, G-008, G-013 |

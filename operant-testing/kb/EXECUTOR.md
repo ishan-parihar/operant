@@ -31,4 +31,4 @@ knowledge base. It is here so you do not re-derive the same conclusions.
 3. **G-007** — MCP-backed tools must not inherit the 30 s tool timeout.
 4. **G-009** — the TUI/gateway command-parity sweep (canonical RT-179).
 5. **G-004/G-008/G-013** — deploy/config, not code: re-deploy the bridge, prefix the cron job models.
-6. **G-005** — iter-1822 (this workspace) needs to be landed and pushed.
+6. **G-005** — DONE: landed and pushed as iter-1822 (`092f53a0`).
