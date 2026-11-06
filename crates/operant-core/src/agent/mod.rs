@@ -1455,6 +1455,43 @@ mod tests {
     use futures::stream::BoxStream;
     use serial_test::serial;
 
+    /// The self-extension tools gate on `ToolContext::metadata["approval"]`,
+    /// and they are NOT permission-gated — so they are never prompted for
+    /// and the flag could only come from the operator's allowlist. Before
+    /// this, nobody set it: the host never passed the approval on, so
+    /// `harness_mount` / `harness_unmount` refused every call, including the
+    /// ones the operator had ALREADY approved in the allowlist — and the
+    /// refusal told them to approve it in the allowlist.
+    #[test]
+    fn an_allowlisted_tool_tells_itself_that_it_was_approved() {
+        let db = Database::init(std::env::temp_dir().join("test_tool_approval.sqlite")).unwrap();
+        let config = AgentConfig {
+            approval_allowlist: vec!["harness_mount".to_string()],
+            ..AgentConfig::default()
+        };
+        let agent = OperantAgent::new(
+            config,
+            Box::new(OpenAIModelClient::new(OpenAIClient::new(
+                crate::client::ClientConfig::default(),
+            ))),
+            ToolRegistry::new(Duration::from_secs(1)),
+            Arc::new(db),
+        );
+
+        let approved = agent.tool_context("harness_mount");
+        assert_eq!(
+            approved.metadata.get("approval").map(String::as_str),
+            Some("true"),
+            "an allowlisted tool must see the operator's approval"
+        );
+
+        let other = agent.tool_context("bash");
+        assert!(
+            !other.metadata.contains_key("approval"),
+            "a tool the operator did not approve must not see the flag"
+        );
+    }
+
     /// The token estimate must be the LARGER of the current heuristic and
     /// the reported count.
     ///

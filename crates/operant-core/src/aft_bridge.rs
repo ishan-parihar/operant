@@ -848,10 +848,22 @@ impl AftBridge {
 
         if response["success"].as_bool() == Some(false) {
             let code = response["code"].as_str().unwrap_or("");
-            let message = response["message"]
+            let reported = response["message"]
                 .as_str()
                 .or_else(|| response["error"].as_str())
-                .unwrap_or("unknown error");
+                .unwrap_or("")
+                .trim();
+            // A failure with no usable message is a dead end for the model:
+            // "unknown error" names nothing and the operator cannot act on
+            // it. The child's own stderr is the explanation, and the bridge
+            // ALREADY drains stderr into a ring — the diagnostics were here
+            // all along and the error threw them away.
+            let message = match (reported, self.stderr_summary().await) {
+                ("", Some(tail)) => tail,
+                ("", None) => "unknown error".to_string(),
+                ("unknown error", Some(tail)) => format!("unknown error (stderr: {tail})"),
+                (m, _) => m.to_string(),
+            };
             let detail = if code.is_empty() {
                 format!("aft {}: {}", command, message)
             } else {
@@ -861,6 +873,37 @@ impl AftBridge {
         }
 
         Ok(response)
+    }
+
+    /// The child's most recent diagnostics, from the ring the stderr drain
+    /// fills. `None` when the child said nothing on stderr.
+    ///
+    /// The child writes its diagnostic just before the failure response and
+    /// the drain task fills the ring concurrently, so a first look can be
+    /// empty; the wait is bounded and only costs anything on a failure.
+    async fn stderr_summary(&self) -> Option<String> {
+        for _ in 0..10 {
+            let summary = {
+                let tail = self.stderr_tail.lock().await;
+                let lines: Vec<&str> = tail
+                    .iter()
+                    .rev()
+                    .take(5)
+                    .map(|line| line.trim())
+                    .filter(|line| !line.is_empty())
+                    .collect();
+                if lines.is_empty() {
+                    None
+                } else {
+                    Some(lines.into_iter().rev().collect::<Vec<_>>().join(" | "))
+                }
+            };
+            if let Some(summary) = summary {
+                return Some(summary);
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        None
     }
 
     /// Run a bash command through aft's async task model.
@@ -1071,6 +1114,11 @@ impl AftBridgePool {
 mod tests {
     use super::*;
 
+    /// `AFT_BINARY` is process-global, so every test that points it at a
+    /// fake child has to hold the SAME lock. A function-local static would
+    /// serialise nothing.
+    static AFT_BINARY_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     /// (plan 07.1) The stderr-drain regression: a child that writes 1MB to
     /// stderr while serving requests must complete them. Before the drain
     /// task, the 64KB OS pipe buffer filled and the child blocked forever
@@ -1105,8 +1153,7 @@ mod tests {
 
         // Scoped AFT_BINARY so resolve_aft_binary finds the fake.
         // Serialise with any other AFT_BINARY-dependent test via a lock.
-        static BIN_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        let _guard = BIN_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _guard = AFT_BINARY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         unsafe {
             std::env::set_var("AFT_BINARY", &fake);
         }
@@ -1150,6 +1197,65 @@ mod tests {
         };
         assert!(ring_has_tail, "stderr tail captured the diagnostics");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A failing aft command with no message must report the child's OWN
+    /// diagnostics. Before the fix the tool said "unknown error" and threw
+    /// away the stderr the bridge had already captured — the operator got a
+    /// dead end with no cause and no way to act.
+    #[tokio::test]
+    #[expect(
+        clippy::await_holding_lock,
+        reason = "test-only: the std mutex serialises process-env mutation across the whole test"
+    )]
+    async fn a_failing_command_without_a_message_reports_the_childs_stderr() {
+        let dir = std::env::temp_dir().join(format!("operant-aft-failure-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let fake = dir.join("aft");
+        std::fs::write(
+            &fake,
+            "#!/bin/sh\n\
+             while IFS= read -r line; do\n\
+               id=$(printf '%s' \"$line\" | sed -n 's/.*\"id\":\"\\([^\"]*\\)\".*/\\1/p')\n\
+               cmd=$(printf '%s' \"$line\" | sed -n 's/.*\"command\":\"\\([^\"]*\\)\".*/\\1/p')\n\
+               if [ \"$cmd\" = \"inspect\" ]; then\n\
+                 printf 'inspect: workspace index not built\\n' >&2\n\
+                 printf '{\"id\":\"%s\",\"success\":false,\"code\":\"E_NO_INDEX\"}\\n' \"$id\"\n\
+               else\n\
+                 printf '{\"id\":\"%s\",\"success\":true,\"result\":{\"ok\":true}}\\n' \"$id\"\n\
+               fi\n\
+             done\n",
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let _guard = AFT_BINARY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        unsafe {
+            std::env::set_var("AFT_BINARY", &fake);
+        }
+
+        let root = dir.join("project");
+        std::fs::create_dir_all(&root).unwrap();
+        let bridge = AftBridge::spawn(root).await.expect("bridge spawns");
+        let failure = bridge
+            .call("inspect", serde_json::json!({}))
+            .await
+            .expect_err("the fake aft fails the inspect command");
+        unsafe {
+            std::env::remove_var("AFT_BINARY");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let reported = failure.to_string();
+        assert!(
+            reported.contains("E_NO_INDEX"),
+            "the error must name the code the child reported: {reported}"
+        );
+        assert!(
+            reported.contains("workspace index not built"),
+            "the child's own diagnostics must reach the error: {reported}"
+        );
     }
 
     #[tokio::test]

@@ -8,11 +8,15 @@
 //!   deny-by-default allowlist).
 //! - `harness_unmount` — inverse of mount. Same approval gate as mount.
 //!
-//! Phase 5 ships `harness_dump` (read-only, no approval) and stubs for
-//! the other two that return a structured "requires approval policy"
-//! error so the boot path knows to wire them in once the approval layer
-//! is updated. Full mount/unmount land when the host's approval policy
-//! accepts "harness.*" tool names (per plan 015's policy surface).
+//! All three are LIVE. `harness_mount` / `harness_unmount` are gated on the
+//! host's approval policy: the host sets `ToolContext::metadata["approval"] =
+//! "true"` when the operator's allowlist covers the tool name (the
+//! `command_allowlist` config key or `~/.operant/approval_allowlist.json`),
+//! and the tool refuses without it. An earlier revision of this header said
+//! the two were "stubs … until the approval layer is updated" — the code was
+//! never a stub; what was missing was the approval layer's half, and the
+//! header said so in the wrong direction. The host's half now lives in
+//! `OperantAgent::tool_context` (`agent/stream.rs`).
 
 use std::sync::Arc;
 

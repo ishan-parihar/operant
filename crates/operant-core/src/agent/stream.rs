@@ -21,13 +21,25 @@ impl OperantAgent {
     /// user-question channel is process-global and the gateway drains it
     /// into whatever chat is active; a scheduled job must never block on
     /// it).
-    fn tool_context(&self) -> ToolContext {
+    ///
+    /// `tool_name` also decides the one approval flag the tools read
+    /// themselves: when the operator's allowlist covers this tool, the
+    /// context says so. Without it the self-extension tools
+    /// (`harness_mount` / `harness_unmount`) could never run — they are not
+    /// permission-gated, so they are never prompted for, and the flag they
+    /// gate on was never set by anyone. An operator who approved
+    /// `harness_mount` in the allowlist got a refusal that told them to
+    /// approve it in the allowlist.
+    pub(crate) fn tool_context(&self, tool_name: &str) -> ToolContext {
         let mut ctx = ToolContext::default().with_metadata(
             "session_id",
             self.session_id().unwrap_or_else(|| "default".to_string()),
         );
         if self.unattended {
             ctx = ctx.with_metadata("unattended", "true");
+        }
+        if self.tool_allowed_by_allowlist(tool_name) {
+            ctx = ctx.with_metadata("approval", "true");
         }
         ctx
     }
@@ -1618,7 +1630,7 @@ impl OperantAgent {
                 .expect("pending non-empty in single-tool branch");
             let name = tool_call.function.name.clone();
             // Plan 015: kernel tools key kernels/harness by session id.
-            let tool_ctx = self.tool_context();
+            let tool_ctx = self.tool_context(&name);
             // Permit is already in hand (single-tool path skips the pool), so
             // re-announce the call: the TUI shows Queued from the first
             // ToolStart and flips to Running on this one.
@@ -1688,7 +1700,7 @@ impl OperantAgent {
                 })
                 .await;
                 let tool_started = std::time::Instant::now();
-                let tool_ctx = self.tool_context();
+                let tool_ctx = self.tool_context(&name);
                 let exec = self.registry.execute(&name, &tool_call.id, args, tool_ctx);
                 let limit = if is_interactive_tool(&name) || is_long_running_tool(&name) {
                     LONG_RUNNING_TOOL_TIMEOUT
@@ -1766,7 +1778,7 @@ impl OperantAgent {
                         })
                         .await;
                         // Plan 015: session-keyed ToolContext for kernel tools.
-                        let tool_ctx = self.tool_context();
+                        let tool_ctx = self.tool_context(&name);
                         let exec_started = std::time::Instant::now();
                         let exec = registry.execute(&name, &tool_call.id, args, tool_ctx);
                         // Interactive tools exempt from the generic tool
