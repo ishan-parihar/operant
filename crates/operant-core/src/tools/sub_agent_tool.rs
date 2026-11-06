@@ -36,7 +36,7 @@ use tokio::time::timeout;
 
 use crate::agent::clients::openai::OpenAIModelClient;
 use crate::agent::{AgentConfig, AgentEvent, ModelClient, OperantAgent};
-use crate::client::{ClientConfig, OpenAIClient};
+use crate::client::{ClientConfig, Message, OpenAIClient};
 use crate::database::Database;
 use crate::schema::ToolSchema;
 use crate::tools::async_delegation;
@@ -687,11 +687,7 @@ impl SubAgentTool {
             summary,
         });
 
-        match result {
-            Ok(Ok(message)) => Ok(message.content),
-            Ok(Err(error)) => Err(format!("Sub-agent error: {}", error).into()),
-            Err(_) => Err(format!("Sub-agent timed out after {} seconds", timeout_seconds).into()),
-        }
+        child_outcome(result, timeout_seconds)
     }
 
     /// Fan out a **swarm**: run every task as a real worker session and
@@ -1373,6 +1369,32 @@ fn preview_of(text: &str, max_chars: usize) -> String {
     out
 }
 
+/// Shape a finished child turn into what the parent receives, for every
+/// delegation path (sync, swarm worker, background).
+///
+/// The parent's tool result IS the child's final message. A child that ended
+/// its turn with NO text has not answered the goal: a turn can stop itself
+/// with no answer (the wall clock, the iteration budget or the grace gate can
+/// each end it), and an empty final message then reached the parent as an
+/// EMPTY tool result — indistinguishable from a successful call that returned
+/// nothing, which is the failure a parent model cannot act on and cannot
+/// report.
+fn child_outcome(
+    result: std::result::Result<crate::error::Result<Message>, tokio::time::error::Elapsed>,
+    timeout_seconds: u64,
+) -> std::result::Result<String, BoxedToolError> {
+    match result {
+        Ok(Ok(message)) => {
+            if message.content.trim().is_empty() {
+                return Err("The sub-agent finished its turn without producing any output".into());
+            }
+            Ok(message.content)
+        }
+        Ok(Err(error)) => Err(format!("Sub-agent error: {}", error).into()),
+        Err(_) => Err(format!("Sub-agent timed out after {} seconds", timeout_seconds).into()),
+    }
+}
+
 /// Set the maximum spawn depth (for testing/config)
 pub fn set_max_spawn_depth(depth: u32) {
     let clamped = depth.clamp(MIN_SPAWN_DEPTH, MAX_SPAWN_DEPTH_CAP);
@@ -1412,6 +1434,24 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(args.goal, Some("analyze this module".to_string()));
+    }
+
+    /// A delegation that produced NOTHING used to reach the parent as an
+    /// empty tool result — a successful-looking call with no output, which
+    /// the parent model cannot act on and cannot distinguish from a child
+    /// that simply had nothing to say.
+    #[test]
+    fn a_child_that_produced_no_output_is_a_failure_not_an_empty_result() {
+        let error = child_outcome(Ok(Ok(Message::assistant("   \n "))), 60)
+            .expect_err("an empty answer is a failure");
+        assert!(
+            error.to_string().contains("without producing any output"),
+            "the error must name the cause: {error}"
+        );
+        assert_eq!(
+            child_outcome(Ok(Ok(Message::assistant("done"))), 60).expect("a real answer passes"),
+            "done"
+        );
     }
 
     #[test]
