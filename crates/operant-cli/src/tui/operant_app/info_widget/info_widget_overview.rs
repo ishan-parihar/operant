@@ -153,6 +153,30 @@ fn compact_overview_height(data: &InfoWidgetData) -> u16 {
         + changes_section_height(data)
 }
 
+/// The Overview's sections — the terms [`compact_overview_height`] adds up,
+/// counted rather than summed.
+///
+/// (RT-256) The admission test used to count its OWN list of sections, which
+/// disagreed with the page the Overview paints: it counted the vestigial
+/// plan-mode flag (never painted here) and the compaction payload (never
+/// painted here either), and it MISSED memory (always painted). A single real
+/// section therefore looked like two, the Overview was admitted for a
+/// one-line page, and the page's only section had its own widget SUPPRESSED
+/// in the Overview's favour — the operator read "3 total · 1 active" instead
+/// of the todo list.
+///
+/// The count is now derived from the same terms as the height, so the
+/// admission decision and the page's content cannot drift apart again.
+pub(crate) fn overview_section_count(data: &InfoWidgetData) -> usize {
+    usize::from(model_info_height(data) > 0)
+        + usize::from(compact_todos_height(data) > 0)
+        + usize::from(compact_memory_height(data) > 0)
+        + usize::from(compact_background_height(data) > 0)
+        + usize::from(compact_usage_height(data) > 0)
+        + usize::from(compact_kv_cache_height(data) > 0)
+        + usize::from(changes_section_height(data) > 0)
+}
+
 fn expanded_todos_height(data: &InfoWidgetData) -> u16 {
     if data.todos.is_empty() {
         return 0;
@@ -199,7 +223,6 @@ mod tests {
     fn compute_page_layout_falls_back_to_compact_page() {
         let data = InfoWidgetData {
             session_name: Some("sauropod".to_string()),
-            queue_mode: Some(true),
             ..Default::default()
         };
 

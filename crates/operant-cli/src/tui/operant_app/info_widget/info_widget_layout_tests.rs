@@ -42,7 +42,6 @@ fn contended_data() -> InfoWidgetData {
         model: Some("claude-test-1".to_string()),
         provider_name: Some("anthropic".to_string()),
         session_count: Some(3),
-        queue_mode: Some(true),
         context_info: Some(crate::tui::operant_app::prompt::ContextInfo {
             system_prompt_chars: 20_000,
             total_chars: 60_000,

@@ -7,7 +7,17 @@ use crate::tui::operant_app::info_widget::InfoWidgetData;
 fn sample_data() -> InfoWidgetData {
     InfoWidgetData {
         session_name: Some("sauropod".to_string()),
-        queue_mode: Some(true),
+        // (RT-256) The Overview is a JOIN: it is admitted only when it has
+        // two of the sections it paints. The vestigial plan-mode flag used
+        // to supply the second one (a section the Overview never painted);
+        // a real todo does now — and the todo's own widget is mergeable, so
+        // the Overview still stands alone here, as this fixture intends.
+        todos: vec![crate::tui::operant_app::todo::TodoItem {
+            content: "first task".to_string(),
+            status: "in_progress".to_string(),
+            id: "t1".to_string(),
+            ..Default::default()
+        }],
         ..Default::default()
     }
 }
@@ -19,7 +29,6 @@ fn rich_data() -> InfoWidgetData {
     use crate::tui::operant_app::info_widget::{BackgroundInfo, UsageInfo, UsageProvider};
     InfoWidgetData {
         session_name: Some("sauropod".to_string()),
-        queue_mode: Some(true),
         todos: vec![
             crate::tui::operant_app::todo::TodoItem {
                 group: None,

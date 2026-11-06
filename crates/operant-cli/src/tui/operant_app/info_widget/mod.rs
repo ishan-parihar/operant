@@ -47,7 +47,9 @@ mod info_widget_layout;
 mod info_widget_overview;
 mod info_widget_settle;
 pub mod info_widget_stability;
-use self::info_widget_overview::{InfoPageKind, MAX_TODO_LINES, compute_page_layout};
+use self::info_widget_overview::{
+    InfoPageKind, MAX_TODO_LINES, compute_page_layout, overview_section_count,
+};
 // [port-excision] upstream :36 `use super::workspace_map::VisibleWorkspaceRow;`:
 // workspace_map / workspace_map_widget are unported (documented at tui_state.rs:18-21).
 // Re-activate if workspace_map is ever ported.
@@ -251,13 +253,19 @@ pub enum Side {
     Right,
 }
 
+/// Which widgets the Overview widget REPLACES when it is shown.
+///
+/// A mergeable widget is SUPPRESSED while the Overview is on screen, so
+/// every widget on this list must be one the Overview actually PAINTS —
+/// otherwise the Overview hides a panel whose content it never shows, and
+/// the operator loses the detail (the compaction status and the swarm
+/// session list are NOT painted by the Overview; they keep their own
+/// widgets, which dock on the other side).
 pub(crate) fn is_overview_mergeable(kind: WidgetKind) -> bool {
     matches!(
         kind,
         WidgetKind::Todos
-            | WidgetKind::SwarmStatus
             | WidgetKind::BackgroundTasks
-            | WidgetKind::Compaction
             | WidgetKind::ModelInfo
             | WidgetKind::UsageLimits
             | WidgetKind::KvCache
@@ -746,7 +754,6 @@ pub struct InfoWidgetData {
     pub context_info: Option<ContextInfo>,
     /// True when context state is being updated and no authoritative snapshot is available.
     pub context_info_stale: bool,
-    pub queue_mode: Option<bool>,
     pub context_limit: Option<usize>,
     pub model: Option<String>,
     pub reasoning_effort: Option<String>,
@@ -821,7 +828,6 @@ impl InfoWidgetData {
     pub fn is_empty(&self) -> bool {
         self.todos.is_empty()
             && self.context_info.is_none()
-            && self.queue_mode.is_none()
             && self.model.is_none()
             && self.memory_info.is_none()
             && self.swarm_info.is_none()
@@ -841,50 +847,20 @@ impl InfoWidgetData {
             // payload fields are excised (mermaid engine / workspace_map unported).
             WidgetKind::Diagrams | WidgetKind::WorkspaceMap => false,
             WidgetKind::Overview => {
-                let mut sections = 0usize;
-                // Status-line facts (model, context %, branch) never count:
-                // the overview only joins detail sections.
-                if runtime_has_data(self) {
-                    sections += 1;
-                }
-                if !self.todos.is_empty() {
-                    sections += 1;
-                }
-                if self
-                    .background_info
-                    .as_ref()
-                    .map(|b| b.running_count > 0)
-                    .unwrap_or(false)
-                {
-                    sections += 1;
-                }
-                if self.queue_mode.is_some() {
-                    sections += 1;
-                }
-                if self
-                    .usage_info
-                    .as_ref()
-                    .map(|u| u.available)
-                    .unwrap_or(false)
-                {
-                    sections += 1;
-                }
-                if self.cache_hit_info.is_some() {
-                    sections += 1;
-                }
-                if self.compaction_info.is_some() {
-                    sections += 1;
-                }
-                if self
-                    .git_info
-                    .as_ref()
-                    .map(changes_has_data)
-                    .unwrap_or(false)
-                {
-                    sections += 1;
-                }
-                // Only useful as a "join" mode when there are multiple sections.
-                sections >= 2
+                // (RT-256) The count must be the sections the Overview
+                // PAINTS. It used to count a section the Overview never
+                // painted (the vestigial plan-mode flag) and to miss one it
+                // always paints (memory), so the widget was admitted for a
+                // ONE-LINE page — and the mergeable widget that page's only
+                // section belonged to was SUPPRESSED in its favour: the
+                // operator saw "3 total · 1 active" instead of the todo
+                // list. The count is now `overview_section_count`, which
+                // mirrors the Overview's own height arithmetic term for
+                // term.
+                //
+                // Only useful as a "join" mode when there are multiple
+                // sections.
+                overview_section_count(self) >= 2
             }
             WidgetKind::Todos => !self.todos.is_empty(),
             WidgetKind::MemoryActivity => self

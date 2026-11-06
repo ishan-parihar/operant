@@ -1147,7 +1147,6 @@ fn overview_requires_multiple_sections() {
     // Status-line facts (model identity) are never an overview section.
     let identity_only = InfoWidgetData {
         model: Some("gpt-test".to_string()),
-        queue_mode: Some(true),
         ..Default::default()
     };
     assert!(!identity_only.has_data_for(WidgetKind::Overview));
@@ -1158,12 +1157,77 @@ fn overview_requires_multiple_sections() {
     };
     assert!(!one_section.has_data_for(WidgetKind::Overview));
 
+    // (RT-256) The second section must be one the Overview PAINTS. It used
+    // to be the vestigial plan-mode flag — a section the Overview never
+    // rendered — so the widget was admitted for a one-line page.
     let two_sections = InfoWidgetData {
         session_name: Some("sauropod".to_string()),
-        queue_mode: Some(true),
+        todos: vec![crate::tui::operant_app::todo::TodoItem {
+            content: "first task".to_string(),
+            status: "in_progress".to_string(),
+            id: "t1".to_string(),
+            ..Default::default()
+        }],
         ..Default::default()
     };
     assert!(two_sections.has_data_for(WidgetKind::Overview));
+}
+
+/// (RT-256) The Overview SUPPRESSES the mergeable widgets while it is on
+/// screen, so it must not be admitted for a single section: the operator
+/// would read the section's one-line summary instead of the section's own
+/// widget (the todo LIST, the usage bars).
+///
+/// This is the whole defect in one assertion: before the fix, a todo list
+/// alone made the Overview eligible, the Overview took the slot, and the
+/// Todos widget — the actual list — was suppressed in its favour.
+#[test]
+fn a_single_section_keeps_its_own_widget_instead_of_a_one_line_overview() {
+    let data = InfoWidgetData {
+        todos: vec![crate::tui::operant_app::todo::TodoItem {
+            content: "first task".to_string(),
+            status: "in_progress".to_string(),
+            id: "t1".to_string(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    assert!(
+        !data.has_data_for(WidgetKind::Overview),
+        "one section is not a join: the Overview must not take the slot"
+    );
+    assert!(
+        data.has_data_for(WidgetKind::Todos),
+        "the todo list's own widget must stay eligible"
+    );
+}
+
+/// The mergeable list must be exactly the widgets the Overview PAINTS: a
+/// widget the Overview suppresses without painting loses its content
+/// entirely. The compaction status and the swarm session list are painted
+/// by their OWN widgets, so the Overview must not suppress them.
+#[test]
+fn the_overview_only_suppresses_the_widgets_it_paints() {
+    for kind in [
+        WidgetKind::Todos,
+        WidgetKind::BackgroundTasks,
+        WidgetKind::ModelInfo,
+        WidgetKind::UsageLimits,
+        WidgetKind::KvCache,
+        WidgetKind::GitStatus,
+    ] {
+        assert!(
+            super::is_overview_mergeable(kind),
+            "{kind:?} is painted by the Overview, so it may be suppressed by it"
+        );
+    }
+    for kind in [WidgetKind::Compaction, WidgetKind::SwarmStatus] {
+        assert!(
+            !super::is_overview_mergeable(kind),
+            "{kind:?} is NOT painted by the Overview — suppressing it would hide \
+             a panel whose content the Overview never shows"
+        );
+    }
 }
 
 #[test]
@@ -1180,7 +1244,15 @@ fn overview_widget_is_placed_when_space_allows() {
 
     let data = InfoWidgetData {
         session_name: Some("sauropod".to_string()),
-        queue_mode: Some(true),
+        // (RT-256) Two of the sections the Overview PAINTS — the runtime row
+        // and the todo list. The vestigial plan-mode flag used to stand in
+        // for the second one and the Overview never painted it.
+        todos: vec![crate::tui::operant_app::todo::TodoItem {
+            content: "first task".to_string(),
+            status: "in_progress".to_string(),
+            id: "t1".to_string(),
+            ..Default::default()
+        }],
         ..Default::default()
     };
     let margins = Margins {
@@ -1224,7 +1296,6 @@ fn workspace_widget_has_high_priority_when_enabled() {
             },
         ],
         session_name: Some("sauropod".to_string()),
-        queue_mode: Some(true),
         ..Default::default()
     };
 
@@ -1623,7 +1694,14 @@ fn sticky_placement_clamps_width_to_current_margin() {
 
     let data = InfoWidgetData {
         session_name: Some("sauropod".to_string()),
-        queue_mode: Some(true),
+        // (RT-256) Two of the sections the Overview paints, so the Overview
+        // is the widget this placement test measures.
+        todos: vec![crate::tui::operant_app::todo::TodoItem {
+            content: "first task".to_string(),
+            status: "in_progress".to_string(),
+            id: "t1".to_string(),
+            ..Default::default()
+        }],
         ..Default::default()
     };
     let area = Rect::new(0, 0, 100, 10);
@@ -1705,7 +1783,6 @@ fn placements_never_include_border_only_widgets() {
             completion_confidence: None,
             confidence_history: Vec::new(),
         }],
-        queue_mode: Some(true),
         memory_info: Some(MemoryInfo {
             total_count: 1,
             ..Default::default()

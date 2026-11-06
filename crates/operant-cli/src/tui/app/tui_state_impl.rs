@@ -759,7 +759,6 @@ impl TuiState for App {
             // estimate stays as the pre-first-turn fallback — before the
             // first Usage event there is no observed figure yet.
             observed_context_tokens: self.last_prompt_tokens(),
-            queue_mode: Some(self.plan_mode),
             model: Some(self.model_name.clone()),
             // (plan 03) the effort shown next to the model in the status
             // facts; "n/a" when the agent rejected the field for this model.
