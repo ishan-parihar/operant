@@ -90,6 +90,17 @@ impl HelpOverlay {
         self.content = HelpOverlayContent::Hotkeys;
     }
 
+    /// Open the command catalogue already FILTERED on a term (the
+    /// `/help <command>` form the overlay's own row and its footer
+    /// advertise). (iter-1785) The argument used to be dropped on the
+    /// floor — the arm toggled the overlay whatever it was given.
+    pub fn open_filtered(&mut self, filter: &str) {
+        self.visible = true;
+        self.scroll_offset = 0;
+        self.filter = filter.trim().to_lowercase();
+        self.content = HelpOverlayContent::Commands;
+    }
+
     pub fn scroll_up(&mut self) {
         self.scroll_offset = self.scroll_offset.saturating_sub(1);
     }

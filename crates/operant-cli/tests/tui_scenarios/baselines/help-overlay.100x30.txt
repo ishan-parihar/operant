@@ -1,0 +1,30 @@
+┌ Help · model ────────────────────────────────────────────────────────────────────────────────────┐
+│    /model  List or switch models                                                                 │
+│    /model <name>  Switch to a different model                                                    │
+│    /agents  Configure models for agent roles                                                     │
+│    /fix  Attempt recovery when model cannot continue                                             │
+│    /models  Alias for /model                                                                     │
+│    /refresh-model-list  Refresh provider model catalogs                                          │
+│    /thinking-display  Show/hide the model's thinking text (off/full/current)                     │
+│    Ctrl+a                Open model picker                                                       │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+└ Esc to close · mouse wheel/j/k scroll · Space/PageUp page · /help <cmd> for details ─────────────┘

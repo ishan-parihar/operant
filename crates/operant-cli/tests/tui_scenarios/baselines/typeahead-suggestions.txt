@@ -23,7 +23,7 @@
 
 › /
 
-/help  Show help and keyboard shortcuts
+/help  Show help and keyboard shortcuts (/help <text> filters)
 /?  Show help and keyboard shortcuts
 /commands  Alias for /help
 /model  List or switch models

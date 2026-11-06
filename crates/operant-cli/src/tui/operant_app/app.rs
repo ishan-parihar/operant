@@ -188,7 +188,15 @@ impl RegisteredCommand {
 }
 
 const REGISTERED_COMMANDS: &[RegisteredCommand] = &[
-    RegisteredCommand::public("/help", "Show help and keyboard shortcuts"),
+    // (iter-1785) The overlay's own row and footer advertise "/help <cmd>
+    // for details", and the argument used to be dropped on the floor — the
+    // arm toggled the overlay whatever it was given. It now opens the
+    // overlay FILTERED on the term. The description is kept short enough
+    // to survive the command palette's row width untruncated.
+    RegisteredCommand::public(
+        "/help",
+        "Show help and keyboard shortcuts (/help <text> filters)",
+    ),
     RegisteredCommand::public("/?", "Show help and keyboard shortcuts"),
     RegisteredCommand::public("/commands", "Alias for /help"),
     RegisteredCommand::public("/model", "List or switch models"),

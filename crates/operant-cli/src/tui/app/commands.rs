@@ -1298,7 +1298,20 @@ impl App {
                 // Bug #8 from iter-82 audit: previously only opened (never
                 // closed), so pressing /help twice showed two different
                 // help overlays (the rich one + the legacy show_help fallback).
-                self.help_overlay.toggle();
+                //
+                // (iter-1785) `/help <command>` opens it FILTERED on the
+                // argument — the overlay's own row and its footer both
+                // advertise "/help <cmd> for details", and the argument
+                // used to be dropped on the floor ("/help model" toggled
+                // the same unfiltered overlay "/help" does). The filter
+                // only became renderable in the same iteration: the
+                // Commands view had never read `HelpOverlay::filter`.
+                let filter = args.trim();
+                if filter.is_empty() {
+                    self.help_overlay.toggle();
+                } else {
+                    self.help_overlay.open_filtered(filter);
+                }
                 self.show_help = self.help_overlay.visible;
                 true
             }
@@ -3057,6 +3070,46 @@ mod tests {
                 "5".to_string()
             ],
             "flags stay split — `operant memory list --limit 5` needs two argv entries"
+        );
+    }
+
+    /// (iter-1785) `/help <command>` dropped its argument on the floor: the
+    /// arm toggled the overlay whatever it was given, so "/help model"
+    /// opened exactly the same unfiltered overlay "/help" does — while the
+    /// overlay's own row ("/help <command> — Show details for one command")
+    /// and its footer ("/help <cmd> for details") both promised the
+    /// argument did something.
+    ///
+    /// The filter itself was DEAD on this side too: `HelpOverlay::filter`
+    /// is documented as "only commands matching this substring are shown",
+    /// and only the Keys view ever read it — every keystroke typed in the
+    /// Commands view was swallowed by a filter no render consulted.
+    #[test]
+    fn help_with_an_argument_opens_the_overlay_filtered_on_it() {
+        let mut app = make_app();
+        assert!(
+            app.handle_tui_command("help", "model"),
+            "/help must intercept"
+        );
+        assert!(app.help_overlay.visible, "/help opens the overlay");
+        assert_eq!(
+            app.help_overlay.filter, "model",
+            "/help <command> must filter the overlay on the argument — the row \
+             and the footer both advertise it"
+        );
+        assert_eq!(
+            app.help_overlay.content,
+            crate::tui::overlays::help::HelpOverlayContent::Commands,
+            "a filtered /help shows the command catalogue, not the chord list"
+        );
+
+        // A bare /help is still a plain toggle.
+        let mut app = make_app();
+        assert!(app.handle_tui_command("help", ""));
+        assert!(app.help_overlay.visible);
+        assert!(
+            app.help_overlay.filter.is_empty(),
+            "a bare /help is not filtered"
         );
     }
 }

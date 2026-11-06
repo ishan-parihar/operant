@@ -9,7 +9,7 @@
                            │                                                               │
                            │                                                               │
                            │ Other                                                         │
-                           │ /help Show help and keyboard shortcuts                        │
+                           │ /help Show help and keyboard shortcuts (/help <text> filters) │
                            │ /? Show help and keyboard shortcuts                           │
  operant · replay          │ /commands Alias for /help                                     │
  operant                   │                                                               │

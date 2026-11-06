@@ -143,6 +143,7 @@ pub(super) fn draw_changelog_overlay(
 pub(super) fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: usize, app: &dyn TuiState) {
     clear_area(frame, area);
 
+    let filter = app.help_filter().to_lowercase();
     let section_style = Style::default()
         .fg(accent_color())
         .add_modifier(Modifier::BOLD);
@@ -401,6 +402,17 @@ pub(super) fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: usize, ap
 
     lines.push(Line::from(""));
 
+    // (iter-1785) The overlay's own contract — `HelpOverlay::filter`: "only
+    // commands matching this substring are shown" — was NEVER read by this
+    // view: the Keys view filtered its report, the Commands view ignored
+    // the filter entirely, so every keystroke an operator typed in /help
+    // was swallowed by a filter no render consulted (the overlay looked
+    // frozen, and the characters never reached the composer either). The
+    // rows filter the same way the Keys view does.
+    if !filter.is_empty() {
+        lines = filter_help_lines(lines, &filter);
+    }
+
     let total_lines = lines.len();
     let visible_height = area.height.saturating_sub(2) as usize;
     #[allow(clippy::manual_checked_ops)] // vendored-verbatim upstream scrollbar math
@@ -419,7 +431,11 @@ pub(super) fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: usize, ap
         String::new()
     };
 
-    let title = format!(" Help {} ", scroll_info);
+    let title = if filter.is_empty() {
+        format!(" Help {} ", scroll_info)
+    } else {
+        format!(" Help {}· {filter} ", scroll_info)
+    };
     let block = Block::default()
         .title(Span::styled(
             title,
@@ -568,5 +584,78 @@ fn color_to_rgb(color: Color) -> Option<[u8; 3]> {
             Some([r, g, b])
         }
         _ => None,
+    }
+}
+
+/// Keep only the /help rows a filter matches. A row matches when ANY of its
+/// spans carries the filter (the command name and its description are two
+/// spans of one row, so both are searchable), and a filter that matches
+/// nothing leaves a line that says so rather than an empty overlay — the
+/// Keys view reports the same way.
+fn filter_help_lines(lines: Vec<Line<'static>>, filter: &str) -> Vec<Line<'static>> {
+    let mut kept: Vec<Line<'static>> = lines
+        .into_iter()
+        .filter(|line| {
+            line.spans
+                .iter()
+                .any(|span| span.content.to_lowercase().contains(filter))
+        })
+        .collect();
+    if kept.is_empty() {
+        kept.push(Line::from(Span::styled(
+            format!("  no command matches \"{filter}\""),
+            Style::default().fg(rgb(150, 150, 165)),
+        )));
+    }
+    kept
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn row(text: &'static str) -> Line<'static> {
+        Line::from(text.to_string())
+    }
+
+    #[test]
+    fn a_filter_keeps_only_the_rows_that_carry_it() {
+        let lines = vec![
+            Line::from(""),
+            Line::from(Span::styled("  Session", Style::default())),
+            Line::from(vec![
+                Span::styled("    ", Style::default()),
+                Span::styled("/save".to_string(), Style::default()),
+                Span::styled("  ", Style::default()),
+                Span::styled("Export the conversation".to_string(), Style::default()),
+            ]),
+            Line::from(vec![
+                Span::styled("    ", Style::default()),
+                Span::styled("/model".to_string(), Style::default()),
+                Span::styled("  ", Style::default()),
+                Span::styled("List or switch models".to_string(), Style::default()),
+            ]),
+        ];
+
+        let kept = filter_help_lines(lines, "model");
+        let shown: Vec<String> = kept.iter().map(|line| line.to_string()).collect();
+        // One row survives — the `/model` row — and not the `/save` row or
+        // the section header beside it.
+        assert_eq!(shown.len(), 1, "only the matching row survives: {shown:?}");
+        assert!(
+            shown[0].contains("/model") && shown[0].contains("List or switch models"),
+            "the surviving row is the /model row: {shown:?}"
+        );
+    }
+
+    #[test]
+    fn a_filter_that_matches_nothing_says_so_rather_than_showing_an_empty_overlay() {
+        let kept = filter_help_lines(vec![row("/model  List or switch models")], "zzz");
+        assert_eq!(kept.len(), 1, "one line, not zero");
+        assert!(
+            kept[0].to_string().contains("\"zzz\""),
+            "the no-match line names the filter: {:?}",
+            kept[0].to_string()
+        );
     }
 }

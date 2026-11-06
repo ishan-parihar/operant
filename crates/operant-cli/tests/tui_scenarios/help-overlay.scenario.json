@@ -17,6 +17,17 @@
     },
     {
       "size": "80x24"
+    },
+    {
+      "size": "100x30",
+      "keys": "/help model<enter>",
+      "assert": [
+        "overlays.help_overlay == true"
+      ],
+      "assert_screen": [
+        "contains:/model",
+        "not-contains:/changelog"
+      ]
     }
   ],
   "assert": [
@@ -29,5 +40,5 @@
   ],
   "baseline": "help-overlay.txt",
   "style_baseline": "help-overlay.style.txt",
-  "notes": "The largest always-available overlay and the one with the most render paths (filter box, two-column shortcut/slash split, scrolling). Also exercises the /help TOGGLE bug class from iter-82: pressing it twice must show the same overlay, not two different ones \u2014 hence the close variant, which baselines the Esc path too. POST-CUTOVER: operant's help table was deleted with the dispatch; the ported chrome draws its own help (operant_ui/ui_overlays.rs::draw_help_overlay), whose ground truth is the /help entry line and the scroll footer."
+  "notes": "The largest always-available overlay and the one with the most render paths (filter box, two-column shortcut/slash split, scrolling). Also exercises the /help TOGGLE bug class from iter-82: pressing it twice must show the same overlay, not two different ones \u2014 hence the close variant, which baselines the Esc path too. POST-CUTOVER: operant's help table was deleted with the dispatch; the ported chrome draws its own help (operant_ui/ui_overlays.rs::draw_help_overlay), whose ground truth is the /help entry line and the scroll footer. (iter-1785) The 100x30 variant is the FILTERED view: `/help model` opens the overlay filtered on the term, and the Commands view renders the filter \u2014 before iter-1785 the Commands view never read HelpOverlay::filter, so every keystroke typed in /help was swallowed by a filter no render consulted, and `/help <command>` dropped its argument on the floor. The variant pins the filtered frame: the /model row is on screen and /changelog is not."
 }
