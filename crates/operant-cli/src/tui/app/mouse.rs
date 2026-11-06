@@ -1147,9 +1147,17 @@ impl App {
             // (The wheel is not absorbed here: the panels that scroll take it
             // — the /help overlay, the session hub, the list dialogs — and the
             // rest absorb it in `wheel_scroll`.)
+            //
+            // (RT-265) The RELEASE is absorbed with it: a release runs the
+            // transcript's copy branch, so a selection made BEFORE the panel
+            // opened was copied by a release inside the panel — the operator
+            // clicked a panel and the clipboard changed without them asking
+            // for it. With the press and the drag absorbed there is no new
+            // selection to end, so the release has nothing to do either.
             MouseEventKind::Down(MouseButton::Right)
             | MouseEventKind::Down(MouseButton::Left)
             | MouseEventKind::Drag(MouseButton::Left)
+            | MouseEventKind::Up(MouseButton::Left)
                 if self.any_overlay_open() => {}
             // ---- Right-click context menu ----------------------------------
             MouseEventKind::Down(MouseButton::Right) => {

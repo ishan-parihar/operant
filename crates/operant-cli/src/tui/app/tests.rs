@@ -3403,6 +3403,60 @@ fn the_wheel_scrolls_the_transcript_and_no_cursor_when_no_panel_is_open() {
     );
 }
 
+/// (RT-265) A release inside an open panel must not copy a selection made
+/// BEFORE the panel opened.
+///
+/// The release is where the transcript's copy happens (jcode parity: a
+/// finalized drag selection always copies on release). With the press and
+/// the drag absorbed behind a panel (RT-258), there is no new selection to
+/// end — but the release still ran the copy branch, so the operator clicked
+/// a panel and the clipboard changed without them asking for it.
+#[test]
+fn a_release_inside_an_open_panel_does_not_copy_a_selection_made_before_it() {
+    let mut app = make_app();
+    // A selection made before the panel opened.
+    app.selection_anchor = Some((0, 0));
+    app.selection_focus = Some((5, 0));
+    *app.selection_text.borrow_mut() = "TEST stale selection".to_string();
+    app.theme_screen.visible = true;
+    let before = app.status_message.clone();
+
+    app.handle_mouse_event(MouseEvent {
+        kind: MouseEventKind::Up(MouseButton::Left),
+        column: 10,
+        row: 5,
+        modifiers: KeyModifiers::empty(),
+    });
+
+    assert_eq!(
+        app.status_message, before,
+        "a release inside an open panel must not copy the selection made before it"
+    );
+}
+
+/// The control for the test above: with NO panel open, the release still
+/// copies — that is the feature the panel must not break.
+#[test]
+fn a_release_with_no_panel_open_still_copies_the_selection() {
+    let mut app = make_app();
+    app.selection_anchor = Some((0, 0));
+    app.selection_focus = Some((5, 0));
+    *app.selection_text.borrow_mut() = "TEST stale selection".to_string();
+    let before = app.status_message.clone();
+
+    app.handle_mouse_event(MouseEvent {
+        kind: MouseEventKind::Up(MouseButton::Left),
+        column: 10,
+        row: 5,
+        modifiers: KeyModifiers::empty(),
+    });
+
+    assert_ne!(
+        app.status_message, before,
+        "a release with nothing open must still copy the selection"
+    );
+}
+
 /// (RT-258) A click with a panel open must not reach the transcript BEHIND
 /// the panel.
 ///
