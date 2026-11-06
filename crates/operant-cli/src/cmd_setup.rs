@@ -21,8 +21,8 @@ use anyhow::{Context, Result};
 use chrono::Local;
 use console::style;
 use operant_core::config::{
-    AppConfig, AuxiliaryModelConfig, GatewaySettings, SessionResetMode, TerminalBackend,
-    ToolProgressMode, default_config_paths, install_runtime_config,
+    AppConfig, AuxiliaryModelConfig, GatewaySettings, TerminalBackend, ToolProgressMode,
+    default_config_paths, install_runtime_config,
 };
 
 use crate::env_store::{remove_env_value, save_env_value};
@@ -212,15 +212,6 @@ fn show_setup_status(config: &AppConfig) {
         ToolProgressMode::Auto => "Auto",
     };
     print_status("Tool progress", tool_progress, true);
-
-    // Session reset
-    let session_reset = match config.agent.session_reset {
-        SessionResetMode::Never => "Never",
-        SessionResetMode::OnSystemPromptChange => "On system prompt change",
-        SessionResetMode::OnToolChange => "On tool change",
-        SessionResetMode::Always => "Always",
-    };
-    print_status("Session reset", session_reset, true);
 
     // Context compression
     print_status(
@@ -1199,31 +1190,12 @@ async fn step_agent_settings(config: &mut AppConfig, _reconfigure: bool) -> Resu
         config.agent.context_compression_threshold = threshold;
     }
 
-    // Session reset
-    print_header("Session Reset Policy");
-    print_info("Messaging sessions accumulate context over time, growing API costs.");
-    print_info("Session reset clears the conversation when certain conditions are met:");
-    println!("    Never                  Keep context forever (highest cost)");
-    println!("    On system prompt       Reset when system prompt changes");
-    println!("    On tool change         Reset when tool configuration changes");
-    println!("    Always                 Reset every new session (lowest cost)");
-    println!();
-    let reset_modes = [
-        ("Never", SessionResetMode::Never),
-        (
-            "On system prompt change",
-            SessionResetMode::OnSystemPromptChange,
-        ),
-        ("On tool change", SessionResetMode::OnToolChange),
-        ("Always", SessionResetMode::Always),
-    ];
-    let reset_mode_names: Vec<&str> = reset_modes.iter().map(|(n, _)| *n).collect();
-    let current_reset = reset_modes
-        .iter()
-        .position(|(_, m)| *m == config.agent.session_reset)
-        .unwrap_or(0);
-    let reset_sel = prompt_select("Session reset mode", &reset_mode_names, current_reset)?;
-    config.agent.session_reset = reset_modes[reset_sel].1.clone();
+    // The session-reset policy screen is GONE (RT-263): the setting is
+    // accepted but no code path enforces it, so offering four behavioural
+    // promises ("Reset every new session — lowest cost") in the wizard made a
+    // no-op look like a live policy. A value set by hand is reported as
+    // unread at load (`AppConfig::unused_setting_warnings`), and the key
+    // stays in the schema so an existing operant.toml still parses.
 
     println!();
     Ok(())

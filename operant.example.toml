@@ -182,7 +182,9 @@ context_compression = false
 #   read-only sessions — ids whose DAG is never mutated (ingest is a no-op),
 #   keeping archived transcripts byte-for-byte stable.
 # context_lcm_readonly_sessions = ["archive-2024"]
-session_reset = "never"
+# Accepted but NOT enforced (RT-263): no code path resets a conversation from
+# this policy. A set value is reported as unread at load — remove the key.
+# session_reset = "never"
 # system_prompt = "You are Hermes."
 # Turns between self-improvement memory reviews (0 = disabled, default 10)
 memory_nudge_interval = 10

@@ -663,6 +663,13 @@ pub struct BehaviorSettings {
     #[serde(default = "default_true")]
     pub show_turn_attribution: bool,
     pub tool_progress: ToolProgressMode,
+    /// Accepted but NOT ENFORCED (RT-263): the reset policy no code path
+    /// reads — nothing resets a conversation when the system prompt or the
+    /// tool set changes, and the gateway's own `SessionResetPolicy` is always
+    /// `ResetMode::None`. The field stays (deleting it breaks any operant.toml
+    /// that sets it — the config carries `deny_unknown_fields`), and a SET
+    /// value is reported by `AppConfig::unused_setting_warnings` so it stops
+    /// looking like a live policy. The setup wizard no longer offers it.
     pub session_reset: SessionResetMode,
     pub context_compression: bool,
     pub context_compression_threshold: f64,
@@ -3141,6 +3148,20 @@ impl AppConfig {
             self.agent.max_consecutive_tool_only != d.agent.max_consecutive_tool_only,
             "[agent] max_consecutive_tool_only"
         );
+        // (RT-263) `agent.session_reset` is parsed, offered by `operant setup`
+        // with four behavioural promises ("Reset when system prompt changes",
+        // "Reset every new session — lowest cost"), shown in the setup status
+        // as an ACTIVE setting — and READ BY NOTHING: no code path resets a
+        // conversation on a system-prompt or a tool change, and the gateway's
+        // own `SessionResetPolicy` is always `ResetMode::None`. The key stays
+        // (deleting it breaks any operant.toml that sets it — the config
+        // carries `deny_unknown_fields`) but a SET value now REPORTS instead
+        // of being accepted in silence, which is what made a no-op look like
+        // a live policy.
+        flag!(
+            self.agent.session_reset != d.agent.session_reset,
+            "[agent] session_reset"
+        );
         flag!(
             self.tools.event_channel_size != d.tools.event_channel_size
                 || self.tools.browser_binary_path != d.tools.browser_binary_path,
@@ -4154,6 +4175,28 @@ wonderful_unknown_key = 42
         let warnings = config.unused_setting_warnings();
         assert_eq!(warnings.len(), 1, "{warnings:?}");
         assert!(warnings[0].contains("[socialization]"), "{warnings:?}");
+    }
+
+    /// RT-263: `agent.session_reset` is accepted but UNREAD — the setup
+    /// wizard offers it with four behavioural promises ("Reset every new
+    /// session — lowest cost") and the status panel shows it as an active
+    /// setting, but nothing in the codebase resets a conversation on a
+    /// system-prompt or a tool change. A SET value must REPORT rather than
+    /// be accepted in silence.
+    #[test]
+    fn a_session_reset_policy_setting_is_reported_as_unread() {
+        // The default is `never` — which is what the runtime does anyway, so
+        // a clean config stays silent.
+        assert!(AppConfig::default().unused_setting_warnings().is_empty());
+
+        let raw = "[agent]\nsession_reset = \"always\"\n";
+        let config = parse_config_str(raw, Path::new("memory://unused-session-reset")).unwrap();
+        let warnings = config.unused_setting_warnings();
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(
+            warnings[0].contains("[agent] session_reset"),
+            "{warnings:?}"
+        );
     }
 
     /// The six inert `[auxiliary_models.*]` slots (audit 2026-10-26, iter-1349).
