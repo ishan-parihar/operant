@@ -911,6 +911,10 @@ impl App {
             }
             return;
         }
+        // (RT-262) The panels whose list carries a cursor take the wheel.
+        if self.wheel_scroll_panel_cursor(up) {
+            return;
+        }
         if self.any_overlay_open() {
             return;
         }
@@ -920,6 +924,64 @@ impl App {
         } else {
             self.scroll_down_rows(step);
         }
+    }
+
+    /// Move the open panel's SELECTION cursor with the wheel.
+    ///
+    /// (RT-262) The wheel belonged to the open panel (RT-251), and the panels
+    /// that SCROLL took it (the `/help` overlay, the session hub's preview,
+    /// the three list dialogs, the diff viewer's detail pane, the skills
+    /// view). But the panels whose list carries a CURSOR had nothing: the
+    /// wheel did nothing there at all, so the operator scrolled a long list
+    /// with the arrow keys, because the one control that means "scroll" was
+    /// inert — the same gap the diff viewer had (RT-259), ten panels over.
+    ///
+    /// The wheel moves the cursor the way ↑/↓ do — the SAME methods the key
+    /// handler calls — so the wheel and the keys can never disagree about
+    /// where the selection is, and a panel cannot grow a second, different
+    /// notion of "the current row".
+    ///
+    /// Returns true when a panel took the wheel (including when it absorbed
+    /// it), so the transcript behind the panel never moves.
+    fn wheel_scroll_panel_cursor(&mut self, up: bool) -> bool {
+        // `up` is passed in rather than captured: a macro body resolves its
+        // free identifiers at the definition site, and this one is defined
+        // inside the function.
+        macro_rules! cursor_panel {
+            ($panel:expr, $prev:ident, $next:ident, $up:expr) => {
+                if $panel.visible {
+                    if $up {
+                        $panel.$prev();
+                    } else {
+                        $panel.$next();
+                    }
+                    return true;
+                }
+            };
+        }
+        cursor_panel!(self.agents_menu, select_prev, select_next, up);
+        cursor_panel!(self.plugins_hub, select_prev, select_next, up);
+        cursor_panel!(self.journey_view, cursor_up, cursor_down, up);
+        cursor_panel!(self.global_search, select_prev, select_next, up);
+        cursor_panel!(self.history_search_overlay, select_prev, select_next, up);
+        cursor_panel!(self.memory_file_selector, select_prev, select_next, up);
+        cursor_panel!(self.permissions_picker, select_prev, select_next, up);
+        cursor_panel!(self.ask_user_dialog, select_prev, select_next, up);
+        cursor_panel!(self.theme_screen, select_prev, select_next, up);
+        if self.rewind_selector.visible {
+            // Its arrows are EATEN while the filter box is open (the
+            // operator is typing a filter), so the wheel is eaten too — the
+            // wheel belongs to the panel, and the panel says "not now".
+            if !self.rewind_selector.filter_open {
+                if up {
+                    self.rewind_selector.select_prev();
+                } else {
+                    self.rewind_selector.select_next();
+                }
+            }
+            return true;
+        }
+        false
     }
 
     #[expect(

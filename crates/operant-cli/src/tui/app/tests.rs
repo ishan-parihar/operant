@@ -3160,6 +3160,249 @@ fn the_wheel_scrolls_the_panels_that_can_scroll() {
     );
 }
 
+/// (RT-262) The wheel moves the CURSOR of the panel whose list is open.
+///
+/// The panels whose list carries a cursor had nothing: the wheel did nothing
+/// there at all, so the operator scrolled a long list with the arrow keys,
+/// because the one control that means "scroll" was inert. The wheel now
+/// moves the cursor the way ↑/↓ do — the same methods the key handler calls
+/// — so the wheel and the keys can never disagree about where the selection
+/// is.
+///
+/// This table drives EVERY panel with a cursor, so a panel cannot fall
+/// through by being forgotten in a second list.
+#[test]
+fn the_wheel_moves_the_cursor_of_the_panel_whose_list_is_open() {
+    /// One panel: its name, the setup that gives it a list to move in, and
+    /// the cursor it moves.
+    type Panel = (&'static str, fn(&mut App), fn(&App) -> usize);
+
+    let panels: Vec<Panel> = vec![
+        (
+            "agents_menu",
+            |app| {
+                app.agents_menu.visible = true;
+                app.agents_menu.definitions = vec![crate::tui::agents_view::AgentDefinition {
+                    file_path: std::path::PathBuf::from("/tmp/first.md"),
+                    name: "first".to_string(),
+                    source: "user".to_string(),
+                    model: None,
+                    memory_scope: None,
+                    description: String::new(),
+                    tools: Vec::new(),
+                    shadowed_by: None,
+                    instructions: String::new(),
+                }];
+            },
+            |app| app.agents_menu.selected_row,
+        ),
+        (
+            "plugins_hub",
+            |app| {
+                app.plugins_hub.visible = true;
+                app.plugins_hub.plugins = vec![
+                    crate::tui::plugins_hub::PluginEntry {
+                        name: "first".to_string(),
+                        enabled: true,
+                        size: "1K".to_string(),
+                    },
+                    crate::tui::plugins_hub::PluginEntry {
+                        name: "second".to_string(),
+                        enabled: true,
+                        size: "2K".to_string(),
+                    },
+                ];
+            },
+            |app| app.plugins_hub.selected,
+        ),
+        (
+            "journey_view",
+            |app| {
+                app.journey_view.visible = true;
+                app.journey_view.skills = vec![
+                    operant_core::skills::Skill {
+                        name: "first".to_string(),
+                        description: "first".to_string(),
+                        version: "1.0.0".to_string(),
+                        content: String::new(),
+                        platforms: Vec::new(),
+                        tags: Vec::new(),
+                        category: "demo".to_string(),
+                        prerequisites_env: Vec::new(),
+                        prerequisites_commands: Vec::new(),
+                        references: std::collections::HashMap::new(),
+                        origin: operant_core::skills::SkillOrigin::OperatorPool,
+                    },
+                    operant_core::skills::Skill {
+                        name: "second".to_string(),
+                        description: "second".to_string(),
+                        version: "1.0.0".to_string(),
+                        content: String::new(),
+                        platforms: Vec::new(),
+                        tags: Vec::new(),
+                        category: "demo".to_string(),
+                        prerequisites_env: Vec::new(),
+                        prerequisites_commands: Vec::new(),
+                        references: std::collections::HashMap::new(),
+                        origin: operant_core::skills::SkillOrigin::OperatorPool,
+                    },
+                ];
+            },
+            |app| app.journey_view.skills_cursor,
+        ),
+        (
+            "global_search",
+            |app| {
+                app.global_search.visible = true;
+                app.global_search.results = vec![
+                    crate::tui::overlays::SearchResult {
+                        file: "a.rs".to_string(),
+                        line: 1,
+                        text: "first".to_string(),
+                    },
+                    crate::tui::overlays::SearchResult {
+                        file: "b.rs".to_string(),
+                        line: 2,
+                        text: "second".to_string(),
+                    },
+                ];
+            },
+            |app| app.global_search.selected,
+        ),
+        (
+            "history_search_overlay",
+            |app| {
+                app.history_search_overlay.visible = true;
+                app.history_search_overlay.matches = vec![
+                    crate::tui::overlays::MatchEntry {
+                        snapshot_idx: 0,
+                        score: 1.0,
+                    },
+                    crate::tui::overlays::MatchEntry {
+                        snapshot_idx: 1,
+                        score: 0.5,
+                    },
+                ];
+            },
+            |app| app.history_search_overlay.selected_idx,
+        ),
+        (
+            "memory_file_selector",
+            |app| {
+                app.memory_file_selector.visible = true;
+                app.memory_file_selector.files = vec![
+                    crate::tui::memory_file_selector::MemoryFile {
+                        display_path: "first.md".to_string(),
+                        file_type: crate::tui::memory_file_selector::MemoryFileType::User,
+                        exists: true,
+                    },
+                    crate::tui::memory_file_selector::MemoryFile {
+                        display_path: "second.md".to_string(),
+                        file_type: crate::tui::memory_file_selector::MemoryFileType::Project,
+                        exists: true,
+                    },
+                ];
+            },
+            |app| app.memory_file_selector.selected,
+        ),
+        (
+            "permissions_picker",
+            |app| app.permissions_picker.visible = true,
+            |app| app.permissions_picker.selected,
+        ),
+        (
+            "ask_user_dialog",
+            |app| {
+                app.ask_user_dialog.visible = true;
+                app.ask_user_dialog.options = Some(vec!["yes".to_string(), "no".to_string()]);
+            },
+            |app| app.ask_user_dialog.selected_idx,
+        ),
+        (
+            "theme_screen",
+            |app| app.theme_screen.visible = true,
+            |app| app.theme_screen.selected_idx,
+        ),
+        (
+            "rewind_selector",
+            |app| {
+                app.rewind_selector.visible = true;
+                app.rewind_selector.entries = vec![
+                    crate::tui::rewind_selector::RewindEntry {
+                        turn_id: 1,
+                        text: "first".to_string(),
+                        compacted: false,
+                    },
+                    crate::tui::rewind_selector::RewindEntry {
+                        turn_id: 2,
+                        text: "second".to_string(),
+                        compacted: false,
+                    },
+                ];
+            },
+            |app| app.rewind_selector.selected,
+        ),
+    ];
+
+    for (name, setup, cursor) in panels {
+        let mut app = make_app();
+        setup(&mut app);
+        let before = cursor(&app);
+
+        app.handle_mouse_event(MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 10,
+            row: 5,
+            modifiers: KeyModifiers::empty(),
+        });
+        assert_ne!(
+            cursor(&app),
+            before,
+            "the wheel must move the {name} panel's cursor"
+        );
+
+        app.handle_mouse_event(MouseEvent {
+            kind: MouseEventKind::ScrollUp,
+            column: 10,
+            row: 5,
+            modifiers: KeyModifiers::empty(),
+        });
+        assert_eq!(
+            cursor(&app),
+            before,
+            "the wheel must move the {name} panel's cursor back"
+        );
+    }
+}
+
+/// The control for the table above: with NO panel open, the wheel scrolls the
+/// transcript and no panel's cursor moves. Without this, "the wheel does
+/// nothing" would pass it.
+#[test]
+fn the_wheel_scrolls_the_transcript_and_no_cursor_when_no_panel_is_open() {
+    let mut app = make_app();
+    assert!(!app.any_overlay_open());
+    app.scroll_offset = 10;
+    app.auto_scroll = false;
+
+    app.handle_mouse_event(MouseEvent {
+        kind: MouseEventKind::ScrollUp,
+        column: 10,
+        row: 5,
+        modifiers: KeyModifiers::empty(),
+    });
+
+    assert!(
+        app.scroll_offset < 10,
+        "the wheel must still scroll the transcript when nothing is open: {}",
+        app.scroll_offset
+    );
+    assert_eq!(
+        app.theme_screen.selected_idx, 0,
+        "no panel is open, so no panel's cursor may move"
+    );
+}
+
 /// (RT-258) A click with a panel open must not reach the transcript BEHIND
 /// the panel.
 ///
