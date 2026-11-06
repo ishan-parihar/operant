@@ -8,30 +8,30 @@
                            │ Search                                                        │
                            │                                                               │
                            │                                                               │
-                           │ Other                                                         │
-                           │ /help Show help and keyboard shortcuts (/help <text> filters) │
-                           │ /? Show help and keyboard shortcuts                           │
- operant · replay          │ /commands Alias for /help                                     │
+                           │ Model & Provider                                              │
+                           │ /model List or switch models                                  │
+                           │ /effort Pick the reasoning effort (low | normal | high | max) │
+ operant · replay          │ /connect Open the provider connect dialog                     │
  operant                   │                                                               │
- /model to switch · Offline│ Model & Provider                                              │
- v0.3.0                    │ /model List or switch models                                  │
- /login to add provider    │                                                               │
- ● anthropic(key)          │ Other                                                         │
- ~                         │ /models Alias for /model                                      │
-                           │ /refresh-model-list Refresh provider model catalogs           │
-                           │                                                               │
-                           │ Tools                                                         │
-› Ask operant to do anythin│ /agents Configure models for agent roles                      │
-                           │                                                               │
-                           │ Other                                                         │   ~ API key Offline Capture
-                           │ /todos Show the session todo list as a card in the chat       │
-                           │ /todo Alias for /todos                                        │
-                           │ /hotkeys List hotkeys with your personal usage                │
+ /model to switch · Offline│ Review & History                                              │
+ v0.3.0                    │ /review Open the git diff viewer (same as /diff)              │
+ /login to add provider    │ /rewind Rewind to the Nth-last prompt (forks the session; old │
+ ● anthropic(key)          │ /diff Open the git diff viewer                                │
+ ~                         │ /rename Rename current session                                │
+                           │ /changes Show the current turn's diff                         │
+                           │ /copy Copy the last N messages to the clipboard (default 1): /│
+                           │ /export Export the conversation                               │
+› Ask operant to do anythin│ /retry Rewind the last turn and resubmit it                   │
+                           │ /rollback Show the last turn's diff (does not rewind; use /rew│
+                           │ /stop Stop the running turn                                   │   ~ API key Offline Capture
+                           │ /undo Rewind the last N turns                                 │
                            │                                                               │
                            │ Diagnostics                                                   │
                            │ /terminal-setup Fix Shift+Enter newlines                      │
-                           │                                                               │
-                           │ Other                                                         │
+                           │ /context Show the full session context snapshot               │
+                           │ /version Show current version                                 │
+                           │ /stats Show session token and cost stats                      │
+                           │ /usage Alias for /stats                                       │
                            └───────────────────────────────────────────────────Esc to close┘
 
 

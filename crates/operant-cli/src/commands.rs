@@ -540,9 +540,14 @@ pub fn build_command_map() -> HashMap<&'static str, &'static CommandDef> {
 // TUI command data (single source of truth for typeahead + help overlay)
 // ---------------------------------------------------------------------------
 
-/// TUI-specific category labels for grouping commands in the help overlay.
+/// TUI-specific category labels for grouping commands in the command palette.
 /// These are separate from the registry's `category` field because the TUI
 /// groups commands by user-facing intent (e.g. "Model & Provider" vs. "Configuration").
+///
+/// The DECLARATION ORDER is the palette's section order, and `Other` is
+/// LAST on purpose: it is the catch-all, so it belongs after every real
+/// category rather than in the middle of the list (iter-1791).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum TuiCategory {
     ModelAndProvider,
     ReviewAndHistory,
@@ -576,29 +581,27 @@ impl TuiCategory {
 }
 
 /// Return the TUI category for a given command name.
-pub fn tui_category(name: &str) -> &'static str {
+pub fn tui_category(name: &str) -> TuiCategory {
     match name {
-        "connect" | "model" | "effort" | "provider" => TuiCategory::ModelAndProvider.as_str(),
+        "connect" | "model" | "effort" | "provider" => TuiCategory::ModelAndProvider,
         "changes" | "diff" | "review" | "rewind" | "export" | "copy" | "history" | "retry"
         | "undo" | "rollback" | "stop" | "refresh" | "rename" | "replay" | "replay-diff" => {
-            TuiCategory::ReviewAndHistory.as_str()
+            TuiCategory::ReviewAndHistory
         }
         "stats" | "cost" | "context" | "doctor" | "status" | "version" | "time" | "debug"
         | "whoami" | "credits" | "billing" | "insights" | "usage" | "mouse" | "terminal-setup"
-        | "heapdump" | "mem" | "pet" => TuiCategory::Diagnostics.as_str(),
+        | "heapdump" | "mem" | "pet" => TuiCategory::Diagnostics,
         "config" | "theme" | "keybindings" | "hooks" | "mcp" | "import-config" | "output-style"
         | "setup" | "indicator" | "statusbar" | "skin" | "busy" | "verbose" => {
-            TuiCategory::Workspace.as_str()
+            TuiCategory::Workspace
         }
-        "agents" | "memory" | "tools" | "skills" | "bundles" | "journey" => {
-            TuiCategory::Tools.as_str()
-        }
-        "search" | "sessions" | "session" => TuiCategory::Sessions.as_str(),
-        "plan" | "vim" | "yolo" => TuiCategory::Preferences.as_str(),
-        "goal" | "title" | "branch" | "personality" | "reasoning" => TuiCategory::Session.as_str(),
-        "compact" | "compress" => TuiCategory::Context.as_str(),
-        "login" | "logout" | "update" => TuiCategory::Account.as_str(),
-        _ => TuiCategory::Other.as_str(),
+        "agents" | "memory" | "tools" | "skills" | "bundles" | "journey" => TuiCategory::Tools,
+        "search" | "sessions" | "session" => TuiCategory::Sessions,
+        "plan" | "vim" | "yolo" => TuiCategory::Preferences,
+        "goal" | "title" | "branch" | "personality" | "reasoning" => TuiCategory::Session,
+        "compact" | "compress" => TuiCategory::Context,
+        "login" | "logout" | "update" => TuiCategory::Account,
+        _ => TuiCategory::Other,
     }
 }
 

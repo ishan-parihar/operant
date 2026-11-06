@@ -265,13 +265,33 @@ impl App {
             ),
             import_config_dialog: ImportConfigDialogState::new(),
             command_palette: {
-                let items: Vec<SelectItem> = tui_slash_command_data()
-                    .iter()
-                    .map(|(name, desc)| SelectItem {
-                        id: format!("/{}", name),
-                        title: format!("/{}", name),
-                        description: (*desc).to_string(),
-                        category: crate::commands::tui_category(name).to_string(),
+                // (iter-1791) The palette's rows are GROUPED by category.
+                // They used to be in registration order, so the categories
+                // INTERLEAVED and the renderer — which prints a header
+                // whenever the category CHANGES — printed the same header
+                // again and again ("Other" four times in the first twenty
+                // rows). The sort is stable, so the registration order
+                // survives INSIDE a category, and the enum's order puts the
+                // catch-all ("Other") last.
+                let mut rows: Vec<(crate::commands::TuiCategory, String, String)> =
+                    tui_slash_command_data()
+                        .iter()
+                        .map(|(name, desc)| {
+                            (
+                                crate::commands::tui_category(name),
+                                format!("/{}", name),
+                                (*desc).to_string(),
+                            )
+                        })
+                        .collect();
+                rows.sort_by_key(|(category, ..)| *category);
+                let items: Vec<SelectItem> = rows
+                    .into_iter()
+                    .map(|(category, title, description)| SelectItem {
+                        id: title.clone(),
+                        title,
+                        description,
+                        category: category.as_str().to_string(),
                         badge: None,
                     })
                     .collect();

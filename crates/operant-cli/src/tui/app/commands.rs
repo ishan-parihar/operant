@@ -3112,4 +3112,44 @@ mod tests {
             "a bare /help is not filtered"
         );
     }
+
+    /// (iter-1791) The command palette's rows were in REGISTRATION order, so
+    /// the categories INTERLEAVED — and the renderer prints a category
+    /// header whenever the category CHANGES, so the same header came back
+    /// again and again ("Other" four times in the first twenty rows of the
+    /// palette). The rows must be GROUPED: every category is one contiguous
+    /// run, so every header is printed exactly once.
+    #[test]
+    fn the_command_palette_groups_its_rows_by_category() {
+        let app = make_app();
+        let categories: Vec<&str> = app
+            .command_palette
+            .items
+            .iter()
+            .map(|item| item.category.as_str())
+            .collect();
+        assert!(
+            categories.len() > 10,
+            "the palette has the whole command table, not a handful of rows"
+        );
+        let mut seen: Vec<&str> = Vec::new();
+        for category in &categories {
+            if seen.last() != Some(category) {
+                assert!(
+                    !seen.contains(category),
+                    "{category} appears in two runs — the palette would print its \
+                     header twice (rows: {categories:?})"
+                );
+                seen.push(category);
+            }
+        }
+        assert_eq!(
+            seen.len(),
+            categories
+                .iter()
+                .collect::<std::collections::HashSet<_>>()
+                .len(),
+            "every category is one contiguous run: {seen:?}"
+        );
+    }
 }
