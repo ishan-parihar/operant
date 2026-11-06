@@ -4419,7 +4419,7 @@ mod rt175_tests {
 #[cfg(test)]
 mod rt179_functional_core_tests {
     use super::*;
-    use crate::gateway_runner::{context_headroom_line, gateway_context_window_for_model};
+    use crate::gateway_runner::context_headroom_line;
 
     /// The two commands must RESOLVE — a name that falls through
     /// `resolve_command` reaches the model as a literal, which is exactly
@@ -4616,34 +4616,51 @@ mod rt179_functional_core_tests {
         );
     }
 
-    /// The window resolver must agree with the TUI's own fallback table —
-    /// the iter-1207 defect was TWO denominators, and the way it reappears
-    /// is a gateway resolver that quietly drifts from the TUI's.
+    /// The TUI's footer and the gateway's `/context` must quote ONE
+    /// denominator: the agent's own window.
+    ///
+    /// (iter-1779) iter-1769 changed the TUI's refresh to read the configured
+    /// value and added `OperantAgent::context_window()` — "public because CLI
+    /// and TUI surfaces must report the same denominator the agent uses" —
+    /// but left the gateway's resolver on the models.dev table it had used
+    /// since iter-1386. So the TUI's footer said "8/128k" while `/context`
+    /// said "0 / 200.0k": the iter-1207 two-denominator lie, back again, and
+    /// the same session's two surfaces disagreeing about how full the context
+    /// was.
+    ///
+    /// The check reads the source (the repo's pattern for a cross-file
+    /// contract — the settings applier guard does the same): both surfaces
+    /// must take the window from the agent, and the old resolver must be
+    /// gone.
     #[test]
-    fn gateway_context_window_matches_the_tui_fallback_table() {
-        // The TUI table (tui/app/providers.rs refresh_context_window_size):
-        // anthropic 200_000, openai 128_000, google 1_048_576, else 128_000.
-        // These are the OFFLINE fallbacks — the models_dev cache may override
-        // them when populated, so this asserts the FALLBACK path by using
-        // model ids the cache cannot resolve.
-        assert_eq!(
-            gateway_context_window_for_model("anthropic/__nope__"),
-            200_000
+    fn the_tui_and_the_gateway_quote_the_agents_window() {
+        let runner = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/gateway_runner.rs"
+        ))
+        .expect("the gateway runner is readable");
+        let tui = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/tui/adapter_types/tui_app.rs"
+        ))
+        .expect("the TUI app is readable");
+
+        assert!(
+            runner.contains("let window = agent.context_window();"),
+            "the gateway's /context must take the window from the agent — it is what \
+             the core budgets against, and what the TUI's footer reads"
         );
-        assert_eq!(gateway_context_window_for_model("openai/__nope__"), 128_000);
-        assert_eq!(
-            gateway_context_window_for_model("google/__nope__"),
-            1_048_576
+        assert!(
+            !runner.contains("gateway_context_window_for_model"),
+            "the gateway's own window resolver is gone: it resolved a DIFFERENT \
+             denominator than the core used"
         );
-        // An unknown provider prefix falls to the flat default, not zero and
-        // not infinity — a division by zero would hang the percentage.
-        assert_eq!(
-            gateway_context_window_for_model("mystery/__nope__"),
-            128_000
+        assert!(
+            tui.contains("self.app.context_window_size = agent.context_window() as u64;"),
+            "the TUI's footer must take the window from the agent when the agent \
+             exists — the configured value alone is not what the core budgets \
+             against (a learned overflow limit lowers it)"
         );
-        // A bare model with no provider prefix still resolves to a finite
-        // window rather than an unwindowed divisor.
-        assert!(gateway_context_window_for_model("some-bare-model") > 0);
     }
 }
 

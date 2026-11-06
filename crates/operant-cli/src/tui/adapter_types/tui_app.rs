@@ -344,6 +344,15 @@ impl TuiApp {
         // After the fetch: on a cold models.dev cache the window reads the
         // models.dev cache, which this fetch is what populates.
         self.app.refresh_context_window_size();
+        // (iter-1779) The agent's own window is the denominator the core
+        // budgets against — the configured one, lowered by a limit a prior
+        // overflow taught us. The config alone is not it, so the footer takes
+        // the agent's value whenever the agent exists: the TUI's footer and
+        // the gateway's /context quote ONE number, not two (the iter-1207
+        // lesson, learned twice).
+        if let Some(ref agent) = agent {
+            self.app.context_window_size = agent.context_window() as u64;
+        }
 
         if let Some(query) = self.initial_query.take()
             && let Some(ref agent) = agent
@@ -983,6 +992,15 @@ impl TuiApp {
             }
         }
         self.app.refresh_context_window_size();
+        // (iter-1779) The agent's own window is the denominator the core
+        // budgets against — the configured one, lowered by a limit a prior
+        // overflow taught us. The config alone is not it, so the footer takes
+        // the agent's value whenever the agent exists: the TUI's footer and
+        // the gateway's /context quote ONE number, not two (the iter-1207
+        // lesson, learned twice).
+        if let Some(ref agent) = agent {
+            self.app.context_window_size = agent.context_window() as u64;
+        }
 
         if let Some(query) = self.initial_query.take()
             && let Some(ref agent) = agent
