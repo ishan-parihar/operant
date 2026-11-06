@@ -3071,6 +3071,127 @@ fn the_wheel_scrolls_the_transcript_when_no_overlay_is_open() {
     );
 }
 
+/// (RT-258) A click with a panel open must not reach the transcript BEHIND
+/// the panel.
+///
+/// The mouse's dialog gate named ten of the catalogue's 29 overlays, so the
+/// other nineteen let the click through: it selected the transcript's text
+/// (so Ctrl+C copied text the operator could not see, under the panel they
+/// were looking at), and it could expand a tool row or a thinking block the
+/// panel was covering.
+///
+/// This table drives EVERY overlay in the catalogue, so a panel cannot fall
+/// through by being forgotten in a second list.
+#[test]
+fn a_click_never_selects_the_transcript_behind_an_open_overlay() {
+    /// One catalogue entry: the overlay's name and the opener that shows it.
+    type Opener = (&'static str, fn(&mut App));
+
+    let openers: Vec<Opener> = vec![
+        ("help_overlay", |app| app.help_overlay.visible = true),
+        ("history_search_overlay", |app| {
+            app.history_search_overlay.visible = true
+        }),
+        ("global_search", |app| app.global_search.visible = true),
+        ("rewind_selector", |app| app.rewind_selector.visible = true),
+        ("settings_screen", |app| app.settings_screen.visible = true),
+        ("theme_screen", |app| app.theme_screen.visible = true),
+        ("stats_dialog", |app| app.stats_dialog.visible = true),
+        ("mcp_view", |app| app.mcp_view.visible = true),
+        ("agents_menu", |app| app.agents_menu.visible = true),
+        ("diff_viewer", |app| app.diff_viewer.visible = true),
+        ("memory_file_selector", |app| {
+            app.memory_file_selector.visible = true
+        }),
+        ("skills_view", |app| app.skills_view.visible = true),
+        ("plugins_hub", |app| app.plugins_hub.visible = true),
+        ("journey_view", |app| app.journey_view.visible = true),
+        ("session_hub", |app| app.session_hub.visible = true),
+        ("export_dialog", |app| app.export_dialog.visible = true),
+        ("context_viz", |app| app.context_viz.visible = true),
+        ("bypass_permissions_dialog", |app| {
+            app.bypass_permissions_dialog.visible = true
+        }),
+        ("permissions_picker", |app| {
+            app.permissions_picker.visible = true
+        }),
+        ("key_input_dialog", |app| {
+            app.key_input_dialog.visible = true
+        }),
+        ("custom_provider_dialog", |app| {
+            app.custom_provider_dialog.visible = true
+        }),
+        ("free_mode_dialog", |app| {
+            app.free_mode_dialog.visible = true
+        }),
+        ("connect_dialog", |app| app.connect_dialog.visible = true),
+        ("import_config_picker", |app| {
+            app.import_config_picker.visible = true
+        }),
+        ("import_config_dialog", |app| {
+            app.import_config_dialog.visible = true
+        }),
+        ("command_palette", |app| app.command_palette.visible = true),
+        ("ask_user_dialog", |app| app.ask_user_dialog.visible = true),
+    ];
+
+    for (name, open) in openers {
+        let mut app = make_app();
+        open(&mut app);
+        assert!(
+            app.any_overlay_open(),
+            "{name} is open but the catalogue does not see it"
+        );
+        // The geometry a frame would have published: the transcript's
+        // selectable area, so a click lands ON the transcript.
+        app.last_selectable_area.set(ratatui::layout::Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 10,
+        });
+
+        app.handle_mouse_event(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 10,
+            row: 3,
+            modifiers: KeyModifiers::empty(),
+        });
+
+        assert!(
+            app.selection_anchor.is_none(),
+            "a click must not select the transcript behind the {name} panel"
+        );
+    }
+}
+
+/// The control for the test above: with NO overlay open, the click still
+/// selects the transcript. Without this, "the click does nothing" would pass
+/// it.
+#[test]
+fn a_click_still_selects_the_transcript_when_no_overlay_is_open() {
+    let mut app = make_app();
+    assert!(!app.any_overlay_open());
+    app.last_selectable_area.set(ratatui::layout::Rect {
+        x: 0,
+        y: 0,
+        width: 80,
+        height: 10,
+    });
+
+    app.handle_mouse_event(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: 10,
+        row: 3,
+        modifiers: KeyModifiers::empty(),
+    });
+
+    assert!(
+        app.selection_anchor.is_some(),
+        "the click must still select the transcript when nothing is open"
+    );
+}
+
 // ---- Help overlay -------------------------------------------------------
 
 #[test]

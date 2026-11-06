@@ -1037,6 +1037,25 @@ impl App {
                     self.wheel_scroll(false);
                 }
             }
+            // (RT-258) A panel is open, so the mouse belongs to the PANEL.
+            //
+            // The gate above handles the ten dialogs that have their own click
+            // behaviour; the nineteen it forgot let the mouse reach the
+            // transcript BEHIND them. A click there selected the transcript's
+            // text — so Ctrl+C copied text the operator could not see, under a
+            // panel they were looking at — and a click could even expand a
+            // tool row or a thinking block the panel was covering, or open the
+            // transcript's context menu behind it.
+            //
+            // The panels have no mouse handling of their own, so the press is
+            // ABSORBED: the transcript behind an open panel is not reachable.
+            // (The wheel is not absorbed here: the panels that scroll take it
+            // — the /help overlay, the session hub, the list dialogs — and the
+            // rest absorb it in `wheel_scroll`.)
+            MouseEventKind::Down(MouseButton::Right)
+            | MouseEventKind::Down(MouseButton::Left)
+            | MouseEventKind::Drag(MouseButton::Left)
+                if self.any_overlay_open() => {}
             // ---- Right-click context menu ----------------------------------
             MouseEventKind::Down(MouseButton::Right) => {
                 let msg_area = self.last_msg_area.get();
