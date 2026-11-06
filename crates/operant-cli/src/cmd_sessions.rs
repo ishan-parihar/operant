@@ -209,11 +209,7 @@ async fn cmd_list_filtered(config: &AppConfig, json: bool, interrupted_only: boo
 
     for (i, session) in sessions.iter().enumerate() {
         let title = session.title.as_deref().unwrap_or("(untitled)");
-        let display_title = if title.len() > 26 {
-            format!("{}…", &title[..25])
-        } else {
-            title.to_string()
-        };
+        let display_title = display_title(title);
         println!(
             "{:<4} {:<36} {:<28} {:<12} {:<20} {:>8}",
             i + 1,
@@ -533,6 +529,16 @@ async fn cmd_search(config: &AppConfig, query: &str, limit: usize) -> Result<()>
     Ok(())
 }
 
+/// The session title as the LIST table shows it.
+///
+/// CHAR-safe, and it has to be: the operator's own session title carries an
+/// em-dash, and the byte slice this replaced PANICKED on it (2026-11-06:
+/// "end byte index 25 is not a char boundary") — in the one command an
+/// operator runs to SEE their sessions.
+fn display_title(title: &str) -> String {
+    truncate_str(title, 26)
+}
+
 fn truncate_str(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
         s.to_string()
@@ -668,6 +674,25 @@ async fn cmd_resume(config: &AppConfig, id: Option<&str>, last: bool) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The list table must not die on a title with a multi-byte character.
+    /// The operator's own session title carries an em-dash, and the byte
+    /// slice it used to take panicked on it.
+    #[test]
+    fn a_title_with_a_multi_byte_character_is_truncated_without_panicking() {
+        let title = "Capacity retry probe — echo status and current UTC time";
+        let shown = display_title(title);
+        assert!(
+            shown.chars().count() <= 26,
+            "the table column is 26 characters wide, got {:?}",
+            shown
+        );
+        assert!(shown.ends_with('…'), "a cut title is ellipsised: {shown:?}");
+        assert!(
+            shown.chars().take(25).all(|c| title.contains(c)),
+            "the cut must be a prefix of the title: {shown:?}"
+        );
+    }
 
     fn test_db() -> Database {
         use std::sync::atomic::{AtomicUsize, Ordering};

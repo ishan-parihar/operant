@@ -126,8 +126,13 @@ pub enum KeyAction {
 /// `K`eep / `R`eplace / `C`lear prompt for existing API keys.
 /// Shows masked key, returns Keep/Replace/Clear decision.
 pub fn prompt_key_action(label: &str, key: &str) -> Result<KeyAction> {
-    let masked = if key.len() > 8 {
-        format!("{}…{}", &key[..4], &key[key.len() - 4..])
+    // CHAR-safe: a pasted key can carry a multi-byte character, and a byte
+    // slice panics when the cut lands inside one.
+    let key_chars: Vec<char> = key.chars().collect();
+    let masked = if key_chars.len() > 8 {
+        let head: String = key_chars[..4].iter().collect();
+        let tail: String = key_chars[key_chars.len() - 4..].iter().collect();
+        format!("{head}…{tail}")
     } else {
         "configured".to_string()
     };

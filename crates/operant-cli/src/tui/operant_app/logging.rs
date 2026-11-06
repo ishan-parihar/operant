@@ -62,11 +62,12 @@ fn context_prefix_for(ctx: &LogContext) -> String {
         parts.push(format!("srv:{}", server));
     }
     if let Some(ref session) = ctx.session {
-        // Truncate session name if too long
-        let short = if session.len() > 20 {
-            &session[..20]
+        // Truncate the session name if too long. CHAR-safe: a byte slice
+        // panics when the cut lands inside a multi-byte character.
+        let short: String = if session.chars().count() > 20 {
+            session.chars().take(20).collect()
         } else {
-            session
+            session.clone()
         };
         parts.push(format!("ses:{}", short));
     }

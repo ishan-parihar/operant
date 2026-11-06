@@ -138,8 +138,13 @@ async fn cmd_list(config: &AppConfig) -> Result<()> {
             &cp.hash
         };
         let reason = cp.reason.as_deref().unwrap_or("-");
-        let display = if reason.len() > 50 {
-            format!("{}…", &reason[..49])
+        // CHAR-safe: the reason is free text, and a byte slice panics when
+        // the cut lands inside a multi-byte character (the same defect that
+        // killed `operant sessions list` on the operator's own em-dash).
+        let display = if reason.chars().count() > 50 {
+            let mut cut: String = reason.chars().take(49).collect();
+            cut.push('…');
+            cut
         } else {
             reason.to_string()
         };

@@ -445,9 +445,12 @@ fn render_models(state: &StatsDialogState, area: Rect, buf: &mut Buffer) {
         total_output += entry.output_tokens;
         total_cost += entry.cost_usd;
 
-        // Truncate long model IDs
-        let model_display = if entry.model_id.len() > 42 {
-            format!("{}...", &entry.model_id[..39])
+        // Truncate long model IDs. CHAR-safe: a byte slice panics when the
+        // cut lands inside a multi-byte character.
+        let model_display = if entry.model_id.chars().count() > 42 {
+            let mut cut: String = entry.model_id.chars().take(39).collect();
+            cut.push_str("...");
+            cut
         } else {
             entry.model_id.clone()
         };
