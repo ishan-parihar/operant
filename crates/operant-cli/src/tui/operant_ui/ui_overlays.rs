@@ -402,6 +402,10 @@ pub(super) fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: usize, ap
     let visible_height = area.height.saturating_sub(2) as usize;
     #[allow(clippy::manual_checked_ops)] // vendored-verbatim upstream scrollbar math
     let max_scroll = total_lines.saturating_sub(visible_height);
+    // (iter-1795) Record the real max so the KEY handler clamps to it: the
+    // hard-coded cap it used instead made the lower half of this overlay
+    // unreachable.
+    app.help_max_scroll().set(max_scroll);
     let scroll = scroll.min(max_scroll);
 
     let scroll_info = if total_lines > visible_height {
@@ -429,7 +433,16 @@ pub(super) fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: usize, ap
                 .add_modifier(Modifier::BOLD),
         ))
         .title_bottom(Line::from(Span::styled(
-            " Esc to close · mouse wheel/j/k scroll · Space/PageUp page · /help <cmd> for details ",
+            // (iter-1795) The old footer was a vendored string whose three
+            // scroll claims no arm implemented: j/k are NOT scroll keys (they
+            // are the filter's letters — and after iter-1785 the filter was
+            // live, so pressing 'j' per the footer HID the help), Space and
+            // PageUp/PageDown had no arm at all, and the wheel scrolled the
+            // TRANSCRIPT behind the overlay. The footer now names what the
+            // panel does: arrows and the wheel scroll, typing filters, and
+            // /help <cmd> filters the list. It also fits the narrow panel —
+            // the old line was clipped at 80 columns ("for d").
+            " Esc to close · ↑↓/wheel scroll · type to filter · /help <cmd> for details ",
             Style::default().fg(dim_color()),
         )))
         .borders(Borders::ALL)
@@ -479,6 +492,13 @@ pub(super) fn draw_keys_overlay(frame: &mut Frame, area: Rect, scroll: usize, ap
             dim_style,
         )));
     }
+
+    // (iter-1795) The same record the commands view makes: the key handler
+    // clamps the scroll to the content's real height, and this view's
+    // content is the chord report (a different height).
+    let visible_height = area.height.saturating_sub(2) as usize;
+    app.help_max_scroll()
+        .set(lines.len().saturating_sub(visible_height));
 
     let title = if hotkeys { " Hotkeys " } else { " Keys " };
     let block = Block::default()
@@ -627,6 +647,59 @@ mod tests {
             .draw(|frame| draw_help_overlay(frame, frame.area(), 0, app))
             .expect("draw");
         crate::tui::debug::debug_hub::buffer_rows(terminal.backend().buffer()).join("\n")
+    }
+
+    /// (iter-1795) The `/help` catalogue is far taller than the viewport —
+    /// the "More commands" list, the Skills section, the whole KEYBOARD
+    /// section and the Input section live BELOW the fold. The key handler
+    /// used to cap the scroll at a hard-coded 50 lines ("a generous upper
+    /// bound"), which was generous for the /keys report and far too small
+    /// for this one: those sections were UNREACHABLE.
+    ///
+    /// The render path records the content's real max scroll, and the
+    /// handler clamps to it — so the bottom is reachable and the scroll
+    /// never runs past it.
+    #[test]
+    fn the_help_overlay_scrolls_to_the_bottom_of_its_catalogue() {
+        let app = make_app();
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 40)).expect("terminal");
+        terminal
+            .draw(|frame| draw_help_overlay(frame, frame.area(), 0, &app))
+            .expect("draw");
+        let max = app.help_max_scroll().get();
+        assert!(
+            max > 49,
+            "the /help catalogue is much taller than the old hard-coded cap: {max}"
+        );
+
+        // And the KEY handler reaches it — and stops there. The overlay is
+        // opened and drawn first (the render path is what records the max),
+        // then the arrow key is pressed far more times than the content has
+        // lines: the scroll must land ON the bottom, not short of it (the
+        // old 50-line cap) and not past it (a scroll that runs over the end
+        // leaves the view stuck while the state walks back).
+        let mut app = make_app();
+        assert!(
+            app.handle_tui_command("help", ""),
+            "/help opens the overlay"
+        );
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 40)).expect("terminal");
+        terminal
+            .draw(|frame| draw_help_overlay(frame, frame.area(), 0, &app))
+            .expect("draw");
+        let max = app.help_max_scroll().get();
+        for _ in 0..(max + 50) {
+            app.handle_key_event(crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Down,
+                crossterm::event::KeyModifiers::NONE,
+            ));
+        }
+        assert_eq!(
+            app.help_overlay.scroll_offset as usize, max,
+            "the scroll must reach the bottom of the catalogue and stop there"
+        );
     }
 
     /// (iter-1786) The overlay's command rows read their descriptions from

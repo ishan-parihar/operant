@@ -987,14 +987,34 @@ impl App {
             MouseEventKind::ScrollUp => {
                 // Don't consume Ctrl+Scroll — let the terminal handle zoom.
                 if !mouse_event.modifiers.contains(KeyModifiers::CONTROL) {
-                    let step = self.scroll_step();
-                    self.scroll_up_rows(step);
+                    // (iter-1795) The help overlay is a SCROLLABLE overlay and
+                    // its footer says the wheel scrolls it. It is not one of
+                    // the dialogs in the gate above, so the wheel used to fall
+                    // through to the TRANSCRIPT — behind the overlay, where
+                    // the operator cannot see it.
+                    if self.help_overlay.visible {
+                        let step = self.scroll_step();
+                        for _ in 0..step {
+                            self.help_overlay.scroll_up();
+                        }
+                    } else {
+                        let step = self.scroll_step();
+                        self.scroll_up_rows(step);
+                    }
                 }
             }
             MouseEventKind::ScrollDown => {
                 if !mouse_event.modifiers.contains(KeyModifiers::CONTROL) {
-                    let step = self.scroll_step();
-                    self.scroll_down_rows(step);
+                    if self.help_overlay.visible {
+                        let step = self.scroll_step();
+                        let max = self.help_overlay.max_scroll.get().min(u16::MAX as usize) as u16;
+                        for _ in 0..step {
+                            self.help_overlay.scroll_down(max);
+                        }
+                    } else {
+                        let step = self.scroll_step();
+                        self.scroll_down_rows(step);
+                    }
                 }
             }
             // ---- Right-click context menu ----------------------------------

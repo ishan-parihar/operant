@@ -21,4 +21,4 @@
 │  Session                                                                     │
 │                                                                              │
 │    /clear  Clear conversation history                                        │
-└ Esc to close · mouse wheel/j/k scroll · Space/PageUp page · /help <cmd> for d┘
+└ Esc to close · ↑↓/wheel scroll · type to filter · /help <cmd> for details ───┘

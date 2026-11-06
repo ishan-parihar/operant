@@ -25,6 +25,16 @@ pub enum HelpOverlayContent {
 pub struct HelpOverlay {
     pub visible: bool,
     pub scroll_offset: u16,
+    /// The largest scroll offset the CONTENT allows (its height minus the
+    /// viewport), recorded by the render path on every frame.
+    /// (iter-1795) The key handler used to cap the scroll at a hard-coded
+    /// 50 lines — "a generous upper bound" — which was generous for the
+    /// /keys report and far too small for the /help catalogue: the
+    /// "More commands" list, the Skills section, the whole KEYBOARD
+    /// section and the Input section were UNREACHABLE. The render path
+    /// knows the real number, so it records it here (a Cell, because the
+    /// TuiState seam is read-only) and the handler clamps to it.
+    pub max_scroll: std::cell::Cell<usize>,
     /// Live search filter — only commands matching this substring are shown.
     pub filter: String,
     /// Dynamically populated entries from the command registry.
@@ -42,7 +52,12 @@ pub struct HelpEntry {
 
 impl HelpOverlay {
     pub fn new() -> Self {
-        Self::default()
+        let overlay = Self::default();
+        // "Never recorded" — the render path has not drawn the content yet, so
+        // the height is unknown and the scroll must not be clamped to a
+        // guessed zero (iter-1795). The renderer clamps the DISPLAY anyway.
+        overlay.max_scroll.set(usize::MAX);
+        overlay
     }
 
     /// Populate (or replace) the command entries from the command registry.
@@ -105,8 +120,12 @@ impl HelpOverlay {
         self.scroll_offset = self.scroll_offset.saturating_sub(1);
     }
 
+    /// Scroll down one line, up to `max` — the largest offset the content
+    /// allows (`HelpOverlay::max_scroll`, recorded by the render path).
+    /// `max` is INCLUSIVE: the offset may reach it (the renderer clamps
+    /// the same way), and the comparison is overflow-safe.
     pub fn scroll_down(&mut self, max: u16) {
-        if self.scroll_offset + 1 < max {
+        if self.scroll_offset < max {
             self.scroll_offset += 1;
         }
     }

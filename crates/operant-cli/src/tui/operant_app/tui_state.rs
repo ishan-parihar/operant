@@ -554,6 +554,11 @@ pub trait TuiState {
     /// The live filter string typed into the open overlay (plan 10: the dead
     /// overlays/help.rs renderer ignored it; the keys surface applies it).
     fn help_filter(&self) -> String;
+    /// The help overlay's largest valid scroll offset — the slot the RENDER
+    /// path records it in. A Cell, because the seam is read-only and the
+    /// renderer is the only side that knows the content's height
+    /// (iter-1795).
+    fn help_max_scroll(&self) -> &std::cell::Cell<usize>;
     /// The /keys or /hotkeys report body as plain lines, produced by the
     /// same report builders the commands use (single source of truth).
     fn keys_report_lines(&self, hotkeys: bool) -> Vec<String>;

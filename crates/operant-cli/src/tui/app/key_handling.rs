@@ -2595,7 +2595,13 @@ impl App {
                 self.help_overlay.scroll_up();
             }
             KeyCode::Down => {
-                let max = 50u16; // generous upper bound; renderer will clamp
+                // (iter-1795) The bound is the CONTENT's real max scroll,
+                // recorded by the render path — the hard-coded 50 this used
+                // ("a generous upper bound") was generous for the /keys
+                // report and far too small for the /help catalogue, whose
+                // "More commands" list, Skills section, KEYBOARD section
+                // and Input section were UNREACHABLE.
+                let max = self.help_overlay.max_scroll.get().min(u16::MAX as usize) as u16;
                 self.help_overlay.scroll_down(max);
             }
             KeyCode::Backspace => {

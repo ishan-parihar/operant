@@ -215,11 +215,32 @@ mod tests {
     /// `HERMES_TEST_ENV_PATH` environment variable.
     static TEST_MUTEX: Mutex<()> = Mutex::new(());
 
+    /// The temp path for the FILE tests.
+    ///
+    /// (iter-1795) The name says FILE, and the directory test has its own
+    /// `tmp_env_dir` — the two used to share one generator, so the directory
+    /// test left a DIRECTORY at `<pid>_<counter>` and the next process with
+    /// the same pid (this sandbox reuses small pids quickly) wrote its FILE
+    /// there: `remove_file` cannot remove a directory, so the write failed
+    /// with EISDIR and four env-store tests went red for a reason that had
+    /// nothing to do with the code under test.
     fn tmp_env() -> PathBuf {
         use std::sync::atomic::{AtomicU32, Ordering};
         static COUNTER: AtomicU32 = AtomicU32::new(0);
         std::env::temp_dir().join(format!(
-            "operant_test_env_{}_{}",
+            "operant_test_env_file_{}_{}",
+            std::process::id(),
+            COUNTER.fetch_add(1, Ordering::SeqCst)
+        ))
+    }
+
+    /// The temp DIRECTORY for the permissions test — a different name space
+    /// from `tmp_env`'s files, so the two can never collide (iter-1795).
+    fn tmp_env_dir() -> PathBuf {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+        std::env::temp_dir().join(format!(
+            "operant_test_env_dir_{}_{}",
             std::process::id(),
             COUNTER.fetch_add(1, Ordering::SeqCst)
         ))
@@ -327,7 +348,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn temp_file_is_owner_only_from_creation() {
-        let dir = tmp_env();
+        let dir = tmp_env_dir();
         fs::create_dir_all(&dir).expect("temp dir");
         let path = dir.join("probe.env.tmp");
 

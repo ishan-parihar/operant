@@ -1046,6 +1046,10 @@ impl TuiState for App {
         self.help_overlay.content
     }
 
+    fn help_max_scroll(&self) -> &std::cell::Cell<usize> {
+        &self.help_overlay.max_scroll
+    }
+
     fn help_filter(&self) -> String {
         self.help_overlay.filter.clone()
     }

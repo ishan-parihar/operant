@@ -27,4 +27,4 @@
 │                                                                                                  │
 │                                                                                                  │
 │                                                                                                  │
-└ Esc to close · mouse wheel/j/k scroll · Space/PageUp page · /help <cmd> for details ─────────────┘
+└ Esc to close · ↑↓/wheel scroll · type to filter · /help <cmd> for details ───────────────────────┘
