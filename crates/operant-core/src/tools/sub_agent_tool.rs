@@ -231,7 +231,7 @@ impl SpawnPermit {
     // 1.95 and this workspace declares `rust-version = "1.89"`, so taking it
     // would break the MSRV to silence a deprecation lint. The method is a
     // plain rename with identical semantics.
-    #[expect(
+    #[allow(
         deprecated,
         reason = "`try_update` needs 1.95; the workspace MSRV is 1.89 (rust-version)"
     )]
@@ -278,7 +278,7 @@ impl SpawnPermit {
 impl Drop for SpawnPermit {
     // `fetch_update` is DEPRECATED (renamed `try_update` in 1.95) — kept for
     // the workspace's 1.89 MSRV; see the note on `reserve`.
-    #[expect(
+    #[allow(
         deprecated,
         reason = "`try_update` needs 1.95; the workspace MSRV is 1.89 (rust-version)"
     )]

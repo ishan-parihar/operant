@@ -47,7 +47,7 @@
 // attribute, and the workspace hand-writes no `#[must_use]` of its own, so
 // the duplication is expected here — once, with the reason, rather than at
 // eighteen separate sites.
-#![expect(
+#![allow(
     clippy::double_must_use,
     reason = "async_trait's generated #[must_use] on Result-returning methods"
 )]

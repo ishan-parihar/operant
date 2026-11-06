@@ -23,7 +23,7 @@ pub struct ToolSpec {
 // `#[must_use]`. The lint's own suggestion (give the attribute a message)
 // cannot be applied to a macro-generated attribute, so the duplication is
 // expected here.
-#[expect(
+#[allow(
     clippy::double_must_use,
     reason = "async_trait's generated #[must_use] on a Result-returning method"
 )]
