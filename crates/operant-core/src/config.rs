@@ -386,6 +386,34 @@ fn expand_holon_path(p: &std::path::Path) -> std::path::PathBuf {
     p.to_path_buf()
 }
 
+/// Expand a leading `~` or `$HOME` in a path the operator wrote by hand.
+///
+/// RT-197: the skills paths were the ONLY path settings with no expansion,
+/// so a value copied from the template (`root_dir = "$HOME/.operant/skills"`)
+/// created a directory literally named `$HOME` under the working directory.
+/// `[holon]` paths already expand `~` (O-26); the same spelling has to
+/// behave the same way in every table.
+fn expand_home_path(p: &std::path::Path) -> std::path::PathBuf {
+    let s = p.to_string_lossy();
+    if let Some(home) = std::env::var_os("HOME") {
+        let home = std::path::Path::new(&home);
+        for prefix in ["~/", "~\\"] {
+            if let Some(rest) = s.strip_prefix(prefix) {
+                return home.join(rest);
+            }
+        }
+        for prefix in ["$HOME/", "$HOME\\"] {
+            if let Some(rest) = s.strip_prefix(prefix) {
+                return home.join(rest);
+            }
+        }
+        if s == "~" || s == "$HOME" {
+            return home.to_path_buf();
+        }
+    }
+    p.to_path_buf()
+}
+
 impl HolonSettings {
     /// O-26: resolve `~` in every `[holon]` path field, once, at load.
     pub fn expand_tilde(mut self) -> Self {
@@ -1420,6 +1448,19 @@ fn default_skill_template_vars() -> bool {
 }
 fn default_skill_inline_shell_timeout() -> u64 {
     10
+}
+
+impl SkillsSettings {
+    /// RT-197: resolve `~` and `$HOME` in the skills paths, once, at load.
+    ///
+    /// Without this the two path settings were the only ones an operator
+    /// could not spell with `~`: a copied `$HOME/...` value reached the
+    /// filesystem verbatim, and a skills operation created a directory
+    /// literally named `$HOME` under the working directory.
+    pub fn expand_paths(&mut self) {
+        self.root_dir = expand_home_path(&self.root_dir);
+        self.memory_dir = expand_home_path(&self.memory_dir);
+    }
 }
 
 impl Default for SkillsSettings {
@@ -2604,6 +2645,10 @@ pub fn load_app_config(explicit: Option<&Path>) -> Result<LoadedConfig> {
     // O-26: [holon] paths arrive with `~` expanded exactly once.
     config.holon = config.holon.expand_tilde();
 
+    // RT-197: the skills paths expand `~` and `$HOME` the same way, so a
+    // path copied from the template never reaches the filesystem verbatim.
+    config.skills.expand_paths();
+
     // (plan 09) Record the file this process actually loaded — the one
     // `persist_config_key` writes into. Without it, every writer guessed
     // `~/.operant/operant.toml` and `operant -c <path>` runs wrote the
@@ -3162,6 +3207,9 @@ impl AppConfig {
         )?;
         apply_string_value_override("HERMES_LOG_LEVEL", &mut self.logging.level);
         apply_path_override("HERMES_SKILLS_DIR", &mut self.skills.root_dir)?;
+        // RT-197: the env override is a path the operator wrote by hand too,
+        // so it gets the same expansion as the file value.
+        self.skills.expand_paths();
 
         // Gateway env var overrides
         apply_string_option_override("TELEGRAM_BOT_TOKEN", &mut self.gateway.telegram_token)?;
@@ -4589,6 +4637,76 @@ strategies = { opencode-zen = "round_robin", openai = "least_used" }
         };
         assert_eq!(invalid.strategy_for("openai"), PoolStrategy::FillFirst);
         assert_eq!(invalid.strategy_for("other"), PoolStrategy::FillFirst);
+    }
+
+    // ── RT-197: the skills paths expand `~` and `$HOME` ──────────────────
+
+    /// RT-197: the skills paths were the ONLY path settings with no
+    /// expansion. A value copied from the template (`root_dir =
+    /// "$HOME/.operant/skills"`) reached the filesystem verbatim, so a skills
+    /// operation created a directory literally named `$HOME` under the
+    /// working directory — a directory nobody can find and nobody asked for.
+    #[test]
+    #[serial]
+    fn a_skills_path_written_with_a_tilde_or_home_variable_resolves_under_the_home() {
+        let _guard = crate::platform::test_env_lock_blocking();
+        let _cfg_guard = config_path_test_guard();
+        let home = PathBuf::from(std::env::var("HOME").expect("the test environment has a HOME"));
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("operant.toml");
+        std::fs::write(
+            &path,
+            "[skills]\nroot_dir = \"~/skills\"\nmemory_dir = \"$HOME/memory\"\n",
+        )
+        .expect("write the config");
+
+        let loaded = load_app_config(Some(&path)).expect("the config loads");
+
+        assert_eq!(loaded.config.skills.root_dir, home.join("skills"));
+        assert_eq!(loaded.config.skills.memory_dir, home.join("memory"));
+    }
+
+    /// The expansion changes nothing for a path the operator wrote out in
+    /// full — that is the shape every existing config uses.
+    #[test]
+    #[serial]
+    fn an_absolute_skills_path_is_left_alone() {
+        let _guard = crate::platform::test_env_lock_blocking();
+        let _cfg_guard = config_path_test_guard();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("operant.toml");
+        let absolute = dir.path().join("elsewhere").join("skills");
+        std::fs::write(
+            &path,
+            format!("[skills]\nroot_dir = {:?}\n", absolute.to_string_lossy()),
+        )
+        .expect("write the config");
+
+        let loaded = load_app_config(Some(&path)).expect("the config loads");
+
+        assert_eq!(loaded.config.skills.root_dir, absolute);
+    }
+
+    /// The env override is a path the operator wrote by hand too, so it gets
+    /// the same expansion as the file value.
+    #[test]
+    #[serial]
+    fn the_skills_dir_env_override_expands_the_home_variable() {
+        let _lock = crate::platform::test_env_lock_blocking();
+        let previous = std::env::var("HERMES_SKILLS_DIR").ok();
+        // SAFETY: the env is process-global; the lock above serialises this
+        // test against every other test that mutates it.
+        unsafe { std::env::set_var("HERMES_SKILLS_DIR", "~/env-skills") };
+        let mut config = AppConfig::default();
+        config.apply_env_overrides().expect("override applies");
+        // SAFETY: the lock above serialises this restore.
+        match previous {
+            Some(v) => unsafe { std::env::set_var("HERMES_SKILLS_DIR", v) },
+            None => unsafe { std::env::remove_var("HERMES_SKILLS_DIR") },
+        }
+
+        let home = PathBuf::from(std::env::var("HOME").expect("the test environment has a HOME"));
+        assert_eq!(config.skills.root_dir, home.join("env-skills"));
     }
 }
 

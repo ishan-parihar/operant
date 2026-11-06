@@ -399,13 +399,11 @@ enabled = false
 # EXAMPLE_ROOT = "C:/workspace"
 
 [skills]
-# NO expansion exists for these paths — neither `$HOME` nor `~` is
-# resolved here (only `[holon]` paths expand a leading `~`). A literal
-# `$HOME/...` or `~/...` value creates a directory with that literal
-# name under the working directory. Leave these keys ABSENT to use the
-# defaults (the operant-home resolver), or write an absolute path.
-# root_dir = "/home/you/.operant/skills"
-# memory_dir = "/home/you/.operant/memory"
+# A leading `~` or `$HOME` in these paths is resolved to the home directory
+# (the same expansion `[holon]` paths get). Leave these keys ABSENT to use
+# the defaults (the operant-home resolver), or write an absolute path.
+# root_dir = "$HOME/.operant/skills"
+# memory_dir = "$HOME/.operant/memory"
 autoload = true
 # `template_name` / `template_description` are accepted but UNREAD (RT-136).
 
@@ -563,18 +561,10 @@ enabled = false
 #
 # The WASM plugin host is ON by default (iter-1720: the plugins-wasm cargo
 # feature is in the default build; CI builds with --no-default-features).
-# A plugin's manifest.toml can declare:
-#   capabilities = ["tool" | "memory" | "skill" | "observer" | "channel"]
-#   requires = ["other-plugin"]   # skipped at discovery while a named
-#                                 # plugin is absent (transitively); a
-#                                 # require may also name a service another
-#                                 # plugin `provides`
-#   provides = ["memory.backend"] # service names other plugins' requires
-#                                 # can match (composition labels only)
-#   [config]                      # free-form table, passed verbatim in the
-#                                 # observe envelope (policy observers read
-#                                 # their thresholds here; the host never
-#                                 # interprets it)
+# A plugin ships its OWN manifest.toml — its capabilities, the plugins and
+# services it requires, the services it provides, and a free-form config
+# table. That schema and the discovery rules live in
+# docs/library/plugins.md, the one place they are documented.
 # Tool and observer modules run on RESIDENT instances (one WASM compile per
 # module per process, iter-1725).
 # Capability seams: tool -> tool registry (KB-11: builtins win name
@@ -582,7 +572,6 @@ enabled = false
 # SkillManager extra root (operator pool wins collisions), observer ->
 # tool-seam interception (the observe export may veto any tool call,
 # fail-open), channel -> deferred (gateway adapters are compile-time).
-# See docs/library/plugins.md.
 
 [tools.kernel]
 # Persistent kernel — session-persistent Python execution and learned state.
