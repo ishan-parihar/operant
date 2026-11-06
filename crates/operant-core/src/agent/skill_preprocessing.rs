@@ -406,7 +406,32 @@ pub fn build_skill_invocation_message_in(
         parts.push(format!("User instruction: {}", user_instruction.trim()));
     }
 
+    // Building the invocation message IS the use event, so the curator's
+    // telemetry is recorded HERE — one place, every caller (the TUI's
+    // `/skill`, the gateway's skill commands and the agent's own lane all
+    // come through this function). The curator archives an agent-created
+    // skill after `archive_after_days` of INACTIVITY, measured from
+    // `last_used`; nothing recorded a use before this, so a skill that was
+    // invoked every day still looked abandoned and was archived like one.
+    // Telemetry must never break an invocation, so a failed write is
+    // swallowed (the curator's own reads tolerate a missing file).
+    record_skill_use(skills_dir, name);
+
     Some(parts.join("\n"))
+}
+
+/// Record the USE of a skill in the curator's telemetry.
+///
+/// The file is the SAME one the skills tool writes (`<skills_dir>/.curator/
+/// usage.json`) and the curator reads, and the write goes through
+/// `with_exclusive_lock` so it cannot lose a concurrent record.
+fn record_skill_use(skills_dir: &std::path::Path, name: &str) {
+    let tracker =
+        crate::skill_usage::SkillUsageTracker::new(skills_dir.join(".curator").join("usage.json"));
+    let _ = tracker.with_exclusive_lock(|t| {
+        t.bump_use(name);
+        Ok(())
+    });
 }
 
 #[cfg(test)]

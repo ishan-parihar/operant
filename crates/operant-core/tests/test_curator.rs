@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use operant_core::curator::{CuratorEngine, CuratorState, archiver, backup};
-use operant_core::skill_usage::SkillUsageTracker;
+use operant_core::skill_usage::{SkillUsageTracker, UsageTelemetry};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -494,6 +494,76 @@ fn test_backup_and_rollback_preserves_skills() {
     assert!(
         content.contains("original content"),
         "Rollback should restore original content"
+    );
+
+    cleanup(&tmp);
+}
+
+/// RT-261: a skill that is USED must not be archived by the curator.
+///
+/// The curator archives an agent-created skill after `archive_after_days` of
+/// INACTIVITY, measured from `last_used`. Nothing recorded a use — so
+/// `use_count` stayed 0 and `last_used` stayed at creation time — and a skill
+/// that was invoked every day was archived like an abandoned one.
+#[tokio::test]
+async fn a_used_skill_is_not_archived_by_the_curator() {
+    let tmp = temp_dir();
+    let skills_dir = tmp.join("skills");
+    let skill_dir = skills_dir.join("used-skill");
+    fs::create_dir_all(&skill_dir).unwrap();
+    fs::write(
+        skill_dir.join("SKILL.md"),
+        "---\nname: used-skill\ndescription: a skill in daily use\n---\n\nbody\n",
+    )
+    .unwrap();
+
+    // The curator's telemetry: an AGENT-CREATED skill whose last use was 40
+    // days ago (the default archive window is 30).
+    let usage_path = skills_dir.join(".curator").join("usage.json");
+    fs::create_dir_all(usage_path.parent().unwrap()).unwrap();
+    {
+        let mut telemetry = UsageTelemetry::load(&usage_path).unwrap();
+        telemetry.record_created("used-skill", true);
+        telemetry.get_record_mut("used-skill").unwrap().last_used =
+            chrono::Utc::now() - chrono::Duration::days(40);
+        telemetry.save(&usage_path).unwrap();
+    }
+
+    // The skill is invoked — the production path the TUI's `/skill` and the
+    // gateway's skill commands both use.
+    let invoked = operant_core::agent::skill_preprocessing::build_skill_invocation_message_in(
+        &skills_dir,
+        "used-skill",
+        "",
+    );
+    assert!(
+        invoked.is_some(),
+        "the skill must resolve and be injected: {invoked:?}"
+    );
+
+    // The curator now runs with a ONE-day window: an unused skill would be
+    // archived in this run, so the skill's survival is the assertion.
+    let state_path = tmp.join("state.json");
+    let state = CuratorState {
+        stale_after_days: 1,
+        archive_after_days: 1,
+        ..CuratorState::default()
+    };
+    fs::write(&state_path, serde_json::to_string_pretty(&state).unwrap()).unwrap();
+
+    let tracker = Arc::new(SkillUsageTracker::new(usage_path));
+    let engine = CuratorEngine::new(skills_dir.clone(), state_path, tracker);
+    engine.load_state().await.unwrap();
+    let counts = engine.apply_automatic_transitions().await.unwrap();
+
+    assert_eq!(
+        counts.get("archived").copied().unwrap_or(0),
+        0,
+        "a skill in daily use must not be archived: {counts:?}"
+    );
+    assert!(
+        skill_dir.exists(),
+        "the skill directory must survive the curator's pass"
     );
 
     cleanup(&tmp);

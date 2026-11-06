@@ -481,6 +481,43 @@ impl SkillUsageTracker {
         inner.bump_patch(name);
     }
 
+    /// Record a USE of a skill: `use_count` + 1 and `last_used` = now.
+    ///
+    /// The curator's idle clock reads this record (it archives an
+    /// agent-created skill after `archive_after_days` of INACTIVITY), so a
+    /// skill that is invoked every day must move it. Nothing recorded a use
+    /// until the invocation path started calling this — see
+    /// `agent::skill_preprocessing::build_skill_invocation_message_in`.
+    ///
+    /// The caller's `with_exclusive_lock` persists the change; this method
+    /// only mutates the in-memory record.
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
+    pub fn bump_use(&self, name: &str) {
+        let mut inner = self
+            .inner
+            .lock()
+            .expect("skill usage mutex poisoned — programmer error");
+        inner.bump_use(name);
+    }
+
+    /// Record a VIEW of a skill: `last_used` = now, `use_count` unchanged.
+    ///
+    /// See [`SkillUsageTracker::bump_use`] for why the clock matters.
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
+    pub fn bump_view(&self, name: &str) {
+        let mut inner = self
+            .inner
+            .lock()
+            .expect("skill usage mutex poisoned — programmer error");
+        inner.bump_view(name);
+    }
+
     /// Add `count` to a record's `patch_count` (creating the record
     /// if it doesn't exist), and bump `last_used`. The legacy
     /// `.usage.json` migration uses this to merge per-skill counts

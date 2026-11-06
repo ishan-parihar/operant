@@ -1466,6 +1466,18 @@ impl SkillViewTool {
             root_dir: skills_dir,
         }
     }
+
+    /// A VIEW is activity: the curator archives an agent-created skill after
+    /// `archive_after_days` of INACTIVITY, so a skill the operator still
+    /// reads must move `last_used` — otherwise it is archived like an
+    /// abandoned one (RT-261).
+    fn record_view(&self, name: &str) {
+        let tracker = SkillUsageTracker::new(self.root_dir.join(".curator").join("usage.json"));
+        let _ = tracker.with_exclusive_lock(|t| {
+            t.bump_view(name);
+            Ok(())
+        });
+    }
 }
 
 #[async_trait]
@@ -1505,6 +1517,8 @@ impl OperantTool for SkillViewTool {
             };
             // Track that this skill was read during background review
             mark_review_skill_read(name);
+            // A view moves the curator's idle clock (RT-261).
+            self.record_view(name);
             let target = match resolve_skill_target(&skill_dir, file_path) {
                 Ok(t) => t,
                 Err(e) => return ToolResult::error("skill_view", e),
@@ -1533,6 +1547,8 @@ impl OperantTool for SkillViewTool {
             Some(d) => {
                 // Track that this skill was read during background review
                 mark_review_skill_read(name);
+                // A view moves the curator's idle clock (RT-261).
+                self.record_view(name);
                 d
             }
             None => {
