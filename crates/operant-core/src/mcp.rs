@@ -29,6 +29,42 @@ const MCP_SUPPORTED_VERSIONS: &[&str] = &["2025-06-18", "2024-11-05"];
 /// The default (newest) version we send in `initialize`.
 const MCP_DEFAULT_VERSION: &str = "2025-06-18";
 
+/// (iter-1822) How many non-JSON stdout lines a stdio MCP server may print
+/// between two JSON-RPC messages before the client gives up. (iter-1822; the
+/// bound keeps a banner-only server from spinning the read loop forever.)
+const MCP_BANNER_SKIP_LIMIT: u64 = 256;
+
+/// (iter-1822) How many non-matching responses the stdio client will drain
+/// while hunting for the response to the request in flight.
+///
+/// The client used to read ONE line and fail the call when its id did not
+/// match. A single stray line on stdout — a log line, a duplicate, an
+/// orphan — then wedged the client for the rest of the process's life: the
+/// real response for the in-flight request stayed queued, so the NEXT call
+/// consumed it and failed the same check, and every call after that read
+/// one response behind. Observed live against sourcehound on 2026-11-05:
+/// nine consecutive calls each reported "MCP response ID mismatch: expected
+/// N, got M" with M < N, and the entire sourcehound surface (web_search,
+/// web_extract, browser, company_lookup, papers_search, ...) was dead for
+/// the session with no recovery path.
+const MCP_MAX_RESPONSE_DRAIN: usize = 64;
+
+/// (iter-1822) Cap on parked responses. A misbehaving server must not grow
+/// this buffer without bound.
+const MCP_BUFFERED_RESPONSE_CAP: usize = 64;
+
+/// (iter-1822) How long the drain waits for the response that actually
+/// belongs to the request in flight, once a FOREIGN response has already
+/// arrived.
+///
+/// The first read of a request uses the full 60s request timeout. After a
+/// foreign response, the drain is looking for a response that is either
+/// already in the pipe (immediate) or never coming (a server that answers
+/// with the wrong id). Waiting the full 60s on every drained line turned a
+/// broken server into a 60s-per-line hang; 5s is long enough for a queued
+/// response and short enough that a mismatched server fails BOUNDEDLY.
+const MCP_DRAIN_READ_TIMEOUT_SECS: u64 = 5;
+
 /// Check whether a server-returned `protocolVersion` is one we accept.
 /// Returns the (possibly normalized) version to use, or None if the
 /// server's version is incompatible with all of ours.
@@ -761,6 +797,15 @@ pub struct McpStdioClient {
     /// dead server can never trigger a reconnect → connect → send_request →
     /// reconnect loop.
     reconnecting: Arc<AtomicBool>,
+    /// (iter-1822) Responses that arrived out of order and belong to a
+    /// request that has not been answered yet, keyed by their JSON-RPC id.
+    ///
+    /// A stdio server that emits a stray or duplicate response used to
+    /// desynchronise the serial read loop permanently (see
+    /// [`MCP_MAX_RESPONSE_DRAIN`]). Parking the foreign response lets the
+    /// call that owns it still claim it, so no response is ever dropped and
+    /// no response is ever handed to the wrong caller.
+    buffered: Arc<tokio::sync::Mutex<Vec<(u64, JsonRpcResponse)>>>,
 }
 
 impl McpStdioClient {
@@ -785,6 +830,7 @@ impl McpStdioClient {
             banner_lines: Arc::new(AtomicU64::new(0)),
             had_session: Arc::new(AtomicBool::new(false)),
             reconnecting: Arc::new(AtomicBool::new(false)),
+            buffered: Arc::new(tokio::sync::Mutex::new(Vec::new())),
         }
     }
 
@@ -1048,6 +1094,67 @@ impl McpStdioClient {
             .collect())
     }
 
+    /// Read ONE JSON-RPC-shaped line off the child's stdout, skipping the
+    /// non-JSON lines a stdio server may print there (a startup banner, or
+    /// mid-session status/log noise).
+    ///
+    /// (iter-1822) sourcehound's `mcp` subcommand writes ~54 lines of
+    /// tool-group inventory on stdout before the first response, so a
+    /// `read_line` that expects JSON immediately fails the whole call. A
+    /// JSON-RPC response is a JSON object: a line that does not start with
+    /// `{` cannot be one, so dropping it and reading on is correct.
+    ///
+    /// (iter-1822) Extracted so the drain loop can call it repeatedly
+    /// instead of duplicating the skip logic in two inline blocks.
+    async fn read_response_line(
+        &self,
+        io: &mut StdioIo,
+        timeout_secs: u64,
+    ) -> std::result::Result<String, ReqError> {
+        let mut line = String::new();
+        loop {
+            line.clear();
+            let read_result = tokio::time::timeout(
+                std::time::Duration::from_secs(timeout_secs),
+                io.stdout.read_line(&mut line),
+            )
+            .await;
+            match read_result {
+                Ok(Ok(_)) => {}
+                Ok(Err(e)) => {
+                    // EOF / read error — the child died mid-call.
+                    return Err(ReqError::Transport(crate::error::Error::Agent(format!(
+                        "Failed to read from MCP stdout: {}",
+                        e
+                    ))));
+                }
+                Err(_) => {
+                    // Read timeout — the server may be hung. The call is
+                    // never re-issued; count it so the next request
+                    // force-reconnects once consecutive timeouts reach 2.
+                    let n = self.timeouts.fetch_add(1, Ordering::SeqCst) + 1;
+                    return Err(ReqError::Protocol(crate::error::Error::Agent(format!(
+                        "MCP stdio server did not respond within {timeout_secs}s (possible hang; consecutive timeouts: {n})"
+                    ))));
+                }
+            }
+            if line.trim_start().starts_with('{') {
+                return Ok(line.trim().to_string());
+            }
+            // A server that only ever prints a banner must not spin: the
+            // per-line timeout above does not bound the NUMBER of lines, so
+            // a verbose banner would loop forever. Bound the skip.
+            let skipped = self.banner_lines.fetch_add(1, Ordering::SeqCst) + 1;
+            if skipped >= MCP_BANNER_SKIP_LIMIT {
+                self.banner_lines.store(0, Ordering::SeqCst);
+                return Err(ReqError::Protocol(crate::error::Error::Agent(
+                    "MCP stdio server produced 256 non-JSON lines without a JSON-RPC response"
+                        .to_string(),
+                )));
+            }
+        }
+    }
+
     /// Call a tool on the MCP server
     pub async fn call_tool(&self, name: &str, arguments: Value) -> Result<Value> {
         let params = serde_json::json!({
@@ -1157,6 +1264,28 @@ impl McpStdioClient {
     ) -> std::result::Result<Value, ReqError> {
         let request_id = self.request_id.fetch_add(1, Ordering::SeqCst);
 
+        // (iter-1822) Claim this request's response if an earlier, out-of-
+        // order exchange parked it. Without this the response would sit in
+        // `buffered` forever and this call would block on a read that can
+        // never be satisfied.
+        {
+            let mut buf = self.buffered.lock().await;
+            if let Some(pos) = buf.iter().position(|(id, _)| *id == request_id) {
+                let (_, rpc_response) = buf.remove(pos);
+                if let Some(error) = rpc_response.error {
+                    return Err(ReqError::Protocol(crate::error::Error::Agent(format!(
+                        "MCP error {}: {}",
+                        error.code, error.message
+                    ))));
+                }
+                return rpc_response.result.ok_or_else(|| {
+                    ReqError::Protocol(crate::error::Error::Agent(
+                        "No result in MCP response".to_string(),
+                    ))
+                });
+            }
+        }
+
         let request = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
             method: method.to_string(),
@@ -1201,217 +1330,177 @@ impl McpStdioClient {
             )))
         })?;
 
-        // Read response from stdout — with a 60s timeout. Without this, a
-        // hung MCP server would block the agent loop forever.
+        // Read the response that belongs to THIS request, draining anything
+        // that is not it.
         //
-        // (iter-1209) The read is BANNER-TOLERANT. Some stdio MCP servers
-        // print a human-oriented startup banner on STDOUT before the first
-        // JSON-RPC response: sourcehound's `mcp` subcommand writes ~54 lines
-        // of tool-group inventory there (`bin: ~/.local/bin/sourcehound`,
-        // `count: 25 tool groups (143 total tools)`, a per-group table, …), so
-        // the first `read_line` after `initialize` returned that text and
-        // `serde_json::from_str` failed the whole call. Every web and browser
-        // tool was therefore refused locally against a server that would have
-        // answered. A server may also log mid-session on stdout, so the skip
-        // applies to every response, not only the first. A JSON-RPC response is
-        // a JSON object, so a line that does not start with `{` cannot be one;
-        // dropping it and reading on is the correct behaviour.
-        let mut response_line = String::new();
+        // (iter-1822) The read is BANNER-TOLERANT: a stdio MCP server may
+        // print a human-oriented startup banner on stdout before the first
+        // JSON-RPC response (sourcehound's `mcp` subcommand writes ~54 lines
+        // of tool-group inventory there), and a JSON-RPC response is a JSON
+        // object, so a line that does not start with `{` cannot be one.
+        // `read_response_line` owns that rule.
+        //
+        // (iter-1822) The read DRAINS. The old code read ONE line and failed
+        // the call when its id did not match. One stray line on stdout — a
+        // log line, a duplicate, an orphan — then wedged the client for the
+        // rest of the process's life: the real response for the in-flight
+        // request stayed queued, so the NEXT call consumed it and failed the
+        // same check, and every call after that read one response behind.
+        // Observed live against sourcehound on 2026-11-05: nine consecutive
+        // calls each reported "MCP response ID mismatch: expected N, got M"
+        // with M < N, and the entire sourcehound surface (web_search,
+        // web_extract, browser, company_lookup, papers_search, …) was dead
+        // for the session with no recovery path.
+        //
+        // Now: keep reading until the response carrying `request_id`
+        // arrives. A response for a LATER id is parked in `buffered` for
+        // the call that owns it; a response for an EARLIER id can never be
+        // claimed (ids only increase) and is dropped. The iter-1822
+        // guarantee is unchanged and now actually holds: a response is only
+        // ever returned to the caller whose id it carries.
+        let mut drained: usize = 0;
         loop {
-            response_line.clear();
-            let read_result = tokio::time::timeout(
-                std::time::Duration::from_secs(60),
-                io.stdout.read_line(&mut response_line),
-            )
-            .await;
-            match read_result {
-                Ok(Ok(_)) => {}
-                Ok(Err(e)) => {
-                    // EOF / read error — the child died mid-call.
-                    return Err(ReqError::Transport(crate::error::Error::Agent(format!(
-                        "Failed to read from MCP stdout: {}",
-                        e
-                    ))));
-                }
-                Err(_) => {
-                    // Read timeout — the server may be hung. Never re-issue this
-                    // call (it may have executed the tool); count it so the next
-                    // request force-reconnects once consecutive timeouts reach 2.
-                    let n = self.timeouts.fetch_add(1, Ordering::SeqCst) + 1;
+            // The FIRST read of a request gets the full request timeout. Once
+            // a FOREIGN response has arrived, the drain is hunting for a
+            // response that is either already queued (immediate) or never
+            // coming (a server that answers with the wrong id), so it uses the
+            // short drain timeout instead of hanging a full minute per line.
+            let read_timeout = if drained == 0 {
+                60
+            } else {
+                MCP_DRAIN_READ_TIMEOUT_SECS
+            };
+            let line = match self.read_response_line(io, read_timeout).await {
+                Ok(line) => line,
+                Err(ReqError::Protocol(e)) if drained > 0 => {
+                    // A drain timeout means the foreign response was the last
+                    // thing the server said. Name the drain, not the hang:
+                    // the operator needs to know the ids did not line up.
                     return Err(ReqError::Protocol(crate::error::Error::Agent(format!(
-                        "MCP stdio server did not respond within 60s (possible hang; consecutive timeouts: {n})"
+                        "MCP stdio server produced {} responses without one for request {} ({})",
+                        drained, request_id, e
                     ))));
                 }
-            }
-            if response_line.trim_start().starts_with('{') {
-                break;
-            }
-            // A server that only ever prints a banner must not spin: the
-            // per-line timeout above does not bound the NUMBER of lines, and a
-            // server still delivering banner lines would loop forever. Bound
-            // the skip. 256 clears a verbose startup banner (sourcehound's is
-            // ~54) with generous headroom while still failing fast.
-            let skipped = self.banner_lines.fetch_add(1, Ordering::SeqCst) + 1;
-            if skipped >= 256 {
-                self.banner_lines.store(0, Ordering::SeqCst);
-                return Err(ReqError::Protocol(crate::error::Error::Agent(
-                    "MCP stdio server produced 256 non-JSON lines without a JSON-RPC response"
-                        .to_string(),
-                )));
-            }
-        }
-        // The response is served. Reset the budget so the next response gets
-        // its own allowance — a server may print one line between responses.
-        self.banner_lines.store(0, Ordering::SeqCst);
-        let trimmed = response_line.trim();
-        if trimmed.is_empty() {
-            return Err(ReqError::Protocol(crate::error::Error::Agent(
-                "MCP server returned empty or whitespace-only response".to_string(),
-            )));
-        }
+                Err(other) => return Err(other),
+            };
 
-        // Check if this is a server-initiated request (has "method" field)
-        // rather than a response (has "result" or "error"). If so, handle
-        // it and read the next line for our actual response.
-        let parsed: Value = serde_json::from_str(trimmed).map_err(|e| {
-            ReqError::Protocol(crate::error::Error::ParseResponse(format!(
-                "Failed to parse MCP stdio response: {}",
-                e
-            )))
-        })?;
+            let parsed: Value = serde_json::from_str(&line).map_err(|e| {
+                ReqError::Protocol(crate::error::Error::ParseResponse(format!(
+                    "Failed to parse MCP stdio response: {}",
+                    e
+                )))
+            })?;
 
-        if parsed.get("method").is_some() {
-            // This is a server-initiated request (e.g. sampling/createMessage,
-            // elicitation/create, notifications/*).
-            let method = parsed["method"].as_str().unwrap_or("");
-            let id = parsed.get("id").and_then(|v| v.as_u64());
+            if parsed.get("method").is_some() {
+                // This is a server-initiated request (e.g.
+                // sampling/createMessage, elicitation/create,
+                // notifications/*). Answer it, then keep hunting for OUR
+                // response.
+                let method = parsed["method"].as_str().unwrap_or("");
+                let id = parsed.get("id").and_then(|v| v.as_u64());
 
-            match method {
-                "sampling/createMessage" => {
-                    // Handle sampling request — the server wants us to
-                    // sample an LLM. For now, return an error indicating
-                    // sampling is not supported (the agent can be wired
-                    // in later via a callback).
-                    if let Some(req_id) = id {
-                        let error_response = serde_json::json!({
-                            "jsonrpc": "2.0",
-                            "id": req_id,
-                            "error": {
-                                "code": -32601,
-                                "message": "sampling not supported by this client"
-                            }
-                        });
-                        let mut err_line = serde_json::to_string(&error_response)
-                            .expect("error_response is serializable");
-                        err_line.push('\n');
-                        let _ = io.stdin.write_all(err_line.as_bytes()).await;
-                        let _ = io.stdin.flush().await;
+                match method {
+                    "sampling/createMessage" => {
+                        // The server wants us to sample an LLM. Return an
+                        // error for now — the agent can be wired in later
+                        // via a callback.
+                        if let Some(req_id) = id {
+                            let error_response = serde_json::json!({
+                                "jsonrpc": "2.0",
+                                "id": req_id,
+                                "error": {
+                                    "code": -32601,
+                                    "message": "sampling not supported by this client"
+                                }
+                            });
+                            let mut err_line = serde_json::to_string(&error_response)
+                                .expect("error_response is serializable");
+                            err_line.push('\n');
+                            let _ = io.stdin.write_all(err_line.as_bytes()).await;
+                            let _ = io.stdin.flush().await;
+                        }
+                    }
+                    "elicitation/create" => {
+                        // The server wants user input. Return an error for
+                        // now.
+                        if let Some(req_id) = id {
+                            let error_response = serde_json::json!({
+                                "jsonrpc": "2.0",
+                                "id": req_id,
+                                "error": {
+                                    "code": -32601,
+                                    "message": "elicitation not supported by this client"
+                                }
+                            });
+                            let mut err_line = serde_json::to_string(&error_response)
+                                .expect("error_response is serializable");
+                            err_line.push('\n');
+                            let _ = io.stdin.write_all(err_line.as_bytes()).await;
+                            let _ = io.stdin.flush().await;
+                        }
+                    }
+                    "notifications/progress" | "notifications/cancelled" => {
+                        // Server-side notifications — log and ignore.
+                        debug!(method = method, "MCP server notification received");
+                    }
+                    _ => {
+                        debug!(method = method, "Unknown MCP server request — ignoring");
                     }
                 }
-                "elicitation/create" => {
-                    // Handle elicitation request — the server wants user
-                    // input. Return an error for now.
-                    if let Some(req_id) = id {
-                        let error_response = serde_json::json!({
-                            "jsonrpc": "2.0",
-                            "id": req_id,
-                            "error": {
-                                "code": -32601,
-                                "message": "elicitation not supported by this client"
-                            }
-                        });
-                        let mut err_line = serde_json::to_string(&error_response)
-                            .expect("error_response is serializable");
-                        err_line.push('\n');
-                        let _ = io.stdin.write_all(err_line.as_bytes()).await;
-                        let _ = io.stdin.flush().await;
-                    }
-                }
-                "notifications/progress" | "notifications/cancelled" => {
-                    // Server-side notifications — log and ignore.
-                    debug!(method = method, "MCP server notification received");
-                }
-                _ => {
-                    debug!(method = method, "Unknown MCP server request — ignoring");
-                }
+                continue;
             }
 
-            // Read the next line for our actual response
-            // (iter-1209) Banner-tolerant for the same reason as the primary
-            // read: a server may interleave stdout status output with its
-            // protocol traffic. Loop until a JSON object arrives.
-            loop {
-                response_line.clear();
-                let read_result2 = tokio::time::timeout(
-                    std::time::Duration::from_secs(60),
-                    io.stdout.read_line(&mut response_line),
-                )
-                .await;
-                match read_result2 {
-                    Ok(Ok(_)) => {}
-                    Ok(Err(e)) => {
-                        return Err(ReqError::Transport(crate::error::Error::Agent(format!(
-                            "Failed to read MCP stdout after server request: {}",
-                            e
-                        ))));
-                    }
-                    Err(_) => {
-                        let n = self.timeouts.fetch_add(1, Ordering::SeqCst) + 1;
-                        return Err(ReqError::Protocol(crate::error::Error::Agent(format!(
-                            "MCP stdio server did not respond within 60s after server request (consecutive timeouts: {n})"
-                        ))));
-                    }
+            let rpc_response: JsonRpcResponse = serde_json::from_str(&line).map_err(|e| {
+                ReqError::Protocol(crate::error::Error::ParseResponse(format!(
+                    "Failed to parse MCP stdio response: {}",
+                    e
+                )))
+            })?;
+
+            if rpc_response.id == request_id {
+                if let Some(error) = rpc_response.error {
+                    return Err(ReqError::Protocol(crate::error::Error::Agent(format!(
+                        "MCP error {}: {}",
+                        error.code, error.message
+                    ))));
                 }
-                if response_line.trim_start().starts_with('{') {
-                    break;
-                }
-                let skipped = self.banner_lines.fetch_add(1, Ordering::SeqCst) + 1;
-                if skipped >= 256 {
-                    self.banner_lines.store(0, Ordering::SeqCst);
-                    return Err(ReqError::Protocol(crate::error::Error::Agent(
-                        "MCP stdio server produced 256 non-JSON lines without a JSON-RPC response"
-                            .to_string(),
-                    )));
-                }
+                return rpc_response.result.ok_or_else(|| {
+                    ReqError::Protocol(crate::error::Error::Agent(
+                        "No result in MCP response".to_string(),
+                    ))
+                });
             }
-            self.banner_lines.store(0, Ordering::SeqCst);
+
+            // Not ours. Park it for the call that owns it (bounded), or
+            // drop it when that call has already come and gone.
+            if rpc_response.id > request_id {
+                let parked_id = rpc_response.id;
+                let mut buf = self.buffered.lock().await;
+                if buf.len() >= MCP_BUFFERED_RESPONSE_CAP {
+                    buf.remove(0);
+                }
+                buf.push((parked_id, rpc_response));
+                debug!(
+                    parked_id = parked_id,
+                    request_id = request_id,
+                    "parked an out-of-order MCP response for a later request"
+                );
+            } else {
+                debug!(
+                    stale_id = rpc_response.id,
+                    request_id = request_id,
+                    "discarded an MCP response for an already-completed request"
+                );
+            }
+
+            drained += 1;
+            if drained >= MCP_MAX_RESPONSE_DRAIN {
+                return Err(ReqError::Protocol(crate::error::Error::Agent(format!(
+                    "MCP stdio server produced {} responses without one for request {}",
+                    drained, request_id
+                ))));
+            }
         }
-
-        let trimmed = response_line.trim();
-        if trimmed.is_empty() {
-            return Err(ReqError::Protocol(crate::error::Error::Agent(
-                "MCP server returned empty response after server request".to_string(),
-            )));
-        }
-
-        let rpc_response: JsonRpcResponse = serde_json::from_str(trimmed).map_err(|e| {
-            ReqError::Protocol(crate::error::Error::ParseResponse(format!(
-                "Failed to parse MCP stdio response: {}",
-                e
-            )))
-        })?;
-
-        // Verify response ID matches request ID. Without this, out-of-order
-        // or mismatched responses would silently return the wrong result.
-        if rpc_response.id != request_id {
-            return Err(ReqError::Protocol(crate::error::Error::Agent(format!(
-                "MCP response ID mismatch: expected {}, got {} (possible out-of-order response)",
-                request_id, rpc_response.id
-            ))));
-        }
-
-        if let Some(error) = rpc_response.error {
-            return Err(ReqError::Protocol(crate::error::Error::Agent(format!(
-                "MCP error {}: {}",
-                error.code, error.message
-            ))));
-        }
-
-        rpc_response.result.ok_or_else(|| {
-            ReqError::Protocol(crate::error::Error::Agent(
-                "No result in MCP response".to_string(),
-            ))
-        })
     }
 
     /// Send a notification (no response expected)
@@ -3488,6 +3577,185 @@ while True:
             arr,
             serde_json::json!([1, 2]),
             "non-object shapes ride through"
+        );
+    }
+
+    /// A fake MCP server that emits ONE ORPHAN JSON-RPC response — a
+    /// response whose `id` matches no request — immediately before the real
+    /// response of the first `tools/call`.
+    ///
+    /// This reproduces the live sourcehound failure observed on 2026-11-05:
+    /// after one stray line on stdout, EVERY later call reported
+    ///   "MCP response ID mismatch: expected N, got M"   with M < N,
+    /// because the serial read loop consumed the orphan for request N,
+    /// leaving request N's real response queued for request N+1. The client
+    /// then stayed permanently one response behind, and there was no drain,
+    /// no resync, and no reconnect on a protocol error.
+    const ORPHAN_MCP_SERVER: &str = r#"import sys, json
+orphan_emitted = False
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        req = json.loads(line)
+    except Exception:
+        continue
+    rid = req.get('id')
+    if rid is None:
+        continue
+    mid = req.get('method')
+    if mid == 'initialize':
+        result = {'protocolVersion': '2025-06-18', 'capabilities': {'tools': {}}, 'serverInfo': {'name': 'orphan', 'version': '1.0'}}
+    elif mid == 'tools/list':
+        result = {'tools': []}
+    else:
+        result = {'echo': rid}
+        if not orphan_emitted:
+            orphan_emitted = True
+            # An orphan: id 99999 matches no request.
+            sys.stdout.write(json.dumps({'jsonrpc': '2.0', 'id': 99999, 'result': {'orphan': True}}) + chr(10))
+            sys.stdout.flush()
+    sys.stdout.write(json.dumps({'jsonrpc': '2.0', 'id': rid, 'result': result}) + chr(10))
+    sys.stdout.flush()
+"#;
+
+    /// Build a stdio client pointed at a freshly-written copy of the
+    /// orphan-emitting fake MCP server.
+    fn orphan_stdio_client() -> (McpStdioClient, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!(
+            "operant_mcp_orphan_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        let script = dir.join("orphan_server.py");
+        std::fs::write(&script, ORPHAN_MCP_SERVER).expect("write orphan server");
+        let client = McpStdioClient::new(
+            "python3",
+            vec![script.to_string_lossy().to_string()],
+            std::collections::HashMap::new(),
+        );
+        (client, dir)
+    }
+
+    /// (iter-1822) An orphan response on stdout must not wedge the client
+    /// for the rest of the process's life.
+    ///
+    /// Before the fix the FIRST call already failed with "MCP response ID
+    /// mismatch: expected N, got 99999", and the SECOND call failed with a
+    /// mismatch against the first call's real response — and so did every
+    /// call after that.
+    #[tokio::test]
+    async fn an_orphan_response_does_not_wedge_the_stdio_client() {
+        let (client, _dir) = orphan_stdio_client();
+        client.connect().await.expect("handshake");
+
+        let first = client
+            .call_tool("echo", serde_json::json!({}))
+            .await
+            .expect("the first call must survive the orphan");
+        assert!(
+            first["echo"].is_u64(),
+            "the first call must return ITS OWN response: {first:?}"
+        );
+
+        // The second call is the one that used to fail forever: the orphan
+        // had eaten request N's real response, so the client read one
+        // response behind for the rest of the session.
+        let second = client
+            .call_tool("echo", serde_json::json!({}))
+            .await
+            .expect("the client must not stay wedged behind the orphan");
+        assert!(
+            second["echo"].is_u64(),
+            "the second call must return its own response: {second:?}"
+        );
+        assert_ne!(
+            first["echo"], second["echo"],
+            "each call must get its OWN response, never a replayed one"
+        );
+    }
+
+    /// (iter-1822) The iter-1822 guard must stay strict: a response that
+    /// belongs to a DIFFERENT request must never be handed to the wrong
+    /// caller. The drain must not become a "return whatever arrives"
+    /// shortcut.
+    #[tokio::test]
+    async fn a_parked_orphan_is_never_handed_to_a_caller() {
+        let (client, _dir) = orphan_stdio_client();
+        client.connect().await.expect("handshake");
+        let first = client
+            .call_tool("echo", serde_json::json!({}))
+            .await
+            .expect("call");
+        assert!(
+            first.get("orphan").is_none(),
+            "the orphan payload must never reach a caller: {first:?}"
+        );
+    }
+
+    /// (iter-1822) A server that never answers with the id that was asked
+    /// for must fail LOUDLY and BOUNDEDLY, not spin forever and not wedge
+    /// the client for the next call.
+    #[tokio::test]
+    async fn a_server_that_never_matches_the_request_id_fails_boundedly() {
+        let dir = std::env::temp_dir().join(format!(
+            "operant_mcp_nevermatch_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        let script = dir.join("never_match.py");
+        std::fs::write(
+            &script,
+            r#"import sys, json
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        req = json.loads(line)
+    except Exception:
+        continue
+    rid = req.get('id')
+    if rid is None:
+        continue
+    mid = req.get('method')
+    if mid == 'initialize':
+        result = {'protocolVersion': '2025-06-18', 'capabilities': {'tools': {}}, 'serverInfo': {'name': 'nevermatch', 'version': '1.0'}}
+    elif mid == 'tools/list':
+        result = {'tools': []}
+    else:
+        # Always answer with an id nobody asked for.
+        result = {'echo': rid}
+        rid = 99999
+    sys.stdout.write(json.dumps({'jsonrpc': '2.0', 'id': rid, 'result': result}) + chr(10))
+    sys.stdout.flush()
+"#,
+        )
+        .expect("write never-match server");
+        let client = McpStdioClient::new(
+            "python3",
+            vec![script.to_string_lossy().to_string()],
+            std::collections::HashMap::new(),
+        );
+        client.connect().await.expect("handshake");
+
+        let err = client
+            .call_tool("echo", serde_json::json!({}))
+            .await
+            .expect_err("a server that never matches must not succeed");
+        let text = err.to_string();
+        assert!(
+            text.contains("without one for request"),
+            "the failure must name the drain, got: {text}"
         );
     }
 }
