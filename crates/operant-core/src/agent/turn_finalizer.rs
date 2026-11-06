@@ -148,9 +148,22 @@ impl TurnDiagnostics {
                 self.api_calls, self.max_iterations,
             )),
             TurnExitReason::GraceCall => Some(
-                "⚠️ Turn ended early — the wrap-up call ran out of room mid-summary. \
-                 The answer shown is a best-effort partial; reply 'continue' to resume the task."
-                    .to_string(),
+                // Two different failures land on this reason and the notice
+                // must name the one that happened. A summary CUT OFF by the
+                // output limit is "out of room"; a summary the S1 quality gate
+                // REJECTED (empty, or a reasoning-leak artifact) is not — the
+                // 2026-11-05 live incident was the second kind and the old
+                // notice blamed the first.
+                if self.response_len == 0 {
+                    "⚠️ Turn ended early — the wrap-up produced no usable summary. The \
+                     best-effort partial shown is empty; the harness tried to continue \
+                     the task on its own — reply 'continue' to pick it up."
+                } else {
+                    "⚠️ Turn ended early — the wrap-up call ran out of room mid-summary. \
+                     The answer shown is a best-effort partial; reply 'continue' to \
+                     resume the task."
+                }
+                .to_string(),
             ),
             TurnExitReason::CircuitBreaker => Some(
                 "⚠️ Turn ended early — the model looped the same failing tool call \

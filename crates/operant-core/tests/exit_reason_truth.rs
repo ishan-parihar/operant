@@ -166,6 +166,45 @@ fn tool_call_response(tool: &str, arguments: &str) -> ChatResponse {
 /// `tests/circuit_breaker_abort.rs`).
 struct OkTool;
 
+/// A tool that always FAILS.
+///
+/// The degenerate-grace case uses it so the auto-poke does NOT fire: the
+/// poke's gate is "there was real progress to continue" (an open todo list
+/// or a successful tool call), and a turn whose every tool failed is a
+/// STUCK model — re-running it would only repeat the failing calls. The
+/// poke's own shape is pinned in `tests/auto_poke.rs`.
+struct FailTool;
+
+#[async_trait]
+impl OperantTool for FailTool {
+    fn name(&self) -> &str {
+        "fail_probe"
+    }
+
+    fn description(&self) -> &str {
+        "Always fails (test fixture)."
+    }
+
+    fn schema(&self) -> ToolSchema {
+        ToolSchema::new(
+            "fail_probe",
+            "Always fails (test fixture).",
+            serde_json::json!({"type": "object", "properties": {}}),
+        )
+    }
+
+    async fn execute(&self, _args: serde_json::Value, _context: ToolContext) -> ToolResult {
+        ToolResult {
+            tool_call_id: String::new(),
+            name: "fail_probe".to_string(),
+            success: false,
+            content: String::new(),
+            error: Some("probe failure (test fixture)".to_string()),
+            timed_out: false,
+        }
+    }
+}
+
 #[async_trait]
 impl OperantTool for OkTool {
     fn name(&self) -> &str {
@@ -305,6 +344,7 @@ async fn run_with_events(
     let client = Arc::new(ScriptedClient::new(responses));
     let registry = ToolRegistry::new(Duration::from_secs(5));
     registry.register(OkTool).await.unwrap();
+    registry.register(FailTool).await.unwrap();
     let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(64);
     let agent = OperantAgent::with_events(
         test_config(model, max_iterations),
@@ -358,7 +398,9 @@ async fn degenerate_grace_turn_reports_grace_call() {
     const MODEL: &str = "demo-grace-degenerate";
     let (result, events, client) = run_with_events(
         vec![
-            tool_call_response("ok_probe", "{}"),
+            // A FAILING tool: the turn made no progress, so the auto-poke
+            // does not fire and this case still measures the S1 gate alone.
+            tool_call_response("fail_probe", "{}"),
             text_response("]<]\u{200b}minimax[>["),
         ],
         1,

@@ -1406,6 +1406,12 @@ mod prompting;
 mod run;
 mod stream;
 
+// Round 3: the bounded synthetic continuation (the "poke") that follows an
+// early exit whose wrap-up produced nothing. Public predicate so a renderer
+// can tell a synthetic user row from one the operator typed.
+pub mod auto_poke;
+pub use auto_poke::{is_auto_poke_message, is_non_retryable_auto_poke_error};
+
 // iter-633: the per-turn seat-budget envelope + its task-local. The gateway
 // runner is the only setter — see run.rs for why this is task-local and not
 // a field on the agent (the shared InterruptFlag incident, 2026-10-05).

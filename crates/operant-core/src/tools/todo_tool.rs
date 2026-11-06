@@ -512,6 +512,18 @@ pub fn todo_counts_for_session(session_id: &str) -> (usize, usize, usize) {
         })
 }
 
+/// How many todos of a session are still unfinished (pending or in progress).
+///
+/// The gate for the auto-poke: a synthetic continuation is only worth issuing
+/// when the model left work open. A cancelled todo counts as finished — the
+/// model decided not to do it.
+pub fn unfinished_todo_count(session_id: &str) -> usize {
+    load_session(session_id)
+        .iter()
+        .filter(|item| matches!(item.status.as_str(), "pending" | "in_progress"))
+        .count()
+}
+
 /// Render the active todo list (pending/in_progress only) for re-injection
 /// after context compression. Returns None when nothing active remains.
 /// Ported from hermes `TodoStore.format_for_injection` — completed/cancelled

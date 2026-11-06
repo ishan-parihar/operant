@@ -36,6 +36,19 @@ pub(crate) fn apply_conversation_to_display(app: &mut App, conv: Vec<CoreMessage
 
     for m in conv {
         match m.role {
+            // A POKE is a synthetic continuation the harness wrote, not
+            // something the operator typed. It is persisted as a user row
+            // (the transcript records what the model was told), so the
+            // display has to recognise it — otherwise a restored session
+            // shows a user message the operator never sent.
+            CoreRole::User if operant_core::agent::is_auto_poke_message(&m.content) => {
+                app.messages.push(Message {
+                    role: Role::System,
+                    content: MessageContent::Text(
+                        "↻ Auto-poke — the harness continued the task on its own.".to_string(),
+                    ),
+                });
+            }
             CoreRole::User => app.messages.push(Message {
                 role: Role::User,
                 content: MessageContent::Text(m.content),

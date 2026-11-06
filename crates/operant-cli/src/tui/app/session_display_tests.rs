@@ -175,3 +175,39 @@ fn a_tool_only_turn_commits_no_empty_assistant_message() {
         "the row anchors after the operator's prompt — the only message there is"
     );
 }
+
+/// A POKE is a synthetic continuation the harness wrote. It is persisted as
+/// a user row (the transcript records what the model was told), so the
+/// rebuild must NOT show it as something the operator typed.
+#[test]
+fn a_restored_session_does_not_show_a_poke_as_the_operators_own_message() {
+    let mut app = super::tests::make_app();
+    let conv = vec![
+        operant_core::client::Message::user("do the work"),
+        operant_core::client::Message::user(
+            "You have 2 incomplete todos. Continue working, or update the todo tool.",
+        ),
+        operant_core::client::Message::assistant("Done — both checks pass."),
+    ];
+    session_display::apply_conversation_to_display(&mut app, conv);
+
+    let user_messages: Vec<_> = app
+        .messages
+        .iter()
+        .filter(|m| m.role == crate::tui::adapter_types::types::Role::User)
+        .collect();
+    assert_eq!(
+        user_messages.len(),
+        1,
+        "only the operator's own message may be a user message, got {user_messages:?}"
+    );
+    assert!(
+        app.messages.iter().any(|m| matches!(
+            &m.content,
+            MessageContent::Text(text) if text.contains("Auto-poke")
+        )),
+        "the poke must still be VISIBLE — as the harness's own continuation — \
+         got {:?}",
+        app.messages
+    );
+}

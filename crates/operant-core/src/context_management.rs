@@ -50,13 +50,26 @@ pub fn estimate_tokens(text: &str) -> usize {
 /// The count covers the WHOLE message the provider sees — not just its
 /// text. A tool-call turn's `content` is EMPTY by construction (the text
 /// is suppressed so the provider sees a pure tool-call turn), and the
-/// payload is in `tool_calls[].function.arguments`; the reasoning is in
-/// `msg.reasoning` and is serialised back to the provider on the next
-/// request. Counting only `content` charged 4 tokens for a turn that
-/// carried 100 KB of tool arguments — so the eviction was blind to
-/// exactly the messages that carry the most payload, and the request the
-/// provider rejected was over-budget by an amount the estimator never
-/// saw.
+/// payload is in `tool_calls[].function.arguments`. Counting only
+/// `content` charged 4 tokens for a turn that carried 100 KB of tool
+/// arguments — so the eviction was blind to exactly the messages that
+/// carry the most payload, and the request the provider rejected was
+/// over-budget by an amount the estimator never saw.
+///
+/// The reasoning is deliberately NOT counted. It is not context: the
+/// Anthropic adapter drops it entirely (`build_assistant_content` emits
+/// only text and tool_use blocks), and the OpenAI adapter sends it as
+/// `reasoning_content` — which the provider does not charge against the
+/// window. MEASURED 2026-11-06 against the live `large-stack` endpoint:
+/// an 18 000-character `reasoning_content` added 15 prompt tokens to the
+/// next request (4 027 total, 3 904 of them cached) — i.e. nothing.
+/// Charging it inflated the live session's estimate by 107 173 tokens
+/// (428 693 B of reasoning) and made the agent compact a request the
+/// provider was serving in ~200 000 tokens.
+///
+/// shortcut: a provider that starts CHARGING `reasoning_content` would
+/// make this estimate under-count by that much; the hard-cap guard and
+/// the learned-limit path are the backstop until then.
 pub fn estimate_message_tokens(msg: &Message) -> usize {
     // 4 tokens overhead per message (role tags, separators) — matches
     // OpenAI's pricing model.
@@ -71,11 +84,6 @@ pub fn estimate_message_tokens(msg: &Message) -> usize {
             tokens += estimate_tokens(&call.function.name);
             tokens += estimate_tokens(&call.id);
         }
-    }
-
-    // The reasoning, which IS sent back to the provider.
-    if let Some(reasoning) = msg.reasoning.as_ref() {
-        tokens += estimate_tokens(reasoning);
     }
 
     tokens
@@ -1780,7 +1788,10 @@ mod tests {
              4 tokens — got {counted}"
         );
 
-        // The reasoning counts too.
+        // The reasoning is NOT context and must not be charged: the provider
+        // does not count it (measured: 18 000 B of `reasoning_content` cost
+        // 15 prompt tokens), so charging it made the agent compact requests
+        // that were nowhere near the cap.
         let reasoning_turn = Message {
             role: Role::Assistant,
             content: "the answer".to_string(),
@@ -1791,10 +1802,10 @@ mod tests {
             extra_content: None,
         };
         let counted = estimate_message_tokens(&reasoning_turn);
-        assert!(
-            counted > 9_000,
-            "the reasoning is sent back to the provider, so it must be counted — \
-             got {counted}"
+        assert_eq!(
+            counted,
+            4 + estimate_tokens("the answer"),
+            "the reasoning is not charged against the context window — got {counted}"
         );
 
         // A plain text message is unchanged.

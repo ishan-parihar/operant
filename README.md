@@ -203,6 +203,28 @@ a 128k window keeps the old 80%/95% behaviour (102k / 121k). Set an axis to
 `0` to disable it. The compaction rewrites the request, never the stored
 transcript — a resumed session still has its whole history.
 
+The token count the caps act on is what the provider actually charges: the
+assistant's reasoning is not counted, because no provider bills it against
+the window (measured on the live endpoint: 18 kB of `reasoning_content` cost
+15 prompt tokens). Counting it made the agent compact requests that were
+nowhere near the cap.
+
+### When a turn runs out of room
+
+A turn that hits its iteration budget, the wall clock or the seat cap ends
+with a **toolless wrap-up** — one last request asking the model to summarise
+what it did. If that wrap-up produces a usable summary, the operator gets
+the partial answer.
+
+If it produces nothing usable (empty, or a reasoning-leak artifact the
+quality gate rejects), the turn does not simply stop: the core issues an
+**auto-poke** — a bounded synthetic continuation that gives the turn one more
+pass *with its tools*, bypassing the limit that just stopped it. The poke is
+bounded three ways: at most two per turn, each granting three iterations past
+the limit; only when there is work to continue (an open todo list, or a tool
+call that succeeded); and never after a non-retryable provider error. A poke
+shows in the transcript as "Auto-poke", not as a message you typed.
+
 ### What wins: environment, `.env`, or `operant.toml`
 
 1. **Process environment** — `OPENAI_BASE_URL`, `HERMES_MODEL` and the `OPERANT_*` aliases override the file on every load. `operant config show` lists every key that came from the environment and the loader warns once per key, so an export left over from another tool cannot win silently.

@@ -386,11 +386,31 @@ impl App {
                              shown is a best-effort partial; break the task into smaller \
                              steps or raise `max_iterations`.",
                     ),
-                    operant_core::agent::TurnExitReason::GraceCall => Some(
-                        "⚠️ Turn ended early — the wrap-up ran out of room mid-summary. \
-                             The answer shown is a best-effort partial; reply 'continue' \
-                             to resume.",
-                    ),
+                    operant_core::agent::TurnExitReason::GraceCall => {
+                        // The wrap-up is TOOLLESS and it can fail in two
+                        // different ways. A summary that was CUT OFF by the
+                        // output limit is a partial answer — "ran out of
+                        // room" is true. A summary the S1 quality gate
+                        // rejected (empty, or a reasoning-leak artifact) is
+                        // NOT out of room: the model answered, the answer
+                        // was garbage, and the turn produced nothing. The
+                        // live incident (2026-11-05) was the second kind
+                        // and the notice blamed the first.
+                        if message.content.trim().is_empty() {
+                            Some(
+                                "⚠️ Turn ended early — the wrap-up produced no usable \
+                                 summary. The best-effort partial shown is empty; the \
+                                 harness tried to continue the task on its own — reply \
+                                 'continue' to pick it up.",
+                            )
+                        } else {
+                            Some(
+                                "⚠️ Turn ended early — the wrap-up ran out of room \
+                                 mid-summary. The answer shown is a best-effort partial; \
+                                 reply 'continue' to resume.",
+                            )
+                        }
+                    }
                     operant_core::agent::TurnExitReason::CircuitBreaker => Some(
                         "⚠️ Turn ended early — the model looped the same failing call \
                              until the circuit breaker stopped it. Partial work may be \

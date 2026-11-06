@@ -37,6 +37,34 @@ fn learned_limit_key(provider: &str, model: &str) -> String {
     format!("context_limit:{provider}:{model}")
 }
 
+/// The turn's counters the wrap-up and the poke both read.
+///
+/// One struct because they travel together (the log line, the poke's gate)
+/// and a seven-arg function is a function nobody can read at the call site.
+#[derive(Clone, Copy)]
+struct TurnCounters {
+    /// The loop's iteration counter.
+    iteration: usize,
+    /// Every tool call this turn executed, successful or not.
+    tool_calls: usize,
+    /// How many of those calls SUCCEEDED — the poke's gate: a turn that made
+    /// real progress is worth continuing, a turn whose every tool failed is a
+    /// stuck model.
+    succeeded: usize,
+}
+
+/// What a turn's wrap-up (grace call) produced.
+///
+/// The two arms differ in whether the turn is OVER: `Answer` has been
+/// announced to the operator, `Empty` has not — the caller may still issue a
+/// poke (a bounded synthetic continuation) and keep the turn alive.
+pub(crate) enum GraceOutcome {
+    /// The wrap-up produced a usable summary — the turn's answer.
+    Answer(Message),
+    /// The wrap-up produced nothing usable. The turn is NOT announced.
+    Empty,
+}
+
 // ── Mid-flight seat budget (iter-633, Wave 4) ───────────────────────────
 
 /// The per-turn HARD-cap envelope the gateway runner sets before
@@ -155,13 +183,19 @@ impl OperantAgent {
     /// The model gets one final chance to summarize its progress without
     /// tools, giving the user a partial answer instead of a hard error.
     ///
-    /// Returns `Ok(Message)` on success, or `Err(MaxIterationsExceeded)`
-    /// if the grace call also fails. A degenerate grace output (empty, or a
-    /// short whitespace-free reasoning-leak artifact per
-    /// `turn_rules::is_degenerate_final_text`) returns the EMPTY assistant
-    /// message instead — the gateway substitutes the user-facing
-    /// stopped-early notice keyed on the `GraceCall` exit reason carried by
-    /// the `Done` event (`gateway_runner.rs` turn-end block).
+    /// Returns `Ok(GraceOutcome::Answer)` when the wrap-up produced a usable
+    /// summary — the turn is over and it has been announced. Returns
+    /// `Ok(GraceOutcome::Empty)` when it produced nothing usable (empty or
+    /// rejected by the S1 degenerate-output gate): the turn is NOT announced,
+    /// because the caller may still issue a poke — a bounded synthetic
+    /// continuation that gives the turn one more pass WITH its tools — and
+    /// only announces the end if no poke follows.
+    ///
+    /// A degenerate grace output (empty, or a short whitespace-free
+    /// reasoning-leak artifact per `turn_rules::is_degenerate_final_text`)
+    /// is the EMPTY outcome — the gateway substitutes the user-facing
+    /// stopped-early notice keyed on the `Done` event's `GraceCall` exit
+    /// reason (carried by `gateway_runner.rs` turn-end block).
     ///
     /// `review_fired`: S3 deferral — when the skill-review cadence triggered
     /// during the turn, the spawn was deferred to turn exit; the grace path
@@ -175,7 +209,7 @@ impl OperantAgent {
         tool_calls: usize,
         final_response: Option<&Message>,
         review_fired: bool,
-    ) -> Result<Message> {
+    ) -> Result<GraceOutcome> {
         // The wrap-up is the LAST call of a budget-exhausted turn, so a
         // summary that runs out of room is CONTINUED (bounded) instead of
         // being returned half-written — the generic recovery jcode uses for
@@ -255,6 +289,15 @@ impl OperantAgent {
                     self.persist_assistant_message(session_id, &result, finish_reason.clone())
                         .await;
                 }
+                // An EMPTY wrap-up is not the end of the turn: the caller may
+                // still issue a poke — the bounded synthetic continuation
+                // that gives the turn one more pass WITH its tools, which is
+                // the only thing that can finish the work a TOOLLESS wrap-up
+                // cannot. The turn is therefore NOT announced here; the
+                // caller announces it when no poke follows.
+                if result.content.trim().is_empty() {
+                    return Ok(GraceOutcome::Empty);
+                }
                 if self.record_trajectories {
                     self.save_trajectory(
                         session_id,
@@ -279,58 +322,16 @@ impl OperantAgent {
                         );
                     }
                 }
-                self.emit(AgentEvent::Done {
-                    message: result.clone(),
-                    // S5: the grace path must not report `text_response` —
-                    // the summary is a best-effort partial.
-                    reason: TurnExitReason::GraceCall,
-                })
+                self.announce_grace_end(
+                    session_id,
+                    messages,
+                    &result,
+                    iterations,
+                    tool_calls,
+                    review_fired,
+                )
                 .await;
-                // ── Turn diagnostics (grace exit) ─────────────────────────
-                // S5: honesty — the log must say `grace_call` here, never
-                // `budget_exhausted` (pre-call diagnostic, kept) or
-                // `text_response`.
-                warn!(
-                    "{}",
-                    TurnDiagnostics {
-                        exit_reason: TurnExitReason::GraceCall,
-                        model: self.model(),
-                        api_calls: iterations,
-                        max_iterations: self.config.max_iterations,
-                        budget_used: self.iteration_budget.used(),
-                        budget_max: self.iteration_budget.max_total(),
-                        tool_turns: tool_calls,
-                        response_len: result.content.len(),
-                        session_id: session_id.to_string(),
-                    }
-                    .log_message()
-                );
-                if let Some(ref obs) = self.observer {
-                    let cost = self.session_cost_usd.read().map(|c| *c).unwrap_or(0.0);
-                    obs.record_event(&ObserverEvent::AgentEnd {
-                        provider: self.config.model.clone(),
-                        model: self.model(),
-                        duration: std::time::Duration::from_secs(0),
-                        tokens_used: None,
-                        cost_usd: if cost > 0.0 { Some(cost) } else { None },
-                    });
-                }
-                if let Some(ref hooks) = self.hook_registry {
-                    hooks
-                        .emit(
-                            crate::gateway_pipeline::HookEvent::AgentEnd,
-                            crate::gateway_pipeline::HookContext::new().with_session(session_id),
-                        )
-                        .await;
-                }
-                // S3: deferred skill review — review the complete transcript
-                // AFTER the turn's final answer is committed/emitted, so the
-                // review never competes with the turn for provider slots.
-                if review_fired {
-                    self.spawn_background_review(messages, session_id, true, false)
-                        .await;
-                }
-                Ok(result)
+                Ok(GraceOutcome::Answer(result))
             }
             Err(e) => {
                 warn!(error = %e, "Grace call failed — returning hard error");
@@ -387,6 +388,207 @@ impl OperantAgent {
                 })
             }
         }
+    }
+
+    /// Announce a turn that ended on the grace path.
+    ///
+    /// The `Done` event, the diagnostics line, the observer and hook signals
+    /// and the deferred review. Split out of [`Self::attempt_grace_call`] so
+    /// the caller can announce an EMPTY wrap-up AFTER deciding that no poke
+    /// follows: announcing it inside the wrap-up would have told the
+    /// operator the turn was over before the poke gave it one more pass.
+    async fn announce_grace_end(
+        &self,
+        session_id: &str,
+        messages: &[Message],
+        result: &Message,
+        iterations: usize,
+        tool_calls: usize,
+        review_fired: bool,
+    ) {
+        self.emit(AgentEvent::Done {
+            message: result.clone(),
+            // S5: the grace path must not report `text_response` —
+            // the summary is a best-effort partial.
+            reason: TurnExitReason::GraceCall,
+        })
+        .await;
+        // ── Turn diagnostics (grace exit) ─────────────────────────
+        // S5: honesty — the log must say `grace_call` here, never
+        // `budget_exhausted` (pre-call diagnostic, kept) or
+        // `text_response`.
+        warn!(
+            "{}",
+            TurnDiagnostics {
+                exit_reason: TurnExitReason::GraceCall,
+                model: self.model(),
+                api_calls: iterations,
+                max_iterations: self.config.max_iterations,
+                budget_used: self.iteration_budget.used(),
+                budget_max: self.iteration_budget.max_total(),
+                tool_turns: tool_calls,
+                response_len: result.content.len(),
+                session_id: session_id.to_string(),
+            }
+            .log_message()
+        );
+        if let Some(ref obs) = self.observer {
+            let cost = self.session_cost_usd.read().map(|c| *c).unwrap_or(0.0);
+            obs.record_event(&ObserverEvent::AgentEnd {
+                provider: self.config.model.clone(),
+                model: self.model(),
+                duration: std::time::Duration::from_secs(0),
+                tokens_used: None,
+                cost_usd: if cost > 0.0 { Some(cost) } else { None },
+            });
+        }
+        if let Some(ref hooks) = self.hook_registry {
+            hooks
+                .emit(
+                    crate::gateway_pipeline::HookEvent::AgentEnd,
+                    crate::gateway_pipeline::HookContext::new().with_session(session_id),
+                )
+                .await;
+        }
+        // S3: deferred skill review — review the complete transcript
+        // AFTER the turn's final answer is committed/emitted, so the
+        // review never competes with the turn for provider slots.
+        if review_fired {
+            self.spawn_background_review(messages, session_id, true, false)
+                .await;
+        }
+    }
+
+    /// End a turn that ran out of room — and keep it alive when it can.
+    ///
+    /// The wrap-up ([`Self::attempt_grace_call`]) is TOOLLESS: it can
+    /// summarise what happened, but it cannot finish the work that is still
+    /// open. When it comes back empty or degenerate the turn used to stop
+    /// with NOTHING — an empty answer and a notice telling the operator the
+    /// wrap-up "ran out of room mid-summary", which is not what happened.
+    ///
+    /// The poke is the bounded synthetic continuation that gives the turn
+    /// one more pass WITH its tools. It is issued only when there is work to
+    /// continue (incomplete todos, or a turn that ran tools) and never after
+    /// a non-retryable provider error. See [`crate::agent::auto_poke`].
+    ///
+    /// `Ok(None)` means THE TURN CONTINUES: a poke was issued and the caller
+    /// must loop again. `Ok(Some(message))` means the turn is over.
+    ///
+    /// `allow_poke` is false where another cap must not be bypassed — the
+    /// seat's SPENDING cap, for instance: a poke spends more, so a turn that
+    /// hit the money cap gets its wrap-up and nothing else.
+    async fn wrap_up_or_poke(
+        &self,
+        messages: &mut Vec<Message>,
+        session_id: &str,
+        counters: TurnCounters,
+        review_fired: bool,
+        poke: &mut crate::agent::auto_poke::PokeState,
+        allow_poke: bool,
+    ) -> Result<Option<Message>> {
+        let outcome = self
+            .attempt_grace_call(
+                messages,
+                session_id,
+                counters.iteration,
+                counters.tool_calls,
+                None,
+                review_fired,
+            )
+            .await?;
+        match outcome {
+            GraceOutcome::Answer(message) => return Ok(Some(message)),
+            GraceOutcome::Empty => {}
+        }
+
+        // The wrap-up produced nothing. Is there work to continue?
+        let unfinished = crate::tools::todo_tool::unfinished_todo_count(session_id);
+        let has_work = unfinished > 0 || counters.succeeded > 0;
+        if !allow_poke {
+            info!(
+                unfinished_todos = unfinished,
+                tool_calls = counters.tool_calls,
+                succeeded = counters.succeeded,
+                "The wrap-up produced no answer — the turn ends (pokes are not allowed here)"
+            );
+        } else if poke.blocked_by_non_retryable() {
+            // The turn's last provider error was deterministic: the same
+            // request would be rejected the same way. Re-issuing it would
+            // burn refused calls, so no poke is issued (jcode's guard).
+            info!(
+                unfinished_todos = unfinished,
+                tool_calls = counters.tool_calls,
+                succeeded = counters.succeeded,
+                "The wrap-up produced no answer and the last provider error is \
+                 not retryable — the turn ends"
+            );
+        } else if !has_work {
+            info!(
+                unfinished_todos = unfinished,
+                tool_calls = counters.tool_calls,
+                succeeded = counters.succeeded,
+                "The wrap-up produced no answer and there is no open work — the turn ends"
+            );
+        } else if poke.used >= crate::agent::auto_poke::MAX_AUTO_POKES {
+            info!(
+                pokes = poke.used,
+                unfinished_todos = unfinished,
+                "The wrap-up produced no answer and the poke budget is spent — the turn ends"
+            );
+        } else {
+            let text = crate::agent::auto_poke::auto_poke_message(unfinished);
+            let message = Message::user(text.clone());
+            messages.push(message.clone());
+            self.add_message(message.clone()).await;
+            // The poke is persisted like any other user row: the transcript
+            // records what the model was actually told, so a resumed session
+            // shows the same history the model saw. The renderer recognises
+            // it (`auto_poke::is_auto_poke_message`) and does not pass it off
+            // as something the operator typed.
+            if let Err(e) = self.database.save_message(
+                session_id,
+                "user",
+                &text,
+                &chrono::Utc::now().to_rfc3339(),
+            ) {
+                warn!(error = %e, "Failed to persist the auto-poke message");
+            }
+            poke.used += 1;
+            // The poke phase runs the turn PAST the limits that just stopped
+            // it — that is the whole point of the feature.
+            poke.iterations_left = crate::agent::auto_poke::AUTO_POKE_ITERATIONS;
+            info!(
+                pokes = poke.used,
+                max = crate::agent::auto_poke::MAX_AUTO_POKES,
+                iterations = poke.iterations_left,
+                unfinished_todos = unfinished,
+                "Auto-poke issued — the turn continues with a synthetic continuation"
+            );
+            self.emit(AgentEvent::Content {
+                text: format!(
+                    "↻ Auto-poke {}/{} — continuing the task.",
+                    poke.used,
+                    crate::agent::auto_poke::MAX_AUTO_POKES
+                ),
+            })
+            .await;
+            return Ok(None);
+        }
+
+        // No poke: announce the empty end now (the same announcement the
+        // wrap-up used to make inline) and hand the empty answer back.
+        let empty = Message::assistant(String::new());
+        self.announce_grace_end(
+            session_id,
+            messages,
+            &empty,
+            counters.iteration,
+            counters.tool_calls,
+            review_fired,
+        )
+        .await;
+        Ok(Some(empty))
     }
 
     /// Run the agent with a user query
@@ -729,6 +931,15 @@ impl OperantAgent {
         // succeeded one after another for 73 iterations — the all-failure
         // breaker above never fired because each call "succeeded".
         let (mut last_call_sig, mut identical_streak): (Option<u64>, usize) = (None, 0);
+        // The poke bookkeeping (round 3): how many synthetic continuations
+        // this turn has issued, and how many iterations the current poke
+        // phase may still run past the configured limits. See
+        // `crate::agent::auto_poke`.
+        let mut poke = crate::agent::auto_poke::PokeState::default();
+        // How many of this turn's tool calls SUCCEEDED. The poke's gate: a
+        // turn that made real progress is worth continuing, a turn whose
+        // every tool failed is a stuck model.
+        let mut successful_tool_calls: usize = 0;
 
         // Reset provider registry to primary at turn start.
         // Matches hermes-agent's restore_primary_runtime() pattern —
@@ -763,16 +974,33 @@ impl OperantAgent {
                     budget_max = self.iteration_budget.max_total(),
                     "Iteration budget exhausted — attempting grace call"
                 );
-                return self
-                    .attempt_grace_call(
-                        &messages,
+                // A poke phase runs the turn PAST the budget that just
+                // stopped it — that is the feature's whole point. The refund
+                // buys back the slot the next iteration needs; the phase is
+                // bounded by `AUTO_POKE_ITERATIONS`.
+                if poke.poking() {
+                    poke.iterations_left -= 1;
+                    self.iteration_budget.refund();
+                    continue;
+                }
+                match self
+                    .wrap_up_or_poke(
+                        &mut messages,
                         &session_id,
-                        iteration,
-                        total_tool_calls,
-                        None,
+                        TurnCounters {
+                            iteration,
+                            tool_calls: total_tool_calls,
+                            succeeded: successful_tool_calls,
+                        },
                         review_fired,
+                        &mut poke,
+                        true,
                     )
-                    .await;
+                    .await?
+                {
+                    Some(answer) => return Ok(answer),
+                    None => continue,
+                }
             }
 
             // Turn-level wall-clock ceiling. `iteration_budget` counts
@@ -783,22 +1011,34 @@ impl OperantAgent {
             // errors the user sees only "Still working..." heartbeats.
             // Checked per iteration so the bound is enforced between calls.
             let turn_elapsed = turn_start.elapsed().as_secs();
-            if turn_elapsed >= turn_wall_clock_limit_secs {
+            // A poke phase runs past the wall clock that just stopped the
+            // turn: the poke is the continuation, so the clock that ended
+            // the FIRST attempt must not end the continuation too. The phase
+            // is bounded by its iteration count.
+            if turn_elapsed >= turn_wall_clock_limit_secs && !poke.poking() {
                 warn!(
                     turn_elapsed,
                     limit_secs = turn_wall_clock_limit_secs,
                     "Turn wall-clock limit reached — attempting grace call"
                 );
-                return self
-                    .attempt_grace_call(
-                        &messages,
+                match self
+                    .wrap_up_or_poke(
+                        &mut messages,
                         &session_id,
-                        iteration,
-                        total_tool_calls,
-                        None,
+                        TurnCounters {
+                            iteration,
+                            tool_calls: total_tool_calls,
+                            succeeded: successful_tool_calls,
+                        },
                         review_fired,
+                        &mut poke,
+                        true,
                     )
-                    .await;
+                    .await?
+                {
+                    Some(answer) => return Ok(answer),
+                    None => continue,
+                }
             }
 
             // Mid-flight seat budget (iter-633, ORGANISM-ARCHITECTURE §5).
@@ -839,16 +1079,27 @@ impl OperantAgent {
                     session_id: session_id.clone(),
                 };
                 warn!("{}", diag.log_message());
-                return self
-                    .attempt_grace_call(
-                        &messages,
+                // No poke here: the seat cap is a SPENDING cap, and a poke
+                // spends more. The wrap-up still runs (it is one toolless
+                // request), but the turn does not get another pass.
+                match self
+                    .wrap_up_or_poke(
+                        &mut messages,
                         &session_id,
-                        iteration,
-                        total_tool_calls,
-                        None,
+                        TurnCounters {
+                            iteration,
+                            tool_calls: total_tool_calls,
+                            succeeded: successful_tool_calls,
+                        },
                         review_fired,
+                        &mut poke,
+                        false,
                     )
-                    .await;
+                    .await?
+                {
+                    Some(answer) => return Ok(answer),
+                    None => continue,
+                }
             }
 
             iteration += 1;
@@ -897,7 +1148,7 @@ impl OperantAgent {
                 return Err(crate::error::Error::Interrupted);
             }
 
-            if iteration > self.config.max_iterations {
+            if iteration > self.config.max_iterations && !poke.poking() {
                 // ── Turn diagnostics (budget exhaustion) ─────────────────
                 let diag = TurnDiagnostics {
                     exit_reason: TurnExitReason::BudgetExhausted,
@@ -915,17 +1166,27 @@ impl OperantAgent {
                 // When max_iterations is exceeded, hermes-agent makes one
                 // extra "grace call" with tools stripped, asking the model
                 // to summarize what it has so far. This gives the user a
-                // partial answer instead of a hard error.
-                return self
-                    .attempt_grace_call(
-                        &messages,
+                // partial answer instead of a hard error — and when even
+                // that comes back empty, the poke gives the turn one more
+                // pass with its tools.
+                match self
+                    .wrap_up_or_poke(
+                        &mut messages,
                         &session_id,
-                        iteration,
-                        total_tool_calls,
-                        None,
+                        TurnCounters {
+                            iteration,
+                            tool_calls: total_tool_calls,
+                            succeeded: successful_tool_calls,
+                        },
                         review_fired,
+                        &mut poke,
+                        true,
                     )
-                    .await;
+                    .await?
+                {
+                    Some(answer) => return Ok(answer),
+                    None => continue,
+                }
             }
 
             // Log iteration progress (not as a Thinking event — that pollutes
@@ -1032,6 +1293,9 @@ impl OperantAgent {
                         // compress the conversation using context_management
                         // and retry once. This prevents hard failures on long
                         // sessions that exceed the context window.
+                        // The poke's non-retryable guard reads this: a turn that ended on a
+                        // deterministic provider rejection must not be poked.
+                        poke.record_error(&e.to_string());
                         let classified = FallbackModelClient::classify_error(&e);
                         self.emit_rate_limit_notice(&classified, &e).await;
                         if classified.reason
@@ -1203,6 +1467,9 @@ impl OperantAgent {
                                 self.commit_interrupted_tail(None).await;
                                 return Err(crate::error::Error::Interrupted);
                             }
+                            // The poke's non-retryable guard reads this: a turn that ended on a
+                            // deterministic provider rejection must not be poked.
+                            poke.record_error(&e.to_string());
                             let classified = FallbackModelClient::classify_error(&e);
                             let retryable = classified.retryable
                                 && !classified.should_compress
@@ -1348,6 +1615,9 @@ impl OperantAgent {
                             self.commit_interrupted_tail(None).await;
                             return Err(crate::error::Error::Interrupted);
                         }
+                        // The poke's non-retryable guard reads this: a turn that ended on a
+                        // deterministic provider rejection must not be poked.
+                        poke.record_error(&e.to_string());
                         let classified = FallbackModelClient::classify_error(&e);
                         self.emit_rate_limit_notice(&classified, &e).await;
                         if classified.reason
@@ -2470,6 +2740,13 @@ impl OperantAgent {
                         }
 
                         if result.success {
+                            // A tool that SUCCEEDED is the evidence that the
+                            // turn was doing real work — the gate for the
+                            // auto-poke. A turn whose every tool failed is a
+                            // stuck model (the circuit breaker owns that
+                            // case), and poking it would only re-run the same
+                            // failing calls.
+                            successful_tool_calls += 1;
                             self.emit(AgentEvent::ToolComplete {
                                 result: result.clone(),
                             })

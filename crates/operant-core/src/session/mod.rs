@@ -471,7 +471,15 @@ impl SessionStore {
         // The truncation was SILENT: a resumed session that started at the
         // newest window gave no sign that earlier turns existed. The counts
         // are the only record of what was dropped, so they are logged.
-        let dropped = total.saturating_sub(start);
+        //
+        // `dropped` is the rows BEFORE the window (`start`), not the rows
+        // after it. The two are equal whenever the whole transcript fits —
+        // `total - (total - kept) == kept` — so the old expression reported
+        // the KEPT count as the dropped one and the warning fired on every
+        // single load, claiming a mid-session start for sessions that had
+        // none (measured: "rows_total: 643, rows_kept: 643, rows_dropped:
+        // 643").
+        let dropped = start;
         let unconvertible = kept.saturating_sub(messages.len());
         if dropped > 0 || unconvertible > 0 {
             tracing::warn!(
