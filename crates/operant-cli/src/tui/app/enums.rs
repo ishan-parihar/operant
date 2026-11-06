@@ -139,6 +139,15 @@ pub enum DialogPriority {
     RewindFlow = 340,
     /// Memory file selector. Same omission as ThemeScreen.
     MemoryFileSelector = 350,
+    /// The unified inline picker (model / account / effort pickers). Gated
+    /// inline in key_handling.rs — and FIRST there, because it owns the
+    /// keyboard before any other surface — but absent from the chain; see
+    /// docs/ROADMAP-TUI-FLEET.md 6.1.
+    InlineInteractive = 360,
+    /// The live tool-permission request. Gated inline, absent from the chain.
+    PermissionRequest = 370,
+    /// The permission-mode picker. Gated inline, absent from the chain.
+    PermissionsPicker = 380,
 }
 
 /// Status of an active or completed tool call.

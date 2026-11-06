@@ -93,6 +93,14 @@ impl App {
         // chain entirely (theme_screen, rewind_flow, memory_file_selector), so
         // the chain did not describe the UI. They are now present, and
         // `dialog_covers_every_gated_surface` fails if one is ever dropped again.
+        //
+        // (RT-257) That guard was named here for a long time and DID NOT EXIST:
+        // what stood in its place was a hard-coded list of the three surfaces
+        // above, so the chain drifted again — the inline picker, the
+        // permission request and the permissions picker were gated here and
+        // absent from the chain. The guard now exists, and it is derived from
+        // the overlay CATALOGUE (`App::overlay_flags()`) rather than from a
+        // hand-kept list of the surfaces that happened to drift once.
         let _priority = self.dialog_priority();
 
         if self.global_search.visible {
