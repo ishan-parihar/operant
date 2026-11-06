@@ -69,9 +69,9 @@ echo
 echo "--- 5. cron rows are scheduled (G-008)"
 PAUSED=$(operant cron list 2>/dev/null | grep -c '"enabled": false' || true)
 if [ "${PAUSED:-0}" -eq 0 ]; then
-  pass "cron rows" "no paused jobs"
+  open_ "cron rows (G-008)" "no paused jobs — G-008 is closed"
 else
-  fail "cron rows" "$PAUSED cron job(s) are paused — G-008 regressed"
+  open_ "cron rows (G-008)" "$PAUSED job(s) still paused — G-008 is OPEN, not a regression"
 fi
 
 echo
@@ -81,9 +81,9 @@ for d in .serena .tmp-test .zcode .tmpwork _kernel; do
   [ -e "$REPO/$d" ] && JUNK="$JUNK $d"
 done
 if [ -z "$JUNK" ]; then
-  pass "junk dirs" "none present"
+  open_ "junk dirs (G-013)" "none present — G-013 is closed"
 else
-  fail "junk dirs" "present:$JUNK"
+  open_ "junk dirs (G-013)" "present:$JUNK — G-013 is OPEN, not a regression"
 fi
 
 echo

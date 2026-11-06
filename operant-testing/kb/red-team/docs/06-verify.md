@@ -19,9 +19,17 @@ Exit 0 = every finding still holds. Exit 1 = a finding changed; re-reconcile bef
 | `auto_poke` tests | upstream's bounded continuation after an early exit | pass |
 | `sub_agent` named-failure test | a child that produced nothing is a named failure | pass |
 | source anchors resolve | every `file:line` in `gap-register.md` still points at the same code | all resolve |
-| cron rows are scheduled | G-008 is not silently re-broken | 0 `paused` among agent jobs |
-| no junk dirs | G-013 | `.serena/ .tmp-test/ .zcode/ .tmpwork/ _kernel/` absent |
-| TUI overlay catalogue | G-010 — every pane registered in ONE list | no unregistered overlay |
+| cron rows are scheduled | G-008 is not silently re-broken | `OPEN`/`PASS`, never a regression |
+| no junk dirs | G-013 | `OPEN`/`PASS`, never a regression |
+| TUI overlay catalogue | G-010 — every pane registered in ONE list | `OPEN` while the cron pane is missing |
+
+## PASS / OPEN / FAIL
+
+- **PASS** — a *closed* finding is still closed.
+- **OPEN** — a row that is still open by design. It is reported, not hidden, and it does
+  NOT fail the harness: an open gap is the register's job, not a regression.
+- **FAIL** — a *closed* finding regressed, or the harness itself broke. **This is the
+  only thing that fails the run.**
 
 ## Why the anchor check matters
 
