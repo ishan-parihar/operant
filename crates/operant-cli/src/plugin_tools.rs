@@ -207,12 +207,20 @@ async fn register_observer_interceptors(
         // observe envelope (dsh's config-driven policy plugins are the canon;
         // without it a policy observer has nowhere to read its thresholds).
         let plugin_config = serde_json::to_value(&manifest.config).unwrap_or_default();
+        // The NAMED list, the same one the watcher writes to: one plugin, one
+        // registration, replaceable and removable. The anonymous list had no
+        // identity to remove, so a boot registration and a watcher
+        // registration of the SAME plugin both stayed live — the observer ran
+        // twice per tool event and the boot copy kept the pre-change module.
         registry
-            .register_tool_interceptor(observe_interceptor_handler(
-                pool.clone(),
-                manifest.name.clone(),
-                plugin_config.clone(),
-            ))
+            .register_plugin_interceptor(
+                &manifest.name,
+                observe_interceptor_handler(
+                    pool.clone(),
+                    manifest.name.clone(),
+                    plugin_config.clone(),
+                ),
+            )
             .await;
         // gap G1: an observer that opts in via [config] turn_gate = true
         // also sits on the turn-level pre-step seam (dsh's agent/pre-step).
@@ -526,8 +534,33 @@ pub async fn apply_plugin_changes(
                     )
                     .await;
                 tracing::info!(plugin = %name, "watcher: turn pre-step interceptor applied live");
+            } else if registry.unregister_turn_interceptors(name).await {
+                // The change dropped the turn gate (or the config that asked
+                // for it): the veto seat must not survive the change that
+                // withdrew it.
+                tracing::info!(
+                    plugin = %name,
+                    "watcher: turn pre-step interceptor dropped (no turn_gate)"
+                );
             }
             tracing::info!(plugin = %name, "watcher: observer interceptor applied live");
+        } else {
+            // The change withdrew the Observer capability: the registration
+            // this plugin holds must go with it. Without this the observer
+            // kept seeing every tool call, and a withdrawn turn gate kept
+            // vetoing turns — `unregister_*` exists for exactly this.
+            if registry.unregister_plugin_interceptors(name).await {
+                tracing::info!(
+                    plugin = %name,
+                    "watcher: plugin no longer observes; interceptor dropped"
+                );
+            }
+            if registry.unregister_turn_interceptors(name).await {
+                tracing::info!(
+                    plugin = %name,
+                    "watcher: turn pre-step interceptor dropped (no observer capability)"
+                );
+            }
         }
     }
     Ok(())
@@ -1182,6 +1215,27 @@ mod live_registration_tests {
         config
     }
 
+    /// A change whose manifest carries a `[config]` table — the turn-gate
+    /// opt-in lives there.
+    fn change_with_config(
+        manifest_path: &std::path::Path,
+        capabilities: Vec<operant_plugins::PluginCapability>,
+        config: &str,
+    ) -> ManifestChange {
+        let mut change = change_with(manifest_path, capabilities);
+        change.manifest.config = config
+            .parse::<toml::Table>()
+            .expect("the config table must parse");
+        change
+    }
+
+    /// How many interceptors the registry will run for a tool call: the
+    /// anonymous list and the named plugin list are BOTH consulted by
+    /// `execute`, so "one observer" is only true when the SUM is one.
+    async fn interceptor_total(registry: &ToolRegistry) -> usize {
+        registry.plugin_interceptor_count().await + registry.tool_interceptor_count().await
+    }
+
     /// A minimal always-succeeding stub under an arbitrary name — the
     /// observer-veto test registers it under the fixture module's blocked
     /// tool name.
@@ -1266,6 +1320,147 @@ mod live_registration_tests {
             registry.plugin_interceptor_count().await,
             1,
             "named re-registration must REPLACE, not stack"
+        );
+    }
+
+    /// RT-260: the boot registration and the watcher registration must be the
+    /// SAME registration.
+    ///
+    /// Boot wrote the observer into the registry's ANONYMOUS interceptor list
+    /// and the watcher wrote it into the NAMED one, and `execute` consults
+    /// BOTH — so after the first watcher-detected change the plugin's
+    /// observer ran TWICE per tool event, and the boot copy still held the
+    /// pre-change module (the pool is resident, so the old module stayed
+    /// alive and kept answering).
+    #[tokio::test]
+    async fn a_boot_registration_and_a_watcher_change_leave_one_observer() {
+        let (ws, manifest_path) = change_workspace();
+        let config = test_config(&ws);
+        let registry = ToolRegistry::new(Duration::from_secs(5));
+
+        // Boot: the plugin host discovers the workspace's plugin.
+        register_plugin_tools(&registry, &config)
+            .await
+            .expect("boot registration");
+
+        // One watcher-detected change for the SAME plugin.
+        apply_plugin_changes(
+            &registry,
+            &config,
+            &[change_with(
+                &manifest_path,
+                vec![
+                    operant_plugins::PluginCapability::Tool,
+                    operant_plugins::PluginCapability::Observer,
+                ],
+            )],
+        )
+        .await
+        .expect("apply");
+
+        assert_eq!(
+            interceptor_total(&registry).await,
+            1,
+            "one plugin, ONE observer: the boot registration and the watcher \
+             registration must be the same registration"
+        );
+    }
+
+    /// RT-260: a change that withdraws the Observer capability must withdraw
+    /// the registration with it.
+    ///
+    /// The watcher reported the change and the observer kept watching every
+    /// tool call — `unregister_plugin_interceptors` exists for exactly this
+    /// and had no caller.
+    #[tokio::test]
+    async fn a_change_that_drops_the_observer_capability_stops_observing() {
+        let (ws, manifest_path) = change_workspace();
+        let config = test_config(&ws);
+        let registry = ToolRegistry::new(Duration::from_secs(5));
+
+        apply_plugin_changes(
+            &registry,
+            &config,
+            &[change_with(
+                &manifest_path,
+                vec![
+                    operant_plugins::PluginCapability::Tool,
+                    operant_plugins::PluginCapability::Observer,
+                ],
+            )],
+        )
+        .await
+        .expect("first apply");
+        assert_eq!(registry.plugin_interceptor_count().await, 1);
+
+        // The new manifest no longer declares the observer capability.
+        apply_plugin_changes(
+            &registry,
+            &config,
+            &[change_with(
+                &manifest_path,
+                vec![operant_plugins::PluginCapability::Tool],
+            )],
+        )
+        .await
+        .expect("second apply");
+
+        assert_eq!(
+            registry.plugin_interceptor_count().await,
+            0,
+            "a withdrawn observer must not keep watching every tool call"
+        );
+    }
+
+    /// RT-260: a change that drops the `[config] turn_gate = true` opt-in
+    /// must withdraw the turn-seat veto with it — a gate the operator turned
+    /// off cannot keep vetoing turns.
+    #[tokio::test]
+    async fn a_change_that_drops_turn_gate_no_longer_vetoes_turns() {
+        let (ws, manifest_path) = change_workspace();
+        let config = test_config(&ws);
+        let registry = ToolRegistry::new(Duration::from_secs(5));
+
+        apply_plugin_changes(
+            &registry,
+            &config,
+            &[change_with_config(
+                &manifest_path,
+                vec![
+                    operant_plugins::PluginCapability::Tool,
+                    operant_plugins::PluginCapability::Observer,
+                ],
+                "turn_gate = true\n",
+            )],
+        )
+        .await
+        .expect("first apply");
+        assert_eq!(
+            registry.turn_interceptor_count().await,
+            1,
+            "the turn gate must be seated while the manifest asks for it"
+        );
+
+        // The new manifest drops the opt-in.
+        apply_plugin_changes(
+            &registry,
+            &config,
+            &[change_with_config(
+                &manifest_path,
+                vec![
+                    operant_plugins::PluginCapability::Tool,
+                    operant_plugins::PluginCapability::Observer,
+                ],
+                "",
+            )],
+        )
+        .await
+        .expect("second apply");
+
+        assert_eq!(
+            registry.turn_interceptor_count().await,
+            0,
+            "a withdrawn turn gate must not keep vetoing turns"
         );
     }
 

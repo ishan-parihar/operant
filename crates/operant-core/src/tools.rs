@@ -829,6 +829,18 @@ impl ToolRegistry {
         self.interceptors.write().await.push(handler);
     }
 
+    /// How many ANONYMOUS tool-seam interceptors are registered.
+    ///
+    /// The named plugin list has its own counter (`plugin_interceptor_count`);
+    /// this one is the anonymous list's, and it exists because the two lists
+    /// are BOTH consulted by `execute` — so "how many interceptors will run
+    /// for this tool?" has no answer without counting both. The count is what
+    /// made the plugin observer's double registration visible (boot wrote to
+    /// this list, the watcher to the named one: two handlers, one plugin).
+    pub async fn tool_interceptor_count(&self) -> usize {
+        self.interceptors.read().await.len()
+    }
+
     /// Register a PLUGIN interceptor by name (gap G6, live
     /// re-registration). Replace semantics: an existing registration under
     /// the same plugin name is removed first, so a hot-swapped observer
