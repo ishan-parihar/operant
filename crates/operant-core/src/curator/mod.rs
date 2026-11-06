@@ -296,6 +296,13 @@ impl CuratorEngine {
             errors.len()
         );
 
+        // The summary is part of the state, so it must be SET before the
+        // state is written: the old order saved the file first and set the
+        // field afterwards, so the on-disk copy always carried the PREVIOUS
+        // run's summary (and none at all after the first run) — and
+        // `operant status` reads exactly that file (RT-268).
+        state.last_run_summary = Some(summary.clone());
+
         if !dry_run {
             // Create backup before archiving
             if !archived.is_empty() {
@@ -308,8 +315,6 @@ impl CuratorEngine {
             self.save_state_inner(&state).await?;
             self.usage_tracker.save()?;
         }
-
-        state.last_run_summary = Some(summary.clone());
 
         Ok(CuratorReport {
             timestamp: now,

@@ -968,6 +968,17 @@ impl App {
         cursor_panel!(self.permissions_picker, select_prev, select_next, up);
         cursor_panel!(self.ask_user_dialog, select_prev, select_next, up);
         cursor_panel!(self.theme_screen, select_prev, select_next, up);
+        if self.inline_interactive.is_some() {
+            // (RT-267) The unified picker owns the keyboard while it is open,
+            // so the wheel goes through the SAME handler the keys use: the
+            // picker's cursor moves exactly as ↑/↓ move it — the list cursor
+            // in its first column, the selected entry's option in the others.
+            self.handle_inline_interactive_key(
+                if up { KeyCode::Up } else { KeyCode::Down },
+                KeyModifiers::empty(),
+            );
+            return true;
+        }
         if self.rewind_selector.visible {
             // Its arrows are EATEN while the filter box is open (the
             // operator is typing a filter), so the wheel is eaten too — the
@@ -1042,11 +1053,17 @@ impl App {
         // ---- Dialog interaction: dismiss on click-outside, scroll/click inside ----
         // Key-input and device-auth stay outside this gate so their visible text
         // can still be selected and copied with the mouse.
+        //
+        // (RT-267) The inline picker is NOT in this gate: the gate swallows
+        // the wheel, and the picker has a cursor the wheel should move. It
+        // needs no click handling of its own — the press is absorbed by the
+        // overlay gate below (RT-258), which covers every panel in the
+        // catalogue — so moving it here costs the picker nothing and lets
+        // the wheel reach it.
         let any_dialog = self.connect_dialog.visible
             || self.import_config_picker.visible
             || self.import_config_dialog.visible
             || self.command_palette.visible
-            || self.inline_interactive.is_some()
             || self.export_dialog.visible
             || self.settings_screen.visible
             || self.stats_dialog.visible

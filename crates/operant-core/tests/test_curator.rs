@@ -702,3 +702,55 @@ async fn an_unreadable_cron_reference_set_aborts_the_review() {
 
     cleanup(&tmp);
 }
+
+/// RT-268: the persisted summary must be THIS run's, not the previous one's.
+///
+/// `run_review` saved `state.json` and only THEN set `last_run_summary`, so
+/// the file on disk always carried the previous run's summary (and none at
+/// all after the first run) — and `operant status` reads exactly that file
+/// (`cmd_status.rs`), while `operant curator status` read the live value:
+/// two panels, one run apart.
+#[tokio::test]
+async fn the_persisted_summary_is_the_current_runs() {
+    let tmp = temp_dir();
+    let skills_dir = tmp.join("skills");
+    fs::create_dir_all(&skills_dir).unwrap();
+    let usage_path = skills_dir.join(".curator").join("usage.json");
+    fs::create_dir_all(usage_path.parent().unwrap()).unwrap();
+
+    let state_path = tmp.join("state.json");
+    let tracker = Arc::new(SkillUsageTracker::new(usage_path.clone()));
+    let engine = CuratorEngine::new(skills_dir.clone(), state_path.clone(), tracker.clone());
+    engine.load_state().await.unwrap();
+
+    // Run 1: nothing to scan -> the summary says "Scanned 0".
+    let first = engine.run_review(false, None, false, None).await.unwrap();
+    assert!(first.summary.contains("Scanned 0"), "{}", first.summary);
+
+    // Run 2: one agent-created skill, old enough to archive.
+    let skill_dir = skills_dir.join("archived-by-the-curator");
+    fs::create_dir_all(&skill_dir).unwrap();
+    fs::write(skill_dir.join("SKILL.md"), "# Old").unwrap();
+    {
+        let mut telemetry = UsageTelemetry::load(&usage_path).unwrap();
+        telemetry.record_created("archived-by-the-curator", true);
+        telemetry
+            .get_record_mut("archived-by-the-curator")
+            .unwrap()
+            .last_used = chrono::Utc::now() - chrono::Duration::days(90);
+        telemetry.save(&usage_path).unwrap();
+    }
+    let second = engine.run_review(false, None, false, None).await.unwrap();
+    assert!(second.summary.contains("Archived: 1"), "{}", second.summary);
+
+    // The file on disk must carry run 2's summary.
+    let persisted: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&state_path).unwrap()).unwrap();
+    let persisted_summary = persisted["last_run_summary"].as_str().unwrap_or("");
+    assert!(
+        persisted_summary.contains("Archived: 1"),
+        "the persisted summary must be the CURRENT run's, got: {persisted_summary:?}"
+    );
+
+    cleanup(&tmp);
+}

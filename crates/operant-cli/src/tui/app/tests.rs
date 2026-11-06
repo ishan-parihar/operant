@@ -3375,6 +3375,55 @@ fn the_wheel_moves_the_cursor_of_the_panel_whose_list_is_open() {
     }
 }
 
+/// (RT-267) The unified picker's wheel moves its cursor.
+///
+/// The picker (model / account / effort) owns the keyboard while it is open,
+/// and the mouse's own dialog gate swallowed the wheel — so a long model
+/// list could only be walked with the arrow keys. The wheel now goes through
+/// the SAME handler the keys use, so the picker's cursor moves exactly as
+/// ↑/↓ move it.
+#[test]
+fn the_wheel_moves_the_inline_pickers_cursor() {
+    let mut app = make_app();
+    app.inline_interactive = Some(crate::tui::operant_app::tui_fns::InlineInteractiveState {
+        kind: crate::tui::operant_app::tui_fns::PickerKind::Model,
+        // The column-0 cursor moves over the FILTERED list; the entries
+        // behind it are only read in the option columns.
+        entries: Vec::new(),
+        filtered: vec![0, 1],
+        selected: 0,
+        column: 0,
+        filter: String::new(),
+        loading: false,
+        preview: false,
+    });
+    let selected = |app: &App| app.inline_interactive.as_ref().map(|p| p.selected);
+
+    app.handle_mouse_event(MouseEvent {
+        kind: MouseEventKind::ScrollDown,
+        column: 10,
+        row: 5,
+        modifiers: KeyModifiers::empty(),
+    });
+    assert_eq!(
+        selected(&app),
+        Some(1),
+        "the wheel must move the inline picker's cursor"
+    );
+
+    app.handle_mouse_event(MouseEvent {
+        kind: MouseEventKind::ScrollUp,
+        column: 10,
+        row: 5,
+        modifiers: KeyModifiers::empty(),
+    });
+    assert_eq!(
+        selected(&app),
+        Some(0),
+        "the wheel must move the inline picker's cursor back"
+    );
+}
+
 /// The control for the table above: with NO panel open, the wheel scrolls the
 /// transcript and no panel's cursor moves. Without this, "the wheel does
 /// nothing" would pass it.
@@ -3519,6 +3568,22 @@ fn a_click_never_selects_the_transcript_behind_an_open_overlay() {
         }),
         ("command_palette", |app| app.command_palette.visible = true),
         ("ask_user_dialog", |app| app.ask_user_dialog.visible = true),
+        // (RT-267) The inline picker left the mouse's dialog gate when the
+        // wheel was routed to it — so its CLICK must be absorbed by the
+        // catalogue gate instead.
+        ("inline_interactive", |app| {
+            app.inline_interactive =
+                Some(crate::tui::operant_app::tui_fns::InlineInteractiveState {
+                    kind: crate::tui::operant_app::tui_fns::PickerKind::Model,
+                    entries: Vec::new(),
+                    filtered: vec![0, 1],
+                    selected: 0,
+                    column: 0,
+                    filter: String::new(),
+                    loading: false,
+                    preview: false,
+                })
+        }),
     ];
 
     for (name, open) in openers {
