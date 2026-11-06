@@ -463,11 +463,12 @@ impl SessionStore {
         let kept = count_bound.min(self.count_that_fits_byte_budget(&rows, byte_bound));
         let total = rows.len();
         let start = total.saturating_sub(kept);
-        let messages: Vec<Message> = rows
-            .into_iter()
-            .skip(start)
-            .filter_map(row_to_message)
-            .collect();
+        let mut window: Vec<MessageData> = rows.into_iter().skip(start).collect();
+        // Tool rows persisted WITHOUT their call id are repaired here, before
+        // the mapping — see `recover_tool_call_ids` for why the id is the
+        // difference between a resumed session and an emptied one.
+        let recovered = recover_tool_call_ids(&mut window);
+        let messages: Vec<Message> = window.into_iter().filter_map(row_to_message).collect();
         // The truncation was SILENT: a resumed session that started at the
         // newest window gave no sign that earlier turns existed. The counts
         // are the only record of what was dropped, so they are logged.
@@ -491,6 +492,13 @@ impl SessionStore {
                 count_bound,
                 byte_bound,
                 "session rehydration dropped rows — the resumed transcript starts mid-session"
+            );
+        }
+        if recovered > 0 {
+            tracing::info!(
+                session = key.id(),
+                tool_ids_recovered = recovered,
+                "session rehydration recovered the tool-call ids of rows written without one"
             );
         }
         messages
@@ -521,8 +529,102 @@ impl SessionStore {
     }
 }
 
-/// Bytes a persisted row will occupy once it is a [`Message`].
+/// Recover the `tool_call_id` of tool rows that were persisted without one.
 ///
+/// The writer has carried the id since iter-1769, but every tool row written
+/// BEFORE that has none — and an id-less tool row cannot be paired with the
+/// assistant turn that requested it, so the rehydration's orphan repair
+/// DROPS it. The resumed session then loses its ENTIRE tool history, and the
+/// assistant turns that asked for those tools lose their calls too: the
+/// model's context is a conversation with no tools in it.
+///
+/// MEASURED on the operator's live database (2026-11-06): 407 of the 437 tool
+/// rows in `sess_56bae289…` carried no id, and that turn's own repair log
+/// counted 818 dropped halves — the whole tool history, gone on every
+/// resumed turn.
+///
+/// The transcript's ORDER carries the pairing: an assistant turn's tool
+/// results follow it, one per call, in the order the calls were made. The
+/// same database: 193 of 193 assistant turns in that session (and 627 of 628
+/// in the cron session) have exactly as many consecutive tool rows as they
+/// have calls.
+///
+/// A row that ALREADY carries an id keeps it and CLAIMS that call, so a turn
+/// written partly before the fix and partly after it pairs correctly: the
+/// id-less rows take the calls nobody claimed, in order.
+///
+/// Returns the number of ids recovered.
+fn recover_tool_call_ids(rows: &mut [MessageData]) -> usize {
+    let mut recovered = 0usize;
+    let mut i = 0usize;
+    while i < rows.len() {
+        if rows[i].role != "assistant" {
+            i += 1;
+            continue;
+        }
+        // The calls this turn asked for: the id that pairs a result, and the
+        // tool's name (the old writer stored neither on the result row).
+        let calls: Vec<(String, Option<String>)> = rows[i]
+            .tool_calls
+            .as_deref()
+            .and_then(|raw| serde_json::from_str::<Vec<serde_json::Value>>(raw).ok())
+            .map(|calls| {
+                calls
+                    .iter()
+                    .filter_map(|c| {
+                        let id = c.get("id").and_then(|v| v.as_str())?;
+                        let name = c
+                            .get("function")
+                            .and_then(|f| f.get("name"))
+                            .and_then(|v| v.as_str())
+                            .map(str::to_string);
+                        Some((id.to_string(), name))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        // The turn's tool rows: the consecutive ones that follow it.
+        let start = i + 1;
+        let mut end = start;
+        while end < rows.len() && rows[end].role == "tool" {
+            end += 1;
+        }
+        if calls.is_empty() || start == end {
+            i = end.max(i + 1);
+            continue;
+        }
+        // The calls the id-carrying rows already claim.
+        let mut free = calls;
+        for row in rows[start..end].iter() {
+            if let Some(id) = row.tool_call_id.as_deref()
+                && let Some(pos) = free.iter().position(|(c, _)| c == id)
+            {
+                free.remove(pos);
+            }
+        }
+        // The id-less rows take the free calls, in order.
+        for row in rows[start..end].iter_mut() {
+            if row.tool_call_id.as_deref().is_some_and(|id| !id.is_empty()) {
+                continue;
+            }
+            if free.is_empty() {
+                break;
+            }
+            let (id, name) = free.remove(0);
+            row.tool_call_id = Some(id);
+            if row.tool_name.as_deref().is_none_or(str::is_empty)
+                && let Some(name) = name
+            {
+                row.tool_name = Some(name);
+            }
+            recovered += 1;
+        }
+        i = end.max(i + 1);
+    }
+    recovered
+}
+
+/// Bytes a persisted row will occupy once it is a [`Message`].///
 /// Counts the text a human or a model can actually see — content, the tool
 /// call names and arguments, and reasoning — and excludes the bookkeeping
 /// columns (ids, timestamps, token counts), which are the difference between

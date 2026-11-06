@@ -94,8 +94,38 @@ fn parse_distilled_facts(raw: &str) -> Result<Vec<String>> {
         return Ok(vec![]);
     }
 
-    serde_json::from_str::<Vec<String>>(json_str)
-        .map_err(|error| Error::ParseResponse(format!("Invalid distillation JSON: {}", error)))
+    // The payload is the ARRAY; the model often wraps it in prose ("Here are
+    // the facts: [...]") or in a fence the stripper above did not catch
+    // (a fence followed by a sentence). MEASURED on the operator's live
+    // gateway log: 27 distillations failed with "expected value at line 1
+    // column 1" — the response did not START with JSON, so the whole
+    // distillation (the facts that make a session self-improving) was
+    // dropped every time.
+    //
+    // Take the first '[' that opens a JSON array and the last ']'. A leading
+    // '[' is tried first; a prose bracket before the array is tried after,
+    // so "the facts [see below]: [...]" still parses.
+    if let Ok(facts) = serde_json::from_str::<Vec<String>>(json_str) {
+        return Ok(facts);
+    }
+    let Some(end) = json_str.rfind(']') else {
+        return Err(Error::ParseResponse(
+            "Invalid distillation JSON: no JSON array of facts in the response".to_string(),
+        ));
+    };
+    for start in json_str.match_indices('[').map(|(i, _)| i).take(4) {
+        if end <= start {
+            break;
+        }
+        if let Ok(facts) = serde_json::from_str::<Vec<String>>(&json_str[start..=end]) {
+            return Ok(facts);
+        }
+    }
+
+    Err(Error::ParseResponse(format!(
+        "Invalid distillation JSON: no JSON array of facts in a {} character response",
+        json_str.len()
+    )))
 }
 
 fn format_history_for_distillation(history: &[Message]) -> String {
@@ -131,6 +161,24 @@ mod tests {
     fn parses_strict_json_array() {
         let facts = parse_distilled_facts("[\"User prefers concise answers\"]").unwrap();
         assert_eq!(facts, vec!["User prefers concise answers"]);
+    }
+
+    #[test]
+    fn parses_an_array_wrapped_in_prose() {
+        // MEASURED on the operator's live gateway log: 27 distillations failed
+        // with "expected value at line 1 column 1" because the model wrapped
+        // the array in a sentence.
+        let facts = parse_distilled_facts(
+            "Here are the durable facts from that session:\n[\"User prefers concise answers\"]",
+        )
+        .unwrap();
+        assert_eq!(facts, vec!["User prefers concise answers"]);
+    }
+
+    #[test]
+    fn parses_an_array_inside_a_fence_followed_by_prose() {
+        let facts = parse_distilled_facts("```json\n[\"a fact\"]\n```\nThat is all.").unwrap();
+        assert_eq!(facts, vec!["a fact"]);
     }
 
     #[test]
