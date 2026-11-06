@@ -3152,4 +3152,42 @@ mod tests {
             "every category is one contiguous run: {seen:?}"
         );
     }
+
+    /// (iter-1793) The MCP panel's tool filter could not hold an 'r' or an
+    /// 'e': the letter shortcuts ran in EVERY pane, so typing "read" in the
+    /// filter triggered a RECONNECT (the 'r' arm set the reconnect flag and
+    /// the runtime was restarted on the next frame) and then toggled the
+    /// error detail (the 'e' arm). The filter is a plain text field now, and
+    /// the shortcuts act on the pane that owns them.
+    #[test]
+    fn the_mcp_tool_filter_holds_every_letter() {
+        let mut app = make_app();
+        app.mcp_view.visible = true;
+        app.mcp_view.active_pane = crate::mcp_view::McpViewPane::ToolList;
+        for c in "read".chars() {
+            app.handle_mcp_view_key(press_key(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        assert_eq!(
+            app.mcp_view.tool_search, "read",
+            "the tool filter must hold every letter the operator types"
+        );
+        assert!(
+            !app.pending_mcp_reconnect,
+            "typing in the tool filter must never restart the MCP runtime"
+        );
+        assert!(
+            !app.mcp_view.error_expanded,
+            "typing in the tool filter must never toggle the error detail"
+        );
+
+        // The shortcuts still work on the pane that owns them.
+        let mut app = make_app();
+        app.mcp_view.visible = true;
+        app.mcp_view.active_pane = crate::mcp_view::McpViewPane::ServerList;
+        app.handle_mcp_view_key(press_key(KeyCode::Char('r'), KeyModifiers::NONE));
+        assert!(
+            app.pending_mcp_reconnect,
+            "'r' on the servers pane still reconnects the MCP runtime"
+        );
+    }
 }

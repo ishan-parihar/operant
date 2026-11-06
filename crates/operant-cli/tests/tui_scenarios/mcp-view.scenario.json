@@ -21,5 +21,5 @@
   ],
   "baseline": "mcp-view.txt",
   "style_baseline": "mcp-view.style.txt",
-  "notes": "Split-pane Servers | Tools. The opener must be `/mcp` with NO arguments: handle_tui_command explicitly returns false for `mcp` when args are non-empty, so `/mcp r` (the documented reconnect form) is NOT a valid opener here. ENV: server and tool counts come from the live operant.toml."
+  "notes": "Split-pane Servers | Tools | Detail. The opener must be `/mcp` with NO arguments: the arm opens the panel on a bare /mcp and RUNS THE CLI SUBCOMMAND with arguments (`operant mcp list|add|remove|test|serve|login|configure`), so `/mcp list` never opens this panel. (iter-1792) The note that used to sit here said the arm \"explicitly returns false for `mcp` when args are non-empty\" and called `/mcp r` \"the documented reconnect form\" — BOTH were false: the arm shells out and returns true, and `operant mcp` has no `r` subcommand (`operant mcp r` is an \"unrecognized subcommand\" error). The reconnect action is the panel's own `r` KEY, on the Servers pane. ENV: server and tool counts come from the live operant.toml."
 }

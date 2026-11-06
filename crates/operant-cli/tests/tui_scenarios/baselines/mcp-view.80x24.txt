@@ -17,7 +17,7 @@
      │                       ││                                           │
      │                       ││                                           │ ture
      └───────────────────────┘└───────────────────────────────────────────┘
-      Tab switch pane   / filter tools   e error detail   a auth   r reconn
+      Tab pane  type to filter   e error   a auth   r reconnect (servers)
 
 
 

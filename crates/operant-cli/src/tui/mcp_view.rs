@@ -255,6 +255,11 @@ pub fn render_mcp_view(state: &McpViewState, area: Rect, buf: &mut Buffer) {
     render_tool_list(state, right_panes[0], buf);
     render_tool_detail(state, right_panes[1], buf);
 
+    // (iter-1793) The footer says the letter shortcuts act on the PANES
+    // that own them: the tool list is a plain text field (every character
+    // filters), so 'e'/'a'/'r' are scoped — 'e' everywhere but the tool
+    // list, 'a' and 'r' on the servers pane. It also fits the narrow
+    // panel now: the old line was clipped at 80 columns ("r reconn").
     let footer = Line::from(vec![
         Span::styled(
             " Tab ",
@@ -262,21 +267,15 @@ pub fn render_mcp_view(state: &McpViewState, area: Rect, buf: &mut Buffer) {
                 .fg(theme_colors::accent())
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::raw("switch pane  "),
-        Span::styled(
-            " / ",
-            Style::default()
-                .fg(theme_colors::accent())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw("filter tools  "),
+        Span::raw("pane  "),
+        Span::raw("type to filter  "),
         Span::styled(
             " e ",
             Style::default()
                 .fg(theme_colors::accent())
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::raw("error detail  "),
+        Span::raw("error  "),
         Span::styled(
             " a ",
             Style::default()
@@ -290,7 +289,7 @@ pub fn render_mcp_view(state: &McpViewState, area: Rect, buf: &mut Buffer) {
                 .fg(theme_colors::accent())
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::raw("reconnect"),
+        Span::raw("reconnect (servers)"),
     ]);
     Paragraph::new(footer)
         .style(

@@ -32,7 +32,7 @@
        │                                   ││                                                                   │
        │                                   ││                                                                   │
        └───────────────────────────────────┘└───────────────────────────────────────────────────────────────────┘
-        Tab switch pane   / filter tools   e error detail   a auth   r reconnect
+        Tab pane  type to filter   e error   a auth   r reconnect (servers)
 
 
 

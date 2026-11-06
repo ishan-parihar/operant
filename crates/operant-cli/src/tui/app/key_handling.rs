@@ -2458,17 +2458,35 @@ impl App {
         }
     }
 
-    fn handle_mcp_view_key(&mut self, key: KeyEvent) -> bool {
+    /// `pub(crate)` so the TUI's own test can drive the MCP panel's keys
+    /// directly (iter-1793).
+    pub(crate) fn handle_mcp_view_key(&mut self, key: KeyEvent) -> bool {
+        use crate::mcp_view::McpViewPane;
         match key.code {
-            KeyCode::Esc | KeyCode::Char('q') => self.mcp_view.close(),
+            KeyCode::Esc => self.mcp_view.close(),
+            // (iter-1793) The letter shortcuts act on the PANE that owns
+            // them, so the TOOL LIST is a plain text field again. They used
+            // to run in every pane: typing "read" in the tool filter
+            // triggered a RECONNECT (the 'r' arm) and then toggled the
+            // error detail (the 'e' arm), so the filter could never hold
+            // an 'r' or an 'e' — most tool names contain one of them —
+            // and a stray 'r' silently restarted the MCP runtime.
+            //
+            // The scope: 'q' closes, 'a' authenticates and 'r' reconnects
+            // on the SERVERS pane (the one the panel opens on); 'e'
+            // expands the error in the DETAIL pane (where the error
+            // section lives). Esc closes from anywhere.
+            KeyCode::Char('q') if self.mcp_view.active_pane == McpViewPane::ServerList => {
+                self.mcp_view.close()
+            }
             KeyCode::Tab | KeyCode::Left | KeyCode::Right => self.mcp_view.switch_pane(),
             KeyCode::Up => self.mcp_view.select_prev(),
             KeyCode::Down => self.mcp_view.select_next(),
             KeyCode::Backspace => self.mcp_view.pop_search_char(),
-            KeyCode::Char('e') => self.mcp_view.toggle_error_detail(),
-            KeyCode::Char('a')
-                if self.mcp_view.active_pane == crate::mcp_view::McpViewPane::ServerList =>
-            {
+            KeyCode::Char('e') if self.mcp_view.active_pane != McpViewPane::ToolList => {
+                self.mcp_view.toggle_error_detail()
+            }
+            KeyCode::Char('a') if self.mcp_view.active_pane == McpViewPane::ServerList => {
                 let selected_server = self
                     .mcp_view
                     .servers
@@ -2480,13 +2498,13 @@ impl App {
                     self.set_status_notice("Starting MCP auth...".to_string());
                 }
             }
-            KeyCode::Char('r') => {
+            KeyCode::Char('r') if self.mcp_view.active_pane == McpViewPane::ServerList => {
                 self.pending_mcp_reconnect = true;
                 self.set_status_notice("Reconnecting MCP runtime...".to_string());
             }
             KeyCode::Char(c)
                 if key.modifiers.is_empty()
-                    && self.mcp_view.active_pane != crate::mcp_view::McpViewPane::ServerList =>
+                    && self.mcp_view.active_pane != McpViewPane::ServerList =>
             {
                 self.mcp_view.push_search_char(c);
             }
