@@ -269,7 +269,14 @@ pub(super) fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: usize, ap
 
     lines.push(Line::from(Span::styled("  Memory & Swarm", section_style)));
     lines.push(Line::from(""));
-    lines.push(help_entry("/memory [on|off]", "Toggle memory features"));
+    lines.push(help_entry(
+        "/memory",
+        "Memory-wire status; /memory <cmd> runs a memory subcommand",
+    ));
+    lines.push(help_entry(
+        "/memory <cmd>",
+        "Run a memory subcommand (list|get|search|store|delete|stats|import|export|clear)",
+    ));
 
     lines.push(Line::from(""));
     lines.push(separator());

@@ -245,7 +245,13 @@ const REGISTERED_COMMANDS: &[RegisteredCommand] = &[
     RegisteredCommand::public("/fix", "Recover when the model cannot continue"),
     RegisteredCommand::public("/context", "Show the full session context snapshot"),
     RegisteredCommand::public("/context-files", "Select AGENTS.md / context files"),
-    RegisteredCommand::public("/memory", "Memory-wire status (operant memory)"),
+    RegisteredCommand::public(
+        "/memory",
+        // (iter-1781) `operant memory` REQUIRES a subcommand, so the old
+        // description named a status view the arm could not produce (it
+        // printed the usage dump) and hid the form that DOES work.
+        "Memory-wire status; /memory <cmd> runs a memory subcommand",
+    ),
     RegisteredCommand::public(
         "/goals",
         "Show goals and pending initiatives from the autonomous ledger",

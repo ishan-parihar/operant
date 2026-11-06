@@ -22,7 +22,8 @@ use super::*;
 fn with_sandbox_home<T>(f: impl FnOnce() -> T) -> T {
     let _env_lock = crate::config::test_env_lock();
     let saved_home = std::env::var("HERMES_HOME").ok();
-    let sandbox = std::env::temp_dir().join(format!("operant-settings-test-{}", std::process::id()));
+    let sandbox =
+        std::env::temp_dir().join(format!("operant-settings-test-{}", std::process::id()));
     let _ = std::fs::create_dir_all(&sandbox);
     // SAFETY: serialized by the crate-wide test_env_lock; restored below.
     unsafe {
@@ -137,7 +138,7 @@ fn every_settings_entry_has_an_applier() {
 /// clear.
 #[test]
 fn apply_and_save_preserves_unrelated_operator_preferences() {
-        with_sandbox_home(|| {
+    with_sandbox_home(|| {
         let mut config = AppConfig::default();
         // Constructed with the preferences already set rather than assigning to a
         // `Default::default()` instance: clippy's `field_reassign_with_default`
@@ -197,7 +198,7 @@ fn apply_and_save_preserves_unrelated_operator_preferences() {
 /// the max size.
 #[test]
 fn the_file_injection_rows_apply_when_file_injection_is_enabled() {
-        with_sandbox_home(|| {
+    with_sandbox_home(|| {
         let mut screen = SettingsScreen::new();
         let mut config = AppConfig::default();
         let mut settings = Settings::default();

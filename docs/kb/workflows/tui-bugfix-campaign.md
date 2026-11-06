@@ -37,4 +37,5 @@
 | tui-bugfix-campaign-031 | done | B35: the simulator could not gate an expected error, and unit tests rewrote the operator's real settings.json | — | [2026-11-06] origin/main iter-1778 |
 | tui-bugfix-campaign-032 | done | B36: the TUI's footer and the gateway's /context quoted two different context windows again — the third resolver is deleted | — | [2026-11-06] origin/main iter-1779 |
 | tui-bugfix-campaign-033 | done | B37: the flat 128000 window stub — a third answer, still the warning path's fallback — is deleted | — | [2026-11-06] origin/main iter-1780 |
+| tui-bugfix-campaign-034 | done | B38: `/memory` was a registered command that could only print a usage dump — `operant memory` needs a subcommand, and the `/memory on|off` form /help advertised does not exist | — | [2026-11-06] origin/main iter-1781 |
 | tui-bugfix-campaign-018 | done | B23: the per-row diff expansion scenario had no committed golden, so the corpus verify failed on every run | claimed-by `agent-omarchy` since 2026-11-05T13:13 | [2026-11-05] origin/main iter-1758 |

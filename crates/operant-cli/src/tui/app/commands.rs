@@ -325,6 +325,17 @@ impl App {
     /// /unpause, /org, /platforms, /mcp `<args>`, /setup) all funnel here —
     /// one pattern, the actual subcommand, zero re-implementation.
     fn shell_out_to_subcommand(&mut self, subcommand: &str, args: &str) {
+        self.shell_out_to_subcommand_args(
+            subcommand,
+            args.split_whitespace().map(str::to_string).collect(),
+        );
+    }
+
+    /// The same shell-out with the arguments already split — for the arms
+    /// whose argument must stay ONE argv element (a memory, a query, a
+    /// path). `shell_out_to_subcommand` splits on whitespace, so it cannot
+    /// carry a phrase.
+    fn shell_out_to_subcommand_args(&mut self, subcommand: &str, args: Vec<String>) {
         self.close_secondary_views();
         self.dismiss_error_notifications();
         let exe = std::env::current_exe()
@@ -332,7 +343,7 @@ impl App {
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|| "operant".to_string());
         let mut argv = vec![exe, subcommand.to_string()];
-        argv.extend(args.split_whitespace().map(str::to_string));
+        argv.extend(args);
         self.pending_shell_command = Some(argv);
         self.set_status_notice(format!("Running operant {subcommand}…"));
     }
@@ -425,8 +436,34 @@ impl App {
                 self.memory_file_selector.open(&root);
                 true
             }
+            // /memory — the memory-wire store. `operant memory` REQUIRES a
+            // subcommand, so the old arm (which passed the operator's
+            // argument straight through) could only print the usage dump:
+            // bare `/memory` printed it, and the `/memory on|off` form the
+            // /help overlay advertised was an "unrecognized subcommand"
+            // error — there is no on/off toggle in `operant memory` at all.
+            // Bare `/memory` is the status view (`stats`); a subcommand
+            // runs for real (list | get | search | store | delete | stats |
+            // import | export | clear).
             "memory" => {
-                self.shell_out_to_subcommand("memory", args);
+                let request = args.trim();
+                let (sub, tail) = match request.split_once(char::is_whitespace) {
+                    Some((sub, tail)) => (sub, tail.trim()),
+                    None => (request, ""),
+                };
+                let sub = if sub.is_empty() { "stats" } else { sub };
+                // A free-text tail (a memory, a query, a path) is ONE
+                // argument; flags (`--limit 5`, `--confirm`) stay split.
+                let tail: Vec<String> = if tail.is_empty() {
+                    Vec::new()
+                } else if tail.starts_with("--") {
+                    tail.split_whitespace().map(str::to_string).collect()
+                } else {
+                    vec![tail.to_string()]
+                };
+                let mut argv = vec![sub.to_string()];
+                argv.extend(tail);
+                self.shell_out_to_subcommand_args("memory", argv);
                 true
             }
             // /skill <name> — expand a skill into the turn (hermes
@@ -2970,5 +3007,56 @@ mod tests {
             "a dangerous shape must never auto-approve, even on a matching entry"
         );
         assert!(app2.permission_request.is_some(), "it opens the dialog");
+    }
+
+    /// (iter-1781) `/memory` was a registered command that could only ever
+    /// print a usage dump: `operant memory` REQUIRES a subcommand, so the
+    /// old arm — which passed the operator's argument straight through —
+    /// ran `operant memory` (bare: the usage dump) or `operant memory on`
+    /// ("unrecognized subcommand"). The `/memory on|off` form the /help
+    /// overlay advertised does not exist in `operant memory` at all.
+    ///
+    /// Bare `/memory` is now the status view (`stats`) and a subcommand
+    /// runs for real; a free-text tail (a memory, a query) stays ONE
+    /// argument, while flags (`--limit 5`) stay split.
+    #[test]
+    fn memory_runs_a_real_subcommand_instead_of_printing_the_usage_dump() {
+        let run = |args: &str| -> Vec<String> {
+            let mut app = make_app();
+            assert!(
+                app.handle_tui_command("memory", args),
+                "/memory must intercept — it never falls through to the model"
+            );
+            let argv = app
+                .pending_shell_command
+                .expect("/memory must suspend the TUI and run the CLI");
+            // argv[0] is the binary path; the subcommand is what matters.
+            argv[1..].to_vec()
+        };
+
+        assert_eq!(
+            run(""),
+            vec!["memory".to_string(), "stats".to_string()],
+            "a bare /memory is the status view — `operant memory` alone prints usage"
+        );
+        assert_eq!(
+            run("search my query"),
+            vec![
+                "memory".to_string(),
+                "search".to_string(),
+                "my query".to_string()
+            ],
+            "a free-text tail is ONE argument — a query with a space must survive"
+        );
+        assert_eq!(
+            run("list --limit 5"),
+            vec![
+                "memory".to_string(),
+                "list".to_string(),
+                "--limit".to_string(),
+                "5".to_string()
+            ],
+            "flags stay split — `operant memory list --limit 5` needs two argv entries"
+        );
     }
 }
