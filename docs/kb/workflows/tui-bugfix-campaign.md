@@ -31,6 +31,7 @@
 | tui-bugfix-campaign-046 | done | B50: the Overview widget admitted itself on a section it never painted — so a todo list lost its own panel to a one-line summary | — | [2026-11-06] origin/main iter-1810 |
 | tui-bugfix-campaign-047 | done | B51: the key-routing chain's guard did not exist, and the guard that did exist checked nothing | — | [2026-11-06] origin/main iter-1812 |
 | tui-bugfix-campaign-048 | done | B52: a click with a panel open selected (and copied) the transcript text behind the panel | — | [2026-11-06] origin/main iter-1815 |
+| tui-bugfix-campaign-049 | done | B53: the wheel was inert in the diff viewer and the skills view — the panels that CAN scroll, but were not wired to it | — | [2026-11-06] origin/main iter-1818 |
 | tui-bugfix-campaign-018 | done | B23: the keybindings catalogue advertised Ctrl+Q as "Quit application" and nothing dispatched it (the exit-confirmation state machine has two halves, and only one named the chord) | — | [2026-11-05] origin/main iter-1758 |
 | tui-bugfix-campaign-019 | done | phase-5: the highlight test's cross-test frame race — the same palette resetter, reached through a second path | — | [2026-11-05] origin/main iter-1761 |
 | tui-bugfix-campaign-020 | done | B24: the settings screen dropped the operator's edited "File injection max size" (and its own guard never saw the row), the keybindings guard could not see a MODIFIER, and the accent test's palette race was re-broken by an unlocked App::new | — | [2026-11-05] origin/main iter-1760 |

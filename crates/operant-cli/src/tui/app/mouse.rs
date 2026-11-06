@@ -878,6 +878,39 @@ impl App {
             }
             return;
         }
+        // (RT-259) The panels that CAN scroll take the wheel.
+        //
+        // The diff viewer's detail pane is a long, scrollable text — exactly
+        // what a wheel is for — and the panel already has the scroll API its
+        // ↑/↓ keys use. The skills view has a SELECTION cursor in its list
+        // stage, so the wheel moves that cursor (the way ↑/↓ do) rather than
+        // scrolling the list out from under it; in its detail stage the wheel
+        // scrolls the pane.
+        if self.diff_viewer.visible {
+            if up {
+                self.diff_viewer.scroll_detail_up();
+            } else {
+                self.diff_viewer.scroll_detail_down();
+            }
+            return;
+        }
+        if self.skills_view.visible {
+            if self.skills_view.stage == crate::tui::skills_view::SkillsStage::List {
+                if up {
+                    self.skills_view.select_prev();
+                } else {
+                    self.skills_view.select_next();
+                }
+            } else {
+                let viewport = self.skills_view.last_viewport_height.get().max(1);
+                if up {
+                    self.skills_view.scroll_up();
+                } else {
+                    self.skills_view.scroll_down(viewport);
+                }
+            }
+            return;
+        }
         if self.any_overlay_open() {
             return;
         }

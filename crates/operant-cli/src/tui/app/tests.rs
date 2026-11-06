@@ -3071,6 +3071,95 @@ fn the_wheel_scrolls_the_transcript_when_no_overlay_is_open() {
     );
 }
 
+/// (RT-259) The panels that CAN scroll take the wheel.
+///
+/// The wheel belongs to the open panel (RT-251), and the diff viewer's detail
+/// pane is a long, scrollable text with the scroll API its ↑/↓ keys already
+/// use — so the wheel scrolling it is the obvious reading. The skills view's
+/// list has a SELECTION cursor, so the wheel moves that cursor (the way ↑/↓
+/// do) rather than scrolling the list out from under it.
+#[test]
+fn the_wheel_scrolls_the_panels_that_can_scroll() {
+    // The diff viewer's detail pane.
+    let mut app = make_app();
+    app.diff_viewer.visible = true;
+    assert_eq!(app.diff_viewer.detail_scroll, 0);
+    app.handle_mouse_event(MouseEvent {
+        kind: MouseEventKind::ScrollDown,
+        column: 10,
+        row: 5,
+        modifiers: KeyModifiers::empty(),
+    });
+    assert!(
+        app.diff_viewer.detail_scroll > 0,
+        "the wheel must scroll the diff viewer's detail pane"
+    );
+    let scrolled = app.diff_viewer.detail_scroll;
+    app.handle_mouse_event(MouseEvent {
+        kind: MouseEventKind::ScrollUp,
+        column: 10,
+        row: 5,
+        modifiers: KeyModifiers::empty(),
+    });
+    assert!(
+        app.diff_viewer.detail_scroll < scrolled,
+        "the wheel must scroll the diff viewer's detail pane back up"
+    );
+
+    // The skills view's list — the selection cursor moves.
+    let mut app = make_app();
+    app.skills_view.visible = true;
+    app.skills_view.skills = vec![
+        operant_core::skills::Skill {
+            name: "first".to_string(),
+            description: "first".to_string(),
+            version: "1.0.0".to_string(),
+            content: String::new(),
+            platforms: Vec::new(),
+            tags: Vec::new(),
+            category: "demo".to_string(),
+            prerequisites_env: Vec::new(),
+            prerequisites_commands: Vec::new(),
+            references: std::collections::HashMap::new(),
+            origin: operant_core::skills::SkillOrigin::OperatorPool,
+        },
+        operant_core::skills::Skill {
+            name: "second".to_string(),
+            description: "second".to_string(),
+            version: "1.0.0".to_string(),
+            content: String::new(),
+            platforms: Vec::new(),
+            tags: Vec::new(),
+            category: "demo".to_string(),
+            prerequisites_env: Vec::new(),
+            prerequisites_commands: Vec::new(),
+            references: std::collections::HashMap::new(),
+            origin: operant_core::skills::SkillOrigin::OperatorPool,
+        },
+    ];
+    assert_eq!(app.skills_view.selected, 0);
+    app.handle_mouse_event(MouseEvent {
+        kind: MouseEventKind::ScrollDown,
+        column: 10,
+        row: 5,
+        modifiers: KeyModifiers::empty(),
+    });
+    assert_eq!(
+        app.skills_view.selected, 1,
+        "the wheel must move the skills view's selection"
+    );
+    app.handle_mouse_event(MouseEvent {
+        kind: MouseEventKind::ScrollUp,
+        column: 10,
+        row: 5,
+        modifiers: KeyModifiers::empty(),
+    });
+    assert_eq!(
+        app.skills_view.selected, 0,
+        "the wheel must move the skills view's selection back"
+    );
+}
+
 /// (RT-258) A click with a panel open must not reach the transcript BEHIND
 /// the panel.
 ///
