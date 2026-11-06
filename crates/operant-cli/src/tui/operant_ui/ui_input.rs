@@ -18,6 +18,7 @@ use crate::tui::operant_app::message::ConnectionPhase;
 use crate::tui::operant_app::session_facts;
 use crate::tui::operant_app::tui_fns::detect_kv_cache_problem;
 use ratatui::{prelude::*, style::Modifier, widgets::Paragraph};
+use unicode_width::UnicodeWidthStr;
 
 fn shell_mode_color() -> Color {
     rgb(110, 214, 151)
@@ -445,7 +446,20 @@ pub(super) fn input_hint_line_height(app: &dyn TuiState) -> u16 {
 
 pub(super) fn send_mode_reserved_width(app: &dyn TuiState) -> usize {
     let (icon, _) = send_mode_indicator(app);
-    if icon.is_empty() { 0 } else { icon.len() + 1 }
+    send_mode_columns(icon)
+}
+
+/// The columns the send-mode glyph takes from the composer's text area.
+///
+/// The glyph's DISPLAY width — the columns it paints — plus one column of
+/// room. The old arithmetic used `icon.len()`, which is the UTF-8 BYTE
+/// length: the plan marker (📋) is four bytes and TWO columns, so the
+/// composer charged the draft five columns for a two-column glyph and
+/// wrapped it two columns early. `unicode-width` is what the rest of the
+/// TUI measures text with (`render/utils.rs`, `operant_render_core/wrap.rs`),
+/// so the composer now measures the same way the painter does.
+fn send_mode_columns(icon: &str) -> usize {
+    if icon.is_empty() { 0 } else { icon.width() + 1 }
 }
 
 pub(super) fn input_prompt(app: &dyn TuiState) -> (&'static str, Color) {
@@ -3430,6 +3444,52 @@ mod composer_hint_tests {
         assert!(
             !screen.contains("send now"),
             "no app state may advertise a send-now key that does not exist: {screen:?}"
+        );
+    }
+
+    /// (RT-254) The send-mode glyph must be charged its DISPLAY width, not
+    /// its UTF-8 byte length.
+    ///
+    /// The plan marker (📋) is four bytes and TWO columns. The old
+    /// arithmetic charged `icon.len() + 1` — five columns for a two-column
+    /// glyph — so the composer's wrap width was two columns narrower than
+    /// the space it actually has, and a draft that fits wrapped anyway.
+    #[test]
+    fn the_plan_marker_costs_two_columns_not_five() {
+        assert_eq!(
+            unicode_width::UnicodeWidthStr::width("📋"),
+            2,
+            "the plan marker is two columns wide"
+        );
+        assert_eq!(
+            super::send_mode_columns("📋"),
+            3,
+            "two columns of glyph plus one column of room"
+        );
+        assert_ne!(
+            super::send_mode_columns("📋"),
+            "📋".len() + 1,
+            "the byte length is not the width — this is the defect"
+        );
+    }
+
+    /// The same defect, measured where the operator sees it: a draft that
+    /// FITS in the composer's text area must not wrap.
+    ///
+    /// At 80 columns the text area is 77 columns wide; the plan marker takes
+    /// three of them (two columns of glyph plus one of room), leaving 74.
+    /// A 73-character draft fits — and it wrapped at 72 before the fix.
+    #[test]
+    fn a_draft_that_fits_beside_the_plan_marker_does_not_wrap() {
+        let mut app = make_app();
+        app.plan_mode = true;
+        let draft = "x".repeat(73);
+        app.prompt_input.replace_text(draft.clone());
+
+        let screen = rendered_screen(&app);
+        assert!(
+            screen.contains(&draft),
+            "a 73-character draft fits in the 74 columns the plan marker leaves: {screen:?}"
         );
     }
 }
