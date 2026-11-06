@@ -192,21 +192,24 @@ impl App {
     /// appropriate.  Call this after updating `token_count`.
     pub fn check_token_warnings(&mut self) {
         // (iter-1207) Use the SAME window the footer's context bar divides
-        // by: the per-model value `refresh_context_window_size` resolved
-        // from models_dev (200k for Anthropic, 1M for Gemini). This
-        // function used to call the flat
+        // by. This function used to call the flat
         // `context_window_for_model(model)`, which ignores the model name
         // and always returns 128000 — so on Anthropic a context at 160k
         // tokens fired the "95% full" notice while the bar in the footer
         // read 80%. Two surfaces, two denominators, one lie about how
         // close the window is to full, and the warning that decides
         // whether auto-compact triggers is the one that was wrong.
-        // Fall back to the model resolver only before the first refresh
-        // has run (`context_window_size == 0`).
+        //
+        // (iter-1779) The cell now holds the AGENT's window (the configured
+        // one, lowered by a learned overflow limit), so the fallback before
+        // the first refresh is the CONFIGURED value — the same source the
+        // refresh reads, and the same number the agent budgets against when
+        // no limit has been learned yet. The flat 128000 stub is gone: it was
+        // a third answer to the same question.
         let window = if self.context_window_size > 0 {
             self.context_window_size as u32
         } else {
-            crate::tui::adapter_types::context_window_for_model(&self.model_name) as u32
+            self.config.agent.context_window as u32
         };
         if window == 0 {
             return;

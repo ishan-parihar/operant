@@ -4661,6 +4661,31 @@ mod rt179_functional_core_tests {
              exists — the configured value alone is not what the core budgets \
              against (a learned overflow limit lowers it)"
         );
+
+        // And the THIRD answer — the flat 128000 stub — is gone, along with
+        // the warning path's fallback to it: before the first refresh the
+        // warning divides by the configured value, the same source the
+        // refresh reads.
+        let helpers = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/tui/adapter_types/helpers.rs"
+        ))
+        .expect("the TUI's helpers are readable");
+        assert!(
+            !helpers.contains("fn context_window_for_model"),
+            "the flat 128000 window stub is a THIRD answer to the same question — \
+             it ignores the model and the configured window alike"
+        );
+        let messaging = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/tui/app/messaging.rs"
+        ))
+        .expect("the messaging module is readable");
+        assert!(
+            messaging.contains("self.config.agent.context_window as u32"),
+            "before the first refresh the token warning must divide by the \
+             configured window — the same number the refresh reads"
+        );
     }
 }
 

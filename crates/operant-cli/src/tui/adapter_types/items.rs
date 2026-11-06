@@ -12,6 +12,6 @@
 
 pub use super::auth::{AuthStore, StoredCredential};
 pub use super::free_catalog::{FREE_CATALOG, FreeUpstream};
-pub use super::helpers::{context_window_for_model, sample_completion_verb, sample_spinner_verb};
+pub use super::helpers::{sample_completion_verb, sample_spinner_verb};
 pub use super::provider_id::ProviderId;
 pub use super::tui_app::{LaunchMode, TuiApp};

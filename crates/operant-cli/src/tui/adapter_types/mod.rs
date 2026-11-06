@@ -25,5 +25,5 @@ pub use import_config::{
 };
 pub use items::{
     AuthStore, FREE_CATALOG, FreeUpstream, LaunchMode, ProviderId, StoredCredential, TuiApp,
-    context_window_for_model, sample_completion_verb, sample_spinner_verb,
+    sample_completion_verb, sample_spinner_verb,
 };
