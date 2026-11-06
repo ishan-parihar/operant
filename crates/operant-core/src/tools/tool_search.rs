@@ -62,38 +62,31 @@ pub const BRIDGE_TOOL_NAMES: &[&str] = &[TOOL_SEARCH_NAME, TOOL_DESCRIBE_NAME, T
 /// actually fit.
 const CHARS_PER_TOKEN: f64 = 4.0;
 
-/// Whether a tool name is deferrable.
-///
-/// Two families defer, both for the same reason — describing them eagerly costs
-/// far more tokens than the turn that needs them:
-///
-/// 1. **MCP server tools** (`mcp_*`): an unknown, unbounded set of tools from
-///    arbitrary servers. The bridge is the only way a model can discover them.
-/// 2. **sourcehound v2 composites** (`papers_search`, `news_fetch`, ... — 23
-///    tools): eagerly described they cost **~4,738 tokens on EVERY request**
-///    (measured on the live binary, heaviest `news_fetch` ~810); as catalog
-///    lines they cost **~760 on the turn that actually researches**. BUGS.md
-///    RT-194; the audit that measured both numbers is
-///    `docs/audit/2026-10-25-memory-sourcehound-integration-gaps.md` §5.
-///
-/// Native tools stay eager: they are the surface every turn may need.
-pub fn is_deferrable(name: &str) -> bool {
-    name.starts_with("mcp_") || is_sourcehound_composite(name)
-}
-
-/// Whether `name` is one of sourcehound's 23 v2 composites under its operant
-/// spelling (`.` replaced by `_`: `papers.search` -> `papers_search`).
-///
-/// The check is a scan over the SAME table [`super::sourcehound_composites`]
-/// registers, so the classification and the registration cannot drift apart:
-/// a composite the table stops naming stops being deferred (and stops being
-/// registered), which `composite_table_has_no_duplicates` plus the
-/// registration test catch.
-fn is_sourcehound_composite(name: &str) -> bool {
-    super::sourcehound_composites::composite_specs()
-        .iter()
-        .any(|spec| spec.tool_name == name)
-}
+// WHY two families defer — describing them eagerly costs far more tokens than
+// the turn that needs them:
+//
+// 1. **MCP server tools** (`McpNamespacedTool`): an unknown, unbounded set of
+//    tools from arbitrary servers. The bridge is the only way a model can
+//    discover them.
+// 2. **sourcehound v2 composites** (`papers_search`, `news_fetch`, ... — 23
+//    tools): eagerly described they cost **~4,738 tokens on EVERY request**
+//    (measured on the live binary, heaviest `news_fetch` ~810); as catalog
+//    lines they cost **~760 on the turn that actually researches**. BUGS.md
+//    RT-194; the audit that measured both numbers is
+//    `docs/audit/2026-10-25-memory-sourcehound-integration-gaps.md` §5.
+//
+// Native tools stay eager: they are the surface every turn may need.
+//
+// The decision is the TYPE's: the registry stamps `ToolExposure` on every
+// schema it hands out (from `OperantTool::exposure`), and this module reads
+// that stamp. It used to be a string test — a name test answering `mcp_`
+// prefix plus a table scan — and the two rules disagreed: the model-visible
+// array deferred by TYPE while this bridge deferred by NAME, so a tool that
+// declared itself `Deferred` without the prefix was hidden from the model AND
+// refused by `tool_search`, `tool_describe` and `tool_call` — permanently
+// unreachable. The names are still how those two families LOOK (`mcp_*`, and
+// the composite table's own names), but the bridge asks the type, so a third
+// family can defer without borrowing a naming convention.
 
 /// Result of assembling the model-visible tools array.
 pub struct AssembledTools {
@@ -114,20 +107,13 @@ pub fn assemble_tools(
     let mut hidden = Vec::new();
     for s in all {
         // Partition on the exposure the REGISTRY stamped at
-        // `get_schemas_all` (tools.rs). The TYPE is authoritative and the name
-        // rule is only a fallback for a schema that never went through the
-        // registry (`ToolSchema::new` leaves `Direct`), which in production is
-        // no schema at all — `tools.rs:676` is the sole caller and always
-        // passes stamped schemas.
+        // `get_schemas` (tools.rs). The TYPE is authoritative.
         //
         // So:
         // - Direct stays eager even when its name starts with `mcp_`: an
         //   operant-native tool the prefix used to catch by accident.
         // - Deferred is deferred even with no `mcp_` prefix: a type that opted
         //   in deliberately.
-        // - `is_deferrable` survives only for unstamped schemas, i.e. the
-        //   tools the registry never minted (the bridge tools' own schemas and
-        //   hand-built test fixtures).
         match s.exposure {
             ToolExposure::Hidden => hidden.push(s),
             ToolExposure::Deferred => deferred.push(s),
@@ -370,13 +356,18 @@ impl ToolSearchTool {
         Self { registry }
     }
 
-    /// The deferred schemas currently registered (MCP tools only).
+    /// The deferred schemas currently registered.
+    ///
+    /// Filtered by the registry-stamped EXPOSURE (`ToolExposure::Deferred`),
+    /// not by a naming convention: a tool that opts into deferral by type is
+    /// reachable here whatever it is called, and a tool named `mcp_*` that
+    /// owns itself (type `Direct`) is not.
     async fn deferred_schemas(&self) -> Vec<ToolSchema> {
         self.registry
             .get_schemas()
             .await
             .into_iter()
-            .filter(|s| is_deferrable(&s.name))
+            .filter(|s| s.exposure.is_deferred())
             .collect()
     }
 }
@@ -545,7 +536,7 @@ impl OperantTool for ToolDescribeTool {
             .find(|s| s.name == name);
 
         match schema {
-            Some(s) if is_deferrable(&s.name) => ToolResult::success(
+            Some(s) if s.exposure.is_deferred() => ToolResult::success(
                 synthetic_call_id(TOOL_DESCRIBE_NAME),
                 json!({
                     "name": s.name,
@@ -555,7 +546,7 @@ impl OperantTool for ToolDescribeTool {
             ),
             Some(_) => ToolResult::error(
                 synthetic_call_id(TOOL_DESCRIBE_NAME),
-                format!("'{name}' is not a deferred (MCP) tool — call it directly."),
+                format!("'{name}' is not a deferred tool — call it directly."),
             ),
             None => ToolResult::error(
                 synthetic_call_id(TOOL_DESCRIBE_NAME),
@@ -631,19 +622,31 @@ impl OperantTool for ToolCallTool {
             }
         };
 
-        if !is_deferrable(&name) {
-            return ToolResult::error(
-                id,
-                format!("'{name}' is not a deferred tool — call it directly."),
-            );
-        }
         // Availability check mirrors a direct call: a deferred tool that is
         // disabled (by name or toolset) must not be invocable through the
-        // bridge around the ban. `is_available` covers registration too.
+        // bridge around the ban. `is_available` covers registration too, and
+        // it runs FIRST so an absent tool is reported as absent rather than
+        // as "not deferred".
         if !self.registry.is_available(&name).await {
             return ToolResult::error(
                 id,
                 format!("Tool '{name}' is not registered or is currently disabled."),
+            );
+        }
+        // The deferral decision is the TYPE's — the registry stamped
+        // `ToolExposure` on the schema — not the name's: a tool that opts
+        // into `Deferred` is reachable here whatever it is called, and a tool
+        // named `mcp_*` that owns itself (type `Direct`) is not.
+        let deferred = self
+            .registry
+            .get_schemas_all()
+            .await
+            .into_iter()
+            .any(|s| s.name == name && s.exposure.is_deferred());
+        if !deferred {
+            return ToolResult::error(
+                id,
+                format!("'{name}' is not a deferred tool — call it directly."),
             );
         }
 
@@ -735,10 +738,11 @@ mod tests {
     /// Stamp the exposure the registry would stamp, so a hand-built fixture
     /// arrives at `assemble_tools` in the same shape production hands it. The
     /// tests that say "an mcp_* name defers" describe what the REGISTRY does
-    /// today for MCP tools; the ones that say "a type defers regardless of
-    /// name" build the exposure explicitly via `DeferredDummy`.
+    /// today for MCP tools (the proxy names them `mcp_*` and types them
+    /// `Deferred`); the ones that say "a type defers regardless of name"
+    /// build the exposure explicitly via `DeferredDummy`.
     fn schema(name: &str, description: &str) -> ToolSchema {
-        let exposure = if is_deferrable(name) {
+        let exposure = if name.starts_with("mcp_") {
             ToolExposure::Deferred
         } else {
             ToolExposure::Direct
@@ -835,16 +839,18 @@ mod tests {
             .register(ToolSearchTool::new(registry.clone()))
             .await
             .unwrap();
-        // Register a deferred tool directly into the shared map.
+        // Register a deferred tool directly into the shared map: an MCP tool
+        // is deferred BY TYPE (the registry stamps `ToolExposure::Deferred`),
+        // and the `mcp_` name is how it looks.
         registry
-            .register(DeferredDummy::new(
+            .register(DeferredDummy::deferred(
                 "mcp_srv_alpha",
                 "Handles alpha processing",
             ))
             .await
             .unwrap();
         registry
-            .register(DeferredDummy::new(
+            .register(DeferredDummy::deferred(
                 "mcp_srv_beta",
                 "Handles beta processing",
             ))
@@ -889,7 +895,7 @@ mod tests {
     async fn tool_call_executes_underlying_deferred_tool() {
         let registry = ToolRegistry::new(Duration::from_secs(5));
         registry
-            .register(DeferredDummy::new("mcp_srv_alpha", "Alpha"))
+            .register(DeferredDummy::deferred("mcp_srv_alpha", "Alpha"))
             .await
             .unwrap();
         let tool = ToolCallTool::new(registry.clone());
@@ -904,6 +910,67 @@ mod tests {
         assert_eq!(parsed["echoed_x"], 1);
         // The inner result name is stamped by the executor to the inner tool.
         assert_eq!(result.name, "mcp_srv_alpha");
+    }
+
+    /// RT-259: a tool that defers BY TYPE, with no `mcp_` name, must be
+    /// reachable through every arm of the bridge.
+    ///
+    /// `assemble_tools` withholds it from the model's tools array (by type),
+    /// so `tool_search` / `tool_describe` / `tool_call` are its ONLY way out.
+    /// Under the old name rule all three refused it: hidden from the model AND
+    /// refused by the bridge = permanently unreachable.
+    #[tokio::test]
+    async fn a_type_deferred_tool_is_reachable_through_the_bridge() {
+        let registry = ToolRegistry::new(Duration::from_secs(5));
+        registry
+            .register(DeferredDummy::deferred(
+                "zzz_internal_sidecar",
+                "An operant-owned sidecar, deliberately not named mcp_*",
+            ))
+            .await
+            .unwrap();
+
+        // 1. The catalog lists it.
+        let search = ToolSearchTool::new(registry.clone())
+            .execute(
+                json!({ "query": "sidecar", "limit": 10 }),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(search.success, "{}", search.content);
+        let parsed: Value = serde_json::from_str(&search.content).unwrap();
+        let matches = parsed["matches"].as_array().unwrap();
+        assert_eq!(
+            matches.len(),
+            1,
+            "the type-deferred tool must be in the catalog: {matches:?}"
+        );
+        assert_eq!(matches[0]["name"], "zzz_internal_sidecar");
+
+        // 2. The describe arm returns its schema.
+        let describe = ToolDescribeTool::new(registry.clone())
+            .execute(
+                json!({ "name": "zzz_internal_sidecar" }),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(
+            describe.success,
+            "tool_describe must accept it: {}",
+            describe.content
+        );
+
+        // 3. The call arm executes it.
+        let call = ToolCallTool::new(registry.clone())
+            .execute(
+                json!({ "name": "zzz_internal_sidecar", "arguments": { "x": 7 } }),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(call.success, "{}", call.content);
+        let parsed: Value = serde_json::from_str(&call.content).unwrap();
+        assert_eq!(parsed["echoed_x"], 7);
+        assert_eq!(call.name, "zzz_internal_sidecar");
     }
 
     #[tokio::test]
@@ -929,7 +996,7 @@ mod tests {
     async fn tool_call_cannot_bypass_disabled_tools() {
         let registry = ToolRegistry::new(Duration::from_secs(5));
         registry
-            .register(DeferredDummy::new("mcp_srv_alpha", "Alpha"))
+            .register(DeferredDummy::deferred("mcp_srv_alpha", "Alpha"))
             .await
             .unwrap();
         registry.disable_tool("mcp_srv_alpha").await;
@@ -1051,14 +1118,14 @@ mod tests {
         // (they passed with every score forced to 0, i.e. vacuous).
         let registry = ToolRegistry::new(Duration::from_secs(5));
         registry
-            .register(DeferredDummy::new(
+            .register(DeferredDummy::deferred(
                 "mcp_zzz_github_issue_create",
                 "Creates a record in the tracker",
             ))
             .await
             .unwrap();
         registry
-            .register(DeferredDummy::new(
+            .register(DeferredDummy::deferred(
                 "mcp_aaa_project_tools",
                 "Handles github issues and issue comments for a repository",
             ))
@@ -1090,14 +1157,14 @@ mod tests {
     async fn multi_term_query_matches_terms_split_across_fields() {
         let registry = ToolRegistry::new(Duration::from_secs(5));
         registry
-            .register(DeferredDummy::new(
+            .register(DeferredDummy::deferred(
                 "mcp_gh_list",
                 "List github issues for the repository",
             ))
             .await
             .unwrap();
         registry
-            .register(DeferredDummy::new(
+            .register(DeferredDummy::deferred(
                 "mcp_unrelated_thing",
                 "Reads local files from the workspace",
             ))
@@ -1123,11 +1190,11 @@ mod tests {
         // tiebreak is explicit in the implementation and pinned here.
         let registry = ToolRegistry::new(Duration::from_secs(5));
         registry
-            .register(DeferredDummy::new("mcp_zeta", "alpha processing"))
+            .register(DeferredDummy::deferred("mcp_zeta", "alpha processing"))
             .await
             .unwrap();
         registry
-            .register(DeferredDummy::new("mcp_alpha", "alpha processing"))
+            .register(DeferredDummy::deferred("mcp_alpha", "alpha processing"))
             .await
             .unwrap();
 
@@ -1148,11 +1215,11 @@ mod tests {
         // which is a defensible browse order, but it must still WORK.
         let registry = ToolRegistry::new(Duration::from_secs(5));
         registry
-            .register(DeferredDummy::new("mcp_srv_alpha", "Alpha"))
+            .register(DeferredDummy::deferred("mcp_srv_alpha", "Alpha"))
             .await
             .unwrap();
         registry
-            .register(DeferredDummy::new("mcp_srv_beta", "Beta"))
+            .register(DeferredDummy::deferred("mcp_srv_beta", "Beta"))
             .await
             .unwrap();
 
@@ -1212,8 +1279,8 @@ mod tests {
 
     /// A tool with NO `mcp_` prefix that declares itself `Deferred` must be
     /// deferred. Under the old string-only rule this tool was eagerly
-    /// offered, so this test fails if `assemble_tools` reverts to
-    /// `is_deferrable`.
+    /// offered, so this test fails if `assemble_tools` reverts to a name
+    /// test.
     #[tokio::test]
     async fn a_tool_deferring_by_type_is_deferred_without_the_mcp_prefix() {
         let registry = ToolRegistry::new(Duration::from_secs(5));

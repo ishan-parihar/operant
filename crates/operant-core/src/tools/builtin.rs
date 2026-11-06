@@ -119,10 +119,11 @@ pub async fn register_builtin_tools(
     // memory tools (memory_store / memory_search) route through the
     // ACTIVE_MEMORY_PROVIDER global hook set by the CLI, so tool writes
     // sourcehound's v2 composite surface (RT-194): the 23 research/news/OSINT
-    // composites (`papers_search`, `news_fetch`, `data_query`, ...). They ride
-    // the `tool_search` deferred bridge rather than the request (see
-    // `tool_search::is_deferrable`), so they cost ~760 catalog tokens on the
-    // turn that researches instead of ~4,738 on every request. Each tool
+    // composites (`papers_search`, `news_fetch`, `data_query`, ...). Each
+    // declares `ToolExposure::Deferred` on its type, so they ride the
+    // `tool_search` deferred bridge rather than the request, and they cost
+    // ~760 catalog tokens on the turn that researches instead of ~4,738 on
+    // every request. Each tool
     // self-disables via `is_available()` when the sourcehound binary is absent,
     // exactly like the four web tools above.
     sourcehound_composites::register_composites(registry).await;

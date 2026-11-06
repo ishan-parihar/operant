@@ -52,7 +52,6 @@
 
 use std::collections::HashSet;
 
-use super::is_deferrable;
 use crate::schema::ToolSchema;
 
 /// Distinct turn tokens that must appear in a deferred tool's name or
@@ -119,16 +118,20 @@ pub fn is_relevant(turn: &str, tool: &ToolSchema) -> bool {
 /// The deferred tools in `catalog` that this turn makes relevant.
 ///
 /// `catalog` must be the output of `ToolRegistry::get_schemas()` (i.e.
-/// already filtered to registered AND available AND not-disabled); the
-/// `is_deferrable` filter is applied again here so the function is safe to
-/// call with a raw catalog.
+/// already filtered to registered AND available AND not-disabled). The filter
+/// is the registry-stamped EXPOSURE (`ToolExposure::Deferred`), the same type
+/// rule `assemble_tools` and the bridge read — it used to be a name test
+/// (`is_deferrable`: the `mcp_` prefix plus a table scan), which is the drift
+/// that made a type-deferred tool unreachable: the model-visible array hid it
+/// by TYPE while this path re-injected it by NAME, so a deferred tool that
+/// did not borrow a naming convention was never materialised either.
 pub fn materialise_for_turn<'a>(turn: &str, catalog: &'a [ToolSchema]) -> Vec<&'a ToolSchema> {
     if turn.trim().is_empty() {
         return Vec::new();
     }
     catalog
         .iter()
-        .filter(|t| is_deferrable(&t.name) && is_relevant(turn, t))
+        .filter(|t| t.exposure.is_deferred() && is_relevant(turn, t))
         .collect()
 }
 
@@ -173,8 +176,18 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    /// Stamp the exposure the REGISTRY stamps: MCP tools are deferred BY
+    /// TYPE (`McpNamespacedTool`), every other tool is eager. The fixture
+    /// keys the stamp off the `mcp_` prefix because that is how the MCP proxy
+    /// names its tools — the DECISION the production rule reads is the type,
+    /// and this is the fixture modelling what the registry hands over.
     fn schema(name: &str, description: &str) -> ToolSchema {
-        ToolSchema::new(name, description, json!({ "type": "object" }))
+        let exposure = if name.starts_with("mcp_") {
+            crate::tools::ToolExposure::Deferred
+        } else {
+            crate::tools::ToolExposure::Direct
+        };
+        ToolSchema::new(name, description, json!({ "type": "object" })).with_exposure(exposure)
     }
 
     fn names(schemas: &[ToolSchema]) -> Vec<&str> {
@@ -266,14 +279,18 @@ mod tests {
     #[test]
     fn native_tools_are_never_materialised() {
         let cat = catalog();
-        // "terminal" matches the turn hard but is not deferrable.
+        // "terminal" matches the turn hard but is not deferred.
         let out = materialise("run terminal", assembled(), &cat);
         assert_eq!(
             out.iter().filter(|s| s.name == "terminal").count(),
             1,
             "native tool must not be injected a second time"
         );
-        assert!(!is_deferrable("terminal"));
+        assert_eq!(
+            cat[0].exposure,
+            crate::tools::ToolExposure::Direct,
+            "the native tool is eager by type — that is what keeps it out of the bridge"
+        );
     }
 
     /// Honest measurement of the size effect, and an honest record of the

@@ -27,9 +27,10 @@
 //! (measured by the 2026-10-25 audit: the live `tools/list` serialized in the
 //! chat-request wire format; heaviest composite `news.fetch` ~810). As
 //! `tool_search` catalog lines they cost **~760 tokens, and only on the turn
-//! that actually searches**. `is_deferrable` classifies them, so the existing
-//! bridge (`tool_search` / `tool_describe` / `tool_call`) plus the turn-driven
-//! `materialise` path serve them: the model discovers `papers.search` on
+//! that actually searches**. Each composite declares
+//! `ToolExposure::Deferred` on its TYPE, so the existing bridge (`tool_search`
+//! / `tool_describe` / `tool_call`) plus the turn-driven `materialise` path
+//! serve them: the model discovers `papers.search` on
 //! demand, and a request that does not research costs the four web tools only.
 //!
 //! # The schema contract
@@ -544,8 +545,7 @@ pub fn composite_names() -> Vec<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tools::tool_search::is_deferrable;
-
+    use crate::tools::ToolExposure;
     /// Every name is a legal tool identifier and maps 1:1 from the composite.
     #[test]
     fn composite_names_map_dots_to_underscores() {
@@ -582,14 +582,21 @@ mod tests {
 
     /// RT-194's core claim: the composites ride the deferred bridge, so they
     /// cost catalog tokens on the searching turn, not schema tokens on every
-    /// request. If `is_deferrable` stops naming them this test fails and the
-    /// ~4.7k-token regression ships loudly.
+    /// request.
+    ///
+    /// The guard asserts the TYPE, because that is what the production rule
+    /// reads (`assemble_tools` / the bridge / `materialise` all read the
+    /// registry-stamped `ToolExposure`). The old guard asserted the composite
+    /// NAME (`is_deferrable`: a prefix + a table scan), so it kept passing if
+    /// the type stopped deferring — a vacuous guard is the defect RT-257 just
+    /// repaired on the TUI side.
     #[test]
-    fn every_composite_is_deferrable() {
+    fn every_composite_is_deferred_by_type() {
         for spec in composite_specs() {
-            assert!(
-                is_deferrable(spec.tool_name),
-                "{} must be deferred — eager registration costs ~4,738 tokens per request",
+            assert_eq!(
+                SourcehoundCompositeTool::new(spec).exposure(),
+                ToolExposure::Deferred,
+                "{} must be deferred BY TYPE — eager registration costs ~4,738 tokens per request",
                 spec.tool_name
             );
         }
@@ -803,7 +810,7 @@ for line in sys.stdin:
     /// they land in the deferred partition and the model's visible array holds
     /// only the always-on tools plus the bridge trio.
     ///
-    /// This is the test that would catch a `is_deferrable` regression with real
+    /// This is the test that would catch a lost-deferral regression with real
     /// consequences: if the composites stopped deferring, every request would
     /// carry all 23 schemas and this assertion fails by name.
     #[test]
