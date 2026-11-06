@@ -109,17 +109,7 @@ pub async fn handle_curator_command(
             background,
             dry_run,
             consolidate,
-        } => {
-            cmd_run(
-                config,
-                &engine,
-                background,
-                dry_run,
-                consolidate,
-                &curator_dir,
-            )
-            .await
-        }
+        } => cmd_run(config, &engine, background, dry_run, consolidate).await,
         CuratorSubcommand::Pause => cmd_pause(&engine).await,
         CuratorSubcommand::Resume => cmd_resume(&engine).await,
         CuratorSubcommand::Pin { skill } => cmd_pin(&tracker, &skill).await,
@@ -175,7 +165,6 @@ async fn cmd_run(
     background: bool,
     dry_run: bool,
     consolidate: bool,
-    curator_dir: &Path,
 ) -> Result<()> {
     if background {
         println!("Curator run (background mode not yet supported, running synchronously)...");
@@ -191,7 +180,10 @@ async fn cmd_run(
 
     // Initialize CronDb only for the Run subcommand (best-effort).
     let cron_db = {
-        let cron_db_path = curator_dir.join("cron.db");
+        // The LIVE cron db — the same file the cron scheduler writes. The
+        // curator used to open <skills>/.curator/cron.db, which no cron job
+        // ever writes to, so its cron protection protected nothing (RT-267).
+        let cron_db_path = operant_core::cronjobs::db_path(&config.database_path);
         match CronDb::init(cron_db_path) {
             Ok(db) => {
                 println!("  Cron rewriting: enabled (skill refs updated after consolidation)");

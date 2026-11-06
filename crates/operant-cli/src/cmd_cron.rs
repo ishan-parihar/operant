@@ -109,11 +109,10 @@ pub enum CronSubcommand {
 /// the shared `database_path` made CLI-created jobs invisible to the scheduler
 /// and tripped the shared-PRAGMA migration guard (R39-7).
 pub fn cron_db_path(config: &AppConfig) -> std::path::PathBuf {
-    config
-        .database_path
-        .parent()
-        .unwrap_or_else(|| std::path::Path::new("."))
-        .join("operant_cron.db")
+    // The core owns the rule: every cron reader and writer must open the
+    // SAME file, or a reader sees an empty database and reports "nothing
+    // references this skill" (RT-267).
+    operant_core::cronjobs::db_path(&config.database_path)
 }
 
 /// Dispatch a cron subcommand.

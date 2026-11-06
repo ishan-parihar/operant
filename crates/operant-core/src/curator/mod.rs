@@ -225,18 +225,10 @@ impl CuratorEngine {
         let mut stale = Vec::new();
         let mut errors = Vec::new();
 
-        // Protect cron-dependent skills from archival.
-        let cron_refs = if let Some(db) = cron_db {
-            match db.referenced_skill_names() {
-                Ok(refs) => refs,
-                Err(e) => {
-                    tracing::warn!(error = %e, "Failed to read cron skill refs — cron-dependent skills may be archived");
-                    std::collections::HashSet::new()
-                }
-            }
-        } else {
-            std::collections::HashSet::new()
-        };
+        // Protect cron-dependent skills from archival. An UNREADABLE
+        // reference set aborts the review: it is not an empty set, and an
+        // empty set reads as "nothing is protected" (RT-267).
+        let cron_refs = Self::cron_protected_skills(cron_db)?;
 
         for record in &agent_created {
             if record.pinned {
@@ -384,7 +376,16 @@ impl CuratorEngine {
                     );
                 } // drop write guard before async I/O
                 let snapshot = self.state.read().await.clone();
-                let _ = self.save_state_inner(&snapshot).await;
+                // A dropped state write is not a cosmetic loss: `last_run_at`
+                // gates the next pass, so a failed write re-defers the
+                // curator by a whole interval on every restart. The gate
+                // returns a bool, so the failure is surfaced here (RT-267).
+                if let Err(e) = self.save_state_inner(&snapshot).await {
+                    tracing::warn!(
+                        error = %e,
+                        "Curator seed not persisted — the first run will be deferred again after a restart"
+                    );
+                }
                 tracing::info!("Curator seeded — first run deferred by one interval");
                 false
             }
@@ -410,16 +411,40 @@ impl CuratorEngine {
         }
     }
 
+    /// The skills a cron job references — the set the curator must NEVER
+    /// archive.
+    ///
+    /// ONE helper for both paths (the manual review and the automatic
+    /// transitions), because the rule is the rule: a skill a cron job calls
+    /// stays alive however idle it looks.
+    ///
+    /// FAIL CLOSED: an unreadable reference set is an ERROR, not an empty
+    /// set. The old code logged a warning and carried on with an empty set,
+    /// which reads as "nothing is protected" — so one transient sqlite error
+    /// turned into the permanent archival of a skill a cron job still calls
+    /// (RT-267).
+    fn cron_protected_skills(
+        cron_db: Option<&CronDb>,
+    ) -> Result<std::collections::HashSet<String>> {
+        match cron_db {
+            None => Ok(std::collections::HashSet::new()),
+            Some(db) => Ok(db.referenced_skill_names()?),
+        }
+    }
+
     /// Apply automatic lifecycle transitions to agent-created skills.
     ///
     /// Walks every curator-managed skill and moves active → stale → archived
     /// based on the latest real activity timestamp. Pinned skills are never
-    /// touched. Returns a counter dict describing what changed.
+    /// touched, and neither are skills a cron job references — the same rule
+    /// the manual review applies (RT-267). Returns a counter dict describing
+    /// what changed.
     ///
     /// This is a deterministic, no-LLM operation that runs whenever the
     /// curator fires — even when `consolidate` is off.
     pub async fn apply_automatic_transitions(
         &self,
+        cron_db: Option<&CronDb>,
     ) -> Result<std::collections::HashMap<String, i64>> {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -435,15 +460,25 @@ impl CuratorEngine {
         let all_records = self.usage_tracker.all_records();
         let agent_created: Vec<_> = all_records.iter().filter(|r| r.agent_created).collect();
 
+        // Skills referenced by cron jobs are never archived — the same rule
+        // the manual review applies (RT-267).
+        let cron_refs = Self::cron_protected_skills(cron_db)?;
+
         let mut counts = std::collections::HashMap::new();
         counts.insert("checked".to_string(), agent_created.len() as i64);
         counts.insert("archived".to_string(), 0);
         counts.insert("reactivated".to_string(), 0);
         counts.insert("skipped_pinned".to_string(), 0);
+        counts.insert("skipped_cron".to_string(), 0);
 
         for record in &agent_created {
             if record.pinned {
                 *counts.entry("skipped_pinned".to_string()).or_insert(0) += 1;
+                continue;
+            }
+            if cron_refs.contains(&record.name) {
+                tracing::debug!(skill = %record.name, "Skipping archive — skill is referenced by cron job");
+                *counts.entry("skipped_cron".to_string()).or_insert(0) += 1;
                 continue;
             }
 
@@ -466,9 +501,13 @@ impl CuratorEngine {
                 // Archive the skill
                 match archiver::archive_skill(&record.name, &self.skills_dir, &self.archive_dir) {
                     Ok(()) => {
-                        let _ = self
-                            .usage_tracker
-                            .set_state(&record.name, LifecycleState::Archived);
+                        // The archive is only DURABLE once the tracker says
+                        // so: the file has already moved, and a dropped write
+                        // would leave the record Active while SKILL.md sits
+                        // in `.archive` — the next pass then tries to archive
+                        // a skill that is gone (RT-267).
+                        self.usage_tracker
+                            .set_state(&record.name, LifecycleState::Archived)?;
                         *counts.entry("archived".to_string()).or_insert(0) += 1;
                         tracing::info!(skill = %record.name, "Curator archived stale skill");
                     }
@@ -518,8 +557,11 @@ impl CuratorEngine {
             state.last_run_summary = Some(summary);
         } // drop write guard before async I/O
         let state_snapshot = self.state.read().await.clone();
-        let _ = self.save_state_inner(&state_snapshot).await;
-        let _ = self.usage_tracker.save();
+        // A dropped state write is not a cosmetic loss: `last_run_at` gates
+        // the next pass, so a failed write re-defers the curator by a whole
+        // interval on every restart (RT-267).
+        self.save_state_inner(&state_snapshot).await?;
+        self.usage_tracker.save()?;
 
         Ok(counts)
     }

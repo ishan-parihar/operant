@@ -795,6 +795,23 @@ If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
             // curator used to manage the lifecycle of a tree the operator
             // does not use (RT-265).
             let skills_dir = crate::skills::configured_skills_dir();
+            // The LIVE cron db: the curator's "never archive a cron-referenced
+            // skill" rule must read the file the cron scheduler writes. If it
+            // cannot be opened, the pass is SKIPPED rather than run with an
+            // empty protection set — an unreadable protection set must never
+            // become "nothing is protected" (RT-267).
+            let cron_db = match crate::cronjobs::CronDb::init(crate::cronjobs::db_path(
+                &crate::config::runtime_config().database_path,
+            )) {
+                Ok(db) => Some(db),
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        "curator auto-run skipped — the cron db could not be opened"
+                    );
+                    return;
+                }
+            };
             tokio::spawn(async move {
                 let curator_dir = skills_dir.join(".curator");
                 let tracker = std::sync::Arc::new(crate::skill_usage::SkillUsageTracker::new(
@@ -810,7 +827,7 @@ If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
                     return;
                 }
                 if engine.maybe_run_curator().await {
-                    match engine.apply_automatic_transitions().await {
+                    match engine.apply_automatic_transitions(cron_db.as_ref()).await {
                         Ok(counts) => {
                             info!(?counts, "curator auto-run applied lifecycle transitions");
                         }

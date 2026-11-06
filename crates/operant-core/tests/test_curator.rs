@@ -554,7 +554,7 @@ async fn a_used_skill_is_not_archived_by_the_curator() {
     let tracker = Arc::new(SkillUsageTracker::new(usage_path));
     let engine = CuratorEngine::new(skills_dir.clone(), state_path, tracker);
     engine.load_state().await.unwrap();
-    let counts = engine.apply_automatic_transitions().await.unwrap();
+    let counts = engine.apply_automatic_transitions(None).await.unwrap();
 
     assert_eq!(
         counts.get("archived").copied().unwrap_or(0),
@@ -564,6 +564,140 @@ async fn a_used_skill_is_not_archived_by_the_curator() {
     assert!(
         skill_dir.exists(),
         "the skill directory must survive the curator's pass"
+    );
+
+    cleanup(&tmp);
+}
+
+/// RT-267: the automatic curator must protect a skill a cron job references
+/// — exactly like the manual review path.
+///
+/// The two paths implemented the same rule differently: the manual review
+/// skipped cron-referenced skills, the automatic transitions had NO cron
+/// guard at all — and both read the protection set from a database no cron
+/// job ever writes to, so the rule protected nothing either way.
+#[tokio::test]
+async fn the_automatic_curator_never_archives_a_cron_referenced_skill() {
+    let tmp = temp_dir();
+    let skills_dir = tmp.join("skills");
+    let skill_dir = skills_dir.join("cron-skill");
+    fs::create_dir_all(&skill_dir).unwrap();
+    fs::write(skill_dir.join("SKILL.md"), "# Cron Skill").unwrap();
+
+    // The usage record: agent-created and long idle (older than the
+    // one-day archive window below).
+    let usage_path = skills_dir.join(".curator").join("usage.json");
+    fs::create_dir_all(usage_path.parent().unwrap()).unwrap();
+    {
+        let mut telemetry = UsageTelemetry::load(&usage_path).unwrap();
+        telemetry.record_created("cron-skill", true);
+        telemetry.get_record_mut("cron-skill").unwrap().last_used =
+            chrono::Utc::now() - chrono::Duration::days(40);
+        telemetry.save(&usage_path).unwrap();
+    }
+
+    // A cron job that calls the skill, in the LIVE cron database (the path
+    // the core owns — one rule, one file).
+    let cron_db = operant_core::cronjobs::CronDb::init(operant_core::cronjobs::db_path(
+        &tmp.join("operant.db"),
+    ))
+    .unwrap();
+    cron_db
+        .create_job(operant_core::cronjobs::CreateJobParams {
+            name: "nightly".into(),
+            prompt: "run the cron skill".into(),
+            schedule: "0 3 * * *".into(),
+            schedule_display: "nightly".into(),
+            repeat_times: None,
+            deliver: "local".into(),
+            origin_platform: None,
+            origin_chat_id: None,
+            origin_thread_id: None,
+            skill: Some("cron-skill".into()),
+            skills: None,
+            model: None,
+            provider: None,
+            base_url: None,
+            script: None,
+            context_from: None,
+            enabled_toolsets: None,
+            workdir: None,
+            no_agent: false,
+        })
+        .unwrap();
+
+    let state_path = tmp.join("state.json");
+    let state = CuratorState {
+        stale_after_days: 1,
+        archive_after_days: 1,
+        ..CuratorState::default()
+    };
+    fs::write(&state_path, serde_json::to_string_pretty(&state).unwrap()).unwrap();
+
+    let tracker = Arc::new(SkillUsageTracker::new(usage_path));
+    let engine = CuratorEngine::new(skills_dir.clone(), state_path, tracker);
+    engine.load_state().await.unwrap();
+    let counts = engine
+        .apply_automatic_transitions(Some(&cron_db))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        counts.get("archived").copied().unwrap_or(0),
+        0,
+        "a skill a cron job calls must not be archived: {counts:?}"
+    );
+    assert_eq!(
+        counts.get("skipped_cron").copied().unwrap_or(0),
+        1,
+        "the cron skip must be counted, not silent: {counts:?}"
+    );
+    assert!(
+        skill_dir.exists(),
+        "the skill directory must survive the curator's pass"
+    );
+
+    cleanup(&tmp);
+}
+
+/// RT-267: an UNREADABLE cron reference set must ABORT the review, not
+/// silently mean "nothing is protected".
+///
+/// The old code logged a warning and carried on with an EMPTY set — which
+/// reads as "no skill is protected" — so one transient sqlite error turned
+/// into the permanent archival of a skill a cron job still calls.
+#[tokio::test]
+async fn an_unreadable_cron_reference_set_aborts_the_review() {
+    let tmp = temp_dir();
+    let skills_dir = tmp.join("skills");
+    fs::create_dir_all(&skills_dir).unwrap();
+
+    // A cron db whose `cron_jobs` table lost the `skills` column: the
+    // reference query now fails.
+    let cron_path = tmp.join("cron.db");
+    let cron_db = operant_core::cronjobs::CronDb::init(cron_path.clone()).unwrap();
+    {
+        let conn = rusqlite::Connection::open(&cron_path).unwrap();
+        conn.execute("ALTER TABLE cron_jobs DROP COLUMN skills", [])
+            .unwrap();
+    }
+    assert!(
+        cron_db.referenced_skill_names().is_err(),
+        "the fixture must make the cron reference read fail"
+    );
+
+    let state_path = tmp.join("state.json");
+    let tracker = Arc::new(SkillUsageTracker::new(
+        skills_dir.join(".curator").join("usage.json"),
+    ));
+    let engine = CuratorEngine::new(skills_dir.clone(), state_path, tracker);
+    engine.load_state().await.unwrap();
+
+    let result = engine.run_review(false, None, false, Some(&cron_db)).await;
+
+    assert!(
+        result.is_err(),
+        "an unreadable protection set must abort the review, not archive blind"
     );
 
     cleanup(&tmp);
