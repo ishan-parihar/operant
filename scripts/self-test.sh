@@ -122,6 +122,15 @@ run_test "Config surface (scripts/audit-config-surface.py --check)" "python3 scr
 # is what missed it; this is the set difference, run every time.
 run_test "Ledger index vs checkboxes (scripts/audit-ledger-index.py)" "python3 scripts/audit-ledger-index.py 2>&1"
 
+# 4c-1a. The ledger gate's own contract (RG-021). The gate compared the index
+# table and the checkboxes as SETS, and a set has no duplicates — so it could
+# not see an id used by TWO rows, which two agents on the shared branch had
+# done eight times in this ledger's life. The gate now checks the id space
+# (unique index ids, unique detail ids, every index row carrying its detail)
+# and this test proves each check FAILS when the defect is planted in a COPY
+# of the ledger (the real one is never touched).
+run_test "Ledger gate contract (scripts/tests/audit_ledger_index_test.sh)" "bash scripts/tests/audit_ledger_index_test.sh 2>&1"
+
 # 4c-2. The lint-suppression surface. rust-best-practices ch.2 says prefer
 # `#[expect]` over `#[allow]`, because an allow never expires while an expect
 # reports itself unfulfilled the moment the lint stops firing. A prose claim
