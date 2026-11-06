@@ -349,6 +349,15 @@ pub const MESSAGES_WIRE_API: &str = "messages";
 /// — but only at that endpoint, not at the native one.
 pub const GENERATIVE_LANGUAGE_WIRE_API: &str = "generate_content";
 
+// `async_trait` puts a bare `#[must_use]` on every async method it
+// generates, and these methods return a `Result` — which is ALREADY
+// `#[must_use]`. The lint's own suggestion (give the attribute a message)
+// cannot be applied to a macro-generated attribute, so the duplication is
+// expected here.
+#[expect(
+    clippy::double_must_use,
+    reason = "async_trait's generated #[must_use] on a Result-returning method"
+)]
 #[async_trait]
 pub trait Provider: Send + Sync {
     /// Query provider capabilities.

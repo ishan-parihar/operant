@@ -226,6 +226,15 @@ impl SpawnPermit {
     /// slots are free, 2 are claimed and the caller reports the other 3 as
     /// refused rather than building workers that would immediately fail.
     /// `Err` only when NOTHING could be claimed.
+    // `fetch_update is DEPRECATED: it is the pre-1.95 spelling, renamed to
+    // `try_update`. The rename cannot be made — `try_update` is stable since
+    // 1.95 and this workspace declares `rust-version = "1.89"`, so taking it
+    // would break the MSRV to silence a deprecation lint. The method is a
+    // plain rename with identical semantics.
+    #[expect(
+        deprecated,
+        reason = "`try_update` needs 1.95; the workspace MSRV is 1.89 (rust-version)"
+    )]
     fn reserve(want: usize, depth: u32) -> Result<Self, SpawnRefusal> {
         let max_depth = MAX_SPAWN_DEPTH.load(Ordering::Relaxed);
         if depth > max_depth {
@@ -267,6 +276,12 @@ impl SpawnPermit {
 }
 
 impl Drop for SpawnPermit {
+    // `fetch_update` is DEPRECATED (renamed `try_update` in 1.95) — kept for
+    // the workspace's 1.89 MSRV; see the note on `reserve`.
+    #[expect(
+        deprecated,
+        reason = "`try_update` needs 1.95; the workspace MSRV is 1.89 (rust-version)"
+    )]
     fn drop(&mut self) {
         // `checked_sub` inside fetch_update: a double-release bug saturates at
         // 0 instead of wrapping the counter to usize::MAX and wedging every

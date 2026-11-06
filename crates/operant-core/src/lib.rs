@@ -40,6 +40,17 @@
 //! ```
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
+// `async_trait` puts a bare `#[must_use]` on every async method it
+// generates, and this crate has EIGHTEEN traits whose async methods return
+// a `Result` — which is ALREADY `#[must_use]`. The lint's own suggestion
+// (give the attribute a message) cannot be applied to a macro-generated
+// attribute, and the workspace hand-writes no `#[must_use]` of its own, so
+// the duplication is expected here — once, with the reason, rather than at
+// eighteen separate sites.
+#![expect(
+    clippy::double_must_use,
+    reason = "async_trait's generated #[must_use] on Result-returning methods"
+)]
 pub mod accessibility;
 pub mod acp;
 pub mod active_sessions;

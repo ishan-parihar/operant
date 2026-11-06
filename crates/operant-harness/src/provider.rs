@@ -139,6 +139,15 @@ pub struct Registration<'a> {
 ///
 /// Implementations MUST NOT call back into [`crate::Harness`] lifecycle
 /// methods from `install` — lifecycle ops hold the kernel write lock.
+// `async_trait` puts a bare `#[must_use]` on every async method it
+// generates, and these methods return a `Result` — which is ALREADY
+// `#[must_use]`. The lint's own suggestion (give the attribute a message)
+// cannot be applied to a macro-generated attribute, so the duplication is
+// expected here.
+#[expect(
+    clippy::double_must_use,
+    reason = "async_trait's generated #[must_use] on a Result-returning method"
+)]
 #[async_trait::async_trait]
 pub trait Seam: Send + Sync {
     /// Seam family name (matches `Claim.seam`).
@@ -250,6 +259,15 @@ impl<'a> ActivateCx<'a> {
 
 /// A composable extension unit. Implementations are stored as
 /// `Arc<dyn Provider>`; keep methods object-safe.
+// `async_trait` puts a bare `#[must_use]` on every async method it
+// generates, and these methods return a `Result` — which is ALREADY
+// `#[must_use]`. The lint's own suggestion (give the attribute a message)
+// cannot be applied to a macro-generated attribute, so the duplication is
+// expected here.
+#[expect(
+    clippy::double_must_use,
+    reason = "async_trait's generated #[must_use] on a Result-returning method"
+)]
 #[async_trait::async_trait]
 pub trait Provider: Send + Sync {
     fn spec(&self) -> &dyn ProviderSpec;

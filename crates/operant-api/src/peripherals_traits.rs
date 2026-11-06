@@ -20,6 +20,15 @@ use crate::tool::Tool;
 /// The lifecycle follows a connect → use → disconnect pattern. Implementations
 /// must be `Send + Sync` because the peripheral may be accessed from multiple
 /// async tasks after connection.
+// `async_trait` puts a bare `#[must_use]` on every async method it
+// generates, and these methods return a `Result` — which is ALREADY
+// `#[must_use]`. The lint's own suggestion (give the attribute a message)
+// cannot be applied to a macro-generated attribute, so the duplication is
+// expected here.
+#[expect(
+    clippy::double_must_use,
+    reason = "async_trait's generated #[must_use] on a Result-returning method"
+)]
 #[async_trait]
 pub trait Peripheral: Send + Sync {
     /// Return the human-readable instance name of this peripheral.

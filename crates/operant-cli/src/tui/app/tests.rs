@@ -2919,7 +2919,10 @@ fn test_right_click_targets_row_message_instead_of_last_message() {
 /// catalogue.
 #[test]
 fn the_wheel_never_scrolls_the_transcript_behind_an_open_overlay() {
-    let openers: Vec<(&str, fn(&mut App))> = vec![
+    /// One catalogue entry: the overlay's name and the opener that shows it.
+    type Opener = (&'static str, fn(&mut App));
+
+    let openers: Vec<Opener> = vec![
         ("help_overlay", |app| app.help_overlay.visible = true),
         ("history_search_overlay", |app| {
             app.history_search_overlay.visible = true
