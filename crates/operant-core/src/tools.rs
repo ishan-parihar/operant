@@ -977,7 +977,14 @@ impl ToolRegistry {
                     let event = ToolInterceptEvent {
                         point: ToolInterceptPoint::PostExecute,
                         tool: name.clone(),
-                        args: Value::Null,
+                        // The call's args ride the post-execute envelope too.
+                        // The documented envelope carries args at EVERY point
+                        // (point, tool, args, result, config), and the seat
+                        // an observer provides here — "replace this result" —
+                        // is usually a function of WHAT the tool was called
+                        // with: a redactor that cannot see the arguments
+                        // cannot decide whether the output carries them.
+                        args: args.clone(),
                         result: Some(result_value.clone()),
                     };
                     // gap G2 (dsh's post-execute replace seat): a Replace
@@ -1414,6 +1421,47 @@ mod tests {
     }
 
     // ── Tool-seam interception (iter-1722, dsh waterfall parity) ──────────
+
+    /// The post-execute envelope must carry the ARGS the tool was called
+    /// with. The documented envelope carries them at every point (point,
+    /// tool, args, result, config), and the seat an observer provides here —
+    /// "replace this result" — is usually a function of what the tool was
+    /// called with: a redactor that can see the output but not the input
+    /// cannot decide whether the output echoes it.
+    #[tokio::test]
+    async fn post_execute_carries_the_args_the_tool_was_called_with() {
+        let registry = ToolRegistry::new(Duration::from_secs(5));
+        registry.register(TestTool).await.unwrap();
+        registry
+            .register_tool_interceptor(Arc::new(|event| {
+                Box::pin(async move {
+                    if event.point == ToolInterceptPoint::PostExecute
+                        && event.args["query"] == json!("secret")
+                    {
+                        PipelineAction::Replace(json!({ "result": "redacted" }).to_string())
+                    } else {
+                        PipelineAction::Allow
+                    }
+                })
+            }))
+            .await;
+
+        let result = registry
+            .execute(
+                "test_tool",
+                "call_1",
+                json!({"query": "secret"}),
+                ToolContext::default(),
+            )
+            .await
+            .unwrap();
+
+        assert!(
+            result.content.contains("redacted"),
+            "the observer must be able to act on the args at post-execute: {}",
+            result.content
+        );
+    }
 
     #[tokio::test]
     async fn pre_execute_block_stops_the_tool_from_running() {
