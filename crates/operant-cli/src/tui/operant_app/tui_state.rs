@@ -404,8 +404,13 @@ pub trait TuiState {
     fn animation_elapsed(&self) -> f32;
     /// Time remaining until rate limit resets (if rate limited)
     fn rate_limit_remaining(&self) -> Option<Duration>;
-    /// Whether queue mode is enabled (true = wait, false = immediate)
-    fn queue_mode(&self) -> bool;
+    /// Whether the read-only PLAN permission mode is active (plan mode:
+    /// gated tools are denied instead of run).
+    ///
+    /// This is NOT a queue mode: operant has no "wait for the turn to end"
+    /// send mode, and the composer hint once branched on this accessor as if
+    /// it were one. The name says what the flag actually is.
+    fn plan_mode_active(&self) -> bool;
     /// Whether the next normal prompt will be routed into a new headed session.
     fn next_prompt_new_session_armed(&self) -> bool {
         false

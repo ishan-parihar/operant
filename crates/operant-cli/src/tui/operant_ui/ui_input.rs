@@ -2590,11 +2590,14 @@ pub(super) fn draw_input(
         )));
     } else if app.is_processing() && !input_text.is_empty() {
         hint_shown = true;
-        let hint = if app.queue_mode() {
-            "  Ctrl/Cmd+Enter to send now"
-        } else {
-            "  Ctrl/Cmd+Enter to queue"
-        };
+        // ONE truth: while a turn streams, Ctrl/Cmd+Enter QUEUES the draft into
+        // the steer queue. There is no "send now" path — the key handler's
+        // alternate-Enter arm queues while streaming and submits while idle,
+        // and plan mode changes neither. The old branch offered "send now"
+        // whenever plan mode was on, so the hint promised a key action the app
+        // does not have (and the accessor it branched on was plan mode, not a
+        // queue mode).
+        let hint = "  Ctrl/Cmd+Enter to queue";
         hint_line = Some(hint.trim().to_string());
         lines.push(Line::from(Span::styled(
             hint,
@@ -3116,8 +3119,12 @@ fn send_mode_indicator(app: &dyn TuiState) -> (&'static str, Color) {
         ("$", shell_mode_color())
     } else if app.next_prompt_new_session_armed() {
         ("↗", rgb(120, 200, 255))
-    } else if app.queue_mode() {
-        ("⏳", queued_color())
+    } else if app.plan_mode_active() {
+        // Plan mode is read-only (gated tools are denied), so it is marked with
+        // the product's plan glyph — the same 📋 the gateway uses for "Plan
+        // mode" — instead of the ⏳ that means "queued" everywhere else in the
+        // TUI (queued messages, running background tasks).
+        ("📋", accent_color())
     } else if let Some(ref conn) = app.connection_type() {
         let lower = conn.to_lowercase();
         if lower.contains("websocket") {
@@ -3327,5 +3334,102 @@ mod copy_selection_tests {
         assert_eq!(lines.len(), 1, "a full-width row must not wrap");
         let painted: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
         assert_eq!(painted, text, "no character may be clipped");
+    }
+}
+
+/// (RT-245) The composer's streaming hint promised "Ctrl/Cmd+Enter to send
+/// now" whenever plan mode was on. There is no send-now path: the key
+/// handler's alternate-Enter arm queues the draft into the steer queue while
+/// streaming (and merely submits while idle), and plan mode changes neither.
+/// The branch it read was the accessor that answers "is plan mode on", which
+/// is the read-only permission flag, not a queue mode — so the composer told
+/// the operator about a key action that does not exist.
+///
+/// These tests render the REAL composer and read the buffer back, so the hint
+/// is pinned where it is painted rather than where it is computed.
+#[cfg(test)]
+mod composer_hint_tests {
+    use super::*;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    /// An App for the render guard. `App::new` writes the process-global
+    /// palette, so it takes the shared lock the other render tests take.
+    fn make_app() -> crate::tui::app::App {
+        let _guard = crate::tui::theme_colors::tests::ACTIVE_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let config = operant_core::config::AppConfig::default();
+        let settings = crate::tui::adapter_types::config::Settings::default();
+        let cost_tracker = std::sync::Arc::new(crate::tui::adapter_types::cost::CostTracker::new());
+        let command_registry = crate::commands::CommandRegistry::new();
+        crate::tui::app::App::new(config, settings, cost_tracker, command_registry)
+    }
+
+    /// The composer's rendered screen: band fill, hint rows, the draft itself
+    /// and the send-mode glyph, painted the way the real frame does.
+    fn rendered_screen(app: &crate::tui::app::App) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("terminal");
+        let mut capture = None;
+        terminal
+            .draw(|frame| {
+                draw_input(frame, app, frame.area(), 0, &mut capture);
+            })
+            .expect("draw");
+        crate::tui::debug::debug_hub::buffer_rows(terminal.backend().buffer()).join("\n")
+    }
+
+    /// The ONE truth the hint states: Ctrl/Cmd+Enter queues the draft.
+    #[test]
+    fn the_streaming_hint_says_queue_and_not_send_now() {
+        let mut app = make_app();
+        app.is_streaming = true;
+        app.prompt_input
+            .replace_text("then check the tests".to_string());
+
+        let screen = rendered_screen(&app);
+        assert!(
+            screen.contains("Ctrl/Cmd+Enter to queue"),
+            "the streaming hint must say queue: {screen:?}"
+        );
+        assert!(
+            !screen.contains("send now"),
+            "there is no send-now path, so the hint must never offer one: {screen:?}"
+        );
+    }
+
+    /// The regression this fixes: plan mode was the trigger for the lie.
+    #[test]
+    fn plan_mode_does_not_turn_the_queue_hint_into_a_send_now_promise() {
+        let mut app = make_app();
+        app.is_streaming = true;
+        app.plan_mode = true;
+        app.prompt_input
+            .replace_text("then check the tests".to_string());
+
+        let screen = rendered_screen(&app);
+        assert!(
+            screen.contains("Ctrl/Cmd+Enter to queue"),
+            "plan mode queues exactly like the default mode: {screen:?}"
+        );
+        assert!(
+            !screen.contains("send now"),
+            "plan mode must not invent a send-now key: {screen:?}"
+        );
+    }
+
+    /// A "send now" hint on an IDLE composer would be just as wrong: idle
+    /// Ctrl+Enter submits, it does not send "now".
+    #[test]
+    fn an_idle_composer_offers_no_send_now_either() {
+        let mut app = make_app();
+        app.is_streaming = false;
+        app.prompt_input.replace_text("hello there".to_string());
+
+        let screen = rendered_screen(&app);
+        assert!(
+            !screen.contains("send now"),
+            "no app state may advertise a send-now key that does not exist: {screen:?}"
+        );
     }
 }

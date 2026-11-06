@@ -656,7 +656,7 @@ impl TuiState for App {
         None
     }
 
-    fn queue_mode(&self) -> bool {
+    fn plan_mode_active(&self) -> bool {
         self.plan_mode
     }
 
