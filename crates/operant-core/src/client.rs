@@ -86,22 +86,55 @@ pub fn is_local_endpoint(base_url: &str) -> bool {
     }
 }
 
+/// The `[proxy]` service key for an OpenAI-compatible endpoint.
+///
+/// The proxy vocabulary names providers (`provider.openai`,
+/// `provider.openrouter`, …); the compatible client serves all of them, so
+/// the key comes from the endpoint host and falls back to the generic
+/// `provider.compatible` (self-hosted gateways, LiteLLM, …).
+fn provider_proxy_service_key(base_url: &str) -> &'static str {
+    let host = reqwest::Url::parse(base_url)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_ascii_lowercase))
+        .unwrap_or_default();
+    if host == "api.openai.com" || host.ends_with(".openai.com") {
+        "provider.openai"
+    } else if host == "openrouter.ai" || host.ends_with(".openrouter.ai") {
+        "provider.openrouter"
+    } else {
+        "provider.compatible"
+    }
+}
+
+/// Build a provider HTTP client that never follows the AMBIENT proxy
+/// variables but does honour the operator's explicit `[proxy]` table.
+///
+/// ENV-2 (RT-131): a stale `HTTP_PROXY` inherited from another tool silently
+/// rerouted every model request to a dead port, so `.no_proxy()` comes FIRST
+/// and the environment can never redirect provider traffic. The other half of
+/// that contract was the operator's OWN `[proxy]` table — RT-131's residual
+/// named it ("plumb `[proxy]` into `ClientConfig`"): it is applied on top of
+/// the no-proxy builder, and `scope = "environment"` deliberately does NOT
+/// reach the provider, because that is the ambient path RT-131 closed.
+pub(crate) fn provider_http_builder(
+    builder: reqwest::ClientBuilder,
+    service_key: &str,
+) -> reqwest::ClientBuilder {
+    operant_config::schema::apply_runtime_proxy_to_builder(builder.no_proxy(), service_key)
+}
+
 /// HTTP client for streaming requests: connect timeout only, no total
 /// timeout (see `OpenAIClient::stream_http_client`).
 fn stream_http_client(config: &ClientConfig) -> Client {
-    Client::builder()
-        // ENV-2 (RT-131): reqwest honours HTTP(S)_PROXY/ALL_PROXY by default,
-        // so a stale variable from another tool silently sends every provider
-        // request to a dead port. The provider client never reads env proxies;
-        // a proxy must be configured explicitly in `[proxy]` (not yet plumbed
-        // to this builder — see the RT-131 residual).
-        .no_proxy()
-        .connect_timeout(config.timeout)
-        .build()
-        .unwrap_or_else(|e| {
-            tracing::warn!(error = %e, "Failed to build streaming HTTP client, falling back to default");
-            Client::new()
-        })
+    provider_http_builder(
+        Client::builder().connect_timeout(config.timeout),
+        provider_proxy_service_key(&config.base_url),
+    )
+    .build()
+    .unwrap_or_else(|e| {
+        tracing::warn!(error = %e, "Failed to build streaming HTTP client, falling back to default");
+        Client::new()
+    })
 }
 
 /// OpenAI-compatible client for chat completions
@@ -146,16 +179,15 @@ impl OpenAIClient {
         // (iter-139 — fixed ponytail-audit bug A23: was .expect() which
         // panics on reqwest builder failure (e.g. TLS backend missing).
         // Fall back to a default client if the configured builder fails.)
-        let http_client = Client::builder()
-            // ENV-2 (RT-131): see `stream_http_client` — provider traffic never
-            // follows env proxy variables.
-            .no_proxy()
-            .timeout(config.timeout)
-            .build()
-            .unwrap_or_else(|e| {
-                tracing::warn!(error = %e, "Failed to build HTTP client with config, falling back to default");
-                Client::new()
-            });
+        let http_client = provider_http_builder(
+            Client::builder().timeout(config.timeout),
+            provider_proxy_service_key(&config.base_url),
+        )
+        .build()
+        .unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "Failed to build HTTP client with config, falling back to default");
+            Client::new()
+        });
 
         let rate_limiter = RateLimiter::new(
             config.rate_limit.bucket_capacity,
@@ -3451,6 +3483,102 @@ Connection: close
             proxied.load(Ordering::SeqCst),
             0,
             "provider traffic must never reach the env proxy"
+        );
+    }
+
+    /// RT-131's residual, closed: the operator's EXPLICIT `[proxy]` table must
+    /// reach the provider client.
+    ///
+    /// The table was in the config schema the whole time and the CLI applied
+    /// it at startup (`config::apply_startup_proxy`), but NO client ever read
+    /// it — `apply_runtime_proxy_to_builder` had zero callers outside its own
+    /// module — so a deployment behind a proxy had no way through while the
+    /// template promised "Outbound HTTP proxy for provider and tool clients".
+    ///
+    /// The capture listener stands in for the CONFIGURED proxy and must serve
+    /// the provider request. The request targets TEST-NET-1, which cannot
+    /// answer, so a direct attempt is distinguishable from a proxied one, and
+    /// the config's own `no_proxy` list keeps every OTHER test's loopback
+    /// provider out of this proxy while the guard is up.
+    #[tokio::test]
+    async fn configured_proxy_is_used_by_the_provider_client() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use tokio::io::AsyncWriteExt;
+        use tokio::net::TcpListener;
+
+        let _lock = crate::platform::test_env_lock().await;
+
+        let capture = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind capture");
+        let capture_addr = capture.local_addr().expect("capture addr");
+        let proxied = Arc::new(AtomicUsize::new(0));
+        let proxied_task = proxied.clone();
+        tokio::spawn(async move {
+            loop {
+                let accepted =
+                    tokio::time::timeout(std::time::Duration::from_secs(5), capture.accept()).await;
+                match accepted {
+                    Ok(Ok((mut sock, _))) => {
+                        // RT-145's residual, closed: count ONLY the request
+                        // this client would have made. The provider request
+                        // carries the client's own bearer token; a foreign
+                        // CONNECT does not, so the marker makes the
+                        // assertion attributable.
+                        let mut head = [0u8; 1024];
+                        let seen = sock.peek(&mut head).await.unwrap_or(0);
+                        let is_provider_request =
+                            String::from_utf8_lossy(&head[..seen]).contains("test-key");
+                        if is_provider_request {
+                            proxied_task.fetch_add(1, Ordering::SeqCst);
+                        }
+                        let body = r#"{"data":[{"index":0,"embedding":[0.5]}]}"#;
+                        let reply = format!(
+                            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                            body.len(),
+                            body
+                        );
+                        let _ = sock.write_all(reply.as_bytes()).await;
+                    }
+                    _ => break,
+                }
+            }
+        });
+
+        operant_config::schema::set_runtime_proxy_config(operant_config::schema::ProxyConfig {
+            enabled: true,
+            all_proxy: Some(format!("http://{capture_addr}")),
+            // The bypass list is the config's own: another test's loopback
+            // provider is not proxied while this guard is up.
+            no_proxy: vec!["127.0.0.1".into(), "localhost".into()],
+            ..Default::default()
+        });
+
+        let config = ClientConfig {
+            // TEST-NET-1 is unroutable: only the proxy can deliver the
+            // request, so a direct attempt cannot answer it.
+            base_url: "http://192.0.2.1:9/v1".into(),
+            api_key: Some("test-key".into()),
+            timeout: std::time::Duration::from_secs(5),
+            ..ClientConfig::default()
+        };
+        let client = OpenAIClient::new(config);
+        let result = client.embeddings("m", &["a".to_string()]).await;
+
+        // Leave no trace for the next test (still under the lock).
+        operant_config::schema::set_runtime_proxy_config(
+            operant_config::schema::ProxyConfig::default(),
+        );
+
+        assert_eq!(
+            proxied.load(Ordering::SeqCst),
+            1,
+            "the configured proxy must carry the provider request"
+        );
+        assert!(
+            result.is_ok(),
+            "the proxied request must be answered, got: {result:?}"
         );
     }
 }

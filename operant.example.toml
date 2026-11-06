@@ -902,14 +902,20 @@ max_concurrent_runs = 2
 # systemd timer — the clock belongs to the resident runtime
 clock = false
 
-# Outbound HTTP proxy for provider and tool clients. Applied at startup.
+# Outbound HTTP proxy for the PROVIDER clients (the model transport). Applied
+# at startup. Provider traffic never follows the ambient HTTP(S)_PROXY/ALL_PROXY
+# variables (a stale one inherited from another tool rerouted every model
+# request), so a proxy for the model client is written HERE. The tool clients
+# follow the process's own proxy environment variables instead.
 # [proxy]
 # enabled = false
-# scope = "zeroclaw"          # "environment" (also exports to child processes) | "zeroclaw" | "services"
+# scope = "zeroclaw"          # "environment" (also exports to child processes; the tools that follow
+#                            # the environment use it, the provider clients do NOT) | "zeroclaw" (every
+#                            # Operant-managed provider client — the default) | "services"
 # http_proxy = "http://127.0.0.1:7890"
 # https_proxy = "http://127.0.0.1:7890"
 # all_proxy = "socks5://127.0.0.1:1080"
 # no_proxy = ["localhost", "127.0.0.1"]
-# services = []
+# services = []               # e.g. ["provider.*"] when scope = "services"
 
 # [keybindings] is accepted and ignored until the TUI dispatch reads it (AD-024).

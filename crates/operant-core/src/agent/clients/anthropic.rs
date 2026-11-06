@@ -35,10 +35,12 @@ impl AnthropicModelClient {
         // timeout — streaming responses (chat_streaming) can legitimately
         // run for many minutes on long generations, and a total timeout
         // would cut them off mid-stream.
-        let http = Client::builder()
-            .connect_timeout(std::time::Duration::from_secs(30))
-            .build()
-            .unwrap_or_else(|_| Client::new());
+        let http = crate::client::provider_http_builder(
+            Client::builder().connect_timeout(std::time::Duration::from_secs(30)),
+            "provider.anthropic",
+        )
+        .build()
+        .unwrap_or_else(|_| Client::new());
         Self {
             api_key: Arc::new(RwLock::new(api_key)),
             base_url: "https://api.anthropic.com".to_string(),
