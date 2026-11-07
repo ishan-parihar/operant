@@ -20,7 +20,7 @@ use crate::config::BudgetSettings;
 use crate::error::{Error, Result};
 use chrono::Datelike;
 use rusqlite::{Connection, OptionalExtension, params};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 /// The override row. `None` fields inherit `[bylaws].budget`.
@@ -129,6 +129,120 @@ impl SeatBudgetDb {
         let conn = Connection::open(path)
             .map_err(|e| Error::Agent(format!("Failed to open seat budget DB: {e}")))?;
         Self::from_connection(conn)
+    }
+
+    /// Open the seat-budget store where the ORG-FAMILY rows live.
+    ///
+    /// The org family's tables live in the SIBLING of the app database
+    /// (`<dir>/operant_kanban.db`) — the seat policies, the context
+    /// injection tables and the seat budgets all live there, and both
+    /// enforcement paths (the gateway's turn gate and the cron scheduler's
+    /// budget gate) read them from there. The app database
+    /// (`<dir>/database.db`) is a DIFFERENT file: a store opened there is a
+    /// store the enforcement never sees, so an override written into it is
+    /// a silent no-op (RT-288).
+    ///
+    /// One-time migration: rows an earlier build wrote into the app
+    /// database's `seat_budgets` table are copied across once (recorded in
+    /// the sibling), so an operator's existing override is not orphaned by
+    /// the fix.
+    pub fn init_org_sibling(app_db_path: &Path) -> Result<Self> {
+        // The org-sibling rule inlined (the same rule
+        // `org::context_injection::ContextInjectionDb::open` follows).
+        let org_sibling = app_db_path
+            .parent()
+            .map(|p| p.join("operant_kanban.db"))
+            .unwrap_or_else(|| PathBuf::from("operant_kanban.db"));
+        let db = Self::init(&org_sibling)?;
+        db.migrate_from_app_db(app_db_path);
+        Ok(db)
+    }
+
+    /// Copy the app database's `seat_budgets` rows into the sibling, once.
+    ///
+    /// Best-effort: a failure here is reported (warn) and never blocks the
+    /// store — the enforcement must still run, and the operator's own
+    /// `budget list` will show what is and is not there.
+    fn migrate_from_app_db(&self, app_db_path: &Path) {
+        const MIGRATION_KEY: &str = "seat_budgets_from_app_db";
+        let conn = match self.lock() {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!(error = %e, "seat budget migration skipped — the store lock is poisoned");
+                return;
+            }
+        };
+        if let Err(e) = conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS seat_budget_migrations (
+                key TEXT PRIMARY KEY,
+                applied_at TEXT NOT NULL
+            );",
+        ) {
+            tracing::warn!(error = %e, "seat budget migration skipped — could not create the marker table");
+            return;
+        }
+        let already = conn
+            .query_row(
+                "SELECT COUNT(*) FROM seat_budget_migrations WHERE key = ?1",
+                params![MIGRATION_KEY],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap_or(0);
+        if already > 0 {
+            return;
+        }
+        // The app database's table, if an earlier build ever created it.
+        let app_conn = match Connection::open_with_flags(
+            app_db_path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        ) {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+        let legacy: Vec<SeatBudget> = match app_conn
+            .prepare(
+                "SELECT employee_id, basis, window, cap, mode
+                 FROM seat_budgets ORDER BY employee_id",
+            )
+            .and_then(|mut stmt| {
+                stmt.query_map([], |row| {
+                    Ok(SeatBudget {
+                        employee_id: row.get(0)?,
+                        basis: row.get(1)?,
+                        window: row.get(2)?,
+                        cap: row.get(3)?,
+                        mode: row.get(4)?,
+                    })
+                })?
+                .collect::<std::result::Result<Vec<_>, _>>()
+            }) {
+            Ok(rows) => rows,
+            Err(_) => {
+                // No legacy table — nothing to migrate.
+                let _ = conn.execute(
+                    "INSERT OR REPLACE INTO seat_budget_migrations (key, applied_at) VALUES (?1, ?2)",
+                    params![MIGRATION_KEY, chrono::Utc::now().to_rfc3339()],
+                );
+                return;
+            }
+        };
+        for row in &legacy {
+            if let Err(e) = conn.execute(
+                "INSERT OR REPLACE INTO seat_budgets (employee_id, basis, window, cap, mode)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![row.employee_id, row.basis, row.window, row.cap, row.mode],
+            ) {
+                tracing::warn!(error = %e, seat = %row.employee_id, "seat budget migration could not copy a row");
+            }
+        }
+        let _ = conn.execute(
+            "INSERT OR REPLACE INTO seat_budget_migrations (key, applied_at) VALUES (?1, ?2)",
+            params![MIGRATION_KEY, chrono::Utc::now().to_rfc3339()],
+        );
+        tracing::info!(
+            rows = legacy.len(),
+            "migrated seat budget overrides from the app database to the org sibling"
+        );
     }
 
     pub fn from_connection(conn: Connection) -> Result<Self> {
@@ -247,6 +361,74 @@ mod tests {
 
     fn conn() -> Connection {
         Connection::open_in_memory().unwrap()
+    }
+
+    /// RT-288: the seat-budget store the ENFORCEMENT reads must be the same
+    /// store the operator's command writes.
+    ///
+    /// `operant budget set` wrote into the app database
+    /// (`<dir>/database.db`) while both enforcement paths read the org
+    /// SIBLING (`<dir>/operant_kanban.db`) — so every per-seat override the
+    /// operator set was a silent no-op, while the command printed "Budget
+    /// override set for '<seat>'".
+    #[test]
+    fn the_org_sibling_store_sees_the_rows_the_app_db_store_wrote() {
+        let dir = std::env::temp_dir().join(format!(
+            "operant_seat_budget_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let app_db = dir.join("database.db");
+
+        // What an earlier build's command wrote: the app database.
+        let legacy = SeatBudgetDb::init(&app_db).expect("legacy store");
+        legacy
+            .upsert(&SeatBudget {
+                employee_id: "dispatcher".to_string(),
+                basis: None,
+                window: None,
+                cap: 50_000.0,
+                mode: None,
+            })
+            .expect("legacy upsert");
+
+        // What the enforcement mounts: the org sibling.
+        let enforcement = SeatBudgetDb::init_org_sibling(&app_db).expect("the sibling store");
+        assert!(
+            dir.join("operant_kanban.db").exists(),
+            "the enforcement store lives in the org sibling"
+        );
+        let row = enforcement
+            .get("dispatcher")
+            .expect("read the override")
+            .expect("the override must have crossed over");
+        assert_eq!(
+            row.cap, 50_000.0,
+            "the override must be the one enforcement sees"
+        );
+
+        // And the migration runs ONCE: a row written to the app database
+        // after the migration must NOT come back (a cleared override must
+        // stay cleared).
+        legacy
+            .upsert(&SeatBudget {
+                employee_id: "latecomer".to_string(),
+                basis: None,
+                window: None,
+                cap: 1.0,
+                mode: None,
+            })
+            .expect("late upsert");
+        let again = SeatBudgetDb::init_org_sibling(&app_db).expect("the sibling store again");
+        assert!(
+            again.get("latecomer").expect("read").is_none(),
+            "the migration must not run twice"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

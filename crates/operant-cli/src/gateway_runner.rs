@@ -3866,9 +3866,9 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
     store_seat_policy_db(Arc::clone(&seat_policy_store));
     let seat_policies: Arc<dyn operant_core::org::seat_policy::SeatPolicySource> =
         seat_policy_store;
-    let seat_budget_store = Arc::new(operant_core::org::seat_budgets::SeatBudgetDb::init(
-        &org_db,
-    )?);
+    let seat_budget_store = Arc::new(
+        operant_core::org::seat_budgets::SeatBudgetDb::init_org_sibling(&app_config.database_path)?,
+    );
     store_seat_budget_db(Arc::clone(&seat_budget_store));
     let seat_authority = Arc::new(operant_core::org::seat_authority::SeatAuthority::new(
         Arc::clone(&seat_policies),

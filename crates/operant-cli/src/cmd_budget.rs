@@ -63,7 +63,13 @@ pub async fn handle_budget_command(config: &AppConfig, cmd: BudgetSubcommand) ->
 }
 
 fn budget_db(config: &AppConfig) -> Result<SeatBudgetDb> {
-    SeatBudgetDb::init(&config.database_path).context("Failed to open seat budget database")
+    // The ORG SIBLING of the app database — the same file the gateway's
+    // turn gate and the cron scheduler's budget gate read. Opening the app
+    // database instead wrote the override into a table the enforcement
+    // never sees, so the command printed "Budget override set" and nothing
+    // was enforced (RT-288).
+    SeatBudgetDb::init_org_sibling(&config.database_path)
+        .context("Failed to open seat budget database")
 }
 
 fn cmd_budget_set(
@@ -139,4 +145,59 @@ fn cmd_budget_clear(config: &AppConfig, seat: &str) -> Result<()> {
         println!("No budget override existed for '{seat}'.");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// RT-288: the command the operator runs must write into the store the
+    /// ENFORCEMENT reads.
+    ///
+    /// `operant budget set` wrote into the app database while both
+    /// enforcement paths read the org sibling — so the command printed
+    /// "Budget override set for '<seat>'" and nothing was enforced.
+    #[test]
+    fn the_budget_command_writes_to_the_store_the_enforcement_reads() {
+        let dir = std::env::temp_dir().join(format!(
+            "operant_budget_cmd_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let mut config = AppConfig::default();
+        config.database_path = dir.join("database.db");
+
+        let db = budget_db(&config).expect("the command's store");
+        // The command must not touch the APP database at all: the store it
+        // opens is the org sibling, and the app database is not even
+        // created (the migration reads it read-only, and only when it
+        // exists).
+        assert!(
+            !config.database_path.exists(),
+            "the budget command must not create the app database"
+        );
+        db.upsert(&SeatBudget {
+            employee_id: "dispatcher".to_string(),
+            basis: None,
+            window: None,
+            cap: 50_000.0,
+            mode: None,
+        })
+        .expect("upsert");
+
+        // What the gateway's turn gate and the cron scheduler's budget gate
+        // mount.
+        let enforcement =
+            SeatBudgetDb::init_org_sibling(&config.database_path).expect("the enforcement store");
+        let row = enforcement
+            .get("dispatcher")
+            .expect("read the override")
+            .expect("the override the operator set must be visible to enforcement");
+        assert_eq!(row.cap, 50_000.0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
