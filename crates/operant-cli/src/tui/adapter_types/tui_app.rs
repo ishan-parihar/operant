@@ -639,6 +639,11 @@ impl TuiApp {
         // lost). A queued batch would otherwise hijack the operator's turn
         // ordering at the next idle boundary.
         self.app.pending_advisor_continuation = None;
+        // The STANDING session goal (`/goal`) rides every turn: sync the
+        // App's copy onto the agent before it runs, so the request carries
+        // the goal as `<turn_context>` instead of losing it to the
+        // conversation's depth. `None` clears the agent's copy too.
+        agent.set_standing_goal(self.app.session_goal.clone());
         // User activity cancels any pending idle recap (omp parity: the
         // recap exists to greet a returning user, never to interrupt one).
         if let Some(activity) = &self.app.recap_activity {
@@ -1341,6 +1346,10 @@ impl TuiApp {
                 // reference work that no longer exists.
                 app.pending_advisor_continuation = None;
                 agent.clear_history().await;
+                // A cleared conversation starts with no standing goal either:
+                // the agent's copy must not outlive the transcript it belonged
+                // to.
+                agent.set_standing_goal(None);
                 let conv = agent.conversation().await;
                 Self::rebuild_display_from_agent(app, conv);
                 app.clear_tool_blocks();
@@ -1379,6 +1388,9 @@ impl TuiApp {
                 let old = agent.session_id().unwrap_or_default();
                 let fresh = operant_core::agent::rewind::new_session_id();
                 agent.set_session_id(fresh.clone());
+                // The new session starts with no standing goal (the App's copy
+                // is cleared below); the agent's copy goes with it.
+                agent.set_standing_goal(None);
                 agent.notify_session_switch(&fresh, &old, false);
                 // RT-206: retain the real session id, so Ctrl+B can anchor
                 // `CurrentBranch` on a fact rather than on a `Live`-row guess.

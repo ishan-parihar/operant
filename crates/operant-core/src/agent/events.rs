@@ -851,6 +851,30 @@ impl OperantAgent {
         }
     }
 
+    /// The STANDING session goal, if one is set.
+    ///
+    /// The TUI's `/goal` sets it; [`Self::build_messages`] carries it in the
+    /// `<turn_context>` tail of every turn. `None` = no goal, and the tail is
+    /// byte-identical to the no-goal request (prompt-cache stability).
+    pub fn standing_goal(&self) -> Option<String> {
+        self.standing_goal
+            .read()
+            .ok()
+            .and_then(|guard| guard.clone())
+    }
+
+    /// Set (or clear) the standing session goal.
+    ///
+    /// Takes `&self` so a host can call it through `Arc<OperantAgent>`
+    /// between turns. `None` clears the goal — the next turn's tail is then
+    /// byte-identical to a session that never had one.
+    pub fn set_standing_goal(&self, goal: Option<String>) {
+        let goal = goal.map(|g| g.trim().to_string()).filter(|g| !g.is_empty());
+        if let Ok(mut guard) = self.standing_goal.write() {
+            *guard = goal;
+        }
+    }
+
     #[expect(
         clippy::expect_used,
         reason = "lock poisoning means a writer panicked mid-update; treated as a bug, not recovered"

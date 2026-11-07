@@ -623,6 +623,15 @@ pub struct OperantAgent {
     /// `seat_id` by the gateway turn so prompt-cache stability holds: the
     /// pair only changes when the conversation switches employee.
     charter: Arc<std::sync::RwLock<Option<String>>>,
+    /// The STANDING session goal (the TUI's `/goal`): the operator's
+    /// objective for this session, carried in the `<turn_context>` tail of
+    /// EVERY turn until it is cleared. It is separate from the conversation:
+    /// a goal the operator set ten turns ago must still be in front of the
+    /// model, and a one-shot user message cannot do that.
+    ///
+    /// Interior-mutable so a host can set it through `Arc<OperantAgent>`
+    /// between turns, exactly like [`Self::set_charter`].
+    standing_goal: Arc<std::sync::RwLock<Option<String>>>,
     /// Shared interrupt flag for graceful Ctrl-C cancellation.
     /// When triggered, the agent loop exits at the next iteration boundary
     /// and tool execution is aborted via `flag.check()`.
@@ -1884,6 +1893,73 @@ mod tests {
         assert!(
             !msgs.iter().any(|m| m.content.contains("Mixture of Agents")),
             "guidance drained after one turn"
+        );
+    }
+
+    /// `/goal` is a STANDING goal: the agent's turn context carries it on
+    /// EVERY turn until it is cleared. It used to reach the model as ONE
+    /// user message, which the conversation then buried — so a goal set ten
+    /// turns ago had already fallen out of the request ("setting goal does
+    /// not work correctly").
+    ///
+    /// MUTATION-PROVEN: dropping the injection block fails turn two's
+    /// assertion by name; moving it into the frozen prefix fails the
+    /// "tail, not system" assertion.
+    #[tokio::test]
+    async fn the_standing_goal_rides_every_turn_until_cleared() {
+        use crate::agent::clients::openai::OpenAIModelClient;
+        use crate::client::OpenAIClient;
+
+        let db = Database::init(std::env::temp_dir().join("test_standing_goal.sqlite")).unwrap();
+        let agent = OperantAgent::new(
+            AgentConfig::default(),
+            Box::new(OpenAIModelClient::new(OpenAIClient::new(
+                crate::client::ClientConfig::default(),
+            ))),
+            ToolRegistry::new(Duration::from_secs(1)),
+            Arc::new(db),
+        );
+        agent.user_message("first turn").await;
+
+        // No goal → nothing in the request (the feature is invisible when unused).
+        let msgs = agent.build_messages("goal-test").await.unwrap();
+        assert!(
+            !msgs.iter().any(|m| m.content.contains("<session_goal>")),
+            "no goal block when no goal is set"
+        );
+
+        agent.set_standing_goal(Some("ship the release".to_string()));
+        let msgs = agent.build_messages("goal-test").await.unwrap();
+        let carriers: Vec<_> = msgs
+            .iter()
+            .filter(|m| m.content.contains("ship the release"))
+            .collect();
+        assert_eq!(carriers.len(), 1, "the goal rides turn one");
+        assert!(
+            carriers[0].content.contains("<session_goal>"),
+            "the goal is framed so it reads as context, not instruction: {:?}",
+            carriers[0].content
+        );
+        assert_eq!(
+            carriers[0].role,
+            Role::User,
+            "the goal rides the turn_context TAIL, never a new system message"
+        );
+
+        // A LATER turn still carries it — the whole point of a standing goal.
+        agent.user_message("second turn").await;
+        let msgs = agent.build_messages("goal-test").await.unwrap();
+        assert!(
+            msgs.iter().any(|m| m.content.contains("ship the release")),
+            "the goal must survive into turn two: it cannot be one user message"
+        );
+
+        // Cleared → the goal leaves the request entirely.
+        agent.set_standing_goal(None);
+        let msgs = agent.build_messages("goal-test").await.unwrap();
+        assert!(
+            !msgs.iter().any(|m| m.content.contains("ship the release")),
+            "a cleared goal must leave the request"
         );
     }
 

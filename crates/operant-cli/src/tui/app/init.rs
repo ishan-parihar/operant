@@ -195,6 +195,7 @@ impl App {
             core_rewind_marks: None,
             mcp_reconnect_rx: None,
             steer_queue_handle: None,
+            queued_messages: Vec::new(),
             pending_mcp_reconnect: false,
             pending_mcp_panel_auth: None,
             // (iter-209: file_history + current_turn init deleted)

@@ -390,6 +390,25 @@ impl App {
         self.failed_input_recovery = None;
     }
 
+    /// Record a prompt-shaped message in BOTH history stores: the in-session
+    /// Up/Down ladder and the on-disk `~/.operant/history.jsonl` that Ctrl+R
+    /// searches.
+    ///
+    /// The queue path (Ctrl+Enter mid-stream, `/steer`, `/queue`) and `/goal`
+    /// used to bypass this entirely, so a message the operator had actually
+    /// SENT was unreachable from the recall ladder — the one place a sent
+    /// prompt is supposed to live. The operator's report: "sending queue and
+    /// goal messages are not showing up in the prompt-history".
+    pub(crate) fn remember_prompt_history(&mut self, text: &str) {
+        if text.trim().is_empty() {
+            return;
+        }
+        self.prompt_input.history.push(text.to_string());
+        self.prompt_input.history_pos = None;
+        self.prompt_input.history_draft.clear();
+        crate::tui::input_history::append(text);
+    }
+
     /// Take the current input buffer, push it to history, and return it.
     pub fn take_input(&mut self) -> String {
         let input = self.prompt_input.take();
@@ -408,12 +427,7 @@ impl App {
             // directive here is stricter and wins: commands never enter.
             let is_command = crate::tui::input::is_slash_command(input.trim());
             if !is_command {
-                self.prompt_input.history.push(input.clone());
-                self.prompt_input.history_pos = None;
-                self.prompt_input.history_draft.clear();
-                // Persist the new entry to ~/.operant/history.jsonl so it
-                // survives restarts. (iter-125 — persistent input history.)
-                crate::tui::input_history::append(&input);
+                self.remember_prompt_history(&input);
             }
             // (plan 2026-10-24 M5) The word predictor learns from every
             // submitted prompt — same data, one submission, one lesson.

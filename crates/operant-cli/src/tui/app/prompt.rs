@@ -403,6 +403,9 @@ impl App {
             Err(msg) => self.set_status_notice(msg.to_string()),
             Ok(None) => self.set_status_notice("Queue is empty".to_string()),
             Ok(Some(text)) => {
+                // The recalled message leaves the queue, so the mirror the
+                // queued band renders must lose it too.
+                self.refresh_steer_queue_mirror();
                 self.prompt_input.replace_text(text);
                 self.refresh_prompt_input();
                 self.set_status_notice("Recalled a queued message for editing.".to_string());

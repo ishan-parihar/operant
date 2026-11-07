@@ -187,6 +187,22 @@ impl App {
         })
     }
 
+    /// Mirror the live steer queue onto the App so the composer's
+    /// queued-message band renders the REAL queue instead of a stub.
+    ///
+    /// A `try_lock` failure KEEPS the previous mirror: the agent holds the
+    /// lock while it drains the queue, and answering "the queue is empty"
+    /// then would make a real queue flicker out of existence mid-drain.
+    pub(crate) fn refresh_steer_queue_mirror(&mut self) {
+        let Some(handle) = self.steer_queue_handle.as_ref() else {
+            self.queued_messages.clear();
+            return;
+        };
+        if let Ok(queue) = handle.try_lock() {
+            self.queued_messages = queue.clone();
+        }
+    }
+
     /// Push `text` into the live steer queue and return a status string
     /// describing the outcome. The same queue serves both states: while
     /// streaming the agent drains it at the next iteration boundary, while
@@ -200,7 +216,7 @@ impl App {
     pub(super) fn queue_steer(&mut self, text: &str) -> String {
         const NO_QUEUE: &str = "Steer is unavailable (no live agent).";
         const QUEUE_BUSY: &str = "Queue is busy (agent is draining it).";
-        match self.steer_queue_handle.as_ref() {
+        let notice = match self.steer_queue_handle.as_ref() {
             Some(handle) => match handle.try_lock() {
                 Ok(mut q) => {
                     q.push(text.to_string());
@@ -213,7 +229,16 @@ impl App {
                 Err(_) => QUEUE_BUSY.to_string(),
             },
             None => NO_QUEUE.to_string(),
+        };
+        // The queued band and the recall ladder are the operator's only proof
+        // that the message is pending at all: without the mirror the queue
+        // looked dead, and without the history entry the message was
+        // unreachable once it left the composer.
+        if notice.starts_with("Steer queued") {
+            self.refresh_steer_queue_mirror();
+            self.remember_prompt_history(text);
         }
+        notice
     }
 
     /// Render `/keys`: the full active catalogue grouped by context, with the
@@ -843,36 +868,45 @@ impl App {
                 true
             }
 
-            // /goal <text> — set a standing session goal. Shown in the status
-            // bar and injected as a system annotation so the agent sees it.
-            // /goal with no args shows the current goal.
-            // (iter-270: wired to real state.)
+            // /goal <text> — set a STANDING session goal: the agent carries it
+            // in the `<turn_context>` tail of EVERY turn until it is cleared.
+            // /goal with no args shows the current goal; /goal off (or clear)
+            // drops it.
+            // The earlier wiring set the field and submitted the goal ONCE as
+            // a user message; nothing re-injected it, so a goal an operator
+            // set three turns ago had already fallen out of the conversation —
+            // "setting goal does not work correctly". The one-shot submission
+            // stays (it puts the goal in the conversation NOW); the STANDING
+            // half is the agent's own turn-context block.
             "goal" | "subgoal" => {
                 let trimmed = args.trim();
                 if trimmed.is_empty() {
-                    // Show current goal.
-                    let cur = self
-                        .session_goal
-                        .clone()
-                        .unwrap_or_else(|| "(none)".to_string());
-                    self.set_status_notice(format!(
-                        "Session goal: {}. Use /goal <text> to change.",
-                        cur
-                    ));
+                    let notice = match self.session_goal.as_deref() {
+                        Some(goal) => format!("Session goal: {goal}"),
+                        None => "No session goal set. Use /goal <text> to set one.".to_string(),
+                    };
+                    self.set_status_notice(notice);
+                } else if matches!(trimmed, "off" | "clear" | "none" | "reset") {
+                    self.session_goal = None;
+                    self.push_system_message(
+                        "🎯 Goal cleared.".to_string(),
+                        crate::tui::app::SystemMessageStyle::Info,
+                    );
+                    self.set_status_notice("Session goal cleared.".to_string());
                 } else {
                     self.session_goal = Some(trimmed.to_string());
-                    // (plan 03 §6) The annotation below is DISPLAY-only —
-                    // the agent sees the goal because it is SUBMITTED as a
-                    // real message on the next turn, through the same
-                    // one-keystroke drain /skill uses. The old comment
-                    // claimed injection that never reached the agent.
+                    // The one-shot submission stays: it puts the goal in the
+                    // conversation NOW so the running turn sees it immediately.
+                    // The STANDING half is the agent's own turn-context block.
                     self.pending_user_message = Some(format!("[session goal] {}", trimmed));
-                    // Inject as a system annotation so it appears in transcript.
+                    // ...and it is a prompt the operator authored, so it is
+                    // reachable from the recall ladder like any other.
+                    self.remember_prompt_history(trimmed);
                     self.push_system_message(
                         format!("🎯 Goal set: {}", trimmed),
                         crate::tui::app::SystemMessageStyle::Info,
                     );
-                    self.set_status_notice(format!("Goal set and sent to the agent: {trimmed}"));
+                    self.set_status_notice(format!("🎯 Goal active: {trimmed}"));
                 }
                 true
             }

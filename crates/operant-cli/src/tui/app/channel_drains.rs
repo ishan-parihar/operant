@@ -358,6 +358,11 @@ impl App {
 
     /// 7. Drain query events from the agent bridge task.
     pub(super) fn drain_agent_events(&mut self) -> bool {
+        // The mirror is refreshed on every drain because this is the only
+        // place the TUI learns what the agent did to the steer queue: it
+        // drains the real queue at its iteration boundaries, which is when
+        // the queued band must drop back to zero.
+        self.refresh_steer_queue_mirror();
         let mut events = Vec::new();
         if let Some(rx) = &mut self.agent_event_rx {
             // (plan 01) one-event-per-frame mode: the scripted events drive

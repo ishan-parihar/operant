@@ -3178,6 +3178,26 @@ impl OperantAgent {
             volatile_suffix.push_str("\n</workspace_context>");
         }
 
+        // ── The STANDING session goal (the host's `/goal`) ───────────────
+        // The operator's objective for this session, carried in EVERY
+        // turn's context until it is cleared. It used to reach the model as
+        // ONE user message, which the conversation then buried — a goal set
+        // ten turns ago had fallen out of the request, so "the goal" was
+        // only true for the turn it was set in.
+        //
+        // It rides the VOLATILE tail, not the frozen prefix: setting or
+        // clearing a goal must not bust the provider's prompt cache for the
+        // whole conversation, and a session with no goal produces a
+        // byte-identical request to one that never had the feature.
+        if let Some(goal) = self.standing_goal() {
+            let goal = goal.trim();
+            if !goal.is_empty() {
+                volatile_suffix.push_str("\n\n<session_goal>\n");
+                volatile_suffix.push_str(goal);
+                volatile_suffix.push_str("\n</session_goal>");
+            }
+        }
+
         // ── MoA guidance injection (G5, hermes moa_loop.py parity) ─────
         // Per-turn Mixture-of-Agents guidance computed before run(); part of
         // the turn context so the acting loop sees it for every iteration of

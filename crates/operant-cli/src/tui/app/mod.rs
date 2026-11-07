@@ -34,6 +34,8 @@ pub(crate) mod session_display;
 #[cfg(test)]
 pub(crate) mod session_display_tests;
 #[cfg(test)]
+pub(crate) mod steer_queue_tests;
+#[cfg(test)]
 pub(crate) mod tests;
 pub use enums::*;
 use helpers::*;
@@ -559,6 +561,13 @@ pub struct App {
     /// so the agent sees it as a steer directive at the next iteration boundary.
     /// (iter-93 — closes the /steer parity gap.)
     pub steer_queue_handle: Option<Arc<tokio::sync::Mutex<Vec<String>>>>,
+    /// Mirror of the live steer queue's contents (the tokio Mutex vec the
+    /// drain owns), refreshed at every push, every recall and every agent-event
+    /// drain so the composer's queued-message band renders the REAL queue.
+    /// It existed as `&[]` behind a `[port-decision]` stub, so a queued message
+    /// (Ctrl+Enter mid-stream, /steer, /queue) was invisible to the operator —
+    /// the queue looked dead even though the agent drained it.
+    pub queued_messages: Vec<String>,
     /// Queued request for a real MCP reconnect from the interactive loop.
     pub pending_mcp_reconnect: bool,
     /// Pending MCP panel-auth request for the interactive loop.

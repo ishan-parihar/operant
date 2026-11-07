@@ -237,11 +237,11 @@ impl TuiState for App {
     }
 
     fn queued_messages(&self) -> &[String] {
-        // [port-decision] queued_messages: operant's steer queue lives behind a
-        // tokio `Arc<Mutex<Vec<String>>>` handle (`steer_queue_handle`) that
-        // the drain owns; returns empty — wire when a snapshot of the drained
-        // queue is mirrored onto App.
-        &[]
+        // The mirror of the live steer queue (see `App::queued_messages`).
+        // This used to return `&[]` behind a `[port-decision]` stub, so the
+        // queued band never rendered anything and the operator's queued
+        // messages were invisible until they were drained.
+        &self.queued_messages
     }
 
     fn interleave_message(&self) -> Option<&str> {
