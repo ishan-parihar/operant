@@ -2,7 +2,7 @@
 
 > **SUPERSEDED — READ `03-reconciliation-vs-upstream.md` FIRST.**
 > This document is the record of what the sweep believed on 2026-11-05, *before*
-> the reconciliation against `origin/main` @ `43a38696` (iter-1818). Upstream has
+> the reconciliation against `origin/main` @ `758dd4c5` (iter-1818). Upstream has
 > since closed the central claim in this file: **the auto-poke WAS ported**
 > (iter-1783, `operant-core/src/agent/auto_poke.rs`) and the wrap-up is now kept
 > and continued (iter-1769). The claims below are kept because a gap register

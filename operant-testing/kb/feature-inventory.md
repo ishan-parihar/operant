@@ -1,6 +1,6 @@
 # Feature Inventory — Operant Agentic-Core
 
-**Reconciled to `origin/main` @ `43a38696` (iter-1818).** Supersedes the round-1 sweep
+**Reconciled to `origin/main` @ `758dd4c5` (iter-1818).** Supersedes the round-1 sweep
 (see `red-team/02-round1-summary.md` for the raw counts and `red-team/01-round1-reports/`).
 
 ## Local primitives — all verified working
@@ -23,6 +23,13 @@
 | Files | `aft_read/write/edit/glob/grep/bash/outline` | round 1; see G-004/G-011 for the degraded paths |
 | Browser / web | `browser`, `http_request`, `web_extract`, `web_scrape`, `web_crawl` | round 1 + round 2 |
 | Notifications / messaging | `notify`, `send_message`, `react_to_message` | round 1 |
+
+## TUI capabilities now working (operator-verified)
+
+Standing session goal (`/goal` survives every turn until cleared) · the advisor card
+renders one block per note · ctrl+enter queues while a turn streams and the band shows
+the live queue · queued and goal messages reach the prompt history (Up/Down, Ctrl+R) ·
+the input area carries nothing but the operator's own text.
 
 ## Degraded / broken — the gap register owns these
 

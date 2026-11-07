@@ -15,7 +15,7 @@ mid-summary". Reproduction was 3× per failing tool, with the source traced to a
   as the response, then hard-failed when `rpc_response.id != request_id`. There was no
   drain, no resync and no reconnect on that path — one foreign line wedged the client for
   the rest of the process's life. `crates/operant-core/src/mcp.rs:1396` (stdio) and
-  `:659` (HTTP) at `43a38696`.
+  `:659` (HTTP) at `758dd4c5`.
 - **[verified]** The *server* is not at fault. A live probe of sourcehound 1.8.0 over stdio
   echoed the request id correctly: initialize 1→1, tools/list 7→7, tools/call 9→9.
 - **[verified]** Nine consecutive failures were observed, each reporting

@@ -1,7 +1,7 @@
 # Architectural Blind Spots — Operant Agentic-Core (anchored)
 
-**Reconciled to `origin/main` @ `43a38696` (iter-1818).** `Anchor` = `file:line` at that commit;
-verify with `git show 43a38696:<path> | sed -n '<line>p'` before editing.
+**Reconciled to `origin/main` @ `758dd4c5` (iter-1818).** `Anchor` = `file:line` at that commit;
+verify with `git show 758dd4c5:<path> | sed -n '<line>p'` before editing.
 
 1. **The MCP stdio client had no resync path.** One foreign stdout line wedged the client for
    the process's lifetime. `operant-core/src/mcp.rs:695` (the check), `:1355` (the drain, iter-1822).

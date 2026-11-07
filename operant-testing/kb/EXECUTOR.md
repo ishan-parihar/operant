@@ -13,8 +13,8 @@ knowledge base. It is here so you do not re-derive the same conclusions.
 
 ## Ground rules
 
-- **The tree moves.** Every anchor here is pinned to `43a38696` (iter-1818). Before you edit,
-  `git show 43a38696:<path> | sed -n '<line>p'` and confirm. Re-anchor after you sync.
+- **The tree moves.** Every anchor here is pinned to `758dd4c5` (iter-1818). Before you edit,
+  `git show 758dd4c5:<path> | sed -n '<line>p'` and confirm. Re-anchor after you sync.
 - **`origin/main` is the only numbering authority** (`AGENTS.md §Iteration Numbering`).
   `git fetch origin; git log origin/main -1 --pretty=%s` → read the top `iter-N`, use `N+1`.
   Never derive it from local history: peers push concurrently.
@@ -23,6 +23,15 @@ knowledge base. It is here so you do not re-derive the same conclusions.
   `git rev-list --left-right --count origin/main...HEAD` is `0<TAB>1` before pushing.
 - **A row is only `closed-upstream` when `docs/audit/2026-06-19-BUGS.md` carries a
   `CLOSED iter-N` cell.** Otherwise it is open, however plausible.
+
+## What the operator fixed (recorded as closed-upstream)
+
+Five TUI defects were reported and fixed upstream: the standing goal (iter-1839), the
+advisor card's blocks (iter-1842), ctrl+enter queueing (iter-1797 + iter-1839), the
+prompt-history writer (iter-1839) and the input-area tool-tips (iter-1845). They are
+G-015…G-019 in the gap register, `closed-upstream`. `verify.sh` check 8 fails if any of
+their fix symbols disappears — so a regression in a closed fix is caught by the harness,
+not by the operator finding it again.
 
 ## Priority order for the next iteration
 

@@ -57,8 +57,8 @@ python3 scripts/genome lint                 # the KB's own structural gate
 
 ## The rules that are not in the parent repo's AGENTS.md
 
-1. **The tree moves.** Every `file:line` in this KB is pinned to `43a38696` (iter-1818).
-   Confirm it with `git show 43a38696:<path> | sed -n '<line>p'` before editing the code
+1. **The tree moves.** Every `file:line` in this KB is pinned to `758dd4c5` (iter-1818).
+   Confirm it with `git show 758dd4c5:<path> | sed -n '<line>p'` before editing the code
    it points at. `verify.sh` reports any anchor that has drifted.
 2. **A row is only `closed-upstream` when the parent repo's canonical defect ledger
    (agentic-harness/operant/docs/audit/2026-06-19-BUGS.md) carries a `CLOSED iter-N`

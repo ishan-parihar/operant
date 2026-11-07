@@ -32,7 +32,7 @@ RED for 60 s to GREEN in 5 s. `an_orphan_response_does_not_wedge_the_stdio_clien
 the second call used to fail forever. `cargo test -p operant-core --lib mcp::` → 27
 passed, 0 failed.
 
-**Reconciliation against `origin/main` @ `43a38696` (iter-1818)** found that seven of the
+**Reconciliation against `origin/main` @ `758dd4c5` (iter-1818)** found that seven of the
 fourteen rows in the sweep's first report had already been closed upstream
 (RT-234/iter-1783, RT-225/iter-1769, RT-249/iter-1800, RT-247/iter-1799,
 RT-251/iter-1802). The gap register now carries that reconciliation and a layer column
@@ -61,3 +61,29 @@ Only a regressed CLOSED finding now exits non-zero.
 had ported one five days earlier. Seven of fourteen rows were closed before the
 reconciliation ran. A gap register is not a document — it is a live claim about a moving
 tree, and it is only worth what its reconciliation discipline is worth.
+
+## 2026-11-06 — the operator's five TUI reports, reconciled
+
+The operator reported five TUI defects: setting goal did not work; the advisor preview
+lumped everything instead of showing blocks; ctrl+enter did not queue; queued and goal
+messages never reached the prompt-history; and the input area carried tool-tip text.
+
+**All five were already fixed upstream** and are recorded as G-015…G-019, `closed-upstream`:
+
+| report | closed by | what actually changed |
+|---|---|---|
+| goal does not stand | iter-1839 `15cec34e` | a STANDING goal injected into the volatile turn-context tail of every turn |
+| advisor preview lumps everything | iter-1842 `23015b38` | one BLOCK per note; the payload is split from the card at the continuation marker |
+| ctrl+enter does not queue | iter-1797 `2acd8efa` + iter-1839 `15cec34e` | the hint tells one truth; the accessor was `plan_mode`, a jcode vestige; the band mirrors the live queue |
+| queue/goal missing from prompt-history | iter-1839 `15cec34e` | `remember_prompt_history` is the ONE writer |
+| non-input text in the input area | iter-1845 `64094d60` | the hints are STATUS, painted on the row above the composer |
+
+**The register was re-pinned** from `43a38696` (iter-1818) to `758dd4c5` (iter-1867) and
+every anchor re-resolved — seven had drifted, which is exactly the decay the pin exists
+to expose. The alias table also had to be corrected: the first report's `G-015`/`G-016`
+(delegate, dup) were folded into `G-003`/`G-004` so the numbers could carry the new
+reports without two rows claiming one id.
+
+**`verify.sh` grew check 8** — the eight fix symbols for G-015…G-019 must still be present
+in the source. A regression in any of them now fails the harness instead of waiting to be
+found by the operator.

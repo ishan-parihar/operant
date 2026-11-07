@@ -33,6 +33,11 @@ is already done.
 | G-014 | done | The `session_search` SQL error did not reproduce → [2026-11-06] `kb/red-team/02-round1-summary.md` | Transient; the same call returned results on retry. |
 | G-015 | done | The knowledge base itself: reconciled, anchored, and self-verifying → [2026-11-06] `kb/gap-register.md` | Canonical register, reconciliation, TUI map and the `verify.sh` harness. |
 
+| G-015 | done | `/goal` sets a STANDING goal that survives every turn until cleared → [2026-11-06] `kb/red-team/03-reconciliation-vs-upstream.md` | Closed upstream: iter-1839 (`15cec34e`). `set_standing_goal` injects `<session_goal>` into the volatile `<turn_context>` tail of every turn; cleared with the session on `/clear` and `/new`. |
+| G-016 | done | The advisor preview renders one BLOCK per note, and the payload never paints into the card → [2026-11-06] `kb/red-team/03-reconciliation-vs-upstream.md` | Closed upstream: iter-1842 (`23015b38`). `format_advisor_card` + `advisor_review_summary`; the TUI splits at the continuation marker. |
+| G-017 | done | Ctrl/Cmd+Enter QUEUES while a turn streams, and the queued band renders the live queue → [2026-11-06] `kb/red-team/03-reconciliation-vs-upstream.md` | Closed upstream: iter-1797 (`2acd8efa`) — the hint told one truth and the accessor was renamed `plan_mode_active()` — plus iter-1839 (`15cec34e`) — the App mirrors the live queue. |
+| G-018 | done | Queued messages and the `/goal` text reach the prompt history → [2026-11-06] `kb/red-team/03-reconciliation-vs-upstream.md` | Closed upstream: iter-1839 (`15cec34e`). `App::remember_prompt_history` is the ONE writer; the queue path and the /goal path use it. |
+| G-019 | done | The input area carries nothing but the operator's own text → [2026-11-06] `kb/red-team/03-reconciliation-vs-upstream.md` | Closed upstream: iter-1845 (`64094d60`). The hints are STATUS — `composer_hint()` + `draw_status()` paint them on the row ABOVE the composer; `input_hint_line_height` is 0. |
 ## Review
 
 (rows needing an owner decision — no row yet; add one with `genome q add`)

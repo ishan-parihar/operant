@@ -31,7 +31,7 @@ work it. `FAIL` = a closed finding regressed; fix that first.
 
 1. Open `kb/gap-register.md` and read the row's **Anchor** — it is `file:line` at the
    pinned commit. Confirm it:
-   `git show 43a38696:<path> | sed -n '<line>p'`
+   `git show 758dd4c5:<path> | sed -n '<line>p'`
 2. Write the test the row names FIRST and watch it fail.
 3. Make it pass. Run `cargo fmt --all`, `cargo check --workspace`, `cargo test --workspace`,
    `bash scripts/clippy-warning-gate.sh`.

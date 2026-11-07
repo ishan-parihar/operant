@@ -34,7 +34,7 @@ Exit 0 = every finding still holds. Exit 1 = a finding changed; re-reconcile bef
 ## Why the anchor check matters
 
 The tree moves under you. A `file:line` in the gap register is a claim about a commit; the
-anchor check resolves it against the pinned commit (`43a38696`) and reports any row whose
+anchor check resolves it against the pinned commit (`758dd4c5`) and reports any row whose
 anchor has drifted. Drift is not automatically a bug — it is a signal to re-read the code
 before editing it.
 

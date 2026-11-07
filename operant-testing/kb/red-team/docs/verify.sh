@@ -96,6 +96,23 @@ else
 fi
 
 echo
+echo
+echo "--- 8. the five operator-reported TUI defects are still closed (G-015..G-019)"
+TUI_MISSING=0
+for sym in "pub fn set_standing_goal" "pub fn format_advisor_card" "pub fn advisor_review_summary" \
+           "Ctrl/Cmd+Enter to queue" "fn plan_mode_active" "fn queued_messages" \
+           "fn remember_prompt_history" "pub(super) fn composer_hint"; do
+  if git grep -q -e "$sym" "$PINNED" -- crates/operant-core/src crates/operant-cli/src 2>/dev/null; then
+    continue
+  fi
+  TUI_MISSING=1; echo "      MISSING  $sym"
+done
+if [ "$TUI_MISSING" -eq 0 ]; then
+  open_ "tui defects (G-015..G-019)" "all five fixes are live at $PINNED"
+else
+  fail "tui defects (G-015..G-019)" "a fix symbol is gone — a closed defect regressed"
+fi
+
 if [ "$FAIL" -eq 0 ]; then
   echo "RESULT: no CLOSED finding regressed. Rows marked OPEN above are still open by design —"
   echo "        work them from kb/gap-register.md."
