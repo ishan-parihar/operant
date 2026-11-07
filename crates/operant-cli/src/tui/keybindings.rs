@@ -15,16 +15,28 @@ use std::sync::LazyLock;
 
 /// Action that can be bound to a key.
 ///
-/// This is a *catalogue*: 65 of these 76 actions have a default binding, the
-/// other 11 are declared-but-unbound (the table has no chord for them yet).
-/// An enum-level allow is the right granularity for that — 11 scattered
+/// This is a *catalogue*: 59 of these 62 actions have a default binding, the
+/// other 3 are declared-but-unbound (the table has no chord for them yet).
+/// An enum-level allow is the right granularity for that — 3 scattered
 /// per-variant attributes would be more noise than signal, and blanket-
 /// allowing the module (as this file did before) hid genuinely dead code
 /// elsewhere in the registry.
+///
+/// (The counts were 61 and 1 before iter-1890: the generic Dialog context's
+/// Tab rows were the only bindings for `MoveCursorLeft` / `MoveCursorRight`,
+/// and they claimed a field move that most dialogs do not have.)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum KeyAction {
     // Navigation
+    #[expect(
+        dead_code,
+        reason = "iter-1890: no context binds a plain cursor move yet — the generic Dialog rows that named these are gone"
+    )]
     MoveCursorLeft,
+    #[expect(
+        dead_code,
+        reason = "iter-1890: no context binds a plain cursor move yet — the generic Dialog rows that named these are gone"
+    )]
     MoveCursorRight,
     MoveCursorEnd,
     MoveCursorWordRight,

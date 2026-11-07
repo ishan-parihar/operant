@@ -130,7 +130,11 @@ fn test_keybinding_registry_basic() {
     registry.add(KeyBinding {
         key: KeyCode::Char('a'),
         modifiers: KeyModifiers::CONTROL,
-        action: KeyAction::MoveCursorLeft,
+        // (iter-1890) MoveCursorEnd, not MoveCursorLeft: the latter is no
+        // longer bound by any context (the generic Dialog rows that named it
+        // are gone), and constructing it here would make the enum's
+        // `expect(dead_code)` unfulfilled in the test target.
+        action: KeyAction::MoveCursorEnd,
         context: Some(BindingContext::Prompt),
         description: None,
     });
@@ -138,7 +142,7 @@ fn test_keybinding_registry_basic() {
     let event = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL);
     let binding = registry.find(&event, BindingContext::Prompt);
     assert!(binding.is_some());
-    assert_eq!(binding.unwrap().action, KeyAction::MoveCursorLeft);
+    assert_eq!(binding.unwrap().action, KeyAction::MoveCursorEnd);
 }
 
 #[test]

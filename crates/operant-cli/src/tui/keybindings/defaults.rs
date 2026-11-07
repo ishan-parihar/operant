@@ -1071,6 +1071,21 @@ impl KeyBindingRegistry {
             // the reasoning effort (the Global context's row says so), and
             // crossterm delivers Shift+Tab as `BackTab`, so a `Tab`+SHIFT row
             // could not have matched the event even if the action were right.
+            // (iter-1890) The Tab / Shift+Tab rows that used to sit here
+            // ("Next field" / "Previous field") are GONE. This context is a
+            // BUCKET ("In a dialog/overlay"), so a row it names is a claim
+            // about EVERY dialog — and Tab does not move a field in most of
+            // them: the command palette (the app's most-used dialog) has no
+            // Tab arm at all, the export dialog's Tab toggles the format,
+            // and the session hub's / MCP view's / diff viewer's / journey
+            // view's Tab switches a PANE. Every dialog that does use Tab
+            // advertises it in its own surface (the agents editor says "tab
+            // move", the ask-user dialog "↑↓/Tab: options", the export
+            // dialog "tab/←/→ switch"), so the generic rows bought no
+            // discoverability — only the over-claim. The Shift+Tab row was
+            // doubly dead: crossterm delivers Shift+Tab as `BackTab`, so a
+            // `Tab`+SHIFT row could not match the event at all.
+            //
             // Dialog bindings
             DefaultBinding {
                 key: KeyCode::Esc,
@@ -1085,20 +1100,6 @@ impl KeyBindingRegistry {
                 action: KeyAction::Submit,
                 context: BindingContext::Dialog,
                 description: "Confirm",
-            },
-            DefaultBinding {
-                key: KeyCode::Tab,
-                modifiers: KeyModifiers::NONE,
-                action: KeyAction::MoveCursorRight,
-                context: BindingContext::Dialog,
-                description: "Next field",
-            },
-            DefaultBinding {
-                key: KeyCode::Tab,
-                modifiers: KeyModifiers::SHIFT,
-                action: KeyAction::MoveCursorLeft,
-                context: BindingContext::Dialog,
-                description: "Previous field",
             },
             // Composer chords dispatched directly in `app/key_handling.rs`
             // (Custom ids are catalogue-only). Listed so `/keys` shows the

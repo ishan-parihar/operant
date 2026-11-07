@@ -14060,3 +14060,75 @@ fn the_completion_contexts_catalogue_rows_match_the_typeahead_popup() {
         );
     }
 }
+
+// ---- (iter-1890) the generic DIALOG context's catalogue rows ----
+//
+// The DIALOG context is a BUCKET ("In a dialog/overlay"), so a row it names
+// is a claim about EVERY dialog. Its Tab / Shift+Tab rows ("Next field" /
+// "Previous field") were false for most of them: the command palette — the
+// app's most-used dialog — has no Tab arm at all, the export dialog's Tab
+// toggles the format, and the session hub's / MCP view's / diff viewer's /
+// journey view's Tab switches a PANE. Every dialog that does use Tab
+// advertises it in its own surface (the agents editor says "tab move", the
+// ask-user dialog "↑↓/Tab: options", the export dialog "tab/←/→ switch"),
+// so the generic rows bought no discoverability — only the over-claim.
+//
+// The pin is the exact row SET, not just its contents: a row added to this
+// context must come with evidence that every dialog dispatches it.
+
+#[test]
+fn the_dialog_contexts_catalogue_rows_are_the_ones_every_dialog_dispatches() {
+    use crate::tui::keybindings::{BindingContext, DEFAULT_KEYBINDINGS, KeyAction};
+
+    const ROWS: &[(KeyCode, KeyModifiers, KeyAction, &str)] = &[
+        (
+            KeyCode::Esc,
+            KeyModifiers::NONE,
+            KeyAction::Cancel,
+            "Close dialog",
+        ),
+        (
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+            KeyAction::Submit,
+            "Confirm",
+        ),
+    ];
+
+    let catalogue = DEFAULT_KEYBINDINGS.get_bindings(BindingContext::Dialog);
+    assert_eq!(
+        catalogue.len(),
+        ROWS.len(),
+        "the Dialog context must name exactly the chords every dialog \
+         dispatches: {catalogue:?}"
+    );
+    for (key, mods, action, description) in ROWS {
+        let row = catalogue
+            .iter()
+            .find(|b| b.key == *key && b.modifiers == *mods)
+            .unwrap_or_else(|| panic!("the Dialog context is missing a {key:?}+{mods:?} row"));
+        assert_eq!(
+            row.action, *action,
+            "the Dialog context's {key:?} row names the wrong action"
+        );
+        assert_eq!(
+            row.description.as_deref(),
+            Some(*description),
+            "the Dialog context's {key:?} row has the wrong description"
+        );
+    }
+
+    // The surviving "Close dialog" row, driven for real: Esc closes the
+    // command palette — the app's most-used dialog.
+    let mut app = make_app();
+    app.handle_key_event(press_key(KeyCode::Char('k'), KeyModifiers::CONTROL));
+    assert!(
+        app.command_palette.visible,
+        "Ctrl+K opens the command palette"
+    );
+    app.handle_key_event(press_key(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(
+        !app.command_palette.visible,
+        "Esc closes the command palette — the Dialog context's row"
+    );
+}
