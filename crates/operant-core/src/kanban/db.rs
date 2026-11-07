@@ -438,14 +438,17 @@ impl KanbanDb {
     ) -> Result<bool, Error> {
         let conn = self.lock_conn()?;
 
+        // The task's OPEN run, if any. `tasks.current_run_id` is the only
+        // pointer to it — it is set when a worker claims the task.
+        let current_run: Option<i64> = conn
+            .query_row(
+                "SELECT current_run_id FROM tasks WHERE id = ?1",
+                params![tid],
+                |row| row.get(0),
+            )
+            .ok();
+
         if let Some(run_id) = expected_run_id {
-            let current_run: Option<i64> = conn
-                .query_row(
-                    "SELECT current_run_id FROM tasks WHERE id = ?1",
-                    params![tid],
-                    |row| row.get(0),
-                )
-                .ok();
             if current_run != Some(run_id) {
                 return Ok(false);
             }
@@ -454,10 +457,22 @@ impl KanbanDb {
         let metadata_json = metadata.and_then(|m| serde_json::to_string(m).ok());
 
         conn.execute(
-            "UPDATE tasks SET status = 'done', completed_at = ?1, result = ?2 WHERE id = ?3",
+            "UPDATE tasks SET status = 'done', completed_at = ?1, result = ?2, current_run_id = NULL WHERE id = ?3",
             params![chrono::Utc::now().timestamp(), result, tid],
         )
         .map_err(|e| Error::Agent(format!("Failed to complete task: {}", e)))?;
+
+        // Close the run the task was carrying. Without this the run row
+        // stayed 'running' forever and `current_run_id` kept pointing at it —
+        // a state the subsystem's OWN diagnostics classify as a zombie run
+        // that needs hand-run SQL to fix (RT-276).
+        if let Some(run_id) = current_run {
+            conn.execute(
+                "UPDATE task_runs SET status = 'completed', ended_at = ?1, outcome = ?2 WHERE id = ?3",
+                params![chrono::Utc::now().timestamp(), result, run_id],
+            )
+            .map_err(|e| Error::Agent(format!("Failed to close run: {}", e)))?;
+        }
 
         if let Some(cards) = created_cards {
             for card in cards {
@@ -474,7 +489,7 @@ impl KanbanDb {
              VALUES (?1, ?2, 'completed', ?3, ?4)",
             params![
                 tid,
-                expected_run_id,
+                current_run.or(expected_run_id),
                 metadata_json,
                 chrono::Utc::now().timestamp()
             ],

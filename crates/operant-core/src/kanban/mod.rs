@@ -165,6 +165,73 @@ mod tests {
         dir
     }
 
+    /// RT-276: completing a CLAIMED task must close its run.
+    ///
+    /// The live completion path (`KanbanDb::complete_task`) marked the task
+    /// done but left `tasks.current_run_id` set and the `task_runs` row
+    /// 'running' forever — a state the subsystem's own diagnostics classify
+    /// as a ZOMBIE run that needs hand-run SQL. The only code that closed a
+    /// run (`Dispatcher::complete_run`) had no production caller.
+    #[test]
+    fn completing_a_claimed_task_closes_its_run() {
+        let dir = temp_kanban_dir();
+        let mgr = KanbanManager::new(dir);
+        mgr.open_board("default").unwrap();
+        let db = KanbanDb::init(mgr.resolve_path("default")).unwrap();
+
+        let task_id = db
+            .create_task(CreateTaskParams {
+                title: "a claimed task",
+                body: None,
+                assignee: None,
+                created_by: None,
+                workspace_kind: "personal",
+                workspace_path: None,
+                tenant: None,
+                priority: 0,
+                parents: &[],
+                triage: false,
+                idempotency_key: None,
+                max_runtime_seconds: None,
+                skills: None,
+                max_retries: None,
+            })
+            .unwrap();
+
+        let dispatcher = Dispatcher::new(db.conn().clone());
+        let run_id = dispatcher.claim_task(&task_id, "test-worker").unwrap();
+        let task = db.get_task(&task_id).unwrap().unwrap();
+        assert_eq!(task.current_run_id, Some(run_id), "the claim opens a run");
+
+        assert!(
+            db.complete_task(&task_id, Some("done"), None, None, None, None)
+                .unwrap()
+        );
+
+        // The task no longer points at a run.
+        let task = db.get_task(&task_id).unwrap().unwrap();
+        assert_eq!(
+            task.current_run_id, None,
+            "completion must clear current_run_id"
+        );
+
+        // The run row is closed, not left running.
+        let runs = db.list_runs(&task_id).unwrap();
+        let run = runs.iter().find(|r| r.id == run_id).expect("the run row");
+        assert_eq!(run.status, "completed", "the run must be closed: {run:?}");
+        assert!(run.ended_at.is_some(), "the run must carry an end time");
+
+        // And the subsystem's own detector agrees: no zombie run.
+        let issues = KanbanDiagnostics::new(db.conn().clone())
+            .run_checks()
+            .unwrap();
+        assert!(
+            !issues.iter().any(|i| i.description.contains("zombie")
+                || i.description.contains("is 'running'")),
+            "the board must carry no zombie run: {issues:?}"
+        );
+    }
+
     #[test]
     fn test_resolve_path_default() {
         let dir = temp_kanban_dir();
