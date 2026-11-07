@@ -3154,6 +3154,41 @@ impl AppConfig {
             self.agent.max_consecutive_tool_only != d.agent.max_consecutive_tool_only,
             "[agent] max_consecutive_tool_only"
         );
+        // (RT-273) `[observability]` carries six runtime knobs that NOTHING
+        // reads: only `backend` is consulted (the observer). The other six
+        // promise an OTLP endpoint, service name and headers, and a runtime
+        // trace mode, path and entry cap — and none of them happens. A SET
+        // value now REPORTS instead of being accepted in silence.
+        {
+            let o = &self.observability;
+            let d = &d.observability;
+            let mut unread: Vec<&str> = Vec::new();
+            if o.otel_endpoint != d.otel_endpoint {
+                unread.push("otel_endpoint");
+            }
+            if o.otel_service_name != d.otel_service_name {
+                unread.push("otel_service_name");
+            }
+            if o.otel_headers != d.otel_headers {
+                unread.push("otel_headers");
+            }
+            if o.runtime_trace_mode != d.runtime_trace_mode {
+                unread.push("runtime_trace_mode");
+            }
+            if o.runtime_trace_path != d.runtime_trace_path {
+                unread.push("runtime_trace_path");
+            }
+            if o.runtime_trace_max_entries != d.runtime_trace_max_entries {
+                unread.push("runtime_trace_max_entries");
+            }
+            if !unread.is_empty() {
+                out.push(format!(
+                    "warning: [observability] {} is accepted but unread — the runtime applies none of it. Remove the key(s) from operant.toml.",
+                    unread.join(", ")
+                ));
+            }
+        }
+
         // (RT-272) A provider MODEL PROFILE carries seventeen wire knobs that
         // nothing reads — each with a doc comment promising a behaviour
         // (extra headers "sent with every request", credentials pulled from
@@ -4199,6 +4234,31 @@ wonderful_unknown_key = 42
         let warnings = config.unused_setting_warnings();
         assert_eq!(warnings.len(), 1, "{warnings:?}");
         assert!(warnings[0].contains("[socialization]"), "{warnings:?}");
+    }
+
+    /// RT-273: `[observability]`'s six runtime knobs are accepted but NOT
+    /// applied — only `backend` is consulted — so a set value must REPORT.
+    #[test]
+    fn an_observability_knob_is_reported_as_unread() {
+        assert!(AppConfig::default().unused_setting_warnings().is_empty());
+
+        let raw = "[observability]\nbackend = \"otel\"\notel_endpoint = \"http://localhost:4318\"\nruntime_trace_mode = \"full\"\n";
+        let config = parse_config_str(raw, Path::new("memory://unread-observability")).unwrap();
+        let warnings = config.unused_setting_warnings();
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("[observability]"), "{warnings:?}");
+        for key in ["otel_endpoint", "runtime_trace_mode"] {
+            assert!(
+                warnings[0].contains(key),
+                "the warning must name {key}: {warnings:?}"
+            );
+        }
+        // `backend` IS read (the observer consults it) — it must not be
+        // named.
+        assert!(
+            !warnings[0].contains("backend"),
+            "the warning must not name a key the runtime reads: {warnings:?}"
+        );
     }
 
     /// RT-272: a provider model profile's wire knobs are accepted but NOT
