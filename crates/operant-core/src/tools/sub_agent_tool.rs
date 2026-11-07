@@ -90,10 +90,6 @@ pub enum SubAgentRole {
 
 /// A single task in batch mode
 #[derive(Debug, Deserialize, JsonSchema)]
-#[expect(
-    dead_code,
-    reason = "serde-argument struct: fields deserialized from tool-call JSON; optional fields kept for schema parity"
-)]
 struct DelegationTask {
     /// The focused task instruction for the child agent
     goal: String,
@@ -111,10 +107,6 @@ struct DelegationTask {
 
 /// Arguments for delegated sub-agent work.
 #[derive(Debug, Deserialize, JsonSchema)]
-#[expect(
-    dead_code,
-    reason = "serde-argument struct: fields deserialized from tool-call JSON; optional fields kept for schema parity"
-)]
 struct SubAgentArgs {
     /// The focused task instruction for the child agent (single mode)
     #[serde(default, alias = "task")]
@@ -318,6 +310,9 @@ struct WorkerSpec {
     /// wedged worker must not stall the swarm.
     timeout_secs: u64,
     output_schema: Option<Value>,
+    /// The toolsets the caller asked for (NARROW-ONLY: the child's set is
+    /// intersected with the parent's, never widened).
+    toolsets: Option<Vec<String>>,
 }
 
 /// How a single worker ended. Every exit path — success, agent error,
@@ -500,6 +495,7 @@ impl SubAgentTool {
         max_iterations: Option<u32>,
         timeout_seconds: u64,
         output_schema: Option<Value>,
+        toolsets: Option<Vec<String>>,
     ) -> std::result::Result<String, BoxedToolError> {
         let child_depth = self.parent_depth + 1;
         // Depth AND process-wide breadth, both decided here — before
@@ -517,6 +513,7 @@ impl SubAgentTool {
             max_iterations,
             timeout_secs: timeout_seconds.max(MIN_WORKER_TIMEOUT_SECONDS),
             output_schema,
+            toolsets,
         })
         .await
     }
@@ -544,6 +541,7 @@ impl SubAgentTool {
         let max_iterations = worker.max_iterations;
         let role = worker.role;
         let output_schema = worker.output_schema;
+        let toolsets = worker.toolsets.clone();
 
         // The caller already cleared the guard, but the depth floor still
         // decides the effective role: an orchestrator that is already at the
@@ -601,6 +599,7 @@ impl SubAgentTool {
                     effective_role,
                     max_iterations,
                     timeout_seconds,
+                    toolsets.clone(),
                 )
                 .await?;
 
@@ -649,9 +648,11 @@ impl SubAgentTool {
         role: SubAgentRole,
         max_iterations: Option<u32>,
         timeout_seconds: u64,
+        toolsets: Option<Vec<String>>,
     ) -> std::result::Result<String, BoxedToolError> {
-        // Determine effective toolsets based on role and parent toolsets
-        let child_toolsets = self.compute_child_toolsets(role);
+        // Determine effective toolsets based on role, the parent's toolsets
+        // and the subset the caller asked for.
+        let child_toolsets = self.compute_child_toolsets(role, toolsets.as_deref());
 
         let raw_client = OpenAIClient::from_shared_http_client(
             self.client_config.clone(),
@@ -813,6 +814,7 @@ impl SubAgentTool {
         max_iterations: Option<u32>,
         timeout_seconds: u64,
         output_schema: Option<Value>,
+        toolsets: Option<Vec<String>>,
     ) -> std::result::Result<String, BoxedToolError> {
         let Some(delegation_id) = async_delegation::try_create_record(
             &goal,
@@ -840,6 +842,7 @@ impl SubAgentTool {
                     max_iterations,
                     timeout_seconds,
                     output_schema,
+                    toolsets,
                 )
                 .await;
             match outcome {
@@ -893,7 +896,11 @@ impl SubAgentTool {
         }
     }
 
-    fn compute_child_toolsets(&self, role: SubAgentRole) -> Vec<String> {
+    fn compute_child_toolsets(
+        &self,
+        role: SubAgentRole,
+        requested: Option<&[String]>,
+    ) -> Vec<String> {
         // Whether the parent supplied an explicit toolset list at all. hermes
         // semantics: an EMPTY parent list means "use defaults" (DEFAULT_TOOLSETS
         // fallback), but a NON-EMPTY parent list means "intersect/strip only"
@@ -931,6 +938,15 @@ impl SubAgentTool {
         // parent's toolset inheritance.
         let blocked_toolsets: [&str; 4] = ["delegation", "clarify", "memory", "code_execution"];
         toolsets.retain(|ts| !blocked_toolsets.contains(&ts.as_str()));
+
+        // The caller asked for a SUBSET: narrow, never widen. A requested
+        // toolset the parent does not have is simply not there — the
+        // parent's policy is the ceiling, and the request can only lower
+        // it. (Applied before the role's own grant below, so an
+        // orchestrator keeps its delegation tool.)
+        if let Some(requested) = requested {
+            toolsets.retain(|ts| requested.iter().any(|r| r == ts));
+        }
 
         // Orchestrators retain the delegation toolset: the delegate_task tool
         // itself is re-registered for orchestrator children in
@@ -1255,6 +1271,7 @@ impl OperantTool for SubAgentTool {
                     parsed.max_iterations,
                     timeout,
                     parsed.output_schema,
+                    parsed.toolsets.clone(),
                 )
                 .await
             {
@@ -1280,6 +1297,8 @@ impl OperantTool for SubAgentTool {
                         max_iterations: parsed.max_iterations,
                         timeout_secs: timeout,
                         output_schema: task.output_schema,
+                        // A task's own request wins over the top-level one.
+                        toolsets: task.toolsets.or_else(|| parsed.toolsets.clone()),
                     })
                     .collect();
 
@@ -1322,6 +1341,7 @@ impl OperantTool for SubAgentTool {
                     parsed.max_iterations,
                     timeout,
                     parsed.output_schema,
+                    parsed.toolsets.clone(),
                 )
                 .await
             {
@@ -1572,6 +1592,50 @@ mod tests {
         assert!(prompt.contains("delegate_task"));
     }
 
+    /// RT-291: `delegate_task`'s `toolsets` parameter must be honoured —
+    /// and it may only NARROW the child's set.
+    ///
+    /// The parameter was in the args struct (top level and per task) and
+    /// the schema described it ("Optional toolsets to enable for the
+    /// sub-agent"), but the body never read it: the child's toolsets came
+    /// from the parent's policy alone. The model was told it could scope
+    /// the child and could not.
+    #[test]
+    fn the_requested_toolsets_narrow_the_child_set() {
+        let tool = SubAgentTool::with_parent_tool_policy(
+            &OpenAIClient::new(crate::client::ClientConfig::default()),
+            "gpt-4.1",
+            0,
+            vec!["builtin".to_string(), "terminal".to_string()],
+            std::collections::HashSet::new(),
+            std::collections::HashSet::new(),
+            Arc::new(Database::init(std::env::temp_dir().join("test_sub_ts_narrow.db")).unwrap()),
+            None,
+        );
+        let all = tool.compute_child_toolsets(SubAgentRole::Leaf, None);
+        assert!(all.contains(&"builtin".to_string()), "{all:?}");
+        assert!(all.contains(&"terminal".to_string()), "{all:?}");
+
+        // The request narrows: only the requested toolset survives.
+        let narrowed =
+            tool.compute_child_toolsets(SubAgentRole::Leaf, Some(&["terminal".to_string()]));
+        assert_eq!(narrowed, vec!["terminal".to_string()], "{narrowed:?}");
+
+        // An empty request means NO toolsets, not "everything".
+        let none = tool.compute_child_toolsets(SubAgentRole::Leaf, Some(&[]));
+        assert!(none.is_empty(), "{none:?}");
+
+        // A toolset the parent does not have cannot be added by the request.
+        let widened = tool.compute_child_toolsets(
+            SubAgentRole::Leaf,
+            Some(&["terminal".to_string(), "memory".to_string()]),
+        );
+        assert!(
+            !widened.contains(&"memory".to_string()),
+            "the request may never widen the child's set: {widened:?}"
+        );
+    }
+
     #[test]
     fn compute_child_toolsets_defaults_to_builtin_when_parent_passes_none() {
         // hermes fallback: a parent that supplies no toolset list (the CLI
@@ -1586,7 +1650,7 @@ mod tests {
             Arc::new(Database::init(std::env::temp_dir().join("test_sub_ts.db")).unwrap()),
             None,
         );
-        let ts = tool.compute_child_toolsets(SubAgentRole::Leaf);
+        let ts = tool.compute_child_toolsets(SubAgentRole::Leaf, None);
         assert!(
             ts.contains(&"builtin".to_string()),
             "builtin fallback missing: {ts:?}"
@@ -1612,7 +1676,7 @@ mod tests {
         // Orchestrators retain the delegation toolset (hermes
         // `_blocked_toolsets_for_role` discards delegate_task from the
         // blocklist when role == "orchestrator").
-        let ts = tool.compute_child_toolsets(SubAgentRole::Orchestrator);
+        let ts = tool.compute_child_toolsets(SubAgentRole::Orchestrator, None);
         assert!(ts.contains(&"delegation".to_string()));
         // ...but the child-blocked toolsets are still stripped.
         assert!(!ts.contains(&"memory".to_string()));
@@ -1633,7 +1697,7 @@ mod tests {
             Arc::new(Database::init(std::env::temp_dir().join("test_sub_disabled.db")).unwrap()),
             None,
         );
-        let ts = tool.compute_child_toolsets(SubAgentRole::Leaf);
+        let ts = tool.compute_child_toolsets(SubAgentRole::Leaf, None);
         // "web" is stripped AND the builtin fallback must NOT re-add builtin:
         // the parent supplied an explicit list and disabled builtin itself
         // (hermes: children never gain a toolset the parent disabled).
@@ -1657,7 +1721,7 @@ mod tests {
             Arc::new(Database::init(std::env::temp_dir().join("test_sub_stripped.db")).unwrap()),
             None,
         );
-        let ts = tool.compute_child_toolsets(SubAgentRole::Leaf);
+        let ts = tool.compute_child_toolsets(SubAgentRole::Leaf, None);
         assert!(
             ts.is_empty(),
             "fully-stripped parent list must yield empty, got {ts:?}"
@@ -1665,7 +1729,7 @@ mod tests {
 
         // Orchestrator role still retains delegation (its own sub-agents),
         // but never the blocked memory toolset.
-        let orch_ts = tool.compute_child_toolsets(SubAgentRole::Orchestrator);
+        let orch_ts = tool.compute_child_toolsets(SubAgentRole::Orchestrator, None);
         assert_eq!(orch_ts, vec!["delegation".to_string()]);
     }
 
@@ -1689,7 +1753,7 @@ mod tests {
 
         // Leaf child: core tools yes, delegate_task NO (hermes: leaf children
         // must never recursively delegate).
-        let leaf_ts = tool.compute_child_toolsets(SubAgentRole::Leaf);
+        let leaf_ts = tool.compute_child_toolsets(SubAgentRole::Leaf, None);
         let leaf_registry = ToolRegistry::new(Duration::from_secs(5));
         tool.register_child_tools(&leaf_registry, &leaf_ts).await;
         assert!(
@@ -1703,7 +1767,7 @@ mod tests {
 
         // Orchestrator child: retains delegate_task for recursive delegation
         // (hermes `_blocked_toolsets_for_role` when role == "orchestrator").
-        let orch_ts = tool.compute_child_toolsets(SubAgentRole::Orchestrator);
+        let orch_ts = tool.compute_child_toolsets(SubAgentRole::Orchestrator, None);
         let orch_registry = ToolRegistry::new(Duration::from_secs(5));
         tool.register_child_tools(&orch_registry, &orch_ts).await;
         assert!(
@@ -1731,7 +1795,7 @@ mod tests {
             None,
         );
 
-        let ts = tool.compute_child_toolsets(SubAgentRole::Leaf);
+        let ts = tool.compute_child_toolsets(SubAgentRole::Leaf, None);
         let registry = ToolRegistry::new(Duration::from_secs(5));
         tool.register_child_tools(&registry, &ts).await;
         // A tool the parent explicitly disabled must not leak into children.
@@ -1796,6 +1860,7 @@ mod tests {
             max_iterations: Some(1),
             timeout_secs,
             output_schema: None,
+            toolsets: None,
         }
     }
 
