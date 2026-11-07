@@ -3154,6 +3154,24 @@ impl AppConfig {
             self.agent.max_consecutive_tool_only != d.agent.max_consecutive_tool_only,
             "[agent] max_consecutive_tool_only"
         );
+        // (RT-272) A provider MODEL PROFILE carries seventeen wire knobs that
+        // nothing reads — each with a doc comment promising a behaviour
+        // (extra headers "sent with every request", credentials pulled from
+        // OPENAI_API_KEY, pricing merged into the cost lookup). The profile
+        // is accepted (deleting a field would break every existing
+        // operant.toml — the config carries `deny_unknown_fields`), but a SET
+        // value now REPORTS instead of being accepted in silence. One line
+        // per profile, naming the exact keys the operator must delete.
+        for (profile, config) in &self.providers.models {
+            let unread = config.unread_wire_knobs();
+            if !unread.is_empty() {
+                out.push(format!(
+                    "warning: [providers.models.{}] {} is accepted but unread — the runtime applies none of it. Remove the key(s) from operant.toml.",
+                    profile,
+                    unread.join(", ")
+                ));
+            }
+        }
         // (RT-263) `agent.session_reset` is parsed, offered by `operant setup`
         // with four behavioural promises ("Reset when system prompt changes",
         // "Reset every new session — lowest cost"), shown in the setup status
@@ -4181,6 +4199,33 @@ wonderful_unknown_key = 42
         let warnings = config.unused_setting_warnings();
         assert_eq!(warnings.len(), 1, "{warnings:?}");
         assert!(warnings[0].contains("[socialization]"), "{warnings:?}");
+    }
+
+    /// RT-272: a provider model profile's wire knobs are accepted but NOT
+    /// applied, and a SET value must REPORT rather than be accepted in
+    /// silence — each one has a doc comment promising a behaviour nothing
+    /// implements.
+    #[test]
+    fn a_provider_profile_wire_knob_is_reported_as_unread() {
+        // The default is a profile that only names what the runtime reads.
+        assert!(AppConfig::default().unused_setting_warnings().is_empty());
+
+        // A profile that also SIZES the wire: extra_headers, wire_api and the
+        // temperature. All three are unread; base_url is not.
+        let raw = "[providers.models.fast]\n                   base_url = \"https://example.invalid/v1\"\n                   wire_api = \"responses\"\n                   temperature = 0.2\n                   extra_headers = { X-Trace = \"1\" }\n";
+        let config = parse_config_str(raw, Path::new("memory://unread-profile")).unwrap();
+        let warnings = config.unused_setting_warnings();
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(
+            warnings[0].contains("[providers.models.fast]"),
+            "{warnings:?}"
+        );
+        for key in ["extra_headers", "wire_api", "temperature"] {
+            assert!(
+                warnings[0].contains(key),
+                "the warning must name {key}: {warnings:?}"
+            );
+        }
     }
 
     /// RT-263: `agent.session_reset` is accepted but UNREAD — the setup
