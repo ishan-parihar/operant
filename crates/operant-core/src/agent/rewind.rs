@@ -174,13 +174,26 @@ impl OperantAgent {
             })?;
 
         // 3. Write the prefix as the new session's transcript.
+        //
+        // The error is PROPAGATED, like the session row's above: a fork
+        // whose transcript is missing messages is a context hole the agent
+        // then works from, and the old code dropped the write error — so a
+        // failed write produced a silently incomplete fork (RT-283).
         for msg in &prefix {
-            let _ = self.database.save_message(
-                &new_session,
-                msg.role.as_str(),
-                &msg.content,
-                &chrono::Utc::now().to_rfc3339(),
-            );
+            self.database
+                .save_message(
+                    &new_session,
+                    msg.role.as_str(),
+                    &msg.content,
+                    &chrono::Utc::now().to_rfc3339(),
+                )
+                .map_err(|e| {
+                    tracing::error!(
+                        ?e,
+                        "rewind_to_turn: save_message failed for the fork's transcript"
+                    );
+                    RewindError::SaveFailed(e.to_string())
+                })?;
         }
 
         // 4. Swap the agent onto the fork: mark history of marks is
@@ -284,6 +297,31 @@ mod tests {
                 .await;
         }
         ids
+    }
+
+    /// RT-283: the fork's transcript write error must NOT be dropped.
+    ///
+    /// A fork whose transcript is missing messages is a context hole the
+    /// agent then works from, and the old code dropped the write error
+    /// (`let _ =`) while surfacing the sibling session-row error — so a
+    /// failed write produced a silently incomplete fork.
+    ///
+    /// Source-grep contract (the repo's own shape — cf.
+    /// `the_credential_pool_does_not_swallow_the_auth_store_write_error`):
+    /// the needle is built by concatenation so this test's own source
+    /// cannot satisfy it.
+    #[test]
+    fn the_rewind_does_not_drop_the_transcript_write_error() {
+        let src = include_str!("rewind.rs");
+        let dropped = format!("let _ = self.database.{}", "save_message");
+        assert!(
+            !src.contains(&dropped),
+            "the fork's transcript write error must be propagated, not dropped"
+        );
+        assert!(
+            src.contains("RewindError::SaveFailed"),
+            "a failed transcript write must surface as a rewind failure"
+        );
     }
 
     /// Fork at turn 2: the agent's conversation becomes the pre-turn-2

@@ -304,13 +304,23 @@ impl OperantAgent {
             }
         }
         // Phase 2 (lock released): persist what was appended.
+        //
+        // The error is REPORTED, not dropped (RT-283): this function cannot
+        // return a Result (it runs on the abort path), so the failure is
+        // logged — the old `let _ =` made a transcript that silently lost
+        // the cancelled tool rows indistinguishable from a clean one.
         for msg in to_persist {
-            let _ = self.database.save_message(
-                &session_id,
-                msg.role.as_str(),
-                &msg.content,
-                &timestamp,
-            );
+            if let Err(e) =
+                self.database
+                    .save_message(&session_id, msg.role.as_str(), &msg.content, &timestamp)
+            {
+                tracing::warn!(
+                    session_id = %session_id,
+                    role = %msg.role.as_str(),
+                    error = %e,
+                    "Interrupted-tail commit could not be persisted — the transcript is missing this row"
+                );
+            }
         }
     }
 
