@@ -13928,3 +13928,135 @@ fn the_skills_views_detail_footer_names_the_keys_that_leave_it() {
         "Esc closes the panel — the key the detail footer names"
     );
 }
+
+// ---- (iter-1887) the COMPLETION context's catalogue rows vs the popup ----
+//
+// The keybinding registry is what /keys and /hotkeys PRINT, so a row that
+// names an action the popup does not perform is a promise the operator reads
+// and cannot rely on. Two rows were wrong: Tab said "Next completion" (it
+// ACCEPTS the highlighted completion) and Shift+Tab said "Previous
+// completion" (it cycles the reasoning effort, and crossterm delivers
+// Shift+Tab as `BackTab`, so a `Tab`+SHIFT row could never match the event).
+//
+// The pin is BEHAVIOURAL: every row is driven through the REAL handler with
+// the typeahead popup genuinely open (typed "/", so the app computes its own
+// 111 suggestions), and the observed effect must match the row's action — so
+// neither the catalogue nor the dispatch can drift alone.
+
+/// An app with the slash typeahead popup open.
+fn app_with_typeahead_open() -> App {
+    let mut app = make_app();
+    app.handle_key_event(press_key(KeyCode::Char('/'), KeyModifiers::NONE));
+    assert!(
+        !app.prompt_input.suggestions.is_empty(),
+        "the typeahead popup must be open for this check"
+    );
+    app
+}
+
+#[test]
+fn the_completion_contexts_catalogue_rows_match_the_typeahead_popup() {
+    use crate::tui::keybindings::{BindingContext, DEFAULT_KEYBINDINGS, KeyAction};
+
+    /// Every row of the COMPLETION context and the action it must name.
+    const ROWS: &[(KeyCode, KeyModifiers, KeyAction)] = &[
+        (KeyCode::Down, KeyModifiers::NONE, KeyAction::CompletionNext),
+        (KeyCode::Up, KeyModifiers::NONE, KeyAction::CompletionPrev),
+        (
+            KeyCode::Tab,
+            KeyModifiers::NONE,
+            KeyAction::CompletionAccept,
+        ),
+        (
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+            KeyAction::CompletionAccept,
+        ),
+        (
+            KeyCode::Esc,
+            KeyModifiers::NONE,
+            KeyAction::CompletionDismiss,
+        ),
+    ];
+
+    let catalogue = DEFAULT_KEYBINDINGS.get_bindings(BindingContext::Completion);
+
+    for (key, mods, action) in ROWS {
+        let row = catalogue
+            .iter()
+            .find(|b| b.key == *key && b.modifiers == *mods)
+            .unwrap_or_else(|| panic!("the Completion context is missing a {key:?}+{mods:?} row"));
+        assert_eq!(
+            row.action, *action,
+            "the Completion context's {key:?}+{mods:?} row names the wrong action"
+        );
+
+        let mut app = app_with_typeahead_open();
+        let index_before = app.prompt_input.suggestion_index;
+        let text_before = app.prompt_input.text.clone();
+        let count_before = app.prompt_input.suggestions.len();
+
+        match action {
+            KeyAction::CompletionNext => {
+                app.handle_key_event(press_key(*key, *mods));
+                assert!(
+                    app.prompt_input.suggestion_index > index_before,
+                    "{key:?} must move the completion highlight forward: \
+                     {index_before:?} -> {:?}",
+                    app.prompt_input.suggestion_index
+                );
+            }
+            KeyAction::CompletionPrev => {
+                // The popup opens on the FIRST completion, so "previous" needs
+                // somewhere to go: step forward once, then back.
+                app.handle_key_event(press_key(KeyCode::Down, KeyModifiers::NONE));
+                let index = app.prompt_input.suggestion_index;
+                app.handle_key_event(press_key(*key, *mods));
+                assert!(
+                    app.prompt_input.suggestion_index < index,
+                    "{key:?} must move the completion highlight back: {index:?} -> {:?}",
+                    app.prompt_input.suggestion_index
+                );
+            }
+            KeyAction::CompletionAccept => {
+                app.handle_key_event(press_key(*key, *mods));
+                assert!(
+                    app.prompt_input.text != text_before
+                        && app.prompt_input.suggestions.len() < count_before,
+                    "{key:?} must ACCEPT the highlighted completion: text \
+                     {text_before:?} -> {:?}, suggestions {count_before} -> {}",
+                    app.prompt_input.text,
+                    app.prompt_input.suggestions.len()
+                );
+            }
+            KeyAction::CompletionDismiss => {
+                app.handle_key_event(press_key(*key, *mods));
+                assert!(
+                    app.prompt_input.suggestions.is_empty(),
+                    "{key:?} must dismiss the completion popup"
+                );
+            }
+            other => panic!("the Completion context names an unexpected action {other:?}"),
+        }
+    }
+
+    // The chord that does NOT touch the completion must not be catalogued in
+    // this context. Shift+Tab cycles the reasoning effort — the Global
+    // context's row says so — and crossterm delivers it as `BackTab`, so
+    // neither `Tab`+SHIFT nor `BackTab` can be a completion row.
+    for chord in [
+        (KeyCode::Tab, KeyModifiers::SHIFT),
+        (KeyCode::BackTab, KeyModifiers::SHIFT),
+        (KeyCode::BackTab, KeyModifiers::NONE),
+    ] {
+        assert!(
+            !catalogue
+                .iter()
+                .any(|b| b.key == chord.0 && b.modifiers == chord.1),
+            "the Completion context must not name {:?}+{:?} — it cycles the \
+             reasoning effort, not the completion",
+            chord.0,
+            chord.1
+        );
+    }
+}

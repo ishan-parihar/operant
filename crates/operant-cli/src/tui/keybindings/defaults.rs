@@ -1038,19 +1038,19 @@ impl KeyBindingRegistry {
                 context: BindingContext::Completion,
                 description: "Previous completion",
             },
+            // (iter-1887) Tab ACCEPTS the highlighted completion — it does not
+            // step to the next one. The Prompt context's Tab row has always
+            // said "Accept completion", and the dispatch arm
+            // (`KeyCode::Tab => { … accept_suggestion() … }`) agrees with it;
+            // this row said "Next completion" and contradicted both. /keys
+            // and /hotkeys print these rows, so the operator read a promise
+            // the popup never made.
             DefaultBinding {
                 key: KeyCode::Tab,
                 modifiers: KeyModifiers::NONE,
-                action: KeyAction::CompletionNext,
+                action: KeyAction::CompletionAccept,
                 context: BindingContext::Completion,
-                description: "Next completion",
-            },
-            DefaultBinding {
-                key: KeyCode::Tab,
-                modifiers: KeyModifiers::SHIFT,
-                action: KeyAction::CompletionPrev,
-                context: BindingContext::Completion,
-                description: "Previous completion",
+                description: "Accept completion",
             },
             DefaultBinding {
                 key: KeyCode::Enter,
@@ -1066,6 +1066,11 @@ impl KeyBindingRegistry {
                 context: BindingContext::Completion,
                 description: "Dismiss completion",
             },
+            // The Shift+Tab row that used to sit here ("Previous completion")
+            // is GONE: the chord does nothing to the completion — it cycles
+            // the reasoning effort (the Global context's row says so), and
+            // crossterm delivers Shift+Tab as `BackTab`, so a `Tab`+SHIFT row
+            // could not have matched the event even if the action were right.
             // Dialog bindings
             DefaultBinding {
                 key: KeyCode::Esc,
