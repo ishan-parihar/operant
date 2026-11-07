@@ -135,7 +135,10 @@ impl OperantAgent {
             started_at: now.clone(),
             ended_at: None,
             end_reason: None,
-            message_count: prefix.len() as i64,
+            // ZERO, not prefix.len(): `save_message` increments the
+            // session's counter on every append, so seeding it with the
+            // prefix length counted the fork's transcript TWICE (RT-284).
+            message_count: 0,
             tool_call_count: 0,
             input_tokens: 0,
             output_tokens: 0,
@@ -376,6 +379,52 @@ mod tests {
         assert_eq!(fork_msgs[0].content, "one");
         assert_eq!(outcome.prompt_text, "two");
         assert_eq!(outcome.removed_turns, 1, "turn 3 dropped, turn 2 rewound");
+    }
+
+    /// RT-284: the fork's `message_count` must match its transcript.
+    ///
+    /// The session row was seeded with `message_count = prefix.len()` and
+    /// then every prefix message was persisted through `save_message`,
+    /// which increments the counter on every append — so the fork's count
+    /// was exactly double its real transcript size, and every surface that
+    /// shows it (the session listing, the gateway API, the insights totals,
+    /// the session hub) showed double.
+    #[tokio::test]
+    async fn rewind_fork_message_count_matches_its_transcript() {
+        let (agent, db) = agent();
+        let old_session = format!("sess_old_{}", uuid::Uuid::new_v4());
+        let now = chrono::Utc::now().to_rfc3339();
+        agent
+            .database
+            .save_session(&old_session, None, "agent", &now, &now)
+            .expect("parent session row");
+        agent.set_session_id(old_session.clone());
+        let ids = three_turns(&agent).await;
+
+        let outcome = agent.rewind_to_turn(ids[1]).await.expect("fork succeeds");
+
+        let rows = db
+            .get_session_messages(&outcome.new_session_id)
+            .expect("fork transcript exists")
+            .len() as i64;
+        // The COLUMN, not the recomputed count: `list_sessions` counts the
+        // message ROWS with a JOIN, so it would agree with the transcript
+        // whatever the column says — and the column is what the session
+        // listing, the gateway API, the insights totals and the session hub
+        // display.
+        let counted: i64 = {
+            let conn = db.conn();
+            conn.query_row(
+                "SELECT message_count FROM sessions WHERE id = ?1",
+                rusqlite::params![outcome.new_session_id],
+                |row| row.get(0),
+            )
+            .expect("the fork's session row")
+        };
+        assert_eq!(
+            counted, rows,
+            "the fork's message_count must match its transcript"
+        );
     }
 
     /// A mark from a compacted-away turn returns `Compacted`; a later mark
