@@ -43,14 +43,23 @@ pub struct ObservabilityConfig {
     /// "none" | "log" | "verbose" | "prometheus" | "otel"
     pub backend: String,
 
+    ///
+    /// ACCEPTED BUT NOT APPLIED (RT-274): the runtime does not read this key —
+    /// it is accepted so an existing config keeps parsing, and it has NO effect.
     /// OTLP endpoint (e.g. `"http://localhost:4318"`). Only used when backend = `"otel"`.
     #[serde(default)]
     pub otel_endpoint: Option<String>,
 
+    ///
+    /// ACCEPTED BUT NOT APPLIED (RT-274): the runtime does not read this key —
+    /// it is accepted so an existing config keeps parsing, and it has NO effect.
     /// Service name reported to the OTel collector. Defaults to "operant".
     #[serde(default)]
     pub otel_service_name: Option<String>,
 
+    ///
+    /// ACCEPTED BUT NOT APPLIED (RT-274): the runtime does not read this key —
+    /// it is accepted so an existing config keeps parsing, and it has NO effect.
     /// Optional HTTP headers sent with every OTLP export request (e.g. authorization).
     /// Specified as key-value pairs in TOML:
     /// ```toml
@@ -60,15 +69,24 @@ pub struct ObservabilityConfig {
     #[serde(default)]
     pub otel_headers: Option<std::collections::HashMap<String, String>>,
 
+    ///
+    /// ACCEPTED BUT NOT APPLIED (RT-274): the runtime does not read this key —
+    /// it is accepted so an existing config keeps parsing, and it has NO effect.
     /// Runtime trace storage mode: "none" | "rolling" | "full".
     /// Controls whether model replies and tool-call diagnostics are persisted.
     #[serde(default = "default_runtime_trace_mode")]
     pub runtime_trace_mode: String,
 
+    ///
+    /// ACCEPTED BUT NOT APPLIED (RT-274): the runtime does not read this key —
+    /// it is accepted so an existing config keeps parsing, and it has NO effect.
     /// Runtime trace file path. Relative paths are resolved under workspace_dir.
     #[serde(default = "default_runtime_trace_path")]
     pub runtime_trace_path: String,
 
+    ///
+    /// ACCEPTED BUT NOT APPLIED (RT-274): the runtime does not read this key —
+    /// it is accepted so an existing config keeps parsing, and it has NO effect.
     /// Maximum entries retained when runtime_trace_mode = "rolling".
     #[serde(default = "default_runtime_trace_max_entries")]
     pub runtime_trace_max_entries: usize,
