@@ -635,9 +635,23 @@ impl CredentialPool {
                     info!(
                         provider = %self.provider,
                         credential = %cred.name,
-                        "OAuth token refreshed successfully"
+                        "OAuth token refreshed"
                     );
-                    let _ = refresher.persist_to_auth_store(&self.provider, cred, &response);
+                    // The refresh succeeded, so the IN-MEMORY credential is
+                    // good — but if the WRITE fails, the on-disk credential
+                    // stays stale: after a restart the provider rejects the
+                    // expired token and the operator sees an auth error with
+                    // no hint that the write failed. So the failure is
+                    // reported, not swallowed (RT-279).
+                    if let Err(e) = refresher.persist_to_auth_store(&self.provider, cred, &response)
+                    {
+                        warn!(
+                            provider = %self.provider,
+                            credential = %cred.name,
+                            error = %e,
+                            "OAuth token refreshed but NOT persisted to the auth store — the on-disk credential stays stale"
+                        );
+                    }
                 }
                 Err(e) => {
                     warn!(
@@ -681,7 +695,17 @@ impl CredentialPool {
                         credential = %cred.name,
                         "OAuth credential refreshed"
                     );
-                    let _ = refresher.persist_to_auth_store(provider_type, cred, &response);
+                    // Same rule as above (RT-279): a failed write is
+                    // reported, not swallowed.
+                    if let Err(e) = refresher.persist_to_auth_store(provider_type, cred, &response)
+                    {
+                        warn!(
+                            provider = %provider_type,
+                            credential = %cred.name,
+                            error = %e,
+                            "OAuth token refreshed but NOT persisted to the auth store — the on-disk credential stays stale"
+                        );
+                    }
                 }
                 Err(e) => {
                     warn!(
@@ -1528,5 +1552,32 @@ mod tests {
         registry.add_seed("openai", "empty", "  ", "env");
         assert!(!registry.has_credentials("openai"));
         assert!(registry.get_or_create("openai").is_empty());
+    }
+
+    /// RT-279: the credential pool must not swallow a failed auth-store
+    /// write.
+    ///
+    /// A successful OAuth refresh whose token cannot be written back was
+    /// logged as "refreshed successfully" and reported as `Ok(())` — the
+    /// error was dropped with `let _ =`. The on-disk credential then stayed
+    /// stale: after a restart the provider rejects the expired token and the
+    /// operator sees an auth error with no hint that the write failed.
+    ///
+    /// Source-grep contract (the repo's own shape — see
+    /// `the_cli_surface_is_phase_one_config_only` in config.rs): the pool
+    /// must not discard the persist error. The needle is built by
+    /// concatenation so this test's own source cannot satisfy it.
+    #[test]
+    fn the_credential_pool_does_not_swallow_the_auth_store_write_error() {
+        let src = include_str!("credential_pool.rs");
+        let swallowed = format!("let _ = refresher.{}", "persist_to_auth_store");
+        assert!(
+            !src.contains(&swallowed),
+            "the auth-store write error must be surfaced, not dropped"
+        );
+        assert!(
+            src.contains("persist_to_auth_store"),
+            "the pool must still persist the refreshed token"
+        );
     }
 }
