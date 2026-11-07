@@ -166,8 +166,7 @@ fallback_models = ["gpt-4o-mini"]   # tried in order when the primary fails
 max_iterations = 20
 show_reasoning = true # TUI: thinking stays until your next prompt; /thinking-display full|current|off
 context_window = 128000
-# Context caps — BOTH axes bind and the SMALLER one wins.
-# The absolute axis is OFF by default (0): the threshold tracks the window.
+# Context caps — BOTH axes bind and the SMALLER one wins; the absolute axis is OFF by default (0).
 context_soft_cap_tokens = 0            # ...or an absolute ceiling: compact at the turn boundary
 context_soft_cap_percent = 0.80       # ...or at 80% of the window, whichever is smaller
 context_hard_cap_tokens = 0            # ...or an absolute ceiling: never send a request over this
