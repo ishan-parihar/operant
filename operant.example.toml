@@ -63,19 +63,23 @@ context_window = 128000
 # before the next provider call, and a context that cannot be compacted under
 # it fails typed instead of being sent.
 #
-# Absolute tokens:
-#   context_soft_cap_tokens = 350000   # soft cap in tokens
-#   context_hard_cap_tokens = 400000   # hard cap in tokens
+# Absolute tokens (0 = no absolute ceiling; this is the DEFAULT):
+#   context_soft_cap_tokens = 0   # soft cap in tokens
+#   context_hard_cap_tokens = 0   # hard cap in tokens
 # Percentage of `context_window` (fractions, 0.80 = 80%):
 #   context_soft_cap_percent = 0.80
 #   context_hard_cap_percent = 0.95
 #
-# With the defaults, a 1M window compacts at 350k and never exceeds 400k;
-# a 128k window compacts at 102k (80%) and never exceeds 121k (95%).
+# With the defaults, the PERCENTAGE axis alone binds, so the threshold tracks
+# the window the model actually has: a 1M window compacts at 800k and never
+# exceeds 950k; a 128k window compacts at 102k (80%) and never exceeds 121k
+# (95%). Set the absolute axis to a number and the SMALLER axis binds again —
+# that is the operator's own ceiling, and it is how a deployment that wants
+# compaction earlier than the window's headroom asks for it.
 # Set an axis to 0 to disable it (0 tokens / 0.0 percent = that axis is off).
-# context_soft_cap_tokens = 350000
+# context_soft_cap_tokens = 0
 # context_soft_cap_percent = 0.80
-# context_hard_cap_tokens = 400000
+# context_hard_cap_tokens = 0
 # context_hard_cap_percent = 0.95
 # The most trajectory files to keep in `~/.operant/trajectories`.
 # 0 (the default) keeps them ALL. The bound exists so the directory cannot

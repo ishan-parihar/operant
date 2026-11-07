@@ -683,14 +683,18 @@ pub struct BehaviorSettings {
     pub context_compression: bool,
     pub context_compression_threshold: f64,
     /// Absolute soft-compaction limit in tokens. Whichever of this and
-    /// `context_soft_cap_percent` is smaller binds first.
+    /// `context_soft_cap_percent` is smaller binds first. `0` (the default)
+    /// DISABLES the absolute axis, so the percentage of the window governs —
+    /// a threshold that does not scale with the window compacts a 1M-token
+    /// session at 35% of itself, every turn.
     #[serde(default = "default_context_soft_cap_tokens")]
     pub context_soft_cap_tokens: usize,
     /// Soft-compaction limit as a fraction of `context_window`.
     #[serde(default = "default_context_soft_cap_percent")]
     pub context_soft_cap_percent: f64,
     /// Absolute hard-compaction limit in tokens. Whichever of this and
-    /// `context_hard_cap_percent` is smaller binds first.
+    /// `context_hard_cap_percent` is smaller binds first. `0` (the default)
+    /// disables the absolute axis.
     #[serde(default = "default_context_hard_cap_tokens")]
     pub context_hard_cap_tokens: usize,
     /// Hard-compaction limit as a fraction of `context_window`.

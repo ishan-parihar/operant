@@ -583,10 +583,40 @@ pub struct ContextCaps {
 
 impl Default for ContextCaps {
     fn default() -> Self {
+        // The ABSOLUTE axis is OFF by default: the compaction threshold must
+        // scale with the model's context window.
+        //
+        // MEASURED on this host (2026-11-07): the caps used to default to
+        // 350k/400k ABSOLUTE, and the resolver takes the SMALLER of the
+        // absolute and the percentage axis. With a 1M-token window that made
+        // the soft cap 350_000 — 35% of the window — so the preflight ladder
+        // fired on EVERY turn of a long session:
+        //
+        //   Preflight ladder: over threshold — running ordered rungs,
+        //   estimated: 361332, threshold: 350000, budget: 1000000
+        //
+        // and the ladder's first rung re-trims every historical tool result
+        // to 2_000 chars — a LOSSY, content-agnostic truncation of the
+        // agent's own earlier reads, applied turn after turn, while the
+        // window still had 640k tokens of room. That is the "generic
+        // compression" the operator reported, and it is why the agent stopped
+        // following instructions it had already read: the text it was working
+        // from was truncated away under it.
+        //
+        // The percentage axis (80% soft / 95% hard) is the honest trigger —
+        // it tracks the window the model actually has. The absolute axis
+        // stays available as an OPERATOR ceiling: set `context_soft_cap_tokens`
+        // (or `context_hard_cap_tokens`) to a value and the smaller axis binds
+        // again. Zero means "no absolute ceiling", which is what the default
+        // now says.
+        //
+        // For windows up to ~437k the resolved limits are UNCHANGED (the
+        // percentage axis was already the stricter one there); only the large
+        // windows move.
         Self {
-            soft_tokens: 350_000,
+            soft_tokens: 0,
             soft_percent: 0.80,
-            hard_tokens: 400_000,
+            hard_tokens: 0,
             hard_percent: 0.95,
         }
     }
@@ -2598,20 +2628,75 @@ mod tests {
 
     // ── context caps ─────────────────────────────────────────────────────
 
+    /// The DEFAULT caps are the WINDOW's percentages: no absolute ceiling.
+    ///
+    /// The old default (350k/400k absolute) made a 1M-token window compact at
+    /// 35% of itself, so the preflight ladder re-trimmed the agent's own
+    /// historical tool results on every turn of a long session while the
+    /// window had room. The threshold must track the window.
+    ///
+    /// MUTATION-PROVEN: putting the absolute axis back (350k/400k) fails
+    /// this test by name.
     #[test]
-    fn context_caps_default_to_350k_soft_and_400k_hard() {
+    fn context_caps_default_to_the_window_percentage() {
         let caps = ContextCaps::default();
-        assert_eq!(caps.soft_tokens, 350_000);
-        assert_eq!(caps.hard_tokens, 400_000);
-        let limits = caps.resolve(1_000_000);
-        assert_eq!(limits.soft, 350_000);
-        assert_eq!(limits.hard, 400_000);
+        assert_eq!(
+            caps.soft_tokens, 0,
+            "no absolute ceiling by default — the window's percentage binds"
+        );
+        assert_eq!(caps.hard_tokens, 0);
+        assert_eq!(caps.soft_percent, 0.80);
+        assert_eq!(caps.hard_percent, 0.95);
+
+        // A 1M window: 80% / 95% of the window.
+        let large = caps.resolve(1_000_000);
+        assert_eq!(large.soft, 800_000);
+        assert_eq!(large.hard, 950_000);
+
+        // A 200k window: the same percentages, scaled to the window.
+        let small = caps.resolve(200_000);
+        assert_eq!(small.soft, 160_000);
+        assert_eq!(small.hard, 190_000);
     }
 
-    /// Both axes bind: whichever is SMALLER for the active window wins.
+    /// THE REPORTED CASE: a 361_332-token request against a 1M window is
+    /// UNDER the soft cap, so the preflight ladder does not fire and the
+    /// historical tool results are not re-trimmed.
+    ///
+    /// This is the operator's session, measured: "Preflight ladder: over
+    /// threshold — running ordered rungs, estimated: 361332, threshold:
+    /// 350000, budget: 1000000".
+    ///
+    /// MUTATION-PROVEN: restoring the 350k absolute default fails this test
+    /// by name.
+    #[test]
+    fn a_one_million_window_does_not_compact_at_thirty_five_percent() {
+        let limits = ContextCaps::default().resolve(1_000_000);
+        assert!(
+            !limits.over_soft(361_332),
+            "361k tokens is 36% of a 1M window — the ladder must not fire: \
+             soft={} hard={}",
+            limits.soft,
+            limits.hard
+        );
+        assert!(
+            !limits.over_hard(361_332),
+            "and it is nowhere near the hard cap"
+        );
+        // The request still fits the window with room for the answer.
+        assert!(limits.soft < limits.window);
+    }
+
+    /// Both axes bind WHEN BOTH ARE SET: whichever is SMALLER for the active
+    /// window wins. The absolute axis is the operator's own ceiling.
     #[test]
     fn context_caps_take_the_stricter_of_absolute_and_percentage() {
-        let caps = ContextCaps::default();
+        let caps = ContextCaps {
+            soft_tokens: 350_000,
+            soft_percent: 0.80,
+            hard_tokens: 400_000,
+            hard_percent: 0.95,
+        };
         // A 100k window: 80% / 95% are stricter than 350k / 400k.
         let small = caps.resolve(100_000);
         assert_eq!(small.soft, 80_000);
@@ -2650,11 +2735,13 @@ mod tests {
 
     #[test]
     fn context_cap_limits_report_the_crossings() {
+        // The default caps are the window's percentages, so for a 1M window
+        // the crossings are at 800k / 950k.
         let limits = ContextCaps::default().resolve(1_000_000);
-        assert!(!limits.over_soft(349_999));
-        assert!(limits.over_soft(350_000));
-        assert!(!limits.over_hard(399_999));
-        assert!(limits.over_hard(400_000));
+        assert!(!limits.over_soft(799_999));
+        assert!(limits.over_soft(800_000));
+        assert!(!limits.over_hard(949_999));
+        assert!(limits.over_hard(950_000));
     }
 
     #[test]
