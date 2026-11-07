@@ -60,6 +60,36 @@ fn shell_mode_hint(mode: ComposerMode) -> Option<&'static str> {
     }
 }
 
+/// The composer's AFFORDANCE hints — the queue shortcut, the shell-mode
+/// notice, the "next prompt opens a new session" notice.
+///
+/// They are STATUS, not the operator's text: they used to be painted as the
+/// FIRST ROW of the composer's text rect, so the box the operator types in
+/// carried a line they did not write, the draft was pushed down a row, and
+/// the caret/copy arithmetic had to carry the offset. The operator's report:
+/// "TUI shows non-input text within the input area, like tool-tips for using
+/// CTRL+ENTER".
+///
+/// They now ride the status row ABOVE the composer (see `draw_status`), so
+/// the text rect holds nothing but the operator's own text.
+pub(super) fn composer_hint(app: &dyn TuiState) -> Option<String> {
+    let mode = composer_mode(app.input(), app.is_remote_mode());
+    if let Some(shell_hint) = shell_mode_hint(mode) {
+        return Some(shell_hint.trim().to_string());
+    }
+    if app.next_prompt_new_session_armed() {
+        return Some("↗ Next prompt opens a new session".to_string());
+    }
+    if app.is_processing() && !app.input().is_empty() {
+        // ONE truth: while a turn streams, Ctrl/Cmd+Enter QUEUES the draft into
+        // the steer queue. There is no "send now" path — the key handler's
+        // alternate-Enter arm queues while streaming and submits while idle,
+        // and plan mode changes neither.
+        return Some("Ctrl/Cmd+Enter to queue".to_string());
+    }
+    None
+}
+
 fn normalize_repaint_sensitive_notice_text(text: &str) -> String {
     text.replace("⚠️", "⚠")
 }
@@ -426,22 +456,19 @@ pub(crate) fn dim_command_color(color: Option<Color>) -> Color {
 }
 
 pub(super) fn input_hint_line_height(app: &dyn TuiState) -> u16 {
-    // Command suggestions render as an overlay (see
-    // `draw_command_suggestions_overlay`) and intentionally reserve no layout
-    // height: opening the palette must not move the transcript or footer.
-    if command_suggestions_active(app, &app.command_suggestions()) {
-        return 0;
-    }
-    let mode = composer_mode(app.input(), app.is_remote_mode());
-
-    // RT-144: no `vim_mode_label()` clause. The vim badge it reserved this row
-    // for was removed in the same iteration, and a reservation with no painter
-    // is worse than no reservation at all: it silently swallows a transcript row.
-    u16::from(
-        shell_mode_hint(mode).is_some()
-            || app.next_prompt_new_session_armed()
-            || (app.is_processing() && !app.input().is_empty()),
-    )
+    // NO hint row is reserved inside the composer any more.
+    //
+    // The affordance hints (queue shortcut, shell mode, next-session notice)
+    // ride the status row above the composer, so the composer's band is the
+    // operator's text and the two padding rows only. Reserving a row for a
+    // hint that is painted elsewhere is the "reservation with no painter"
+    // defect RT-144 removed for the vim badge: it silently swallows a
+    // transcript row and moves the footer on the next keystroke.
+    //
+    // `app` is still read so the signature (and the call site) stays honest
+    // about the layout contract.
+    let _ = app;
+    0
 }
 
 pub(super) fn send_mode_reserved_width(app: &dyn TuiState) -> usize {
@@ -869,7 +896,9 @@ pub(super) fn draw_status(frame: &mut Frame, app: &dyn TuiState, area: Rect, pen
         String::new()
     };
 
-    let line = if let Some(build_progress) = crate::tui::operant_app::build::read_build_progress() {
+    let mut line = if let Some(build_progress) =
+        crate::tui::operant_app::build::read_build_progress()
+    {
         let spinner = super::activity_indicator(elapsed, 12.5);
         Line::from(vec![
             Span::styled(spinner, Style::default().fg(rgb(255, 193, 7))),
@@ -1154,6 +1183,19 @@ pub(super) fn draw_status(frame: &mut Frame, app: &dyn TuiState, area: Rect, pen
             Line::from("")
         }
     };
+
+    // The composer's affordance hint rides THIS row — the status line above
+    // the composer — and not the composer's text area. The input box must
+    // carry nothing but the operator's own text: the hint used to be painted
+    // as the first row of that rect, so the box showed a line nobody typed
+    // and the draft was pushed down a row ("TUI shows non-input text within
+    // the input area, like tool-tips for using CTRL+ENTER").
+    if let Some(hint) = composer_hint(app) {
+        line.spans.push(Span::styled(
+            format!(" · {hint}"),
+            Style::default().fg(dim_color()),
+        ));
+    }
 
     crate::tui::operant_app::memory::check_staleness();
 
@@ -2542,7 +2584,6 @@ pub(super) fn draw_input(
     let cursor_pos = app.cursor_pos();
     let selection = app.input_selection();
 
-    let mode = composer_mode(input_text, app.is_remote_mode());
     // Command suggestions render later as an overlay pass
     // (`draw_command_suggestions_overlay`), never inline: they must not shift
     // the input rows or anything below them.
@@ -2582,42 +2623,22 @@ pub(super) fn draw_input(
     );
 
     let mut lines: Vec<Line> = Vec::new();
-    let mut hint_shown = false;
-    let mut hint_line: Option<String> = None;
-    if has_suggestions {
-        // Overlay pass owns the palette rows; no inline hint line competes
-        // with it.
-    } else if let Some(shell_hint) = shell_mode_hint(mode) {
-        hint_shown = true;
-        hint_line = Some(shell_hint.trim().to_string());
-        lines.push(Line::from(Span::styled(
-            shell_hint,
-            Style::default().fg(shell_mode_color()),
-        )));
-    } else if app.next_prompt_new_session_armed() {
-        hint_shown = true;
-        let hint = "  ↗ Next prompt opens a new session";
-        hint_line = Some(hint.trim().to_string());
-        lines.push(Line::from(Span::styled(
-            hint,
-            Style::default().fg(rgb(120, 200, 255)),
-        )));
-    } else if app.is_processing() && !input_text.is_empty() {
-        hint_shown = true;
-        // ONE truth: while a turn streams, Ctrl/Cmd+Enter QUEUES the draft into
-        // the steer queue. There is no "send now" path — the key handler's
-        // alternate-Enter arm queues while streaming and submits while idle,
-        // and plan mode changes neither. The old branch offered "send now"
-        // whenever plan mode was on, so the hint promised a key action the app
-        // does not have (and the accessor it branched on was plan mode, not a
-        // queue mode).
-        let hint = "  Ctrl/Cmd+Enter to queue";
-        hint_line = Some(hint.trim().to_string());
-        lines.push(Line::from(Span::styled(
-            hint,
-            Style::default().fg(dim_color()),
-        )));
-    }
+    // The affordance hints (queue shortcut, shell mode, next-session notice)
+    // are STATUS: they ride the status row above the composer, never the text
+    // rect. The text rect carries the operator's own text and nothing else —
+    // the old shape painted the hint as its first row, which pushed the
+    // draft down a line and made the box carry text the operator never typed
+    // ("TUI shows non-input text within the input area").
+    //
+    // The hint is still COMPUTED here so the visual-debug capture can report
+    // it (`input_hint`) and the shift-enter anomaly check still knows a hint
+    // was in play.
+    let hint_line: Option<String> = if has_suggestions {
+        None
+    } else {
+        composer_hint(app)
+    };
+    let hint_shown = hint_line.is_some();
 
     // RT-144: the `-- INSERT --` / `-- NORMAL --` vim badge is gone. It cost a
     // reserved hint row purely to restate what the composer's mode glyph and
@@ -3380,8 +3401,8 @@ mod composer_hint_tests {
         crate::tui::app::App::new(config, settings, cost_tracker, command_registry)
     }
 
-    /// The composer's rendered screen: band fill, hint rows, the draft itself
-    /// and the send-mode glyph, painted the way the real frame does.
+    /// The composer's rendered screen: band fill, the draft itself and the
+    /// send-mode glyph, painted the way the real frame does.
     fn rendered_screen(app: &crate::tui::app::App) -> String {
         let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("terminal");
         let mut capture = None;
@@ -3393,6 +3414,52 @@ mod composer_hint_tests {
         crate::tui::debug::debug_hub::buffer_rows(terminal.backend().buffer()).join("\n")
     }
 
+    /// The STATUS row's rendered screen — where the affordance hint lives now.
+    fn rendered_status(app: &crate::tui::app::App) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("terminal");
+        terminal
+            .draw(|frame| {
+                draw_status(frame, app, frame.area(), 0);
+            })
+            .expect("draw");
+        crate::tui::debug::debug_hub::buffer_rows(terminal.backend().buffer()).join("\n")
+    }
+
+    /// THE INPUT AREA CARRIES ONLY THE OPERATOR'S TEXT.
+    ///
+    /// The queue tooltip used to be painted as the FIRST ROW of the
+    /// composer's text rect: the box the operator types in showed a line
+    /// nobody wrote and the draft was pushed down a row. The operator's
+    /// report: "TUI shows non-input text within the input area, like
+    /// tool-tips for using CTRL+ENTER".
+    ///
+    /// MUTATION-PROVEN: pushing the hint back into the `lines` vector (the old
+    /// shape) fails this test by name.
+    #[test]
+    fn the_input_area_carries_no_non_input_text() {
+        let mut app = make_app();
+        app.is_streaming = true;
+        app.prompt_input
+            .replace_text("then check the tests".to_string());
+
+        let screen = rendered_screen(&app);
+        assert!(
+            !screen.contains("Ctrl/Cmd+Enter to queue"),
+            "the composer's text area must carry only what the operator typed: {screen:?}"
+        );
+        assert!(
+            screen.contains("then check the tests"),
+            "the draft is still painted: {screen:?}"
+        );
+        // …and the hint is not LOST: it rides the status row above the
+        // composer.
+        let status = rendered_status(&app);
+        assert!(
+            status.contains("Ctrl/Cmd+Enter to queue"),
+            "the hint moved to the status row, not into the void: {status:?}"
+        );
+    }
+
     /// The ONE truth the hint states: Ctrl/Cmd+Enter queues the draft.
     #[test]
     fn the_streaming_hint_says_queue_and_not_send_now() {
@@ -3401,14 +3468,14 @@ mod composer_hint_tests {
         app.prompt_input
             .replace_text("then check the tests".to_string());
 
-        let screen = rendered_screen(&app);
+        let status = rendered_status(&app);
         assert!(
-            screen.contains("Ctrl/Cmd+Enter to queue"),
-            "the streaming hint must say queue: {screen:?}"
+            status.contains("Ctrl/Cmd+Enter to queue"),
+            "the streaming hint must say queue: {status:?}"
         );
         assert!(
-            !screen.contains("send now"),
-            "there is no send-now path, so the hint must never offer one: {screen:?}"
+            !status.contains("send now"),
+            "there is no send-now path, so the hint must never offer one: {status:?}"
         );
     }
 
@@ -3421,14 +3488,14 @@ mod composer_hint_tests {
         app.prompt_input
             .replace_text("then check the tests".to_string());
 
-        let screen = rendered_screen(&app);
+        let status = rendered_status(&app);
         assert!(
-            screen.contains("Ctrl/Cmd+Enter to queue"),
-            "plan mode queues exactly like the default mode: {screen:?}"
+            status.contains("Ctrl/Cmd+Enter to queue"),
+            "plan mode queues exactly like the default mode: {status:?}"
         );
         assert!(
-            !screen.contains("send now"),
-            "plan mode must not invent a send-now key: {screen:?}"
+            !status.contains("send now"),
+            "plan mode must not invent a send-now key: {status:?}"
         );
     }
 
@@ -3444,6 +3511,11 @@ mod composer_hint_tests {
         assert!(
             !screen.contains("send now"),
             "no app state may advertise a send-now key that does not exist: {screen:?}"
+        );
+        assert!(
+            !rendered_status(&app).contains("send now"),
+            "nor may the status row: {:?}",
+            rendered_status(&app)
         );
     }
 
