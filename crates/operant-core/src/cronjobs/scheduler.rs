@@ -79,8 +79,6 @@ pub struct CronScheduler {
     /// iter-679 (gap 5, phase 1): the DM/feed context injector. `None` =
     /// no injection, prompts byte-identical (dark-mergeable).
     context_injection: Option<Arc<crate::org::context_injection::ContextInjector>>,
-    /// iter-684 (gap 6): the daily seat-pairing sessions' settings.
-    /// `None` = never mounted, the tick never checks (dark-mergeable).
     /// iter-720 (trinity P2-A): the observer told about delivery-ledger
     /// lifecycle points (queued / reclaimed / parked). `None` = the
     /// default no-op, tick byte-identical (dark-mergeable).
@@ -283,14 +281,13 @@ impl CronScheduler {
 
         let due_jobs = self.db.get_due_jobs()?;
         if due_jobs.is_empty() {
-            // iter-684 gap 6 (defect found live 2026-10-09, arming the
-            // sessions for the first time): the socialization coordinator
-            // must be checked on EVERY tick — this early return used to
-            // skip it, so a schedule fire landing on an empty tick was
-            // delayed to the next busy one (the 09:30 session would have
-            // waited for the 10:00 hourly jobs; an armed-with-no-stamp box
-            // waits even longer). The unit tests call the coordinator
-            // directly, so the tick-level gate was never pinned.
+            // No coordinator check happens here, and none is claimed: the
+            // daily seat-pairing sessions (iter-684 gap 6) are NOT armed —
+            // the socialisation coordinator is not part of this tree, and
+            // `[socialization]` is parsed, reported as unread and read by
+            // nothing (RT-136). The comment that used to stand here
+            // described that check as if it were in this tick; it was not,
+            // and the early return did skip it.
             return Ok(());
         }
 
@@ -302,9 +299,9 @@ impl CronScheduler {
             }
         }
 
-        // iter-684 (gap 6): the daily seat-pairing sessions — a schedule
-        // check, not a job row (infra-owned, outside the cast registry).
-        // After the due jobs so a busy tick never delays a live dispatch.
+        // No daily seat-pairing session is armed here: the socialisation
+        // coordinator is not part of this tree (RT-136), so the schedule
+        // check this comment described does not exist.
 
         Ok(())
     }
@@ -976,11 +973,17 @@ fn seat_memory_path(org_root: &std::path::Path, seat_id: &str) -> std::path::Pat
 }
 
 /// iter-684 (gap 6): append a bounded socialization outcome to a seat's
-/// MEMORY.md — the two-tier memory doc's seat tier, appended by the
-/// socialization coordinator (the seat itself curates what stays). Creates
-/// the file and its directory when absent — a cold-start seat's first
-/// socialization IS its first memory. `None` root = no-op (the caller
-/// warns); a failed write warns and never fails the session.
+/// MEMORY.md — the two-tier memory doc's seat tier. Creates the file and
+/// its directory when absent — a cold-start seat's first socialization IS
+/// its first memory. `None` root = no-op (the caller warns); a failed
+/// write warns and never fails the session.
+///
+/// COMPLED OUT OF PRODUCTION BUILDS (RT-136): the only writer of a seat's
+/// MEMORY.md is this function, and it is `#[cfg(test)]` — the socialisation
+/// coordinator that would call it is not part of this tree. So the READER
+/// (`seat_memory_prompt`, production, mounted by the gateway) finds no file
+/// unless a seat writes one itself, and the seat's continuity thread is
+/// never written by operant.
 #[cfg(test)]
 fn seat_memory_append(
     org_root: Option<&std::path::Path>,
@@ -1904,5 +1907,41 @@ mod tests {
             format!("{err}").contains("no-such-job"),
             "the error names the missing id: {err}"
         );
+    }
+
+    /// RT-287: the scheduler must not claim a coordinator check it does not
+    /// have.
+    ///
+    /// The file carried three comments that read like facts about the code:
+    /// a doc block for a field that does not exist, a tick comment claiming
+    /// the socialisation coordinator is checked there (it is not), and the
+    /// doc of a `#[cfg(test)]` writer presented as the production writer of
+    /// a seat's MEMORY.md. The feature gap is named (RT-136); the false
+    /// claims are this row.
+    ///
+    /// Source-grep contract (the repo's own shape): the needles are built
+    /// by concatenation so this test's own source cannot satisfy them.
+    #[test]
+    fn the_scheduler_does_not_claim_a_coordinator_check_it_does_not_have() {
+        let src = include_str!("scheduler.rs");
+        for (needle, what) in [
+            (
+                format!("the daily seat-pairing sessions' {}", "settings"),
+                "a field that does not exist",
+            ),
+            (
+                format!("must be checked on EVERY {}", "tick"),
+                "a coordinator check the tick does not make",
+            ),
+            (
+                format!("appended by the socialization {}", "coordinator"),
+                "a writer that is compiled out of production builds",
+            ),
+        ] {
+            assert!(
+                !src.contains(&needle),
+                "the scheduler must not claim {what} (the claim: {needle})"
+            );
+        }
     }
 }
