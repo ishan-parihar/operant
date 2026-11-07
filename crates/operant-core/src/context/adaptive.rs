@@ -203,7 +203,11 @@ impl AdaptiveRetrievalRegistry {
             )
         };
 
-        let hits = engine.recall(session, &q, 10).await.unwrap_or_default();
+        // The recall's failure PROPAGATES: the old `unwrap_or_default()`
+        // turned a broken store into "zero hits", and the caller could not
+        // tell a broken engine from a session with nothing to recall
+        // (RT-295).
+        let hits = engine.recall(session, &q, 10).await?;
         let round_number = rounds_done + 1;
         let mut evidence = Vec::new();
         let mut leads = Vec::new();
@@ -350,6 +354,48 @@ mod tests {
             "evidence must contain the exact phrase"
         );
         assert!(round.complete, "requirement of 1 met in round 1");
+    }
+
+    /// RT-295: a broken recall engine must not read as "zero hits".
+    ///
+    /// The recall's error was swallowed with `unwrap_or_default()`, so a
+    /// failed store became an empty hit list — and the caller could not tell
+    /// a broken engine from a session with nothing to recall.
+    #[tokio::test]
+    async fn a_failed_recall_is_not_reported_as_zero_hits() {
+        let dir = std::env::temp_dir().join(format!(
+            "operant_lcm_adaptive_broken_{}_{}",
+            std::process::id(),
+            Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db_path = dir.join("adaptive_broken.db");
+        let engine = Arc::new(
+            LcmContextEngine::new(LcmConfig {
+                db_path: db_path.clone(),
+                tail_tokens: 100,
+                auto_recall: false,
+                auto_recall_limit: 3,
+                auto_recall_max_chars: 4_000,
+                rollups_inject: true,
+                ignore_session_patterns: Vec::new(),
+                readonly_sessions: Vec::new(),
+            })
+            .unwrap(),
+        );
+        // Break the store the recall reads.
+        {
+            let conn = rusqlite::Connection::open(&db_path).unwrap();
+            conn.execute_batch("DROP TABLE IF EXISTS nodes_fts;")
+                .unwrap();
+        }
+        let reg = AdaptiveRetrievalRegistry::new();
+        let outcome = reg.start(&engine, Some("sess_broken"), "alpha", 1).await;
+        assert!(
+            outcome.is_err(),
+            "a broken store must surface as an error, not as zero hits: {outcome:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]
