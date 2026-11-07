@@ -31,6 +31,8 @@ pub(crate) mod advisor_card_tests;
 #[cfg(test)]
 pub(crate) mod debug_log_tests;
 #[cfg(test)]
+pub(crate) mod notice_ttl_tests;
+#[cfg(test)]
 pub(crate) mod session_counter_tests;
 pub(crate) mod session_display;
 #[cfg(test)]
@@ -1989,6 +1991,11 @@ impl App {
                 // alternate screen under native scroll, so they never
                 // duplicate history that is already in scrollback.
                 self.sync_overlay_alt_screen(terminal);
+                // Drop a timed notice whose TTL has passed BEFORE the frame is
+                // painted: the accessors already hide it, but the field itself
+                // used to linger forever — and a lingering notice kept the
+                // notification row reserved and kept the redraw reason firing.
+                self.expire_status_notice();
                 let redraw_reason = self.redraw_reason();
                 let draw_start = std::time::Instant::now();
                 let drawn = terminal.draw(|f| render::render_app(f, self));

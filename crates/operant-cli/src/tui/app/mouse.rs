@@ -276,7 +276,11 @@ impl App {
             self.scroll_offset,
             self.auto_scroll,
         );
-        self.status_message = Some("Copy mode: drag to select (Esc or Alt+Y to exit).".to_string());
+        // A MODE hint, not an event: it stays while copy mode is armed, so
+        // it has no TTL.
+        self.set_status_message_persistent(
+            "Copy mode: drag to select (Esc or Alt+Y to exit).".to_string(),
+        );
     }
 
     /// Turn copy mode off and restore scroll offset, tail-follow and the

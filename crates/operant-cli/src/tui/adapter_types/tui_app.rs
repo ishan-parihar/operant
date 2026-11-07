@@ -224,7 +224,10 @@ impl TuiApp {
                     Some(std::sync::Arc::new(agent.with_permissions(permission_tx)))
                 }
                 Err(e) => {
-                    self.app.status_message = Some(format!("Agent init failed: {}", e));
+                    // A FATAL state, not an event: it stays until the
+                    // operator acts, so it has no TTL.
+                    self.app
+                        .set_status_message_persistent(format!("Agent init failed: {}", e));
                     None
                 }
             };
@@ -497,12 +500,10 @@ impl TuiApp {
                             &argv,
                             self.app.mouse_capture_active,
                         ) {
-                            Ok(status) => {
-                                self.app.status_message = Some(shell_return_message(&status))
-                            }
+                            Ok(status) => self.app.set_status_notice(shell_return_message(&status)),
                             Err(e) => {
-                                self.app.status_message =
-                                    Some(format!("Shell command failed: {}", e));
+                                self.app
+                                    .set_status_notice(format!("Shell command failed: {}", e));
                             }
                         }
                         // Force a redraw on the next frame so the status
@@ -674,12 +675,17 @@ impl TuiApp {
         if self.app.is_streaming
             && let Some(handle) = &self.app.steer_queue_handle
         {
-            let mut q = handle.lock().await;
-            q.push(text.clone());
-            self.app.status_message = Some(format!(
-                "Steer queued: {}",
-                text.chars().take(60).collect::<String>()
-            ));
+            let notice = {
+                let mut q = handle.lock().await;
+                q.push(text.clone());
+                format!(
+                    "Steer queued: {}",
+                    text.chars().take(60).collect::<String>()
+                )
+            };
+            // The notice is set AFTER the queue guard is released: the guard
+            // borrows the app, and the notice needs it mutably.
+            self.app.set_status_notice(notice);
             return;
         }
         // (plan 03 §5) The failed-input restore slot is the COMPOSER's
@@ -885,7 +891,10 @@ impl TuiApp {
             {
                 Ok(agent) => Some(std::sync::Arc::new(agent.with_permissions(permission_tx))),
                 Err(e) => {
-                    self.app.status_message = Some(format!("Agent init failed: {}", e));
+                    // A FATAL state, not an event: it stays until the
+                    // operator acts, so it has no TTL.
+                    self.app
+                        .set_status_message_persistent(format!("Agent init failed: {}", e));
                     None
                 }
             }

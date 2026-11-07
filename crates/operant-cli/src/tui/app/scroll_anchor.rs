@@ -120,7 +120,7 @@ impl App {
                     self.auto_scroll = true;
                     self.new_messages_while_scrolled = 0;
                 }
-                self.status_message = Some(format!("Bookmark off — jumped to row {target}."));
+                self.set_status_notice(format!("Bookmark off — jumped to row {target}."));
             }
             None => {
                 let at = self.scroll_offset;

@@ -654,7 +654,7 @@ impl App {
                 )
             {
                 self.session_hub.pending_archive = None;
-                self.status_message = Some("Archive cancelled.".to_string());
+                self.set_status_notice("Archive cancelled.".to_string());
             }
             // Search-edit mode swallows plain keys first (jcode's
             // search_active).
@@ -745,8 +745,9 @@ impl App {
                             self.status_message =
                                 Some("Cannot archive a live subagent row.".to_string());
                         } else if Some(&id) == self.current_session.as_ref() {
-                            self.status_message =
-                                Some("Cannot archive the active session.".to_string());
+                            self.set_status_notice(
+                                "Cannot archive the active session.".to_string(),
+                            );
                         } else {
                             let action = if row.status
                                 == operant_core::session::listing::RowStatus::Archived
@@ -756,7 +757,9 @@ impl App {
                                 "Archive"
                             };
                             self.session_hub.pending_archive = Some(id.clone());
-                            self.status_message = Some(format!(
+                            // A PROMPT, not an event: it stays until the
+                            // operator answers y/n, so it has no TTL.
+                            self.set_status_message_persistent(format!(
                                 "{} session {}? (y/n)",
                                 action,
                                 id.chars().take(8).collect::<String>()
@@ -797,7 +800,7 @@ impl App {
                     })();
                     // Re-list rather than mutating in place (codex archive.rs).
                     self.session_list_pending = true;
-                    self.status_message = Some(if was_archived {
+                    self.set_status_notice(if was_archived {
                         format!(
                             "Unarchived session {}.",
                             id.chars().take(8).collect::<String>()
@@ -813,7 +816,7 @@ impl App {
                     if self.session_hub.pending_archive.is_some() =>
                 {
                     self.session_hub.pending_archive = None;
-                    self.status_message = Some("Archive cancelled.".to_string());
+                    self.set_status_notice("Archive cancelled.".to_string());
                 }
                 // Esc is handled above (`KeyCode::Esc => self.session_hub.close()`):
                 // closing the hub drops the pending archive, so it is not
@@ -846,7 +849,7 @@ impl App {
                             // loop pass, so name the outcome instead of the
                             // intermediate step — and reserve the ⏳ for the
                             // hub's own row load.
-                            self.status_message = Some(format!(
+                            self.set_status_notice(format!(
                                 "Switching to session {}…",
                                 id.chars().take(8).collect::<String>()
                             ));

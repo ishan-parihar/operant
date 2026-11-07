@@ -608,6 +608,11 @@ impl TuiState for App {
     fn status_notice(&self) -> Option<String> {
         // (plan 08) hidden-state indicator: prepend the persistent markers so
         // hidden mode is never a mystery once the transient notice fades.
+        //
+        // The LIVE reader: a timed notice is shown only inside its TTL. This
+        // used to read `status_message` raw, so a notice that had served its
+        // 3-second TTL ("Copied to clipboard via wl-copy.") stayed on screen
+        // forever.
         let mut markers = Vec::new();
         if !self.thinking_display_on {
             markers.push("thinking off");
@@ -615,7 +620,10 @@ impl TuiState for App {
         if !self.show_tool_calls {
             markers.push("tools hidden");
         }
-        match (self.status_message.clone(), markers.is_empty()) {
+        match (
+            self.live_status_notice().map(str::to_owned),
+            markers.is_empty(),
+        ) {
             (Some(msg), true) => Some(msg),
             (Some(msg), false) => Some(format!("{} · {}", markers.join(" · "), msg)),
             (None, false) => Some(markers.join(" · ")),
@@ -1170,8 +1178,11 @@ impl TuiState for App {
     }
 
     fn has_notification(&self) -> bool {
-        // P4-2: the banner queue is gone; a live status notice (within its
-        // 3s TTL) is what reserves the one-line slot now.
-        self.status_message.is_some()
+        // P4-2: the banner queue is gone; a LIVE status notice is what
+        // reserves the one-line slot now. This used to ask only whether the
+        // field was set — and the field was never cleared — so a notice that
+        // had already served its TTL kept its row reserved for the rest of
+        // the session.
+        self.live_status_notice().is_some()
     }
 }

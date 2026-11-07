@@ -135,14 +135,58 @@ impl App {
             && self.streaming_text.is_empty()
     }
 
+    /// How long a transient status notice stays up.
+    pub(crate) const STATUS_NOTICE_TTL: std::time::Duration = std::time::Duration::from_secs(3);
+
     /// Set the transient status-line notice (jcode `set_status_notice`
     /// parity, P4-2). Single write seam: stamps `status_message_set_at` so
-    /// the `status_detail`/`status_notice` accessors can self-hide the
-    /// notice after 3s without a tick loop. All `status_message = Some(..)`
-    /// writes route here.
+    /// the accessors can self-hide the notice after its TTL without a tick
+    /// loop. All transient `status_message` writes route here.
     pub fn set_status_notice(&mut self, text: impl Into<String>) {
         self.status_message = Some(text.into());
         self.status_message_set_at = Some(std::time::Instant::now());
+    }
+
+    /// Set a notice that stays up until something replaces it (NO TTL).
+    ///
+    /// The transient twin is [`Self::set_status_notice`] (3 seconds). This one
+    /// is for the few messages that are STATE rather than events: "Agent init
+    /// failed", the copy-mode hint. Every other notice is an event and gets
+    /// the TTL — the operator's report: "certain notifications do not have the
+    /// TTL and they persist like 'copied to clipboard via wl-copy'".
+    pub(crate) fn set_status_message_persistent(&mut self, text: impl Into<String>) {
+        self.status_message = Some(text.into());
+        self.status_message_set_at = None;
+    }
+
+    /// The notice that is LIVE right now.
+    ///
+    /// ONE reader for every surface that shows a notice. The notification line
+    /// used to read `status_message` RAW: it ignored the timestamp entirely,
+    /// so a notice that had served its 3-second TTL stayed on screen forever
+    /// and kept its row reserved. A timed notice is live only inside its TTL;
+    /// a notice set through [`Self::set_status_message_persistent`] (no
+    /// timestamp) is live until it is replaced.
+    pub(crate) fn live_status_notice(&self) -> Option<&str> {
+        let message = self.status_message.as_deref()?;
+        match self.status_message_set_at {
+            None => Some(message),
+            Some(at) if at.elapsed() <= Self::STATUS_NOTICE_TTL => Some(message),
+            Some(_) => None,
+        }
+    }
+
+    /// Drop a timed notice whose TTL has passed.
+    ///
+    /// The accessors already hide it; this clears the field so the state does
+    /// not linger (and the redraw reason stops firing for a dead notice).
+    pub(crate) fn expire_status_notice(&mut self) {
+        if let Some(at) = self.status_message_set_at
+            && at.elapsed() > Self::STATUS_NOTICE_TTL
+        {
+            self.status_message = None;
+            self.status_message_set_at = None;
+        }
     }
 
     /// P4-2 routing seam — the jcode notification taxonomy:

@@ -269,7 +269,7 @@ impl App {
             }
         };
         self.persist_provider_and_model();
-        self.status_message = Some(message);
+        self.set_status_notice(message);
         // Mark onboarding as complete now that the user has connected a
         // provider. (P0-2 from UX audit — was never called.)
         let _ = Self::persist_onboarding_complete();
@@ -475,7 +475,7 @@ impl App {
         // (plan 07 §2) a theme change recolors every settled row — replay
         // re-emits history under the new palette.
         self.request_native_replay();
-        self.status_message = Some(match saved {
+        self.set_status_notice(match saved {
             Ok(()) => format!("Theme set to: {}", theme_name),
             Err(e) => format!("Theme set to: {} (not saved: {})", theme_name, e),
         });
