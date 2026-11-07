@@ -306,3 +306,43 @@ fn a_git_diff_is_read_off_the_loop_and_taken_once_it_arrives() {
     }
     assert!(!state.loading);
 }
+
+/// The keys the diff viewer's footer names, and the arm that implements each.
+///
+/// (RT-272) A claim without an arm is a promise the panel does not keep: the
+/// footer used to end with `d toggle scope`, and NOTHING dispatched 'd' —
+/// the panel has no scope to toggle, so the operator pressed it and nothing
+/// happened.
+#[test]
+fn the_diff_viewers_footer_only_names_keys_it_dispatches() {
+    /// Each claim: the label the footer shows, the key it means, and the
+    /// handler's arm that implements it.
+    const CLAIMS: &[(&str, &str, &str)] = &[
+        ("tab switch pane", "Tab", "KeyCode::Tab"),
+        ("↑↓ navigate", "Up/Down", "KeyCode::Up"),
+        ("pgup/pgdn", "PageUp/PageDown", "KeyCode::PageUp"),
+        ("space collapse", "Space", "KeyCode::Char(' ')"),
+    ];
+
+    let footer = super::render::FOOTER_HINT;
+    let handler = include_str!("../app/key_handling.rs");
+
+    for (label, key, arm) in CLAIMS {
+        assert!(
+            footer.contains(label),
+            "the footer must name the {key} key: {footer:?}"
+        );
+        assert!(
+            handler.contains(arm),
+            "the footer claims {key} ({label}), but the handler has no {arm} arm"
+        );
+    }
+
+    // The scope toggle that never existed is not named. The needle is built
+    // by concatenation on purpose: written out literally it would appear in
+    // this test's own source.
+    assert!(
+        !footer.contains(&format!("{} {}", "toggle", "scope")),
+        "the footer must not name a key the panel does not dispatch: {footer:?}"
+    );
+}

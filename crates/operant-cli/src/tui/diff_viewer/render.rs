@@ -13,6 +13,20 @@ use ratatui::widgets::{Paragraph, Widget};
 
 use crate::tui::vendor::style::theme;
 
+/// The panel's footer: the keys the panel DISPATCHES, nothing else.
+///
+/// (RT-272) It used to end with `d toggle scope` — a key with no arm
+/// anywhere: the panel has no scope to toggle, so the operator pressed 'd'
+/// and nothing happened. The panel's own footer was a promise the panel did
+/// not keep. The page keys and the wheel (which scroll the detail pane) are
+/// named now, because they do what the footer says.
+///
+/// The claims are pinned by `the_diff_viewers_footer_only_names_keys_it_dispatches`
+/// (diff_viewer/tests.rs), which reads this constant and checks each claimed
+/// key against the handler's arms.
+pub(crate) const FOOTER_HINT: &str =
+    " tab switch pane  ·  ↑↓ navigate  ·  pgup/pgdn/wheel scroll  ·  space collapse";
+
 pub fn render_diff_dialog(state: &mut DiffViewerState, area: Rect, buf: &mut Buffer) {
     if !state.visible {
         return;
@@ -86,7 +100,7 @@ pub fn render_diff_dialog(state: &mut DiffViewerState, area: Rect, buf: &mut Buf
     render_file_list(state, panes[0], buf);
     render_diff_detail(state, panes[2], buf);
     Paragraph::new(Line::from(vec![Span::styled(
-        " tab switch pane  ·  ↑↓ navigate  ·  space collapse  ·  d toggle scope",
+        FOOTER_HINT,
         Style::default()
             .fg(theme_colors::muted())
             .add_modifier(Modifier::ITALIC),

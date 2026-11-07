@@ -37,6 +37,7 @@
 | tui-bugfix-campaign-052 | done | B56: a release inside an open panel copied a selection made before the panel opened | — | [2026-11-07] origin/main iter-1830 |
 | tui-bugfix-campaign-053 | done | B57: the unified picker's wheel did nothing — a long model list could only be walked with the arrow keys | — | [2026-11-07] origin/main iter-1835 |
 | tui-bugfix-campaign-054 | done | B58: /model <name> and /effort <level> dropped their argument — the picker opened unfiltered | — | [2026-11-07] origin/main iter-1838 |
+| tui-bugfix-campaign-055 | done | B59: the diff viewer's footer advertised a key that does nothing | — | [2026-11-07] origin/main iter-1840 |
 | tui-bugfix-campaign-018 | done | B23: the keybindings catalogue advertised Ctrl+Q as "Quit application" and nothing dispatched it (the exit-confirmation state machine has two halves, and only one named the chord) | — | [2026-11-05] origin/main iter-1758 |
 | tui-bugfix-campaign-019 | done | phase-5: the highlight test's cross-test frame race — the same palette resetter, reached through a second path | — | [2026-11-05] origin/main iter-1761 |
 | tui-bugfix-campaign-020 | done | B24: the settings screen dropped the operator's edited "File injection max size" (and its own guard never saw the row), the keybindings guard could not see a MODIFIER, and the accent test's palette race was re-broken by an unlocked App::new | — | [2026-11-05] origin/main iter-1760 |

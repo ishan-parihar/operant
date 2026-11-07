@@ -42,9 +42,6 @@ pub struct ModelProviderConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_url: Option<String>,
     /// Path suffix appended to the base URL. Almost no one needs this — only touch it for custom reverse-proxy routing where your gateway mounts the API under a non-standard prefix.
-    ///
-    /// ACCEPTED BUT NOT APPLIED (RT-272): the runtime does not read this key —
-    /// it is accepted so an existing config keeps parsing, and it has NO effect.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_path: Option<String>,
     /// Model identifier to send with each request — the ID string from the provider's catalog (e.g. `gpt-4o`, `claude-sonnet-4-5`, `llama-3.3-70b`). Must match a model the provider actually serves on this account.
@@ -53,66 +50,39 @@ pub struct ModelProviderConfig {
     /// Sampling temperature passed to the model. Lower values (0.0–0.3) give
     /// deterministic, near-verbatim output — fits code, routing, summarization.
     /// Higher values (0.7–1.2) give more varied output — fits open-ended chat.
-    ///
-    /// ACCEPTED BUT NOT APPLIED (RT-272): the runtime does not read this key —
-    /// it is accepted so an existing config keeps parsing, and it has NO effect.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f64>,
     /// HTTP request timeout in seconds. Bump this for slow local providers (Ollama on CPU, big local models) or high-latency networks; leave unset otherwise.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout_secs: Option<u64>,
     /// Extra HTTP headers sent with every request. Niche — used for auth bridges, corporate proxies, or custom gateways that demand a tracing header. Most users never touch this; edit `config.toml` directly if you need it.
-    ///
-    /// ACCEPTED BUT NOT APPLIED (RT-272): the runtime does not read this key —
-    /// it is accepted so an existing config keeps parsing, and it has NO effect.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub extra_headers: HashMap<String, String>,
     /// Wire protocol flavor: `"responses"` for OpenAI's Codex/Responses API, `"chat_completions"` for everything else (OpenAI chat, Anthropic, OpenRouter, Groq, local gateways). Auto-selected per provider — only override if you're forcing an unusual combination.
-    ///
-    /// ACCEPTED BUT NOT APPLIED (RT-272): the runtime does not read this key —
-    /// it is accepted so an existing config keeps parsing, and it has NO effect.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wire_api: Option<String>,
     /// When true, the client pulls credentials from `OPENAI_API_KEY` or `~/.codex/auth.json` instead of the `api_key` field above. Turn on only for the OpenAI Codex provider; leave off for standard API-key providers.
-    ///
-    /// ACCEPTED BUT NOT APPLIED (RT-272): the runtime does not read this key —
-    /// it is accepted so an existing config keeps parsing, and it has NO effect.
     #[serde(default, skip_serializing_if = "is_false")]
     pub requires_openai_auth: bool,
     /// Azure OpenAI resource name (the `<resource>` part of `<resource>.openai.azure.com`). Azure-only; ignore for OpenAI, Anthropic, and everything else.
-    ///
-    /// ACCEPTED BUT NOT APPLIED (RT-272): the runtime does not read this key —
-    /// it is accepted so an existing config keeps parsing, and it has NO effect.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub azure_openai_resource: Option<String>,
     /// Azure OpenAI deployment name — the deployment you created in Azure AI Studio that wraps a specific model. Azure-only; ignore for other providers.
-    ///
-    /// ACCEPTED BUT NOT APPLIED (RT-272): the runtime does not read this key —
-    /// it is accepted so an existing config keeps parsing, and it has NO effect.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub azure_openai_deployment: Option<String>,
     /// Azure OpenAI API version string (e.g. `2024-10-21`). Azure-only; must match a version your resource supports. Ignore for other providers.
-    ///
-    /// ACCEPTED BUT NOT APPLIED (RT-272): the runtime does not read this key —
-    /// it is accepted so an existing config keeps parsing, and it has NO effect.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub azure_openai_api_version: Option<String>,
     /// Hard cap on response length in tokens. Most models enforce sensible built-in limits already — leave unset unless you specifically need to clip long outputs for cost or latency reasons.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u32>,
     /// Provider-specific quirk: fold the system prompt into the first user message instead of sending a separate system role. Only needed for models that reject (or mishandle) a standalone system role — e.g. certain older Mistral variants.
-    ///
-    /// ACCEPTED BUT NOT APPLIED (RT-272): the runtime does not read this key —
-    /// it is accepted so an existing config keeps parsing, and it has NO effect.
     #[serde(default, skip_serializing_if = "is_false")]
     pub merge_system_into_user: bool,
     /// Extra JSON parameters to include in API requests.
     /// Merged at the top level of the request body, allowing provider-specific
     /// features (routing, transforms, etc.) without code changes.
     /// Example: `provider_extra = { provider = { only = ["Anthropic"] } }`
-    ///
-    /// ACCEPTED BUT NOT APPLIED (RT-272): the runtime does not read this key —
-    /// it is accepted so an existing config keeps parsing, and it has NO effect.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_extra: Option<serde_json::Value>,
     /// Per-provider input/output token pricing (USD per 1M tokens). When set,
@@ -121,9 +91,6 @@ pub struct ModelProviderConfig {
     /// served by different providers at different rates. Top-level
     /// `[cost.prices.<key>]` entries continue to take precedence on conflict;
     /// this field is purely additive.
-    ///
-    /// ACCEPTED BUT NOT APPLIED (RT-272): the runtime does not read this key —
-    /// it is accepted so an existing config keeps parsing, and it has NO effect.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pricing: Option<ModelPricing>,
     /// Override the provider's default for native tool calling.
@@ -133,18 +100,12 @@ pub struct ModelProviderConfig {
     /// text-fallback because llama-family Groq models reject native tool
     /// calls with HTTP 400. Setting `native_tools = true` re-enables native
     /// tool calling for Groq models that support it.
-    ///
-    /// ACCEPTED BUT NOT APPLIED (RT-272): the runtime does not read this key —
-    /// it is accepted so an existing config keeps parsing, and it has NO effect.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub native_tools: Option<bool>,
     /// Enable or disable chain-of-thought thinking for models that support it
     /// (e.g. Qwen3, GLM-4). `true` turns thinking on, `false` turns it off.
     /// `None` (default) lets the model decide. Forwarded as `enable_thinking`
     /// in the request body; mirrors the Ollama provider's `think` field.
-    ///
-    /// ACCEPTED BUT NOT APPLIED (RT-272): the runtime does not read this key —
-    /// it is accepted so an existing config keeps parsing, and it has NO effect.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub think: Option<bool>,
     /// Arbitrary key/value pairs forwarded verbatim as `chat_template_kwargs`
@@ -152,27 +113,18 @@ pub struct ModelProviderConfig {
     /// template variables that control behaviour not exposed by other fields.
     /// Example (Qwen3 thinking suppression):
     ///   `chat_template_kwargs = { enable_thinking = false }`
-    ///
-    /// ACCEPTED BUT NOT APPLIED (RT-272): the runtime does not read this key —
-    /// it is accepted so an existing config keeps parsing, and it has NO effect.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chat_template_kwargs: Option<serde_json::Value>,
     /// Override the Ollama `num_ctx` (context window, in tokens) sent on
     /// every `/api/chat` request. Only consulted when this profile resolves
     /// to the `ollama` provider. Defaults to the framework constant
     /// (`OLLAMA_DEFAULT_NUM_CTX`) when unset.
-    ///
-    /// ACCEPTED BUT NOT APPLIED (RT-272): the runtime does not read this key —
-    /// it is accepted so an existing config keeps parsing, and it has NO effect.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ollama_num_ctx: Option<u32>,
     /// Override the Ollama `num_predict` (max output tokens) sent on every
     /// `/api/chat` request. Only consulted when this profile resolves to
     /// the `ollama` provider. Defaults to the framework constant
     /// (`OLLAMA_DEFAULT_NUM_PREDICT`) when unset.
-    ///
-    /// ACCEPTED BUT NOT APPLIED (RT-272): the runtime does not read this key —
-    /// it is accepted so an existing config keeps parsing, and it has NO effect.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ollama_num_predict: Option<i32>,
     /// Force every Ollama `/api/chat` request to use this temperature,
@@ -181,82 +133,8 @@ pub struct ModelProviderConfig {
     /// (`None`, the default), the per-call temperature wins — full
     /// backward compatibility. Only consulted when this profile
     /// resolves to the `ollama` provider.
-    ///
-    /// ACCEPTED BUT NOT APPLIED (RT-272): the runtime does not read this key —
-    /// it is accepted so an existing config keeps parsing, and it has NO effect.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ollama_temperature_override: Option<f64>,
-}
-
-impl ModelProviderConfig {
-    /// The wire knobs this profile carries that the runtime does NOT apply.
-    ///
-    /// Seventeen keys are accepted so an existing `operant.toml` keeps
-    /// parsing (`deny_unknown_fields` would otherwise fail the whole load),
-    /// but nothing reads them: the client reads only `base_url`, `api_key`,
-    /// `api_keys`, `model`, `timeout_secs`, `max_tokens` and `name`. Each of
-    /// the listed keys has a doc comment that PROMISES a behaviour — extra
-    /// headers "sent with every request", credentials pulled from
-    /// `OPENAI_API_KEY`, pricing merged into the cost lookup — and none of
-    /// them happens (RT-272).
-    ///
-    /// The list lives here, next to the fields it names, so a new key cannot
-    /// be added to the struct without deciding whether it is read.
-    pub fn unread_wire_knobs(&self) -> Vec<&'static str> {
-        let mut knobs: Vec<&'static str> = Vec::new();
-        if self.api_path.is_some() {
-            knobs.push("api_path");
-        }
-        if !self.extra_headers.is_empty() {
-            knobs.push("extra_headers");
-        }
-        if self.wire_api.is_some() {
-            knobs.push("wire_api");
-        }
-        if self.requires_openai_auth {
-            knobs.push("requires_openai_auth");
-        }
-        if self.azure_openai_resource.is_some() {
-            knobs.push("azure_openai_resource");
-        }
-        if self.azure_openai_deployment.is_some() {
-            knobs.push("azure_openai_deployment");
-        }
-        if self.azure_openai_api_version.is_some() {
-            knobs.push("azure_openai_api_version");
-        }
-        if self.temperature.is_some() {
-            knobs.push("temperature");
-        }
-        if self.merge_system_into_user {
-            knobs.push("merge_system_into_user");
-        }
-        if self.provider_extra.is_some() {
-            knobs.push("provider_extra");
-        }
-        if self.pricing.is_some() {
-            knobs.push("pricing");
-        }
-        if self.native_tools.is_some() {
-            knobs.push("native_tools");
-        }
-        if self.think.is_some() {
-            knobs.push("think");
-        }
-        if self.chat_template_kwargs.is_some() {
-            knobs.push("chat_template_kwargs");
-        }
-        if self.ollama_num_ctx.is_some() {
-            knobs.push("ollama_num_ctx");
-        }
-        if self.ollama_num_predict.is_some() {
-            knobs.push("ollama_num_predict");
-        }
-        if self.ollama_temperature_override.is_some() {
-            knobs.push("ollama_temperature_override");
-        }
-        knobs
-    }
 }
 
 /// Valid temperature range for all paths (config, CLI, env override).
