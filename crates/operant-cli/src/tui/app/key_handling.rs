@@ -2070,41 +2070,42 @@ impl App {
                 self.prompt_input.insert_newline();
                 self.refresh_prompt_input();
             }
-            // Ctrl+Enter: QUEUE. While a turn streams this pushes the draft
-            // to the steer queue (the same mechanism /queue and /steer
-            // drive — `queue_steer`) and says so; while idle it submits like
-            // plain Enter. jcode's `send_action` routes the alternate Enter
-            // to Queue when processing and Submit otherwise — same shape here.
-            // Ctrl+J keeps its newline meaning in BOTH states (the iter-120
-            // contract, unchanged). A failed push must NOT lose the draft:
-            // `queue_steer` refuses without consuming, so the composer is
-            // only cleared after the text is held.
+            // Ctrl+Enter: QUEUE — ALWAYS.
+            //
+            // The operator's contract: "CTRL+ENTER still does not queue
+            // correctly" and, before that, "shortcuts like ctrl+enter must
+            // queue the message". The key means QUEUE, so it queues in both
+            // states: while a turn streams the draft joins the steer queue
+            // and the agent sees it at the next model call; while idle it
+            // waits in the same queue and is delivered WITH the next turn
+            // (see `take_pending_queued_messages`).
+            //
+            // It is NEVER a submission: the plain-Enter arm below would submit
+            // the very draft the operator asked to queue, and the `return
+            // false` keeps that arm from seeing this key.
+            //
+            // A failed push must NOT lose the draft: `queue_steer` refuses
+            // without consuming, so the composer is only cleared after the
+            // text is held.
             KeyCode::Enter
                 if key.modifiers.contains(KeyModifiers::CONTROL)
                     && !key.modifiers.contains(KeyModifiers::SHIFT) =>
             {
-                if self.is_streaming {
-                    let held = self.prompt_input.text.clone();
-                    if held.trim().is_empty() {
-                        self.set_status_notice(
-                            "Nothing to queue — the composer is empty.".to_string(),
-                        );
-                    } else {
-                        let notice = self.queue_steer(&held);
-                        let queued = notice.starts_with("Steer queued");
-                        if queued {
-                            // Success: consume the composer (take() also
-                            // clears any paste-placeholder metadata).
-                            let _ = self.prompt_input.take();
-                        }
-                        self.set_status_notice(notice);
-                    }
-                    self.refresh_prompt_input();
+                let held = self.prompt_input.text.clone();
+                if held.trim().is_empty() {
+                    self.set_status_notice("Nothing to queue — the composer is empty.".to_string());
                 } else {
-                    // Idle: Ctrl+Enter is just another submit (jcode's
-                    // SendAction::Submit when not processing).
-                    return true;
+                    let notice = self.queue_steer(&held);
+                    let queued = notice.starts_with("Steer queued");
+                    if queued {
+                        // Success: consume the composer (take() also
+                        // clears any paste-placeholder metadata).
+                        let _ = self.prompt_input.take();
+                    }
+                    self.set_status_notice(notice);
                 }
+                self.refresh_prompt_input();
+                return false;
             }
             // Trailing-backslash continuation (jcode `newline.rs`): the
             // universal newline fallback that needs NO keyboard protocol —

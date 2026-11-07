@@ -688,6 +688,18 @@ impl TuiApp {
             self.app.set_status_notice(notice);
             return;
         }
+        // A message the operator QUEUED while the TUI was IDLE is delivered
+        // WITH this turn, ahead of the draft they just submitted: they queued
+        // it first. The agent's own steer drain only runs BETWEEN iterations,
+        // so a message queued before a turn had no boundary to wait for — it
+        // would sit until the turn after the next one (or forever, if that
+        // turn ended in a single iteration). This is the "queued but never
+        // delivered" half of the operator's Ctrl+Enter report.
+        let mut text = text;
+        let pending = self.app.take_pending_queued_messages();
+        if !pending.is_empty() {
+            text = format!("{}\n\n{}", pending.join("\n\n"), text);
+        }
         // (plan 03 §5) The failed-input restore slot is the COMPOSER's
         // debt: `take_input` armed it when Enter consumed the composer,
         // and the merged composer path routes through here — clearing it

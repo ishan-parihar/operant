@@ -10009,17 +10009,39 @@ mod enter_chord_tests {
         );
     }
 
-    /// Ctrl+Enter while idle submits like plain Enter (jcode's
-    /// SendAction::Submit when not processing).
+    /// Ctrl+Enter ALWAYS queues — the operator's contract: "CTRL+ENTER still
+    /// does not queue correctly", and before that "shortcuts like ctrl+enter
+    /// must queue the message". While idle the draft joins the steer queue
+    /// and waits for the next turn (the submit path delivers it WITH that
+    /// turn); it is never submitted straight into a turn the operator did not
+    /// ask for.
     #[test]
-    fn ctrl_enter_submits_when_idle() {
+    fn ctrl_enter_queues_when_idle() {
         let mut app = make_app();
+        let queue = make_steer_queue();
+        app.steer_queue_handle = Some(std::sync::Arc::clone(&queue));
         app.is_streaming = false;
         app.prompt_input.replace_text("hello there".to_string());
 
         let submitted = app.handle_key_event(press_key(KeyCode::Enter, KeyModifiers::CONTROL));
 
-        assert!(submitted, "idle Ctrl+Enter must submit");
+        assert!(!submitted, "idle Ctrl+Enter must not submit — it queues");
+        assert_eq!(
+            queue.try_lock().unwrap().as_slice(),
+            ["hello there".to_string()],
+            "the draft must land in the steer queue"
+        );
+        assert!(
+            app.prompt_input.text.is_empty(),
+            "a successful queue consumes the composer"
+        );
+        assert!(
+            app.status_notice()
+                .as_deref()
+                .is_some_and(|n| n.contains("Steer queued")),
+            "the queue must be announced: {:?}",
+            app.status_notice()
+        );
     }
 
     /// An empty composer + Ctrl+Enter mid-stream says so and queues nothing.

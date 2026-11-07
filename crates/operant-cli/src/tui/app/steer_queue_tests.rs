@@ -195,3 +195,64 @@ fn the_goal_message_enters_the_prompt_history() {
         "the goal must be in the on-disk history: {persisted}"
     );
 }
+
+/// A message the operator QUEUED while the TUI was IDLE must be delivered
+/// WITH the next turn, ahead of the draft they just submitted.
+///
+/// The agent's steer drain runs BETWEEN iterations, so a message queued
+/// before a turn had no iteration boundary to wait for: it sat until the
+/// turn after the next one — "CTRL+ENTER still does not queue correctly".
+///
+/// MUTATION-PROVEN: leaving the pending messages in the queue (the old
+/// behaviour — the submit path never looked at them) fails this test by name.
+#[test]
+fn an_idle_queued_message_is_taken_for_the_next_turn() {
+    let mut app = super::tests::make_app();
+    let queue = make_steer_queue();
+    app.steer_queue_handle = Some(std::sync::Arc::clone(&queue));
+    app.is_streaming = false;
+    app.prompt_input.replace_text("do this first".to_string());
+
+    // Ctrl+Enter: the operator asks for it to be QUEUED, not sent.
+    let submitted = app.handle_key_event(press_key(KeyCode::Enter, KeyModifiers::CONTROL));
+    assert!(!submitted, "Ctrl+Enter must not submit — it queues");
+    assert_eq!(
+        queue.try_lock().unwrap().as_slice(),
+        ["do this first".to_string()],
+        "the draft is queued"
+    );
+
+    // The next turn takes it, in the order it was queued.
+    let pending = app.take_pending_queued_messages();
+    assert_eq!(
+        pending,
+        vec!["do this first".to_string()],
+        "the pending message is handed to the next turn"
+    );
+    assert!(
+        queue.try_lock().unwrap().is_empty(),
+        "the queue is empty once the turn has taken it"
+    );
+    assert!(
+        app.queued_messages().is_empty(),
+        "and the queued band agrees: {:?}",
+        app.queued_messages()
+    );
+}
+
+/// Two queued messages keep their order.
+#[test]
+fn queued_messages_keep_their_order() {
+    let mut app = super::tests::make_app();
+    let queue = make_steer_queue();
+    app.steer_queue_handle = Some(std::sync::Arc::clone(&queue));
+
+    app.queue_steer("first");
+    app.queue_steer("second");
+
+    assert_eq!(
+        app.take_pending_queued_messages(),
+        vec!["first".to_string(), "second".to_string()],
+        "FIFO: the operator's order is the agent's order"
+    );
+}

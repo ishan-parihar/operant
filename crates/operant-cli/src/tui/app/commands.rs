@@ -241,6 +241,30 @@ impl App {
         notice
     }
 
+    /// Take the messages the operator QUEUED that are still pending.
+    ///
+    /// The queue is drained by the AGENT between iterations, so a message
+    /// queued while the TUI is IDLE has no iteration boundary to wait for: it
+    /// would sit until the turn after the next one (or forever, if the next
+    /// turn ends in a single iteration). The submit path takes those pending
+    /// messages and delivers them WITH the next turn, ahead of the draft the
+    /// operator just sent — they queued first.
+    ///
+    /// FIFO order; the queue and the queued band are left in step with what
+    /// was taken.
+    pub(crate) fn take_pending_queued_messages(&mut self) -> Vec<String> {
+        let mut pending = Vec::new();
+        if let Some(handle) = &self.steer_queue_handle
+            && let Ok(mut q) = handle.try_lock()
+        {
+            pending.append(&mut q);
+        }
+        if !pending.is_empty() {
+            self.refresh_steer_queue_mirror();
+        }
+        pending
+    }
+
     /// Render `/keys`: the full active catalogue grouped by context, with the
     /// chords a terminal is likely to intercept flagged inline.
     pub fn render_keys_report(
@@ -3202,6 +3226,30 @@ mod tests {
                 .collect::<std::collections::HashSet<_>>()
                 .len(),
             "every category is one contiguous run: {seen:?}"
+        );
+    }
+
+    /// (iter-1876) The palette's section header is the only thing that tells
+    /// the operator what a row is, and the catch-all ("Other") is a header
+    /// that says nothing: 58 of the 111 rows sat under it. Every registered
+    /// command now carries a real category, so the palette reads as eleven
+    /// labelled groups instead of one labelled group and a wall. This test
+    /// names any command that slips back into the catch-all.
+    #[test]
+    fn no_palette_command_falls_into_the_catch_all_category() {
+        let app = make_app();
+        let catch_all = crate::commands::TuiCategory::Other.as_str();
+        let unclassified: Vec<&str> = app
+            .command_palette
+            .items
+            .iter()
+            .filter(|item| item.category == catch_all)
+            .map(|item| item.title.as_str())
+            .collect();
+        assert!(
+            unclassified.is_empty(),
+            "these palette commands fell back to the catch-all category {catch_all:?}, \
+             whose header says nothing: {unclassified:?}"
         );
     }
 
