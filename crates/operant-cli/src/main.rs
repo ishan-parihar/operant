@@ -3173,6 +3173,28 @@ fn restore_default_sigpipe_disposition() {
     }
 }
 
+/// Keep SIGPIPE IGNORED in a long-lived process.
+///
+/// The CLI restores the default disposition so a closed pipe kills the tool
+/// quietly — the Unix-tool behaviour `operant doctor | head -5` needs. A
+/// DAEMON must NOT have that disposition: when a CHILD closes its pipe, the
+/// write has to return EPIPE so the caller can report it, not raise SIGPIPE
+/// and kill the whole process.
+///
+/// MEASURED on this host (2026-11-07): the gateway writes NDJSON to the AFT
+/// bridge's child on stdin; that child prints its help text and exits, so
+/// the write hit a closed pipe and the gateway DIED of SIGPIPE seconds after
+/// every start — a crash loop of 870+ restarts, with the operator's session
+/// unable to stay up.
+fn ignore_sigpipe_disposition() {
+    #[cfg(unix)]
+    // Safety: `signal` is async-signal-safe; this runs before the daemon's
+    // workers start. `SIG_IGN` is a valid disposition constant.
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_IGN);
+    }
+}
+
 fn main() -> Result<()> {
     restore_default_sigpipe_disposition();
 
@@ -3446,6 +3468,10 @@ async fn run(
             cmd_org::handle_org_command(&loaded.config, cmd.clone()).await?;
         }
         Some(Commands::Gateway { cmd, json }) => {
+            // A DAEMON keeps SIGPIPE ignored: a child that closes its pipe
+            // must produce a reportable error, not the death of the gateway
+            // (see `ignore_sigpipe_disposition`).
+            ignore_sigpipe_disposition();
             cmd_gateway::handle_gateway_command(&loaded.config, cmd.clone(), *json).await?;
         }
         Some(Commands::Checkpoints { cmd }) => {
@@ -3605,6 +3631,27 @@ async fn run(
 mod tests {
     use super::*;
     use std::io::Cursor;
+
+    /// THE GATEWAY MUST NOT DIE OF SIGPIPE.
+    ///
+    /// MEASURED (2026-11-07): the gateway wrote NDJSON to the AFT bridge's
+    /// child on stdin; that child printed its help and exited, the write hit
+    /// a closed pipe, and — with the CLI's `SIG_DFL` disposition — the whole
+    /// gateway DIED. The host logged 870+ restarts in two hours and the
+    /// operator's session could not stay up.
+    ///
+    /// The daemon arm must therefore ignore SIGPIPE, and the needle is built
+    /// by concatenation so this test's own source cannot satisfy it.
+    #[test]
+    fn the_gateway_ignores_sigpipe() {
+        let source = include_str!("main.rs");
+        let needle = format!("ignore_sigpipe_{}()", "disposition");
+        assert!(
+            source.contains(&needle),
+            "the gateway arm must ignore SIGPIPE — a child that closes its \
+             pipe must produce a reportable error, not the death of the daemon"
+        );
+    }
 
     /// A log path that cannot be opened is a startup error that names the path,
     /// not a panic. The open happens before the subscriber is installed, so
