@@ -216,17 +216,26 @@ fn check_config_semantics(config: &AppConfig, items: &mut Vec<CheckResult>) {
                     None => items.push(CheckResult::warn(cat, "no default_model configured")),
                 }
 
+                // The provider profile's temperature is ACCEPTED BUT NOT
+                // APPLIED (RT-272): nothing reads it, so an out-of-range
+                // value cannot change any request. Reporting it as an ERROR
+                // made the doctor fail on a knob that does nothing — a
+                // phantom failure the operator could not act on. The
+                // load-time warning (AppConfig::unused_setting_warnings)
+                // names the knob instead.
                 let default_temperature = entry.temperature.unwrap_or(0.7);
                 if (0.0..=2.0).contains(&default_temperature) {
-                    items.push(CheckResult::ok(
-                        cat,
-                        format!("temperature {default_temperature:.1} (valid range 0.0–2.0)"),
-                    ));
-                } else {
-                    items.push(CheckResult::error(
+                    items.push(CheckResult::warn(
                         cat,
                         format!(
-                            "temperature {default_temperature:.1} is out of range (expected 0.0–2.0)"
+                            "temperature {default_temperature:.1} is set but NOT applied — the runtime does not read it"
+                        ),
+                    ));
+                } else {
+                    items.push(CheckResult::warn(
+                        cat,
+                        format!(
+                            "temperature {default_temperature:.1} is out of range (expected 0.0–2.0) AND is NOT applied — the runtime does not read it"
                         ),
                     ));
                 }
@@ -762,8 +771,12 @@ mod tests {
         assert!(provider_validation_error("anthropic-custom:https://example.com").is_none());
     }
 
+    /// RT-272: the provider profile's temperature is ACCEPTED BUT NOT
+    /// APPLIED, so an out-of-range value cannot break a request — the
+    /// doctor must WARN (naming the knob as not applied), not ERROR on a
+    /// setting the operator cannot act on.
     #[test]
-    fn config_validation_catches_bad_temperature() {
+    fn config_validation_warns_about_an_unapplied_temperature() {
         let mut config = fixture_config();
         if let Some(entry) = config.providers.models.get_mut("openrouter") {
             entry.temperature = Some(5.0);
@@ -771,15 +784,29 @@ mod tests {
         let items = diagnose(&config);
         let temp_item = items.iter().find(|i| i.message.contains("temperature"));
         assert!(temp_item.is_some());
-        assert_eq!(temp_item.map(|i| i.severity), Some(Severity::Error));
+        assert_eq!(temp_item.map(|i| i.severity), Some(Severity::Warn));
+        assert!(
+            temp_item
+                .map(|i| i.message.contains("NOT applied"))
+                .unwrap_or(false),
+            "the warning must say the knob is not applied: {temp_item:?}"
+        );
     }
 
+    /// RT-272: even a VALID temperature is not applied, so the doctor must
+    /// not report the knob as working.
     #[test]
-    fn config_validation_accepts_valid_temperature() {
+    fn config_validation_reports_a_valid_temperature_as_unapplied() {
         let items = diagnose(&fixture_config());
         let temp_item = items.iter().find(|i| i.message.contains("temperature"));
         assert!(temp_item.is_some());
-        assert_eq!(temp_item.map(|i| i.severity), Some(Severity::Ok));
+        assert_eq!(temp_item.map(|i| i.severity), Some(Severity::Warn));
+        assert!(
+            temp_item
+                .map(|i| i.message.contains("NOT applied"))
+                .unwrap_or(false),
+            "the warning must say the knob is not applied: {temp_item:?}"
+        );
     }
 
     #[test]
