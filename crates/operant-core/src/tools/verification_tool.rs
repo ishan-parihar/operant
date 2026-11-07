@@ -280,13 +280,25 @@ impl VerifyTaskTool {
         phases: &[crate::verification::PhaseResult],
     ) {
         for phase in phases {
-            let _ = self.database.record_verification_event(
+            // The evidence ledger is the module's promise ("records every
+            // phase in the verification_events evidence ledger"). A failed
+            // write is REPORTED, not dropped: the old `let _ =` made a
+            // missing evidence row invisible while the tool returned
+            // success (RT-292).
+            if let Err(e) = self.database.record_verification_event(
                 &recipe.name,
                 &phase.name,
                 phase.ok,
                 phase.exit_code,
                 &phase.output_tail,
-            );
+            ) {
+                tracing::warn!(
+                    recipe = %recipe.name,
+                    phase = %phase.name,
+                    error = %e,
+                    "Verification evidence could not be recorded — the ledger is missing this phase"
+                );
+            }
         }
     }
 }
@@ -414,6 +426,25 @@ mod tests {
         assert!(evidence.success);
         let e: Value = serde_json::from_str(&evidence.content).unwrap();
         assert_eq!(e["count"], 0);
+    }
+
+    /// RT-292: the verification evidence write error must not be dropped.
+    ///
+    /// The module doc claims it "records every phase in the
+    /// `verification_events` evidence ledger"; the write's error was
+    /// swallowed with `let _ =`, so a failed write left the ledger missing
+    /// a phase while the tool returned success.
+    ///
+    /// Source-grep contract (the repo's own shape): the needle is built by
+    /// concatenation so this test's own source cannot satisfy it.
+    #[test]
+    fn the_verification_evidence_write_error_is_not_dropped() {
+        let src = include_str!("verification_tool.rs");
+        let dropped = format!("let _ = self.database.{}", "record_verification_event");
+        assert!(
+            !src.contains(&dropped),
+            "the evidence write error must be reported, not dropped"
+        );
     }
 
     /// RT-290: the `phases` parameter must be honoured.
