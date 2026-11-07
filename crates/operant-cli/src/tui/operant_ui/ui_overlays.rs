@@ -406,6 +406,9 @@ pub(super) fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: usize, ap
     // hard-coded cap it used instead made the lower half of this overlay
     // unreachable.
     app.help_max_scroll().set(max_scroll);
+    // (iter-1855) The page step for PageUp/PageDown is the overlay's visible
+    // height — the render path is the only place that knows it.
+    app.help_page_height().set(visible_height);
     let scroll = scroll.min(max_scroll);
 
     let scroll_info = if total_lines > visible_height {
@@ -442,7 +445,7 @@ pub(super) fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: usize, ap
             // panel does: arrows and the wheel scroll, typing filters, and
             // /help <cmd> filters the list. It also fits the narrow panel —
             // the old line was clipped at 80 columns ("for d").
-            " Esc to close · ↑↓/wheel scroll · type to filter · /help <cmd> for details ",
+            " Esc to close · ↑↓/pgup/pgdn/wheel scroll · type to filter · /help <cmd> ",
             Style::default().fg(dim_color()),
         )))
         .borders(Borders::ALL)
@@ -499,6 +502,7 @@ pub(super) fn draw_keys_overlay(frame: &mut Frame, area: Rect, scroll: usize, ap
     let visible_height = area.height.saturating_sub(2) as usize;
     app.help_max_scroll()
         .set(lines.len().saturating_sub(visible_height));
+    app.help_page_height().set(visible_height);
 
     let title = if hotkeys { " Hotkeys " } else { " Keys " };
     let block = Block::default()
@@ -509,7 +513,7 @@ pub(super) fn draw_keys_overlay(frame: &mut Frame, area: Rect, scroll: usize, ap
                 .add_modifier(Modifier::BOLD),
         ))
         .title_bottom(Line::from(Span::styled(
-            " Esc to close · type to filter chords · ↑/↓ scroll · /help for commands ",
+            " Esc to close · type to filter chords · ↑↓/pgup/pgdn scroll · /help for commands ",
             Style::default().fg(dim_color()),
         )))
         .borders(Borders::ALL)

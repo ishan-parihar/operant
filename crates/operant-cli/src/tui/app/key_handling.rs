@@ -2612,6 +2612,25 @@ impl App {
                 let max = self.help_overlay.max_scroll.get().min(u16::MAX as usize) as u16;
                 self.help_overlay.scroll_down(max);
             }
+            // (iter-1855) The page keys: the /help catalogue is long (the
+            // commands, the Skills section, the whole KEYBOARD section, the
+            // Input section), and one line at a time is the long way through
+            // it. The step is the overlay's visible height, recorded by the
+            // render path.
+            // (iter-1855) The page keys: the /help catalogue is long (the
+            // commands, the Skills section, the whole KEYBOARD section, the
+            // Input section), and one line at a time is the long way through
+            // it. The step is the overlay's visible height, recorded by the
+            // render path.
+            KeyCode::PageUp => {
+                self.help_overlay
+                    .scroll_up_by(self.help_overlay.page_step());
+            }
+            KeyCode::PageDown => {
+                let max = self.help_overlay.max_scroll.get().min(u16::MAX as usize) as u16;
+                self.help_overlay
+                    .scroll_down_by(self.help_overlay.page_step(), max);
+            }
             KeyCode::Backspace => {
                 self.help_overlay.pop_filter_char();
             }

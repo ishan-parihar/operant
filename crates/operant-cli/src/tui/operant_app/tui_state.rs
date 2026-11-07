@@ -564,6 +564,10 @@ pub trait TuiState {
     /// renderer is the only side that knows the content's height
     /// (iter-1795).
     fn help_max_scroll(&self) -> &std::cell::Cell<usize>;
+
+    /// The help overlay's visible height in rows — the PAGE step for
+    /// PageUp/PageDown (iter-1855).
+    fn help_page_height(&self) -> &std::cell::Cell<usize>;
     /// The /keys or /hotkeys report body as plain lines, produced by the
     /// same report builders the commands use (single source of truth).
     fn keys_report_lines(&self, hotkeys: bool) -> Vec<String>;

@@ -21,4 +21,4 @@
 │  Session                                                                     │
 │                                                                              │
 │    /clear  Clear conversation history                                        │
-└ Esc to close · ↑↓/wheel scroll · type to filter · /help <cmd> for details ───┘
+└ Esc to close · ↑↓/pgup/pgdn/wheel scroll · type to filter · /help <cmd> ─────┘

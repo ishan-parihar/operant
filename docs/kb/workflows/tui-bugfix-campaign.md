@@ -40,6 +40,7 @@
 | tui-bugfix-campaign-055 | done | B59: the diff viewer's footer advertised a key that does nothing | — | [2026-11-07] origin/main iter-1840 |
 | tui-bugfix-campaign-056 | done | B60: the suite's own gate flaked — another test's delegation landed in the frame | — | [2026-11-07] origin/main iter-1851 |
 | tui-bugfix-campaign-057 | done | B61: the fleet lesson from iter-1840's revert — build the staged ledger from origin/main, and commit with --only | — | [2026-11-07] origin/main iter-1853 |
+| tui-bugfix-campaign-058 | done | B62: the /help overlay had no page scroll — hundreds of lines, one at a time | — | [2026-11-07] origin/main iter-1854 |
 | tui-bugfix-campaign-018 | done | B23: the keybindings catalogue advertised Ctrl+Q as "Quit application" and nothing dispatched it (the exit-confirmation state machine has two halves, and only one named the chord) | — | [2026-11-05] origin/main iter-1758 |
 | tui-bugfix-campaign-019 | done | phase-5: the highlight test's cross-test frame race — the same palette resetter, reached through a second path | — | [2026-11-05] origin/main iter-1761 |
 | tui-bugfix-campaign-020 | done | B24: the settings screen dropped the operator's edited "File injection max size" (and its own guard never saw the row), the keybindings guard could not see a MODIFIER, and the accent test's palette race was re-broken by an unlocked App::new | — | [2026-11-05] origin/main iter-1760 |

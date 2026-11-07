@@ -35,6 +35,15 @@ pub struct HelpOverlay {
     /// knows the real number, so it records it here (a Cell, because the
     /// TuiState seam is read-only) and the handler clamps to it.
     pub max_scroll: std::cell::Cell<usize>,
+    /// The overlay's visible height in rows, recorded by the render path on
+    /// every frame — the PAGE step for PageUp/PageDown.
+    /// (iter-1855) The /help catalogue is long (the commands, the Skills
+    /// section, the whole KEYBOARD section, the Input section), and the only
+    /// way through it was one line at a time — the arrows, or the wheel. The
+    /// page keys are what a reader expects of a long list, and the render
+    /// path knows the real height (a Cell, because the TuiState seam is
+    /// read-only), so it records it here.
+    pub page_height: std::cell::Cell<usize>,
     /// Live search filter — only commands matching this substring are shown.
     pub filter: String,
     /// Dynamically populated entries from the command registry.
@@ -120,6 +129,11 @@ impl HelpOverlay {
         self.scroll_offset = self.scroll_offset.saturating_sub(1);
     }
 
+    /// Scroll up by `lines` rows — the PAGE step (PageUp).
+    pub fn scroll_up_by(&mut self, lines: u16) {
+        self.scroll_offset = self.scroll_offset.saturating_sub(lines);
+    }
+
     /// Scroll down one line, up to `max` — the largest offset the content
     /// allows (`HelpOverlay::max_scroll`, recorded by the render path).
     /// `max` is INCLUSIVE: the offset may reach it (the renderer clamps
@@ -128,6 +142,20 @@ impl HelpOverlay {
         if self.scroll_offset < max {
             self.scroll_offset += 1;
         }
+    }
+
+    /// Scroll down by `lines` rows — the PAGE step (PageDown) — up to `max`,
+    /// with the same inclusive clamp as `scroll_down`.
+    pub fn scroll_down_by(&mut self, lines: u16, max: u16) {
+        let target = self.scroll_offset.saturating_add(lines);
+        self.scroll_offset = target.min(max);
+    }
+
+    /// The page step: the overlay's visible height, recorded by the render
+    /// path (`HelpOverlay::page_height`). A page is at least one line, so a
+    /// page key always moves even before the first frame has drawn.
+    pub fn page_step(&self) -> u16 {
+        self.page_height.get().max(1).min(u16::MAX as usize) as u16
     }
 
     pub fn push_filter_char(&mut self, c: char) {

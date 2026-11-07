@@ -1252,6 +1252,50 @@ fn keys_overlay_opens_at_top_not_transcript() {
     assert!(!app.help_overlay.visible);
 }
 
+/// (iter-1855) The /help overlay's page keys scroll a page.
+///
+/// The /help catalogue is long — the commands, the Skills section, the whole
+/// KEYBOARD section, the Input section — and one line at a time is the long
+/// way through it. The page step is the overlay's VISIBLE HEIGHT, recorded
+/// by the render path (the only place that knows it).
+#[test]
+fn the_help_overlay_page_keys_scroll_a_page() {
+    let _registry = registry_lock();
+    let mut app = make_app();
+    assert!(app.handle_tui_command("help", ""));
+    assert!(app.help_overlay.visible, "/help must open the overlay");
+    // The render path records the page height and the content's real max.
+    let _ = render_buffer(&app);
+    let page = app.help_overlay.page_step();
+    assert!(
+        page > 1,
+        "the page step must be the overlay's visible height, not one line: {page}"
+    );
+    let max = app.help_overlay.max_scroll.get();
+    assert!(
+        max > page as usize,
+        "the /help catalogue must be taller than a page: {max}"
+    );
+
+    app.handle_key_event(crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::PageDown,
+        crossterm::event::KeyModifiers::NONE,
+    ));
+    assert_eq!(
+        app.help_overlay.scroll_offset, page,
+        "PageDown must scroll exactly one page"
+    );
+
+    app.handle_key_event(crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::PageUp,
+        crossterm::event::KeyModifiers::NONE,
+    ));
+    assert_eq!(
+        app.help_overlay.scroll_offset, 0,
+        "PageUp must scroll back to the top"
+    );
+}
+
 /// 2026-10-14 batch, plan 10: /info prints once — the status-bar echo of the
 /// same summary line duplicated every press.
 #[test]
@@ -13609,6 +13653,7 @@ fn every_transcript_content_test_holds_the_delegation_registry_lock() {
         "tool_rows_show_failure_and_pending_from_app_status",
         "highlight_covers_only_the_text_a_copy_carries",
         "copy_merges_wrapped_table_cells_and_skips_error_cards",
+        "the_help_overlay_page_keys_scroll_a_page",
     ];
 
     let source = include_str!("tests.rs");
