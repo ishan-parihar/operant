@@ -131,17 +131,55 @@ fn format_advisor_batch(notes: &[ParsedNote]) -> String {
     let mut out = String::from(BOUNDARY_GUIDANCE);
     out.push('\n');
     for note in notes {
-        let sev = match note.severity {
-            Severity::Nit => "nit",
-            Severity::Concern => "concern",
-            Severity::Blocker => "blocker",
-        };
+        let sev = severity_label(note.severity);
         out.push_str(&format!(
             "<advisory severity=\"{sev}\" guidance=\"{ADVISORY_GUIDANCE}\">\n{}\n</advisory>\n",
             escape_xml_text(&note.text)
         ));
     }
     out
+}
+
+/// The severity word of a note, as the card shows it.
+fn severity_label(severity: Severity) -> &'static str {
+    match severity {
+        Severity::Nit => "nit",
+        Severity::Concern => "concern",
+        Severity::Blocker => "blocker",
+    }
+}
+
+/// Render one review's notes as the HOST-facing card: one block per note.
+///
+/// The card is what the operator READS, so each note gets its own block,
+/// prefixed with its severity and separated by a blank line. The preserve
+/// channel used to join the notes with `"; "` into ONE string, so a review
+/// with three notes read as a single run-on sentence — the operator's report:
+/// "advisor preview does not render correctly. It lumps everything without
+/// correct formatting, rather than showing it in blocks".
+pub fn format_advisor_card(notes: &[ParsedNote]) -> String {
+    notes
+        .iter()
+        .map(|note| format!("[{}] {}", severity_label(note.severity), note.text.trim()))
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+/// The summary the advisor's delivery carries to the host: the header, the
+/// CARD (one block per note) and, for a continue-channel review, the
+/// continuation marker + the model-visible batch AFTER the card.
+///
+/// The order matters: the host splits the summary at the marker, so the card
+/// is everything BEFORE it. A payload painted into the card would show the
+/// operator the boundary guidance and the raw `<advisory>` XML.
+pub fn advisor_review_summary(review: &AdvisorDelivery) -> String {
+    let card = format_advisor_card(&review.notes);
+    let continuation = if review.should_continue {
+        format!("\n\n{CONTINUATION_TAG}\n{}", review.batch)
+    } else {
+        String::new()
+    };
+    format!("⚑ advisor ({}):\n\n{card}{continuation}", review.advisor)
 }
 
 /// Channel decision (omp `resolveAdvisorDeliveryChannel`, the idle arm
@@ -637,6 +675,106 @@ mod tests {
             format!("tests {amp_entity} {lt_entity}guards{gt_entity} aren{apos_entity}t exercised");
         assert!(batch.contains(&expected));
         assert!(batch.ends_with("</advisory>\n"));
+    }
+
+    /// The HOST-facing card: one BLOCK per note, severity-prefixed, blank
+    /// line between the blocks. The preserve channel used to join the notes
+    /// with `"; "` into one run-on string, so a three-note review read as a
+    /// single sentence — "it lumps everything without correct formatting,
+    /// rather than showing it in blocks".
+    #[test]
+    fn the_card_renders_one_block_per_note() {
+        let card = format_advisor_card(&[
+            ParsedNote {
+                severity: Severity::Concern,
+                text: "fix the race".into(),
+            },
+            ParsedNote {
+                severity: Severity::Nit,
+                text: "typo in the comment".into(),
+            },
+            ParsedNote {
+                severity: Severity::Blocker,
+                text: "tests are broken".into(),
+            },
+        ]);
+        let blocks: Vec<&str> = card.split("\n\n").collect();
+        assert_eq!(
+            blocks,
+            vec![
+                "[concern] fix the race",
+                "[nit] typo in the comment",
+                "[blocker] tests are broken",
+            ],
+            "each note is its own block, in order, with its severity"
+        );
+        // And never the old lump: no semicolon-joined run-on.
+        assert!(
+            !card.contains("; "),
+            "the card must not join the notes into one sentence: {card}"
+        );
+    }
+
+    /// The delivery summary's SHAPE: the header, the card (one block per
+    /// note), and — for a continue-channel review — the marker + batch AFTER
+    /// the card, because the host splits the string at the marker.
+    ///
+    /// MUTATION-PROVEN: joining the notes with `"; "` (or appending the
+    /// batch before the card) fails the block / split assertions by name.
+    #[test]
+    fn the_delivery_summary_carries_the_card_then_the_payload() {
+        fn delivery(should_continue: bool) -> AdvisorDelivery {
+            AdvisorDelivery {
+                notes: vec![
+                    ParsedNote {
+                        severity: Severity::Concern,
+                        text: "fix the race".into(),
+                    },
+                    ParsedNote {
+                        severity: Severity::Nit,
+                        text: "typo in the comment".into(),
+                    },
+                ],
+                should_continue,
+                batch: format!(
+                    "{CONTINUATION_TAG}\n<advisory severity=\"concern\">fix the race</advisory>"
+                ),
+                session_id: "sess".into(),
+                advisor: "small-stack".into(),
+            }
+        }
+
+        // Preserve: the card only.
+        let preserve = advisor_review_summary(&delivery(false));
+        assert!(preserve.starts_with("⚑ advisor (small-stack):"));
+        assert!(
+            preserve.contains("[concern] fix the race\n\n[nit] typo in the comment"),
+            "the notes are blocks: {preserve}"
+        );
+        assert!(
+            !preserve.contains(CONTINUATION_TAG),
+            "a preserve review carries no continuation payload"
+        );
+
+        // Continue: the card, then the payload — split at the marker.
+        let continued = advisor_review_summary(&delivery(true));
+        let pos = continued
+            .find(CONTINUATION_TAG)
+            .expect("the marker rides the payload");
+        let card = continued[..pos].trim_end();
+        let payload = continued[pos..].trim_start();
+        assert!(
+            card.contains("[concern] fix the race") && card.contains("[nit] typo in the comment"),
+            "the card still shows every note: {card}"
+        );
+        assert!(
+            !card.contains("<advisory"),
+            "the XML payload is not card text: {card}"
+        );
+        assert!(
+            payload.starts_with(CONTINUATION_TAG) && payload.contains("<advisory"),
+            "the payload is the marker + batch: {payload}"
+        );
     }
 
     /// Continuation-latch predicate: a delta whose user message carries the

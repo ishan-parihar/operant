@@ -650,22 +650,36 @@ impl App {
                 // show the card AND queue the batch as the next turn's query.
                 // The main loop applies it once the run is complete.
                 let marker = operant_core::advisor::CONTINUATION_TAG;
-                if let Some(pos) = summary.find(marker) {
+                // The CARD and the CONTINUATION PAYLOAD are two different
+                // things in one string: the card is what the operator reads
+                // (the notes, one block each), the payload is the machine
+                // batch the model must receive. Showing the payload in the
+                // transcript dumped the boundary guidance and the raw
+                // `<advisory>` XML into the card — the "it lumps everything
+                // without correct formatting" report. Split at the marker:
+                // the card ends there, the payload starts there.
+                let (card, continuation) = match summary.find(marker) {
+                    Some(pos) => (
+                        summary[..pos].trim_end().to_string(),
+                        Some(summary[pos..].trim().to_string()),
+                    ),
+                    None => (summary.clone(), None),
+                };
+                if let Some(batch) = continuation
+                    && !batch.is_empty()
+                {
                     // Keep the marker IN the extracted text: it becomes
                     // part of the submitted query, the conversation carries
                     // it, and the engine's continuation latch (advisor.rs)
                     // greps for it on the next delta — the omp cascade guard.
-                    let batch = summary[pos..].trim().to_string();
-                    if !batch.is_empty() {
-                        self.pending_advisor_continuation = Some(batch);
-                    }
+                    self.pending_advisor_continuation = Some(batch);
                 }
-                if summary.starts_with("⚑") {
-                    self.push_system_message(summary, SystemMessageStyle::Advisor);
-                } else if summary.starts_with("※") {
-                    self.push_system_message(summary, SystemMessageStyle::Recap);
+                if card.starts_with("⚑") {
+                    self.push_system_message(card, SystemMessageStyle::Advisor);
+                } else if card.starts_with("※") {
+                    self.push_system_message(card, SystemMessageStyle::Recap);
                 } else {
-                    self.push_system_message(summary, SystemMessageStyle::Info);
+                    self.push_system_message(card, SystemMessageStyle::Info);
                 }
             }
 

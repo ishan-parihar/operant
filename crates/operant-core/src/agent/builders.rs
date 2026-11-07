@@ -635,7 +635,6 @@ impl OperantAgent {
         let model = self.effective_model().to_string();
         let conversation = Arc::clone(&self.conversation);
         let event_tx = self.event_tx.clone();
-        let continuation_prefix = format!("{}\n", crate::advisor::CONTINUATION_TAG);
         crate::advisor::spawn_advisor(
             config,
             base,
@@ -649,26 +648,14 @@ impl OperantAgent {
             },
             move |review| {
                 if let Some(tx) = &event_tx {
-                    // Card channel (preserve): the batch rides the event to
-                    // the TUI as before. Continue channel: the same event,
-                    // but the summary embeds the marker + batch so the TUI
-                    // can both SHOW the card and submit the batch as the
-                    // next turn's query.
+                    // The summary carries BOTH the card the operator reads (the
+                    // notes, one block each) and — for a continue-channel
+                    // review — the marker + model-visible batch the host
+                    // submits as the next turn's query. `advisor_review_summary`
+                    // owns the ORDER (card first, payload after the marker),
+                    // which is what lets the host split the two apart.
                     let _ = tx.try_send(AgentEvent::BackgroundReview {
-                        summary: format!(
-                            "⚑ advisor ({}): {}",
-                            review.advisor,
-                            if review.should_continue {
-                                format!("{continuation_prefix}{}", review.batch)
-                            } else {
-                                review
-                                    .notes
-                                    .iter()
-                                    .map(|n| n.text.as_str())
-                                    .collect::<Vec<_>>()
-                                    .join("; ")
-                            }
-                        ),
+                        summary: crate::advisor::advisor_review_summary(&review),
                         session_id: review.session_id.clone(),
                     });
                 }

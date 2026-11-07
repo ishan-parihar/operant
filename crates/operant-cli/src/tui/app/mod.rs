@@ -27,6 +27,8 @@ use crate::tui::operant_model::ContentPos;
 pub(crate) use scroll_anchor::ScrollMemory;
 
 #[cfg(test)]
+pub(crate) mod advisor_card_tests;
+#[cfg(test)]
 pub(crate) mod debug_log_tests;
 #[cfg(test)]
 pub(crate) mod session_counter_tests;
