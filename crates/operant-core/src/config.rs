@@ -249,8 +249,17 @@ pub struct ContextInjectionSettings {
     /// Feed sources (channel/group posts captured at route time,
     /// plan-2026-10-09 §3): per-seat char quota, same budget model.
     pub feed_quota: usize,
+    /// ACCEPTED BUT NOT APPLIED (RT-289): the Global content class was
+    /// retired to Holon, so this quota is never compared to anything. The
+    /// loader reports it when it is set.
     pub global_quota: usize,
+    /// ACCEPTED BUT NOT APPLIED (RT-289): the Dept content class was
+    /// retired to Holon, so this quota is never compared to anything. The
+    /// loader reports it when it is set.
     pub dept_quota: usize,
+    /// ACCEPTED BUT NOT APPLIED (RT-289): the Self content class was
+    /// retired to Holon, so this quota is never compared to anything. The
+    /// loader reports it when it is set.
     pub self_quota: usize,
     /// Feed seat routing: platform chat id → the seat whose feed it is.
     /// Unmapped chats default to `premiere` (the operator's default
@@ -3158,6 +3167,33 @@ impl AppConfig {
             self.agent.max_consecutive_tool_only != d.agent.max_consecutive_tool_only,
             "[agent] max_consecutive_tool_only"
         );
+        // (RT-289) `[context_injection]`'s three "aspect" quotas cannot
+        // fire: the Global / Dept / Self content classes were retired to
+        // Holon, so their per-class item lists are always empty and the
+        // quotas are never compared to anything. Only the DM and Feed
+        // classes have producers. A SET value now REPORTS instead of being
+        // accepted in silence.
+        {
+            let ci = &self.context_injection;
+            let d = &d.context_injection;
+            let mut unread: Vec<&str> = Vec::new();
+            if ci.global_quota != d.global_quota {
+                unread.push("global_quota");
+            }
+            if ci.dept_quota != d.dept_quota {
+                unread.push("dept_quota");
+            }
+            if ci.self_quota != d.self_quota {
+                unread.push("self_quota");
+            }
+            if !unread.is_empty() {
+                out.push(format!(
+                    "warning: [context_injection] {} is accepted but unread — the runtime applies none of it. Remove the key(s) from operant.toml.",
+                    unread.join(", ")
+                ));
+            }
+        }
+
         // (RT-278) `[cli] max_help_lines` caps the lines SERVED when the
         // agent asks for a CLI's full `--help` — a cap the runtime does not
         // have yet: the Phase-C `cli_exec` surface is the thing that would
@@ -4249,6 +4285,28 @@ wonderful_unknown_key = 42
         let warnings = config.unused_setting_warnings();
         assert_eq!(warnings.len(), 1, "{warnings:?}");
         assert!(warnings[0].contains("[socialization]"), "{warnings:?}");
+    }
+
+    /// RT-289: `[context_injection]`'s three aspect quotas are accepted but
+    /// NOT applied — the Global / Dept / Self content classes retired to
+    /// Holon — so a set value must REPORT.
+    #[test]
+    fn a_context_injection_quota_is_reported_as_unread() {
+        assert!(AppConfig::default().unused_setting_warnings().is_empty());
+
+        let raw = "[context_injection]\nglobal_quota = 999\ndept_quota = 111\n";
+        let config = parse_config_str(raw, Path::new("memory://unread-context-quota")).unwrap();
+        let warnings = config.unused_setting_warnings();
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("[context_injection]"), "{warnings:?}");
+        for key in ["global_quota", "dept_quota"] {
+            assert!(warnings[0].contains(key), "must name {key}: {warnings:?}");
+        }
+        // `self_quota` is at its default — it must NOT be named.
+        assert!(
+            !warnings[0].contains("self_quota"),
+            "only what is set may be named: {warnings:?}"
+        );
     }
 
     /// RT-278: `[cli] max_help_lines` is accepted but NOT applied — the

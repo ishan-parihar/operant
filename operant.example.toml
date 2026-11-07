@@ -842,9 +842,9 @@ enabled = true
 total_char_cap = 2000
 dm_quota = 800
 feed_quota = 500
-global_quota = 500
-dept_quota = 400
-self_quota = 300
+global_quota = 500               # UNREAD: the Global class retired to Holon (accepted, no effect)
+dept_quota = 400                # UNREAD: the Dept class retired to Holon (accepted, no effect)
+self_quota = 300                # UNREAD: the Self class retired to Holon (accepted, no effect)
 # Feed seat routing (plan-2026-10-09 §3): platform chat id -> seat whose
 # feed it is. Unmapped chats default to "premiere".
 # feed_seat_map = { "-1001234567890" = "premiere" }
