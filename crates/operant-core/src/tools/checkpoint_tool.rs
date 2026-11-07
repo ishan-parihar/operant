@@ -867,15 +867,22 @@ fn ensure_store(store: &Path) -> std::result::Result<(), String> {
     // configurable, and a store at any other path would still snapshot
     // itself.
     let exclude = store.join("info").join("exclude");
-    let _ = std::fs::create_dir_all(store.join("info"));
+    // The exclude file is the ONLY thing that stops the store from
+    // snapshotting itself -- the comment above says so, and the self-
+    // snapshot loop is what it lets happen. So its write error PROPAGATES:
+    // the old `let _ =` swallowed it, `ensure_store` returned Ok, and the
+    // checkpoint walked straight into that loop (RT-297).
+    std::fs::create_dir_all(store.join("info"))
+        .map_err(|e| format!("Failed to create the checkpoint store info dir: {e}"))?;
     let store_path = store.to_string_lossy();
-    let _ = std::fs::write(
+    std::fs::write(
         &exclude,
         format!(
             ".git\nnode_modules/\ntarget/\n__pycache__/\n.venv/\nvenv/\ncheckpoints/\n{}\n",
             store_path
         ),
-    );
+    )
+    .map_err(|e| format!("Failed to write the checkpoint store exclude file: {e}"))?;
     Ok(())
 }
 
@@ -1241,24 +1248,33 @@ mod tests {
         let _ = std::fs::remove_dir_all(&home);
     }
 
-    /// The REAL store's exclude file is rewritten with the store's own
+    /// An EXISTING store's exclude file is rewritten with the store's own
     /// path, so a store created before the list grew stops snapshotting
     /// itself.
     ///
-    /// This test runs against the LIVE store on this box (it only ADDS an
-    /// exclude entry; it does not touch the store's contents), because the
-    /// whole point is that an EXISTING store — one created in August,
-    /// before the exclusion was added — must be repaired rather than
-    /// left to keep the list it was born with.
+    /// The test uses a TEMP store that already exists with a STALE exclude
+    /// file — the property that matters ("an existing store must be
+    /// repaired, not left to keep the list it was born with"). It used to
+    /// run against the LIVE store on the operator's box, which made it
+    /// depend on that box's home being writable (RT-297 made the write
+    /// error visible, and a read-only home is exactly the case the repair
+    /// now refuses loudly).
     #[test]
     fn an_existing_store_gets_its_exclude_file_repaired() {
-        let store =
-            std::path::PathBuf::from(std::env::var("OPERANT_TEST_STORE").unwrap_or_else(|_| {
-                "/home/ishanp/.operant/checkpoints/store/cdb4ee2aea69cc6a".to_string()
-            }));
-        if !store.exists() {
-            return; // no live store on this box
-        }
+        let dir = std::env::temp_dir().join(format!(
+            "operant_checkpoint_repair_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let store = dir.join("checkpoints").join("store").join("abc123");
+        std::fs::create_dir_all(store.join("info")).expect("store");
+        // The stale exclude file: the list as it was born, without the
+        // store's own path.
+        std::fs::write(store.join("info").join("exclude"), ".git\nnode_modules/\n")
+            .expect("the stale exclude file");
         let exclude = store.join("info").join("exclude");
         let before = std::fs::read_to_string(&exclude).unwrap_or_default();
 
@@ -1274,10 +1290,8 @@ mod tests {
             "the repaired exclude must name the store's own absolute path, got:\n{after}"
         );
         // The repair is what changed it.
-        assert!(
-            before != after || before.contains("checkpoints/"),
-            "the exclude file must have been rewritten"
-        );
+        assert!(before != after, "the exclude file must have been rewritten");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The shadow store must NOT snapshot itself.
@@ -1623,5 +1637,40 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&tmp);
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// RT-297: the checkpoint store's exclude file must be written or the
+    /// checkpoint refused.
+    ///
+    /// The exclude file is the only thing that stops the shadow store from
+    /// snapshotting itself. Its write error was dropped with `let _ =`, so
+    /// `ensure_store` returned Ok and the checkpoint proceeded into exactly
+    /// the self-snapshot loop the code comments about (the store's own
+    /// packed objects are not covered by the working-tree size bounds).
+    #[test]
+    fn ensure_store_fails_when_the_exclude_file_cannot_be_written() {
+        let dir = std::env::temp_dir().join(format!(
+            "operant_checkpoint_store_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let store = dir.join("shadow");
+        std::fs::create_dir_all(&store).expect("the store dir");
+        // The store looks like a git store already (so `ensure_store` does
+        // not run `git init` -- the failure under test is the EXCLUDE
+        // WRITE, not the init), and `info` is a FILE, so the info directory
+        // cannot be created and the exclude file cannot be written.
+        std::fs::write(store.join("HEAD"), b"ref: refs/heads/main").expect("HEAD");
+        std::fs::write(store.join("info"), b"not a directory").expect("the blocker");
+        let outcome = ensure_store(&store);
+        assert!(
+            outcome.is_err(),
+            "a store whose exclude file cannot be written must be refused: {outcome:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
