@@ -116,13 +116,14 @@ impl CronTool {
                 name: "cron".to_string(),
                 details: "Missing 'schedule' for job creation".to_string(),
             })?;
+        // The display is DERIVED from the schedule when the caller did not
+        // supply one: the schema marks `scheduleDisplay` optional, and the
+        // sibling CLI path derives it the same way (`schedule.to_string()`).
+        // Requiring it rejected schema-compliant calls (RT-298).
         let display = args
             .schedule_display
-            .as_ref()
-            .ok_or_else(|| Error::InvalidToolArgs {
-                name: "cron".to_string(),
-                details: "Missing 'schedule_display' for job creation".to_string(),
-            })?;
+            .clone()
+            .unwrap_or_else(|| schedule.to_string());
         let prompt = args.prompt.as_ref().ok_or_else(|| Error::InvalidToolArgs {
             name: "cron".to_string(),
             details: "Missing 'prompt' for job creation".to_string(),
@@ -154,8 +155,13 @@ impl CronTool {
             no_agent: args.no_agent.unwrap_or(false),
         })?;
 
-        // Compute and set the first next_run_at
-        let next_run = compute_first_run(schedule);
+        // Compute and set the first next_run_at -- with the SHARED rule
+        // (the same one the database and the scheduler use). The tool's
+        // private copy parsed only what the cron crate accepts, so the
+        // 5-field form its own doc advertises ("0 9 * * *") came back as
+        // `next_run_at: null` for a job the database had already scheduled
+        // (RT-298).
+        let next_run = crate::cronjobs::schedule::next_run_from_schedule(schedule);
         if let Some(ref next) = next_run {
             self.db.set_next_run(&id, Some(next.clone()))?;
         }
@@ -360,33 +366,62 @@ impl OperantTool for CronTool {
     }
 }
 
-/// Compute the first next_run_at for a schedule string.
-/// Supports cron expressions (5-field) and interval shorthand (e.g. "every 30m").
-fn compute_first_run(schedule: &str) -> Option<String> {
-    use chrono::Utc;
-    use std::str::FromStr;
-    // Try cron expression first
-    if let Ok(sched) = cron::Schedule::from_str(schedule) {
-        return sched.upcoming(Utc).next().map(|t| t.to_rfc3339());
-    }
-    // Try interval shorthand: "every 30m", "every 2h", "30m", "2h", "1d"
-    let s = schedule.trim().trim_start_matches("every").trim();
-    let (num, unit) = s.split_at(s.len().saturating_sub(1));
-    let num: u64 = num.trim().parse().ok()?;
-    let secs = match unit {
-        "s" => num,
-        "m" => num * 60,
-        "h" => num * 3600,
-        "d" => num * 86400,
-        _ => return None,
-    };
-    let next = Utc::now() + chrono::Duration::seconds(secs as i64);
-    Some(next.to_rfc3339())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// RT-298: the cron tool must accept a SCHEMA-COMPLIANT create call.
+    ///
+    /// The schema marks `scheduleDisplay` optional, but the body demanded
+    /// it ("Missing 'schedule_display' for job creation"), so a model that
+    /// followed the schema could not create a job. And the tool's private
+    /// copy of the schedule rule did not accept the 5-field form its own
+    /// doc advertises ("0 9 * * *"), so the tool answered
+    /// `next_run_at: null` for a job the database had already scheduled.
+    #[tokio::test]
+    async fn cron_create_accepts_a_five_field_schedule_and_reports_the_next_run() {
+        let dir = std::env::temp_dir().join(format!(
+            "operant_cron_tool_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let db = std::sync::Arc::new(
+            crate::cronjobs::db::CronDb::init(dir.join("cron.db")).expect("cron db"),
+        );
+        let tool = CronTool::new(db.clone());
+        let result = tool
+            .execute(
+                json!({
+                    "action": "create",
+                    "name": "daily-nine",
+                    "schedule": "0 9 * * *",
+                    "prompt": "say good morning"
+                }),
+                crate::tools::ToolContext::default(),
+            )
+            .await;
+        assert!(
+            result.success,
+            "a schema-compliant call must succeed: {}",
+            result.content
+        );
+        let payload: serde_json::Value = serde_json::from_str(&result.content).expect("json");
+        assert!(
+            payload["next_run_at"].is_string(),
+            "the next run must be reported: {payload}"
+        );
+        let job_id = payload["job_id"].as_str().expect("the job id");
+        let job = db.get_job(job_id).expect("read").expect("the job");
+        assert_eq!(
+            job.schedule_display, "0 9 * * *",
+            "the display is derived from the schedule"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn test_cron_schema() {
