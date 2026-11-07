@@ -24,11 +24,11 @@
 
  The shell command exited 3.
 
-Tool error: exit status 3
 
 › Ask operant to do anything
 
                                                                          ~ 21/128k ▱▱▱▱▱▱▱▱▱▱ 0% API key Offline Capture
+
 
 
 

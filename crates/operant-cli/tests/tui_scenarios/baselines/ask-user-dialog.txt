@@ -21,11 +21,11 @@
                                │                                                        │
  1› Which database should I poi│  type to fill custom answer…                           │                              │
                                │                                                        │
-Empty reply — the provider stre│  type: custom   ↑↓/Tab: options   Enter: confirm   Esc:│
-                               │                                                        │
+                               │  type: custom   ↑↓/Tab: options   Enter: confirm   Esc:│
 › Ask operant to do anything   │                                                        │
-                               └────────────────────────────────────────────Esc to close┘
-                                                                         ~ 11/128k ▱▱▱▱▱▱▱▱▱▱ 0% API key Offline Capture
+                               │                                                        │
+                               └────────────────────────────────────────────Esc to close┘▱▱▱▱ 0% API key Offline Capture
+
 
 
 

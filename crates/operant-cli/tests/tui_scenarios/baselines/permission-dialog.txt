@@ -21,11 +21,11 @@
                     │  ► [y] Yes, allow once                                                       │
  1› Delete the build│    [Y] Yes, allow this session                                               │                   │
                     │    [p] Yes, always allow (persistent)                                        │
-Empty reply — the pr│    [n] No, deny                                                              │
-                    │                                                                              │
-› Ask operant to do └──────────────────────────────────────────────────────────────────Esc to close┘
-
+                    │    [n] No, deny                                                              │
+› Ask operant to do │                                                                              │
+                    └──────────────────────────────────────────────────────────────────Esc to close┘
                                                                           ~ 6/128k ▱▱▱▱▱▱▱▱▱▱ 0% API key Offline Capture
+
 
 
 

@@ -27,11 +27,11 @@
 
  1› hello world                                                                                                        │
 
-Prompt restored to the composer — the turn failed.
 
 › Ask operant to do anything
 
                                                                          ~ 10/128k ▱▱▱▱▱▱▱▱▱▱ 0% API key Offline Capture
+
 
 
 

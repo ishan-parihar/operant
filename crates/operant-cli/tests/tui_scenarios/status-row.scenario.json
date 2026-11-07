@@ -2,22 +2,23 @@
   "name": "status-row",
   "surface": "crates/operant-cli/src/tui/render/footer.rs::render_status_row",
   "opens_with": "/status",
-  "keys": "/status<enter>",
+  "keys": "/status<enter><alt+y>",
   "size": "120x40",
   "variants": [
     {
       "size": "80x24",
-      "keys": "/status<enter>"
+      "keys": "/status<enter><alt+y>"
     }
   ],
   "assert": [
-    "status_message contains Session status"
+    "status_message contains Copy mode"
   ],
   "assert_screen": [
     "contains:Session status",
-    "contains:idle"
+    "contains:idle",
+    "contains:Copy mode"
   ],
   "baseline": "status-row.txt",
   "style_baseline": "status-row.style.txt",
-  "notes": "The status row only exists when should_render_status_row() is true, which needs a status_message while idle — /status is the cheapest way to arm it. It also pushes a system annotation, so this one scenario pins both the status row and the system-annotation transcript style. Catches the status row losing a row to render_app's prompt_height clamp when the message wraps (the div_ceil(display_width(text)) measurement path). NOTE: deliberately does NOT assert any_modal_open — on a host with audio, voice_mode_notice is visible from frame 0, so any_modal_open is true for the whole run and the assertion would be host-dependent rather than surface-dependent."
+  "notes": "The status row only exists when should_render_status_row() is true, which needs a status_message while idle. /status arms the TRANSCRIPT (it pushes a system annotation, so this scenario still pins the system-annotation transcript style and the 'Session status' text), but its copy in the status ROW is an EVENT with a three-second TTL (iter-1871), so it is gone by the time the frame is captured \u2014 the row cannot be armed by /status any more. Alt+Y enters copy mode, whose hint is a MODE and therefore persistent (set_status_message_persistent), so the status row IS in the captured frame and the row's rendering stays pinned. NOTE: deliberately does NOT assert any_modal_open \u2014 on a host with audio, voice_mode_notice is visible from frame 0, so any_modal_open is true for the whole run and the assertion would be host-dependent rather than surface-dependent."
 }
