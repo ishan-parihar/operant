@@ -44,6 +44,7 @@
 | tui-bugfix-campaign-059 | done | B63: the settings screen's wheel did nothing — the mouse's dialog gate swallowed it | — | [2026-11-07] origin/main iter-1856 |
 | tui-bugfix-campaign-060 | done | B64: the command palette's category headers said nothing for 58 of its 111 rows — the catch-all held the majority of the catalogue | — | [2026-11-07] origin/main iter-1877 |
 | tui-bugfix-campaign-061 | done | B65: the session hub's subagent detail promised "Esc returns to the list" — Esc closes the whole hub | — | [2026-11-07] origin/main iter-1882 |
+| tui-bugfix-campaign-062 | done | B66: the skills view's detail footer said "Esc close" — Esc went back to the list instead | — | [2026-11-07] origin/main iter-1885 |
 | tui-bugfix-campaign-018 | done | B23: the keybindings catalogue advertised Ctrl+Q as "Quit application" and nothing dispatched it (the exit-confirmation state machine has two halves, and only one named the chord) | — | [2026-11-05] origin/main iter-1758 |
 | tui-bugfix-campaign-019 | done | phase-5: the highlight test's cross-test frame race — the same palette resetter, reached through a second path | — | [2026-11-05] origin/main iter-1761 |
 | tui-bugfix-campaign-020 | done | B24: the settings screen dropped the operator's edited "File injection max size" (and its own guard never saw the row), the keybindings guard could not see a MODIFIER, and the accent test's palette race was re-broken by an unlocked App::new | — | [2026-11-05] origin/main iter-1760 |

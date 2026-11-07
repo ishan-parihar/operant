@@ -13840,3 +13840,91 @@ fn the_session_hubs_subagent_detail_names_only_the_keys_that_leave_it() {
         "Esc closes the hub — the other key the painted line names"
     );
 }
+
+/// The skills view painted into a real frame, as text.
+///
+/// The panel's own render entry point (`render_skills_view`) — the same one
+/// the overlay ladder calls — so a claim this reads back is a claim the
+/// OPERATOR reads.
+fn skills_view_screen(state: &crate::tui::skills_view::SkillsViewState) -> Vec<String> {
+    use crate::tui::debug::debug_hub::buffer_rows;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+    terminal
+        .draw(|f| crate::tui::skills_view::render_skills_view(f, state, f.area()))
+        .unwrap();
+    buffer_rows(terminal.backend().buffer())
+}
+
+/// (iter-1885) The skills view's DETAIL footer said "Backspace back to list
+/// · Esc close" — and the panel's Esc arm sent the operator BACK TO THE LIST
+/// instead of closing. The screen says "Esc close" TWICE (the shared modal
+/// hint in the border and the detail stage's own footer), and the panel's
+/// back key is the one the footer names — Backspace.
+///
+/// The arm now honours the screen: Esc closes the panel at both stages, and
+/// Backspace is the way back. Pinned BEHAVIOURALLY — the test paints the
+/// REAL panel, reads the frame the OPERATOR reads, and drives the REAL
+/// handler for each key the footer names.
+#[test]
+fn the_skills_views_detail_footer_names_the_keys_that_leave_it() {
+    use crate::tui::skills_view::SkillsStage;
+    use operant_core::skills::{Skill, SkillOrigin};
+
+    let mut app = make_app();
+    app.skills_view.visible = true;
+    app.skills_view.skills = vec![Skill {
+        name: "demo-skill".to_string(),
+        description: "a skill with a description".to_string(),
+        version: "1.0.0".to_string(),
+        content: String::new(),
+        platforms: Vec::new(),
+        tags: Vec::new(),
+        category: "demo".to_string(),
+        prerequisites_env: Vec::new(),
+        prerequisites_commands: Vec::new(),
+        references: std::collections::HashMap::new(),
+        origin: SkillOrigin::OperatorPool,
+    }];
+
+    // Enter on a skill row opens its detail.
+    assert!(
+        !app.handle_key_event(press_key(KeyCode::Enter, KeyModifiers::NONE)),
+        "the skills view consumes Enter — it must not reach the composer"
+    );
+    assert_eq!(app.skills_view.stage, SkillsStage::Detail);
+
+    // What the panel actually paints.
+    let screen = skills_view_screen(&app.skills_view);
+    let shown = screen.join("\n");
+    assert!(
+        shown.contains("Backspace back to list") && shown.contains("Esc close"),
+        "the detail footer must name both ways out: {shown:?}"
+    );
+
+    // The key the footer names for "back": Backspace returns to the list and
+    // leaves the panel open.
+    app.handle_key_event(press_key(KeyCode::Backspace, KeyModifiers::NONE));
+    assert_eq!(
+        app.skills_view.stage,
+        SkillsStage::List,
+        "Backspace returns to the list — the key the footer names"
+    );
+    assert!(
+        app.skills_view.visible,
+        "Backspace must not close the view — the footer says where it goes"
+    );
+
+    // The key the footer names for "close": Esc closes the panel, at the list
+    // stage AND at the detail stage (which is where the old arm went back
+    // instead).
+    app.handle_key_event(press_key(KeyCode::Enter, KeyModifiers::NONE));
+    assert_eq!(app.skills_view.stage, SkillsStage::Detail);
+    app.handle_key_event(press_key(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(
+        !app.skills_view.visible,
+        "Esc closes the panel — the key the detail footer names"
+    );
+}

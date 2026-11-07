@@ -926,13 +926,14 @@ impl App {
         // Skills view intercepts navigation and Esc
         if self.skills_view.visible {
             match key.code {
-                KeyCode::Esc => {
-                    if self.skills_view.stage == crate::tui::skills_view::SkillsStage::Detail {
-                        self.skills_view.back_to_list();
-                    } else {
-                        self.skills_view.close();
-                    }
-                }
+                // (iter-1885) Esc closes the panel at BOTH stages. The
+                // detail stage used to send Esc BACK to the list — but the
+                // screen says "Esc close" twice (the shared modal hint in
+                // the border and the detail stage's own footer), and the
+                // panel's back key is Backspace, which that footer names.
+                // Esc closing is also the convention every other modal in
+                // this TUI follows (HINT_ESC).
+                KeyCode::Esc => self.skills_view.close(),
                 KeyCode::Backspace => {
                     if self.skills_view.stage == crate::tui::skills_view::SkillsStage::Detail {
                         self.skills_view.back_to_list();
