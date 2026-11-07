@@ -10,7 +10,7 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 KB="$(cd "$HERE/../.." && pwd)"                # operant-testing/kb
 REPO="$(cd "$KB/../.." && pwd)"                # agentic-harness/operant (repo root)
-PINNED="43a38696"                             # the commit the gap register is anchored to
+PINNED="758dd4c5"                             # the commit the gap register is anchored to
 
 FAIL=0
 pass() { printf 'PASS  %-40s %s\n' "$1" "$2"; }
