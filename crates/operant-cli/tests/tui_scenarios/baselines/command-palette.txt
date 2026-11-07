@@ -10,28 +10,28 @@
                            │                                                               │
                            │ Model & Provider                                              │
                            │ /model List or switch models                                  │
-                           │ /effort Pick the reasoning effort (low | normal | high | max) │
- operant · replay          │ /connect Open the provider connect dialog                     │
- operant                   │                                                               │
- /model to switch · Offline│ Review & History                                              │
- v0.3.0                    │ /review Open the git diff viewer (same as /diff)              │
- /login to add provider    │ /rewind Rewind to the Nth-last prompt (forks the session; old │
- ● anthropic(key)          │ /diff Open the git diff viewer                                │
- ~                         │ /rename Rename current session                                │
+                           │ /models Alias for /model                                      │
+ operant · replay          │ /refresh-model-list Refresh provider model catalogs           │
+ operant                   │ /effort Pick the reasoning effort (low | normal | high | max) │
+ /model to switch · Offline│ /effort-set Internal: set effort on the live agent            │
+ v0.3.0                    │ /connect Open the provider connect dialog                     │
+ /login to add provider    │                                                               │
+ ● anthropic(key)          │ Review & History                                              │
+ ~                         │ /transcript Open the current session transcript file          │
+                           │ /review Open the git diff viewer (same as /diff)              │
+                           │ /cancel Cancel the current prompt or operation                │
+                           │ /clear Clear conversation history                             │
+› Ask operant to do anythin│ /cls Clear the view only, keeping context                     │
+                           │ /clear-view Alias for /cls                                    │
+                           │ /rewind Rewind to the Nth-last prompt (forks the session; old │   ~ API key Offline Capture
+                           │ /diff Open the git diff viewer                                │
+                           │ /save Export the conversation to a file (same as /export)     │
+                           │ /rename Rename current session                                │
                            │ /changes Show the current turn's diff                         │
                            │ /copy Copy the last N messages to the clipboard (default 1): /│
                            │ /export Export the conversation                               │
-› Ask operant to do anythin│ /retry Rewind the last turn and resubmit it                   │
+                           │ /retry Rewind the last turn and resubmit it                   │
                            │ /rollback Show the last turn's diff (does not rewind; use /rew│
-                           │ /stop Stop the running turn                                   │   ~ API key Offline Capture
-                           │ /undo Rewind the last N turns                                 │
-                           │                                                               │
-                           │ Diagnostics                                                   │
-                           │ /terminal-setup Fix Shift+Enter newlines                      │
-                           │ /context Show the full session context snapshot               │
-                           │ /version Show current version                                 │
-                           │ /stats Show session token and cost stats                      │
-                           │ /usage Alias for /stats                                       │
                            └───────────────────────────────────────────────────Esc to close┘
 
 

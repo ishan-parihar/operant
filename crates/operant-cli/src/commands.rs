@@ -556,10 +556,17 @@ pub fn build_command_map() -> HashMap<&'static str, &'static CommandDef> {
 /// The DECLARATION ORDER is the palette's section order, and `Other` is
 /// LAST on purpose: it is the catch-all, so it belongs after every real
 /// category rather than in the middle of the list (iter-1791).
+///
+/// (iter-1877) EVERY command the TUI registry offers gets a real category.
+/// The catch-all used to hold 58 of the palette's 111 rows, so more than
+/// half the catalogue sat under a header that said nothing. `Other` stays
+/// as the fallback for a name nobody classified, and the palette test
+/// names any registered command that falls into it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum TuiCategory {
     ModelAndProvider,
     ReviewAndHistory,
+    ReferenceAndHelp,
     Diagnostics,
     Workspace,
     Tools,
@@ -576,6 +583,7 @@ impl TuiCategory {
         match self {
             Self::ModelAndProvider => "Model & Provider",
             Self::ReviewAndHistory => "Review & History",
+            Self::ReferenceAndHelp => "Reference & Help",
             Self::Diagnostics => "Diagnostics",
             Self::Workspace => "Workspace",
             Self::Tools => "Tools",
@@ -590,26 +598,45 @@ impl TuiCategory {
 }
 
 /// Return the TUI category for a given command name.
+///
+/// (iter-1877) The names are the TUI registry's (`/model`, `/reload`, …).
+/// Every registered command is listed here: the palette's section header
+/// is the only thing that tells the operator what a row is, and a row
+/// under "Other" has no header at all. `no_palette_command_falls_into_the_
+/// catch_all_category` fails by name when a new command is registered
+/// without a category.
 pub fn tui_category(name: &str) -> TuiCategory {
     match name {
-        "connect" | "model" | "effort" | "provider" => TuiCategory::ModelAndProvider,
-        "changes" | "diff" | "review" | "rewind" | "export" | "copy" | "history" | "retry"
-        | "undo" | "rollback" | "stop" | "refresh" | "rename" | "replay" | "replay-diff" => {
+        "connect" | "model" | "models" | "effort" | "effort-set" | "refresh-model-list"
+        | "provider" => TuiCategory::ModelAndProvider,
+        "changes" | "diff" | "review" | "rewind" | "export" | "copy" | "save" | "transcript"
+        | "retry" | "undo" | "rollback" | "stop" | "cancel" | "clear" | "cls" | "clear-view"
+        | "rename" | "history" | "refresh" | "replay" | "replay-diff" => {
             TuiCategory::ReviewAndHistory
         }
-        "stats" | "cost" | "context" | "doctor" | "status" | "version" | "time" | "debug"
-        | "whoami" | "credits" | "billing" | "insights" | "usage" | "mouse" | "terminal-setup"
-        | "heapdump" | "mem" | "pet" => TuiCategory::Diagnostics,
-        "config" | "theme" | "keybindings" | "hooks" | "mcp" | "import-config" | "output-style"
-        | "setup" | "indicator" | "statusbar" | "skin" | "busy" | "verbose" => {
+        "help" | "?" | "commands" | "hotkeys" => TuiCategory::ReferenceAndHelp,
+        "stats" | "cost" | "context" | "version" | "info" | "changelog" | "keys" | "doctor"
+        | "status" | "platforms" | "logs" | "whoami" | "usage" | "mouse" | "terminal-setup"
+        | "time" | "debug" | "credits" | "billing" | "insights" | "heapdump" | "mem" | "pet" => {
+            TuiCategory::Diagnostics
+        }
+        "config" | "theme" | "skin" | "statusbar" | "output-style" | "verbose" | "mcp"
+        | "reload" | "reload-mcp" | "reload-skills" | "hooks" | "import-config" | "setup"
+        | "init" | "redraw" | "quit" | "exit" | "keybindings" | "indicator" | "busy" => {
             TuiCategory::Workspace
         }
-        "agents" | "memory" | "tools" | "skills" | "bundles" | "journey" => TuiCategory::Tools,
-        "search" | "sessions" | "session" => TuiCategory::Sessions,
-        "plan" | "vim" | "yolo" => TuiCategory::Preferences,
-        "goal" | "title" | "branch" | "personality" | "reasoning" => TuiCategory::Session,
-        "compact" | "compress" => TuiCategory::Context,
-        "login" | "logout" | "update" => TuiCategory::Account,
+        "agents" | "tasks" | "memory" | "tools" | "skills" | "skill" | "plugins" | "bundle"
+        | "journey" | "improve" | "refactor" | "triage" | "judge" | "cron" | "kanban"
+        | "curator" | "suggestions" | "bundles" => TuiCategory::Tools,
+        "resume" | "sessions" | "session" | "new" | "fresh" | "find" | "search" => {
+            TuiCategory::Sessions
+        }
+        "plan" | "vim" | "yolo" | "permissions" | "ponytail" => TuiCategory::Preferences,
+        "goal" | "goals" | "subgoal" | "title" | "branch" | "personality" | "reasoning"
+        | "thinking-display" | "thinking" | "queue" | "steer" | "fix" | "todos" | "todo"
+        | "pause" | "unpause" => TuiCategory::Session,
+        "compact" | "compress" | "context-files" => TuiCategory::Context,
+        "login" | "logout" | "update" | "auth" | "profile" | "org" => TuiCategory::Account,
         _ => TuiCategory::Other,
     }
 }
