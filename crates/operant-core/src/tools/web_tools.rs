@@ -226,8 +226,11 @@ impl OperantTool for WebFetchTool {
             }
         };
 
-        let method = args.method.as_deref().unwrap_or("GET");
-        let mut request = match method {
+        // The same case-normalisation as the sibling `http_request`: a
+        // model that writes `post` must not get "Unsupported HTTP method"
+        // (RT-306).
+        let method = args.method.as_deref().unwrap_or("GET").to_uppercase();
+        let mut request = match method.as_str() {
             "GET" => client.get(&args.url),
             "POST" => client.post(&args.url),
             "PUT" => client.put(&args.url),
@@ -263,8 +266,13 @@ impl OperantTool for WebFetchTool {
                     .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
                     .collect();
 
-                match response.text().await {
-                    Ok(body) => {
+                // The SHARED bounded reader: `response.text().await` read
+                // the whole body into memory with no cap, so one large (or
+                // hostile) endpoint streamed the process out of RAM -- the
+                // exact path R48-7 was filed for, which `http_request` had
+                // already closed (RT-306).
+                match crate::tools::http_tool::read_bounded_body(response).await {
+                    Some(body) => {
                         let body_size = body.len();
                         if status.is_success() {
                             ToolResult::success(
@@ -295,10 +303,9 @@ impl OperantTool for WebFetchTool {
                             )
                         }
                     }
-                    Err(e) => ToolResult::error(
-                        "web_fetch",
-                        format!("Failed to read response body: {}", e),
-                    ),
+                    None => {
+                        ToolResult::error("web_fetch", "Failed to read response body".to_string())
+                    }
                 }
             }
             Err(e) => ToolResult::error("web_fetch", format!("Request failed: {}", e)),
@@ -321,6 +328,40 @@ impl OperantTool for WebFetchTool {
 // (plan 11C1) the provider-matrix tests went with the chain — search is
 // sourcehound-only now; the migration contract is pinned by the config
 // test below.
+
+/// RT-305: `web_fetch` must read its body through the SHARED bounded
+/// reader, and must accept a lowercase method like its sibling.
+///
+/// `http_request` had already closed the RAM-exhaustion path R48-7 was
+/// filed for: it uppercases the method and reads the body through a
+/// 2 MiB chunked cap. `web_fetch` — the same job, registered beside it —
+/// did neither: `response.text().await` read the whole body into
+/// memory, and `{"method":"post"}` was rejected as an unsupported
+/// method.
+///
+/// Source-grep contract (the repo's own shape): the needles are built
+/// by concatenation so this test's own source cannot satisfy them.
+#[test]
+fn web_fetch_reads_its_body_through_the_bounded_reader() {
+    let src = include_str!("web_tools.rs");
+    // The CODE SHAPE, not the bare call: the file's own comment quotes the
+    // old `response.text().await`, and a bare needle would match it.
+    let unbounded = format!("match response.{}().await", "text");
+    assert!(
+        !src.contains(&unbounded),
+        "web_fetch must not read the whole body into memory (R48-7)"
+    );
+    let bounded = format!("read_bounded_{}(response)", "body");
+    assert!(
+        src.contains(&bounded),
+        "web_fetch must use the shared bounded reader"
+    );
+    let case = format!("to_{}()", "uppercase");
+    assert!(
+        src.contains(&case),
+        "web_fetch must accept a lowercase method like http_request does"
+    );
+}
 #[cfg(test)]
 mod tests {
     use super::*;

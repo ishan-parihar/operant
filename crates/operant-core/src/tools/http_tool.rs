@@ -278,13 +278,13 @@ mod tests {
 
 /// The response-body cap for `http_request`: a fetched page fits, a
 /// multi-gigabyte stream does not take the agent down.
-const MAX_HTTP_BODY_BYTES: usize = 2 * 1024 * 1024;
-const MARKER: &str = "\n…[truncated]";
+pub(crate) const MAX_HTTP_BODY_BYTES: usize = 2 * 1024 * 1024;
+pub(crate) const MARKER: &str = "\n…[truncated]";
 
 /// Read a response body up to [`MAX_HTTP_BODY_BYTES`], appending a
 /// truncation marker when the source is larger (R48-7). Chunked reads so
 /// the cap applies DURING the download, not after it.
-async fn read_bounded_body(response: reqwest::Response) -> Option<String> {
+pub(crate) async fn read_bounded_body(response: reqwest::Response) -> Option<String> {
     use futures_util::StreamExt;
 
     let mut stream = response.bytes_stream();
