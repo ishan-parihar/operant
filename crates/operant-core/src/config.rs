@@ -1439,6 +1439,12 @@ pub struct SkillsSettings {
     pub template_description: String,
     /// Substitute `${OPERANT_SKILL_DIR}` / `${OPERANT_SESSION_ID}` in
     /// SKILL.md before injection (hermes `template_vars`, default true).
+    ///
+    /// The session id is substituted on the surfaces that KNOW it (the TUI's
+    /// current session, the gateway's runtime command). The gateway's SYNC
+    /// command arm carries no session id — its session key also folds in the
+    /// chat thread — so there the token stays literal: the documented
+    /// fallback, not a silent drop (RT-270).
     #[serde(default = "default_skill_template_vars")]
     pub template_vars: bool,
     /// Expand `` !`cmd` `` inline-shell snippets in SKILL.md at load time

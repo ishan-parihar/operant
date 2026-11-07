@@ -260,11 +260,16 @@ pub fn preprocess_skill_content(
 /// the hermes activation scaffolding so the model treats it as active
 /// guidance for the turn. Returns `None` when the skill is missing or its
 /// SKILL.md cannot be read.
-pub fn build_skill_invocation_message(name: &str, user_instruction: &str) -> Option<String> {
+pub fn build_skill_invocation_message(
+    name: &str,
+    user_instruction: &str,
+    session_id: Option<&str>,
+) -> Option<String> {
     build_skill_invocation_message_in(
         &crate::platform::operant_skills_dir(),
         name,
         user_instruction,
+        session_id,
     )
 }
 
@@ -372,6 +377,7 @@ pub fn build_skill_invocation_message_in(
     skills_dir: &std::path::Path,
     name: &str,
     user_instruction: &str,
+    session_id: Option<&str>,
 ) -> Option<String> {
     let skill_dir = resolve_skill_dir(skills_dir, name)?;
     let skill_md = skill_dir.join("SKILL.md");
@@ -388,7 +394,7 @@ pub fn build_skill_invocation_message_in(
     };
 
     let cfg = load_skills_config();
-    let content = preprocess_skill_content(&body, Some(&skill_dir), None, Some(&cfg));
+    let content = preprocess_skill_content(&body, Some(&skill_dir), session_id, Some(&cfg));
 
     let mut parts = vec![format!(
         "[IMPORTANT: The user has invoked the \"{}\" skill, indicating they \
@@ -472,7 +478,12 @@ mod tests {
         // SAFETY: test-only env mutation under the crate-wide env lock.
         unsafe { std::env::set_var(key, &tmp) };
 
-        let msg = build_skill_invocation_message_in(&tmp.join("skills"), "ponytail-review", "");
+        let msg = build_skill_invocation_message_in(
+            &tmp.join("skills"),
+            "ponytail-review",
+            "",
+            Some("s-1"),
+        );
 
         // Restore original value.
         match original {
@@ -529,7 +540,7 @@ mod tests {
         // SAFETY: test-only env mutation under the crate-wide env lock.
         unsafe { std::env::set_var(key, &tmp) };
 
-        let msg = build_skill_invocation_message_in(&pool, "ponytail-review", "");
+        let msg = build_skill_invocation_message_in(&pool, "ponytail-review", "", Some("s-1"));
 
         // Restore original value.
         match original {
@@ -664,11 +675,58 @@ mod tests {
         assert!(result.contains("/test"));
     }
 
+    /// RT-270: `${OPERANT_SESSION_ID}` must be substituted before the skill
+    /// body reaches the model.
+    ///
+    /// The setting is documented as substituting it (hermes `template_vars`
+    /// parity) and the substitution function is correct — but the only
+    /// production call passed `None` for the session id, so the LITERAL token
+    /// reached the model and the skill's own instructions told the model to
+    /// use a placeholder that does not exist.
+    #[test]
+    fn the_session_id_token_is_substituted_before_injection() {
+        let _env = crate::platform::test_env_lock_blocking();
+        let key = "HERMES_HOME";
+        let original = std::env::var(key).ok();
+        let tmp =
+            std::env::temp_dir().join(format!("operant-session-token-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let skills = tmp.join("skills");
+        std::fs::create_dir_all(skills.join("session-skill")).unwrap();
+        std::fs::write(
+            skills.join("session-skill").join("SKILL.md"),
+            "---\nname: session-skill\ndescription: a skill that names its session\n---\n\nWrite the notes to ${OPERANT_SESSION_ID}.\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(&tmp).unwrap();
+        // SAFETY: test-only env mutation under the crate-wide env lock.
+        unsafe { std::env::set_var(key, &tmp) };
+
+        let msg = build_skill_invocation_message_in(&skills, "session-skill", "", Some("s-42"));
+
+        // Restore original value.
+        match original {
+            Some(val) => unsafe { std::env::set_var(key, val) },
+            None => unsafe { std::env::remove_var(key) },
+        }
+        let _ = std::fs::remove_dir_all(&tmp);
+
+        let msg = msg.expect("the skill must resolve and be injected");
+        assert!(
+            msg.contains("s-42"),
+            "the session id must be substituted into the skill body: {msg}"
+        );
+        assert!(
+            !msg.contains("${OPERANT_SESSION_ID}"),
+            "the literal token must never reach the model: {msg}"
+        );
+    }
+
     #[test]
     fn test_build_skill_invocation_message_missing_skill_returns_none() {
         // Hermes parity: a missing skill must yield None (no message), not a
         // panic or an empty string. Deterministic — no env mutation needed.
-        let result = build_skill_invocation_message("definitely-not-a-real-skill-xyz", "go");
+        let result = build_skill_invocation_message("definitely-not-a-real-skill-xyz", "go", None);
         assert!(result.is_none());
     }
 

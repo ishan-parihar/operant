@@ -487,6 +487,7 @@ impl App {
                     &self.config.skills.root_dir,
                     skill_name,
                     &instruction,
+                    self.current_session.as_deref(),
                 ) {
                     Some(msg) => {
                         // Inject as a fresh user message on the next loop
@@ -591,7 +592,7 @@ impl App {
                 // (plan 05B) the ported jcode unified inline picker over the
                 // agent's endpoint catalogue (05A's rows: base_url /models
                 // + the configured [agent] models).
-                self.open_model_picker_inline();
+                self.open_model_picker_inline(args);
                 true
             }
             // /model-status — status-tier (command backlog tier 1):
@@ -967,7 +968,7 @@ impl App {
                 let _ = std::fs::remove_file(&cache);
                 crate::tui::operant_app::provider::catalog_scheduler::bump_catalog_generation();
                 if self.credentials_live() {
-                    self.open_model_picker_inline();
+                    self.open_model_picker_inline("");
                     self.set_status_notice("Refreshing the model catalog…".to_string());
                 } else {
                     self.connect_dialog.open();
@@ -1149,7 +1150,7 @@ impl App {
                 // preselected. Enter routes through the plan-03
                 // pending_effort drain. The legacy effort_picker overlay
                 // is retired with this.
-                self.open_effort_picker_inline();
+                self.open_effort_picker_inline(args);
                 true
             }
             "effort-set" => {

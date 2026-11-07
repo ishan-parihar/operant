@@ -2822,6 +2822,12 @@ pub fn handle_command(cmd_name: &str, _args: &str, ctx: &CommandContext<'_>) -> 
                     &root,
                     name,
                     &instruction,
+                    // The sync arm's context carries no session id (it holds
+                    // platform/channel, and the gateway's session key also
+                    // folds in the thread), so the session token stays
+                    // literal here — the documented fallback, not a silent
+                    // drop. The runtime arm substitutes it.
+                    None,
                 ) {
                     Some(msg) => {
                         const CHANNEL_SKILL_HEAD_CHARS: usize = 1200;

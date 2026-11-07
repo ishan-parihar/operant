@@ -1443,6 +1443,11 @@ async fn handle_runtime_command(
                 &skills_dir,
                 skill_name,
                 &instruction,
+                // The agent's session id for this chat, derived exactly as
+                // `run_session_scoped_command` derives it (a PINNED or
+                // persisted session id differs; the derived one is the
+                // default this arm can resolve without the gateway lock).
+                Some(derived_gateway_session_id(session_key).as_str()),
             ) {
                 Some(msg) => {
                     // Bounded to the same 1200-char head /memory uses, with
