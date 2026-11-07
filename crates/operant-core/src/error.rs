@@ -51,8 +51,13 @@ fn extract_provider_message(body: &str) -> String {
 
     // Fallback: strip newlines and truncate.
     let clean = body.split_whitespace().collect::<Vec<_>>().join(" ");
-    if clean.len() > 200 {
-        format!("{}...", &clean[..200])
+    // CHAR-safe: a byte slice panics when the cut lands inside a
+    // multi-byte character -- and this is the ERROR path, so the panic
+    // would replace the error with a crash.
+    if clean.chars().count() > 200 {
+        let mut cut: String = clean.chars().take(200).collect();
+        cut.push_str("...");
+        cut
     } else {
         clean
     }
@@ -585,5 +590,49 @@ mod tests {
             "query-param key leaked into converted network error: {display}"
         );
         assert!(display.contains("Network error"), "got: {display}");
+    }
+
+    /// RT-299: free text must never be cut with a BYTE slice.
+    ///
+    /// A byte slice panics when the cut lands inside a multi-byte
+    /// character — the same defect that killed `operant sessions list` on
+    /// the operator's own em-dash. Five sites cut free text that way
+    /// (the insights' model name, the learning graph's memory label, the
+    /// webhook response body, the CLI discovery's description and this
+    /// module's own error fallback — where the panic would replace the
+    /// error with a crash).
+    ///
+    /// Source-grep contract (the repo's own shape): the needles are built
+    /// by concatenation so this test's own source cannot satisfy them.
+    #[test]
+    fn no_free_text_is_cut_with_a_byte_slice() {
+        let cases: [(&str, String); 5] = [
+            (
+                include_str!("agent/insights.rs"),
+                format!("&m.model[{n}]", n = "..28"),
+            ),
+            (
+                include_str!("agent/learning_graph.rs"),
+                format!("&first_line[{n}]", n = "..80"),
+            ),
+            (
+                include_str!("gateway/webhook_subscriptions.rs"),
+                format!("&text[{n}]", n = "..500"),
+            ),
+            (
+                include_str!("tools/cli_discovery.rs"),
+                format!("&description[{n}]", n = "..197"),
+            ),
+            (
+                include_str!("error.rs"),
+                format!("&clean[{n}]", n = "..200"),
+            ),
+        ];
+        for (src, needle) in cases {
+            assert!(
+                !src.contains(&needle),
+                "a byte slice can panic on a multi-byte character: {needle}"
+            );
+        }
     }
 }

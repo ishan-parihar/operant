@@ -553,10 +553,15 @@ fn format_report_terminal(report: &InsightsReport) -> String {
         lines.push("  🤖 Models Used".to_string());
         lines.push("  ────────────────────────────────────".to_string());
         for m in &report.models {
-            let name = if m.model.len() > 28 {
-                &m.model[..28]
+            // CHAR-safe: a byte slice panics when the cut lands inside a
+            // multi-byte character (the same defect that killed
+            // `operant sessions list` on the operator's own em-dash).
+            let name = if m.model.chars().count() > 28 {
+                let mut cut: String = m.model.chars().take(28).collect();
+                cut.push('…');
+                cut
             } else {
-                &m.model
+                m.model.clone()
             };
             let cost_str = if m.estimated_cost_usd > 0.0 {
                 format!("${:.4}", m.estimated_cost_usd)

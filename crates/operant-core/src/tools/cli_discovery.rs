@@ -384,8 +384,12 @@ impl CapabilityManager {
                     .chars()
                     .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
                     .collect();
-                let desc = if description.len() > 200 {
-                    format!("{}...", &description[..197])
+                // CHAR-safe: a byte slice panics when the cut lands inside
+                // a multi-byte character.
+                let desc = if description.chars().count() > 200 {
+                    let mut cut: String = description.chars().take(197).collect();
+                    cut.push_str("...");
+                    cut
                 } else {
                     description.clone()
                 };

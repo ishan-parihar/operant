@@ -243,8 +243,12 @@ pub async fn post_json(url: &str, body: &str, secret: Option<&str>) -> Result<Po
         .map_err(|e| format!("could not reach {url}: {e}"))?;
     let status = response.status().as_u16();
     let text = response.text().await.unwrap_or_default();
-    let body = if text.len() > 500 {
-        format!("{}…", &text[..500])
+    // CHAR-safe: a byte slice panics when the cut lands inside a
+    // multi-byte character.
+    let body = if text.chars().count() > 500 {
+        let mut cut: String = text.chars().take(500).collect();
+        cut.push('…');
+        cut
     } else {
         text
     };

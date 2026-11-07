@@ -634,8 +634,12 @@ pub fn build_learning_graph(skills_dir: &Path, memory_dir: &Path) -> LearningGra
                 .trim()
                 .trim_start_matches('#')
                 .trim();
-            let label = if first_line.len() > 80 {
-                format!("{}…", &first_line[..80])
+            // CHAR-safe: a byte slice panics when the cut lands inside a
+            // multi-byte character.
+            let label = if first_line.chars().count() > 80 {
+                let mut cut: String = first_line.chars().take(80).collect();
+                cut.push('…');
+                cut
             } else {
                 first_line.to_string()
             };
