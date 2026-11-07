@@ -381,10 +381,21 @@ pub struct SessionEntry {
     /// Set after background expiry watcher finalizes
     #[serde(default)]
     pub expiry_finalized: bool,
-    /// When true, next access auto-resets (from /stop)
+    /// When true, next access auto-resets (from /stop).
+    ///
+    /// NOT SET BY ANY PRODUCTION PATH (RT-280): `suspend_session` has no
+    /// caller outside the tests, so this flag — and the read branch that
+    /// honours it — never fires. The behaviour is named as a design
+    /// decision (wire it, or park it), not guessed at here.
     #[serde(default)]
     pub suspended: bool,
-    /// Session was interrupted by restart, resume on next access
+    /// Session was interrupted by restart, resume on next access.
+    ///
+    /// NOT SET BY ANY PRODUCTION PATH (RT-280): `mark_resume_pending` and
+    /// `suspend_recently_active` (the startup sweep) have no callers
+    /// outside the tests, so after a gateway restart no session is ever
+    /// resume-pending and the session id is not preserved. Named as a design
+    /// decision (RT-280).
     #[serde(default)]
     pub resume_pending: bool,
     /// Reason for resume_pending
