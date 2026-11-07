@@ -99,7 +99,12 @@ impl App {
     /// The fetch rides the same model_fetch_rx → drain path the old
     /// overlay used, so the picker opens instantly on the configured rows
     /// and refreshes in place when the endpoint answers.
-    pub(super) fn open_model_picker_inline(&mut self) {
+    ///
+    /// `filter` is the argument the operator typed (`/model gpt-5`): the
+    /// picker opens ALREADY FILTERED, so the argument narrows the list
+    /// instead of being dropped. The filter survives the endpoint fetch
+    /// (the drain re-applies it).
+    pub(super) fn open_model_picker_inline(&mut self, filter: &str) {
         let base_url = self
             .config
             .client
@@ -182,17 +187,20 @@ impl App {
         }
 
         let selected = entries.iter().position(|e| e.is_current).unwrap_or(0);
-        let filtered = (0..entries.len()).collect();
-        self.inline_interactive = Some(crate::tui::operant_app::tui_fns::InlineInteractiveState {
+        let mut picker = crate::tui::operant_app::tui_fns::InlineInteractiveState {
             kind: crate::tui::operant_app::tui_fns::PickerKind::Model,
             entries,
-            filtered,
+            filtered: (0..0).collect(),
             selected,
             column: 0,
-            filter: String::new(),
+            filter: filter.to_string(),
             loading: fetching,
             preview: false,
-        });
+        };
+        // The filter is applied HERE, not by the operator typing it: the
+        // argument `/model gpt-5` narrows the list the moment it opens.
+        Self::apply_inline_interactive_filter(&mut picker);
+        self.inline_interactive = Some(picker);
     }
 
     /// Make `provider_id` the live provider. `endpoint` is the
@@ -266,7 +274,7 @@ impl App {
         // provider. (P0-2 from UX audit — was never called.)
         let _ = Self::persist_onboarding_complete();
         // (plan 05B) the unified inline picker — same surface as /model.
-        self.open_model_picker_inline();
+        self.open_model_picker_inline("");
     }
 
     /// The endpoint `/connect` should point the agent at: the user's own URL
@@ -665,7 +673,10 @@ impl super::App {
     /// wire level, the current level flagged and preselected. Enter routes
     /// through the plan-03 `pending_effort` drain (the agent applies it to
     /// the very next request).
-    pub(super) fn open_effort_picker_inline(&mut self) {
+    ///
+    /// `filter` is the argument the operator typed (`/effort high`): the
+    /// picker opens already narrowed to that level.
+    pub(super) fn open_effort_picker_inline(&mut self, filter: &str) {
         use crate::tui::model_effort::EffortLevel;
         let current = self.effort_level;
         let rows: &[(EffortLevel, &str, &str)] = &[
@@ -702,18 +713,19 @@ impl super::App {
             )
             .collect();
         let selected = entries.iter().position(|e| e.is_current).unwrap_or(1);
-        let filtered = (0..entries.len()).collect();
-        self.inline_interactive = Some(crate::tui::operant_app::tui_fns::InlineInteractiveState {
+        let mut picker = crate::tui::operant_app::tui_fns::InlineInteractiveState {
             kind: crate::tui::operant_app::tui_fns::PickerKind::Model,
             entries,
-            filtered,
+            filtered: (0..0).collect(),
             selected,
             column: 0,
-            filter: String::new(),
+            filter: filter.to_string(),
             // Effort levels are a fixed local list: nothing is loading.
             loading: false,
             preview: false,
-        });
+        };
+        Self::apply_inline_interactive_filter(&mut picker);
+        self.inline_interactive = Some(picker);
     }
 }
 

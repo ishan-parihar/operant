@@ -1487,7 +1487,7 @@ impl App {
                 // (plan 05B) the unified inline picker — same surface as
                 // /model, no provider-guessing.
                 if !self.is_streaming && self.credentials_live() {
-                    self.open_model_picker_inline();
+                    self.open_model_picker_inline("");
                 }
             }
 

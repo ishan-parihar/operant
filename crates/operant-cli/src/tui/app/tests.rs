@@ -962,6 +962,48 @@ fn the_help_overlay_descriptions_match_what_the_arms_do() {
     );
 }
 
+/// (RT-271) A command's ARGUMENT narrows the picker it opens.
+///
+/// `/model gpt-5` and `/effort high` used to drop the argument: the picker
+/// opened with every row, so the operator typed the model they wanted and
+/// then had to find it in the list — the one thing the argument was for.
+#[test]
+fn a_commands_argument_narrows_the_picker_it_opens() {
+    // /effort — the level names a row, so the list narrows to it.
+    let mut app = make_app();
+    assert!(app.handle_tui_command("effort", "high"));
+    let Some(picker) = app.inline_interactive.as_ref() else {
+        panic!("/effort must open the effort picker");
+    };
+    assert_eq!(
+        picker.filter, "high",
+        "the argument must become the picker's filter"
+    );
+    assert_eq!(
+        picker.filtered.len(),
+        1,
+        "the argument must narrow the list to the row it names"
+    );
+
+    // /model — the model name filters the model's rows.
+    let mut app = make_app();
+    app.has_credentials = true;
+    assert!(app.handle_tui_command("model", "glm"));
+    let Some(picker) = app.inline_interactive.as_ref() else {
+        panic!("/model must open the model picker");
+    };
+    assert_eq!(
+        picker.filter, "glm",
+        "the argument must become the picker's filter"
+    );
+    assert!(
+        picker.filtered.len() < picker.entries.len(),
+        "the argument must narrow the list: {} of {} rows",
+        picker.filtered.len(),
+        picker.entries.len()
+    );
+}
+
 /// Ctrl+C in a vim mode other than Insert/Normal leaves the mode — it does
 /// not clear the composer and it does not start the quit confirmation.
 ///

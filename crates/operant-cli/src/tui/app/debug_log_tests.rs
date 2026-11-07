@@ -20,7 +20,7 @@ fn press_key(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
 fn open_inline_picker(app: &mut App) {
     // The same opener the `/model` command uses — a hand-built picker state
     // would test a shape the product never builds.
-    app.open_model_picker_inline();
+    app.open_model_picker_inline("");
 }
 
 /// The picker's keys must reach the debug bus: the publication sits ABOVE
