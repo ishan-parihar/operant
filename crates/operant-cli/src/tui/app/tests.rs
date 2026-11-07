@@ -8122,6 +8122,12 @@ fn empty_flush_releases_the_tool_slot_reservation() {
 
 #[test]
 fn selection_copy_is_synchronous_and_not_clamped_to_the_viewport() {
+    // (RT-274) The frame carries the app's transcript, and the transcript
+    // carries the PROCESS-WIDE delegation registry's rows too — so another
+    // test's delegation can land in the frame between this test's two
+    // renders and move the text it reads. The registry lock is the
+    // discipline this file already documents for it.
+    let _registry = registry_lock();
     // 2026-10-13 copy parity: the release handler used to copy the text the
     // render pass scraped from painted cells — one frame late (a fast
     // Drag…Up batch copied nothing) and clamped to the visible window.
@@ -8185,6 +8191,12 @@ fn select_lines(app: &mut App, first: usize, last: usize) -> String {
 
 #[test]
 fn copy_joins_soft_wraps_and_drops_gutters_like_jcode() {
+    // (RT-274) The frame carries the app's transcript, and the transcript
+    // carries the PROCESS-WIDE delegation registry's rows too — so another
+    // test's delegation can land in the frame between this test's two
+    // renders and move the text it reads. The registry lock is the
+    // discipline this file already documents for it.
+    let _registry = registry_lock();
     // 2026-10-13 copy parity: soft-wrapped rows copied as separate lines and
     // the prompt gutter (`1›`) came along. Copy is logical lines, text only.
     let mut app = make_app();
@@ -8212,6 +8224,12 @@ fn copy_joins_soft_wraps_and_drops_gutters_like_jcode() {
 
 #[test]
 fn copy_carries_tool_rows_alongside_prose() {
+    // (RT-274) The frame carries the app's transcript, and the transcript
+    // carries the PROCESS-WIDE delegation registry's rows too — so another
+    // test's delegation can land in the frame between this test's two
+    // renders and move the text it reads. The registry lock is the
+    // discipline this file already documents for it.
+    let _registry = registry_lock();
     let mut app = make_app();
     app.messages.push(Message::user("go".to_string()));
     app.messages
@@ -8260,6 +8278,12 @@ fn copy_carries_tool_rows_alongside_prose() {
 // "copy spans everything now".
 #[test]
 fn copy_still_skips_chrome_when_the_selection_mixes_prose_and_a_tool_call() {
+    // (RT-274) The frame carries the app's transcript, and the transcript
+    // carries the PROCESS-WIDE delegation registry's rows too — so another
+    // test's delegation can land in the frame between this test's two
+    // renders and move the text it reads. The registry lock is the
+    // discipline this file already documents for it.
+    let _registry = registry_lock();
     let mut app = make_app();
     app.messages.push(Message::user("go".to_string()));
     app.messages.push(Message {
@@ -8312,6 +8336,12 @@ fn copy_still_skips_chrome_when_the_selection_mixes_prose_and_a_tool_call() {
 
 #[test]
 fn copy_slices_exact_columns_on_wrapped_rows() {
+    // (RT-274) The frame carries the app's transcript, and the transcript
+    // carries the PROCESS-WIDE delegation registry's rows too — so another
+    // test's delegation can land in the frame between this test's two
+    // renders and move the text it reads. The registry lock is the
+    // discipline this file already documents for it.
+    let _registry = registry_lock();
     let mut app = make_app();
     app.messages.push(Message::user("go".to_string()));
     let para = "alpha ".repeat(30) + "MIDWORD tail";
@@ -8327,6 +8357,12 @@ fn copy_slices_exact_columns_on_wrapped_rows() {
 
 #[test]
 fn copy_rejoins_pre_wrapped_system_cards_into_authored_lines() {
+    // (RT-274) The frame carries the app's transcript, and the transcript
+    // carries the PROCESS-WIDE delegation registry's rows too — so another
+    // test's delegation can land in the frame between this test's two
+    // renders and move the text it reads. The registry lock is the
+    // discipline this file already documents for it.
+    let _registry = registry_lock();
     // 2026-10-13: a copied error card broke mid-sentence at the terminal
     // width — system rows are pre-wrapped by their renderer, so each row was
     // its own "logical" line. Rows now map back onto the authored lines.
@@ -8346,6 +8382,12 @@ fn copy_rejoins_pre_wrapped_system_cards_into_authored_lines() {
 
 #[test]
 fn copy_strips_code_quote_and_table_chrome() {
+    // (RT-274) The frame carries the app's transcript, and the transcript
+    // carries the PROCESS-WIDE delegation registry's rows too — so another
+    // test's delegation can land in the frame between this test's two
+    // renders and move the text it reads. The registry lock is the
+    // discipline this file already documents for it.
+    let _registry = registry_lock();
     // Copy is document text: no `┌─ lang` frames, `│ ` gutters or box-drawn
     // table rules. Tables copy as tab-separated cells.
     let mut app = make_app();
@@ -8433,6 +8475,12 @@ fn a_user_stop_is_a_quiet_notice_not_an_error() {
 
 #[test]
 fn tool_rows_show_failure_and_pending_from_app_status() {
+    // (RT-274) The frame carries the app's transcript, and the transcript
+    // carries the PROCESS-WIDE delegation registry's rows too — so another
+    // test's delegation can land in the frame between this test's two
+    // renders and move the text it reads. The registry lock is the
+    // discipline this file already documents for it.
+    let _registry = registry_lock();
     let mut app = make_app();
     app.messages.push(Message::user("go".to_string()));
     let block = |id: &str, status, preview: Option<&str>| ToolUseBlock {
@@ -8475,6 +8523,12 @@ fn render_buffer(app: &App) -> ratatui::buffer::Buffer {
 
 #[test]
 fn highlight_covers_only_the_text_a_copy_carries() {
+    // (RT-274) The frame carries the app's transcript, and the transcript
+    // carries the PROCESS-WIDE delegation registry's rows too — so another
+    // test's delegation can land in the frame between this test's two
+    // renders and move the text it reads. The registry lock is the
+    // discipline this file already documents for it.
+    let _registry = registry_lock();
     // 2026-10-13: the selection painted every row edge to edge — the `1›`
     // gutter, padding lit up although copy drops them.
     let mut app = make_app();
@@ -8515,7 +8569,28 @@ fn highlight_covers_only_the_text_a_copy_carries() {
                     .collect::<String>()
                     .contains(needle)
             })
-            .unwrap()
+            .unwrap_or_else(|| {
+                // (iter-1843) The search used to end in a bare `unwrap`, so a
+                // run whose frame did not carry the needle panicked with
+                // "called Option::unwrap() on a None value" and named neither
+                // the needle nor the frame — the one fact needed to tell a
+                // layout race from a lost message. The frame's non-empty
+                // lines are reported instead: a NEEDLE that is absent while
+                // the messages are still there is the layout moving, and a
+                // frame that no longer carries the messages at all is the
+                // render being raced.
+                let lines: Vec<String> = (0..plain.area.height)
+                    .map(|y| {
+                        (0..plain.area.width)
+                            .map(|x| plain[(x, y)].symbol())
+                            .collect::<String>()
+                            .trim_end()
+                            .to_string()
+                    })
+                    .filter(|l| !l.is_empty())
+                    .collect();
+                panic!("`{needle}` is not in the plain frame; the frame holds: {lines:?}")
+            })
     };
     let highlighted = |y: u16| -> String {
         (0..plain.area.width)
@@ -8541,6 +8616,12 @@ fn highlight_covers_only_the_text_a_copy_carries() {
 
 #[test]
 fn copy_merges_wrapped_table_cells_and_skips_error_cards() {
+    // (RT-274) The frame carries the app's transcript, and the transcript
+    // carries the PROCESS-WIDE delegation registry's rows too — so another
+    // test's delegation can land in the frame between this test's two
+    // renders and move the text it reads. The registry lock is the
+    // discipline this file already documents for it.
+    let _registry = registry_lock();
     let mut app = make_app();
     app.messages.push(Message::user("go".to_string()));
     let long = "stored and read back successfully with timestamp ".repeat(4);
@@ -13500,4 +13581,53 @@ fn the_zero_key_selects_nothing_in_the_permission_dialog() {
         pr.selected_option, 1,
         "'0' must not select the first option"
     );
+}
+
+/// (RT-274) Every test that reads a RENDERED TRANSCRIPT holds the delegation
+/// registry lock.
+///
+/// The app's transcript carries the PROCESS-WIDE delegation registry's rows as
+/// well as its own tool rows, so another test's delegation can land in a
+/// frame between this test's two renders and move the text it reads. That is
+/// the flake `highlight_covers_only_the_text_a_copy_carries` carried for
+/// fifteen iterations (named since iter-1762): the frame's tool row was
+/// another test's `dlg-…` row, and the `TOOLROW` needle was simply gone.
+///
+/// The lock is the discipline this file already documents for the registry
+/// ("take one at the top of any test that seeds or READS the delegation
+/// registry"); the transcript reads it, so the transcript's readers take it.
+#[test]
+fn every_transcript_content_test_holds_the_delegation_registry_lock() {
+    const TRANSCRIPT_CONTENT_TESTS: &[&str] = &[
+        "selection_copy_is_synchronous_and_not_clamped_to_the_viewport",
+        "copy_joins_soft_wraps_and_drops_gutters_like_jcode",
+        "copy_carries_tool_rows_alongside_prose",
+        "copy_still_skips_chrome_when_the_selection_mixes_prose_and_a_tool_call",
+        "copy_slices_exact_columns_on_wrapped_rows",
+        "copy_rejoins_pre_wrapped_system_cards_into_authored_lines",
+        "copy_strips_code_quote_and_table_chrome",
+        "tool_rows_show_failure_and_pending_from_app_status",
+        "highlight_covers_only_the_text_a_copy_carries",
+        "copy_merges_wrapped_table_cells_and_skips_error_cards",
+    ];
+
+    let source = include_str!("tests.rs");
+    for name in TRANSCRIPT_CONTENT_TESTS {
+        let marker = format!("fn {name}() {{");
+        let Some(start) = source.find(&marker) else {
+            panic!("the transcript-content test `{name}` is gone from this file");
+        };
+        let rest = &source[start..];
+        let end = rest
+            .find("\n#[test]")
+            .map(|i| start + i)
+            .unwrap_or(source.len());
+        let body = &source[start..end];
+        assert!(
+            body.contains("registry_lock()"),
+            "the transcript-content test `{name}` must hold the delegation registry lock: \
+             the transcript carries the process-wide registry's rows, so another test's \
+             delegation can move the text this test reads"
+        );
+    }
 }
