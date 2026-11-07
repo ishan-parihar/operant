@@ -56,6 +56,44 @@ struct VerifyArgs {
     limit: Option<u32>,
 }
 
+/// Keep only the requested phases of a recipe.
+///
+/// The phase names are the recipe's phase kinds: `bootstrap`, `build` and
+/// `test` (the `start` phase is requested by the start spec, not by name).
+/// An unknown name is an ERROR, not a silent "run everything" — the model
+/// asked for something that does not exist.
+fn filter_recipe_by_phases(
+    recipe: &crate::verification::VerificationRecipe,
+    requested: Option<&[String]>,
+) -> std::result::Result<crate::verification::VerificationRecipe, String> {
+    let Some(requested) = requested else {
+        return Ok(recipe.clone());
+    };
+    let unknown: Vec<&str> = requested
+        .iter()
+        .filter(|name| !matches!(name.as_str(), "bootstrap" | "build" | "test"))
+        .map(|name| name.as_str())
+        .collect();
+    if !unknown.is_empty() {
+        return Err(format!(
+            "Unknown phase(s): {} — one of: bootstrap | build | test",
+            unknown.join(", ")
+        ));
+    }
+    let wants = |name: &str| requested.iter().any(|r| r == name);
+    let mut filtered = recipe.clone();
+    if !wants("bootstrap") {
+        filtered.bootstrap.clear();
+    }
+    if !wants("build") {
+        filtered.build.clear();
+    }
+    if !wants("test") {
+        filtered.test.clear();
+    }
+    Ok(filtered)
+}
+
 #[async_trait]
 impl OperantTool for VerifyTaskTool {
     fn name(&self) -> &str {
@@ -145,6 +183,19 @@ impl VerifyTaskTool {
             .cloned()
             .and_then(|v| serde_json::from_value::<StartSpec>(v).ok());
         let include_start = start.is_some();
+
+        // The model asked for a SUBSET of the phases — run only those.
+        // The parameter was accepted and documented ("subset of phases to
+        // run, e.g. ["build", "test"]") and IGNORED: every run executed
+        // bootstrap + build + test whatever the model asked for (RT-290).
+        let requested: Option<Vec<String>> = args
+            .get("phases")
+            .cloned()
+            .and_then(|v| serde_json::from_value::<Vec<String>>(v).ok());
+        let recipe = match filter_recipe_by_phases(&recipe, requested.as_deref()) {
+            Ok(r) => r,
+            Err(message) => return ToolResult::error("verify_task", message),
+        };
 
         let result = run_verify(&recipe, root, include_start, start.as_ref()).await;
         self.record_phases(&recipe, &result.phases);
@@ -363,5 +414,86 @@ mod tests {
         assert!(evidence.success);
         let e: Value = serde_json::from_str(&evidence.content).unwrap();
         assert_eq!(e["count"], 0);
+    }
+
+    /// RT-290: the `phases` parameter must be honoured.
+    ///
+    /// The schema promises "For \"run\": subset of phases to run, e.g.
+    /// [\"build\", \"test\"]" and the body ignored it: every run executed
+    /// bootstrap + build + test whatever the model asked for.
+    #[tokio::test]
+    async fn verify_task_runs_only_the_requested_phases() {
+        let dir = std::env::temp_dir().join(format!(
+            "operant_verify_phases_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        // A Makefile recipe: the build and the test phase each leave a
+        // marker, so the test can see which one actually ran.
+        std::fs::write(
+            dir.join("Makefile"),
+            "build:\n\t@touch build-ran\ntest:\n\t@touch test-ran\n",
+        )
+        .expect("makefile");
+
+        let tool = VerifyTaskTool::new(test_db());
+        let result = tool
+            .execute(
+                json!({"action": "run", "cwd": dir.to_string_lossy(), "phases": ["test"]}),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(result.success, "{}", result.content);
+        assert!(
+            dir.join("test-ran").exists(),
+            "the requested phase must run: {}",
+            result.content
+        );
+        assert!(
+            !dir.join("build-ran").exists(),
+            "the phase that was NOT requested must not run: {}",
+            result.content
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// RT-290: an unknown phase name is an ERROR, not a silent
+    /// "run everything".
+    #[tokio::test]
+    async fn verify_task_rejects_an_unknown_phase_name() {
+        let dir = std::env::temp_dir().join(format!(
+            "operant_verify_bad_phase_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        std::fs::write(dir.join("Makefile"), "build:\n\t@true\ntest:\n\t@true\n")
+            .expect("makefile");
+
+        let tool = VerifyTaskTool::new(test_db());
+        let result = tool
+            .execute(
+                json!({"action": "run", "cwd": dir.to_string_lossy(), "phases": ["deploy"]}),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(
+            !result.success,
+            "an unknown phase must not succeed: {}",
+            result.content
+        );
+        let message = result.error.clone().unwrap_or_default();
+        assert!(
+            message.contains("Unknown phase"),
+            "the error must name the problem: {message}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
