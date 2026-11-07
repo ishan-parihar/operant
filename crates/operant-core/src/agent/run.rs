@@ -1653,8 +1653,40 @@ impl OperantAgent {
                             let tools = self.tools_for_turn(&messages).await;
                             let retry_request =
                                 self.fitted_request(&self.effective_model(), &messages, tools);
-                            self.call_with_loop_timeout(self.client.chat(retry_request))
-                                .await?
+                            // The retry's own error is handled HERE — the
+                            // same two-strike rule the streaming arm applies
+                            // (see its comment): if the RETRY overflows too
+                            // and the compression did not reduce the
+                            // history, the retry sent the same prompt the
+                            // provider already rejected, and the turn fails
+                            // TYPED. Without this the raw provider error
+                            // escaped, and the gateway's compact-and-retry
+                            // recovery — which keys ONLY on the typed
+                            // context-exhausted error — never fired on the
+                            // non-streaming path (RT-286).
+                            match self
+                                .call_with_loop_timeout(self.client.chat(retry_request))
+                                .await
+                            {
+                                Ok(response) => response,
+                                Err(retry_err) => {
+                                    let retry_classified =
+                                        FallbackModelClient::classify_error(&retry_err);
+                                    if retry_classified.should_compress
+                                        && !retry_state.compress_reduced_history
+                                    {
+                                        let tokens =
+                                            crate::context_management::estimate_total_tokens(
+                                                &messages,
+                                            );
+                                        return Err(Error::ContextExhausted {
+                                            tokens,
+                                            window: self.effective_context_window(),
+                                        });
+                                    }
+                                    return Err(retry_err);
+                                }
+                            }
                         } else if classified.should_rotate_credential
                             && !retry_state.rotate_attempted
                         {
@@ -3706,5 +3738,44 @@ mod turn_retention_tests {
                 assert!(!turn_retains());
             })
             .await;
+    }
+}
+
+#[cfg(test)]
+mod overflow_typed_tests {
+    /// RT-286: the NON-STREAMING context-overflow retry must fail TYPED.
+    ///
+    /// With `[agent] stream = false` the compression arm ended in a bare
+    /// `.await?`, so a second overflow after a compression that did not
+    /// shrink the history escaped as the RAW provider error — even though
+    /// the arm's own comment says "the SECOND overflow fails typed" and the
+    /// streaming arm does exactly that. The gateway's recovery keys ONLY on
+    /// `Err(Error::ContextExhausted { .. })`, so on the non-streaming path
+    /// it never fired.
+    ///
+    /// Source-grep contract over the ARM (the repo's own shape): the
+    /// non-streaming compression arm — the SECOND `should_compress` arm in
+    /// the file — must contain the typed error. The needles are built by
+    /// concatenation so this test's own source cannot satisfy them.
+    #[test]
+    fn the_non_streaming_compression_arm_fails_typed() {
+        let src = include_str!("run.rs");
+        let arm_marker = format!("should_compress && !retry_state.{}", "compress_attempted");
+        let typed = format!("return Err(Error::{}", "ContextExhausted");
+        let arms: Vec<usize> = src.match_indices(&arm_marker).map(|(i, _)| i).collect();
+        assert!(
+            arms.len() >= 2,
+            "expected the streaming and the non-streaming compression arms: {arms:?}"
+        );
+        let start = arms[1];
+        let region_end = src[start..]
+            .find("else if classified.should_rotate_credential")
+            .map(|i| start + i)
+            .unwrap_or(start + 4000);
+        let region = &src[start..region_end];
+        assert!(
+            region.contains(&typed),
+            "the non-streaming compression arm must fail typed (Error::ContextExhausted), not propagate the raw provider error"
+        );
     }
 }
