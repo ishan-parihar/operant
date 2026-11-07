@@ -448,10 +448,10 @@ impl KanbanDb {
             )
             .ok();
 
-        if let Some(run_id) = expected_run_id {
-            if current_run != Some(run_id) {
-                return Ok(false);
-            }
+        if let Some(run_id) = expected_run_id
+            && current_run != Some(run_id)
+        {
+            return Ok(false);
         }
 
         let metadata_json = metadata.and_then(|m| serde_json::to_string(m).ok());
