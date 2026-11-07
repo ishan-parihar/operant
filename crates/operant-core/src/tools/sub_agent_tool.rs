@@ -487,6 +487,10 @@ impl SubAgentTool {
     /// depth + breadth limits as a swarm. Swarms call `call_unguarded` per
     /// worker instead, because `call_batch` already reserved the swarm's slots
     /// in one atomic claim — counting twice would double-charge the budget.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the worker's full instruction set is passed as arguments; the same fields as WorkerSpec"
+    )]
     pub async fn call(
         &self,
         goal: impl Into<String>,
@@ -806,6 +810,10 @@ impl SubAgentTool {
     /// and an `AgentEvent::AsyncDelegation` is pushed onto the parent's event
     /// channel (when one exists) so the CLI/TUI can surface the outcome. The
     /// agent polls progress with `delegate_task(query="<id>")`.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the worker's full instruction set is passed as arguments; the same fields as WorkerSpec"
+    )]
     async fn dispatch_background(
         &self,
         goal: String,

@@ -168,8 +168,10 @@ mod tests {
                 .as_nanos()
         ));
         std::fs::create_dir_all(&dir).expect("temp dir");
-        let mut config = AppConfig::default();
-        config.database_path = dir.join("database.db");
+        let config = AppConfig {
+            database_path: dir.join("database.db"),
+            ..AppConfig::default()
+        };
 
         let db = budget_db(&config).expect("the command's store");
         // The command must not touch the APP database at all: the store it
