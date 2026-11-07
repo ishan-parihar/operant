@@ -20,6 +20,11 @@ pub struct InsightsReport {
     pub days: u32,
     pub source_filter: Option<String>,
     pub empty: bool,
+    /// The failure that made this report empty, when the query FAILED.
+    /// `None` = the report is genuinely empty (no activity in the window).
+    /// Without this the model cannot tell a broken database from a quiet
+    /// week (RT-294).
+    pub error: Option<String>,
     pub overview: OverviewStats,
     pub models: Vec<ModelStats>,
     pub platforms: Vec<PlatformStats>,
@@ -135,7 +140,12 @@ impl<'a> InsightsEngine<'a> {
             Ok(s) => s,
             Err(e) => {
                 tracing::warn!(error = %e, "Failed to fetch sessions for insights");
-                return empty_report(days, source);
+                // The report says the query FAILED. Returning the plain
+                // empty report made a database fault indistinguishable from
+                // a week with no activity (RT-294).
+                let mut report = empty_report(days, source);
+                report.error = Some(format!("Failed to fetch sessions for insights: {e}"));
+                return report;
             }
         };
 
@@ -148,6 +158,7 @@ impl<'a> InsightsEngine<'a> {
             days,
             source_filter: source.map(String::from),
             empty: false,
+            error: None,
             overview: compute_overview(&sessions),
             models: compute_model_breakdown(&sessions),
             platforms: compute_platform_breakdown(&sessions),
@@ -218,6 +229,7 @@ fn empty_report(days: u32, source: Option<&str>) -> InsightsReport {
         days,
         source_filter: source.map(String::from),
         empty: true,
+        error: None,
         overview: OverviewStats::default(),
         models: Vec::new(),
         platforms: Vec::new(),
