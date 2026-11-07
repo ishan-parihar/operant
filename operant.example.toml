@@ -367,7 +367,7 @@ enabled = false
 # default, ~7 tok/CLI/request), "description" (your own one-liner), or "off".
 inject_help = "usage"
 default_timeout_secs = 30
-max_help_lines = 60
+max_help_lines = 60              # PHASE C: lines of --help to serve (stored, not yet enforced)
 
 # [[cli.tools]]
 # name = "git"

@@ -1398,6 +1398,10 @@ pub struct CliSettings {
     pub default_timeout_secs: u64,
     /// Cap on the number of lines served when the agent asks for a CLI's
     /// full `--help` on demand. Default 60.
+    ///
+    /// ACCEPTED BUT NOT APPLIED (RT-278): the surface that would serve the
+    /// help is the Phase-C `cli_exec` tool, which has not landed — so this
+    /// cap has NO effect today, and the loader reports it when it is set.
     #[serde(default = "default_cli_help_lines")]
     pub max_help_lines: usize,
     /// The opted-in tools. Empty means none, regardless of PATH.
@@ -3154,6 +3158,17 @@ impl AppConfig {
             self.agent.max_consecutive_tool_only != d.agent.max_consecutive_tool_only,
             "[agent] max_consecutive_tool_only"
         );
+        // (RT-278) `[cli] max_help_lines` caps the lines SERVED when the
+        // agent asks for a CLI's full `--help` — a cap the runtime does not
+        // have yet: the Phase-C `cli_exec` surface is the thing that would
+        // serve the help, and it has not landed. The key is accepted (the
+        // schema keeps it so an existing config parses), but a SET value
+        // REPORTS instead of being accepted in silence.
+        flag!(
+            self.cli.max_help_lines != d.cli.max_help_lines,
+            "[cli] max_help_lines"
+        );
+
         // (RT-273) `[observability]` carries six runtime knobs that NOTHING
         // reads: only `backend` is consulted (the observer). The other six
         // promise an OTLP endpoint, service name and headers, and a runtime
@@ -4234,6 +4249,23 @@ wonderful_unknown_key = 42
         let warnings = config.unused_setting_warnings();
         assert_eq!(warnings.len(), 1, "{warnings:?}");
         assert!(warnings[0].contains("[socialization]"), "{warnings:?}");
+    }
+
+    /// RT-278: `[cli] max_help_lines` is accepted but NOT applied — the
+    /// Phase-C help-serving surface has not landed — so a set value must
+    /// REPORT.
+    #[test]
+    fn a_cli_max_help_lines_setting_is_reported_as_unread() {
+        assert!(AppConfig::default().unused_setting_warnings().is_empty());
+
+        let raw = "[cli]\nenabled = true\nmax_help_lines = 200\n";
+        let config = parse_config_str(raw, Path::new("memory://unread-cli-help")).unwrap();
+        let warnings = config.unused_setting_warnings();
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(
+            warnings[0].contains("[cli] max_help_lines"),
+            "the warning must name the key: {warnings:?}"
+        );
     }
 
     /// RT-273: `[observability]`'s six runtime knobs are accepted but NOT
