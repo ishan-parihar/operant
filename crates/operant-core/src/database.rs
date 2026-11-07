@@ -464,6 +464,18 @@ impl Database {
         )
         .map_err(|e| Error::Agent(format!("Failed to create FTS triggers: {}", e)))?;
 
+        // BACKFILL. An external-content FTS5 table starts EMPTY: only the
+        // triggers populate it, and they fire for NEW inserts only. So on
+        // any database that held messages before this table existed, those
+        // messages were permanently invisible to `session_search` (which
+        // reads the FTS index and has no LIKE fallback). One rebuild, once,
+        // when the index is first created (RT-296).
+        conn.execute(
+            "INSERT INTO messages_fts(messages_fts) VALUES('rebuild')",
+            [],
+        )
+        .map_err(|e| Error::Agent(format!("Failed to backfill FTS index: {}", e)))?;
+
         Ok(())
     }
 
@@ -2624,6 +2636,58 @@ mod tests {
         let _ = std::fs::remove_file(&path);
         let db = Database::init(path.clone()).expect("Failed to create test database");
         (db, path)
+    }
+
+    /// RT-296: the FTS index must be BACKFILLED when it is created.
+    ///
+    /// An external-content FTS5 table starts EMPTY: only the triggers
+    /// populate it, and they fire for NEW inserts only. So on any database
+    /// that held messages before the index existed, those messages were
+    /// permanently invisible to `session_search` — which reads the FTS
+    /// index and has no LIKE fallback.
+    #[test]
+    fn fts_index_backfills_messages_that_predate_it() {
+        let (db, path) = test_db_path();
+        db.save_session(
+            "sess_pre_fts",
+            Some("pre"),
+            "test",
+            "2024-01-01T00:00:00Z",
+            "2024-01-01T00:00:00Z",
+        )
+        .expect("session");
+        db.save_message(
+            "sess_pre_fts",
+            "user",
+            "the zarquon token appears here",
+            "2024-01-01T00:00:00Z",
+        )
+        .expect("message");
+
+        // Simulate a pre-FTS database: the index and its triggers are gone,
+        // the message row stays.
+        {
+            let conn = db.conn();
+            conn.execute_batch(
+                "DROP TRIGGER IF EXISTS messages_ai;
+                 DROP TRIGGER IF EXISTS messages_ad;
+                 DROP TRIGGER IF EXISTS messages_au;
+                 DROP TABLE IF EXISTS messages_fts;",
+            )
+            .expect("drop the index");
+        }
+        // (Without the index the search cannot run at all -- the FTS join
+        // fails -- which is the state the fix repairs.)
+
+        // Re-opening the database creates the index again -- and must
+        // backfill the rows that predate it.
+        drop(db);
+        let reopened = Database::init(path).expect("reopen");
+        let hits = reopened.search_sessions("zarquon", 10).expect("search");
+        assert!(
+            !hits.is_empty(),
+            "the backfilled index must find the message that predates it"
+        );
     }
 
     #[test]
