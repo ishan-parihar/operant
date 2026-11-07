@@ -74,5 +74,6 @@ mod state;
 mod tests;
 
 pub use keys::handle_settings_key;
+pub(crate) use keys::{select_next_visible, select_prev_visible};
 pub use render::render_settings_screen;
 pub(crate) use state::all_entries;

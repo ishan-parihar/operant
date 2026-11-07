@@ -3246,6 +3246,42 @@ fn the_wheel_scrolls_the_panels_that_can_scroll() {
     );
 }
 
+/// (iter-1856) The settings screen's wheel moves its cursor.
+///
+/// The settings screen's list carries a cursor, and the wheel did nothing in
+/// it: the mouse's own dialog gate swallowed the wheel before it could reach
+/// the panel. The wheel now moves the cursor by the settings module's OWN
+/// rule — the visible count is the filtered entry count, and the cursor stays
+/// in view — so the wheel and the arrow keys cannot disagree.
+#[test]
+fn the_wheel_moves_the_settings_screens_cursor() {
+    let mut app = make_app();
+    app.settings_screen.visible = true;
+    assert_eq!(app.settings_screen.selected_idx, 0);
+
+    app.handle_mouse_event(MouseEvent {
+        kind: MouseEventKind::ScrollDown,
+        column: 10,
+        row: 5,
+        modifiers: KeyModifiers::empty(),
+    });
+    assert_eq!(
+        app.settings_screen.selected_idx, 1,
+        "the wheel must move the settings screen's cursor"
+    );
+
+    app.handle_mouse_event(MouseEvent {
+        kind: MouseEventKind::ScrollUp,
+        column: 10,
+        row: 5,
+        modifiers: KeyModifiers::empty(),
+    });
+    assert_eq!(
+        app.settings_screen.selected_idx, 0,
+        "the wheel must move the settings screen's cursor back"
+    );
+}
+
 /// (RT-262) The wheel moves the CURSOR of the panel whose list is open.
 ///
 /// The panels whose list carries a cursor had nothing: the wheel did nothing

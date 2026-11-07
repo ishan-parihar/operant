@@ -55,21 +55,10 @@ pub fn handle_settings_key(
             screen.pop_search_char();
         }
         KeyCode::Up => {
-            screen.select_prev();
-            update_scroll_offset_for_selection(screen);
+            select_prev_visible(screen);
         }
         KeyCode::Down => {
-            let all = all_entries(screen);
-            let filtered: Vec<_> = all
-                .iter()
-                .filter(|e| {
-                    e.label
-                        .to_lowercase()
-                        .contains(&screen.search_query.to_lowercase())
-                })
-                .collect();
-            screen.select_next(filtered.len());
-            update_scroll_offset_for_selection(screen);
+            select_next_visible(screen);
         }
         KeyCode::Char(c) => {
             screen.push_search_char(c);
@@ -78,6 +67,33 @@ pub fn handle_settings_key(
     }
     *settings = screen.settings_snapshot.clone();
     true
+}
+
+/// Move the settings screen's selection UP one row — the rule ↑ uses.
+///
+/// (iter-1856) The wheel needs the SAME rule as the arrow keys: the visible
+/// count is the FILTERED entry count (the search query hides rows), and the
+/// cursor must stay in view. Both facts live in this module — the key layer
+/// owns the rule, and the wheel is a vertical key.
+pub(crate) fn select_prev_visible(screen: &mut SettingsScreen) {
+    screen.select_prev();
+    update_scroll_offset_for_selection(screen);
+}
+
+/// Move the settings screen's selection DOWN one row — the rule ↓ uses.
+/// See `select_prev_visible` for why this lives here.
+pub(crate) fn select_next_visible(screen: &mut SettingsScreen) {
+    let all = all_entries(screen);
+    let filtered: Vec<_> = all
+        .iter()
+        .filter(|e| {
+            e.label
+                .to_lowercase()
+                .contains(&screen.search_query.to_lowercase())
+        })
+        .collect();
+    screen.select_next(filtered.len());
+    update_scroll_offset_for_selection(screen);
 }
 
 fn update_scroll_offset_for_selection(screen: &mut SettingsScreen) {

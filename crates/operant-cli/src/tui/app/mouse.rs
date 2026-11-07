@@ -968,6 +968,18 @@ impl App {
         cursor_panel!(self.permissions_picker, select_prev, select_next, up);
         cursor_panel!(self.ask_user_dialog, select_prev, select_next, up);
         cursor_panel!(self.theme_screen, select_prev, select_next, up);
+        if self.settings_screen.visible {
+            // (iter-1856) The settings screen's rule lives in its own key
+            // layer — the visible count is the FILTERED entry count, and the
+            // cursor must stay in view — so the wheel calls that rule rather
+            // than growing a second one here.
+            if up {
+                crate::tui::settings_screen::select_prev_visible(&mut self.settings_screen);
+            } else {
+                crate::tui::settings_screen::select_next_visible(&mut self.settings_screen);
+            }
+            return true;
+        }
         if self.inline_interactive.is_some() {
             // (RT-267) The unified picker owns the keyboard while it is open,
             // so the wheel goes through the SAME handler the keys use: the
@@ -1060,12 +1072,13 @@ impl App {
         // overlay gate below (RT-258), which covers every panel in the
         // catalogue — so moving it here costs the picker nothing and lets
         // the wheel reach it.
+        // (iter-1856) The settings screen leaves the gate for the same
+        // reason: its list carries a cursor, and the wheel should move it.
         let any_dialog = self.connect_dialog.visible
             || self.import_config_picker.visible
             || self.import_config_dialog.visible
             || self.command_palette.visible
             || self.export_dialog.visible
-            || self.settings_screen.visible
             || self.stats_dialog.visible
             || self.context_viz.visible
             || self.session_hub.visible;
