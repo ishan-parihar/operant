@@ -13734,3 +13734,109 @@ fn every_transcript_content_test_holds_the_delegation_registry_lock() {
         );
     }
 }
+
+/// The session hub painted into a real frame, as text.
+///
+/// The hub's own render entry point (`render_session_hub`) — the same one the
+/// app's render ladder calls — so a claim this reads back is a claim the
+/// OPERATOR reads, not a string in the source.
+fn session_hub_screen(state: &crate::tui::session_hub::SessionHubState) -> Vec<String> {
+    use crate::tui::debug::debug_hub::buffer_rows;
+    use crate::tui::render::FrameCtx;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+    let mut ctx = FrameCtx {
+        size: ratatui::layout::Rect::new(0, 0, 120, 40),
+        preview_max_scroll: None,
+        stop: false,
+    };
+    terminal
+        .draw(|f| {
+            crate::tui::session_hub::render_session_hub(f, state, f.area(), &mut ctx);
+        })
+        .unwrap();
+    buffer_rows(terminal.backend().buffer())
+}
+
+/// (iter-1882) The session hub's SUBAGENT DETAIL told the operator
+/// "←← / Esc returns to the list" — and the dispatch did neither. ONE ←
+/// clears the detail, and Esc CLOSES the hub; the line that said otherwise
+/// was painted next to the hub's own header, which says "Esc closes", so
+/// one of the two had to be false and it was this one. An operator who
+/// pressed Esc to leave a detail lost the whole hub.
+///
+/// Pinned BEHAVIOURALLY, because a source-level check could not have seen
+/// it: the arm the line named (Left) exists — it just does something
+/// different from what the line promised, and the Esc it named lives in a
+/// different arm entirely. The test drives the REAL handler for every key
+/// the panel names and reads what the REAL render paints.
+#[test]
+fn the_session_hubs_subagent_detail_names_only_the_keys_that_leave_it() {
+    use operant_core::session::listing::{RowKind, RowStatus, SessionEntryV2};
+
+    let mut app = make_app();
+    app.session_hub.visible = true;
+    app.session_hub.replace_rows(vec![SessionEntryV2 {
+        id: "dlg-1".to_string(),
+        parent_id: None,
+        title: None,
+        updated_at: chrono::Utc::now(),
+        employee_id: None,
+        source: "subagent".to_string(),
+        message_count: 0,
+        cost_usd: 0.0,
+        tokens: 0,
+        cwd: None,
+        status: RowStatus::Live,
+        kind: RowKind::Subagent {
+            goal: "audit the tests".to_string(),
+            model: "test-model".to_string(),
+            dispatch_time: 1,
+            status: "pending",
+        },
+    }]);
+
+    // Enter on a subagent row is how the detail opens. The handler's
+    // return is "should submit", so a hub-consumed key is false.
+    assert!(
+        !app.handle_key_event(press_key(KeyCode::Enter, KeyModifiers::NONE)),
+        "the hub consumes Enter — it must not reach the composer"
+    );
+    assert_eq!(
+        app.session_hub.focused_subagent.as_deref(),
+        Some("dlg-1"),
+        "Enter on a subagent row opens its detail"
+    );
+
+    // What the panel actually paints.
+    let screen = session_hub_screen(&app.session_hub);
+    let shown = screen.join("\n");
+    assert!(
+        shown.contains("← clears this detail"),
+        "the detail view must name the key that clears it: {shown:?}"
+    );
+
+    // The claim that was false. Built by concatenation so the needle
+    // cannot be satisfied by this test's own source.
+    assert!(
+        !shown.contains(&format!("{} returns to the {}", "Esc", "list")),
+        "the detail view must not claim Esc returns to the list — Esc CLOSES \
+             the hub: {shown:?}"
+    );
+
+    // The key the line names, driven through the real handler.
+    app.handle_key_event(press_key(KeyCode::Left, KeyModifiers::NONE));
+    assert!(
+        app.session_hub.focused_subagent.is_none(),
+        "one Left must clear the detail — the key the painted line names"
+    );
+
+    // And Esc still closes the hub, which is the hub's own rule.
+    app.handle_key_event(press_key(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(
+        !app.session_hub.visible,
+        "Esc closes the hub — the other key the painted line names"
+    );
+}

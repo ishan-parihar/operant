@@ -989,7 +989,14 @@ fn render_preview(
                     Style::default().fg(theme_colors::muted()),
                 )),
                 Line::from(Span::styled(
-                    "←← / Esc returns to the list",
+                    // (iter-1882) The keys that ACTUALLY leave this view. The
+                    // old line said "←← / Esc returns to the list", and NEITHER
+                    // half was true: ONE ← clears the detail (the hub's Left
+                    // arm), and Esc CLOSES the hub. The operator who pressed
+                    // the key the panel named lost the hub instead of the
+                    // detail — and the hub's own header was saying "Esc
+                    // closes" at the same time.
+                    "← clears this detail · Esc closes the hub",
                     Style::default().fg(theme_colors::muted()),
                 )),
             ]
