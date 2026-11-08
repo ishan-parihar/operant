@@ -120,7 +120,13 @@ async fn check_packages(packages: &[PackageInfo]) -> Result<Value, String> {
     let mut results_map: HashMap<String, Vec<Value>> = HashMap::new();
 
     for pkg in packages {
-        let vulns = query_osv(pkg).await.unwrap_or_default();
+        // Propagate: a failed lookup is NOT a clean package. The old
+        // `unwrap_or_default()` here turned every network/timeout/HTTP/parse
+        // failure into an EMPTY vuln list, which the arm below records as
+        // "no_vulnerabilities_found" — a malware package whose lookup
+        // transiently fails reads as CLEAN (the malware gate failing open,
+        // RT-324). The caller's Err arm reports "status": "error" honestly.
+        let vulns = query_osv(pkg).await?;
 
         if vulns.is_empty() {
             results_map
@@ -259,6 +265,32 @@ pub async fn check_package_osv(package_name: &str, ecosystem: &str) -> Result<Va
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// RT-324: `check_packages` used to swallow a failed OSV lookup with
+    /// `unwrap_or_default()`, which the next arm records as
+    /// "no_vulnerabilities_found" — a malware package whose lookup
+    /// transiently fails reads as CLEAN (the malware gate failing open).
+    /// The URL is hardcoded, so the pin is a source-grep contract over this
+    /// file's own shape (the needle is built by concatenation so this test's
+    /// source cannot satisfy it); the behavioural half is the sibling
+    /// `check_package_osv`, which has always propagated.
+    #[test]
+    fn a_failed_osv_lookup_is_not_recorded_as_a_clean_package() {
+        let src = include_str!("osv_check.rs");
+        let swallow = format!("query_osv(pkg).await{}", ".unwrap_or_default()");
+        assert!(
+            !src.contains(&swallow),
+            "a failed lookup must never become an empty (clean) vuln list"
+        );
+        assert!(
+            src.contains("query_osv(pkg).await?"),
+            "the query's error must propagate to the caller's error arm"
+        );
+        assert!(
+            src.contains("query_osv(&pkg).await?"),
+            "the sibling single-package path keeps propagating"
+        );
+    }
 
     #[test]
     fn test_parse_npx() {
