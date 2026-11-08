@@ -322,11 +322,20 @@ fn render_node_compact(node: &AccessibilityNode, output: &mut String, depth: usi
             } else {
                 format!("[{}] ", ref_tag)
             };
+            // A DOM property value is arbitrary text: `level.len()` rendered
+            // the CHARACTER COUNT (level "12" printed twelve hashes, "abc"
+            // three). Parse the level and clamp to the HTML heading range —
+            // an unparseable or out-of-range value renders as h1 (RT-339).
+            let hashes = level
+                .parse::<usize>()
+                .ok()
+                .filter(|l| (1..=6).contains(l))
+                .unwrap_or(1);
             output.push_str(&format!(
                 "{}{}{} {}\n",
                 indent,
                 prefix,
-                "#".repeat(level.len()),
+                "#".repeat(hashes),
                 text
             ));
         }
@@ -665,6 +674,54 @@ mod tests {
         assert_eq!(node.name.as_deref(), Some("Cancel"));
 
         assert!(tree.find_by_ref("@e99").is_none());
+    }
+
+    /// RT-339: the compact render cut the heading level's `len()` — a DOM
+    /// property value is arbitrary text, so level "12" printed TWELVE hashes
+    /// and "abc" three. Parse and clamp to the HTML heading range.
+    #[test]
+    fn a_heading_level_outside_the_html_range_render_as_h1() {
+        for (level, expected_hashes) in [("7", 1usize), ("12", 1), ("abc", 1), ("0", 1), ("", 1)] {
+            let node = AccessibilityNode {
+                role: "heading".into(),
+                name: Some("Overview".into()),
+                value: None,
+                children: vec![],
+                ref_id: Some("@e1".into()),
+                properties: vec![("level".to_string(), level.to_string())],
+                ignored: false,
+            };
+            let mut out = String::new();
+            render_node_compact(&node, &mut out, 1);
+            let rendered: String = out
+                .lines()
+                .next()
+                .unwrap_or("")
+                .chars()
+                .filter(|c| *c == '#')
+                .collect();
+            assert_eq!(
+                rendered.len(),
+                expected_hashes,
+                "level {level:?} must render {expected_hashes} hashes: {out:?}"
+            );
+        }
+        // The valid range still renders as written.
+        for level in ["2", "3", "4", "5", "6"] {
+            let node = AccessibilityNode {
+                role: "heading".into(),
+                name: Some("Overview".into()),
+                value: None,
+                children: vec![],
+                ref_id: None,
+                properties: vec![("level".to_string(), level.to_string())],
+                ignored: false,
+            };
+            let mut out = String::new();
+            render_node_compact(&node, &mut out, 0);
+            let hashes = out.chars().filter(|c| *c == '#').count();
+            assert_eq!(hashes, level.parse::<usize>().unwrap(), "{out:?}");
+        }
     }
 
     #[test]
