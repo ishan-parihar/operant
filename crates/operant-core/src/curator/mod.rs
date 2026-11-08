@@ -564,10 +564,18 @@ impl CuratorEngine {
             } else if record.last_used.timestamp() > stale_cutoff
                 && *current == LifecycleState::Archived
             {
-                // Reactivate — skill got used again after being archived.
-                // This shouldn't normally happen (archived skills aren't loaded),
-                // but handle it defensively.
-                *counts.entry("reactivated".to_string()).or_insert(0) += 1;
+                // RT-386: this arm used to increment the "reactivated" counter
+                // and nothing else — the aggregate log then reported a
+                // reactivation that never happened, and the function's own
+                // contract (:469) is that the counter "describes what
+                // changed". NOT IMPLEMENTED, NAMED: the reactivation itself
+                // (restore the skill from .archive, set_state Active) is a
+                // product decision — this arm records the occurrence at debug
+                // and changes nothing, so the counter stays honest.
+                tracing::debug!(
+                    skill = %record.name,
+                    "Archived skill was used again — reactivation is not implemented (RT-386)"
+                );
             }
         }
 
@@ -584,6 +592,8 @@ impl CuratorEngine {
                 "Curator automatic transitions complete"
             );
         }
+        // RT-386: reactivated_count is now ALWAYS 0 (the arm counts nothing),
+        // and the log and the summary say so rather than implying it can move.
 
         // Save updated state — clone before async write to release the lock early.
         let summary = format!(

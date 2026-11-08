@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use operant_core::curator::{CuratorEngine, CuratorState, archiver, backup};
-use operant_core::skill_usage::{SkillUsageTracker, UsageTelemetry};
+use operant_core::skill_usage::{LifecycleState, SkillUsageTracker, UsageTelemetry};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -878,4 +878,66 @@ fn the_archive_paths_report_a_dropped_tracker_write() {
         src.contains(&propagated),
         "apply_automatic_transitions must keep propagating the write with `?`"
     );
+}
+
+/// RT-386: the apply_automatic_transitions "reactivated" arm incremented the
+/// counter and changed nothing, so the aggregate log reported a reactivation
+/// that never happened while the function's own contract (:469) says the
+/// counter "describes what changed".
+///
+/// BEHAVIORAL: a tracker record that is Archived but recently used must
+/// produce NO counter and NO state change — and the debug line must name the
+/// gap. The test asserts through the persisted summary and the tracker state.
+#[tokio::test]
+async fn an_archived_skill_that_was_used_again_is_not_counted_as_reactivated() {
+    let tmp = temp_dir();
+    let skills_dir = tmp.join("skills");
+    fs::create_dir_all(&skills_dir).unwrap();
+    let state_path = tmp.join("state.json");
+    let usage_path = tmp.join("usage.json");
+
+    // A skill tracked as ARCHIVED, used recently, still on disk under the
+    // live skills dir (the unusual-but-defensive shape the arm handles).
+    let skill_dir = skills_dir.join("ghost-skill");
+    fs::create_dir_all(&skill_dir).unwrap();
+    fs::write(skill_dir.join("SKILL.md"), "# Ghost Skill").unwrap();
+    {
+        let mut telemetry = UsageTelemetry::load(&usage_path).unwrap_or_default();
+        telemetry.record_created("ghost-skill", true);
+        telemetry
+            .set_state("ghost-skill", LifecycleState::Archived)
+            .unwrap();
+        // use_count must be non-zero or the never-used grace floor intercepts
+        // the record before the reactivation arm is reached.
+        telemetry.bump_use("ghost-skill");
+        telemetry.get_record_mut("ghost-skill").unwrap().last_used = chrono::Utc::now();
+        telemetry.save(&usage_path).unwrap();
+    }
+    let tracker = Arc::new(SkillUsageTracker::new(usage_path.clone()));
+    tracker.load().unwrap();
+    let engine = CuratorEngine::new(skills_dir.clone(), state_path.clone(), tracker.clone());
+    engine.load_state().await.unwrap();
+
+    // apply_automatic_transitions is the path that owns the counter.
+    let counts = engine.apply_automatic_transitions(None).await.unwrap();
+
+    assert_eq!(
+        counts.get("reactivated").copied().unwrap_or(0),
+        0,
+        "a no-op arm must not count a change: {counts:?}"
+    );
+    {
+        let telemetry = UsageTelemetry::load(&usage_path).unwrap();
+        let rec = telemetry
+            .get_record("ghost-skill")
+            .expect("the record stays in telemetry");
+        assert_eq!(
+            rec.lifecycle,
+            LifecycleState::Archived,
+            "the state must be unchanged — nothing was restored"
+        );
+    }
+    assert!(skill_dir.join("SKILL.md").exists(), "nothing moved on disk");
+
+    cleanup(&tmp);
 }
