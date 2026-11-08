@@ -349,10 +349,20 @@ impl SessionStore {
         self.warm().remove(key).is_some()
     }
 
-    /// Delete a session's transcript from memory and disk.
+    /// Drop `key`'s resident copy. NOT a durable delete — see below.
     ///
-    /// Destructive, and named as such. This is the only operation here that
-    /// loses data.
+    /// RT-389: the doc used to promise a durable delete — transcript gone from
+    /// memory AND disk, and the sole operation in this type that loses data.
+    /// The body does neither: it removes the resident copy and never touches
+    /// the backing store, so a session whose rows remain stays recoverable
+    /// (the next `acquire` rehydrates it — the body's own comment already
+    /// said so). This
+    /// is the same behaviour as [`Self::evict`]; the difference is only what
+    /// the doc claimed.
+    ///
+    /// NAMED, NOT SHIPPED: making `/reset` destroy the persisted transcript is
+    /// one of the three RT-285 product decisions (mapping the intended durable
+    /// delete to a DB call is the fix nobody has chosen).
     pub fn discard(&self, key: &SessionKey) -> bool {
         let removed = self.warm().remove(key).is_some();
         // Backing store deletion lives in Database; a session whose rows are
@@ -675,6 +685,41 @@ fn row_to_message(row: MessageData) -> Option<Message> {
         tool_calls,
         extra_content: None,
     })
+}
+
+#[cfg(test)]
+mod rt389_tests {
+    /// RT-389: `discard`'s doc promised a durable transcript delete and named
+    /// itself this type's sole data-losing operation — the body only removes
+    /// the resident copy and never touches the backing store (the session
+    /// stays recoverable, which is the RT-285 product decision). The doc must
+    /// describe what the code does. Source contract, needles
+    /// concatenation-built — and the test's own prose must not quote the claim
+    /// it forbids.
+    #[test]
+    fn the_discard_doc_describes_what_the_body_does() {
+        let src = include_str!("mod.rs");
+        let false_claim = format!("Delete a session's transcript from memory and {}", "disk");
+        assert!(
+            !src.contains(&false_claim),
+            "the doc must not promise a durable delete the body never performs"
+        );
+        let only_data_loser = format!("the only operation here that {}loses data", "");
+        assert!(
+            !src.contains(&only_data_loser),
+            "an evict-shaped operation must not be named the data loser"
+        );
+        let honest = format!("NOT a durable {}delete", "");
+        assert!(
+            src.contains(&honest),
+            "the doc must say the resident copy is all it drops"
+        );
+        let named = format!("one of the three RT-{}285 product decisions", "");
+        assert!(
+            src.contains(&named),
+            "the durable-delete decision must stay named, not implied"
+        );
+    }
 }
 
 #[cfg(test)]
