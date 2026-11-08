@@ -144,10 +144,15 @@ fn fuzzy_replace(
                 i += find_lines.len();
                 continue;
             }
-
-            result_lines.push(content_lines[i].to_string());
-            i += 1;
         }
+
+        // Not a match (or too few lines left for a multi-line find): pass
+        // this line through and advance. Deliberately OUTSIDE the length
+        // guard above — when `i + find_lines.len()` exceeded the line count
+        // the guard's whole body was skipped, `i` never moved and the loop
+        // spun forever (RT-316).
+        result_lines.push(content_lines[i].to_string());
+        i += 1;
     }
 
     if replacements > 0 {
@@ -814,6 +819,26 @@ mod tests {
         let out = fuzzy_replace("a  b\nc\n", "a b", "X", None).expect("one match");
         assert_eq!(out.1, 1, "gate count is the number of matches");
         assert_eq!(out.0, "X\nc\n");
+    }
+
+    /// RT-316: a multi-line `find` matching a non-EOF block left the scan
+    /// loop with FEWER remaining lines than the find — the length guard's
+    /// whole body was skipped, `i` never advanced and the loop spun forever
+    /// (the patch tool never returned; the CPU spun). MEASURED under the
+    /// mutation: the spin is SYNCHRONOUS, so it never yields to the tokio
+    /// timer and the `timeout` wrapper below cannot preempt it — a
+    /// regression HANGS this test until the harness's own test timeout
+    /// kills it. The wrapper stays anyway: it is free, and it is the only
+    /// thing on this path that names the failure mode.
+    #[tokio::test]
+    async fn the_fuzzy_tier_advances_past_a_multiline_match_near_the_tail() {
+        let call = async { fuzzy_replace("alpha\nbeta\ngamma\n", "alpha\nbeta", "X", None) };
+        let out = tokio::time::timeout(std::time::Duration::from_secs(5), call)
+            .await
+            .expect("the fuzzy scan must terminate — it used to spin forever")
+            .expect("one match");
+        assert_eq!(out.1, 1, "one rewritten block");
+        assert_eq!(out.0, "X\ngamma\n");
     }
 
     #[tokio::test]
