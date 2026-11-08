@@ -37,27 +37,13 @@ pub enum PermissionMode {
     Plan,
 }
 
-// ---------- OutputFormat ----------
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
-pub enum OutputFormat {
-    #[default]
-    Text,
-    Json,
-    StreamJson,
-}
-
 // ---------- InnerConfig (Settings.config) ----------
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct InnerConfig {
-    pub verbose: bool,
-    pub cursor_blink_enabled: bool,
-    pub auto_commits: Option<bool>,
     pub file_autocomplete_limit: usize,
     pub file_autocomplete_show_hidden_files: bool,
     pub output_style: Option<String>,
-    pub output_format: OutputFormat,
     pub compact_threshold: f64,
     pub theme: Theme,
     pub max_tokens: usize,
@@ -95,7 +81,6 @@ pub struct Settings {
     /// key must not change the rendering for a fresh install.
     pub show_cwd: Option<bool>,
     pub compact_threshold: Option<usize>,
-    pub notifications: bool,
     /// Tri-state like `show_cwd` (iter-1897): absent means shown.
     pub show_git_branch: Option<bool>,
     pub config: InnerConfig,

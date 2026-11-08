@@ -119,10 +119,10 @@ fn every_settings_entry_has_an_applier() {
 ///
 /// The snapshot it writes is rebuilt wholesale (it is a struct literal, not a
 /// patch), so every field is an opportunity to either carry the persisted
-/// value forward or overwrite it with a constant. This pins the two fields
-/// where the constant is a silent reset: `vim_enabled` and
-/// `cursor_blink_enabled` are operator preferences an unrelated edit must not
-/// clear.
+/// value forward or overwrite it with a constant. (iter-1176 found five such
+/// constants; iter-1900 removed the fields that held two of them along with
+/// their dead rows, so the preferences this pins are the two that survive:
+/// `vim_enabled` and the `show_cwd` tri-state.)
 #[test]
 fn apply_and_save_preserves_unrelated_operator_preferences() {
     with_sandbox_home(|| {
@@ -134,37 +134,26 @@ fn apply_and_save_preserves_unrelated_operator_preferences() {
         // that), so the test is written the way the lint wants from the start.
         let mut settings = Settings {
             vim_enabled: true,
-            // (iter-1899) `disable_claude_mds` was here until the row and its
-            // field went; `show_cwd` is a top-level Settings field, not an
-            // InnerConfig one (iter-1898 made it a tri-state).
+            // (iter-1898) `show_cwd` is a top-level Settings field, not an
+            // InnerConfig one, and it is a tri-state.
             show_cwd: Some(true),
-            config: crate::tui::adapter_types::config::InnerConfig {
-                verbose: true,
-                cursor_blink_enabled: true,
-                ..Default::default()
-            },
             ..Default::default()
         };
 
         let mut screen = SettingsScreen::new();
         // A change to an UNRELATED entry: the settings screen is one screen, and
         // the operator edits one row at a time.
+        // (iter-1900) "notifications" was here until its dead row went;
+        // reduce_motion is live (it drives the render loop's animations), so
+        // the unrelated edit is still a real one.
         screen
             .pending_changes
-            .insert("notifications".to_string(), "true".to_string());
+            .insert("reduce_motion".to_string(), "true".to_string());
         screen.apply_and_save(&mut config, &mut settings);
 
         assert!(
             settings.vim_enabled,
             "vim mode was cleared by saving an unrelated setting"
-        );
-        assert!(
-            settings.config.verbose,
-            "verbose output was cleared by saving an unrelated setting"
-        );
-        assert!(
-            settings.config.cursor_blink_enabled,
-            "cursor blink was cleared by saving an unrelated setting"
         );
         assert_eq!(
             settings.show_cwd,
@@ -256,19 +245,18 @@ fn settings_screen_new_has_sensible_defaults() {
 fn all_entries_returns_expected_settings() {
     let screen = SettingsScreen::new();
     let entries = all_entries(&screen);
-    // The base settings plus the two @-autocomplete rows, which are
-    // unconditional now (iter-1895). (iter-1896, iter-1899) Rows were
-    // REMOVED, not added: the file-injection pair (dead), the display
-    // flags' dead siblings and four rows nothing reads. The floor still
-    // catches an empty list; the ceiling catches a runaway re-port of dead
-    // rows.
+    // (iter-1900) Eight rows survive three sweeps that REMOVED rows rather
+    // than adding them: the two file-injection rows, the display flags' dead
+    // siblings, the four rows nothing read at all and the five more the last
+    // sweep found. The floor still catches an empty list; the ceiling catches
+    // a runaway re-port of dead rows.
     assert!(
-        entries.len() >= 12,
+        entries.len() >= 6,
         "Should have at least 12 editable settings, got {}",
         entries.len()
     );
     assert!(
-        entries.len() <= 16,
+        entries.len() <= 10,
         "Should have at most 16 editable settings, got {}",
         entries.len()
     );
@@ -293,23 +281,25 @@ fn search_filters_entries_correctly() {
 #[test]
 fn toggle_bool_entry_flips_value() {
     let mut screen = SettingsScreen::new();
-    screen.notifications = true;
+    // (iter-1900) "notifications" was here until its dead row went; reduce
+    // motion is live, so the row this exercises is a real one.
+    screen.reduce_motion = false;
     screen.open();
 
-    let initial = screen.notifications;
+    let initial = screen.reduce_motion;
     let all = all_entries(&screen);
-    // (iter-1899) The row's position moved when the four dead rows went:
-    // find it by its key instead of a hardcoded index, so deleting a row
-    // cannot silently re-point this test at a different setting.
+    // (iter-1899) The row's position moves whenever a row is deleted: find it
+    // by its key instead of a hardcoded index, so deleting a row cannot
+    // silently re-point this test at a different setting.
     let entry = all
         .iter()
-        .find(|e| e.key == "notifications")
-        .expect("the screen offers the Desktop notifications row");
-    assert_eq!(entry.label, "Desktop notifications");
+        .find(|e| e.key == "reduce_motion")
+        .expect("the screen offers the Reduce motion row");
+    assert_eq!(entry.label, "Reduce motion");
 
     // Simulate toggle (manually, since toggle_or_cycle_current modifies internal state)
-    screen.notifications = !screen.notifications;
-    assert_ne!(screen.notifications, initial);
+    screen.reduce_motion = !screen.reduce_motion;
+    assert_ne!(screen.reduce_motion, initial);
 }
 
 #[test]
@@ -362,6 +352,11 @@ fn the_settings_screen_offers_no_unread_row() {
         "show_turn_duration",
         "terminal_progress_bar",
         "disable_claude_mds",
+        "notifications",
+        "verbose",
+        "cursor_blink_enabled",
+        "auto_commits",
+        "output_format",
     ];
     let entries = all_entries(&SettingsScreen::new());
     for key in DEAD {

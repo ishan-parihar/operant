@@ -5,18 +5,18 @@
                Type to search settings...
 
                  ► Max Tokens                              0
-                   Desktop notifications                   false
                    Output Style                            default
                    Reduce motion                           false
-                   Verbose logging                         false
-                   Cursor blinking                         false
                    Show current directory                  true
- operant · r       Show git branch                         true
- operant           Auto-compact threshold                  0
- /model to s       Auto-commits                            false
- v0.3.0            Output format                           text
- /login to a       File autocomplete limit                 0
- ● anthropic       Show hidden files                       false
+                   Show git branch                         true
+                   Auto-compact threshold                  0
+                   File autocomplete limit                 0
+ operant · r       Show hidden files                       false
+ operant
+ /model to s
+ v0.3.0
+ /login to a
+ ● anthropic
  ~
                Maximum tokens per response.
 

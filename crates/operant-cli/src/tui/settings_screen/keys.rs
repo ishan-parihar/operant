@@ -121,24 +121,9 @@ fn toggle_or_cycle_current(screen: &mut SettingsScreen) {
             SettingKind::Bool => {
                 let new_value = entry.value != "true";
                 match entry.key {
-                    "notifications" => {
-                        screen.notifications = new_value;
-                        screen.settings_snapshot.notifications = new_value;
-                        let _ = screen.settings_snapshot.save_sync();
-                    }
                     "reduce_motion" => {
                         screen.reduce_motion = new_value;
                         screen.settings_snapshot.reduce_motion = new_value;
-                        let _ = screen.settings_snapshot.save_sync();
-                    }
-                    "verbose" => {
-                        screen.verbose = new_value;
-                        screen.settings_snapshot.config.verbose = new_value;
-                        let _ = screen.settings_snapshot.save_sync();
-                    }
-                    "cursor_blink_enabled" => {
-                        screen.cursor_blink_enabled = new_value;
-                        screen.settings_snapshot.config.cursor_blink_enabled = new_value;
                         let _ = screen.settings_snapshot.save_sync();
                     }
                     "show_cwd" => {
@@ -149,12 +134,6 @@ fn toggle_or_cycle_current(screen: &mut SettingsScreen) {
                     "show_git_branch" => {
                         screen.show_git_branch = new_value;
                         screen.settings_snapshot.show_git_branch = Some(new_value);
-                        let _ = screen.settings_snapshot.save_sync();
-                    }
-                    "auto_commits" => {
-                        screen.auto_commits = new_value;
-                        screen.settings_snapshot.config.auto_commits =
-                            if new_value { Some(true) } else { None };
                         let _ = screen.settings_snapshot.save_sync();
                     }
                     "fileAutocompleteShowHiddenFiles" => {
@@ -173,24 +152,13 @@ fn toggle_or_cycle_current(screen: &mut SettingsScreen) {
                 let next_idx = (current_idx + 1) % options.len();
                 let new_value = options[next_idx];
 
-                match entry.key {
-                    "output_style" => {
-                        screen.output_style = new_value.to_string();
-                        screen.settings_snapshot.config.output_style = Some(new_value.to_string());
-                        let _ = screen.settings_snapshot.save_sync();
-                    }
-                    "output_format" => {
-                        screen.output_format = new_value.to_string();
-                        screen.settings_snapshot.config.output_format = match new_value {
-                            "json" => crate::tui::adapter_types::config::OutputFormat::Json,
-                            "stream_json" => {
-                                crate::tui::adapter_types::config::OutputFormat::StreamJson
-                            }
-                            _ => crate::tui::adapter_types::config::OutputFormat::Text,
-                        };
-                        let _ = screen.settings_snapshot.save_sync();
-                    }
-                    _ => {}
+                // (iter-1900) `output_format` was the other arm here until
+                // its dead row went; with one arm left, a match is a
+                // single-match and clippy says so.
+                if entry.key == "output_style" {
+                    screen.output_style = new_value.to_string();
+                    screen.settings_snapshot.config.output_style = Some(new_value.to_string());
+                    let _ = screen.settings_snapshot.save_sync();
                 }
             }
             SettingKind::Number => {

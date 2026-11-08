@@ -46,16 +46,11 @@ pub struct SettingsScreen {
     pub pending_changes: HashMap<String, String>,
 
     // ---- Real settings fields ----
-    pub notifications: bool,
     pub output_style: String,
     pub reduce_motion: bool,
-    pub verbose: bool,
-    pub cursor_blink_enabled: bool,
     pub show_cwd: bool,
     pub show_git_branch: bool,
     pub compact_threshold: String,
-    pub auto_commits: bool,
-    pub output_format: String,
     pub file_autocomplete_limit: String,
     pub file_autocomplete_show_hidden_files: bool,
 }

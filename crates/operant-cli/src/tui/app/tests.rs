@@ -14247,10 +14247,39 @@ fn toggling_show_current_directory_in_settings_reaches_the_app_live() {
         let mut app = make_app();
         app.settings_screen.visible = true;
         app.settings_screen.selected_idx = row;
-        let before = app.settings_screen.show_cwd;
 
+        // (iter-1900) Seed the row's starting value instead of trusting the
+        // loaded settings.json: `SettingsScreen::new()` reads the ambient
+        // file, and a sibling test in this binary mutates HERMES_HOME without
+        // the crate-wide lock, so "absent means shown" is not a state this
+        // test can assert on. The sandbox below still keeps the toggle's
+        // save out of the operator's real home.
+        app.settings_screen.show_cwd = true;
+        // Read the starting value AFTER the seed, and read it the way the
+        // toggle does — from the row's displayed value — so this asserts the
+        // mechanism, not a parallel copy of it.
+        let before = crate::settings_screen::all_entries(&app.settings_screen)
+            .get(row)
+            .map(|entry| entry.value.clone())
+            .expect("the selected row exists");
+        // Precondition, so a future failure names the real cause ("some other
+        // overlay ate the Enter", "the row moved") instead of "the toggle did
+        // nothing".
+        assert!(
+            app.settings_screen.visible,
+            "/settings must be visible for the Enter to reach its screen"
+        );
+        assert_eq!(
+            crate::settings_screen::all_entries(&app.settings_screen)
+                .get(app.settings_screen.selected_idx)
+                .map(|entry| entry.key),
+            Some("show_cwd"),
+            "the selected row must be the \"Show current directory\" row"
+        );
+        // The settings branch returns `false` on purpose: it means "this key
+        // did not submit or exit", not "unhandled" — so the toggle is what
+        // this asserts on, not the return value.
         app.handle_key_event(press_key(KeyCode::Enter, KeyModifiers::NONE));
-
         let after = app.settings_screen.show_cwd;
         let live = app.settings.show_working_dir();
         let snapshot = app.settings_screen.settings_snapshot.show_cwd;
@@ -14265,8 +14294,9 @@ fn toggling_show_current_directory_in_settings_reaches_the_app_live() {
     }
 
     let (before, after, live, snapshot) = flip;
-    assert_ne!(
-        before, after,
+    assert_eq!(before, "true", "the seeded starting row reads {before}");
+    assert!(
+        !after,
         "Enter on the \"Show current directory\" row must toggle it"
     );
     assert_eq!(
@@ -14277,10 +14307,5 @@ fn toggling_show_current_directory_in_settings_reaches_the_app_live() {
         snapshot,
         Some(after),
         "and the snapshot the screen persists must record the choice"
-    );
-    assert!(
-        !after,
-        "a hermetic sandbox starts from the screen's own default (shown), so \
-         the toggle turns it off"
     );
 }

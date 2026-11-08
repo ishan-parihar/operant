@@ -17,16 +17,11 @@ impl SettingsScreen {
             edit_value: String::new(),
             settings_snapshot: settings_snapshot.clone(),
             pending_changes: HashMap::new(),
-            notifications: true,
             output_style: "default".to_string(),
             reduce_motion: false,
-            verbose: false,
-            cursor_blink_enabled: false,
             show_cwd: true,
             show_git_branch: true,
             compact_threshold: "95".to_string(),
-            auto_commits: false,
-            output_format: "text".to_string(),
             file_autocomplete_limit: "15".to_string(),
             file_autocomplete_show_hidden_files: false,
         };
@@ -38,7 +33,6 @@ impl SettingsScreen {
     /// Apply all settings from the snapshot to the screen fields.
     /// This is called on initialization and when opening the settings screen.
     fn apply_settings_from_snapshot(&mut self) {
-        self.notifications = self.settings_snapshot.notifications;
         self.output_style = self
             .settings_snapshot
             .config
@@ -46,21 +40,11 @@ impl SettingsScreen {
             .clone()
             .unwrap_or_else(|| "default".to_string());
         self.reduce_motion = self.settings_snapshot.reduce_motion;
-        self.verbose = self.settings_snapshot.config.verbose;
-        self.cursor_blink_enabled = self.settings_snapshot.config.cursor_blink_enabled;
         // (iter-1897) `unwrap_or(true)`: the screen's row shows what the
         // header will actually paint, and an absent key means shown.
         self.show_cwd = self.settings_snapshot.show_working_dir();
         self.show_git_branch = self.settings_snapshot.show_branch();
         self.compact_threshold = self.settings_snapshot.config.compact_threshold.to_string();
-        self.auto_commits = self.settings_snapshot.config.auto_commits.unwrap_or(false);
-        self.output_format = match &self.settings_snapshot.config.output_format {
-            crate::tui::adapter_types::config::OutputFormat::Text => "text".to_string(),
-            crate::tui::adapter_types::config::OutputFormat::Json => "json".to_string(),
-            crate::tui::adapter_types::config::OutputFormat::StreamJson => {
-                "stream_json".to_string()
-            }
-        };
         self.file_autocomplete_limit = self
             .settings_snapshot
             .config
@@ -167,11 +151,6 @@ impl SettingsScreen {
                     settings.config.file_autocomplete_show_hidden_files = on;
                     self.file_autocomplete_show_hidden_files = on;
                 }
-                "notifications" => {
-                    let on = matches!(value.as_str(), "true" | "on" | "1" | "yes");
-                    settings.notifications = on;
-                    self.notifications = on;
-                }
                 "reduce_motion" => {
                     let on = matches!(value.as_str(), "true" | "on" | "1" | "yes");
                     settings.reduce_motion = on;
@@ -187,52 +166,17 @@ impl SettingsScreen {
                     settings.show_git_branch = Some(on);
                     self.show_git_branch = on;
                 }
-                "auto_commits" => {
-                    settings.config.auto_commits =
-                        Some(matches!(value.as_str(), "true" | "on" | "1" | "yes"));
-                    self.auto_commits = matches!(value.as_str(), "true" | "on" | "1" | "yes");
-                }
-                "output_format" => {
-                    let parsed = match value.as_str() {
-                        "json" => crate::tui::adapter_types::config::OutputFormat::Json,
-                        "stream_json" => {
-                            crate::tui::adapter_types::config::OutputFormat::StreamJson
-                        }
-                        _ => crate::tui::adapter_types::config::OutputFormat::Text,
-                    };
-                    settings.config.output_format = parsed.clone();
-                    self.output_format = value.clone();
-                }
-                "cursor_blink_enabled" => {
-                    let on = matches!(value.as_str(), "true" | "on" | "1" | "yes");
-                    settings.config.cursor_blink_enabled = on;
-                    self.cursor_blink_enabled = on;
-                }
-                "verbose" => {
-                    let on = matches!(value.as_str(), "true" | "on" | "1" | "yes");
-                    settings.config.verbose = on;
-                    self.verbose = on;
-                }
                 _ => {}
             }
         }
         // The snapshot is rebuilt wholesale below, and until iter-1176 that
         // rebuild ALSO threw away values the screen does not edit:
-        // `verbose`, `cursor_blink_enabled` and `output_format` were written
-        // as constants instead of carried
-        // forward, so saving ANY setting reset them. Every field below is now
-        // taken from `settings`, which this loop has just updated with
-        // whatever the operator changed.
         self.settings_snapshot.config = crate::tui::adapter_types::config::InnerConfig {
-            verbose: settings.config.verbose,
-            cursor_blink_enabled: settings.config.cursor_blink_enabled,
-            auto_commits: settings.config.auto_commits,
             file_autocomplete_limit: settings.config.file_autocomplete_limit,
             file_autocomplete_show_hidden_files: settings
                 .config
                 .file_autocomplete_show_hidden_files,
             output_style: settings.output_style.clone(),
-            output_format: settings.config.output_format.clone(),
             compact_threshold: config.agent.context_compression_threshold,
             theme: settings.theme.clone(),
             max_tokens: config.agent.context_window,
@@ -267,18 +211,6 @@ pub(crate) fn all_entries(screen: &SettingsScreen) -> Vec<SettingsEntry> {
             value: screen.settings_snapshot.config.max_tokens.to_string(),
         },
         SettingsEntry {
-            key: "notifications",
-            label: "Desktop notifications",
-            description: "Notify when a turn completes.",
-            kind: SettingKind::Bool,
-            value: if screen.notifications {
-                "true"
-            } else {
-                "false"
-            }
-            .to_string(),
-        },
-        SettingsEntry {
             key: "output_style",
             label: "Output Style",
             description: "Controls the verbosity and format of responses.",
@@ -293,25 +225,6 @@ pub(crate) fn all_entries(screen: &SettingsScreen) -> Vec<SettingsEntry> {
             description: "Disable UI animations.",
             kind: SettingKind::Bool,
             value: if screen.reduce_motion {
-                "true"
-            } else {
-                "false"
-            }
-            .to_string(),
-        },
-        SettingsEntry {
-            key: "verbose",
-            label: "Verbose logging",
-            description: "Log additional debug information. Takes effect on next session.",
-            kind: SettingKind::Bool,
-            value: if screen.verbose { "true" } else { "false" }.to_string(),
-        },
-        SettingsEntry {
-            key: "cursor_blink_enabled",
-            label: "Cursor blinking",
-            description: "Enable cursor blinking in the chat prompt.",
-            kind: SettingKind::Bool,
-            value: if screen.cursor_blink_enabled {
                 "true"
             } else {
                 "false"
@@ -343,22 +256,6 @@ pub(crate) fn all_entries(screen: &SettingsScreen) -> Vec<SettingsEntry> {
             description: "Context usage % at which to trigger auto-compact (0-100).",
             kind: SettingKind::Number,
             value: screen.compact_threshold.clone(),
-        },
-        SettingsEntry {
-            key: "auto_commits",
-            label: "Auto-commits",
-            description: "Automatically snapshot changes to git via shadow-git.",
-            kind: SettingKind::Bool,
-            value: if screen.auto_commits { "true" } else { "false" }.to_string(),
-        },
-        SettingsEntry {
-            key: "output_format",
-            label: "Output format",
-            description: "How responses are formatted: text, JSON, or streaming JSON.",
-            kind: SettingKind::Enum {
-                options: vec!["text", "json", "streamjson"],
-            },
-            value: screen.output_format.clone(),
         },
         // (iter-1895) The @-autocomplete's own two settings are UNCONDITIONAL
         // now. They used to be pushed only when "File injection (@)" was on —
