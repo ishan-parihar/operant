@@ -64,15 +64,18 @@ fn create_owner_only(path: &Path) -> io::Result<std::fs::File> {
         .open(path)
 }
 
-/// Set file mode to 0o600 on Unix. On non-Unix, no-op.
+/// Set file mode to 0o600 on Unix when it is looser. On non-Unix, no-op.
 ///
-/// If the file already exists at a tighter mode (e.g. 0o400), leaves it.
-/// If looser, tightens to 0o600. Sets the mode exactly (bypasses umask).
+/// TIGHTEN-ONLY (RT-361): a file already at a tighter mode (e.g. 0o400) is
+/// left alone. The old condition was `current != 0o600`, which WIDENED a
+/// 0o400 file to 0o600 — the opposite of the function's contract, and a
+/// silent permission regression on a secret store. Bypasses umask.
 #[cfg(unix)]
 pub fn set_secret_perms(path: &Path) -> io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
     let current = std::fs::metadata(path)?.permissions().mode() & 0o777;
-    if current != 0o600 {
+    // Any bit set outside 0o600 means the mode is looser: tighten it.
+    if current & !0o600 != 0 {
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
     }
     Ok(())
@@ -113,6 +116,53 @@ use std::io::Write;
 
 #[cfg(test)]
 mod tests {
+    /// RT-361: `set_secret_perms` promised "if the file already exists at a
+    /// tighter mode (e.g. 0o400), leaves it" while its condition
+    /// (`current != 0o600`) WIDENED a 0o400 file to 0o600 — a silent
+    /// permission regression on a secret store.
+    #[cfg(unix)]
+    #[test]
+    fn set_secret_perms_tightens_but_never_widens() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().expect("tempdir");
+
+        // A LOOSER file (0o644) is tightened to 0o600.
+        let loose = dir.path().join("loose");
+        std::fs::write(&loose, "secret").expect("write");
+        std::fs::set_permissions(&loose, std::fs::Permissions::from_mode(0o644)).expect("chmod");
+        set_secret_perms(&loose).expect("set perms");
+        let mode = std::fs::metadata(&loose)
+            .expect("meta")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600, "a looser file must be tightened");
+
+        // A TIGHTER file (0o400) is left exactly as it is.
+        let tight = dir.path().join("tight");
+        std::fs::write(&tight, "secret").expect("write");
+        std::fs::set_permissions(&tight, std::fs::Permissions::from_mode(0o400)).expect("chmod");
+        set_secret_perms(&tight).expect("set perms");
+        let mode = std::fs::metadata(&tight)
+            .expect("meta")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o400, "a tighter file must not be widened: {mode:o}");
+
+        // Exactly 0o600 is a no-op.
+        let exact = dir.path().join("exact");
+        std::fs::write(&exact, "secret").expect("write");
+        std::fs::set_permissions(&exact, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+        set_secret_perms(&exact).expect("set perms");
+        let mode = std::fs::metadata(&exact)
+            .expect("meta")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600);
+    }
+
     use super::*;
     use std::io::Read;
 
