@@ -1,17 +1,22 @@
 //! Security utilities for Operant-RS
 //!
-//! Backend utility modules used by `skills_guard` and other internal components.
-//! These are **not** registered tools — they are plain utility functions.
+//! Backend utility modules used by internal components (the URL-safety
+//! check is what the web tools consult).  These are **not** registered
+//! tools — they are plain utility functions.
 //!
 //! Modules:
 //!
 //! - **url_safety** — SSRF protection via DNS resolution + IP class checks.
 //!   Checks resolved addresses against private, loopback, link-local, CGNAT,
-//!   benchmarking, and cloud-metadata ranges.  Fail-closed on DNS errors.
+//!   benchmarking, and cloud-metadata ranges (an IPv4-mapped IPv6 literal
+//!   carries its IPv4 verdict).  Fail-closed on DNS errors.
 //!
-//! - **osv_check** — Queries [api.osv.dev](https://api.osv.dev) for MAL-type
-//!   vulnerability advisories on PyPI packages.  Fail-open (returns empty on
-//!   any error).
+//! The `osv_check` half further down has ZERO production callers: the live
+//! tool is `tools::osv_check`, which runs its own api.osv.dev query and
+//! does not import this module (grep over `crates/` proves it). It is left
+//! in place as a named RT-275-class dead surface — an owner decision —
+//! and the header no longer claims `skills_guard` consumes this module
+//! (it does not). Retracting a false claim, not shipping the deletion.
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
@@ -132,7 +137,12 @@ fn is_blocked_ip(ip: IpAddr) -> bool {
                 || is_benchmarking(v4)
         }
         IpAddr::V6(v6) => {
-            v6.is_loopback()
+            // An IPv4-mapped address carries the IPv4 verdict: without this
+            // arm, `http://[::ffff:169.254.169.254]/` (the cloud-metadata
+            // range in its mapped spelling) and `http://[::ffff:127.0.0.1]/`
+            // passed the gate as "safe" (RT-322).
+            v6.to_ipv4().is_some_and(|v4| is_blocked_ip(IpAddr::V4(v4)))
+                || v6.is_loopback()
                 || v6.is_unicast_link_local()
                 || v6.is_multicast()
                 || v6.is_unspecified()
@@ -355,5 +365,28 @@ mod tests {
         assert!(!is_blocked_ip(IpAddr::V6(Ipv6Addr::new(
             0x2001, 0x4860, 0x4860, 0, 0, 0, 0, 0x8888
         ))));
+    }
+
+    /// RT-322: an IPv4-mapped IPv6 address (`::ffff:a.b.c.d`) carries the
+    /// IPv4 verdict — without the arm, `http://[::ffff:169.254.169.254]/`
+    /// (the cloud-metadata range in its mapped spelling) and
+    /// `http://[::ffff:127.0.0.1]/` passed the SSRF gate as "safe".
+    #[test]
+    fn ipv4_mapped_ipv6_is_blocked_like_its_ipv4_address() {
+        for mapped in [
+            "::ffff:127.0.0.1",       // loopback
+            "::ffff:10.0.0.1",        // private
+            "::ffff:192.168.1.1",     // private
+            "::ffff:169.254.169.254", // link-local / cloud metadata
+            "::ffff:100.64.0.1",      // CGNAT
+        ] {
+            let ip: IpAddr = mapped.parse().expect("a valid mapped literal");
+            assert!(is_blocked_ip(ip), "{mapped} must be blocked");
+        }
+        let public: IpAddr = "::ffff:8.8.8.8".parse().unwrap();
+        assert!(
+            !is_blocked_ip(public),
+            "a mapped PUBLIC address must stay allowed"
+        );
     }
 }
