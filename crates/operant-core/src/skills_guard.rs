@@ -1590,7 +1590,11 @@ fn check_structure(skill_dir: &Path) -> Vec<SecurityFinding> {
             .to_string_lossy()
             .to_string();
 
-        file_count += 1;
+        // RT-400: the count used to increment HERE, per collected entry —
+        // directories and symlinks included — while the finding it feeds
+        // reports "skill has {} files". A skill of 51 empty subdirectories
+        // tripped too_many_files and reported "51 files" that do not exist.
+        // The count now lives past the symlink and is_file guards below.
 
         // Symlink check — must resolve within the skill directory
         if metadata.file_type().is_symlink() {
@@ -1638,6 +1642,12 @@ fn check_structure(skill_dir: &Path) -> Vec<SecurityFinding> {
         if !metadata.is_file() {
             continue;
         }
+
+        // RT-400: counted here — past the symlink and non-file guards — so the
+        // count is regular FILES, which is what MAX_FILE_COUNT's doc says it
+        // limits ("Maximum number of files a skill should have") and what the
+        // finding reports.
+        file_count += 1;
 
         // Size tracking
         let size = metadata.len();
@@ -2908,5 +2918,45 @@ fn a_path_that_is_neither_dir_nor_file_is_not_a_clean_scan() {
         result.summary.contains("unscannable") || !result.summary.is_empty(),
         "the summary must not claim a clean scan: {}",
         result.summary
+    );
+}
+
+/// RT-400: `too_many_files` reports "skill has {} files" but the count used to
+/// increment per collected ENTRY — directories and symlinks included — so a
+/// skill of 51 empty subdirectories tripped the limit and reported "51 files".
+/// BEHAVIORAL: the count (and thus the finding) counts regular files only.
+#[test]
+fn the_file_count_counts_files_not_directories() {
+    let dir = tempfile::tempdir().unwrap();
+    let skill = dir.path().join("dirstructure");
+    std::fs::create_dir_all(skill.join("SKILL.md").parent().unwrap()).unwrap();
+    std::fs::write(skill.join("SKILL.md"), "# Skill\n\nBody.").unwrap();
+    // 51 empty subdirectories — zero files beyond SKILL.md.
+    for i in 0..51 {
+        std::fs::create_dir_all(skill.join(format!("d{i}"))).unwrap();
+    }
+
+    let findings = check_structure(&skill);
+    assert!(
+        !findings.iter().any(|f| f.pattern_id == "too_many_files"),
+        "directories must not be counted as files: {:?}",
+        findings
+            .iter()
+            .filter(|f| f.pattern_id == "too_many_files")
+            .collect::<Vec<_>>()
+    );
+
+    // And the real files still count: 51 real files DO trip the limit.
+    let dir2 = tempfile::tempdir().unwrap();
+    let skill2 = dir2.path().join("manyfiles");
+    std::fs::create_dir_all(&skill2).unwrap();
+    std::fs::write(skill2.join("SKILL.md"), "# Skill\n").unwrap();
+    for i in 0..51 {
+        std::fs::write(skill2.join(format!("f{i}.txt")), "x").unwrap();
+    }
+    let findings2 = check_structure(&skill2);
+    assert!(
+        findings2.iter().any(|f| f.pattern_id == "too_many_files"),
+        "real files still trip the limit"
     );
 }
