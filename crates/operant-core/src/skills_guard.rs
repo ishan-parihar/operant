@@ -1726,8 +1726,18 @@ fn resolve_trust_level(source: &str) -> TrustLevel {
         _ => {}
     }
 
+    // RT-397: the doc says TrustLevel::Trusted is "openai/skills and
+    // anthropics/skills only", but this was a PREFIX match — any source string
+    // that merely BEGAN with a trusted repo (e.g. "openai/skills-evil/x",
+    // "anthropics/skillsfoo") was classified Trusted and silently upgraded to
+    // the first-party install policy. A repo prefix is a PATH separator now,
+    // so only the two named repos and their genuine `<repo>/<skill>` paths
+    // qualify.
     for trusted in TRUSTED_REPOS {
-        if normalized == *trusted || normalized.starts_with(trusted) {
+        let separator_start = normalized
+            .strip_prefix(trusted)
+            .and_then(|rest| rest.strip_prefix('/'));
+        if normalized == *trusted || separator_start.is_some() {
             return TrustLevel::Trusted;
         }
     }
@@ -2701,4 +2711,45 @@ mod tests {
         assert_eq!(result.len(), 120);
         assert!(result.ends_with("..."));
     }
+}
+
+/// RT-397: the Trusted tier's doc reserves it for "openai/skills and
+/// anthropics/skills only", but the classifier was a PREFIX match, so any
+/// source that merely BEGAN with a trusted repo ("openai/skills-evil/x",
+/// "anthropics/skillsfoo") was classified Trusted — the first-party install
+/// policy applied to a string nobody vetted. BEHAVIORAL: the two named repos
+/// and their `<repo>/<skill>` paths qualify; every other prefix does not.
+#[test]
+fn only_genuinely_trusted_repo_paths_get_the_trusted_tier() {
+    // The exact repos.
+    assert_eq!(resolve_trust_level("openai/skills"), TrustLevel::Trusted);
+    assert_eq!(
+        resolve_trust_level("anthropics/skills"),
+        TrustLevel::Trusted
+    );
+    // Genuine `<repo>/<skill>` paths under them.
+    assert_eq!(
+        resolve_trust_level("openai/skills/pdf-tools"),
+        TrustLevel::Trusted
+    );
+    assert_eq!(
+        resolve_trust_level("anthropics/skills/web-search/v2"),
+        TrustLevel::Trusted
+    );
+    // Look-alike prefixes — NOT trusted.
+    assert_eq!(
+        resolve_trust_level("openai/skills-evil/x"),
+        TrustLevel::Community,
+        "a look-alike org path must not inherit the first-party policy"
+    );
+    assert_eq!(
+        resolve_trust_level("anthropics/skillsfoo"),
+        TrustLevel::Community
+    );
+    assert_eq!(
+        resolve_trust_level("openai/skills.fork"),
+        TrustLevel::Community
+    );
+    // Unrelated sources stay Community.
+    assert_eq!(resolve_trust_level("some/scam-repo"), TrustLevel::Community);
 }
