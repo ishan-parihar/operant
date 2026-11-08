@@ -230,6 +230,35 @@ impl CuratorEngine {
         // empty set reads as "nothing is protected" (RT-267).
         let cron_refs = Self::cron_protected_skills(cron_db)?;
 
+        // RT-377: the backup used to be taken AFTER the archival loop, so the
+        // "pre-archive" snapshot captured the tree the loop had already moved
+        // — it could not roll back the archival it was named for. The doc's
+        // promise ("Creates a backup before any archiving when not in dry-run
+        // mode") is now literal: the same predicate the loop applies decides
+        // whether a backup is needed, the backup is taken first, and a backup
+        // that FAILS means the archival does not run at all.
+        let would_archive = !dry_run
+            && agent_created.iter().any(|record| {
+                !record.pinned
+                    && !cron_refs.contains(&record.name)
+                    && (now - record.last_used.timestamp()) / 86400
+                        >= state.archive_after_days as i64
+            });
+        let backup_failed = if would_archive {
+            match backup::create_backup(&self.skills_dir, &self.backup_dir, Some("pre-archive")) {
+                Ok(path) => {
+                    tracing::info!(path = %path.display(), "Curator pre-archive backup created");
+                    false
+                }
+                Err(e) => {
+                    errors.push(format!("Backup failed: {} — archiving skipped", e));
+                    true
+                }
+            }
+        } else {
+            false
+        };
+
         for record in &agent_created {
             if record.pinned {
                 continue;
@@ -241,7 +270,10 @@ impl CuratorEngine {
             }
             let inactive_days = (now - record.last_used.timestamp()) / 86400;
             if inactive_days >= state.archive_after_days as i64 {
-                if !dry_run {
+                if backup_failed {
+                    // RT-377: no archival without its backup. The error is
+                    // already in `errors`; this arm reports nothing more.
+                } else if !dry_run {
                     match archiver::archive_skill(&record.name, &self.skills_dir, &self.archive_dir)
                     {
                         Ok(()) => {
@@ -304,14 +336,6 @@ impl CuratorEngine {
         state.last_run_summary = Some(summary.clone());
 
         if !dry_run {
-            // Create backup before archiving
-            if !archived.is_empty() {
-                backup::create_backup(&self.skills_dir, &self.backup_dir, Some("pre-archive"))
-                    .unwrap_or_else(|e| {
-                        errors.push(format!("Backup failed: {}", e));
-                        PathBuf::new()
-                    });
-            }
             self.save_state_inner(&state).await?;
             self.usage_tracker.save()?;
         }

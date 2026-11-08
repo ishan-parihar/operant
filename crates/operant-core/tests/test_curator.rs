@@ -755,3 +755,90 @@ async fn the_persisted_summary_is_the_current_runs() {
 
     cleanup(&tmp);
 }
+
+/// RT-377: the doc promises "Creates a backup before any archiving when not in
+/// dry-run mode" — the backup used to be taken AFTER the archival loop, so the
+/// "pre-archive" snapshot captured the tree the loop had already moved and
+/// could not roll back the archival it was named for.
+///
+/// Two halves, both BEHAVIORAL:
+///   1. a FAILING backup means the skill is not archived at all (which is only
+///      observable if the backup precedes the move);
+///   2. a SUCCESSFUL backup's archive contains the skill — the snapshot really
+///      is the pre-archive tree.
+#[tokio::test]
+async fn a_pre_archive_backup_is_taken_before_the_archival() {
+    let tmp = temp_dir();
+    let skills_dir = tmp.join("skills");
+    fs::create_dir_all(&skills_dir).unwrap();
+    let state_path = tmp.join("state.json");
+    let usage_path = tmp.join("usage.json");
+
+    {
+        let seed = Arc::new(SkillUsageTracker::new(usage_path.clone()));
+        seed.load().unwrap();
+        seed.mark_agent_created("old-skill");
+        seed.save().unwrap();
+    }
+    // Age the record past the 30-day default BEFORE anything loads it.
+    {
+        let mut telemetry = UsageTelemetry::load(&usage_path).unwrap();
+        telemetry.get_record_mut("old-skill").unwrap().last_used =
+            chrono::Utc::now() - chrono::Duration::days(60);
+        telemetry.save(&usage_path).unwrap();
+    }
+    // The tracker the engine reads is loaded AFTER the aging.
+    let tracker = Arc::new(SkillUsageTracker::new(usage_path));
+    tracker.load().unwrap();
+    let skill_dir = skills_dir.join("old-skill");
+    fs::create_dir_all(&skill_dir).unwrap();
+    fs::write(skill_dir.join("SKILL.md"), "# Old Skill").unwrap();
+
+    // Half 1: the backup cannot be created — `.backups` is a FILE, so
+    // create_dir_all fails deterministically.
+    fs::write(skills_dir.join(".backups"), "not a directory").unwrap();
+    let engine = CuratorEngine::new(skills_dir.clone(), state_path.clone(), tracker.clone());
+    engine.load_state().await.unwrap();
+    let report = engine.run_review(false, None, false, None).await.unwrap();
+
+    assert!(
+        report.errors.iter().any(|e| e.starts_with("Backup failed")),
+        "the failed backup must be reported: {:?}",
+        report.errors
+    );
+    assert!(
+        report.skills_archived.is_empty(),
+        "no archival may run without its backup"
+    );
+    assert!(
+        skill_dir.join("SKILL.md").exists(),
+        "the skill must still be on disk — the backup precedes the move"
+    );
+
+    // Half 2: with a working backup dir the same review archives the skill AND
+    // leaves a pre-archive backup that contains it.
+    fs::remove_file(skills_dir.join(".backups")).unwrap();
+    // The engine's own tracker was loaded after the first aging and its
+    // in-memory copy is what run_review reads, so it still holds the aged
+    // record — no re-aging is needed for the second run.
+    let engine = CuratorEngine::new(skills_dir.clone(), state_path, tracker);
+    engine.load_state().await.unwrap();
+    let report = engine.run_review(false, None, false, None).await.unwrap();
+
+    assert_eq!(report.skills_archived, vec!["old-skill".to_string()]);
+    let backups = backup::list_backups(&skills_dir.join(".backups")).unwrap();
+    assert_eq!(backups.len(), 1, "exactly one pre-archive backup");
+    // The snapshot is the pre-archive tree: the skill is inside it.
+    let extract_dir = tmp.join("extract");
+    fs::create_dir_all(&extract_dir).unwrap();
+    let tar_gz = fs::File::open(&backups[0]).unwrap();
+    let decoder = flate2::read::GzDecoder::new(tar_gz);
+    let mut archive = tar::Archive::new(decoder);
+    archive.unpack(&extract_dir).unwrap();
+    assert!(
+        extract_dir.join("old-skill").join("SKILL.md").exists(),
+        "the backup must hold the pre-archive tree — the skill inside it"
+    );
+
+    cleanup(&tmp);
+}
