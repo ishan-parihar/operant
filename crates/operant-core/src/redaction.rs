@@ -285,7 +285,7 @@ fn patterns() -> &'static RedactPatterns {
 )]
 /// merely costs a regex pass, which is the pre-screen's safe direction.
 fn needs_redaction(input: &str) -> bool {
-    const NEEDLES: [&str; 60] = [
+    const NEEDLES: [&str; 61] = [
         // Leading chars of every token prefix (lowercased).
         "sk-",
         "sk_",
@@ -296,6 +296,7 @@ fn needs_redaction(input: &str) -> bool {
         "ghs",
         "ghr",
         "xox",
+        "xapp",
         "aiza",
         "pplx",
         "fal_",
@@ -527,6 +528,58 @@ mod tests {
         let out = redact_sensitive_text("AKIAIOSFODNN7EXAMPLE");
         assert!(!out.contains("AKIAIOSFODNN7EXAMPLE"));
         assert!(out.contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn a_slack_app_level_token_is_redacted() {
+        // The pre-screen early-returns on a needle miss, so a token shape the
+        // regex can match but NEEDLES does not cover is emitted verbatim.
+        // Built by concatenation so this test's own source cannot satisfy the
+        // assertion.
+        let token = format!("{}pp-1-{}", "xa", "AbCdEfGhIjKlMnOpQrStUv0123");
+        let out = redact_sensitive_text(&token);
+        assert!(!out.contains(&token), "the app-level token leaked: {out}");
+        assert!(out.contains("[REDACTED]"), "no redaction: {out}");
+    }
+
+    #[test]
+    fn every_token_prefix_has_a_prescreen_needle() {
+        // The pre-screen's documented invariant: NEEDLES is a SUPERSET of
+        // every trigger the token_prefix regex can fire on. One missing
+        // needle makes the whole regex pipeline unreachable for that shape
+        // (the xapp defect), and no runtime test can see it unless it owns
+        // that exact token -- so the invariant is checked structurally over
+        // this file's own two arrays.
+        let src = include_str!("redaction.rs");
+        let prefixes_block = src
+            .split("let prefixes = [")
+            .nth(1)
+            .and_then(|rest| rest.split("];").next())
+            .expect("the token_prefix regex's prefixes array");
+        let needles_block = src
+            .split("const NEEDLES: [&str; ")
+            .nth(1)
+            .and_then(|rest| rest.split("    ];").next())
+            .expect("the pre-screen's NEEDLES array");
+        let needles: Vec<&str> = needles_block.split('"').skip(1).step_by(2).collect();
+        assert!(
+            needles.len() > 40,
+            "the NEEDLES array was not parsed: {needles:?}"
+        );
+        let prefixes: Vec<&str> = prefixes_block.split('"').skip(1).step_by(2).collect();
+        assert!(prefixes.len() > 40, "the prefixes array was not parsed");
+        for prefix in prefixes {
+            // The needle is matched with `lower.contains(n)` against the
+            // INPUT, so it must be a PREFIX of the prefix's own text
+            // (lowercased, regex escapes dropped): `ghp` covers `ghp_…`,
+            // `sg.` covers `SG\.`.
+            let prefix_lower = prefix.to_ascii_lowercase().replace('\\', "");
+            assert!(
+                needles.iter().any(|n| prefix_lower.starts_with(n)),
+                "token prefix '{prefix}' has no pre-screen needle that is a prefix \
+                 of it -- the token_prefix regex can never fire for it"
+            );
+        }
     }
 
     #[test]
