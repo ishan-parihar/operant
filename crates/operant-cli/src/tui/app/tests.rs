@@ -2836,6 +2836,56 @@ fn a_click_in_the_composer_places_the_caret_at_the_clicked_character() {
 // omp agent-hub.ts: a second ← within [40ms, 500ms) on an empty composer
 // opens the session hub — armed, so ONE further ← closes it. The 40ms floor
 // rejects key-repeat bursts; the 500ms ceiling matches omp's window.
+/// (iter-1947) `/rewind`'s registry row advertises `[N]`, so an argument the
+/// operator typed is a claim about the count. `/rewind abc`, `/rewind 0`,
+/// `/rewind -1` and an overflowing value all used to fall silently into the
+/// no-argument path and open the selector — the typed argument was discarded
+/// without a word, the class iter-1772 fixed on `/copy`.
+#[test]
+fn rewind_an_unreadable_count_is_an_error_not_a_silent_selector() {
+    // A genuinely absent argument still opens the selector.
+    let mut app = make_app();
+    assert!(app.handle_tui_command("rewind", ""));
+    assert!(
+        app.rewind_selector.visible,
+        "/rewind with no argument opens the selector"
+    );
+    assert!(
+        app.pending_rewind_confirm.is_none(),
+        "and arms no confirmation"
+    );
+
+    // An argument that is present but unread names the value and the
+    // requirement instead of being discarded.
+    for bad in ["abc", "0", "-1", "99999999999999999999999", "1.5"] {
+        let mut app = make_app();
+        assert!(app.handle_tui_command("rewind", bad));
+        assert!(
+            !app.rewind_selector.visible,
+            "/rewind {bad} must not silently open the selector — the typed \
+             argument was discarded without a word"
+        );
+        assert!(
+            app.pending_rewind_confirm.is_none(),
+            "/rewind {bad} arms no confirmation either"
+        );
+        let notice = app.status_message.clone().unwrap_or_default();
+        assert!(
+            notice.contains(bad) && notice.contains("1 or more"),
+            "/rewind {bad} must name the value and the requirement: {notice:?}"
+        );
+    }
+
+    // A real count still arms the y/n confirmation, in the Nth-last direction.
+    let mut app = make_app();
+    assert!(app.handle_tui_command("rewind", "3"));
+    assert_eq!(app.pending_rewind_confirm, Some(3));
+    assert!(
+        !app.rewind_selector.visible,
+        "a count takes the confirm path, not the selector"
+    );
+}
+
 mod left_tap_gesture_tests {
     use super::*;
 

@@ -1255,16 +1255,39 @@ impl App {
                 // the Nth prompt counting back from the newest (so `/rewind 1`
                 // is the last prompt) — confirm via y/n in the status line
                 // before the fork.
-                if let Ok(n) = args.trim().parse::<usize>()
-                    && n > 0
-                {
-                    self.pending_rewind_confirm = Some(n);
-                    self.set_status_notice(format!(
-                        "Rewind to {n} prompt(s) back (the Nth-last)? (y/n)"
-                    ));
-                } else {
-                    self.open_rewind_selector();
-                }
+                //
+                // (iter-1947) An argument that is PRESENT but unread is an
+                // error, not an absent argument. `Ok(n) if n > 0` with an
+                // `else` arm meant `/rewind abc`, `/rewind 0` and
+                // `/rewind -1` all silently opened the selector — the
+                // operator's typed argument was discarded without a word,
+                // which is the same class iter-1772 fixed on `/copy` ("an
+                // unread argument made that a lie"). `/copy` names the value
+                // and the requirement; `/rewind` now does too, and only a
+                // genuinely empty argument takes the selector path.
+                let trimmed = args.trim();
+                let n = match parse_last_n(trimmed, 0) {
+                    Ok(0) if trimmed.is_empty() => {
+                        self.open_rewind_selector();
+                        return true;
+                    }
+                    Ok(n) if n > 0 => n,
+                    Ok(_) | Err(_) => {
+                        self.push_notice(
+                            NotificationKind::Warning,
+                            format!(
+                                "/rewind: {} is not a count back — use a whole number of 1 or more, \
+                                 or /rewind alone to open the selector",
+                                if trimmed.is_empty() { "no count" } else { trimmed }
+                            ),
+                        );
+                        return true;
+                    }
+                };
+                self.pending_rewind_confirm = Some(n);
+                self.set_status_notice(format!(
+                    "Rewind to {n} prompt(s) back (the Nth-last)? (y/n)"
+                ));
                 true
             }
             "export" => {
