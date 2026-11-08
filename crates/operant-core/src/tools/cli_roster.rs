@@ -274,18 +274,23 @@ pub fn admit_with_capabilities(
 ) -> std::io::Result<bool> {
     let mut roster = roster_or_seed(path);
     let already_present = roster.entries.contains_key(name);
-    let previous = roster
-        .entries
-        .get(name)
-        .map(|e| e.capabilities.clone())
-        .unwrap_or_default();
+    // PRESERVE what the previous probe learned: re-admission used to
+    // overwrite `version_args` with `["--version"]`, so a kubectl re-admit
+    // broke its real probe (`version --client --short`) and the next version
+    // check failed on a binary that was admitted the week before (RT-349).
+    // The capabilities field has always carried this shape (`unwrap_or(previous)`).
+    let previous = roster.entries.get(name);
+    let previous_version_args = previous
+        .map(|e| e.version_args.clone())
+        .unwrap_or_else(|| vec!["--version".to_string()]);
+    let previous_capabilities = previous.map(|e| e.capabilities.clone()).unwrap_or_default();
     roster.entries.insert(
         name.to_string(),
         RosterEntry {
             name: name.to_string(),
-            version_args: vec!["--version".to_string()],
+            version_args: previous_version_args,
             category,
-            capabilities: capabilities.unwrap_or(previous),
+            capabilities: capabilities.unwrap_or(previous_capabilities),
             admitted_at: Some(now_epoch_secs()),
         },
     );
@@ -425,6 +430,54 @@ mod tests {
         std::fs::write(&path, "this is not = = toml").expect("write");
         let roster = load_roster(&path);
         assert!(roster.entries.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// RT-349: `admit_with_capabilities` overwrote `version_args` with
+    /// `["--version"]` on EVERY insert, so a re-admission clobbered the real
+    /// probe a binary needs (kubectl wants `version --client --short`) and the
+    /// next version check failed on a CLI that had worked the week before.
+    #[test]
+    fn a_re_admission_preserves_the_binarys_real_probe() {
+        let dir = scratch_dir("readmit");
+        let path = roster_path_in(&dir);
+
+        // The first admission seeds the built-in roster (kubectl's REAL probe
+        // is `version --client --short`) and inserts the entry.
+        let first = admit(&path, "kubectl", CliCategory::Cloud).expect("admit");
+        assert!(!first, "the seeded kubectl is not a new entry");
+
+        // A re-admission with NEW capabilities must not destroy the probe.
+        let caps = vec![CliCapability {
+            name: "kubectl:get".to_string(),
+            description: Some("Display resources".to_string()),
+        }];
+        let second = admit_with_capabilities(&path, "kubectl", CliCategory::Cloud, Some(caps))
+            .expect("re-admit");
+        assert!(!second, "the re-admission reports an existing entry");
+
+        let roster = load_roster(&path);
+        let entry = roster.entries.get("kubectl").expect("entry");
+        assert_eq!(
+            entry.version_args,
+            vec!["version", "--client", "--short"],
+            "the real probe must survive the re-admission"
+        );
+        assert_eq!(
+            entry.capabilities.len(),
+            1,
+            "the new capabilities are still recorded"
+        );
+
+        // A brand-new admission still defaults to --version.
+        admit(&path, "brandnew", CliCategory::Build).expect("admit new");
+        let roster = load_roster(&path);
+        assert_eq!(
+            roster.entries["brandnew"].version_args,
+            vec!["--version"],
+            "a first admission still gets the default probe"
+        );
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 
