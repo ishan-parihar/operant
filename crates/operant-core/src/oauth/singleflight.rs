@@ -361,8 +361,22 @@ impl<T> RefreshCoordinator<T> {
             return Self::share(done, &flight);
         }
         if done_rx.changed().await.is_err() {
-            // Sender dropped without a result — reachable only if the leader's
-            // future panicked. Re-read once, then report a shared failure.
+            // RT-411: this comment used to read "Sender dropped without a
+            // result — reachable only if the leader's future panicked.
+            // Re-read once, then report a shared failure." Neither half is
+            // true. `Flight` owns the `watch::Sender` (its `done` field), and
+            // BOTH the coordinator's map (`flights: HashMap<String,
+            // Arc<Flight<T>>>`) and this follower hold an `Arc` to that Flight
+            // across this await — so the sender cannot be dropped while a
+            // follower is still waiting on it. A leader whose future panics
+            // (or is cancelled mid-await) drops only the leader's own Arc: the
+            // map entry and the follower's Arc keep the Flight — and the
+            // sender — alive, and every follower stays suspended in
+            // `changed().await` FOREVER, with no result, no shared failure and
+            // no timeout. (Verified first-hand against the workspace's tokio
+            // by a probe: with the leader's future panicking, `changed()`
+            // still times out after the map entry is removed.) This arm is
+            // therefore dead code for the case it names.
             return match flight.outcome() {
                 Some(done) => Self::share(done, &flight),
                 None => Err(Self::vanished(account, &flight)),
@@ -417,6 +431,57 @@ static GLOBAL: OnceLock<TokenCoordinator> = OnceLock::new();
 /// still spend the token.
 pub fn global() -> &'static TokenCoordinator {
     GLOBAL.get_or_init(TokenCoordinator::new)
+}
+
+#[cfg(test)]
+mod rt411_tests {
+    /// RT-411: the follower's dead `Err` arm claimed a recovery ("Sender dropped
+    /// without a result — reachable only if the leader's future panicked") that
+    /// cannot run: `Flight` owns the `watch::Sender` and BOTH the coordinator map
+    /// and the follower hold an `Arc` across the await, so the sender cannot be
+    /// dropped while a follower waits. A panicking leader therefore wedges
+    /// every follower forever. SOURCE contract with its limitation named: the
+    /// wedge is a panic-path shape, so no deterministic unit fixture can force
+    /// it without hanging the suite; the contract pins that the false claim is
+    /// gone, the wedge is named, and the ownership facts it rests on are still
+    /// the file's structure. Needles concatenation-built — and this test's own
+    /// prose does not contain the phrases it forbids.
+    #[test]
+    fn the_follower_comment_names_what_the_dead_arm_actually_does() {
+        let src = include_str!("singleflight.rs");
+        // 1. The false claim is gone (the sentence the old comment led with).
+        let false_claim = concat!("Sender dropped without a ", "result");
+        let prod = &src[..src.find("#[cfg(test)]").unwrap_or(src.len())];
+        assert_eq!(
+            prod.matches(false_claim).count(),
+            0,
+            "the recovery claim must be gone from the production region"
+        );
+        // 2. The wedge is named: both Arc holders, and forever.
+        let both_arcs = concat!("and this follower hold an `Arc`", "");
+        assert_eq!(
+            prod.matches(both_arcs).count(),
+            1,
+            "the comment must name both Arc holders"
+        );
+        let forever = concat!("every follower stays suspended in", "");
+        assert_eq!(
+            prod.matches(forever).count(),
+            1,
+            "the comment must name the forever wedge"
+        );
+        // 3. The ownership facts the claim rests on are still the structure.
+        let owns_sender = concat!("done: watch::", "Sender<()>");
+        assert!(
+            prod.contains(owns_sender),
+            "Flight must still own the sender (the fact underneath the claim)"
+        );
+        let map_arc = concat!("flights: Mutex<HashMap<String, Arc<", "Flight<T>>>>");
+        assert!(
+            prod.contains(map_arc),
+            "the coordinator map must still hold the Flight's Arc"
+        );
+    }
 }
 
 #[cfg(test)]
