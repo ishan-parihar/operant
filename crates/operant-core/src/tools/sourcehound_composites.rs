@@ -125,8 +125,16 @@ fn spec(
 /// **This table is the contract.** Descriptions are the sourcehound 1.8.0
 /// server's own text (probed over stdio `tools/list` on 2026-10-26); schemas
 /// are that server's `inputSchema`. A sourcehound release that renames a
-/// composite or changes a contract must update this table, and
-/// [`composites_match_the_live_server`] is the test that catches the drift.
+/// composite or changes a contract must update this table. RT-410: this doc
+/// used to name `composites_match_the_live_server` as "the test that catches
+/// the drift" — no such test exists anywhere in the tree, and the rustdoc
+/// link to it is a dangling symbol. What actually guards the table today is
+/// `composite_names_map_dots_to_underscores`, `composite_table_has_no_duplicates`,
+/// `every_composite_is_deferred_by_type`, and
+/// `every_composite_carries_a_real_description` — naming, uniqueness,
+/// deferred-ness, and description presence. NONE of them compares the table
+/// against the live server, so contract drift is not caught by any test;
+/// naming that plainly is more useful than naming a guard that is absent.
 pub fn composite_specs() -> &'static [&'static CompositeSpec] {
     static SPECS: LazyLock<Vec<&'static CompositeSpec>> = LazyLock::new(|| {
         vec![
@@ -872,4 +880,34 @@ for line in sys.stdin:
             assembled.visible.len()
         );
     }
+}
+
+/// RT-410: the module doc named `composites_match_the_live_server` as "the test
+/// that catches the drift" — no such test exists anywhere in the tree, and the
+/// rustdoc link to it was a dangling symbol. The doc must name the guards that
+/// actually exist and state plainly that none compares the live server.
+/// Source contract, needles concatenation-built — and this test's prose does not
+/// quote the phrases it forbids.
+#[test]
+fn the_composites_doc_names_the_guards_that_exist() {
+    let src = include_str!("sourcehound_composites.rs");
+    let phantom = concat!("[`composites_match", "_the_live_server`]");
+    assert_eq!(
+        src.matches(&format!("{}{}", "", phantom)).count(),
+        0,
+        "the doc must not link a test that does not exist"
+    );
+    let real_guards = concat!(
+        "`composite_names_map_dots_to_underscores`",
+        ", `composite_table_has_no_duplicates`"
+    );
+    assert!(
+        src.contains(&real_guards),
+        "the doc must name the real guards"
+    );
+    let gap_named = "against the live server, so contract drift";
+    assert!(
+        src.contains(&gap_named),
+        "the doc must name the uncaught-drift gap"
+    );
 }

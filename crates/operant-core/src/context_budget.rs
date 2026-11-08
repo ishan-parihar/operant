@@ -24,7 +24,8 @@
 //! re-measure, keep or revert — and it stops when the marginal gain falls below
 //! a floor rather than when some absolute count is reached.
 //!
-//! Every number here is an ESTIMATE from [`estimate_tokens`] (chars/4, the
+//! Every number here is an ESTIMATE from
+//! [`crate::context_management::estimate_tokens`] (chars/4, the
 //! repo's own heuristic). Nothing in this module claims provider-accurate
 //! tokenization; it claims a consistent yardstick, which is what a budget
 //! decision needs.

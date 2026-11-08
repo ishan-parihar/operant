@@ -170,7 +170,7 @@ pub struct OutcomeSignals {
 ///
 /// `result_summary_empty` is `TurnEnd::result_summary.is_empty()`, supplied
 /// separately because §3.4's `noop` rule reads the summary, which lives on
-/// the [`TurnEnd`] rather than on [`OutcomeSignals`].
+/// the [`crate::turn_end::TurnEnd`] rather than on [`OutcomeSignals`].
 pub fn derive_outcome(signals: &OutcomeSignals, result_summary_empty: bool) -> Outcome {
     if signals.turn_errored {
         return Outcome::Failure;

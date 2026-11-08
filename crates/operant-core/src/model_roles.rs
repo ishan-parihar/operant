@@ -19,7 +19,7 @@
 //! ## The two behaviours that carry the semantics
 //!
 //! 1. **`Conversation` is the only self-switching slot.** Selecting it moves
-//!    the live agent (`OperantAgent::set_model`, `agent/events.rs:540`) AND
+//!    the live agent ([`OperantAgent::set_model`](crate::agent::OperantAgent::set_model)) AND
 //!    persists `[agent] model`. Every other slot is a plain assignment: the
 //!    conversation keeps running on whatever it was on, and the slot's own
 //!    consumer picks the new model up on its next call.
@@ -51,7 +51,7 @@ use crate::config::AppConfig;
 
 /// A named model slot. One variant per slot the config actually routes to.
 ///
-/// The #[non_exhaustive] is absent on purpose: a new variant here is a new
+/// The `non_exhaustive` attribute is absent on purpose: a new variant here is a new
 /// routing path, which must be a deliberate edit with its own consumer, and
 /// an exhaustive match that breaks the build is how that is enforced.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -478,20 +478,37 @@ mod rt405_tests {
     #[test]
     fn the_doc_citation_lands_on_the_definition_it_names() {
         let doc = include_str!("model_roles.rs");
+        // RT-410 (following RT-407): the citation is now a SYMBOL ANCHOR —
+        // [`OperantAgent::set_model`](crate::agent::OperantAgent::set_model) —
+        // because a rewritten line number re-arms the same rot on the next edit
+        // above it. rustdoc resolves the anchor at build time (the
+        // broken-intra-doc-links gate), so the doc cannot silently point at
+        // nothing again.
         let re = regex::Regex::new(r"`OperantAgent::set_model`, `agent/events\.rs:(\d+)`")
             .expect("a valid needle");
-        let caps = re.captures(doc).expect("the doc cites the definition");
-        let cited: usize = caps[1].parse().expect("a line number");
-        let events = include_str!("agent/events.rs");
-        let line = events
-            .lines()
-            .nth(cited - 1)
-            .expect("the cited line is in range");
         assert!(
-            line.contains("fn set_model"),
-            "the cited line must BE the set_model definition: {:?}",
-            line
+            re.captures(doc).is_none(),
+            "no bare line-number citation of the definition may remain"
         );
+        let anchor = concat!(
+            "([`OperantAgent::set_model`]",
+            "(crate::agent::OperantAgent::set_model))"
+        );
+        assert_eq!(
+            doc.matches(anchor).count(),
+            1,
+            "the citation must be the symbol anchor"
+        );
+        // The anchor's subject is real, and its old coordinate is gone.
+        let events = include_str!("agent/events.rs");
+        assert!(
+            events.lines().any(|l| l.contains("pub fn set_model")),
+            "set_model exists — the anchor's subject is real"
+        );
+        // The anchor RESOLVES: the doc gate (RUSTDOCFLAGS=
+        // "-D rustdoc::broken_intra_doc_links" cargo doc --no-deps -p
+        // operant-core) is green with this link in place — a build-time check
+        // a line number never had.
         // And the definition is still where the doc now says it is.
         let events_owned = events.to_string();
         assert!(
