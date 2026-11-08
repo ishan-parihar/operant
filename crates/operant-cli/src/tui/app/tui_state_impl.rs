@@ -1080,6 +1080,14 @@ impl TuiState for App {
         self.current_dir.clone()
     }
 
+    fn show_working_dir(&self) -> bool {
+        self.settings.show_working_dir()
+    }
+
+    fn show_branch(&self) -> bool {
+        self.settings.show_branch()
+    }
+
     fn git_branch(&self) -> Option<String> {
         self.git_branch.clone()
     }

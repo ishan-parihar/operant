@@ -158,12 +158,12 @@ fn toggle_or_cycle_current(screen: &mut SettingsScreen) {
                     }
                     "show_cwd" => {
                         screen.show_cwd = new_value;
-                        screen.settings_snapshot.show_cwd = new_value;
+                        screen.settings_snapshot.show_cwd = Some(new_value);
                         let _ = screen.settings_snapshot.save_sync();
                     }
                     "show_git_branch" => {
                         screen.show_git_branch = new_value;
-                        screen.settings_snapshot.show_git_branch = new_value;
+                        screen.settings_snapshot.show_git_branch = Some(new_value);
                         let _ = screen.settings_snapshot.save_sync();
                     }
                     "auto_commits" => {

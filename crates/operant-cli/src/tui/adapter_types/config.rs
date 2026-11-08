@@ -90,19 +90,40 @@ pub struct Settings {
     /// Set by `operant tui vim on|off`.
     pub vim_enabled: bool,
     pub reduce_motion: bool,
-    pub show_cwd: bool,
+    /// Tri-state on purpose (iter-1897): `None` is the value a settings.json
+    /// written before this field existed carries, and `None` means SHOWN —
+    /// the header has always painted the working directory, so an absent
+    /// key must not change the rendering for a fresh install.
+    pub show_cwd: Option<bool>,
     pub auto_compact: bool,
     pub compact_threshold: Option<usize>,
     pub notifications: bool,
     pub show_turn_duration: bool,
     pub terminal_progress_bar: bool,
-    pub show_git_branch: bool,
+    /// Tri-state like `show_cwd` (iter-1897): absent means shown.
+    pub show_git_branch: Option<bool>,
     pub config: InnerConfig,
     pub providers: HashMap<String, ProviderEntry>,
     pub has_completed_onboarding: bool,
 }
 
 impl Settings {
+    /// Whether the header paints the working directory.
+    ///
+    /// (iter-1897) `/settings` offers "Show current directory"; the header
+    /// read nothing, so the operator's choice was a promise nothing kept.
+    /// An absent key (a settings.json predating the field) shows it, which
+    /// is the rendering every earlier version had.
+    pub fn show_working_dir(&self) -> bool {
+        self.show_cwd.unwrap_or(true)
+    }
+
+    /// Whether the header paints the git branch beside the working directory.
+    /// Same tri-state contract as [`Self::show_working_dir`].
+    pub fn show_branch(&self) -> bool {
+        self.show_git_branch.unwrap_or(true)
+    }
+
     pub fn save_sync(&self) -> anyhow::Result<()> {
         self.save_to(&Self::config_dir().join("settings.json"))
     }

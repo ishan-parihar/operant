@@ -574,6 +574,20 @@ pub trait TuiState {
     /// Working directory for this session
     // ---- Misc ----
     fn working_dir(&self) -> Option<String>;
+    /// Whether the header may paint the working directory.
+    ///
+    /// (iter-1897) `/settings` offers "Show current directory"; the header
+    /// read nothing, so the operator's choice was a promise nothing kept.
+    /// The default `true` is the rendering every earlier version had, so an
+    /// implementor that does not model the flag keeps the status quo.
+    fn show_working_dir(&self) -> bool {
+        true
+    }
+    /// Whether the header may paint the git branch beside the working
+    /// directory. Same contract as [`Self::show_working_dir`].
+    fn show_branch(&self) -> bool {
+        true
+    }
     /// Current git branch of the working directory, if in a repo.
     fn git_branch(&self) -> Option<String> {
         None

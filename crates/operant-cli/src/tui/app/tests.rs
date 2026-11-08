@@ -14132,3 +14132,155 @@ fn the_dialog_contexts_catalogue_rows_are_the_ones_every_dialog_dispatches() {
         "Esc closes the command palette — the Dialog context's row"
     );
 }
+
+/// (iter-1897) The header's working-directory row obeys `/settings`.
+///
+/// The screen offers "Show current directory" and "Show git branch"; the
+/// header painted both unconditionally, so the operator's choice was a
+/// promise nothing kept. Each flag is now a tri-state
+/// (`Option<bool>`): absent — a settings.json written before the field
+/// existed, or a fresh install — means SHOWN, which is the rendering every
+/// earlier version had, and only an explicit `false` hides the row.
+///
+/// This drives the REAL render path (`build_header_sections`, the one the
+/// frame loop calls) rather than a re-implementation of its condition, so a
+/// header that ignores the flag again fails here.
+#[test]
+fn the_headers_directory_row_obeys_the_settings_display_flags() {
+    use crate::tui::operant_ui::header;
+
+    /// The header's secondary (detail) lines as one flat string — the
+    /// working-directory row lives there.
+    fn detail(app: &App) -> String {
+        header::build_header_sections(app, 200)
+            .1
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .map(|span| span.content.as_ref())
+            .collect()
+    }
+
+    let mut app = make_app();
+    // Hermetic: the detection paths (cwd, git) are not what this pins, so
+    // the two inputs are set directly instead of depending on where the
+    // test binary happens to run.
+    app.current_dir = Some("/home/operator/project".to_string());
+    app.git_branch = Some("release-branch".to_string());
+
+    // Absent (the default for a fresh install, and every older
+    // settings.json): the status quo — both shown.
+    let rendered = detail(&app);
+    assert!(
+        rendered.contains("project"),
+        "the working directory must paint when the flag is absent: {rendered}"
+    );
+    assert!(
+        rendered.contains("(release-branch)"),
+        "the git branch must paint when the flag is absent: {rendered}"
+    );
+
+    // An explicit false hides the directory row — and the branch with it,
+    // because the branch is painted as part of the same row.
+    app.settings.show_cwd = Some(false);
+    let rendered = detail(&app);
+    assert!(
+        !rendered.contains("project"),
+        "\"Show current directory\" is off, so the header must not paint it: {rendered}"
+    );
+
+    // The branch flag on its own: the directory stays, the branch goes.
+    app.settings.show_cwd = Some(true);
+    app.settings.show_git_branch = Some(false);
+    let rendered = detail(&app);
+    assert!(
+        rendered.contains("project"),
+        "the working directory must still paint: {rendered}"
+    );
+    assert!(
+        !rendered.contains("(release-branch)"),
+        "\"Show git branch\" is off, so the header must not paint it: {rendered}"
+    );
+
+    // Both on again: the row comes back whole.
+    app.settings.show_git_branch = Some(true);
+    let rendered = detail(&app);
+    assert!(
+        rendered.contains("project") && rendered.contains("(release-branch)"),
+        "both flags on must restore the whole row: {rendered}"
+    );
+}
+
+/// (iter-1897) The settings screen's toggle reaches the header WITHOUT a
+/// restart or /reload.
+///
+/// `handle_settings_key` ends with `*settings = screen.settings_snapshot.clone()`,
+/// so the App's live settings already carry the screen's writes — but nothing
+/// read them, which is the defect. This drives the operator's real path:
+/// open /settings, land on the "Show current directory" row, press Enter,
+/// and the App's live flag must flip (which is what the header now reads).
+///
+/// The sandbox home matters: `SettingsScreen::new()` loads the ambient
+/// settings.json, and without one hermetic the row's starting value is
+/// whatever a previous test-run left on disk — which made an earlier version
+/// of this test flip the flag the wrong way and fail on a different machine
+/// than the one it was written on.
+#[test]
+fn toggling_show_current_directory_in_settings_reaches_the_app_live() {
+    // The crate-wide lock the settings-screen tests serialise on: HERMES_HOME
+    // is process-global and another test may be writing a sandbox of its own.
+    let _env_lock = crate::config::test_env_lock();
+    let saved_home = std::env::var_os("HERMES_HOME");
+    let sandbox =
+        std::env::temp_dir().join(format!("operant-header-toggle-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&sandbox);
+    // SAFETY: serialised by the crate-wide test_env_lock above; restored below.
+    unsafe {
+        std::env::set_var("HERMES_HOME", &sandbox);
+    }
+    let flip = {
+        // Land on the "Show current directory" row: the screen's own row list
+        // is the authority for its position.
+        let row = crate::settings_screen::all_entries(&SettingsScreen::new())
+            .iter()
+            .position(|entry| entry.key == "show_cwd")
+            .expect("the screen offers the \"Show current directory\" row");
+        let mut app = make_app();
+        app.settings_screen.visible = true;
+        app.settings_screen.selected_idx = row;
+        let before = app.settings_screen.show_cwd;
+
+        app.handle_key_event(press_key(KeyCode::Enter, KeyModifiers::NONE));
+
+        let after = app.settings_screen.show_cwd;
+        let live = app.settings.show_working_dir();
+        let snapshot = app.settings_screen.settings_snapshot.show_cwd;
+        (before, after, live, snapshot)
+    };
+    // SAFETY: still under test_env_lock.
+    unsafe {
+        match &saved_home {
+            Some(home) => std::env::set_var("HERMES_HOME", home),
+            None => std::env::remove_var("HERMES_HOME"),
+        }
+    }
+
+    let (before, after, live, snapshot) = flip;
+    assert_ne!(
+        before, after,
+        "Enter on the \"Show current directory\" row must toggle it"
+    );
+    assert_eq!(
+        live, after,
+        "the toggle must reach the App's live settings — the header reads it"
+    );
+    assert_eq!(
+        snapshot,
+        Some(after),
+        "and the snapshot the screen persists must record the choice"
+    );
+    assert!(
+        !after,
+        "a hermetic sandbox starts from the screen's own default (shown), so \
+         the toggle turns it off"
+    );
+}

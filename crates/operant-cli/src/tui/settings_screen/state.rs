@@ -25,8 +25,8 @@ impl SettingsScreen {
             terminal_progress_bar: true,
             verbose: false,
             cursor_blink_enabled: false,
-            show_cwd: false,
-            show_git_branch: false,
+            show_cwd: true,
+            show_git_branch: true,
             compact_threshold: "95".to_string(),
             auto_commits: false,
             output_format: "text".to_string(),
@@ -55,8 +55,10 @@ impl SettingsScreen {
         self.terminal_progress_bar = self.settings_snapshot.terminal_progress_bar;
         self.verbose = self.settings_snapshot.config.verbose;
         self.cursor_blink_enabled = self.settings_snapshot.config.cursor_blink_enabled;
-        self.show_cwd = self.settings_snapshot.show_cwd;
-        self.show_git_branch = self.settings_snapshot.show_git_branch;
+        // (iter-1897) `unwrap_or(true)`: the screen's row shows what the
+        // header will actually paint, and an absent key means shown.
+        self.show_cwd = self.settings_snapshot.show_working_dir();
+        self.show_git_branch = self.settings_snapshot.show_branch();
         self.compact_threshold = self.settings_snapshot.config.compact_threshold.to_string();
         self.auto_commits = self.settings_snapshot.config.auto_commits.unwrap_or(false);
         self.output_format = match &self.settings_snapshot.config.output_format {
@@ -200,12 +202,12 @@ impl SettingsScreen {
                 }
                 "show_cwd" => {
                     let on = matches!(value.as_str(), "true" | "on" | "1" | "yes");
-                    settings.show_cwd = on;
+                    settings.show_cwd = Some(on);
                     self.show_cwd = on;
                 }
                 "show_git_branch" => {
                     let on = matches!(value.as_str(), "true" | "on" | "1" | "yes");
-                    settings.show_git_branch = on;
+                    settings.show_git_branch = Some(on);
                     self.show_git_branch = on;
                 }
                 "disable_claude_mds" => {

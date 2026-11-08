@@ -838,10 +838,16 @@ fn build_header_lines_with_auth(
         );
     }
 
-    if let Some(dir) = app.working_dir() {
+    // (iter-1897) The two rows are gated on the /settings flags the screen
+    // writes and the App carries live (`handle_settings_key` ends with
+    // `*settings = screen.settings_snapshot.clone()`), so an operator who
+    // turns "Show current directory" off sees it leave on the next frame.
+    // `show_working_dir` gates the whole line: hiding the directory hides
+    // its branch too, because the branch is painted as part of the same row.
+    if let Some(dir) = app.working_dir().filter(|_| app.show_working_dir()) {
         let display_dir = abbreviate_home(&dir);
         let mut text = display_dir;
-        if let Some(branch) = app.git_branch() {
+        if let Some(branch) = app.git_branch().filter(|_| app.show_branch()) {
             let with_branch = format!("{} ({})", text, branch);
             if with_branch.chars().count() <= w {
                 text = with_branch;
