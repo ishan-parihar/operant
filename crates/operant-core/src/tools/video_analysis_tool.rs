@@ -12,17 +12,18 @@ pub struct VideoAnalysisTool {
     fal_key: String,
 }
 
+/// The analysis-mode knob that used to sit here was REMOVED (RT-344): it
+/// was deserialized and never read - the request body carries only
+/// `video_url` and `prompt`, so the schema advertised a setting that
+/// silently did nothing. Re-add it only with a real payload mapping. (The
+/// knob's name is deliberately not spelled here: this doc IS the schema's
+/// description, so spelling it would put the dead setting back in the
+/// schema the agent reads.)
 #[derive(JsonSchema, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VideoAnalysisArgs {
     pub video_url: String,
-    #[serde(default = "default_analysis_type")]
-    pub analysis_type: String,
     pub prompt: Option<String>,
-}
-
-fn default_analysis_type() -> String {
-    "describe".to_string()
 }
 
 impl Default for VideoAnalysisTool {
@@ -122,6 +123,30 @@ impl OperantTool for VideoAnalysisTool {
 
 #[cfg(test)]
 mod tests {
+    /// RT-344: `analysis_type` was deserialized and never read -- the request
+    /// body carries only `video_url` and `prompt`, so the schema advertised a
+    /// setting that silently did nothing. The schema must not offer it again,
+    /// and no code may read it back in.
+    #[test]
+    fn the_schema_does_not_advertise_a_knob_no_request_reads() {
+        let schema = VideoAnalysisTool::new().schema();
+        let rendered = serde_json::to_string(&schema.parameters).expect("schema json");
+        // The needle is built by concatenation so this test's own source
+        // cannot satisfy it.
+        let knob = format!("analysis{}", "_type");
+        assert!(
+            !rendered.contains(&knob),
+            "the dead knob must not be in the schema: {rendered}"
+        );
+        let src = include_str!("video_analysis_tool.rs");
+        let any_read = format!("args.{}", "analysis_type");
+        assert_eq!(
+            src.matches(&any_read).count(),
+            0,
+            "no code may read the retracted field"
+        );
+    }
+
     use super::*;
     use serde_json::json;
 
@@ -132,11 +157,6 @@ mod tests {
         let json = serde_json::to_string(&schema).unwrap();
         assert!(!json.is_empty());
         assert_eq!(schema.name, "video_analyze");
-    }
-
-    #[test]
-    fn test_default_analysis_type() {
-        assert_eq!(default_analysis_type(), "describe");
     }
 
     #[tokio::test]
