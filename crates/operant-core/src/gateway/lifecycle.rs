@@ -171,6 +171,12 @@ impl Drop for TurnLeaseGuard {
 /// `touch` is called when a session's turn starts; `complete` clears it
 /// when the turn ends. Sessions still "active" after `stalled(timeout)`
 /// have exceeded the configured stall window without completing.
+///
+/// UNWIRED (RT-331, named not shipped): no production callers route it —
+/// the lease gate itself (`TurnLease`) is exercised in production, but
+/// the detector that would escalate stalled sessions is complete and
+/// unread. Wiring a sweep over `stalled()` is a product decision; the
+/// doc no longer implies the detector runs.
 #[derive(Debug, Clone, Default)]
 pub struct SessionStallTracker {
     inner: Arc<Mutex<HashMap<String, Instant>>>,
@@ -416,6 +422,20 @@ mod tests {
         drop(g1);
         drop(g2);
         assert_eq!(lease.in_flight().await, 0);
+    }
+
+    /// RT-331: the tracker presents `stalled()` as live machinery while
+    /// nothing calls it — a detector that would run only if routed.
+    /// Source-grep contract (the RT-323 shape), the needle concatenation-
+    /// built so this test's own source cannot satisfy it.
+    #[test]
+    fn the_stall_detector_names_its_unwired_state() {
+        let src = include_str!("lifecycle.rs");
+        let claim = format!("no production callers {}", "route it");
+        assert!(
+            src.contains(&claim),
+            "the doc must name the unwired detector — a reader must not infer it runs"
+        );
     }
 
     #[tokio::test]
