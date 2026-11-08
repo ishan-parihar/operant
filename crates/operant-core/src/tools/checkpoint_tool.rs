@@ -1115,13 +1115,48 @@ impl OperantTool for CheckpointTool {
 }
 
 /// Register the checkpoint tool
+/// UNWIRED AND INERT (RT-356, named not shipped): no caller exists anywhere
+/// in the workspace, and the body registers nothing — it constructs a
+/// `CheckpointTool` and drops it. It used to log a loaded-success line — a
+/// success message for a load that never happened (RT-275 class: a log that
+/// claims more than the code does).
+///
+/// The real registration path mounts [`CheckpointTool`] directly through the
+/// tool registry; wiring this seam (or deleting it) is a product decision.
 pub fn register_checkpoint_tool() -> impl FnOnce() -> Result<()> {
     || {
         let _tool = CheckpointTool::new();
         // Registration would happen here via the registry
         // This is a placeholder for the registration function
-        info!("Checkpoint tool loaded");
+        info!(
+            "checkpoint tool seam invoked — nothing is registered by it (see the doc on register_checkpoint_tool)"
+        );
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod rt356_tests {
+    /// RT-356: `register_checkpoint_tool` is a no-op seam (zero callers) that
+    /// logged a success line for a load that never happened. The log and the
+    /// doc must both name the inert state. Source contract, needles
+    /// concatenation-built (and this test's own prose avoids the phrases it
+    /// asserts on).
+    #[test]
+    fn the_registration_seam_names_its_inert_state() {
+        let src = include_str!("checkpoint_tool.rs");
+        let false_log = format!("Checkpoint tool {}loaded", "");
+        assert!(
+            !src.contains(&false_log),
+            "a log must not claim a load that did not happen"
+        );
+        let named = format!("UNWIRED AND {}INERT", "");
+        assert!(src.contains(&named), "the seam must name its inert state");
+        let honest_log = format!("nothing is registered by {}", "it");
+        assert!(
+            src.contains(&honest_log),
+            "the log line must say what actually happens"
+        );
     }
 }
 
