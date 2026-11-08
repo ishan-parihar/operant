@@ -842,3 +842,40 @@ async fn a_pre_archive_backup_is_taken_before_the_archival() {
 
     cleanup(&tmp);
 }
+/// RT-385: two archive paths dropped the tracker write that makes the archive
+/// durable — the invariant the file itself names at :539 ("a dropped write
+/// would leave the record Active while SKILL.md sits in `.archive` — the next
+/// pass then tries to archive a skill that is gone"). The apply path
+/// propagates with `?`; run_review and run_consolidation used `let _ =`.
+///
+/// SOURCE contract, with its honest limitation named: the failure it pins is
+/// race-shaped (the tracker's records changing between the scan and the
+/// write — `set_state` fails only when the record is gone, and both paths
+/// read their records from that same tracker), so no deterministic unit
+/// fixture can force it. The contract pins that the swallow is gone from BOTH
+/// arms and that each names the consequence. Needles are
+/// concatenation-built so the test's own text cannot satisfy them.
+#[test]
+fn the_archive_paths_report_a_dropped_tracker_write() {
+    let src = include_str!("../src/curator/mod.rs");
+    // The swallow shape is gone from BOTH archive arms.
+    let swallowed = format!("let _ = self.usage{}_tracker.set_state", "");
+    assert_eq!(
+        src.matches(&swallowed).count(),
+        0,
+        "no archive arm may discard the tracker write that makes the archive durable"
+    );
+    // And both report it, each naming the consequence the invariant describes.
+    let consequence = format!("the next pass may re-{}try a skill that is gone", "");
+    assert_eq!(
+        src.matches(&consequence).count(),
+        2,
+        "both arms must report the write failure, naming the re-try consequence"
+    );
+    // The apply path's propagation (the invariant's own honest site) stays.
+    let propagated = format!("set_state(&record.name, LifecycleState::Archived){}", "?");
+    assert!(
+        src.contains(&propagated),
+        "apply_automatic_transitions must keep propagating the write with `?`"
+    );
+}

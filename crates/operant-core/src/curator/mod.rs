@@ -277,9 +277,23 @@ impl CuratorEngine {
                     match archiver::archive_skill(&record.name, &self.skills_dir, &self.archive_dir)
                     {
                         Ok(()) => {
-                            let _ = self
+                            // RT-385: the archive is only DURABLE once the
+                            // tracker says so — the invariant
+                            // apply_automatic_transitions propagates with `?`
+                            // at :539 ("a dropped write would leave the record
+                            // Active while SKILL.md sits in `.archive` — the
+                            // next pass then tries to archive a skill that is
+                            // gone"). This arm dropped it; report instead.
+                            if let Err(e) = self
                                 .usage_tracker
-                                .set_state(&record.name, LifecycleState::Archived);
+                                .set_state(&record.name, LifecycleState::Archived)
+                            {
+                                errors.push(format!(
+                                    "Archived '{}' but the usage tracker still says Active ({}): \
+                                     the next pass may re-try a skill that is gone",
+                                    record.name, e
+                                ));
+                            }
                             archived.push(record.name.clone());
                         }
                         Err(e) => {
@@ -725,10 +739,19 @@ impl CuratorEngine {
                         continue;
                     }
 
-                    // Update usage tracker state
-                    let _ = self
+                    // Update usage tracker state — the same invariant
+                    // apply_automatic_transitions propagates with `?` at :539
+                    // (RT-385).
+                    if let Err(e) = self
                         .usage_tracker
-                        .set_state(skill_name, LifecycleState::Archived);
+                        .set_state(skill_name, LifecycleState::Archived)
+                    {
+                        result.errors.push(format!(
+                            "Consolidated '{}' into '{}' but the usage tracker still says Active ({}): \
+                             the next pass may re-try a skill that is gone",
+                            skill_name, verdict.umbrella, e
+                        ));
+                    }
                 }
 
                 // Record consolidation entry (always, even in dry_run —
