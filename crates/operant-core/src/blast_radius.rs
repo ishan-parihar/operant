@@ -700,15 +700,21 @@ fn interpreter_script(seg: &str) -> Option<String> {
     let mut i = 1usize;
     while i < toks.len() {
         let tok = toks[i].trim();
-        // A short-flag cluster whose LAST letter is `c` — `-c`, `-lc`, `-ec` —
-        // means "the next non-flag token is the script". Matching only the
-        // exact `-c` missed `sh -lc`, which is a login shell and one of the
-        // shapes that actually appears.
-        if tok.starts_with('-') && !tok.starts_with("--") && tok.ends_with('c') {
-            if let Some(glued) = glued_script(tok) {
+        // A short-flag cluster carrying `c` — `-c`, `-lc`, `-ec` — means
+        // "the script is the rest of THIS word (glued) or the next token
+        // (spaced)". Matching only the exact `-c` token missed `sh -lc`,
+        // and the old `ends_with('c')` gate + `rfind('c')` mistook a glued
+        // script's own trailing `c` for the flag — so `bash -c"rm -rf /etc"`
+        // (one word after quote removal: `-crm -rf /etc`) fell through to
+        // the unfollowable sentinel and the gate passed it (RT-320).
+        if tok.starts_with('-')
+            && !tok.starts_with("--")
+            && let Some(glued) = glued_script(tok)
+        {
+            if !glued.is_empty() {
                 return Some(glued);
             }
-            // `bash -c` with nothing after it: interpreter-shaped but
+            // `bash -c` with nothing glued: interpreter-shaped but
             // unfollowable. `Some("")` (not `None`) so the caller emits the
             // fail-closed sentinel instead of treating this as "not an
             // interpreter" and rating it `None`.
@@ -763,16 +769,23 @@ fn interpreter_script(seg: &str) -> Option<String> {
 }
 
 /// The script glued onto a short-flag cluster's `c`, when there is one:
-/// `-cscript` or `-lcscript`. Returns `None` for a bare `-c`/`-lc`, where the
-/// script is the NEXT token instead.
+/// `-cscript` or `-lcscript`. Returns `None` when the cluster carries no
+/// `c` (a bare `-c`/`-lc` returns `Some("")` — the script is the NEXT token).
+///
+/// bash/getopt semantics: the `c` flag's argument is the rest of the SAME
+/// word, so the script runs from the first `c` in the letter run onward —
+/// `-c"rm -rf /etc"` is ONE word after quote removal (`-crm -rf /etc`) and
+/// bash runs exactly `rm -rf /etc`. Scanning only the leading ASCII-letter
+/// run keeps a glued script's own characters (and a flagless cluster's
+/// later text) from being mistaken for the flag.
 fn glued_script(flag: &str) -> Option<String> {
-    let pos = flag.rfind('c')?;
-    let rest = &flag[pos + 1..];
-    if rest.is_empty() {
-        None
-    } else {
-        Some(rest.to_string())
-    }
+    let letters = flag.strip_prefix('-')?;
+    let letter_run: String = letters
+        .chars()
+        .take_while(|c| c.is_ascii_alphabetic())
+        .collect();
+    let c_at = letter_run.find('c')?;
+    Some(letters[c_at + 1..].to_string())
 }
 
 /// Rebuild the tokens from `start` onward into one string, re-quoting any
@@ -1394,6 +1407,34 @@ mod interpreter_boundary_tests {
         // `sh` and its login-shell form behave the same way.
         assert_eq!(classify("sh -c 'rm -rf /etc'"), BlastRadius::Unbounded);
         assert_eq!(classify("sh -lc 'rm -rf /etc'"), BlastRadius::Unbounded);
+    }
+
+    /// RT-320: the GLUED form — `bash -c"rm -rf /etc"` is ONE word after
+    /// quote removal (`-crm -rf /etc`), and a real shell runs exactly
+    /// `rm -rf /etc` (getopt: the `c` flag's argument is the rest of the
+    /// word). The old gate required the token to END with `c` and then
+    /// `rfind`'d the LAST `c` — which for this shape is the one inside
+    /// `/etc`, so the "glued script" came out empty, the segment became the
+    /// unfollowable sentinel, and the gate passed it as `Scoped`.
+    #[test]
+    fn bash_c_glued_to_the_script_is_unwrapped_like_the_spaced_form() {
+        assert_eq!(
+            classify("bash -c\"rm -rf /etc\""),
+            BlastRadius::Unbounded,
+            "the glued form is the spaced form in a real shell"
+        );
+        assert_eq!(
+            classify("bash -lc\"rm -rf /etc\""),
+            BlastRadius::Unbounded,
+            "the login-shell glued form too"
+        );
+        // The gate itself must refuse it, not merely the classifier.
+        assert!(
+            screen("bash -c\"rm -rf /etc\"", None, None).is_some(),
+            "the destructive gate must fire on the glued form"
+        );
+        // A glued benign script stays benign (the guard against over-blocking).
+        assert_eq!(classify("bash -c\"echo hi\""), BlastRadius::None);
     }
 
     #[test]
