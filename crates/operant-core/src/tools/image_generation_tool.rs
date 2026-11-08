@@ -79,7 +79,19 @@ impl ImageGenerationTool {
             "recraft" => "fal-ai/recraft-v3",
             "ideogram" => "fal-ai/ideogram-v2",
             "flux-schnell" => "fal-ai/flux-schnell",
-            _ => "fal-ai/flux-pro",
+            // An unknown model used to fall through to flux-pro while the
+            // response still reported the REQUESTED name — a flux-pro image
+            // labelled "banana". The field's doc lists the values, so a typo
+            // or a guessed new name fails loud instead (RT-336).
+            other => {
+                return ToolResult::error(
+                    "image_generate",
+                    format!(
+                        "Unknown model '{other}'. Supported: flux-pro, flux-dev, flux-klein, \
+                         gpt-image-1, gpt-image-2, recraft, ideogram, flux-schnell."
+                    ),
+                );
+            }
         };
 
         let aspect_ratio = match args.aspect_ratio.to_lowercase().as_str() {
@@ -245,6 +257,30 @@ impl OperantTool for ImageGenerationTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// RT-336: an unknown model used to fall through to flux-pro while the
+    /// response still reported the REQUESTED name — a flux-pro image
+    /// labelled "banana". Constructed with a dummy key so the check fire
+    /// before any network call.
+    #[tokio::test]
+    async fn an_unknown_model_fails_loud_instead_of_silently_serving_flux_pro() {
+        let tool = ImageGenerationTool {
+            client: Client::new(),
+            api_key: "test-key".to_string(),
+        };
+        let result = tool
+            .execute(
+                json!({"prompt": "a cat", "model": "banana"}),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(!result.success, "an unknown model must not be served");
+        let message = result.error.clone().unwrap_or_default();
+        assert!(
+            message.contains("Unknown model 'banana'"),
+            "the error names the model and the supported set: {message}"
+        );
+    }
 
     #[test]
     fn test_image_generation_schema() {
