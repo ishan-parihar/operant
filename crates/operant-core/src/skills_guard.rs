@@ -1955,9 +1955,9 @@ mod skills_guard_rt340_tests {
     #[test]
     fn the_content_hash_label_names_the_truncation() {
         let src = include_str!("skills_guard.rs");
-        let label = format!("TRUNCATED {}-{}", "", "256").replace("{}", "");
-        // "TRUNCATED SHA-256" split so this test's own source cannot match it.
-        let label = format!("TRUNCATED {}-{}", "SHA", "256");
+        // The needle is built in pieces so this test's own source -- comment
+        // included -- cannot satisfy it.
+        let label = format!("TRUNCATED {}", "SHA-256");
         assert!(
             src.contains(&label),
             "the digest's label must name the truncation"

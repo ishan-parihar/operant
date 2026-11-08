@@ -187,10 +187,25 @@ pub fn remove_shell_hook(dir: &Path, name: &str) -> Result<bool, String> {
 
 /// Run one hook command now (the `operant hooks test` path). Returns the
 /// exit status and whatever the command printed.
-pub async fn run_hook_command(command: &str, ctx: &HookContext) -> (Option<i32>, String) {
+pub async fn run_hook_command(
+    command: &str,
+    event: &str,
+    ctx: &HookContext,
+) -> (Option<i32>, String) {
     let mut cmd = tokio::process::Command::new("sh");
     cmd.arg("-c").arg(command);
-    cmd.env("OPERANT_HOOK_EVENT", "test");
+    // The hook's REAL event, not the literal "test": an operator testing a
+    // SessionStart hook used to see it behave as if its event were "test", so
+    // a hook that branches on `$OPERANT_HOOK_EVENT` silently tested the wrong
+    // branch (RT-350). "test" remains the fallback for a caller with no event.
+    cmd.env(
+        "OPERANT_HOOK_EVENT",
+        if event.trim().is_empty() {
+            "test"
+        } else {
+            event.trim()
+        },
+    );
     if let Some(session) = &ctx.session_id {
         cmd.env("OPERANT_HOOK_SESSION", session);
     }
@@ -239,11 +254,16 @@ pub async fn register_shell_hooks(registry: &HookRegistry, hooks: Vec<(String, S
         };
         let command = hook.command.clone();
         let hook_name = name.clone();
-        let handler: crate::gateway_pipeline::HookHandler = Arc::new(move |_event, ctx| {
+        let handler: crate::gateway_pipeline::HookHandler = Arc::new(move |event, ctx| {
             let command = command.clone();
             let hook_name = hook_name.clone();
+            let event_name = event_name(&event).to_string();
             Box::pin(async move {
-                let (status, output) = run_hook_command(&command, &ctx).await;
+                // The LIVE event at dispatch time (RT-350): the env var used
+                // to be the literal "test" on every path, so a hook that
+                // branches on `$OPERANT_HOOK_EVENT` ran the wrong branch in
+                // production.
+                let (status, output) = run_hook_command(&command, &event_name, &ctx).await;
                 match status {
                     Some(0) => {
                         tracing::info!(hook = %hook_name, "shell hook finished");
@@ -272,6 +292,33 @@ use std::sync::Arc;
 
 #[cfg(test)]
 mod tests {
+    /// RT-350: the hook runner exported `OPERANT_HOOK_EVENT=test` on EVERY
+    /// path — the registry dispatch and the CLI's `hooks test` — so a hook
+    /// that branches on the event ran the WRONG branch in production and
+    /// silently tested the wrong branch from the CLI.
+    #[tokio::test]
+    async fn a_hook_sees_the_event_it_is_actually_running_for() {
+        // Echo the event the runner exports: assert the output IS the event.
+        let ctx = HookContext::new();
+        let (status, output) =
+            run_hook_command("printf '%s' \"$OPERANT_HOOK_EVENT\"", "session_start", &ctx).await;
+        assert_eq!(status, Some(0), "the echo command must run: {output}");
+        assert_eq!(
+            output, "session_start",
+            "the runner must export the caller's event, not a literal"
+        );
+
+        // The fallback survives for a caller with no event (the old literal).
+        let (status, output) =
+            run_hook_command("printf '%s' \"$OPERANT_HOOK_EVENT\"", "", &ctx).await;
+        assert_eq!(status, Some(0), "the echo command must run: {output}");
+        assert_eq!(output, "test", "an empty event still exports the fallback");
+
+        // The registry dispatch resolves the LIVE event through the same
+        // helper the file names use.
+        assert_eq!(event_name(&HookEvent::TurnEnd), "turn_end");
+    }
+
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -403,7 +450,7 @@ mod tests {
     #[tokio::test]
     async fn running_a_hook_reports_its_exit_code() {
         static CALLS: AtomicUsize = AtomicUsize::new(0);
-        let (status, _) = run_hook_command("exit 3", &HookContext::new()).await;
+        let (status, _) = run_hook_command("exit 3", "turn_end", &HookContext::new()).await;
         assert_eq!(status, Some(3));
         CALLS.fetch_add(1, Ordering::SeqCst);
         assert_eq!(CALLS.load(Ordering::SeqCst), 1);

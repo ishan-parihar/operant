@@ -122,7 +122,7 @@ async fn cmd_test(name: &str) -> Result<()> {
     };
     println!("Running hook '{name}' (event {}):", hook.event);
     println!("  {}", hook.command);
-    let (status, output) = run_hook_command(&hook.command, &HookContext::new()).await;
+    let (status, output) = run_hook_command(&hook.command, &hook.event, &HookContext::new()).await;
     if !output.trim().is_empty() {
         println!();
         println!("{}", output.trim_end());
