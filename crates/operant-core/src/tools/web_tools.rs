@@ -313,18 +313,18 @@ impl OperantTool for WebFetchTool {
     }
 }
 
-/// Decide whether to prefer the sourcehound engine for web search.
-///
-/// Explicit user config wins: sourcehound is preferred only when the
-/// configured provider is `sourcehound`/`auto`/unset (compared
-/// case-insensitively, trimmed). Any explicit non-sourcehound provider
-/// (tavily, exa, searxng, …) returns `false` even when the binary is
-/// installed — mirroring hermes's
-/// `web_search_registry._resolve(explicit, capability)`, which honors the
-/// configured backend before auto-selecting among available ones.
-///
-/// `igs` is the retired name of this same key-free engine, so it resolves to
-/// the successor (`sourcehound`/`auto`) rather than falling through to
+// Decide whether to prefer the sourcehound engine for web search.
+//
+// Explicit user config wins: sourcehound is preferred only when the
+// configured provider is `sourcehound`/`auto`/unset (compared
+// case-insensitively, trimmed). Any explicit non-sourcehound provider
+// (tavily, exa, searxng, …) returns `false` even when the binary is
+// installed — mirroring hermes's
+// `web_search_registry._resolve(explicit, capability)`, which honors the
+// configured backend before auto-selecting among available ones.
+//
+// `igs` is the retired name of this same key-free engine, so it resolves to
+// the successor (`sourcehound`/`auto`) rather than falling through to
 // (plan 11C1) the provider-matrix tests went with the chain — search is
 // sourcehound-only now; the migration contract is pinned by the config
 // test below.

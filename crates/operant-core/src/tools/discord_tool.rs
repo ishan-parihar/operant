@@ -1201,8 +1201,6 @@ impl OperantTool for DiscordAdminTool {
 
 #[cfg(test)]
 mod tests {
-    use crate::tools::OperantTool as _;
-
     /// RT-353: `is_available` accepted DISCORD_TOKEN as well, while the
     /// runtime reads DISCORD_BOT_TOKEN ONLY — so a DISCORD_TOKEN-only setup
     /// reported the tool available and every call failed with "not

@@ -365,14 +365,15 @@ impl SeatBudgetDb {
 
 #[cfg(test)]
 mod tests {
-    /// RT-340: the migration marker writes were `let _ = conn.execute(...)` —
-    /// silent, against the doc's own "best-effort: a failure here is reported
-    /// (warn)" contract, so a failed marker made the copy re-run at every
-    /// boot with no trace. Source contract, needle concatenation-built.
+    /// RT-340: the migration marker writes used to DISCARD their Result, silent
+    /// against the doc's own "best-effort: a failure here is reported (warn)"
+    /// contract, so a failed marker re-ran the copy at every boot with no
+    /// trace. Source contract: the swallow shape must be gone, and the needle is
+    /// built in pieces so this test's own prose cannot satisfy it.
     #[test]
     fn a_failed_migration_marker_is_reported_not_swallowed() {
         let src = include_str!("seat_budgets.rs");
-        let swallow = format!("let _ = conn.execute({}", "");
+        let swallow = format!("let _ = {}{}execute(", "_", "conn.");
         assert_eq!(
             src.matches(&swallow).count(),
             0,

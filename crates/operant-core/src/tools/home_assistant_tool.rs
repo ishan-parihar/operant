@@ -808,8 +808,6 @@ impl OperantTool for HomeAssistantTool {
 
 #[cfg(test)]
 mod tests {
-    use crate::tools::OperantTool as _;
-
     /// RT-353: `is_available` accepted EITHER HASS_TOKEN or HASS_URL while
     /// HASS_URL DEFAULTS to homeassistant.local — so a URL-only setup
     /// reported the tool available and every call 401'd. The gate is the
@@ -820,7 +818,7 @@ mod tests {
         let _env_lock = crate::platform::test_env_lock().await;
         let saved_token = std::env::var("HASS_TOKEN").ok();
         let saved_url = std::env::var("HASS_URL").ok();
-        let tool = crate::tools::home_assistant_tool::HomeAssistantTool::default();
+        let tool = crate::tools::home_assistant_tool::HomeAssistantTool;
 
         // URL only (the defaulted variable) -> NOT available.
         // SAFETY: test-only env mutation under the crate-wide lock.

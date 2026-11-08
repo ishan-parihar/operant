@@ -90,6 +90,49 @@ pub async fn handle_admin_command(
     }
 }
 
+/// Format startup announcement message
+pub fn format_startup_message(config: &GatewayConfig) -> String {
+    let mut msg = String::from("=== Operant Gateway Started ===\n");
+    msg.push_str("Enabled Platforms:\n");
+    msg.push_str(&format!(
+        "  - Telegram  : {}\n",
+        if config.telegram_enabled {
+            "ENABLED"
+        } else {
+            "DISABLED"
+        }
+    ));
+    msg.push_str(&format!(
+        "  - Discord   : {}\n",
+        if config.discord_enabled {
+            "ENABLED"
+        } else {
+            "DISABLED"
+        }
+    ));
+    msg.push_str(&format!(
+        "  - Slack     : {}\n",
+        if config.slack_enabled {
+            "ENABLED"
+        } else {
+            "DISABLED"
+        }
+    ));
+    msg.push_str(&format!(
+        "  - Webhooks  : {}\n",
+        if config.webhooks_enabled {
+            "ENABLED"
+        } else {
+            "DISABLED"
+        }
+    ));
+    msg.push_str(&format!(
+        "\nAdmin Users: {} configured",
+        config.admins.len()
+    ));
+    msg
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -133,47 +176,4 @@ mod tests {
         .unwrap();
         assert!(help.contains("shutdown"), "help still lists the command");
     }
-}
-
-/// Format startup announcement message
-pub fn format_startup_message(config: &GatewayConfig) -> String {
-    let mut msg = String::from("=== Operant Gateway Started ===\n");
-    msg.push_str("Enabled Platforms:\n");
-    msg.push_str(&format!(
-        "  - Telegram  : {}\n",
-        if config.telegram_enabled {
-            "ENABLED"
-        } else {
-            "DISABLED"
-        }
-    ));
-    msg.push_str(&format!(
-        "  - Discord   : {}\n",
-        if config.discord_enabled {
-            "ENABLED"
-        } else {
-            "DISABLED"
-        }
-    ));
-    msg.push_str(&format!(
-        "  - Slack     : {}\n",
-        if config.slack_enabled {
-            "ENABLED"
-        } else {
-            "DISABLED"
-        }
-    ));
-    msg.push_str(&format!(
-        "  - Webhooks  : {}\n",
-        if config.webhooks_enabled {
-            "ENABLED"
-        } else {
-            "DISABLED"
-        }
-    ));
-    msg.push_str(&format!(
-        "\nAdmin Users: {} configured",
-        config.admins.len()
-    ));
-    msg
 }
