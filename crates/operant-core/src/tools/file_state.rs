@@ -32,12 +32,62 @@ struct FileStateArgs {
     path: String,
 }
 
+/// The content hash for a path.
+///
+/// A FILE is its bytes. A DIRECTORY is the sorted sequence of its files'
+/// relative paths and bytes (RT-346): the metadata path already records
+/// directories — `get_file_metadata` appends the "/d" permission suffix and
+/// `fs::metadata` accepts them — so `fs::read`'s "Is a directory" failure at
+/// the last step made every directory check/watch/diff fail after the code
+/// had gone out of its way to describe the directory.
 fn compute_hash(path: &str) -> Result<String, String> {
-    let content = fs::read(path).map_err(|e| format!("Failed to read file: {}", e))?;
     let mut hasher = Sha256::new();
-    hasher.update(&content);
-    let result = hasher.finalize();
-    Ok(format!("{:x}", result))
+    let metadata = fs::metadata(path).map_err(|e| format!("Failed to stat file: {}", e))?;
+    if metadata.is_dir() {
+        // An empty directory still gets a well-defined, stable hash (and one
+        // that differs from an empty file's).
+        hasher.update(b"dir:");
+        let mut files: Vec<std::path::PathBuf> = Vec::new();
+        collect_dir_files(std::path::Path::new(path), &mut files);
+        // Sorted: the walk order is the filesystem's, not ours, and the same
+        // tree must hash the same on every call.
+        files.sort();
+        for file in &files {
+            // The RELATIVE path is the digest input (the absolute prefix is
+            // this process's tempdir, not the tree); the file itself is read
+            // through the absolute path — feeding the relative path to
+            // `fs::read` would silently skip every file and hash names only
+            // (RT-346).
+            let rel = file.strip_prefix(path).unwrap_or(file);
+            hasher.update(rel.to_string_lossy().as_bytes());
+            hasher.update(b"\0");
+            if let Ok(bytes) = fs::read(file) {
+                hasher.update(&bytes);
+            }
+            hasher.update(b"\0");
+        }
+    } else {
+        let content = fs::read(path).map_err(|e| format!("Failed to read file: {}", e))?;
+        hasher.update(&content);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+/// Depth-first collect of the FILES under `dir` (absolute paths).
+/// Unreadable entries are skipped (a permissions failure is not a hash
+/// failure — the metadata is still worth reporting).
+fn collect_dir_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+    let Ok(read) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in read.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_dir_files(&path, out);
+        } else {
+            out.push(path);
+        }
+    }
 }
 
 fn get_file_metadata(path: &str) -> Result<FileSnapshot, String> {
@@ -227,6 +277,52 @@ fn handle_diff(path: &str) -> ToolResult {
 mod tests {
     use super::*;
     use std::io::Write;
+
+    /// RT-346: the metadata path records directories (the "/d" permission
+    /// suffix) but the hash step used `fs::read`, which fails with "Is a
+    /// directory" — so every directory check/watch/diff failed at the LAST
+    /// step, after the code described the directory. The directory hash is
+    /// the sorted sequence of its files' relative paths and bytes.
+    #[tokio::test]
+    async fn a_directory_hashes_deterministically_and_reports_content_changes() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().to_str().expect("utf8 path");
+        std::fs::create_dir_all(dir.path().join("sub")).unwrap();
+        std::fs::write(dir.path().join("a.txt"), "alpha").unwrap();
+        std::fs::write(dir.path().join("sub/b.txt"), "beta").unwrap();
+
+        async fn check(path: &str) -> ToolResult {
+            FileStateTool
+                .execute(
+                    serde_json::json!({"operation": "check", "path": path}),
+                    ToolContext::default(),
+                )
+                .await
+        }
+
+        let first = check(root).await;
+        assert!(first.success, "a directory must not fail the check");
+        let payload: Value = serde_json::from_str(&first.content).expect("json");
+        let hash = payload["hash"].as_str().expect("hash").to_string();
+        assert!(
+            payload["permissions"].as_str().unwrap_or("").contains("/d"),
+            "the snapshot still records the directory: {payload}"
+        );
+
+        // Stable across calls.
+        let again = check(root).await;
+        let payload2: Value = serde_json::from_str(&again.content).expect("json");
+        assert_eq!(hash, payload2["hash"], "the same tree hashes the same");
+
+        // A change inside the directory moves the hash.
+        std::fs::write(dir.path().join("a.txt"), "ALPHA").unwrap();
+        let changed = check(root).await;
+        let payload3: Value = serde_json::from_str(&changed.content).expect("json");
+        assert_ne!(
+            hash, payload3["hash"],
+            "a content change inside must move the hash"
+        );
+    }
 
     #[tokio::test]
     async fn test_file_state_invalid_args() {
