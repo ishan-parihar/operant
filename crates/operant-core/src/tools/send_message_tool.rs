@@ -229,12 +229,20 @@ impl SendMessageTool {
             }
 
             // Try split boundaries in preference order: \n\n, \n, space.
+            //
+            // The bytes are compared, not a slice: `byte_off` is a CHAR
+            // boundary, but `byte_off - 1` / `byte_off - 2` are not — when
+            // the preceding character is multi-byte ('é' is 2 bytes, '🚀'
+            // is 4), `&s[byte_off - 1..byte_off]` PANICS ("byte index is
+            // not a char boundary") and takes the turn with it. The
+            // separators are ASCII, so a byte comparison is exact (RT-312).
+            let bytes = s.as_bytes();
             for &(byte_off, _) in utf16_positions.iter().rev() {
                 if byte_off == 0 {
                     continue;
                 }
                 // Check for \n\n
-                if byte_off >= 2 && &s[byte_off - 2..byte_off] == "\n\n" {
+                if byte_off >= 2 && bytes[byte_off - 1] == b'\n' && bytes[byte_off - 2] == b'\n' {
                     return byte_off;
                 }
             }
@@ -243,7 +251,7 @@ impl SendMessageTool {
                     continue;
                 }
                 // Check for \n
-                if byte_off >= 1 && &s[byte_off - 1..byte_off] == "\n" {
+                if byte_off >= 1 && bytes[byte_off - 1] == b'\n' {
                     return byte_off;
                 }
             }
@@ -252,7 +260,7 @@ impl SendMessageTool {
                     continue;
                 }
                 // Check for space
-                if byte_off >= 1 && &s[byte_off - 1..byte_off] == " " {
+                if byte_off >= 1 && bytes[byte_off - 1] == b' ' {
                     return byte_off;
                 }
             }
@@ -743,6 +751,29 @@ mod tests {
         let err = result.error.unwrap_or_default();
         assert!(err.contains("myspace"));
         assert!(err.contains("available_platforms"));
+    }
+
+    /// RT-309: the chunker must not PANIC on a multi-byte character next to
+    /// a split boundary.
+    ///
+    /// The boundary search sliced `s[byte_off - 1..byte_off]`, and
+    /// `byte_off - 1` is not a char boundary when the preceding character
+    /// is multi-byte — so a message over the platform limit containing
+    /// "café " or "🚀\n" panicked and took the turn with it.
+    #[test]
+    fn chunk_message_does_not_panic_when_a_multibyte_char_precedes_a_boundary() {
+        // "é" sits at a char boundary the walk examines, and the rest of the
+        // split region offers no newline or space, so the walk reaches it.
+        let message = format!("é{}", "A".repeat(5000));
+        let chunks = SendMessageTool::chunk_message(&message, 4096);
+        assert!(chunks.len() > 1, "the message must be split");
+        for chunk in &chunks {
+            assert!(
+                chunk.encode_utf16().count() <= 4096,
+                "every chunk must fit the limit: {}",
+                chunk.chars().count()
+            );
+        }
     }
 
     #[test]
