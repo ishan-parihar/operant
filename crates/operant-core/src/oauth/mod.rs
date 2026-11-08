@@ -214,6 +214,15 @@ pub fn parse_token_response(
             OAuthFlowError::InvalidResponse("token response missing access_token".to_string())
         })?;
 
+    // RT-413: the RFC 6749 §5.1 payload's `scope` was read and thrown away by
+    // a bare discard at this site, so a provider-returned scope
+    // never reaches any caller of either flow — the granted scope is silently
+    // dropped between the wire and the stored credential, and a narrowed-grant
+    // response is indistinguishable from a full one. NAMED, NOT SHIPPED:
+    // `OAuthTokenResponse` (oauth_refresh) carries no scope field and no
+    // consumer reads one, so adding the field would grow an API nobody reads —
+    // the decision of what to do with a narrowed grant (store it, warn on it,
+    // or re-authorize) belongs to the owner of the credential store.
     let _ = payload.scope.as_deref();
 
     Ok(crate::oauth_refresh::OAuthTokenResponse {
@@ -249,6 +258,46 @@ pub fn http_failure(url: &str, status: u16, body: &str) -> OAuthFlowError {
         url: url.to_string(),
         status,
         body: clamp_body(body),
+    }
+}
+
+#[cfg(test)]
+mod rt413_tests {
+    /// RT-413: the token response's `scope` is parsed and dropped by a bare
+    /// `let _ = payload.scope.as_deref();`, so a provider-returned scope never
+    /// reaches any caller — a narrowed grant is indistinguishable from a full
+    /// one. The parse site must name the drop and the decision that owns it.
+    /// Source contracts, needles concatenation-built — and this test's prose does
+    /// not quote the phrases it forbids.
+    #[test]
+    fn the_dropped_scope_is_named_at_the_parse_site() {
+        let src = include_str!("mod.rs");
+        let prod = &src[..src.find("#[cfg(test)]").unwrap_or(src.len())];
+        let bare_discard = concat!("let _ = payload.scope.as_", "deref();");
+        assert_eq!(
+            prod.matches(bare_discard).count(),
+            1,
+            "the discard is still the parse site's behavior (named, not removed)"
+        );
+        let named = concat!(
+            "parsed and dropped by a bare",
+            " `let _ = payload.scope.as_deref();`"
+        );
+        assert_eq!(
+            prod.matches(named).count(),
+            0,
+            "the note must not itself quote the bare discard's form (trap reflex)"
+        );
+        let consequence = concat!("response is indistinguishable from a full", " one");
+        assert!(
+            src.contains(&consequence),
+            "the note must name the indistinguishable-grant consequence"
+        );
+        let decision = concat!("belongs to the owner of the credential", " store");
+        assert!(
+            src.contains(&decision),
+            "the note must name the decision's owner"
+        );
     }
 }
 
