@@ -1080,13 +1080,18 @@ impl KeyBindingRegistry {
                 context: BindingContext::Dialog,
                 description: "Close dialog",
             },
-            DefaultBinding {
-                key: KeyCode::Enter,
-                modifiers: KeyModifiers::NONE,
-                action: KeyAction::Submit,
-                context: BindingContext::Dialog,
-                description: "Confirm",
-            },
+            // The Enter row that used to sit here ("Confirm") is GONE, for the
+            // same reason iter-1890 took the Tab/Shift+Tab rows: this context
+            // is a BUCKET, so a row it names is a claim about EVERY dialog —
+            // and the memory file selector (`/context-files`) disarms it. Its
+            // Enter arm is byte-for-byte its Esc arm (`close()`), and nothing
+            // consumes the highlighted row (iter-1931), so "Confirm" names an
+            // effect one dialog does not perform. Esc stays: every dialog
+            // closes on it, which `esc_closes_every_dialog` drives and pins.
+            // Every dialog that DOES confirm advertises it in its own surface
+            // (the export dialog "enter export", the import dialog "Enter to
+            // import", the theme screen "enter apply", the agents list "enter
+            // open"), so the generic row bought no discoverability either.
             // Composer chords dispatched directly in `app/key_handling.rs`
             // (Custom ids are catalogue-only). Listed so `/keys` shows the
             // full map; `the_default_keymap_has_no_conflicts` keeps it

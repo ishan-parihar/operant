@@ -1557,15 +1557,24 @@ impl App {
                 self.session_list_pending = true;
             }
 
-            // ---- Scroll bookmark (Ctrl+G) -------------------------------
-            // Toggles: first press remembers the current spot, second press
-            // jumps back to it and disarms. The status row names the state so
-            // the toggle is discoverable without opening the help overlay.
-            // Ctrl+G: edit the prompt in the external editor (oh-my-pi
-            // `app.editor.external`); the scroll bookmark moved to Alt+G.
+            // ---- External editor (Ctrl+G) -------------------------------
+            // Edit the prompt in the external editor (oh-my-pi
+            // `app.editor.external`).
+            //
+            // (iter-1932) This arm used to share a section with the scroll
+            // bookmark under a header that named only Ctrl+G — a header naming
+            // one of two arms is how the bookmark's header came to say Ctrl+G
+            // for years after the binding moved to Alt+G. A reader trusts the
+            // header over the arms below it, so the two features now have
+            // separate sections and `every_section_header_names_the_chord_its_
+            // arm_takes` can check each one.
             KeyCode::Char('g') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.pending_external_editor = true;
             }
+            // ---- Scroll bookmark (Alt+G) -------------------------------
+            // First press remembers the current spot, second press jumps back
+            // to it and disarms. The status row names the state so the toggle
+            // is discoverable without opening the help overlay.
             KeyCode::Char('g') if key.modifiers.contains(KeyModifiers::ALT) => {
                 self.toggle_scroll_bookmark();
             }
@@ -1791,9 +1800,14 @@ impl App {
             KeyCode::Char('x') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.recall_queued_message();
             }
-            // ---- Drag-select copy mode (Ctrl+T) -------------------------
+            // ---- Thinking toggle (Ctrl+T) / tool-call visibility (Alt+O) --
             // Every other Ctrl letter in the composer is taken (a b c d g k
             // n p r s u w x y z); t is the one that reads as "text".
+            // (iter-1932) This header used to read "Drag-select copy mode
+            // (Ctrl+T)" — copy mode moved to Alt+Y long before, so the header
+            // named a binding the section no longer has. Renamed to what the
+            // section dispatches; `every_section_header_names_the_chord_its_arm_
+            // takes` fails when a header names a chord with no arm below it.
             // ---- Thinking / tool visibility (plan 08) -----------------
             // Ctrl+T is the thinking toggle (oh-my-pi parity); copy mode
             // moved to Alt+Y. Ctrl+Shift+O's arm sits above plain Ctrl+O;

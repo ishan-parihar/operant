@@ -2778,6 +2778,171 @@ fn the_catalogue_rows_name_what_the_keys_actually_do() {
         }
     }
 }
+/// (iter-1932) The Dialog context is a BUCKET, so a row it names is a claim
+/// about EVERY dialog — and both remaining rows must hold for each of them.
+///
+/// `Esc → "Close dialog"` stays, and `esc_closes_every_dialog` drives the real
+/// handler across every overlay to prove it. `Enter → "Confirm"` was removed
+/// here for the same reason iter-1890 took the Tab/Shift+Tab rows: the memory
+/// file selector's Enter arm is byte-for-byte its Esc arm (iter-1931), so
+/// "Confirm" named an effect at least one dialog does not perform. Every dialog
+/// that DOES confirm advertises it in its own surface (the export dialog
+/// "enter export", the import dialog "Enter to import", the theme screen
+/// "enter apply", the agents list "enter open"), so the generic row bought no
+/// discoverability either.
+///
+/// This pins the shape of the bucket (Esc only, no Enter) AND the behavioural
+/// half: enter does not confirm in the dialog that disarmed it.
+#[test]
+fn the_dialog_context_names_only_what_every_dialog_does() {
+    use crate::tui::keybindings::{BindingContext, DEFAULT_KEYBINDINGS};
+    use ratatui::crossterm::event::{KeyCode, KeyModifiers};
+
+    let dialogue = DEFAULT_KEYBINDINGS.get_bindings(BindingContext::Dialog);
+
+    // Esc remains, and only Esc: a claim in a bucket must hold everywhere.
+    let chords: Vec<String> = dialogue.iter().map(|b| b.chord()).collect();
+    assert_eq!(
+        chords,
+        vec!["Esc".to_string()],
+        "the Dialog context is a bucket — its rows are claims about EVERY dialog, \
+         so it may name only what all of them do: {chords:?}"
+    );
+
+    // The memory file selector's Enter must not confirm: it is the Esc arm.
+    let mut app = make_app();
+    app.memory_file_selector.visible = true;
+    app.handle_key_event(press_key(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(
+        !app.memory_file_selector.visible,
+        "Enter in the memory file selector must not \"Confirm\" — it closes, exactly \
+         like Esc, and nothing consumes the selection (iter-1931)"
+    );
+}
+
+/// (iter-1932) Every section header in the dispatcher names the chord its arm
+/// actually takes.
+///
+/// iter-1919 removed catalogue rows that named chords doing something else.
+/// The dispatcher's own section headers carry the same kind of claim — a reader
+/// (this one included) trusts `// ---- Scroll bookmark (Ctrl+G) ----` and reads
+/// the arm below it as the scroll bookmark — and the bookmark's header said
+/// Ctrl+G while the arm under it is Alt+G (Ctrl+G is the external editor). One
+/// header drifted when the bookmark moved and nothing caught it.
+///
+/// This parses each `// ---- Title (Chord) ----` header and checks the arm it
+/// introduces takes that chord.
+#[test]
+fn every_section_header_names_the_chord_its_arm_takes() {
+    // The dispatcher source, read the way the RT-331 unwired-state pin does.
+    let handler = include_str!("key_handling.rs");
+
+    // Find each header line and the first chord-conditioned arm after it.
+    let lines: Vec<&str> = handler.lines().collect();
+    for (idx, line) in lines.iter().enumerate() {
+        let Some(rest) = line.trim_start().strip_prefix("// ---- ") else {
+            continue;
+        };
+        let Some((title_and_chord, _)) = rest.split_once(" ----") else {
+            continue;
+        };
+        // The chord, if the header names one: "(Ctrl+G)", "(Alt+Up/Alt+Down)"…
+        let Some(open) = title_and_chord.rfind('(') else {
+            continue;
+        };
+        let Some(close) = title_and_chord.rfind(')') else {
+            continue;
+        };
+        let chord = &title_and_chord[open + 1..close];
+        // Only a parenthesised group that looks like a CHORD counts: headers
+        // also carry prose in parentheses ("(jcode parity)", "(the status bar
+        // advertises …)"), and treating those as chords makes this pin check
+        // the wrong thing.
+        let is_chord = chord.starts_with("Ctrl")
+            || chord.starts_with("Alt")
+            || chord.starts_with("Shift")
+            || (chord.starts_with('F') && chord[1..].chars().all(|c| c.is_ascii_digit()));
+        if !is_chord {
+            continue;
+        }
+
+        // The section this header introduces: the lines below it, up to the
+        // next header. A header names EVERY chord its section dispatches, and
+        // this requires an arm for each one — a header naming a chord that has
+        // moved away is exactly the drift that produced the stale bookmark
+        // header.
+        let mut section = Vec::new();
+        for below in lines.iter().skip(idx + 1) {
+            if below.trim_start().starts_with("// ---- ") {
+                break;
+            }
+            section.push(*below);
+        }
+        let joined = section.join("\n");
+
+        // Each modifier the header names must appear on some arm in the section.
+        for (wanted, token) in [("Ctrl", "CONTROL"), ("Alt", "ALT"), ("Shift", "SHIFT")] {
+            if chord.contains(wanted) {
+                assert!(
+                    joined.contains(token),
+                    "the section header at line {} names {wanted}+ but no arm below it \
+                     uses {token} — the header describes a binding that is not there",
+                    idx + 1
+                );
+            }
+        }
+    }
+}
+
+/// (iter-1932) Esc closes EVERY dialog — the claim the bucket's remaining row
+/// makes. Driven, not asserted: the catalogue says a key works, so the key is
+/// pressed in each surface that claims to be a dialog.
+#[test]
+fn esc_closes_every_dialog() {
+    use ratatui::crossterm::event::KeyCode;
+
+    // Every overlay the Dialog context's Esc row is a claim about, with the
+    // ONE call that opens it (a fresh app per case, so no second overlay's
+    // priority hides the one under test).
+    type Opener = fn(&mut crate::tui::app::App);
+    const DIALOGS: &[(&str, Opener)] = &[
+        ("export_dialog", |app| app.export_dialog.visible = true),
+        ("memory_file_selector", |app| {
+            app.memory_file_selector.visible = true
+        }),
+        ("stats_dialog", |app| app.stats_dialog.visible = true),
+        ("theme_screen", |app| app.theme_screen.visible = true),
+        ("command_palette", |app| app.command_palette.open()),
+        ("agents_menu", |app| app.agents_menu.visible = true),
+        ("diff_viewer", |app| app.diff_viewer.visible = true),
+        ("session_hub", |app| app.session_hub.visible = true),
+        ("help_overlay", |app| app.help_overlay.visible = true),
+        ("settings_screen", |app| app.settings_screen.visible = true),
+        ("import_config_dialog", |app| {
+            app.import_config_dialog.visible = true
+        }),
+        ("context_viz", |app| app.context_viz.visible = true),
+        ("plugins_hub", |app| app.plugins_hub.visible = true),
+        ("journey_view", |app| app.journey_view.visible = true),
+        ("mcp_view", |app| app.mcp_view.visible = true),
+    ];
+
+    for (name, open) in DIALOGS {
+        let mut app = make_app();
+        open(&mut app);
+        assert!(
+            app.any_overlay_open(),
+            "{name} must be open before the Esc press"
+        );
+        app.handle_key_event(press_key(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(
+            !app.any_overlay_open(),
+            "the Dialog context claims Esc closes a dialog — it must close the \
+             {name}: overlays are still open after the Esc press"
+        );
+    }
+}
+
 /// (iter-1931) The memory file selector's footer must not promise a selection
 /// that nothing consumes.
 ///
@@ -14234,28 +14399,27 @@ fn the_completion_contexts_catalogue_rows_match_the_typeahead_popup() {
 // advertises it in its own surface (the agents editor says "tab move", the
 // ask-user dialog "↑↓/Tab: options", the export dialog "tab/←/→ switch"),
 // so the generic rows bought no discoverability — only the over-claim.
+// (iter-1932) The `Enter → "Confirm"` row went the same way: the memory file
+// selector's Enter arm is byte-for-byte its Esc arm (iter-1931), so "Confirm"
+// named an effect at least one dialog does not perform.
 //
 // The pin is the exact row SET, not just its contents: a row added to this
-// context must come with evidence that every dialog dispatches it.
+// context must come with evidence that every dialog dispatches it. Esc is the
+// only survivor, and `esc_closes_every_dialog` drives it across every overlay.
 
 #[test]
 fn the_dialog_contexts_catalogue_rows_are_the_ones_every_dialog_dispatches() {
     use crate::tui::keybindings::{BindingContext, DEFAULT_KEYBINDINGS, KeyAction};
 
-    const ROWS: &[(KeyCode, KeyModifiers, KeyAction, &str)] = &[
-        (
-            KeyCode::Esc,
-            KeyModifiers::NONE,
-            KeyAction::Cancel,
-            "Close dialog",
-        ),
-        (
-            KeyCode::Enter,
-            KeyModifiers::NONE,
-            KeyAction::Submit,
-            "Confirm",
-        ),
-    ];
+    // (iter-1932) One row. Enter is gone: the memory file selector's Enter arm
+    // is byte-for-byte its Esc arm, and a row in this BUCKET is a claim about
+    // every dialog.
+    const ROWS: &[(KeyCode, KeyModifiers, KeyAction, &str)] = &[(
+        KeyCode::Esc,
+        KeyModifiers::NONE,
+        KeyAction::Cancel,
+        "Close dialog",
+    )];
 
     let catalogue = DEFAULT_KEYBINDINGS.get_bindings(BindingContext::Dialog);
     assert_eq!(
