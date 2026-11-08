@@ -112,6 +112,17 @@ impl OperantTool for LearningMutationTool {
             return holon_learning_annotation(&run_dir, &parsed);
         }
 
+        // Read-BEFORE-edit (hermes-parity C4): capture the node's current
+        // contents so the agent sees exactly what it is about to change. It
+        // has to happen BEFORE the edit — reading afterwards reports the NEW
+        // content as the "previous" snapshot, which is the opposite of what
+        // the field promises (RT-343).
+        let previous = if parsed.action.as_str() == "edit" {
+            node_detail(&parsed.node_id, &self.skills_dir, &self.memory_dir)
+        } else {
+            None
+        };
+
         let result = match parsed.action.as_str() {
             "delete" => delete_node(&parsed.node_id, &self.skills_dir, &self.memory_dir),
             "edit" => {
@@ -134,14 +145,6 @@ impl OperantTool for LearningMutationTool {
             other => {
                 return ToolResult::error("learning_manage", format!("Unknown action: {}", other));
             }
-        };
-
-        // Read-before-edit: surface the node's current contents so the agent
-        // sees exactly what it is about to change (hermes-parity C4).
-        let previous = if parsed.action.as_str() == "edit" {
-            node_detail(&parsed.node_id, &self.skills_dir, &self.memory_dir)
-        } else {
-            None
         };
 
         let mut payload = json!({
@@ -189,6 +192,48 @@ fn holon_learning_annotation(run_dir: &std::path::Path, parsed: &LearningManageA
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    /// RT-343: the "previous" snapshot was read AFTER `edit_node` ran, so a
+    /// successful edit reported the NEW body as the "previous" one - the
+    /// opposite of what the field and its own comment ("read-before-edit",
+    /// hermes-parity C4) promise. The agent diffs what it THOUGHT was there
+    /// against a snapshot that matches the new state exactly.
+    #[tokio::test]
+    async fn an_edit_reports_the_previous_contents_not_the_new_ones() {
+        let tmp = tempdir().unwrap();
+        let skills_dir = tmp.path().join("skills");
+        let memory_dir = tmp.path().join("memory");
+        std::fs::create_dir_all(&skills_dir).unwrap();
+        std::fs::create_dir_all(&memory_dir).unwrap();
+        // The memory store is chunked on the section-sign separator.
+        let separator = char::from_u32(0xa7).expect("the chunk separator");
+        std::fs::write(
+            memory_dir.join("MEMORY.md"),
+            format!("# First chunk\n{separator}\n# Second chunk\n"),
+        )
+        .unwrap();
+
+        let tool = LearningMutationTool::new(skills_dir.clone(), memory_dir.clone());
+        let result = tool
+            .execute(
+                json!({"action": "edit", "node_id": "memory:memory:0", "content": "# Replaced chunk"}),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(result.success, "the edit itself must succeed");
+
+        let payload: serde_json::Value = serde_json::from_str(&result.content).expect("json");
+        let previous = &payload["previous"];
+        assert_eq!(
+            previous["body"], "# First chunk",
+            "`previous` must hold the contents BEFORE the edit"
+        );
+
+        // The node really did change - so the snapshot above is the PREVIOUS
+        // state, not a stale read of a file that never moved.
+        let after = node_detail("memory:memory:0", &skills_dir, &memory_dir).expect("detail");
+        assert_eq!(after.body, "# Replaced chunk");
+    }
 
     #[test]
     fn holon_run_records_a_delete_as_an_annotation_only() {
