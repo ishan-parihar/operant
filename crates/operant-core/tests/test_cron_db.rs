@@ -347,3 +347,56 @@ fn rewrite_prune_nonexistent_skill_is_noop() {
         &vec!["a".to_string(), "b".to_string(), "c".to_string()]
     );
 }
+
+/// RT-388: `rewrite_skill_refs`' note claimed the mutex made the rewrite loop
+/// atomic ("no partial rewrites on failure") — a mutex gives mutual exclusion,
+/// not atomicity, so a mid-loop failure left earlier jobs rewritten and later
+/// ones untouched. The rewrite now runs inside ONE explicit transaction.
+///
+/// BEHAVIORAL: a trigger that aborts the SECOND job's update must roll back the
+/// FIRST job's rewrite — the whole fleet stays untouched, which is what the
+/// note always promised.
+#[test]
+fn a_failed_mid_loop_rewrite_rolls_back_the_whole_fleet() {
+    let (db, dir) = temp_db();
+    let db_path = dir.path().join("cron.db");
+    // create_job mints its own id and returns it — the trigger and the
+    // lookups must use the RETURNED ids, not the job's display name.
+    let id1 = db
+        .create_job(make_job("job-one", None, Some(vec!["seo-audit"])))
+        .unwrap();
+    let id2 = db
+        .create_job(make_job("job-two", None, Some(vec!["seo-audit"])))
+        .unwrap();
+    let abort_id = id2.clone();
+
+    // Abort the update for the second job only.
+    {
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute_batch(&format!(
+            "CREATE TRIGGER abort_second_job BEFORE UPDATE ON cron_jobs
+             WHEN NEW.id = '{abort_id}'
+             BEGIN SELECT RAISE(ABORT, 'injected mid-loop failure'); END;",
+        ))
+        .unwrap();
+    }
+
+    let mut consolidated = HashMap::new();
+    consolidated.insert("seo-audit".to_string(), "web-quality".to_string());
+    let result = db.rewrite_skill_refs(&consolidated, &[]);
+
+    assert!(
+        result.is_err(),
+        "the injected failure must surface, not be swallowed"
+    );
+
+    // Neither job may carry the rewrite: the transaction rolled both back.
+    for id in [id1.as_str(), id2.as_str()] {
+        let job = db.get_job(id).unwrap().expect("the job still exists");
+        let skills: Vec<String> = job.skills.clone().unwrap_or_default();
+        assert!(
+            skills == vec!["seo-audit".to_string()],
+            "{id} must be untouched by the rolled-back rewrite: {skills:?}"
+        );
+    }
+}

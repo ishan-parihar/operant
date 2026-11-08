@@ -890,10 +890,13 @@ impl CronDb {
         consolidated: &HashMap<String, String>,
         pruned: &[String],
     ) -> Result<CronRewriteReport, Error> {
-        // NOTE: Mutex is held for the entire rewrite loop so all job references
-        // are rewritten atomically (no partial rewrites on failure). This is fine
-        // for CLI (short-lived) but could be relaxed in daemon mode if contention
-        // becomes an issue — e.g. by batching into per-job transactions.
+        // RT-388: this note used to claim the mutex made the loop atomic
+        // ("no partial rewrites on failure") — a mutex gives mutual exclusion,
+        // not atomicity, so a mid-loop failure left earlier jobs rewritten and
+        // later ones untouched. The rewrite now runs inside ONE explicit
+        // transaction: either every job's refs are rewritten or none are. The
+        // mutex is still held across it (no concurrent writer can interleave),
+        // and the transaction is what makes the note true.
         let conn = self.lock_conn()?;
         let mut report = CronRewriteReport::default();
 
@@ -915,6 +918,12 @@ impl CronDb {
             .collect();
 
         report.jobs_scanned = job_rows.len();
+
+        // One transaction around the whole loop: a mid-loop failure rolls the
+        // partial rewrites back instead of leaving a half-rewritten fleet.
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(|e| Error::Agent(format!("Failed to begin rewrite transaction: {}", e)))?;
 
         for (job_id, skill_field, skills_field) in &job_rows {
             // Parse the skills list
@@ -980,7 +989,7 @@ impl CronDb {
                 .map_err(|e| Error::Agent(format!("Failed to serialize skills: {}", e)))?;
             let new_primary = new_skills.first().cloned();
 
-            conn.execute(
+            tx.execute(
                 "UPDATE cron_jobs SET skills = ?1, skill = ?2 WHERE id = ?3",
                 params![new_skills_json, new_primary, job_id],
             )
@@ -993,6 +1002,12 @@ impl CronDb {
                 "Cron job skill refs rewritten"
             );
         }
+
+        // RT-388: the commit is what makes the rewrite atomic — a mid-loop
+        // failure has already returned `Err` with the transaction (and its
+        // partial writes) rolled back on drop.
+        tx.commit()
+            .map_err(|e| Error::Agent(format!("Failed to commit rewrite transaction: {}", e)))?;
 
         Ok(report)
     }

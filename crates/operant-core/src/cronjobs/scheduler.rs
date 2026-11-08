@@ -1100,6 +1100,7 @@ mod rt387_tests {
     }
 }
 
+#[cfg(test)]
 mod tests {
     use super::{
         repeat_limit_reached, seat_memory_append, seat_memory_prompt, should_arm_transient_retry,
