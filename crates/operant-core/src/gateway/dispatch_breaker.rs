@@ -68,6 +68,7 @@ pub enum FailureClass {
     ///     the chat was deleted) and "bot was blocked" (the bot was removed
     ///     from the chat or banned) — the fix is the target or the bot's
     ///     membership, NOT the credential.
+    ///
     /// An operator reading a trip in this class must check both, and the
     /// second family is the one a credential-focused reading misses.
     Auth,
@@ -570,6 +571,7 @@ mod rt369_tests {
     }
 }
 
+#[cfg(test)]
 mod tests {
     use super::*;
 

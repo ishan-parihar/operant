@@ -378,6 +378,7 @@ mod rt368_tests {
     }
 }
 
+#[cfg(test)]
 mod tests {
     use super::*;
 
