@@ -190,8 +190,15 @@ pub fn run_inline_shell(command: &str, cwd: Option<&Path>, timeout_secs: u64) ->
     if out.is_empty() {
         out = stderr.trim_end().to_string();
     }
-    if out.len() > INLINE_SHELL_MAX_OUTPUT {
-        out.truncate(INLINE_SHELL_MAX_OUTPUT);
+    // RT-396: the cap is labelled in CHARS but String::len()/truncate() count
+    // BYTES, so a non-ASCII snippet (CJK or emoji stdout behind an `!`cmd``
+    // token) hit byte 4000 mid-character and truncate PANICKED. Truncate in
+    // chars, which is what the doc always claimed.
+    if out.chars().count() > INLINE_SHELL_MAX_OUTPUT {
+        out = out
+            .chars()
+            .take(INLINE_SHELL_MAX_OUTPUT)
+            .collect::<String>();
         out.push_str("...[truncated]");
     }
     out
@@ -795,4 +802,29 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
+}
+
+/// RT-396: the cap is labelled "chars" but the truncate counted BYTES, so a
+/// non-ASCII snippet hit byte 4000 mid-character and `String::truncate`
+/// PANICKED. BEHAVIORAL: a 5000-character CJK snippet must survive, be capped
+/// in CHARS, and carry the truncated marker — no panic, and the byte count is
+/// free to exceed 4000 (which is exactly what the chars-label means).
+#[test]
+fn run_inline_shell_truncates_multibyte_output_on_a_char_boundary() {
+    // 5000 CJK chars (3 bytes each = 15000 bytes) — byte 4000 lands mid-char.
+    let output = run_inline_shell("printf '你好%.0s' $(seq 1 5000)", None, 10);
+    assert!(
+        output.ends_with("...[truncated]"),
+        "oversized multibyte output is truncated"
+    );
+    let body = output.strip_suffix("...[truncated]").unwrap_or(&output);
+    assert_eq!(
+        body.chars().count(),
+        INLINE_SHELL_MAX_OUTPUT,
+        "the cap holds in CHARACTERS, which is the labelled unit"
+    );
+    assert!(
+        output.len() > INLINE_SHELL_MAX_OUTPUT,
+        "the byte length legitimately exceeds 4000 for multibyte text"
+    );
 }
