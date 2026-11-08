@@ -3,6 +3,13 @@
 //! Provides proactive rate limiting to avoid HTTP 429 responses,
 //! with automatic retry support and status querying for the gateway.
 //!
+//! PARTIAL (RT-360, named not shipped): the retry/backoff half is live
+//! (`client.rs` drives `try_acquire` and `exponential_backoff_secs`), but
+//! the "status querying for the gateway" half is UNWIRED — `get_status` and
+//! [`RateLimitStatus`] have zero callers outside this module. A gateway
+//! command that surfaces a bucket's remaining tokens is a product decision,
+//! not a silent new feature.
+//!
 //! Each model or provider gets its own token bucket. Tokens are
 //! consumed on each API request and refilled at a fixed rate.
 //! On a 429 response the bucket is drained and the caller waits
@@ -224,6 +231,10 @@ impl RateLimiter {
 
     /// Query the current rate-limit status for `model`.
     ///
+    /// UNWIRED (RT-360, named not shipped): zero callers outside this module —
+    /// no gateway command surfaces a bucket's remaining tokens. Exposing one
+    /// is a product decision.
+    ///
     /// Returns a default (full) status when no bucket exists for the
     /// requested model yet.
     pub async fn get_status(&self, model: &str) -> RateLimitStatus {
@@ -309,6 +320,22 @@ pub fn exponential_backoff_secs(attempt: u32, base_delay: u64, max_delay: u64) -
     }
     let factor = 2u64.saturating_pow(attempt - 1);
     base_delay.saturating_mul(factor).min(max_delay)
+}
+
+#[cfg(test)]
+mod rt360_tests {
+    /// RT-360: the module doc claims status querying for the gateway, while
+    /// `get_status` and `RateLimitStatus` have zero callers outside this
+    /// module. Source contract, needle concatenation-built.
+    #[test]
+    fn the_rate_limit_status_names_its_unwired_half() {
+        let src = include_str!("rate_limiter.rs");
+        let named = format!("named not {}shipped", "");
+        assert!(
+            src.matches(&named).count() >= 2,
+            "both the module doc and the status method must name the unwired half"
+        );
+    }
 }
 
 #[cfg(test)]
