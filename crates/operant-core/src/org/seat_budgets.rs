@@ -13,8 +13,14 @@
 //! budget from the persistent session accumulator
 //! ([`crate::gateway_session::PersistentSessionStore::employee_window_usage`])
 //! and either refuses (hard) or injects the remainder into the turn (soft).
-//! Nothing here reaches into the agent loop mid-flight — that is a recorded
-//! follow-up, not this contract.
+//! RT-376: this note used to end "Nothing here reaches into the agent loop
+//! mid-flight — that is a recorded follow-up, not this contract". The first
+//! half is still true of THIS module (it never reaches into the loop), but
+//! the follow-up has since shipped: the agent stops a token-basis turn
+//! mid-flight once the hard cap is crossed (`agent::run` — "a hard token cap
+//! must stop a runaway turn AT the boundary, not after it"), scoped per-turn
+//! by the envelope the gateway runner sets. What REMAINS a recorded
+//! follow-up is the usd-basis per-call catalog cost inside the loop.
 
 use crate::config::BudgetSettings;
 use crate::error::{Error, Result};
@@ -623,5 +629,52 @@ mod tests {
         // doctor can flag the value. A silent refusal would be worse.
         let typo = window_start("weakly");
         assert!(typo.ends_with("00:00:00+00:00"));
+    }
+}
+
+mod rt376_tests {
+    /// RT-376: the seat-budgets doc claimed mid-flight enforcement is "a
+    /// recorded follow-up, not this contract" — but the agent stops a
+    /// token-basis turn mid-flight once the hard cap is crossed (run.rs), so
+    /// the claim is half-stale. The doc must name the shipped path and what
+    /// remains a follow-up. Source contract, needle concatenation-built.
+    #[test]
+    fn the_budget_doc_names_what_mid_flight_enforcement_really_does() {
+        let src = include_str!("seat_budgets.rs");
+        let stale = format!("Nothing here reaches into the agent loop {}mid-flight", "");
+        assert!(
+            !src.contains(&stale),
+            "the doc must not claim mid-flight enforcement does not exist"
+        );
+        let shipped = format!("the follow-up has since {}shipped", "");
+        assert!(
+            src.contains(&shipped),
+            "the doc must say the mid-flight follow-up has shipped"
+        );
+        let crossing = format!("mid-flight once the hard cap is {}crossed", "");
+        assert!(
+            src.contains(&crossing),
+            "the doc must name when the shipped mid-flight stop fires"
+        );
+        let remains = format!("follow-up is the usd-basis per-call {}catalog cost", "");
+        assert!(
+            src.contains(&remains),
+            "the doc must say what is still a follow-up (the usd per-call cost)"
+        );
+        // The operator-facing config doc carries the same contract.
+        let config_doc = include_str!("../config.rs");
+        let stale_config = format!(
+            "Mid-flight enforcement is\n/// a recorded follow-up, not this {}contract",
+            ""
+        );
+        assert!(
+            !config_doc.contains(&stale_config),
+            "the bylaws doc must not repeat the stale follow-up-only claim"
+        );
+        let corrected = format!("half-{}historical", "");
+        assert!(
+            config_doc.contains(&corrected),
+            "the bylaws doc must name the correction it carries"
+        );
     }
 }

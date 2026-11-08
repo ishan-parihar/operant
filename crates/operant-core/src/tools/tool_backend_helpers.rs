@@ -131,6 +131,7 @@ mod rt375_tests {
     }
 }
 
+#[cfg(test)]
 mod tests {
     use super::*;
 

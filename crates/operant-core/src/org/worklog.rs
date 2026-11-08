@@ -384,6 +384,7 @@ mod rt373_tests {
     }
 }
 
+#[cfg(test)]
 mod tests {
     use super::*;
 

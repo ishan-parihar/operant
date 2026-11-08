@@ -462,8 +462,12 @@ impl Default for HolonSettings {
 /// refuses the turn at the cap (with a clear notice); `soft` warns and
 /// continues. Enforcement is TURN-BOUNDARY v1: a turn that STARTS over a
 /// hard cap is refused; in-flight turns complete and their usage lands in
-/// the accumulator for the next boundary check. Mid-flight enforcement is
-/// a recorded follow-up, not this contract.
+/// the accumulator for the next boundary check. RT-376: the last two
+/// sentences are now half-historical — since the envelope scoping landed, a
+/// HARD cap on a `tokens`-basis seat ALSO stops the turn mid-flight once the
+/// cap is crossed (`agent::run`), so "in-flight turns complete" holds for
+/// the usd basis only. The mid-flight per-call catalog cost for usd-basis
+/// seats remains the recorded follow-up.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct BudgetSettings {
