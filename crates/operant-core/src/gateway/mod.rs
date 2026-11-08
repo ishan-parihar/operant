@@ -158,7 +158,10 @@ impl Gateway {
         self
     }
 
-    /// Add a response mirror rule (hermes `gateway/mirror.py` parity).
+    /// Add a response mirror rule (hermes `gateway/mirror.py` parity, as
+    /// DATA only: see [`Self::mirror_targets`] for the unwired-forwarder
+    /// note — rules register and the targets compute, but nothing routes
+    /// them).
     pub fn with_mirror_rule(mut self, rule: MirrorRule) -> Self {
         self.mirror_rules.push(rule);
         self
@@ -260,9 +263,13 @@ impl Gateway {
         &self.mirror_rules
     }
 
-    /// Target channels an outbound response on `platform`/`channel` should
-    /// be mirrored to (hermes `gateway/mirror.py` parity). The caller sends
-    /// the mirrored copies via `send_to_platform`.
+    /// Target channels an outbound response on `platform`/`channel` would be
+    /// mirrored to. UNWIRED (RT-332, named not shipped): nothing calls this
+    /// on the delivery path — hermes `gateway/mirror.py` FORWARDS the copies,
+    /// so the parity is DATA-only and
+    /// mirroring never happens in a live gateway. Routing the copies through
+    /// `send_to_platform` is a product decision; the doc no longer implies a
+    /// caller exists.
     pub fn mirror_targets(&self, platform: &str, channel: &str) -> Vec<String> {
         self.mirror_rules
             .iter()
@@ -1512,6 +1519,21 @@ mod tests {
 
     /// Every successful route records a delivery in the ledger; mirror rules
     /// resolve matching target channels.
+    /// RT-332: `mirror_targets` was documented as a live parity feature
+    /// (hermes `gateway/mirror.py` FORWARDS) while nothing on the delivery
+    /// path calls it — the parity is DATA-only. Source-grep contract (the
+    /// RT-323 shape), the needle split at a word boundary so this test's own
+    /// source cannot satisfy it.
+    #[test]
+    fn the_mirror_parity_names_its_unwired_forwarder() {
+        let src = include_str!("mod.rs");
+        let claim = format!("mirroring never happens in a live {}", "gateway");
+        assert!(
+            src.contains(&claim),
+            "the doc must name the unrouted forwarder — a reader must not infer mirroring runs"
+        );
+    }
+
     #[tokio::test]
     async fn route_message_records_delivery_and_mirror_targets() {
         let handler = Arc::new(BlockingEchoHandler { gate: None });
