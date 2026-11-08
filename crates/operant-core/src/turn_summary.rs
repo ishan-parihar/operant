@@ -275,11 +275,12 @@ pub fn format_turn_summary(tally: &TurnTally, elapsed_seconds: f64) -> String {
         }
     }
 
-    let mut extra = 0usize;
-    let shown: usize = ordered.len();
-    if shown < tally.verbs.len() {
-        extra = tally.verbs.len() - shown;
-    }
+    // Only one verb group can be hidden: the `take(MAX_SEGMENTS)` above. The
+    // old `ordered.len() < tally.verbs.len()` subtraction was DEAD — `ordered`
+    // holds every verb, so it was always false — and initializing `extra` to
+    // its result would have MASKED the overflow as 0 (RT-329). The true
+    // overflow is what the cap skipped, counted in verb GROUPS as before.
+    let mut extra = tally.verbs.len().saturating_sub(MAX_SEGMENTS);
     if tally.other_tools > 0 {
         extra += tally.other_tools;
     }
@@ -313,6 +314,28 @@ mod tests {
         let t = c.tally();
         assert_eq!(t.total_tools(), 4);
         assert_eq!(t.other_tools, 1);
+    }
+
+    /// RT-329: the "+N more" overflow count was DEAD for one of its two
+    /// sources. `ordered` holds every verb group, so the
+    /// `ordered.len() < tally.verbs.len()` subtraction could never fire — and
+    /// initializing `extra` from it masked the real overflow (the
+    /// `take(MAX_SEGMENTS)` cap above) as zero. A five-verb turn reported
+    /// nothing hidden.
+    #[test]
+    fn a_capped_verb_list_reports_what_it_hid() {
+        let mut c = TurnSummaryCollector::new();
+        c.record_tool("patch", r#"{"diff":"@@\n+a\n-b\n"}"#); // edited
+        c.record_tool("file_read", "{}"); // read
+        c.record_tool("terminal", "{}"); // ran
+        c.record_tool("file_search", "{}"); // searched
+        c.record_tool("web_search", "{}"); // the 5th group — past MAX_SEGMENTS
+        c.record_tool("some_mcp_tool", "{}"); // other_tools = 1
+        let line = format_turn_summary(c.tally(), 12.4);
+        assert!(
+            line.contains("+2 more"),
+            "the cap hid one verb group and one other tool: {line}"
+        );
     }
 
     #[test]
