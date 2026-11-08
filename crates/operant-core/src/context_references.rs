@@ -6,8 +6,13 @@
 //! * `@file:path` — inline a file (optional `:start-end` line range), with a
 //!   code fence and token estimate.
 //! * `@folder:dir` — inline a visible-file listing of a directory.
-//! * `@git:diff` / `@git:staged` / `@git:N` — inline `git diff`, `git diff
+//! * `@diff` / `@staged` / `@git:N` — inline `git diff`, `git diff
 //!   --staged`, or `git log -N -p` output.
+//!
+//! The doc's first two spellings used to read `@git:diff` / `@git:staged`,
+//! which resolve to GitLogs whose TARGET is the literal word ("diff") — no git
+//! accepts `git log -diff -p`. The bare `@diff` / `@staged` forms are what the
+//! CLI suggests and what `parse_context_references` resolves (RT-363).
 //! * `@url:https://…` — inline fetched page text (bounded).
 //!
 //! Expansion happens ONCE per turn at the single user-input ingestion point
@@ -797,6 +802,51 @@ mod tests {
         let mut f = std::fs::File::create(&p).unwrap();
         f.write_all(content.as_bytes()).unwrap();
         p
+    }
+
+    /// RT-363: the module doc advertised `@git:diff` / `@git:staged` — forms
+    /// the parser does not accept — while the CLI suggests and the parser
+    /// resolves bare `@diff` / `@staged`. The wrong spelling is a dead end for
+    /// anyone copying it out of the docs.
+    #[test]
+    fn the_reference_doc_spells_the_forms_the_parser_accepts() {
+        // `@git:diff` parses as a GitLog whose TARGET is the string "diff" —
+        // `git log -diff -p`, which no git accepts. So the doc's spelling is
+        // worse than a dead end: it produces a broken reference silently.
+        let undoc = parse_context_references("see @git:diff and @git:staged");
+        assert_eq!(
+            undoc.len(),
+            2,
+            "the wrong spellings still parse, as GitLogs"
+        );
+        assert_eq!(undoc[0].kind, ReferenceKind::GitLog);
+        assert_eq!(
+            undoc[0].target, "diff",
+            "the target is the word, not a number"
+        );
+        assert!(
+            undoc[0].target.parse::<u32>().is_err(),
+            "and no git takes it"
+        );
+        // The real forms resolve.
+        let real = parse_context_references("see @diff and @staged");
+        assert_eq!(real.len(), 2, "the bare forms are the supported spellings");
+        assert_eq!(real[0].kind, ReferenceKind::Diff);
+        assert_eq!(real[1].kind, ReferenceKind::Staged);
+
+        // The doc source itself carries the correction note (not a bare
+        // wrong list).
+        let src = include_str!("context_references.rs");
+        let note = format!("used to read {}", "`@git:diff`");
+        assert!(
+            src.contains(&note),
+            "the doc must say the old spelling was wrong, not just drop it"
+        );
+        let real_doc = format!("`@diff` / `@staged` / `@git:{}`", "N");
+        assert!(
+            src.contains(&real_doc),
+            "the doc must list the real spellings"
+        );
     }
 
     #[tokio::test]
