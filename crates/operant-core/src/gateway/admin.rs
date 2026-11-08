@@ -5,6 +5,11 @@ use crate::error::Result;
 use super::*;
 
 /// Handle admin commands (sessions, channels, broadcast, shutdown, help)
+///
+/// UNWIRED (RT-333, named not shipped): every caller is in this crate's
+/// test module — no production path routes an admin command here, so
+/// nothing an operator types reaches this handler. The per-arm behavior
+/// below is real (and tested); wiring the dispatch is a product decision.
 pub async fn handle_admin_command(
     command: &str,
     _args: &[&str],
@@ -62,7 +67,15 @@ pub async fn handle_admin_command(
             Ok("Broadcast command received. Not yet implemented.".to_string())
         }
         "shutdown" => {
-            Ok("Shutdown initiated. Goodbye!".to_string())
+            // Not enacted: nothing on this path stops the gateway (and no
+            // production path reaches here at all — see the note above). The
+            // arm claimed "Shutdown initiated. Goodbye!" — a shutdown that
+            // never happened, which is worse than broadcast's honest "not
+            // yet implemented" beside it (RT-333).
+            Ok("Shutdown is not enacted here: no production path routes this \
+               command, and this handler holds no shutdown channel. Stop the \
+               gateway process externally."
+                .to_string())
         }
         "help" => {
             Ok(
@@ -74,6 +87,51 @@ pub async fn handle_admin_command(
             "Unknown command: {}. Type 'help' for available commands.",
             command
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// RT-333: the shutdown arm replied "Shutdown initiated. Goodbye!" —
+    /// a shutdown that never happened (nothing on this path stops the
+    /// gateway), sitting beside broadcast's honest "Not yet implemented".
+    /// The reply must name the not-enacted state instead of claiming one.
+    #[tokio::test]
+    async fn the_shutdown_arm_does_not_claim_a_shutdown_it_never_ran() {
+        use crate::gateway::{ChannelDirectory, SessionStore};
+        let store = SessionStore::new();
+        let dir = ChannelDirectory::new();
+        let reply = handle_admin_command(
+            "shutdown",
+            &[],
+            "ch1",
+            "admin1",
+            &store,
+            &dir,
+            &["admin1".to_string()],
+        )
+        .await
+        .unwrap();
+        assert!(
+            reply.contains("not enacted"),
+            "the reply must name the not-enacted state: {reply}"
+        );
+        // The help arm still lists the command (the command is listed, the
+        // claim is what changed).
+        let help = handle_admin_command(
+            "help",
+            &[],
+            "ch1",
+            "admin1",
+            &store,
+            &dir,
+            &["admin1".to_string()],
+        )
+        .await
+        .unwrap();
+        assert!(help.contains("shutdown"), "help still lists the command");
     }
 }
 
