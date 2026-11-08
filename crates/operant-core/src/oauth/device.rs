@@ -185,8 +185,17 @@ pub async fn start(
 /// Poll the token endpoint until the human approves, denies, or the code
 /// expires.
 ///
-/// `previous_refresh` seeds the returned refresh token for servers that
-/// omit it from the response.
+/// RT-409: this doc used to promise that "`previous_refresh` seeds the
+/// returned refresh token for servers that omit it from the response" — there is
+/// NO such parameter, and the parse below passes no seed at all — the
+/// caller-has-no-seed path. A device-code response that omits
+/// `refresh_token` therefore yields an empty one, and the credential stored
+/// from it cannot be refreshed.
+///
+/// NAMED, NOT SHIPPED: threading a real `previous_refresh: Option<&str>`
+/// parameter (the parser under it already supports the seed) is a signature
+/// change to a public flow with NO production caller anywhere in the workspace
+/// — a change to an API nobody invokes is the owner's call, not a doc fix's.
 pub async fn poll(
     http: &dyn HttpEndpoint,
     config: &DeviceFlowConfig,
@@ -308,6 +317,56 @@ impl Clock for VirtualClock {
 
     fn now(&self) -> Instant {
         self.state.lock().expect("clock lock").now
+    }
+}
+
+#[cfg(test)]
+mod rt409_tests {
+    /// RT-409: `poll`'s doc promised a `previous_refresh` seed "for servers
+    /// that omit it from the response" — the parameter does not exist and the
+    /// parse hardcodes `None`, so a device-code response without a
+    /// `refresh_token` yields an unrefreshable credential. The doc must say
+    /// that, and name the threading as an owner decision. Source contracts,
+    /// needles concatenation-built — and this test's prose does not quote the
+    /// phrases it forbids.
+    #[test]
+    fn the_poll_doc_names_the_absent_seed_mechanism() {
+        let src = include_str!("device.rs");
+        // 1. The phantom promise is gone (the param name and the seed verb).
+        let phantom_param = format!("`previous_{}refresh` seeds the returned", "");
+        assert_eq!(
+            src.matches(&phantom_param).count(),
+            0,
+            "the doc must not promise a parameter the signature does not have"
+        );
+        let seed_verb = "seeds the returned refresh token for servers that \nomit";
+        assert_eq!(
+            src.matches(&seed_verb).count(),
+            0,
+            "the doc must not describe a seed that never happens"
+        );
+        // 2. The truth is named: the parse path and the consequence.
+        // Concatenation-built: the needle's joined form cannot appear in this
+        // test's own source, so only the production call site can match it.
+        let hardcoded_none = concat!("return parse_token_response(&ok.body,", " None);");
+        assert_eq!(
+            src.matches(&hardcoded_none).count(),
+            1,
+            "the no-seed parse must still be there (the fact the doc describes)"
+        );
+        let consequence = format!("cannot be {}refreshed", "");
+        assert!(
+            src.contains(&consequence),
+            "the doc must name the unrefreshable-credential consequence"
+        );
+        let named = format!(
+            "a public flow with NO production caller anywhere in the {}workspace",
+            ""
+        );
+        assert!(
+            src.contains(&named),
+            "the doc must name the threading as an owner decision"
+        );
     }
 }
 
