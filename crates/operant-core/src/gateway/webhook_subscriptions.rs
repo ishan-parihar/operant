@@ -158,7 +158,16 @@ pub fn route_from_url(url: &str) -> Option<String> {
 /// effect without a gateway restart; the file is a handful of entries.
 pub fn subscription_for_route(route: &str) -> Option<WebhookSubscription> {
     let subs = load_subscriptions().ok()?;
-    subs.into_values()
+    let mut pairs: Vec<(String, WebhookSubscription)> = subs.into_iter().collect();
+    // Deterministic: a HashMap's iteration order is NOT stable, so with two
+    // subscriptions claiming one route the "winner" varied per request — the
+    // same event could dispatch to different endpoints within one process
+    // and across a gateway restart. Sort by the map key (the endpoint URL)
+    // so the same subscription wins every time (RT-342).
+    pairs.sort_by(|a, b| a.0.cmp(&b.0));
+    pairs
+        .into_iter()
+        .map(|(_, sub)| sub)
         .find(|sub| sub.route.as_deref() == Some(route))
 }
 
@@ -258,6 +267,69 @@ pub async fn post_json(url: &str, body: &str, secret: Option<&str>) -> Result<Po
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// RT-342: `subscription_for_route` picked the first match from a
+    /// HashMap's iteration order, so with two subscriptions claiming one
+    /// route the winner varied per request — the same event could dispatch
+    /// to a different endpoint on every call, and across restarts. The
+    /// lookup must be deterministic (the map key, the endpoint URL, decides).
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn a_claimed_route_resolves_deterministically_when_two_subscriptions_claim_it() {
+        let _env_lock = crate::platform::test_env_lock().await;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let saved = std::env::var("HERMES_HOME").ok();
+        // SAFETY: test-only env mutation, held under the crate-wide lock.
+        unsafe { std::env::set_var("HERMES_HOME", dir.path()) };
+
+        // Two subscriptions, the SAME route, different endpoints. The
+        // lexicographically smaller URL must win every time.
+        let mut subs: HashMap<String, WebhookSubscription> = HashMap::new();
+        for (url, prompt) in [
+            ("https://z.example/hook", "from-z"),
+            ("https://a.example/hook", "from-a"),
+        ] {
+            subs.insert(
+                url.to_string(),
+                WebhookSubscription {
+                    url: url.to_string(),
+                    route: Some("shared".to_string()),
+                    prompt: Some(prompt.to_string()),
+                    events: vec!["ping".to_string()],
+                    description: None,
+                    skills: vec![],
+                    deliver: None,
+                    deliver_chat_id: None,
+                    secret: None,
+                    deliver_only: false,
+                },
+            );
+        }
+        save_subscriptions(&subs).expect("save");
+
+        // 20 lookups: each one re-reads the file into a FRESH HashMap (whose
+        // iteration order is randomized), so an order-dependent `find` picks
+        // a different winner within ~20 calls with overwhelming probability —
+        // while the sorted lookup picks the same one every time.
+        for _ in 0..20 {
+            let picked = subscription_for_route("shared").expect("a claimed route resolves");
+            assert_eq!(
+                picked.url, "https://a.example/hook",
+                "the smaller endpoint URL must win — deterministically"
+            );
+        }
+
+        // A route no subscription claims still resolves to None.
+        assert!(subscription_for_route("nobody").is_none());
+        // Restore the environment for the next serialized test.
+        // SAFETY: test-only env restoration, held under the crate-wide lock.
+        unsafe {
+            match saved {
+                Some(v) => std::env::set_var("HERMES_HOME", v),
+                None => std::env::remove_var("HERMES_HOME"),
+            }
+        }
+    }
 
     /// A known HMAC-SHA256 vector (key "secret", message "hello"). The
     /// expectation is the standard digest, not this crate's own output.
