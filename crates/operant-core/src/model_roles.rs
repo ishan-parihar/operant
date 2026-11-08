@@ -19,7 +19,7 @@
 //! ## The two behaviours that carry the semantics
 //!
 //! 1. **`Conversation` is the only self-switching slot.** Selecting it moves
-//!    the live agent (`OperantAgent::set_model`, `agent/events.rs:491`) AND
+//!    the live agent (`OperantAgent::set_model`, `agent/events.rs:540`) AND
 //!    persists `[agent] model`. Every other slot is a plain assignment: the
 //!    conversation keeps running on whatever it was on, and the slot's own
 //!    consumer picks the new model up on its next call.
@@ -462,6 +462,42 @@ pub fn describe_slots(cfg: &AppConfig) -> String {
     }
     out.push_str("Send /model <role> to switch the conversation, or /model <provider/model> to set it directly.");
     out
+}
+
+#[cfg(test)]
+mod rt405_tests {
+    /// RT-405: the module header cited `agent/events.rs:491` as the home of
+    /// `OperantAgent::set_model`. Line 491 is blank — the definition is at 540
+    /// — so a reader following the doc's own pointer landed on nothing and
+    /// could conclude the self-switching behavior does not exist. The campaign
+    /// has three instances of this class (RT-281, RT-290, RT-309): a line cite
+    /// survives while its neighbors shift, and a verification that reads the
+    /// cite becomes vacuous. The contract FOLLOWS the doc's pointer instead of
+    /// trusting it.
+    #[test]
+    fn the_doc_citation_lands_on_the_definition_it_names() {
+        let doc = include_str!("model_roles.rs");
+        let re = regex::Regex::new(r"`OperantAgent::set_model`, `agent/events\.rs:(\d+)`")
+            .expect("a valid needle");
+        let caps = re.captures(doc).expect("the doc cites the definition");
+        let cited: usize = caps[1].parse().expect("a line number");
+        let events = include_str!("agent/events.rs");
+        let line = events
+            .lines()
+            .nth(cited - 1)
+            .expect("the cited line is in range");
+        assert!(
+            line.contains("fn set_model"),
+            "the cited line must BE the set_model definition: {:?}",
+            line
+        );
+        // And the definition is still where the doc now says it is.
+        let events_owned = events.to_string();
+        assert!(
+            events_owned.lines().any(|l| l.contains("pub fn set_model")),
+            "set_model exists — the citation's subject is real"
+        );
+    }
 }
 
 #[cfg(test)]
