@@ -15,7 +15,7 @@
     "any_modal_open == true"
   ],
   "assert_screen": [
-    "contains:Memory \u2014 choose a file",
+    "contains:Memory files",
     "contains:navigate"
   ],
   "baseline": "memory-file-selector.txt",
