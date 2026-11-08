@@ -321,6 +321,31 @@ pub fn count_injected_retries<'a>(contents: impl IntoIterator<Item = &'a str>) -
         .count()
 }
 
+/// Count the injected retry markers belonging to the CURRENT turn.
+///
+/// [`count_injected_retries`] counts the whole list, which made the anomaly
+/// budget per-CONVERSATION: a persistent session that spent its budget in an
+/// earlier turn got NO anomaly retry for the rest of the session's life
+/// (RT-354). A turn is bounded by the last user message that is not itself
+/// an injected marker — the markers are pushed as user messages, so "after
+/// the last user message" is an empty window once one is injected.
+///
+/// Each item is `(is_user_message, content)`.
+pub fn count_turn_injected_retries<'a>(msgs: impl IntoIterator<Item = (bool, &'a str)>) -> usize {
+    let collected: Vec<(bool, &str)> = msgs.into_iter().collect();
+    let start = collected
+        .iter()
+        .rposition(|(is_user, content)| {
+            *is_user && !content.trim_start().starts_with(ANOMALY_RETRY_PREFIX)
+        })
+        .map(|i| i + 1)
+        .unwrap_or(0);
+    collected[start..]
+        .iter()
+        .filter(|(_, content)| content.trim_start().starts_with(ANOMALY_RETRY_PREFIX))
+        .count()
+}
+
 /// The feedback message for a detected anomaly batch, or `None` when the
 /// turn has already spent its budget (`injected >= MAX_ANOMALY_RETRIES`).
 /// `injected` is the value [`count_injected_retries`] returned for the
@@ -581,6 +606,66 @@ mod tests {
         ];
         assert_eq!(count_injected_retries(messages), 2);
         assert_eq!(count_injected_retries(["nothing injected"]), 0);
+    }
+
+    /// RT-354: the anomaly budget was counted over the WHOLE conversation,
+    /// so a persistent session that spent its budget in an earlier turn got
+    /// no anomaly retry for the rest of the session's life. The count is now
+    /// per turn — bounded by the last user message that is not itself an
+    /// injected marker (the markers ARE user messages, so the naive window
+    /// would be empty after the first injection).
+    #[test]
+    fn the_anomaly_budget_is_per_turn_not_per_conversation() {
+        let a = anomaly_retry_prompt(&[Anomaly::EmptyToolResult], 0).unwrap();
+        let b = anomaly_retry_prompt(&[Anomaly::EmptyToolResult], 1).unwrap();
+        let c = anomaly_retry_prompt(&[Anomaly::EmptyToolResult], 2).unwrap();
+
+        // A previous turn spent the whole budget.
+        let history = vec![
+            (true, "first user message"),
+            (false, "assistant reply"),
+            (true, a.as_str()),
+            (false, "assistant reply"),
+            (true, b.as_str()),
+            (false, "assistant reply"),
+            (true, c.as_str()),
+        ];
+        assert_eq!(
+            count_turn_injected_retries(history.clone()),
+            3,
+            "within that turn all three were spent"
+        );
+        assert!(
+            anomaly_retry_prompt(&[Anomaly::EmptyToolResult], 3).is_none(),
+            "the cap is 3"
+        );
+
+        // A NEW user message starts a fresh turn: the budget is back.
+        let next_turn = vec![
+            (true, "first user message"),
+            (false, "assistant reply"),
+            (true, a.as_str()),
+            (true, b.as_str()),
+            (true, c.as_str()),
+            (false, "assistant reply"),
+            (true, "a NEW user message"),
+            (false, "assistant reply"),
+        ];
+        assert_eq!(
+            count_turn_injected_retries(next_turn),
+            0,
+            "a new turn gets the full budget back"
+        );
+
+        // And the retries WITHIN the current turn still count.
+        let mid_turn = vec![
+            (true, "a NEW user message"),
+            (false, "assistant reply"),
+            (true, a.as_str()),
+            (false, "assistant reply"),
+            (true, b.as_str()),
+        ];
+        assert_eq!(count_turn_injected_retries(mid_turn), 2);
     }
 
     #[test]

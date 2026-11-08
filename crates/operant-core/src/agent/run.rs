@@ -1882,8 +1882,15 @@ impl OperantAgent {
                         if !batch.is_empty() {
                             let anomalies =
                                 turn_end_heuristics::detect_anomalies(&batch, &response_text);
-                            let injected = turn_end_heuristics::count_injected_retries(
-                                messages.iter().map(|m| m.content.as_str()),
+                            // Per-turn scope (RT-354): counting the whole
+                            // conversation history made the budget
+                            // per-session — a turn after a busy one got no
+                            // anomaly retry at all. See
+                            // `count_turn_injected_retries`.
+                            let injected = turn_end_heuristics::count_turn_injected_retries(
+                                messages
+                                    .iter()
+                                    .map(|m| (m.role == Role::User, m.content.as_str())),
                             );
                             if let Some(feedback) =
                                 turn_end_heuristics::anomaly_retry_prompt(&anomalies, injected)
