@@ -53,6 +53,45 @@ set -u
 # (AGENTS.md fleet rule 6); pin the real one.
 export AR="${AR:-/usr/bin/ar}"
 
+# Resolve a cargo binary that actually RUNS (iter-1933).
+#
+# `cargo` on PATH may be a systemd-run wrapper that runs builds inside
+# build.slice (MemoryHigh, oom_score) so an OOM under memory pressure kills the
+# BUILD, not an agent session. Its guard is
+#
+#     if [ -n "$XDG_RUNTIME_DIR" ] && [ -S "$XDG_RUNTIME_DIR/bus" ]; then
+#         exec systemd-run --user --scope --quiet --slice=build.slice -- /usr/bin/cargo "$@"
+#     fi
+#     exec /usr/bin/cargo "$@"
+#
+# which checks that the user bus SOCKET EXISTS, not that it is alive. A stale
+# socket — a user manager that died without cleaning /run/user/<uid>/bus — makes
+# the guard pass, so every build goes down the systemd-run path and dies with
+# "Failed to connect to user scope bus via local transport: No data available"
+# with no fallback at all. The memory-wire sync then ALSO fails, and the warning
+# printed below misattributes it to being offline, so a broken local bus reads as
+# a network problem.
+#
+# Probe the candidate before starting a build rather than assuming PATH order is
+# right; `/usr/bin/cargo` is the real binary the wrapper falls back to.
+CARGO_BIN="${CARGO_BIN:-$(command -v cargo || true)}"
+cargo_runs() {
+    [ -n "${1:-}" ] && "$1" --version >/dev/null 2>&1
+}
+if ! cargo_runs "$CARGO_BIN"; then
+    for candidate in /usr/bin/cargo /usr/local/bin/cargo; do
+        if [ -x "$candidate" ] && cargo_runs "$candidate"; then
+            CARGO_BIN="$candidate"
+            break
+        fi
+    done
+fi
+if ! cargo_runs "$CARGO_BIN"; then
+    echo "[build] ERROR: no working cargo binary (tried PATH and /usr/bin/cargo)" >&2
+    exit 1
+fi
+echo "[build] cargo: $CARGO_BIN"
+
 # Locked memory-wire rev from Cargo.lock (empty when absent).
 rev_of() {
     awk '
@@ -69,7 +108,7 @@ sync_memory_wire() {
     fi
     local before
     before="$(rev_of)"
-    if cargo update -p memory-wire; then
+    if "$CARGO_BIN" update -p memory-wire; then
         local after
         after="$(rev_of)"
         echo "[build] memory-wire: ${before:-unknown} → ${after:-unknown}"
@@ -90,4 +129,4 @@ if [ ${#cargo_args[@]} -eq 0 ]; then
     cargo_args=(build -p operant-cli --bin operant)
     [ "$release" = 1 ] && cargo_args=(build --release -p operant-cli --bin operant)
 fi
-exec cargo "${cargo_args[@]}"
+exec "$CARGO_BIN" "${cargo_args[@]}"

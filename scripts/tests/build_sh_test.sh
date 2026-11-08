@@ -74,6 +74,50 @@ FAKE_CARGO_FAIL_ON=update run_build_sh --strict >/dev/null 2>&1 \
     && { echo "FAIL: --strict did not fail on sync failure"; exit 1; }
 echo "PASS 5: --strict fails on sync failure"
 
+# --- 5b. a stale user-bus socket must not break the build ---------------------
+# `cargo` on PATH may be a systemd-run wrapper that guards on the user bus
+# SOCKET EXISTING, not on its being alive. A user manager that died without
+# cleaning /run/user/<uid>/bus leaves a socket that exists and refuses
+# connections, so the guard passes, every build goes down the systemd-run path
+# and dies with "Failed to connect to user scope bus via local transport: No
+# data available" — the wrapper has no fallback for its own failure mode. On
+# this box that is exactly what happened (iter-1933): scripts/build.sh, the ONLY
+# documented entry point, failed on a healthy tree, and the memory-wire sync
+# misreported it as an offline network.
+#
+# The script now PROBES the binary it intends to run. The observed contract is
+# the resolution line it prints: a PATH cargo that cannot run `--version` must
+# resolve to a binary that can, and the build must still run.
+rm -f "$TMP/out5b"
+HOME="$TMP/home" PATH="$TMP/bin:/usr/bin:/bin" FAKE_CARGO_FAIL_ON=--version \
+    bash "$SCRIPTS_DIR/build.sh" --offline > "$TMP/out5b" 2>&1
+rc=$?
+resolved="$(grep -m1 '^\[build\] cargo: ' "$TMP/out5b" | sed 's/^\[build\] cargo: //')"
+if [ -n "$resolved" ] && [ "$resolved" != "$TMP/bin/cargo" ] && \
+   "$resolved" --version >/dev/null 2>&1; then
+    echo "PASS 5b: a PATH cargo that cannot run --version resolves to $resolved"
+else
+    echo "FAIL: a dead PATH cargo still resolved to '${resolved:-nothing}' (the stale-bus failure)"
+    sed -n '1,6p' "$TMP/out5b"
+    exit 1
+fi
+[ "$rc" -eq 0 ] || { echo "FAIL: the build did not run after the fallback (exit $rc)"; exit 1; }
+
+# An explicit CARGO_BIN that cannot run must be probed and replaced too — the
+# caller may hand the script the same dead wrapper.
+resolved="$(grep -m1 '^\[build\] cargo: ' "$TMP/out5b" | sed 's/^\[build\] cargo: //')"
+HOME="$TMP/home" PATH="$TMP/bin:/usr/bin:/bin" CARGO_BIN="$TMP/bin/cargo" \
+    FAKE_CARGO_FAIL_ON=--version \
+    bash "$SCRIPTS_DIR/build.sh" --offline > "$TMP/out5c" 2>&1
+rc=$?
+resolved="$(grep -m1 '^\[build\] cargo: ' "$TMP/out5c" | sed 's/^\[build\] cargo: //')"
+if [ "$resolved" = "$TMP/bin/cargo" ]; then
+    echo "FAIL: a broken explicit CARGO_BIN was used anyway"
+    exit 1
+fi
+[ "$rc" -eq 0 ] || { echo "FAIL: broken CARGO_BIN blocked the build (exit $rc)"; exit 1; }
+echo "PASS 5c: a broken explicit CARGO_BIN is probed and replaced (exit $rc)"
+
 # --- 6. every build script resolves LOCAL_DIR to the REPO's own `local/` --
 # One of them (check.sh) fell back to one developer's machine
 # (`/home/z/my-project/local`). On every other box that path does not exist,
