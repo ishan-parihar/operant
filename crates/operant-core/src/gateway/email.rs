@@ -90,8 +90,19 @@ impl PlatformAdapter for EmailAdapter {
             let port = if host.contains(":") { "" } else { ":587" };
             let addr = format!("{}{}", host, port);
 
-            let mut stream = TcpStream::connect(&addr)
-                .map_err(|e| format!("SMTP connect failed: {e}"))?;
+            let mut stream = TcpStream::connect(&addr).map_err(|e| {
+                // Name the supported form: this path speaks plaintext SMTP
+                // plus STARTTLS only, so the standard implicit-TLS endpoint
+                // (`host:465`) connected here fails on the greeting with a
+                // bare parse error and the operator could not tell why
+                // (RT-334).
+                format!(
+                    "SMTP connect failed: {e}. This path speaks plaintext SMTP + STARTTLS \
+                     only — an implicit-TLS endpoint (port 465, i.e. 'host:465') is not \
+                     supported; use port 587 (submission + STARTTLS) or an explicit \
+                     'host:port' whose server speaks STARTTLS."
+                )
+            })?;
             // Set a 30s timeout so a hung SMTP server doesn't block the
             // gateway forever.
             let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(30)));
@@ -420,6 +431,35 @@ where
 #[cfg(test)]
 mod tests {
     use super::check_smtp_code;
+
+    /// RT-334: the connect failure for the standard implicit-TLS endpoint
+    /// (`host:465`) used to arrive as a bare "SMTP connect failed" — the
+    /// failure mode (an implicit-TLS server receives plaintext) was invisible.
+    /// The error must name the supported form. An unresolvable `.invalid`
+    /// host fails fast at DNS, so this stays offline and deterministic.
+    #[tokio::test]
+    async fn a_failed_smtp_connect_names_the_supported_form() {
+        use crate::gateway::PlatformAdapter as _;
+        let adapter = super::EmailAdapter::new(true).with_smtp(
+            Some("smtp.invalid.example:465".to_string()),
+            Some("user".to_string()),
+            Some("pass".to_string()),
+        );
+        let msg = crate::gateway::OutgoingMessage::new("to@example.invalid", "hello");
+        let err = adapter
+            .send_message(msg)
+            .await
+            .expect_err("an unresolvable host must fail the send");
+        let rendered = err.to_string();
+        assert!(
+            rendered.contains("implicit-TLS"),
+            "the error must name the unsupported form: {rendered}"
+        );
+        assert!(
+            rendered.contains("587"),
+            "the error must name the supported port: {rendered}"
+        );
+    }
 
     #[test]
     fn an_accepted_reply_passes() {
