@@ -1,8 +1,15 @@
 //! LCM (Lossless Context Management) agent tools.
 //!
-//! When `agent.context_engine = "lcm"`, the DAG engine is attached to the
-//! agent AND its two tools are registered so the model can use the lossless
-//! store directly:
+//! UNWIRED (RT-358, named not shipped): when `agent.context_engine = "lcm"`
+//! the DAG engine is attached to the agent, but NONE of these tool structs is
+//! registered — nothing in the workspace names any of them outside this file
+//! (verified: the only external references to the tool NAMES are icon and
+//! parameter strings in `gateway_runner` and the CLI's command docs). The
+//! header used to promise that both LCM tools mount into the registry so
+//! the model can use the lossless store directly; the store is reachable
+//! only through the engine internals and the CLI's `context` commands.
+//!
+//! The tools, for a reader:
 //!   - `lcm_recall` — FTS5 phrase search over the DAG (session-scoped by
 //!     default, global when `session` is omitted). Returns verbatim nodes
 //!     so nothing ever lost to compaction is truly gone.
@@ -10,7 +17,8 @@
 //!     the D0 tail token budget.
 //!
 //! hermes-lcm parity: recall tools are the "memory tool" half of the
-//! ContextEngine plugin (see `docs/HERMES_LCM_INTEGRATION.md` P2).
+//! ContextEngine plugin (see `docs/HERMES_LCM_INTEGRATION.md` P2); mounting
+//! them into the registry is a product decision, not a silent refactor.
 
 use std::sync::Arc;
 
@@ -1012,6 +1020,27 @@ pub async fn register_lcm_tools(
             .await?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod rt358_tests {
+    /// RT-358: the module header promised the LCM tools are registered when
+    /// `context_engine = "lcm"`, while nothing in the workspace mounts any of
+    /// them. Source contract, needles concatenation-built.
+    #[test]
+    fn the_lcm_tools_name_their_unregistered_state() {
+        let src = include_str!("lcm_tools.rs");
+        let unwired = format!("UNWIRED (RT-358, named not {}shipped)", "");
+        assert!(
+            src.contains(&unwired),
+            "the module doc must name the unregistered surface"
+        );
+        let promise = format!("its two tools are {}registered", "");
+        assert!(
+            !src.contains(&promise),
+            "the header must not promise a registration that does not happen"
+        );
+    }
 }
 
 #[cfg(test)]
