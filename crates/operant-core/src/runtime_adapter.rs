@@ -1,9 +1,14 @@
 //! Runtime adapter trait for platform abstraction.
 //!
-//! Modeled after operant's `runtime_traits.rs`. Abstracts platform differences
-//! (shell access, filesystem, long-running processes) so the agent can adapt
-//! its behavior to different execution environments (native, Docker, serverless,
-//! embedded, etc.).
+//! UNWIRED (RT-345, named not shipped): nothing in this workspace calls this
+//! trait, its `NativeRuntime`/`SandboxedRuntime`/`ServerlessRuntime`
+//! implementations, or the two `lib.rs` re-exports. The orchestration loop
+//! does NOT "query these capabilities to adapt its behavior" — no code asks
+//! a runtime whether it has shell access. `operant-api::runtime_traits` is
+//! the live twin (same trait shape, its own doc); this copy duplicates it
+//! with zero readers. Deleting the module and its re-exports is a product
+//! decision — deleting someone's extension surface is not a silent refactor.
+//! Modeled after operant's `runtime_traits.rs`.
 
 use std::path::{Path, PathBuf};
 
@@ -12,12 +17,13 @@ use std::path::{Path, PathBuf};
 /// Implement this trait to port the agent to a new execution environment.
 /// The adapter declares platform capabilities (shell access, filesystem,
 /// long-running processes) and provides platform-specific implementations
-/// for operations like spawning shell commands. The orchestration loop
-/// queries these capabilities to adapt its behavior — for example, disabling
-/// tool execution on runtimes without shell access.
+/// for operations like spawning shell commands.
 ///
-/// Implementations must be `Send + Sync` because the adapter is shared
-/// across async tasks on the Tokio runtime.
+/// UNWIRED (RT-345, named not shipped): nothing queries these capabilities —
+/// the orchestration loop never asks a runtime whether it has shell access,
+/// so no caller of this trait exists in the workspace. The doc used to claim
+/// the opposite ("the orchestration loop queries these capabilities to adapt
+/// its behavior"); `operant-api::runtime_traits` is the live twin.
 pub trait RuntimeAdapter: Send + Sync {
     /// Return the human-readable name of this runtime environment.
     ///
@@ -236,6 +242,25 @@ impl RuntimeAdapter for ServerlessRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// RT-345: this trait and its implementations are called by NOTHING in
+    /// the workspace, while the doc claimed the orchestration loop queries
+    /// the capabilities to adapt its behavior. Source contract, the needle
+    /// concatenation-built so this test's own source cannot satisfy it.
+    #[test]
+    fn the_runtime_adapter_names_its_unwired_state() {
+        let src = include_str!("runtime_adapter.rs");
+        let claim = format!("nothing queries these {}capabilities", "");
+        assert!(
+            src.contains(&claim),
+            "the doc must name the unwired surface - a reader must not infer it runs"
+        );
+        let module = format!("UNWIRED (RT-345, named not {}shipped)", "");
+        assert!(
+            src.contains(&module),
+            "the module doc must name the unwired surface too"
+        );
+    }
 
     #[test]
     fn native_runtime_has_full_capabilities() {
