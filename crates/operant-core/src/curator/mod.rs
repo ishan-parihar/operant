@@ -37,6 +37,32 @@ use crate::skill_usage::{LifecycleState, SkillUsageTracker};
 /// Strip YAML frontmatter (delimited by `---`) from a SKILL.md file.
 ///
 /// Returns the content after the frontmatter block, or the full content
+/// The frontmatter's `description:` value (RT-393).
+///
+/// `SkillSummary::description`'s doc promises the "Skill description from
+/// SKILL.md frontmatter"; the producer used to send the first 10 raw lines of
+/// the whole file — the `---` delimiters and the `name:`/`version:` rows
+/// included — which is noise to the model reading the summary. This parses
+/// the field the doc names.
+fn frontmatter_description(content: &str) -> String {
+    let trimmed = content.trim_start();
+    if !trimmed.starts_with("---") {
+        return String::new();
+    }
+    // Between the first two `---` delimiters sits the frontmatter block.
+    let parts: Vec<&str> = trimmed.splitn(3, "---").collect();
+    if parts.len() < 3 {
+        return String::new();
+    }
+    for line in parts[1].lines() {
+        let line = line.trim();
+        if let Some(rest) = line.strip_prefix("description:") {
+            return rest.trim().trim_matches('"').trim_matches('\'').to_string();
+        }
+    }
+    String::new()
+}
+
 /// if no frontmatter is found.
 fn strip_frontmatter(content: &str) -> String {
     let trimmed = content.trim_start();
@@ -82,6 +108,48 @@ mod rt392_tests {
         assert!(
             src.contains(&named),
             "the module header must name the nonexistent state"
+        );
+    }
+}
+
+#[cfg(test)]
+mod rt393_tests {
+    use super::*;
+
+    /// RT-393: `SkillSummary::description`'s doc promises "Skill description
+    /// from SKILL.md frontmatter"; the producer sent the first 10 raw lines of
+    /// the whole file — delimiters and `name:`/`version:` rows included — as
+    /// the description the LLM reads. BEHAVIORAL: the parsed field, and an
+    /// honest empty when the frontmatter carries none (never the raw noise).
+    #[test]
+    fn the_summary_description_is_the_frontmatter_field() {
+        let with = "---\nname: seo-audit\nversion: 1.0\ndescription: Audits pages for SEO.\n---\n\n# SEO Audit\n";
+        assert_eq!(
+            frontmatter_description(with),
+            "Audits pages for SEO.",
+            "the frontmatter description field is the summary's description"
+        );
+        // The old shape — raw lines with the delimiters — is gone.
+        let without = "# No frontmatter here\n\nJust body text.\n";
+        assert_eq!(
+            frontmatter_description(without),
+            "",
+            "no frontmatter means an empty description, not the raw file head"
+        );
+        // Quoted and single-quoted values both parse.
+        assert_eq!(
+            frontmatter_description("---\ndescription: \"Quoted desc\"\n---\n"),
+            "Quoted desc"
+        );
+        assert_eq!(
+            frontmatter_description("---\ndescription: 'Single'\n---\n"),
+            "Single"
+        );
+        // A frontmatter block with no description row is an empty description,
+        // never the block's raw text.
+        assert_eq!(
+            frontmatter_description("---\nname: x\nversion: 2\n---\n"),
+            ""
         );
     }
 }
@@ -697,7 +765,7 @@ impl CuratorEngine {
                 let skill_md = self.skills_dir.join(&r.name).join("SKILL.md");
                 let (description, cached_content) = match fs::read_to_string(&skill_md) {
                     Ok(raw) => {
-                        let desc = raw.lines().take(10).collect::<Vec<_>>().join(" ");
+                        let desc = frontmatter_description(&raw);
                         let body = strip_frontmatter(&raw);
                         (desc, body)
                     }
