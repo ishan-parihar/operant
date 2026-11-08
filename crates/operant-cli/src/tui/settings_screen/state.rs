@@ -17,12 +17,9 @@ impl SettingsScreen {
             edit_value: String::new(),
             settings_snapshot: settings_snapshot.clone(),
             pending_changes: HashMap::new(),
-            auto_compact: false,
             notifications: true,
-            show_turn_duration: false,
             output_style: "default".to_string(),
             reduce_motion: false,
-            terminal_progress_bar: true,
             verbose: false,
             cursor_blink_enabled: false,
             show_cwd: true,
@@ -30,7 +27,6 @@ impl SettingsScreen {
             compact_threshold: "95".to_string(),
             auto_commits: false,
             output_format: "text".to_string(),
-            disable_claude_mds: false,
             file_autocomplete_limit: "15".to_string(),
             file_autocomplete_show_hidden_files: false,
         };
@@ -42,9 +38,7 @@ impl SettingsScreen {
     /// Apply all settings from the snapshot to the screen fields.
     /// This is called on initialization and when opening the settings screen.
     fn apply_settings_from_snapshot(&mut self) {
-        self.auto_compact = self.settings_snapshot.auto_compact;
         self.notifications = self.settings_snapshot.notifications;
-        self.show_turn_duration = self.settings_snapshot.show_turn_duration;
         self.output_style = self
             .settings_snapshot
             .config
@@ -52,7 +46,6 @@ impl SettingsScreen {
             .clone()
             .unwrap_or_else(|| "default".to_string());
         self.reduce_motion = self.settings_snapshot.reduce_motion;
-        self.terminal_progress_bar = self.settings_snapshot.terminal_progress_bar;
         self.verbose = self.settings_snapshot.config.verbose;
         self.cursor_blink_enabled = self.settings_snapshot.config.cursor_blink_enabled;
         // (iter-1897) `unwrap_or(true)`: the screen's row shows what the
@@ -68,7 +61,6 @@ impl SettingsScreen {
                 "stream_json".to_string()
             }
         };
-        self.disable_claude_mds = self.settings_snapshot.config.disable_claude_mds;
         self.file_autocomplete_limit = self
             .settings_snapshot
             .config
@@ -175,30 +167,15 @@ impl SettingsScreen {
                     settings.config.file_autocomplete_show_hidden_files = on;
                     self.file_autocomplete_show_hidden_files = on;
                 }
-                "auto_compact" => {
-                    let on = matches!(value.as_str(), "true" | "on" | "1" | "yes");
-                    settings.auto_compact = on;
-                    self.auto_compact = on;
-                }
                 "notifications" => {
                     let on = matches!(value.as_str(), "true" | "on" | "1" | "yes");
                     settings.notifications = on;
                     self.notifications = on;
                 }
-                "show_turn_duration" => {
-                    let on = matches!(value.as_str(), "true" | "on" | "1" | "yes");
-                    settings.show_turn_duration = on;
-                    self.show_turn_duration = on;
-                }
                 "reduce_motion" => {
                     let on = matches!(value.as_str(), "true" | "on" | "1" | "yes");
                     settings.reduce_motion = on;
                     self.reduce_motion = on;
-                }
-                "terminal_progress_bar" => {
-                    let on = matches!(value.as_str(), "true" | "on" | "1" | "yes");
-                    settings.terminal_progress_bar = on;
-                    self.terminal_progress_bar = on;
                 }
                 "show_cwd" => {
                     let on = matches!(value.as_str(), "true" | "on" | "1" | "yes");
@@ -209,11 +186,6 @@ impl SettingsScreen {
                     let on = matches!(value.as_str(), "true" | "on" | "1" | "yes");
                     settings.show_git_branch = Some(on);
                     self.show_git_branch = on;
-                }
-                "disable_claude_mds" => {
-                    let on = matches!(value.as_str(), "true" | "on" | "1" | "yes");
-                    settings.config.disable_claude_mds = on;
-                    self.disable_claude_mds = on;
                 }
                 "auto_commits" => {
                     settings.config.auto_commits =
@@ -246,8 +218,8 @@ impl SettingsScreen {
         }
         // The snapshot is rebuilt wholesale below, and until iter-1176 that
         // rebuild ALSO threw away values the screen does not edit:
-        // `verbose`, `cursor_blink_enabled`, `disable_claude_mds` and
-        // `output_format` were written as constants instead of carried
+        // `verbose`, `cursor_blink_enabled` and `output_format` were written
+        // as constants instead of carried
         // forward, so saving ANY setting reset them. Every field below is now
         // taken from `settings`, which this loop has just updated with
         // whatever the operator changed.
@@ -255,7 +227,6 @@ impl SettingsScreen {
             verbose: settings.config.verbose,
             cursor_blink_enabled: settings.config.cursor_blink_enabled,
             auto_commits: settings.config.auto_commits,
-            disable_claude_mds: settings.config.disable_claude_mds,
             file_autocomplete_limit: settings.config.file_autocomplete_limit,
             file_autocomplete_show_hidden_files: settings
                 .config
@@ -296,30 +267,11 @@ pub(crate) fn all_entries(screen: &SettingsScreen) -> Vec<SettingsEntry> {
             value: screen.settings_snapshot.config.max_tokens.to_string(),
         },
         SettingsEntry {
-            key: "auto_compact",
-            label: "Auto-compact",
-            description: "Automatically compact turns at threshold.",
-            kind: SettingKind::Bool,
-            value: if screen.auto_compact { "true" } else { "false" }.to_string(),
-        },
-        SettingsEntry {
             key: "notifications",
             label: "Desktop notifications",
             description: "Notify when a turn completes.",
             kind: SettingKind::Bool,
             value: if screen.notifications {
-                "true"
-            } else {
-                "false"
-            }
-            .to_string(),
-        },
-        SettingsEntry {
-            key: "show_turn_duration",
-            label: "Show turn duration",
-            description: "Display elapsed time per turn in status bar.",
-            kind: SettingKind::Bool,
-            value: if screen.show_turn_duration {
                 "true"
             } else {
                 "false"
@@ -341,18 +293,6 @@ pub(crate) fn all_entries(screen: &SettingsScreen) -> Vec<SettingsEntry> {
             description: "Disable UI animations.",
             kind: SettingKind::Bool,
             value: if screen.reduce_motion {
-                "true"
-            } else {
-                "false"
-            }
-            .to_string(),
-        },
-        SettingsEntry {
-            key: "terminal_progress_bar",
-            label: "Terminal progress bar",
-            description: "Show progress during tool use.",
-            kind: SettingKind::Bool,
-            value: if screen.terminal_progress_bar {
                 "true"
             } else {
                 "false"
@@ -419,18 +359,6 @@ pub(crate) fn all_entries(screen: &SettingsScreen) -> Vec<SettingsEntry> {
                 options: vec!["text", "json", "streamjson"],
             },
             value: screen.output_format.clone(),
-        },
-        SettingsEntry {
-            key: "disable_claude_mds",
-            label: "Disable CLAUDE.md",
-            description: "Ignore CLAUDE.md files in projects (use defaults instead).",
-            kind: SettingKind::Bool,
-            value: if screen.disable_claude_mds {
-                "true"
-            } else {
-                "false"
-            }
-            .to_string(),
         },
         // (iter-1895) The @-autocomplete's own two settings are UNCONDITIONAL
         // now. They used to be pushed only when "File injection (@)" was on —

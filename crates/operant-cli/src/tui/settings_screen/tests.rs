@@ -51,7 +51,7 @@ fn with_sandbox_home<T>(f: impl FnOnce() -> T) -> T {
 /// wrote `pending_changes`, and then silently dropped it on the floor —
 /// while still rewriting the ENTIRE settings.json from the snapshot,
 /// hard-coding `verbose: false`, `cursor_blink_enabled: false`,
-/// `disable_claude_mds: false`, `file_injection_enabled: false` and
+/// `file_injection_enabled: false` and
 /// `OutputFormat::default()` instead of carrying the persisted values
 /// forward. The save appeared to succeed, so nothing surfaced it until
 /// the two sets were compared side by side.
@@ -134,10 +134,13 @@ fn apply_and_save_preserves_unrelated_operator_preferences() {
         // that), so the test is written the way the lint wants from the start.
         let mut settings = Settings {
             vim_enabled: true,
+            // (iter-1899) `disable_claude_mds` was here until the row and its
+            // field went; `show_cwd` is a top-level Settings field, not an
+            // InnerConfig one (iter-1898 made it a tri-state).
+            show_cwd: Some(true),
             config: crate::tui::adapter_types::config::InnerConfig {
                 verbose: true,
                 cursor_blink_enabled: true,
-                disable_claude_mds: true,
                 ..Default::default()
             },
             ..Default::default()
@@ -163,9 +166,10 @@ fn apply_and_save_preserves_unrelated_operator_preferences() {
             settings.config.cursor_blink_enabled,
             "cursor blink was cleared by saving an unrelated setting"
         );
-        assert!(
-            settings.config.disable_claude_mds,
-            "disable_claude_mds was cleared by saving an unrelated setting"
+        assert_eq!(
+            settings.show_cwd,
+            Some(true),
+            "show_cwd was cleared by saving an unrelated setting"
         );
         assert!(
             screen.settings_snapshot.vim_enabled,
@@ -253,15 +257,19 @@ fn all_entries_returns_expected_settings() {
     let screen = SettingsScreen::new();
     let entries = all_entries(&screen);
     // The base settings plus the two @-autocomplete rows, which are
-    // unconditional now (iter-1895).
+    // unconditional now (iter-1895). (iter-1896, iter-1899) Rows were
+    // REMOVED, not added: the file-injection pair (dead), the display
+    // flags' dead siblings and four rows nothing reads. The floor still
+    // catches an empty list; the ceiling catches a runaway re-port of dead
+    // rows.
     assert!(
-        entries.len() >= 16,
-        "Should have at least 16 editable settings, got {}",
+        entries.len() >= 12,
+        "Should have at least 12 editable settings, got {}",
         entries.len()
     );
     assert!(
-        entries.len() <= 20,
-        "Should have at most 20 editable settings, got {}",
+        entries.len() <= 16,
+        "Should have at most 16 editable settings, got {}",
         entries.len()
     );
 }
@@ -290,7 +298,13 @@ fn toggle_bool_entry_flips_value() {
 
     let initial = screen.notifications;
     let all = all_entries(&screen);
-    let entry = &all[2]; // notifications is at index 2
+    // (iter-1899) The row's position moved when the four dead rows went:
+    // find it by its key instead of a hardcoded index, so deleting a row
+    // cannot silently re-point this test at a different setting.
+    let entry = all
+        .iter()
+        .find(|e| e.key == "notifications")
+        .expect("the screen offers the Desktop notifications row");
     assert_eq!(entry.label, "Desktop notifications");
 
     // Simulate toggle (manually, since toggle_or_cycle_current modifies internal state)
@@ -318,4 +332,86 @@ fn cycle_enum_entry_wraps_around() {
 
     idx = (idx + 1) % options.len();
     assert_eq!(options[idx], "default"); // Wraps around
+}
+
+/// (iter-1899) The screen must not offer a row whose value nothing reads.
+///
+/// This is the family iter-1896 opened (`fileInjectionEnabled` /
+/// `fileInjectionMaxSize`) and iter-1899 finishes. Each key below was
+/// offered by `all_entries`, persisted by the screen and displayed with a
+/// value, and NO code outside the settings screen read it — so the operator
+/// could change it, watch it save, and change nothing at all:
+///
+///   auto_compact          "Automatically compact turns at threshold."
+///   show_turn_duration    "Display elapsed time per turn in status bar."
+///   terminal_progress_bar "Show progress during tool use."
+///   disable_claude_mds    "Ignore CLAUDE.md files in projects."
+///
+/// The four lived in the ported claurst settings surface and were never
+/// wired. `terminal_progress_bar` was the only one with a command (/statusbar,
+/// which printed "Status bar shown." while nothing changed) — that command is
+/// retired with the setting.
+///
+/// The pin is the screen's own row list, and the doc comment's claim is
+/// mechanical: a grep for each key outside the settings screen module finds
+/// nothing, which the ledger row cites with the command that produced it.
+#[test]
+fn the_settings_screen_offers_no_unread_row() {
+    const DEAD: &[&str] = &[
+        "auto_compact",
+        "show_turn_duration",
+        "terminal_progress_bar",
+        "disable_claude_mds",
+    ];
+    let entries = all_entries(&SettingsScreen::new());
+    for key in DEAD {
+        assert!(
+            !entries.iter().any(|entry| entry.key == *key),
+            "/settings offers {key} again — nothing reads its value, so the \
+             operator's edit is a promise nothing keeps"
+        );
+    }
+    // And the rows that DO something are still there.
+    for live in [
+        "max_tokens",
+        "output_style",
+        "reduce_motion",
+        "show_cwd",
+        "show_git_branch",
+        "fileAutocompleteLimit",
+        "fileAutocompleteShowHiddenFiles",
+    ] {
+        assert!(
+            entries.iter().any(|entry| entry.key == live),
+            "/settings must still offer {live}"
+        );
+    }
+}
+
+/// (iter-1899) The dead fields must be GONE from the persisted settings, not
+/// merely hidden — a settings.json still carrying `auto_compact` (and every
+/// old file does) must load and round-trip without it, thanks to the struct's
+/// `#[serde(default)]`.
+#[test]
+fn the_dead_settings_fields_are_gone_from_the_persisted_shape() {
+    // The exact shape an old settings.json carries.
+    let legacy = r#"{"auto_compact":true,"show_turn_duration":true,
+        "terminal_progress_bar":false,"disable_claude_mds":true,
+        "theme":"Default","permission_mode":"Default"}"#;
+    let settings: Settings = serde_json::from_str(legacy).expect("an old settings.json must load");
+    // The JSON on disk keeps the stale keys (serde ignores unknown fields —
+    // `Settings` does not deny them), and the loaded value must not resurrect
+    // a field the Rust type no longer has.
+    let reloaded = serde_json::to_string(&settings).expect("the loaded settings re-serialise");
+    for key in [
+        "auto_compact",
+        "show_turn_duration",
+        "terminal_progress_bar",
+        "disable_claude_mds",
+    ] {
+        assert!(
+            !reloaded.contains(key),
+            "{key} survived the round-trip — the field is still in the struct"
+        );
+    }
 }

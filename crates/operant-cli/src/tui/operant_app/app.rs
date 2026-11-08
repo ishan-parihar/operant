@@ -388,7 +388,6 @@ const REGISTERED_COMMANDS: &[RegisteredCommand] = &[
     RegisteredCommand::public("/skill", "Run a saved skill"),
     RegisteredCommand::public("/skin", "Show or switch the terminal skin"),
     RegisteredCommand::public("/status", "Show gateway and runtime status"),
-    RegisteredCommand::public("/statusbar", "Toggle the terminal status bar"),
     RegisteredCommand::public("/steer", "Queue a steering message mid-run"),
     RegisteredCommand::public("/stop", "Stop the running turn"),
     RegisteredCommand::public(

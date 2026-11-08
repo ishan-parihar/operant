@@ -54,7 +54,6 @@ pub struct InnerConfig {
     pub verbose: bool,
     pub cursor_blink_enabled: bool,
     pub auto_commits: Option<bool>,
-    pub disable_claude_mds: bool,
     pub file_autocomplete_limit: usize,
     pub file_autocomplete_show_hidden_files: bool,
     pub output_style: Option<String>,
@@ -95,11 +94,8 @@ pub struct Settings {
     /// the header has always painted the working directory, so an absent
     /// key must not change the rendering for a fresh install.
     pub show_cwd: Option<bool>,
-    pub auto_compact: bool,
     pub compact_threshold: Option<usize>,
     pub notifications: bool,
-    pub show_turn_duration: bool,
-    pub terminal_progress_bar: bool,
     /// Tri-state like `show_cwd` (iter-1897): absent means shown.
     pub show_git_branch: Option<bool>,
     pub config: InnerConfig,

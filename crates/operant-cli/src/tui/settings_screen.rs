@@ -46,12 +46,9 @@ pub struct SettingsScreen {
     pub pending_changes: HashMap<String, String>,
 
     // ---- Real settings fields ----
-    pub auto_compact: bool,
     pub notifications: bool,
-    pub show_turn_duration: bool,
     pub output_style: String,
     pub reduce_motion: bool,
-    pub terminal_progress_bar: bool,
     pub verbose: bool,
     pub cursor_blink_enabled: bool,
     pub show_cwd: bool,
@@ -59,11 +56,8 @@ pub struct SettingsScreen {
     pub compact_threshold: String,
     pub auto_commits: bool,
     pub output_format: String,
-    pub disable_claude_mds: bool,
-    pub file_injection_enabled: bool,
     pub file_autocomplete_limit: String,
     pub file_autocomplete_show_hidden_files: bool,
-    pub file_injection_max_size: String,
 }
 
 mod keys;

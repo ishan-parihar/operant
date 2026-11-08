@@ -272,9 +272,6 @@ pub static COMMAND_REGISTRY: &[CommandDef] = &[
     .with_args("[auto|codex_app_server]"),
     CommandDef::new("profile", "Show active profile name and home directory"),
     CommandDef::new("personality", "Set a predefined personality").with_args("[name]"),
-    CommandDef::new("statusbar", "Toggle the context/model status bar")
-        .cli_only()
-        .with_aliases(&["sb"]),
     CommandDef::new(
         "verbose",
         "Cycle tool progress display: off -> new -> all -> verbose",
@@ -620,9 +617,9 @@ pub fn tui_category(name: &str) -> TuiCategory {
         | "time" | "debug" | "credits" | "billing" | "insights" | "heapdump" | "mem" | "pet" => {
             TuiCategory::Diagnostics
         }
-        "config" | "theme" | "skin" | "statusbar" | "output-style" | "verbose" | "mcp"
-        | "reload" | "reload-mcp" | "reload-skills" | "hooks" | "import-config" | "setup"
-        | "init" | "redraw" | "quit" | "exit" | "keybindings" | "indicator" | "busy" => {
+        "config" | "theme" | "skin" | "output-style" | "verbose" | "mcp" | "reload"
+        | "reload-mcp" | "reload-skills" | "hooks" | "import-config" | "setup" | "init"
+        | "redraw" | "quit" | "exit" | "keybindings" | "indicator" | "busy" => {
             TuiCategory::Workspace
         }
         "agents" | "tasks" | "memory" | "tools" | "skills" | "skill" | "plugins" | "bundle"
@@ -973,14 +970,18 @@ mod tests {
         );
     }
 
+    // (iter-1899) /statusbar and its `sb` alias are gone: the command
+    // toggled `Settings.terminal_progress_bar`, which no renderer reads, so
+    // it printed "Status bar shown." while nothing changed. The command
+    // catalogue is a list of things the operator can do, so a command that
+    // does nothing is removed with its setting rather than left to lie.
     #[test]
-    fn test_statusbar_alias_sb() {
+    fn test_statusbar_stays_deleted() {
         let map = build_command_map();
         assert!(
-            map.contains_key("sb"),
-            "Alias 'sb' must resolve to 'statusbar'"
+            !map.contains_key("statusbar") && !map.contains_key("sb"),
+            "/statusbar is back — nothing reads the setting it toggles"
         );
-        assert_eq!(map.get("sb").unwrap().name, "statusbar");
     }
 
     #[test]

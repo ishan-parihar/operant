@@ -121,29 +121,14 @@ fn toggle_or_cycle_current(screen: &mut SettingsScreen) {
             SettingKind::Bool => {
                 let new_value = entry.value != "true";
                 match entry.key {
-                    "auto_compact" => {
-                        screen.auto_compact = new_value;
-                        screen.settings_snapshot.auto_compact = new_value;
-                        let _ = screen.settings_snapshot.save_sync();
-                    }
                     "notifications" => {
                         screen.notifications = new_value;
                         screen.settings_snapshot.notifications = new_value;
                         let _ = screen.settings_snapshot.save_sync();
                     }
-                    "show_turn_duration" => {
-                        screen.show_turn_duration = new_value;
-                        screen.settings_snapshot.show_turn_duration = new_value;
-                        let _ = screen.settings_snapshot.save_sync();
-                    }
                     "reduce_motion" => {
                         screen.reduce_motion = new_value;
                         screen.settings_snapshot.reduce_motion = new_value;
-                        let _ = screen.settings_snapshot.save_sync();
-                    }
-                    "terminal_progress_bar" => {
-                        screen.terminal_progress_bar = new_value;
-                        screen.settings_snapshot.terminal_progress_bar = new_value;
                         let _ = screen.settings_snapshot.save_sync();
                     }
                     "verbose" => {
@@ -170,11 +155,6 @@ fn toggle_or_cycle_current(screen: &mut SettingsScreen) {
                         screen.auto_commits = new_value;
                         screen.settings_snapshot.config.auto_commits =
                             if new_value { Some(true) } else { None };
-                        let _ = screen.settings_snapshot.save_sync();
-                    }
-                    "disable_claude_mds" => {
-                        screen.disable_claude_mds = new_value;
-                        screen.settings_snapshot.config.disable_claude_mds = new_value;
                         let _ = screen.settings_snapshot.save_sync();
                     }
                     "fileAutocompleteShowHiddenFiles" => {

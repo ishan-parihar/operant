@@ -5,10 +5,10 @@
            Type to search settings...
  operant
  operant     ► Max Tokens                              0
- /model        Auto-compact                            false
- v0.3.0        Desktop notifications                   false
- /login        Show turn duration                      false
- ● anthr       Output Style                            default
+ /model        Desktop notifications                   false
+ v0.3.0        Output Style                            default
+ /login        Reduce motion                           false
+ ● anthr       Verbose logging                         false
  ~
            Maximum tokens per response.
 

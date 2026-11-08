@@ -1618,25 +1618,12 @@ impl App {
 
             // /browser — surface that operant has a Camofox browser backend
             // but no in-TUI browser launcher (it's a tool the agent calls).
-            // /statusbar — toggle Settings.terminal_progress_bar. The
-            // /indicator twin is deleted: two names, one toggle, one row
-            // (plan 04 — operant has one status-bar toggle, not the two
-            // hermes has).
-            "statusbar" => {
-                let mut settings =
-                    crate::tui::adapter_types::Settings::load_sync().unwrap_or_default();
-                settings.terminal_progress_bar = !settings.terminal_progress_bar;
-                let _ = settings.save_sync();
-                self.set_status_notice(format!(
-                    "Status bar {}.",
-                    if settings.terminal_progress_bar {
-                        "shown"
-                    } else {
-                        "hidden"
-                    }
-                ));
-                true
-            }
+            // (iter-1899) /statusbar is gone. It toggled
+            // `Settings.terminal_progress_bar`, which no renderer reads, so
+            // it printed "Status bar shown." while the status bar stayed
+            // exactly as it was. The setting's row went with it (see
+            // `all_entries`), and a command whose only effect was a notice
+            // that lied is worse than no command.
 
             // /mouse — report the mouse-capture state. Capture is enabled on
             // startup unless --no-mouse was passed; that flag lives on the
