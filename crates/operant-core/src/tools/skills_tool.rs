@@ -412,8 +412,16 @@ fn collect_skills_recursive(base_dir: &Path, current_dir: &Path, skills: &mut Ve
                 .get("description")
                 .and_then(|v| v.as_str())
                 .map(|s| {
-                    if s.len() > MAX_DESCRIPTION_LENGTH {
-                        format!("{}...", &s[..MAX_DESCRIPTION_LENGTH - 3])
+                    // Char-safe: a byte cut panics when the boundary lands inside a
+                    // multi-byte character (an em-dash or curly quote in a SKILL.md
+                    // description is ordinary) — RT-325.
+                    if s.chars().count() > MAX_DESCRIPTION_LENGTH {
+                        format!(
+                            "{}...",
+                            s.chars()
+                                .take(MAX_DESCRIPTION_LENGTH - 3)
+                                .collect::<String>()
+                        )
                     } else {
                         s.to_string()
                     }
@@ -1009,8 +1017,16 @@ pub fn collect_skill_children(skill_dir: &Path) -> Vec<SkillMeta> {
                         .get("description")
                         .and_then(|v| v.as_str())
                         .map(|s| {
-                            if s.len() > MAX_DESCRIPTION_LENGTH {
-                                format!("{}...", &s[..MAX_DESCRIPTION_LENGTH - 3])
+                            // Char-safe: a byte cut panics when the boundary lands inside a
+                            // multi-byte character (an em-dash or curly quote in a SKILL.md
+                            // description is ordinary) — RT-325.
+                            if s.chars().count() > MAX_DESCRIPTION_LENGTH {
+                                format!(
+                                    "{}...",
+                                    s.chars()
+                                        .take(MAX_DESCRIPTION_LENGTH - 3)
+                                        .collect::<String>()
+                                )
                             } else {
                                 s.to_string()
                             }
@@ -2580,6 +2596,40 @@ mod tests {
 
         assert!(write_screened(&skill, &extra, "echo hi\n").is_ok());
         assert!(extra.exists());
+    }
+
+    /// RT-325: the description cap cut with a BYTE slice, so a SKILL.md whose
+    /// description has a multi-byte character straddling offset 1021 (an
+    /// em-dash or curly quote is ordinary) panicked the listing. Both listing
+    /// sites share the fix; this drives the recursive collector directly.
+    #[test]
+    fn a_description_truncation_survives_a_multibyte_boundary() {
+        let base = tempfile::tempdir().unwrap();
+        let skill = base.path().join("demo");
+        std::fs::create_dir_all(&skill).unwrap();
+        // Byte 1021 lands inside an em-dash ("—" is 3 bytes at offset 1020).
+        let description = format!("{}\u{2014}{}", "x".repeat(1020), "y".repeat(200));
+        assert!(description.len() > MAX_DESCRIPTION_LENGTH);
+        assert!(!description.is_char_boundary(1021));
+        std::fs::write(
+            skill.join("SKILL.md"),
+            format!("---\nname: demo\ndescription: {description}\n---\nbody\n"),
+        )
+        .unwrap();
+
+        let mut skills = Vec::new();
+        collect_skills_recursive(base.path(), base.path(), &mut skills);
+        let found = skills.iter().find(|s| s.name == "demo").expect("listed");
+        assert!(
+            found.description.ends_with("..."),
+            "the description is capped: {:?}",
+            found.description.chars().count()
+        );
+        assert!(
+            found.description.chars().count() <= MAX_DESCRIPTION_LENGTH,
+            "the cap holds in CHARS: {}",
+            found.description.chars().count()
+        );
     }
 
     #[test]

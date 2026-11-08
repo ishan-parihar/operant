@@ -179,7 +179,10 @@ fn truncate(text: &str, max_bytes: usize, marker: &str) -> String {
         return text.to_string();
     }
     let mut out = String::with_capacity(max_bytes + marker.len());
-    out.push_str(&text[..max_bytes]);
+    // Char-safe: a byte cut panics when `max_bytes` lands inside a
+    // multi-byte character — an ordinary case for a git diff with
+    // comments/strings (the RT-301 class, RT-325).
+    out.push_str(crate::agent::safe_truncate_str(text, max_bytes));
     out.push_str(marker);
     out
 }
@@ -275,6 +278,26 @@ mod tests {
         let r = run_tool(json!({ "path": tmp.path().to_str().unwrap() }));
         assert!(!r.success);
         assert!(error_of(&r).contains("Not a git repository"));
+    }
+
+    /// RT-325: the diff truncation cut with a BYTE slice, so a diff whose
+    /// cut lands inside a multi-byte character (comments, strings, unicode
+    /// identifiers — ordinary in real diffs) panicked. The ASCII-only test
+    /// below passes on the defective code; this one cannot.
+    #[test]
+    fn diff_output_truncation_survives_a_multibyte_boundary() {
+        let (_tmp, root) = init_repo();
+        // 3-byte characters: byte 102_400 lands mid-character.
+        let big = "\u{65e5}".repeat(60 * 1024); // 180 KiB
+        std::fs::write(root.join("a.txt"), &big).unwrap();
+        let r = run_tool(json!({ "path": root.to_str().unwrap() }));
+        assert!(r.success);
+        let body = body_of(&r);
+        assert!(
+            body.contains("[diff truncated]"),
+            "body must be capped without panicking: len={}",
+            body.len()
+        );
     }
 
     #[test]
