@@ -14,7 +14,7 @@
 //! | `initialize`     | request      | Negotiate protocol version           |
 //! | `session/new`    | request      | Create a session, returns a sessionId |
 //! | `session/prompt` | request      | Send a prompt; streams `session/update`, returns `stopReason` |
-//! | `session/cancel` | notification | Cancel the in-flight prompt for a session |
+//! | `session/cancel` | notification | Cancel the in-flight prompt; the SESSION survives (see the limitation below) |
 //! | `session/update` | notification | Emitted BY US while a prompt runs     |
 //!
 //! # operant extensions
@@ -27,6 +27,13 @@
 //! | `stop`    | Gracefully shuts down the ACP server     |
 //!
 //! # Known limitations, stated rather than implied
+//!
+//! - **`session/cancel` does not interrupt the in-flight prompt (RT-355).**
+//!   The notification is answered with nothing and the session is preserved
+//!   (it used to END the session, which the ACP contract does not ask for),
+//!   but nothing interrupts the running turn: there is no abort handle to
+//!   trip, because `session/prompt` runs `execute_command` to completion.
+//!   A client cancelling a long turn still waits for that turn to finish.
 //!
 //! - **Streaming granularity is one chunk per turn, not per token.** The
 //!   [`AcpHandler`] seam exposes a single `execute_command(&str) -> String`, so
@@ -432,8 +439,18 @@ pub async fn dispatch(
             outcome.notifications = notifications;
         }
         "session/cancel" => {
-            // A notification by spec: acknowledge with nothing at all.
-            sessions.end(&session_id_param(request).unwrap_or_default());
+            // A notification by spec: acknowledge with nothing at all, and do
+            // NOT end the session — the ACP contract cancels the in-flight
+            // PROMPT; the session survives so the client can prompt again.
+            // This path used to call `sessions.end(...)`, which destroyed the
+            // session and made every later prompt fail as unknown (RT-355).
+            //
+            // NAMED (RT-275 class): the in-flight prompt is NOT actually
+            // interrupted — `handle_session_prompt` runs `execute_command`
+            // to completion and there is no abort handle to trip. The
+            // notification is acknowledged and the session preserved; the
+            // prompt-interrupt itself is unwired.
+            let _ = session_id_param(request);
             outcome.response = None;
         }
         // --- operant extensions ---
@@ -818,9 +835,12 @@ mod tests {
     }
 
     /// `session/cancel` is itself a notification: it must produce no response
-    /// at all, only ending the session.
+    /// at all, and it must NOT end the session — the ACP contract cancels the
+    /// in-flight prompt, not the session (RT-355). The old arm called
+    /// `sessions.end(...)`, which destroyed the session and made the client's
+    /// every later prompt fail as unknown.
     #[tokio::test]
-    async fn session_cancel_produces_no_response_and_ends_the_session() {
+    async fn session_cancel_produces_no_response_and_keeps_the_session() {
         let sessions = SessionRegistry::new();
         let id = sessions.create();
 
@@ -836,7 +856,10 @@ mod tests {
             outcome.response.is_none(),
             "session/cancel is a notification and must not be answered"
         );
-        assert!(!sessions.is_live(&id), "cancel must end the session");
+        assert!(
+            sessions.is_live(&id),
+            "cancel must not end the session — the client prompts again"
+        );
     }
 
     /// A prompt against a session that was never created, or has been ended,
