@@ -1,0 +1,542 @@
+# Task Ledger — agentic-core/TUI repair
+
+0. End-state test: `cargo test -p operant-core --lib`, targeted CLI tests, clippy, and behavior regressions prove full-context resume, 1M display, 350k/400k caps on token+percentage, bounded continuation, and logging seams.
+1. [x] Add `ContextCaps` + `ContextCapLimits` (`soft=min(350k,80%)`, `hard=min(400k,95%)`) and config fields/defaults — done when pure tests cover stricter-wins and zero/disabled values — depends on: —
+2. [x] Use configured context window in TUI and gateway, expose agent accessor — done when custom bare model shows configured window and core/TUI agree — depends on: 1
+3. [x] Persist/rehydrate tool results and assistant reasoning/finish_reason — done when resume test keeps assistant tool_calls + tool rows — depends on: —
+4. [x] Make truncation continuation see truncated text; persist it — done when failing/current loop recovery test contains partial assistant text — depends on: 3
+5. [x] Bounded grace continuation, retries, and persistence — done when grace tests assert conversation/DB carry the summary and stream errors are typed/logged — depends on: 3
+6. [x] Enforce soft cap at turn end and hard cap mid-stream with compaction — done when regression tests cross caps and assert compaction occurred — depends on: 1
+7. [x] Add logging at session rehydration, tool results, compaction/retry/errors — done when tests can capture diagnostics/messages, no silent count loss — depends on: 3,6
+8. [x] Fix proven TUI stale counters/session display/early-turn text/debug event defects — done when CLI tests cover each — depends on: 3,6,7
+9. [x] Update example config, README, CHANGELOG, BUGS ledger, TODO where behavior changes — done when doc gates pass — depends on: 8
+10. [x] Scoped workspace verification, clippy/fmt, commit with next iteration, push, deploy release — done when origin/main contains the iteration and deployed binary matches — depends on: 9
+
+## Round 1 (iter-1769, shipped)
+
+The caps, the resume, the truncation/grace recovery, the TUI counters and the
+session-boundary gate. Commit `6bc1b7af`. Ledger rows RT-225/RT-226.
+
+## Round 2 (iter-1774, shipped)
+
+The restored transcript (one shared converter), the silent stream end (the
+`[DONE]` marker is surfaced and an unmarked end is continued when the text
+looks cut), the replayed tool call (the dedup set is cleared before a
+replay), and the debug log's blind spot (the inline picker's keys, the live
+agent error, the terminal error exit's dump). Commit `55ed08b4`. Ledger row
+RT-227.
+
+**Verified in round 2**
+- `cargo check -p operant-core --lib` and `-p operant-cli --bin operant` — clean.
+- `cargo test -p operant-core --lib --tests` — 2792 passed / 5 failed, the
+  SAME five pre-existing failures (three environmental, one sourcehound,
+  one the peer's mcp.rs).
+- `cargo test -p operant-cli --bin operant` — 2185 passed / 2 failed, both in
+  the peer's in-flight vim/settings work; this slice's ten TUI cases pass.
+- New: `crates/operant-core/tests/stream_incomplete_continuation.rs` (2),
+  `crates/operant-core/tests/stream_replay_tool_rows.rs` (1, mutation-proved),
+  `crates/operant-cli/src/tui/app/session_display_tests.rs` (4),
+  `crates/operant-cli/src/tui/app/debug_log_tests.rs` (2), three adapter
+  completion-signal cases in `clients/openai.rs`.
+
+## Round 2b (iter-1776, shipped)
+
+The clippy gate is green again. It was red at HEAD with an EMPTY allowlist
+and four findings on untouched lines: two boolean `assert_eq!`s in the patch
+tool's occurrence rules, a plugin fixture test without the test-target
+exemption header, an `#[expect(clippy::expect_used)]` attribute in
+`agent/run.rs` that sat on `turn_attribution` (no `.expect()`) instead of on
+`run` (four), and a const-assertion lint in the schema fixture's runtime
+assertion. Commit `bef1858d`.
+
+## Final gates (measured on this tree)
+
+| gate | result |
+|---|---|
+| `cargo fmt --all -- --check` | clean |
+| `cargo check --workspace --all-features` | clean |
+| `cargo clippy --workspace --all-targets --all-features -- -D warnings` | clean, 0 warnings |
+| `bash scripts/clippy-warning-gate.sh` | pass (seen=0, new=0, stale=0) |
+| `cargo test -p operant-core --lib --tests` | 2792 passed / 5 failed (pre-existing: three environmental, one sourcehound, one the peer's `mcp.rs`) |
+| `cargo test -p operant-cli --bin operant` | 2186 passed / 1 failed (the peer's in-flight `settings_screen` work) |
+| `cargo test --workspace --exclude operant-cli` | the same five pre-existing core failures, nothing else |
+| `./scripts/genome lint` | 0 errors |
+| `python3 scripts/audit-ledger-index.py` | OK |
+
+## Not done, and why
+
+- `TODO.md` (the autonomous-mode ledger) is untouched: the caps change the
+  context behaviour every mode shares, but no autonomous-mode row opened or
+  closed by it.
+- The synchronous SQLite load in the TUI frame loop was left alone: it is a
+  performance shape, not one of the audited defects, and moving it is a
+  change with no failing test behind it.
+- The five core and one CLI test failures are NOT this slice's: they are
+  environmental (the repo IS a git repo; the sourcehound binary is absent),
+  the peer's `mcp.rs` WIP, and the peer's in-flight `settings_screen` work.
+  Measured, named, and left alone.
+
+## Round 3 (2026-11-06) — the context calculation, the lying log, the poke
+
+End-state test: the live session `sess_56bae289-989f-42f8-b28f-a3942a51ebdc` (653 rows,
+1.72 MB of text) must (a) build a request whose estimated size agrees with the provider's own
+reported prompt tokens, (b) NOT emit a compaction card below the soft cap, (c) keep its whole
+transcript on resume with an honest log, and (d) when a turn ends early with no usable answer,
+the core must continue it with a bounded synthetic poke instead of stopping dead.
+
+| # | unit | done when | depends on | premises |
+|---|---|---|---|---|
+| 1 | [x] Measure the live defects from the gateway log + the live DB | evidence table in `_kernel/claims.md` | — | A1..A5 |
+| 2 | [ ] iter-N1: estimator truthfulness — stop charging reasoning no adapter sends; anchor the estimate on the provider's reported count | core+cli tests green; the live session's estimate lands near the provider's number; clippy gate clean | 1 | A1,A2 |
+| 3 | [ ] iter-N1b: honest session-rehydration log (`rows_dropped` = rows actually dropped; warn only when rows were dropped) | unit test fails without the fix | 1 | A5 |
+| 4 | [ ] iter-N1c: the compaction card fires only when a rung really changed the request | unit/integration test | 2 | A3 |
+| 5 | [ ] iter-N2: core auto-poke — bounded synthetic continuation after an early exit with no usable answer; bypasses the configured iteration limit; non-retryable errors never re-poked; does not collide with the grace continuation, the stream-incomplete continuation or the advisor continuation | integration tests: poke fires / is bounded / is skipped on a non-retryable error / never fires when the wrap-up produced an answer | 2 | A4 |
+| 6 | [ ] iter-N3: honest early-turn notices in the core (`TurnDiagnostics::explanation`), the TUI arm and the gateway substitution | the notice names the real cause; no double notice | 5 | A4 |
+| 7 | [ ] iter-N4: TUI defect sweep on the touched surfaces + full-scope logging for the tool-call / mid-stream paths | the audit records each defect with evidence; every fixed defect has a test | 2,5 | — |
+| 8 | [~] final verification + release build + deploy + gateway restart | the canonical gate table is green; `operant --version` matches the deployed md5 | 2..7 | C1..C7 |
+
+### Round 3, second half — the resumed session's tool history (iter-1786)
+
+| # | unit | done when | depends on | premises |
+|---|---|---|---|---|
+| 5b | [x] Recover the `tool_call_id` of tool rows persisted without one, from the transcript's ORDER | `crates/operant-core/tests/session_tool_pairing.rs` (an id-less result is paired again; a mixed turn keeps the id it has) + the live-data replay (0 mispairings) | 1 | A6 |
+| 6b | [x] The session distillation parses the array out of a prose-wrapped answer | two new unit tests in `distillation.rs` | 1 | A7 |
+| 7b | [x] Ship iter-1787: commit, push, release build, deploy, gateway restart | `origin/main` carries the commit; the deployed binary's md5 matches the artifact | 5b,6b | C3 |
+| 7c | [x] iter-1789: the crash the DEPLOYED binary showed on the operator's own data (`operant sessions list` panicked on a byte slice of a title with an em-dash) — and the same byte-slicing shape in four other display paths | the deployed command prints the table; the regression test fails without the fix | 7b | A8 |
+| 7d | [x] iter-1787 + iter-1789 deployed: release build, `~/.local/bin/operant`, gateway restarted | the deployed md5 equals the artifact's; `systemctl --user status operant-gateway` shows the new inode | 7b,7c | C3 |
+
+**Measured while round 3 ran** (the numbers are in `_kernel/claims.md`): the live session's
+437 tool rows, 407 of them without an id; the live log's 818 dropped halves; ~25 000 rows
+recoverable across six sessions; 15 prompt tokens for 18 000 characters of `reasoning_content`;
+27 distillations lost to a wrapped array.
+
+### Not planned (named, with the reason)
+
+- The AFT bridge's undelivered-completion backlog: a different subsystem, measured separately
+  (`operant-testing/kb/red-team/01-turn-early-root-cause.md`).
+- jcode's TODO-policy-specific poke wording: operant's core has no TODO-policy crate; the
+  mechanism (bounded synthetic continuation + non-retryable guard) is what is ported.
+
+
+## Round 3 outcome (shipped)
+
+- iter-1783 (`8264cdea`): the estimator stops charging the reasoning the provider does not charge;
+  the session-rehydration warning reports the rows it actually dropped; the auto-poke (jcode's
+  mechanism) gives an early turn one more pass WITH its tools; the "Turn ended early" notice names
+  the cause that happened.
+- iter-1787 (`ecf5c59a`): a resumed session keeps its ENTIRE tool history (the rehydration recovers
+  the ids the old writer never stored); the session distillation reads the facts out of a
+  prose-wrapped answer.
+- iter-1789 (`450925a0`): `operant sessions list` no longer dies on the operator's own title; five
+  byte-slicing display paths are char-safe.
+
+**Verified on this tree**: `cargo fmt --all -- --check` clean; `cargo clippy -p operant-core
+--all-targets --all-features -- -D warnings` clean; `cargo clippy -p operant-cli --bin operant
+--all-features -- -D warnings` clean; `cargo test -p operant-core --lib` 2798 passed / 5 failed
+(the same five pre-existing: the peer's `mcp.rs`, three environmental, sourcehound); `cargo test -p
+operant-cli --bin operant` 2197 passed / 0 failed; the new integration targets (auto_poke,
+session_rehydration_log, session_tool_pairing) green; `./scripts/genome lint` 0 errors;
+`python3 scripts/audit-ledger-index.py` OK.
+
+**Deliberately NOT done** (named, with the reason): the AFT bridge's undelivered-completion backlog
+(a different subsystem, measured in `operant-testing/kb/red-team/01-turn-early-root-cause.md`); a
+suffix rule for the tool-name recovery ("bash" → "aft_bash") — the refusal already names the
+candidates, and a wrong recovery runs a tool the model never asked for; the prompt-cache misses
+(the cacheable head changes because the tool set is exposure-dependent — an architectural change,
+not a patch); the five pre-existing core failures (not this slice's).
+
+## Round 4 (2026-11-06) — the remaining agentic-core gaps
+
+End-state test: `cargo test -p operant-core --lib --tests` is green except the peer's in-flight
+`mcp.rs` test, every gap this round fixes has a regression test that fails without the fix, and
+each fix lands as its own pushed iteration.
+
+| # | unit | done when | depends on | premises |
+|---|---|---|---|---|
+| 1 | [x] Re-derive the open gaps from live evidence (test suites, the audit ledger, the scratch gap register) | the measured table below | — | A6..A9 |
+| 2 | [ ] iter-N1: the config template stops advertising config keys the loader REJECTS (`requires`, `provides` under `[plugins]`) | `crates/operant-core/tests/example_template_loads.rs` is green; the manifest schema has exactly one owner (`docs/library/plugins.md`) | 1 | A6, C8 |
+| 3 | [ ] iter-N2 (RT-197): `[skills]` paths expand a leading `~` / `$HOME` / `$OPERANT_HOME`, so a copied template path never creates a literal `$HOME` directory | a load test fails without the fix and passes with it; the template's commented example stays honest | 2 | A7 |
+| 4 | [ ] iter-N3: a failing AFT command surfaces the diagnostics the bridge already captured (stderr tail) instead of "unknown error" | a bridge test fails without the fix and passes with it | 1 | A8 |
+| 5 | [ ] iter-N4: the `harness_tools.rs` header stops claiming mount/unmount are stubs (they are implemented and tested) | the header matches the code; no behaviour change | 1 | — |
+| 6 | [ ] final verification: fmt, scoped clippy, core lib+integration suites, genome lint, audit-ledger index | the gate table is green except the peer's `mcp.rs` test, which is reported | 2..5 | C1..C7 |
+
+### Measured while round 4 ran
+
+- `cargo test -p operant-core --lib`: 2802 passed, 1 failed, 1 ignored — the one failure is
+  `mcp::tests::a_server_that_never_matches_the_request_id_fails_boundedly`, in the PEER's
+  in-flight `mcp.rs` (their response-drain rewrite changed the behaviour their own test pins).
+- `cargo test -p operant-core --tests --no-fail-fast`: one non-peer failure —
+  `every_commented_example_in_the_template_names_a_field_the_loader_accepts` — reporting
+  `operant.example.toml` line 568 (`requires`) and line 572 (`provides`).
+- Those two lines are `manifest.toml` fields of a PLUGIN, not `operant.toml` keys; the loader's
+  `deny_unknown_fields` rejects them, and `docs/library/plugins.md` already owns that schema.
+- The scratch gap register's "MCP response ID mismatch" class is the peer's in-flight `mcp.rs`
+  fix, not an open slice; its `aft_inspect` "unknown error" class is real and is unit 4.
+- The remaining ledger rows are records/decisions, not code gaps: RT-136 (a recorded
+  confirmed-not-a-defect), RT-190 (an owner ruling on two memory-wire bank families), RT-209
+  (two rendering options; the module's own header says the choice is the operator's).
+
+### Not planned (named, with the reason)
+
+- RT-209's subscriber: the module header states the remaining choice (a TUI panel vs a `<turn_context>`
+  block) is the operator's, and the measured blocker (the volatile tail is built once per turn,
+  before any tool runs) makes the prompt seat impossible.
+- RT-190's bank bridge: an owner ruling, already documented as a boundary.
+- The peer's `mcp.rs` response-drain rewrite and its red test: another agent's slice, in flight.
+- The deploy copy and the gateway restart: the sandbox has no systemd user bus and cannot write
+  `~/.local/bin`; the release artifact is built in-tree and the exact deploy commands are reported.
+
+### Round 4 — SHIPPED (iter-1798, iter-1799)
+
+- **iter-1798** (`928a6394`) — RT-197 (the `[skills]` paths resolve `~`/`$HOME`) +
+  RT-246 (the template stops advertising the plugin MANIFEST's fields as config keys).
+  Both mutation-proved; `config.rs` 43/43, `example_template_loads` 4/4, clippy clean.
+- **iter-1799** (`e08a643c`) — RT-247 (a failing aft command reports the child's stderr)
+  + RT-248 (`harness_mount`/`harness_unmount` can be approved — the host now passes the
+  approval on). Both mutation-proved; `aft_bridge` 9/9, `agent::tests` 79/79,
+  `harness_tools` 6/6, clippy clean.
+- Both pushed to `origin/main`; the audit ledger's index agrees with its checkboxes
+  (`python3 scripts/audit-ledger-index.py` → OK) and the open rows are now four:
+  RT-136 (a record), RT-179 (a channel-parity feature), RT-190 (an owner ruling),
+  RT-209 (an operator choice between two rendering seats).
+
+### Round 4, continued — SHIPPED (iter-1800, iter-1805, iter-1808)
+
+- **iter-1800** (`c1870d71`) — RT-249: a delegation that produced nothing is a NAMED failure
+  (one shaping point, `child_outcome`), not an empty successful tool result. Mutation-proved
+  (the check had to move INTO the function that shapes the outcome — a helper-level test did
+  not pin the call site).
+- **iter-1805** (`c49f282f`) — RT-250: the plugin observe envelope's post-execute event carries
+  the call's args again (the redaction seat could see the output but not the input).
+  Mutation-proved.
+- **iter-1808** (`4a35be8a`) — RT-255: the workspace lint gate's 13 expectations became allows
+  with the same reasons (an expectation on a FLOATING `stable` toolchain is a red/green coin
+  flip). `bash scripts/clippy-warning-gate.sh` → "seen=0 allowlist=0 new=0 stale=0 — pass".
+- All three pushed to `origin/main`; the release artifact (20:48:18, after the last commit at
+  19:58:47) reports `operant 0.3.0 (memory-wire b478d15)`, md5
+  `f8c636fad4750484d1163349c2e23bec`. The deploy copy and the gateway restart remain BLOCKED
+  by the sandbox (read-only `~`, no user bus) and are reported, not faked.
+
+### The agentic-core's remaining gaps after iter-1808 — MEASURED, not assumed
+
+| gap | status | why |
+|---|---|---|
+| RT-136 | a RECORD | "Carried open as a RECORD, not a task" — `[pk]`/`[socialization]` are honestly labelled unread |
+| RT-179 | a FEATURE | the channel twins; the functional core is already reachable from a channel |
+| RT-190 | an OWNER RULING | two memory-wire bank families; the boundary is documented, the bridge is a future tranche |
+| RT-209 | an OPERATOR CHOICE | two rendering seats for the turn attribution; the module header says the choice is the operator's |
+| the harness2-contrast plan (iter-A/B/C) | LANDED | `HARNESS_LESSON_TAG`, the verdict tripwire, the INV/DOM review lane, the curator auto-run, the status counters |
+| the plugin plan (G1/G2/G6/G7/G8/G9) | LANDED | the turn-interceptor seat, the Replace verdict, live re-registration, creator mode, the in-tree fixture, `plugins status` |
+| `write_approval` / `persistence_seam` | ACCOUNTED FOR | KB-3/AD-020 decided against wiring the first; the second is inside the harness2 plan's audited surface |
+| `Dispatcher::complete_run`/`fail_run` | hygiene, not a gap | `operant kanban complete` completes tasks through `db.complete_task` |
+| the MCP OAuth manager (`build_authorization_url`, `handle_401`) | NOT WIRED | a real gap, but it needs a decision on the OAuth surface (the MCP client never sees a 401 path); named, not shipped |
+| the sourcehound / aft-binary limits | EXTERNAL | the binaries' own caps and the server's timeouts, not this crate's code |
+| the peer's `mcp.rs` | IN FLIGHT | their response-drain rewrite; their own test is red in their tree |
+
+
+### Round 4 — what is still open after iter-1799
+
+- The release build + deploy: the sandbox has no systemd user bus and cannot write
+  `~/.local/bin`, so the artifact is built in-tree and the deploy commands are
+  reported instead of faked.
+- The peer's `mcp.rs` response-drain rewrite is still in flight and its own test is
+  red in their tree (`a_server_that_never_matches_the_request_id_fails_boundedly`).
+- RT-209 (the turn-attribution subscriber), RT-190 (the memory-wire bank families),
+  RT-179 (the channel twins), RT-136 (a record): records/decisions, not code gaps.
+- The sourcehound/AFT-binary gaps in the scratch gap register are EXTERNAL to this
+  crate (the aft binary's own limits, the sourcehound server's timeouts); the core's
+  half of the aft class (RT-247) is closed.
+
+### Round 4 — the next tranche (found by the orphan-module sweep, for the NEXT round)
+
+The sweep over `crates/operant-core/src/lib.rs`'s `pub mod` list (count each module's
+external users) found TWO modules with zero callers outside themselves:
+
+- `write_approval` — ACCOUNTED FOR, not a new gap: ledger row KB-3 (closed iter-971,
+  AD-020) already decided against wiring it ("no staged apply path (the `write_approval`
+  module has no caller; deletion candidate)") — the three knowledge tools were gated at
+  the PERMISSION prompt instead. Do NOT wire it; the decision is recorded.
+- `persistence_seam` — the 018-U1 sidecar persistence seam. It is one of the mechanisms
+  the repo's own dated-frozen plan audits (docs/plans/2026-11-05-recursive-self-harnessing-
+  for-operant-harness2-contrast-audi.md).
+
+That plan is the next named tranche, and it is already scoped ("Three small iterations;
+the only new persistence is one reserved tag and one marker scan"):
+
+- **iter-A** — the harness-lesson record: a reserved `harness-lesson` tag in `memory_wire`,
+  a four-line body (`component:` / `cue:` / `lesson:` / `evidence:`, `confidence:` optional),
+  and a TRIPWIRE at retain time that refuses-and-logs a lesson body carrying validation
+  markers ("test result:", "FAILED (", "panicked at", "0 passed", "cargo test",
+  "test_command"). Gates: a round-trip test and a tripwire test.
+- **iter-B** — the review fork becomes a propose–reflect lane (prompt text only in
+  `agent/background_review.rs`): INV/DOM split, verdict discipline
+  (`helped | hurt | no observed effect | confounded`), at most ONE lesson, `NO_ENTRY`
+  expected, library read before edit.
+- **iter-C** — close the loop: prefetch includes the lesson tag, `CuratorEngine::maybe_run_curator`
+  (zero callers today) fires from the review cadence gate, and `operant status` gains two
+  counters.
+
+Other named open items (decisions, not code): RT-209's subscriber (two rendering seats —
+the operator's choice), RT-190's bank bridge (an owner ruling), RT-179's channel twins
+(a feature), RT-136 (a record), the harness-level lane's default flip (an owner decision
+the plan explicitly does not take silently).
+
+
+
+## Round 6 (2026-11-07) — the operator's five TUI complaints
+
+End-state test: every one of the five symptoms has a regression test that fails without the fix,
+`cargo test -p operant-cli --bin operant` and `cargo test -p operant-core --lib` are green, the
+clippy gate passes, and each fix is a pushed `iter-N` commit.
+
+| # | unit | done when | depends on | premises |
+|---|---|---|---|---|
+| 1 | [x] the steer queue is MIRRORED onto the App, so the queued band renders the real queue | a queued message shows in `queued_messages()`; Ctrl+X recall updates the mirror | — | A14 |
+| 2 | [x] queued + goal messages enter the prompt history | the Up/Down ladder and `history.jsonl` carry them | 1 | — |
+| 3 | [x] `/goal` is a STANDING goal (injected into every turn) | the agent's turn context carries `<session_goal>` on the next turn | — | A15 |
+| 4 | [x] the advisor card renders in BLOCKS (one per note), not as one `"; "`-joined lump | the card text has one block per note; the continuation payload stays machine-readable | — | A16 |
+| 5 | [x] no non-input text inside the composer's text area | the queue hint moves to the status line; the text rect carries only the operator's text | — | — |
+| 6 | [x] final verification: fmt, scoped clippy, core+cli suites, genome lint, audit index | the gate table is green | 1..5 | C1..C7 |
+
+### Shipped (all on `origin/main`)
+
+| iteration | commit | what |
+|---|---|---|
+| iter-1839 (re-applied as iter-1841) | 15cec34e | the queue mirror, the prompt-history writer, the standing goal |
+| iter-1842 | 23015b38 | the advisor card in blocks, the card/payload split |
+| iter-1845 | 64094d60 | the composer hints moved out of the input area |
+| iter-1846 | d3d4aef7 | the changelog entries |
+
+### Final verification
+
+- `cargo test -p operant-core --tests` → 2833 passed / 0 failed (lib) and every
+  integration target 0 failed.
+- `cargo test -p operant-cli --tests` → 2235 passed / 0 failed / 8 ignored (bin)
+  plus the integration targets 16 / 3 / 1 passed.
+- `cargo clippy -p operant-core --lib --all-features -D warnings` → clean.
+- `cargo clippy -p operant-cli --bin operant --all-features -D warnings` → clean.
+- `cargo fmt --all -- --check` → clean.
+- `python3 scripts/audit-ledger-index.py` → OK. `./scripts/genome lint` → 0 errors.
+- Release build → exit 0; the binary is installed at `~/.local/bin/operant`
+  (`operant --version` → 0.3.0) and `operant-gateway` is ACTIVE on that path.
+
+### NOT DONE (named, not hidden)
+
+- The `docs/audit/2026-06-19-BUGS.md` rows for these defects. The file is in a
+  concurrent editor's in-flight change (its index table and its detail rows must
+  move together, and `scripts/audit-ledger-index.py` checks the pair), so the
+  rows were left to that editor. The CHANGELOG entries and the commit bodies
+  carry the audit trail meanwhile.
+- The workspace-wide `cargo test --workspace` in a CLEAN worktree: the cold
+  target dir cannot build `espeak-rs-sys` on this host (the espeak-ng data
+  generation fails), and in the SHARED tree the same command cannot compile
+  because of the concurrent editor's in-flight `WorkerSpec::toolsets` change.
+  The two touched crates' full suites (lib + integration + bin) are green in
+  the shared tree, and the pushed state was re-read from `origin/main`.
+
+### Measured while round 6 ran
+
+- `TuiState::queued_messages()` returned `&[]` — a `[port-decision]` stub — so the queued band
+  NEVER rendered a queued message, and `pending_soft_interrupts` had the same stub.
+- `session_goal` had NO reader outside its own setter: the "standing session goal … injected as a
+  system preamble message whenever it is set" doc was false.
+- The advisor's preserve channel joined the notes with `"; "` into ONE summary string.
+- The composer's queue hint was pushed into the SAME `lines` vector as the wrapped draft, so it
+  was painted as the FIRST ROW of the text rect.
+
+---
+
+## Round 5 (2026-11-06) — the remaining agentic-core gaps
+
+End-state test: `cargo test -p operant-core --lib --tests` is green, the workspace clippy gate is
+green, and every gap this round fixes has a mutation-proved regression test and a pushed iteration.
+
+| # | unit | done when | depends on | premises |
+|---|---|---|---|---|
+| 1 | [x] Baseline: core suite green, peer WIP identified, genome wake check read | the suite is green at HEAD; the peer's files are named | — | — |
+| 2 | [x] A fresh evidence sweep over operant-core (a read-only subagent + my own greps) | 5 findings, each with file:line evidence | 1 | — |
+| 3 | [x] iter-1813: the `[proxy]` table reaches the provider clients (RT-258) | `configured_proxy_is_used_by_the_provider_client` passes; mutation-proved; pushed | 2 | A10 |
+| 4 | [x] iter-1816: the deferred bridge reads the TYPE, not the name (RT-259) | `a_type_deferred_tool_is_reachable_through_the_bridge` passes; mutation-proved; pushed | 2 | A11 |
+| 5 | [x] iter-1819: a plugin observer is registered ONCE and unregistered when its capability is withdrawn (the HIGH finding) | the observer's `observe` export runs once per tool event after a live change; the turn gate is revoked when `turn_gate` is dropped | 4 | A12 |
+| 6 | [x] iter-1821: the curator's idle clock moves on USE (a used skill must not be archived) | a skill used through the production path survives `apply_automatic_transitions` with `archive_after_days = 1` | 4 | A13 |
+| 7 | [x] iter-1822: `agent.session_reset` is reported as UNREAD instead of as an active setting | the config's unread-warning list names it; the setup wizard stops claiming it works | 4 | — |
+| 8 | [~] final verification + release build + deploy | the gate table is green; the artifact is fresh; the deploy is attempted and REPORTED (the sandbox blocks `~` and the user bus) | 5,6,7 | C1..C8 |
+
+### Round 5 — measured
+
+- `cargo test -p operant-core --lib --tests --no-fail-fast` at HEAD: GREEN (cargo exit 0). The
+  peer's `mcp.rs` response-drain rewrite compiles and its own test passes in the shared tree.
+- The `[proxy]` gap: `apply_runtime_proxy_to_builder`, `build_runtime_proxy_client` and
+  `build_channel_proxy_client` had ZERO callers outside `operant-config/src/schema/proxy.rs`.
+- The deferred-bridge gap: `assemble_tools` matches on `s.exposure`; `tool_search`'s catalog,
+  `tool_describe`, `tool_call` and `materialise_for_turn` matched on `is_deferrable(&name)`.
+
+### Round 5 - shipped
+
+- iter-1813 (RT-258): the proxy table reaches the provider clients.
+- iter-1816 (RT-259): the deferred bridge reads the TYPE, not the name.
+- iter-1819 (RT-260): a plugin observer is registered once, and a withdrawn
+  observer (or turn gate) is unregistered.
+- iter-1821 (RT-262): the curator idle clock moves on a USE.
+- iter-1822 (RT-263): agent.session_reset is reported as unread instead of
+  being advertised as a policy.
+
+### Round 5 - named residuals (not fixed, with the reason)
+
+- The proxy TOOL half: the tool clients follow the process environment, not
+  the runtime table. Wiring them blindly would weaken the SSRF guard (the
+  guard resolves locally, a proxy resolves remotely) and break the localhost
+  CDP client - a per-client decision, not a patch.
+- The provider-account OAuth surface (oauth/, oauth_refresh.rs): real, with
+  no reachable entry point; no small fix (it needs a login surface and a
+  call site).
+- The curator CONFIGURED skills root: with skills.root_dir set, the auto-run
+  reads the default tree while the tools write the configured one - a
+  config-resolution change.
+- The peer slice WIP (mcp.rs, advisor.rs, the two core tests, the TUI files,
+  scripts/genome): untouched, by the fleet rule.
+
+---
+
+## Round 8 (2026-11-07) — Ctrl+Enter, the generic compression, the immortal notice
+
+End-state test: each of the three reports has a mutation-proven regression
+test; the core and CLI suites are green; the release binary is built, installed
+at `~/.local/bin/operant` and the gateway is restarted on it.
+
+| # | unit | done when | depends on | premises |
+|---|---|---|---|---|
+| 1 | [x] every transient notice expires (TTL) and the dead field is cleared | the clipboard notice leaves the notification line and releases its row | — | — |
+| 2 | [x] the compaction threshold scales with the window | a 1M window compacts at 800k, not 350k | — | — |
+| 3 | [x] Ctrl+Enter always queues, and an idle-queued message is delivered with the next turn | the key never submits; the pending queue rides the next turn | 1, 2 | — |
+| 4 | [x] verification: fmt, scoped clippy, core+cli suites, release build, deploy | the gate table is green | 1..3 | C1..C7 |
+
+### Shipped (all on `origin/main`)
+
+| iteration | commit | what |
+|---|---|---|
+| iter-1871 | e7cdc003 | the notice TTL: one reader, a clearing frame loop, two write doors |
+| iter-1872 | 4eab5015 | the caps: the absolute axis off by default, the percentage governs |
+| iter-1873 | a395ca53 | the README's line count restored (the band finding is pre-existing) |
+| iter-1875 | d384d5ba | Ctrl+Enter always queues; the pending queue is delivered with the next turn |
+
+### The compaction mechanism, in one paragraph
+
+`run.rs` builds the request, estimates its tokens, and compares the estimate
+with the resolved soft cap. Over the cap, the "preflight ladder" runs four
+rungs in order — (1) re-trim historical tool results to 2_000 chars (no LLM),
+(2) a deterministic decay-render, (3) the semantic goal-similarity cut (off by
+default: it needs an embedder), (4) an LLM "summarize-before-evict" whose
+output is explicitly framed as "background reference, NOT as active
+instructions". Each rung runs only while the estimate is still over the cap;
+the eviction rung then fits the request to the window. With the caps at
+350k/400k absolute and a 1M window, the ladder fired EVERY turn of a long
+session and rung 1 (the lossy trim) is what ran — truncating the agent's own
+earlier reads, which is the "generic compression" the operator saw and the
+reason the instructions it had read stopped being followed.
+
+### NOT DONE (named, not hidden)
+
+- The ladder's LOSSY budget (2_000 chars per historical tool result) is
+  unchanged: with the threshold fixed it runs only when the request genuinely
+  approaches the window, which is the right time for it. Widening it is a
+  separate decision about what a long tool output costs.
+- The semantic rung stays off by default (it needs an embedder, and every
+  degrade path falls back to recency), and the context engine stays
+  unattached — both are named in the report as the lossless paths.
+- `docs/audit/2026-06-19-BUGS.md` rows for these three defects: the file is
+  in a concurrent editor's in-flight change (its index table and its detail
+  rows must move together). The CHANGELOG entries carry the audit trail.
+- The README rubric's `length_in_band` finding (371 lines vs the monorepo
+  band's 340) is PRE-EXISTING and is reported as such, not silently fixed by
+  trimming 31 unrelated lines.
+
+### Round 8b — the gateway crash loop (found while deploying)
+
+| # | unit | done when | depends on | premises |
+|---|---|---|---|---|
+| 5 | [x] the gateway survives a child that closes its pipe | the daemon arm ignores SIGPIPE; the service stays up | — | — |
+
+- iter-1880 (5a7d4885): `ignore_sigpipe_disposition` in the gateway arm; the
+  CLI keeps the default disposition its piped output needs.
+- MEASURED before: `operant gateway run` exits 141 (128+SIGPIPE) seconds after
+  start; the journal shows 870+ restarts in two hours (the counter was
+  already 863 before this session's deploy).
+- MEASURED after: the foreground run survives the 20s timer (exit 124), and
+  the service is `active` with `NRestarts=0`.
+
+### Deploy (round 8)
+
+- `scripts/build.sh --offline --release` → exit 0 (9m02s).
+- Installed at `~/.local/bin/operant` (`operant --version` → 0.3.0; the
+  deployed md5 equals the artifact's).
+- `systemctl --user restart operant-gateway` → active, NRestarts=0.
+- The operator's `~/.operant/operant.toml` sets `context_window = 1000000`
+  and does NOT override the caps, so the new default (80% / 95%) applies to
+  their session: 800k / 950k instead of 350k / 400k.
+
+## Round 11 (2026-11-08) — the operant-core campaign, iter-1901…iter-1950
+
+Fifty iterations, every one pushed (origin/main 8141e2a3 → b9fe0707). The
+protocol held: fix → mutation-proved regression test → RT row + changelog →
+index-script OK → commit+push. `docs/audit/2026-06-19-BUGS.md` gained
+RT-328…RT-364 and `docs/CHANGELOG.md` the matching newest-first entries.
+
+The fixes, by class:
+
+- **A dropped parameter between schema and wire** (the round's dominant
+  class): the kernel trio's namespace precedence / harness_list routing /
+  stale invalidation list (RT-328), the camelCase-to-snake handoff (already
+  shipped as RT-315 in round 10), inputSchemaProperties' arg merge (RT-318),
+  the registry pass-through (RT-320, round 10), memory_forget's ignored id
+  param (RT-322, round 10), notification_tool's dead priority knob
+  (RT-352), process_tool's notify-on-complete (RT-347), video_analysis's
+  analysis_type (RT-344), browser_cdp's unread timeout (RT-335),
+  code_execution's UNBOUNDED cell timeout (RT-335, RT-337).
+- **A unit or scale subscribed wrong**: the cookie jar writing HttpOnly into
+  the netscape format's SUBDOMAIN column (RT-338, both directions of the
+  round-trip repaired), the accessibility render taking a heading level's
+  character count as the level (RT-339), the dated timestamp ignoring the
+  requested unit (RT-352's fourth site).
+- **A doc or log that claims more than the code does** (the RT-275 family):
+  the session stall detector (RT-331), the mirror forwarder (RT-332), the
+  admin handler's shutdown arm (RT-333), the runtime adapter (RT-345), the
+  LCM tools' registration (RT-358), the persistence seam (RT-359), the rate
+  limiter's status half (RT-360), the checkpoint registration seam's false
+  "loaded" log (RT-356), the SMTP connect failure (RT-334), the env probe's
+  substring false-positives (RT-341), the @-reference spellings (RT-363).
+- **Nondeterminism or ordering**: the webhook route picked per HashMap
+  iteration (RT-342), the anomaly budget counted per conversation (RT-354),
+  the turn summary's dead overflow count (RT-350 → the row is RT-329),
+  learning_manage's read-after-write snapshot (RT-343).
+- **A live-path behaviour fix**: edit_message bypassing the dispatch
+  breaker (RT-330), the ACP session/cancel destroying the session (RT-355),
+  cli_roster's re-admission clobber (RT-349), the checkpoint list's
+  hardcoded diff stats (RT-348), file_state's directory hashing (RT-346),
+  fs_secrets' permission widening (RT-361), gateway_session_delete's
+  creation-only guard → runtime-time store() (RT-321, round 10).
+
+Measured, not assumed:
+
+- The campaign's standing hazards all recurred and were survived: `git
+  checkout --` wiped the RT-348 worktree and the pre-mutation backup
+  restored it (the commit message records it); two `git checkout`s of the
+  same hazard family; a restore-from-backup reverted a repaired contract to
+  its self-satisfying form (RT-340's skills_guard half — re-repaired in
+  iter-1938); and the end-of-round sweep found three more round-owned
+  regressions (RT-364), including a contract vacuous since iter-1928
+  because its own doc comment satisfied its needle.
+- Twelve near-miss tests were caught by their own mutation runs (the
+  needle matching the test's own prose, a camelCase-vs-snake_case schema
+  needle, a doc comment that leaks into the schema description, a
+  non-discriminating fixture where both conditions were true). Every one
+  was repaired and re-proved; the commits say so.
+
+### Deploy (round 11)
+
+- `scripts/build.sh --offline --release` (see the log below).
+- Deploy is still IMPOSSIBLE on this host: `~/.local/bin` is read-only and
+  there is no user session bus; `~/.local/bin/cargo` falls back to plain
+  cargo. The release artifacts build clean and are left in
+  `target/release/`; nothing was faked and nothing was shipped to a live
+  service.
