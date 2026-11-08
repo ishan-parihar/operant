@@ -52,7 +52,19 @@ impl ActiveSessionTracker {
 
         if current.iter().any(|s| s == &file) {
             // Already holding a slot — refresh the mtime so it is not pruned.
-            let _ = fs::write(self.dir.join(&file), now_millis().to_string());
+            // RT-395: the refresh was discarded, so a failed write left a BUSY
+            // session's lock on its old mtime and prune_stale then evicted it —
+            // breaking the module doc's own promise ("their locks are refreshed
+            // on every message, so a busy session can never be evicted by a new
+            // one") and letting a concurrent session exceed the cap.
+            if let Err(e) = fs::write(self.dir.join(&file), now_millis().to_string()) {
+                tracing::warn!(
+                    session = %session_id,
+                    error = %e,
+                    "active-session lock could not be refreshed — the slot may \
+                     be pruned as stale while the session is still active"
+                );
+            }
             return Ok(true);
         }
         if let Some(max) = self.max
@@ -66,7 +78,17 @@ impl ActiveSessionTracker {
             .open(self.dir.join(&file))
         {
             Ok(mut f) => {
-                let _ = f.write_all(now_millis().to_string().as_bytes());
+                // RT-395: the create succeeded but the timestamp is the mtime
+                // prune_stale keys on — a failed write here creates a
+                // born-stale slot (0 mtime) that the next check prunes.
+                if let Err(e) = f.write_all(now_millis().to_string().as_bytes()) {
+                    tracing::warn!(
+                        session = %session_id,
+                        error = %e,
+                        "active-session lock was created without its timestamp \
+                         — the slot is born stale and may be pruned at once"
+                    );
+                }
                 Ok(true)
             }
             // Lost a create race — another request for the same session
@@ -316,6 +338,45 @@ pub fn prune_dead_presence() -> (usize, usize) {
         }
     }
     (pruned, kept)
+}
+
+#[cfg(test)]
+mod rt395_tests {
+    /// RT-395: the module's doc promises "their locks are refreshed on every
+    /// message, so a busy session can never be evicted by a new one" — both
+    /// refresh writes were discarded (`let _ =`), so a failed write left a
+    /// BUSY session's lock on its old mtime (pruned as stale, cap exceeded by
+    /// a concurrent session) or a brand-new slot born with no mtime.
+    /// Source contract, limitation named (IO-shaped), needles
+    /// concatenation-built.
+    #[test]
+    fn the_lock_writes_report_a_failed_refresh() {
+        let src = include_str!("active_sessions.rs");
+        let swallowed_write = format!("let _ = fs::write(self.dir.join(&{}file)", "");
+        assert_eq!(
+            src.matches(&swallowed_write).count(),
+            0,
+            "the lock refresh must not be discarded"
+        );
+        let swallowed_flush = format!("let _ = f.write_all(now_{}millis", "");
+        assert_eq!(
+            src.matches(&swallowed_flush).count(),
+            0,
+            "the created lock's timestamp write must not be discarded"
+        );
+        let busy_side = format!("pruned as stale while the session is still {}active", "");
+        assert_eq!(
+            src.matches(&busy_side).count(),
+            1,
+            "the refresh's report must name the evicted-while-busy consequence"
+        );
+        let born_stale = format!("born stale and may be pruned at {}once", "");
+        assert_eq!(
+            src.matches(&born_stale).count(),
+            1,
+            "the create's report must name the born-stale consequence"
+        );
+    }
 }
 
 #[cfg(test)]
