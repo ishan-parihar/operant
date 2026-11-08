@@ -466,9 +466,10 @@ pub fn describe_slots(cfg: &AppConfig) -> String {
 
 #[cfg(test)]
 mod rt405_tests {
-    /// RT-405: the module header cited `agent/events.rs:491` as the home of
-    /// `OperantAgent::set_model`. Line 491 is blank — the definition is at 540
-    /// — so a reader following the doc's own pointer landed on nothing and
+    /// RT-405: the module header cited a line number 49 lines before the
+    /// definition as the home of `OperantAgent::set_model` (which lives at
+    /// line 540). That cited line is blank, so a reader following the doc's own
+    /// pointer landed on nothing and
     /// could conclude the self-switching behavior does not exist. The campaign
     /// has three instances of this class (RT-281, RT-290, RT-309): a line cite
     /// survives while its neighbors shift, and a verification that reads the
