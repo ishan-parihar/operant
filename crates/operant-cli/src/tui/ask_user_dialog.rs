@@ -357,8 +357,16 @@ pub fn render_ask_user_dialog(state: &AskUserDialogState, area: Rect, buf: &mut 
     // Hint row
     row += 1;
     if row < last_row {
+        // (iter-1935) The options hint must FIT the panel. It read
+        // "  type: custom   ↑↓/Tab: options   Enter: confirm   Esc: skip" — 61
+        // columns against a 54-column inner area — so the border silently cut
+        // the tail and the operator's hint ended at "Esc:" with no "skip"
+        // after it. A clipped claim is a half-told one, so the wording is now
+        // measured against `inner_w` and the custom-text tail (which the row
+        // above already advertises as "type to fill custom answer…") is gone.
         let hint = if state.options.is_some() {
-            "  type: custom   ↑↓/Tab: options   Enter: confirm   Esc: skip"
+            // 46 columns: ↑↓/Tab pick, Enter confirm, Esc skip.
+            "  ↑↓/Tab: options   Enter: confirm   Esc: skip"
         } else {
             "  Type answer, then Enter to confirm   Esc: skip"
         };

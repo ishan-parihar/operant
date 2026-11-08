@@ -1669,6 +1669,235 @@ fn the_rewind_headers_claims_hold_in_the_state_they_are_shown_in() {
         notice = app.rewind_selector.notice
     );
 }
+/// (iter-1935) THE CLASS PIN: every surface that paints a key claim must derive
+/// it from the state that gates it.
+///
+/// Four defects this session had the same shape — a claim line painted
+/// unchanged in every state of its surface while the dispatcher's answer for
+/// that key changed between states:
+///
+///   iter-1930  diff viewer footer   — PANE-gated: "space collapse" in the detail pane
+///   iter-1931  memory selector      — ALIASED: "Enter select" where Enter == Esc
+///   iter-1932  catalogue bucket     — BUCKET: Enter "Confirm" for every dialog
+///   iter-1934  rewind selector      — STATE-gated: "Enter to rewind" while filtering
+///
+/// Each was fixed by deriving the claim from the state. This pins the CLASS, so
+/// the next surface that grows a second state without its claim following fails
+/// here. The table is the sweep: render each surface in both of its states
+/// through its REAL renderer and require the claim set to differ exactly where
+/// the dispatch differs.
+///
+/// The negative rows matter as much as the positive ones: a surface whose
+/// claims are genuinely state-independent must NOT change its hint, or this
+/// table would be satisfied by a renderer that reshuffles text for no reason.
+#[test]
+fn every_state_gated_claim_is_derived_from_the_state_that_gates_it() {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    /// Render a surface and return the painted text.
+    fn paint(draw: impl FnOnce(&mut ratatui::Frame<'_>)) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        terminal.draw(draw).unwrap();
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol().chars().next().unwrap_or(' '))
+            .collect()
+    }
+
+    // (surface, state A, state B, what must move, what must stay)
+    //
+    // "must move" is a claim that holds only in state A — it may not appear in
+    // state B's paint. "must stay" holds in both, so a renderer that drops it
+    // (rather than re-deriving it) fails.
+    struct Case {
+        surface: &'static str,
+        must_stay: Vec<&'static str>,
+        must_move: Vec<&'static str>,
+        state_a: Box<dyn Fn() -> String>,
+        state_b: Box<dyn Fn() -> String>,
+    }
+
+    // A `fn`, not a closure: the `Box<dyn Fn() -> String>` cases below are
+    // 'static, so they cannot borrow a local.
+    fn diff_files(app: &mut crate::tui::app::App) {
+        app.diff_viewer.visible = true;
+        app.diff_viewer.files = vec![crate::tui::diff_viewer::FileDiffStats {
+            path: "src/lib.rs".to_string(),
+            added: 5,
+            removed: 2,
+            binary: false,
+            is_new_file: false,
+            hunks: Vec::new(),
+        }];
+        app.diff_viewer.collapsed = vec![false; app.diff_viewer.files.len()];
+    }
+
+    let cases: Vec<Case> = vec![
+        // ---- iter-1930: the diff viewer's PANE-gated "space collapse" -------
+        Case {
+            surface: "diff_viewer",
+            must_stay: vec!["switch pane", "pgup/pgdn"],
+            must_move: vec!["space", "collapse"],
+            state_a: Box::new(|| {
+                let mut app = make_app();
+                diff_files(&mut app);
+                paint(|frame| {
+                    crate::tui::diff_viewer::render_diff_dialog(
+                        &mut app.diff_viewer,
+                        frame.area(),
+                        frame.buffer_mut(),
+                    );
+                })
+            }),
+            state_b: Box::new(|| {
+                let mut app = make_app();
+                diff_files(&mut app);
+                app.diff_viewer.switch_pane();
+                paint(|frame| {
+                    crate::tui::diff_viewer::render_diff_dialog(
+                        &mut app.diff_viewer,
+                        frame.area(),
+                        frame.buffer_mut(),
+                    );
+                })
+            }),
+        },
+        // ---- iter-1934: the rewind selector's STATE-gated header -------------
+        Case {
+            surface: "rewind_selector",
+            must_stay: vec!["Rewind to a previous prompt"],
+            must_move: vec!["Enter to rewind", "f filter", "Esc cancel"],
+            state_a: Box::new(|| {
+                let mut app = make_app();
+                app.handle_tui_command("rewind", "");
+                paint(|frame| {
+                    crate::tui::rewind_selector::draw_rewind_selector(frame, frame.area(), &app);
+                })
+            }),
+            state_b: Box::new(|| {
+                let mut app = make_app();
+                app.handle_tui_command("rewind", "");
+                app.handle_key_event(press_key(KeyCode::Char('f'), KeyModifiers::NONE));
+                paint(|frame| {
+                    crate::tui::rewind_selector::draw_rewind_selector(frame, frame.area(), &app);
+                })
+            }),
+        },
+        // ---- the ask-user dialog: its hint changes when options exist -------
+        // (iter-1935) The options hint OVERFLOWED its panel (61 columns against
+        // a 54-column inner area), so the border cut the tail and the operator's
+        // hint ended at "Esc:" with no "skip" after it. The class pin catches it
+        // because "Esc: skip" is a claim that must be legible in BOTH states.
+        Case {
+            surface: "ask_user_dialog",
+            must_stay: vec!["Esc: skip"],
+            must_move: vec!["↑↓/Tab: options", "Enter: confirm"],
+            state_a: Box::new(|| {
+                let state = crate::tui::ask_user_dialog::AskUserDialogState {
+                    visible: true,
+                    question: "Pick one".to_string(),
+                    options: Some(vec!["yes".to_string(), "no".to_string()]),
+                    ..Default::default()
+                };
+                paint(|frame| {
+                    crate::tui::ask_user_dialog::render_ask_user_dialog(
+                        &state,
+                        frame.area(),
+                        frame.buffer_mut(),
+                    );
+                })
+            }),
+            state_b: Box::new(|| {
+                let state = crate::tui::ask_user_dialog::AskUserDialogState {
+                    visible: true,
+                    question: "Pick one".to_string(),
+                    options: None,
+                    ..Default::default()
+                };
+                paint(|frame| {
+                    crate::tui::ask_user_dialog::render_ask_user_dialog(
+                        &state,
+                        frame.area(),
+                        frame.buffer_mut(),
+                    );
+                })
+            }),
+        },
+        // ---- the agents menu: its footer changes per route ------------------
+        Case {
+            surface: "agents_menu",
+            // Both routes name Esc (close / back), but only the editor's
+            // footer names the editor's own chords — and List's footer is
+            // "enter open · esc close", so "esc close" must NOT appear there.
+            must_stay: vec!["esc"],
+            must_move: vec!["ctrl+s save", "tab move"],
+            state_a: Box::new(|| {
+                let state = crate::tui::agents_view::AgentsMenuState {
+                    visible: true,
+                    route: crate::tui::agents_view::AgentsRoute::Editor(None),
+                    ..Default::default()
+                };
+                paint(|frame| {
+                    crate::tui::agents_view::render_agents_menu(
+                        &state,
+                        frame.area(),
+                        frame.buffer_mut(),
+                    );
+                })
+            }),
+            state_b: Box::new(|| {
+                let state = crate::tui::agents_view::AgentsMenuState {
+                    visible: true,
+                    route: crate::tui::agents_view::AgentsRoute::List,
+                    ..Default::default()
+                };
+                paint(|frame| {
+                    crate::tui::agents_view::render_agents_menu(
+                        &state,
+                        frame.area(),
+                        frame.buffer_mut(),
+                    );
+                })
+            }),
+        },
+    ];
+
+    for case in &cases {
+        let a = (case.state_a)();
+        let b = (case.state_b)();
+        for stay in &case.must_stay {
+            assert!(
+                a.contains(stay) && b.contains(stay),
+                "{}: {stay:?} holds in both states, so both paints must carry it",
+                case.surface
+            );
+        }
+        for claim in &case.must_move {
+            assert!(
+                a.contains(claim),
+                "{}: state A must still claim {claim:?} — it dispatches there",
+                case.surface
+            );
+            assert!(
+                !b.contains(claim),
+                "{}: {claim:?} is false in state B, so state B's paint must not \
+                 promise it — the claim is state-gated and must be derived from \
+                 the state (iter-1935)",
+                case.surface
+            );
+        }
+        // The two paints must actually differ, or the table proved nothing.
+        assert_ne!(
+            a, b,
+            "{}: the two states' paints are identical, so this case proves nothing",
+            case.surface
+        );
+    }
+}
 
 /// match; Esc closes.
 #[test]

@@ -21,7 +21,7 @@
                                │                                                        │
  1› Which database should I poi│  type to fill custom answer…                           │                              │
                                │                                                        │
-                               │  type: custom   ↑↓/Tab: options   Enter: confirm   Esc:│
+                               │  ↑↓/Tab: options   Enter: confirm   Esc: skip          │
 › Ask operant to do anything   │                                                        │
                                │                                                        │
                                └────────────────────────────────────────────Esc to close┘▱▱▱▱ 0% API key Offline Capture
