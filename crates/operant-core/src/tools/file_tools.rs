@@ -4,16 +4,23 @@
 //!
 //! ## Path safety (iter-125)
 //!
-//! All file tools reject paths that escape the user's home directory or
-//! resolve to known-sensitive system files. This closes the ponytail-audit
+//! All file tools reject paths that escape via `..` traversal or resolve
+//! to known-sensitive system files. This closes the ponytail-audit
 //! security gap "file_tools no path-traversal validation — agent can read
 //! /etc/shadow, ~/.ssh/id_rsa".
 //!
 //! The guard is conservative on purpose: any canonicalized path that
 //! either (a) starts with `..` (still relative after canonicalization
-//! failure — usually means the file doesn't exist), (b) lives outside
-//! the home directory, OR (c) is in the hard-deny list of sensitive
-//! files (SSH keys, .aws/credentials, /etc/shadow, etc.) is rejected.
+//! failure — usually means the file doesn't exist), OR (c) is in the
+//! hard-deny list of sensitive files (SSH keys, .aws/credentials,
+//! /etc/shadow, etc.) or the registered credential registry, is rejected.
+//!
+//! NOT enforced (named, not promised — iter-1911): home-directory
+//! containment. An earlier version of this doc claimed paths "outside the
+//! home directory" are rejected; that arm was never implemented (and a
+//! strict version would also reject the agent's own workspace outside
+//! `$HOME`, e.g. a container's `/workspace`). The deny list and the
+//! traversal arms are what actually ship.
 
 use async_trait::async_trait;
 use schemars::JsonSchema;
@@ -705,6 +712,25 @@ impl OperantTool for FileListTool {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// RT-323: the module doc promised home-directory containment that the
+    /// code never implemented (the doc was the only thing "enforcing" it —
+    /// a phantom gate). Source-grep contract (the RT-198 shape): the needle
+    /// is built by concatenation so this test's own source cannot satisfy it.
+    #[test]
+    fn the_path_safety_doc_does_not_promise_a_gate_that_does_not_exist() {
+        let src = include_str!("file_tools.rs");
+        let phantom = format!("lives {}side the home directory", "out");
+        assert!(
+            !src.contains(&phantom),
+            "the doc must not claim home containment — the arm does not exist"
+        );
+        // The arms that DO ship stay named.
+        assert!(
+            src.contains("hard-deny list"),
+            "the implemented deny-list arm must stay documented"
+        );
+    }
 
     #[test]
     fn test_file_read_schema() {
