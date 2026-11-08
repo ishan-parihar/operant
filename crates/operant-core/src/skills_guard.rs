@@ -1526,7 +1526,16 @@ pub fn format_scan_report(result: &ScanResult) -> String {
 }
 
 /// Compute a TRUNCATED SHA-256 (the first 8 digest bytes = 16 hex chars,
-/// ~64 bits) of all files in a skill directory for integrity tracking.
+/// ~64 bits) of a skill directory's files for integrity tracking.
+///
+/// RT-401: the doc read "of all files", but the digest covers only the files
+/// whose bytes could be READ (an unreadable file contributes nothing). VERIFIED
+/// the stronger claim FALSE before writing this: a file becoming unreadable
+/// DOES change the digest — its bytes stop contributing — so the change-
+/// detection property holds for every file the hash reaches. What is true is
+/// the doc's overstatement: a file unreadable at BOTH measurements is invisible
+/// to the digest for both, and the digest never covers bytes it cannot read.
+/// The doc now says what is measured.
 ///
 /// Labeled on purpose: the label used to read as a full SHA-256, which no
 /// consumer relies on (there is none — nothing verifies a skill against this
@@ -2074,6 +2083,41 @@ mod rt399_tests {
         assert!(
             src.contains(&unreachable),
             "the doc must name the unreachable-pattern consequence"
+        );
+    }
+}
+
+#[cfg(test)]
+mod rt401_tests {
+    /// RT-401: `content_hash`'s doc read "of all files" while the digest covers
+    /// only the files whose bytes could be read. The stronger claim was
+    /// verified FALSE before this row shipped (a file becoming unreadable DOES
+    /// change the digest — its bytes stop contributing), so the contract pins
+    /// the doc's truth and the property that actually holds: the digest changes
+    /// for every file the hash reaches. Source contract, needles
+    /// concatenation-built — and this test's prose does not quote the phrases it
+    /// forbids.
+    #[test]
+    fn the_hash_doc_names_what_the_digest_measures() {
+        let src = include_str!("skills_guard.rs");
+        let overclaim = format!(
+            "~64 bits) of all files in a skill directory for integrity {}tracking",
+            ""
+        );
+        assert_eq!(
+            src.matches(&overclaim).count(),
+            0,
+            "the doc must not claim coverage the digest does not have"
+        );
+        let honest = format!("whose bytes could be {}READ", "");
+        assert!(
+            src.contains(&honest),
+            "the doc must say the digest covers the readable files"
+        );
+        let false_killed = format!("the stronger claim FALSE before writing {}", "this");
+        assert!(
+            src.contains(&false_killed),
+            "the doc must record the claim that was verified false"
         );
     }
 }
