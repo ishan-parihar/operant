@@ -52,6 +52,7 @@
 | tui-bugfix-campaign-067 | done | B71: /settings offered "Show current directory" and "Show git branch" — the header painted both unconditionally | — | [2026-11-08] origin/main iter-1898 |
 | tui-bugfix-campaign-068 | done | B72: /settings offered four more rows whose values nothing read, and /statusbar existed only to toggle one of them | — | [2026-11-08] origin/main iter-1899 |
 | tui-bugfix-campaign-069 | done | B73: /settings offered five more rows whose values nothing read (the last of the family), and two of them were not simple ported rows | — | [2026-11-08] origin/main iter-1904 |
+| tui-bugfix-campaign-070 | done | B74: the typeahead golden's command count follows the /statusbar retirement | — | [2026-11-08] origin/main iter-1906 |
 | tui-bugfix-campaign-018 | done | B23: the keybindings catalogue advertised Ctrl+Q as "Quit application" and nothing dispatched it (the exit-confirmation state machine has two halves, and only one named the chord) | — | [2026-11-05] origin/main iter-1758 |
 | tui-bugfix-campaign-019 | done | phase-5: the highlight test's cross-test frame race — the same palette resetter, reached through a second path | — | [2026-11-05] origin/main iter-1761 |
 | tui-bugfix-campaign-020 | done | B24: the settings screen dropped the operator's edited "File injection max size" (and its own guard never saw the row), the keybindings guard could not see a MODIFIER, and the accent test's palette race was re-broken by an unlocked App::new | — | [2026-11-05] origin/main iter-1760 |
