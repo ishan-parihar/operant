@@ -11,10 +11,19 @@
 //!   once visibility — every send is accounted, success or failure).
 //! - [`MirrorRule`]: forwards responses for a matched source channel to a
 //!   target channel (e.g. DM → ops group).
-//! - [`TurnExitReason`] + [`classify_turn_error`]: the machine-readable exit
-//!   classification written to the turn-state journal at close (the
-//!   exit_code/exit_reason columns), with negative-marker precedence so a
-//!   subprocess signal death is never misread as a credential failure.
+//! - [`TurnExitReason`] + [`classify_turn_error`]: UNWIRED (RT-368, named not shipped) —
+//!   a machine-readable exit classifier with nothing calling it.
+//!   The doc used to claim it was "written to the turn-state journal at close
+//!   (the exit_code/exit_reason columns)" and that "retries, breakers, and
+//!   audits branch on THIS". Neither is true: `classify_turn_error` has ZERO
+//!   production callers (the only references are its own tests), and the
+//!   classifier is not re-exported past this module. The LIVE per-turn
+//!   classification is a different enum — `crate::agent::TurnExitReason`
+//!   (TextResponse/BudgetExhausted/GraceCall/CircuitBreaker/Interrupted/
+//!   Error), built by `agent::turn_finalizer` and written through
+//!   `TurnDiagnostics::exit_reason`. This classifier's marker tables and
+//!   kill-over-auth precedence are correct and useful; wiring it INTO that
+//!   path (or deleting it) is a product decision, named rather than implied.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
@@ -23,10 +32,14 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
-/// Machine-readable reason a turn closed — the turn-state journal's
-/// exit_code column. Free-form `last_error` strings stay for the human,
-/// but retries, breakers, and audits branch on THIS (trinity
-/// `TaskExecutionErrorCode` pattern, ported iter-691).
+/// Machine-readable reason a turn closed.
+///
+/// UNWIRED (RT-368, named not shipped): the doc used to claim this is "the
+/// turn-state journal's exit_code column" and that "retries, breakers, and
+/// audits branch on THIS" — nothing writes this enum anywhere, and nothing
+/// branches on it (zero production callers; see the module doc for the live
+/// `agent::TurnExitReason` path). The classifier itself is correct; the
+/// claim of its wiring was not.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TurnExitReason {
     /// The turn returned a final response.
@@ -338,6 +351,33 @@ impl MirrorRule {
 }
 
 #[cfg(test)]
+mod rt368_tests {
+    /// RT-368: the classifier's docs claimed the journal column and live
+    /// branching that do not exist — `classify_turn_error` has zero
+    /// production callers and the live classification is
+    /// `crate::agent::TurnExitReason`. Source contract, needles
+    /// concatenation-built.
+    #[test]
+    fn the_turn_exit_classifier_names_its_unwired_state() {
+        let src = include_str!("lifecycle.rs");
+        let named = format!("UNWIRED (RT-368, named not {}shipped)", "");
+        assert!(
+            src.matches(&named).count() >= 2,
+            "both the module doc and the enum doc must name the unwired surface"
+        );
+        let old_claim = format!("retries, breakers, and audits branch on {}", "THIS");
+        assert!(
+            !src.contains(&old_claim),
+            "the doc must not claim a branching that does not exist"
+        );
+        let live_path = format!("crate::agent::{}", "TurnExitReason");
+        assert!(
+            src.contains(&live_path),
+            "the doc must name the live classification path so a reader finds the real one"
+        );
+    }
+}
+
 mod tests {
     use super::*;
 
