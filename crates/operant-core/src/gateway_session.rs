@@ -1150,6 +1150,22 @@ impl PersistentSessionStore {
         Ok(Some(new_entry))
     }
 
+    /// Persist `entry`, reporting a failure with the state it leaves wrong
+    /// (RT-394). The in-memory map already holds the change, so the caller's
+    /// answer is unchanged; the WARN is what makes the disk divergence visible.
+    fn persist_entry_or_report(&self, entry: &SessionEntry, change: &str) {
+        if let Err(e) = self.save_entry(entry) {
+            tracing::warn!(
+                session = %entry.session_key,
+                change = %change,
+                error = %e,
+                "session entry change could not be persisted — the on-disk \
+                 entry keeps its previous state while this process's memory \
+                 holds the new one"
+            );
+        }
+    }
+
     #[expect(
         clippy::expect_used,
         reason = "poisoned lock: panic is the intended recovery"
@@ -1164,7 +1180,10 @@ impl PersistentSessionStore {
             entry.suspended = true;
             let entry = entry.clone();
             drop(entries);
-            let _ = self.save_entry(&entry);
+            // RT-394: the persist was discarded, so a failed write left the
+            // in-memory entry suspended while the disk entry stayed live — the
+            // next process started the session again.
+            Self::persist_entry_or_report(self, &entry, "suspended");
             return true;
         }
         false
@@ -1189,7 +1208,11 @@ impl PersistentSessionStore {
             entry.last_resume_marked_at = Some(now_rfc3339());
             let entry = entry.clone();
             drop(entries);
-            let _ = self.save_entry(&entry);
+            // RT-394: the persist was discarded, so a failed write left the
+            // disk entry WITHOUT resume_pending — after the restart the resume
+            // the mark exists for never happens (RT-280 names the unwired
+            // machinery; this row is its silent write).
+            Self::persist_entry_or_report(self, &entry, "resume-pending");
             return true;
         }
         false
@@ -1214,7 +1237,10 @@ impl PersistentSessionStore {
             entry.last_resume_marked_at = None;
             let entry = entry.clone();
             drop(entries);
-            let _ = self.save_entry(&entry);
+            // RT-394: the persist was discarded, so a failed write left the disk
+            // entry STILL resume-pending — an already-resumed session resumes
+            // again, delivering a duplicate turn.
+            Self::persist_entry_or_report(self, &entry, "resume-cleared");
             return true;
         }
         false
@@ -1789,7 +1815,11 @@ impl PersistentSessionStore {
             entry.updated_at = now_rfc3339();
             let entry = entry.clone();
             drop(entries);
-            let _ = self.save_entry(&entry);
+            // RT-394: the persist was discarded, so a failed write left the
+            // disk entry's activity timestamp stale — the last-activity the
+            // operator reads (and the startup sweep keys on) shows the old time
+            // forever.
+            Self::persist_entry_or_report(self, &entry, "activity-updated");
             true
         } else {
             false
@@ -2011,6 +2041,48 @@ fn parse_rfc3339(s: &str) -> Option<SystemTime> {
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod rt394_tests {
+    /// RT-394: four gateway_session state changes (suspend, resume-pending mark,
+    /// resume-pending clear, activity timestamp) mutated the in-memory entry
+    /// and then discarded the persist — `let _ = self.save_entry(&entry)` — so
+    /// a failed write left the disk entry on its previous state with no log
+    /// anywhere: a suspended session came back after restart, a resumed
+    /// session resumed twice, an activity timestamp stayed stale forever.
+    ///
+    /// SOURCE contract with its limitation named: the failure is IO-shaped (a
+    /// DB error inside save_entry), so no deterministic unit fixture can force
+    /// it; the contract pins that the swallow shape is gone from ALL FOUR arms
+    /// and that the report names both sides of the divergence. Needles
+    /// concatenation-built.
+    #[test]
+    fn the_entry_writes_report_a_failed_persist() {
+        let src = include_str!("gateway_session.rs");
+        let swallowed = format!("let _ = self.save{}_entry(&entry);", "");
+        assert_eq!(
+            src.matches(&swallowed).count(),
+            0,
+            "no state change may discard its persist"
+        );
+        let reported = format!("persist_entry_{}or_report(self, &entry,", "");
+        assert_eq!(
+            src.matches(&reported).count(),
+            4,
+            "all four arms must report through the helper"
+        );
+        let disk_side = format!("keeps its previous {}state", "");
+        assert!(
+            src.contains(&disk_side),
+            "the report must name the disk side of the divergence"
+        );
+        let memory_side = format!("while this process's {}", "memory");
+        assert!(
+            src.contains(&memory_side),
+            "the report must name the in-memory side of the divergence"
+        );
+    }
+}
 
 #[cfg(test)]
 mod tests {
