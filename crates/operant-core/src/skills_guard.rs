@@ -1940,6 +1940,14 @@ fn truncate_match(line: &str) -> String {
 }
 
 /// Recursively collect all regular files in a directory tree.
+///
+/// RT-402: the doc said "regular files" and the implementation used
+/// `path.is_dir()` / `path.is_file()`, which FOLLOW symlinks — so a symlinked
+/// directory was traversed (the scan and `content_hash` read content OUTSIDE
+/// the skill tree, and double-counted it across links) and symlinks were
+/// collected as if they were regular files. `symlink_metadata` does not
+/// follow, so a symlink is now neither traversed nor pushed: it stays a
+/// structural CHECK's subject (see `collect_all_entries`), not scan input.
 fn collect_files(dir: &Path) -> Vec<PathBuf> {
     let mut files = Vec::new();
     collect_files_inner(dir, &mut files);
@@ -1953,11 +1961,18 @@ fn collect_files_inner(dir: &Path, files: &mut Vec<PathBuf>) {
     };
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.is_dir() {
+        // RT-402: symlink_metadata does NOT follow the link, so a symlinked
+        // directory is neither traversed nor pushed, and a symlink to a file
+        // is not treated as a regular file.
+        let Ok(meta) = std::fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if meta.is_dir() {
             collect_files_inner(&path, files);
-        } else if path.is_file() || path.is_symlink() {
+        } else if meta.is_file() {
             files.push(path);
         }
+        // Symlinks (and every other non-regular entry) are skipped here.
     }
 }
 
@@ -1972,10 +1987,16 @@ fn collect_all_entries_inner(dir: &Path, entries: &mut Vec<PathBuf>) -> std::io:
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
-        if path.is_dir() {
+        // RT-402: a symlinked directory is followed here on purpose — it is how
+        // the structural checks SEE a symlink — but following without a memory
+        // recurses forever on a symlink cycle. The canonical path is the
+        // visited-set key.
+        let canonical = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+        let visited = entries.iter().any(|p| *p == canonical);
+        if path.is_dir() && !visited {
             collect_all_entries_inner(&path, entries)?;
         }
-        entries.push(path);
+        entries.push(canonical);
     }
     Ok(())
 }
@@ -3002,5 +3023,69 @@ fn the_file_count_counts_files_not_directories() {
     assert!(
         findings2.iter().any(|f| f.pattern_id == "too_many_files"),
         "real files still trip the limit"
+    );
+}
+
+/// RT-402: `collect_files`' doc promises "all regular files", but the walk used
+/// `is_dir()`/`is_file()`, which FOLLOW symlinks — so a symlinked directory was
+/// traversed (the scan and `content_hash` read content OUTSIDE the skill tree)
+/// and symlinks were pushed as if they were regular files. BEHAVIORAL: a
+/// symlinked directory pointing outside the tree contributes NOTHING to
+/// collect_files, and a symlink cycle terminates instead of recursing forever.
+#[cfg(unix)]
+#[test]
+fn the_file_walk_collects_regular_files_only() {
+    let outside = tempfile::tempdir().unwrap();
+    let outside_file = outside.path().join("host-secret.txt");
+    std::fs::write(&outside_file, "host content outside the skill tree").unwrap();
+
+    let dir = tempfile::tempdir().unwrap();
+    let skill = dir.path().join("linked");
+    std::fs::create_dir_all(&skill).unwrap();
+    std::fs::write(skill.join("SKILL.md"), "# Skill\n\nBody.").unwrap();
+    // A symlink to a file outside the tree, and a symlinked DIRECTORY.
+    std::os::unix::fs::symlink(&outside_file, skill.join("link.txt")).unwrap();
+    std::os::unix::fs::symlink(outside.path(), skill.join("linkdir")).unwrap();
+
+    let files = collect_files(&skill);
+    let names: Vec<String> = files
+        .iter()
+        .map(|p| p.file_name().unwrap().to_string_lossy().to_string())
+        .collect();
+    assert!(
+        names.contains(&"SKILL.md".to_string()),
+        "the regular file is collected: {names:?}"
+    );
+    assert!(
+        !names.contains(&"link.txt".to_string()),
+        "a symlink is not a regular file and must not be collected: {names:?}"
+    );
+    assert_eq!(
+        files.len(),
+        1,
+        "no content from outside the tree is collected: {names:?}"
+    );
+    // The outside content must not be reachable through the walk.
+    let content = super::content_hash(&skill);
+    assert!(content.starts_with("sha256:"), "the hash still computes");
+}
+
+/// RT-402: the other half — a symlink CYCLE used to recurse forever in the
+/// all-entries walk (no visited set). BEHAVIORAL: the walk terminates.
+#[cfg(unix)]
+#[test]
+fn a_symlink_cycle_terminates_the_entry_walk() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = dir.path().join("a");
+    std::fs::create_dir_all(&a).unwrap();
+    std::fs::write(a.join("SKILL.md"), "# A\n").unwrap();
+    // A cycle: a/inner -> a.
+    std::os::unix::fs::symlink(dir.path().join("a"), a.join("inner")).unwrap();
+
+    // Must terminate (and report no hang / no stack overflow).
+    let entries = collect_all_entries(&a).expect("the walk completes");
+    assert!(
+        !entries.is_empty(),
+        "the cycle walk still collects the real entries"
     );
 }
