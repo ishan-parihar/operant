@@ -789,6 +789,14 @@ impl Gateway {
         message_id: &str,
         message: OutgoingMessage,
     ) -> Result<String> {
+        // The breaker seam. The doc on `send_message_return_id` says the
+        // callers that need the message id back — "proactive sends, edits" —
+        // must not bypass the guard the plain send enforces; an edit is
+        // exactly that caller, and it used to route straight to the adapter
+        // (RT-330). Same seam for the delete arm below.
+        if let Some(rejection) = self.breaker_guard(platform, &message).await {
+            return Err(rejection);
+        }
         let adapter = match self.adapters.get(platform) {
             Some(a) => a,
             None => {
@@ -798,7 +806,12 @@ impl Gateway {
                 )));
             }
         };
-        adapter.edit_message(channel_id, message_id, &message).await
+        let outcome = adapter.edit_message(channel_id, message_id, &message).await;
+        // An edit that fails against the platform is an outbound failure like
+        // any other: record it so the breaker can trip on it.
+        self.breaker_record(platform, channel_id, outcome.as_ref().err())
+            .await;
+        outcome
     }
 
     /// Send a voice/audio message to a platform channel.
@@ -2781,6 +2794,52 @@ mod tests {
             sends.load(Ordering::SeqCst),
             3,
             "the adapter was never called for the fourth send"
+        );
+    }
+
+    /// RT-330: the edit arm bypassed the dispatch-breaker seam entirely —
+    /// no `breaker_guard`, no `breaker_record` — while the doc above the
+    /// streaming send says the id-back callers ("proactive sends, edits")
+    /// must not bypass the guard. A tripped breaker let edits through to
+    /// the adapter, and edit failures never walked the breaker either.
+    #[tokio::test]
+    async fn edit_message_shares_the_breaker_seam() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let breaker =
+            Arc::new(DispatchBreaker::init(dir.path().join("breaker.sqlite")).expect("breaker"));
+        let sends = Arc::new(AtomicUsize::new(0));
+        let adapter = Arc::new(FlakyAdapter {
+            name: "telegram".to_string(),
+            sends: Arc::clone(&sends),
+            error: "HTTP 401 Unauthorized".to_string(),
+        });
+        let gw = Gateway::new(GatewayConfig::default())
+            .with_adapter(adapter.clone())
+            .with_dispatch_breaker(Arc::clone(&breaker));
+
+        // Trip the breaker the documented way: three failing sends.
+        for i in 0..3 {
+            let r = gw
+                .send_to_platform("telegram", OutgoingMessage::new("chat-42", format!("m{i}")))
+                .await;
+            assert!(r.is_err(), "the send itself still fails (i={i})");
+        }
+
+        // The edit must fast-fail at the seam, never reaching the adapter.
+        let r = gw
+            .edit_message(
+                "telegram",
+                "chat-42",
+                "msg-1",
+                OutgoingMessage::new("chat-42", "corrected"),
+            )
+            .await;
+        let err = r
+            .expect_err("an open breaker must reject the edit")
+            .to_string();
+        assert!(
+            err.contains("dispatch breaker open"),
+            "the fast-fail names the breaker: {err}"
         );
     }
 
