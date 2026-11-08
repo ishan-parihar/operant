@@ -940,13 +940,26 @@ impl CronScheduler {
         // normalized form is persisted once, then used for scheduling.
         let schedule = crate::cronjobs::normalize_schedule(&job.schedule).ok()?;
         if schedule != job.schedule {
-            let _ = self.db.update_job(
+            // RT-387: the self-heal's persist used to be discarded, so a failed
+            // write left the row on its legacy 5-field schedule forever —
+            // nothing was "persisted once", the schedule the scheduler FIRES
+            // (the normalized form below) diverged from the schedule the
+            // operator SEES, and no log line said so.
+            if let Err(e) = self.db.update_job(
                 &job.id,
                 HashMap::from([(
                     "schedule".to_string(),
                     Some(serde_json::json!(schedule.clone())),
                 )]),
-            );
+            ) {
+                tracing::warn!(
+                    job = %job.id,
+                    stored = %job.schedule,
+                    normalized = %schedule,
+                    error = %e,
+                    "cron schedule self-heal could not be persisted — the stored                      schedule stays on its legacy form while this run fires the                      normalized one"
+                );
+            }
         }
         let parsed = Schedule::from_str(&schedule).ok()?;
         let next = parsed.upcoming(chrono::Utc).next()?;
@@ -1052,6 +1065,41 @@ fn repeat_limit_reached(repeat_times: Option<i32>, repeat_completed: i32) -> boo
 }
 
 #[cfg(test)]
+mod rt387_tests {
+    /// RT-387: the cron self-heal's persist was discarded (`let _ =
+    /// update_job(...)`), so a failed write left the row on its legacy
+    /// 5-field schedule forever — nothing was "persisted once", the schedule
+    /// the scheduler FIRES (the normalized form) diverged from the schedule
+    /// the operator SEES, and no log line said so.
+    ///
+    /// SOURCE contract, with its limitation named: the failure is IO-shaped
+    /// (a write against a broken/unwritable store), so a deterministic unit
+    /// fixture cannot force it — and `compute_next_run` is private, so the
+    /// proof lives beside it rather than in an integration test. The contract
+    /// pins that the swallow is gone and that the report names BOTH forms the
+    /// divergence is between. Needles concatenation-built.
+    #[test]
+    fn the_cron_self_heal_reports_a_failed_persist() {
+        let src = include_str!("scheduler.rs");
+        let swallowed = format!("let _ = self.db.update{}_job(", "");
+        assert_eq!(
+            src.matches(&swallowed).count(),
+            0,
+            "the self-heal's persist must not be discarded"
+        );
+        let stored = format!("schedule stays on its legacy {}form", "");
+        assert!(
+            src.contains(&stored),
+            "the report must name the stored side of the divergence"
+        );
+        let normalized = format!("{}normalized one", "");
+        assert!(
+            src.contains(&normalized),
+            "the report must name the fired side of the divergence"
+        );
+    }
+}
+
 mod tests {
     use super::{
         repeat_limit_reached, seat_memory_append, seat_memory_prompt, should_arm_transient_retry,
