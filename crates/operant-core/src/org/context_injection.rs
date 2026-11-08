@@ -5,17 +5,18 @@
 //! MEMORY.md budget model, applied to four aspect classes) and re-ranking
 //! across the classes (recency + lexical affinity + author authority).
 //!
-//! Phase 1 sources are org-internal only — everything here is data the
-//! organism already persists (the worklog), so there is no platform API
-//! risk and the seats' cross-visibility goes live immediately:
+//! DM/feed context injection — what the pipeline LIVEly injects is the
+//! channel-sourced `dm` / `feed` classes only (RT-372).
 //!
-//! - `Self` — the seat's own recent worklog rows (its continuity thread).
-//! - `Global` — rows authored by `premiere` / `chief-of-staff` (directives,
-//!   digests) that the seat has not consumed.
-//! - `Dept` — rows by same-department peers (empty until Wave 3 departments;
-//!   the honest value, not a guess).
-//! - `Dm` — reserved for phase 2 (platform read adapters) and the
-//!   socialization sessions; the org layer stores no DM bodies today.
+//! RETIRED SOURCES (G+1, `docs/agentic-os/`): the org-internal classes —
+//! `Self` (the seat's own worklog rows), `Global` (premiere / chief-of-staff
+//! rows) and `Dept` (same-department peers) — were RETIRED to Holon: the
+//! collector returns `Ok(Vec::new())` for all three and no worklog table is
+//! queried anywhere in this file. The header used to describe those three as
+//! the live phase-1 sources ("everything here is data the organism already
+//! persists (the worklog)") and to promise the seats' cross-visibility;
+//! `crate::org`'s own module doc already records the retirement, and this
+//! header now agrees with it. Only `Dm`/`Feed` can produce an item.
 //!
 //! Nonredundancy is the watermark backbone: a per-seat, per-class monotonic
 //! cursor in `context_watermarks`. Items at/below the cursor are never
@@ -28,11 +29,12 @@
 //! prompt is returned byte-identical — the iter-666 contract. Injection
 //! must never fail a run.
 //!
-//! ponytail: phase 1 reads the worklog directly rather than copying it into
-//! a `context_items` table (the design doc's §5 store is deferred to phase
-//! 2, where pull-once platform reads genuinely need a durable landing).
+//! ponytail: the pipeline reads the `context_items` table it owns rather
+//! than copying the worklog into it (the design doc's §5 store is deferred to
+//! phase 2, where pull-once platform reads genuinely need a durable landing).
 //! Same pipeline, less code, no schema duplication of rows the worklog
-//! already keeps.
+//! already keeps. (The earlier note said "phase 1 reads the worklog
+//! directly" — true of the RETIRED org classes, and corrected by RT-372.)
 
 use crate::error::{Error, Result};
 use rusqlite::{Connection, params};
@@ -227,8 +229,8 @@ fn lexical_overlap(item_text: &str, affinity: &str) -> f64 {
     iw.intersection(&aw).count() as f64 / iw.len().max(aw.len()) as f64
 }
 
-/// The phase-1 injector: reads the worklog, ranks, quotas, renders, and
-/// advances the per-seat watermarks. All state lives in the app database
+/// The phase-1 injector: reads `context_items` (dm/feed), ranks, quotas,
+/// renders, and advances the per-seat watermarks. All state lives in the app database
 /// (`context_watermarks` — table-not-a-file, the seat_policies discipline).
 pub struct ContextInjector {
     app_db: PathBuf,
@@ -678,6 +680,35 @@ fn truncate_chars(text: &str, limit: usize) -> String {
         .nth(limit)
         .map(|(i, _)| format!("{}…", &text[..i]))
         .unwrap_or_else(|| text.to_string())
+}
+
+mod rt372_tests {
+    /// RT-372: the module header described three org classes (`Self`,
+    /// `Global`, `Dept`) as the live phase-1 sources reading the worklog, while
+    /// the collector returns `Ok(Vec::new())` for all three ("retired to
+    /// Holon") and `crate::org`'s own module doc records the retirement — the
+    /// two docs contradicted. Source contract, needles concatenation-built.
+    #[test]
+    fn the_injection_header_names_the_retired_classes() {
+        let src = include_str!("context_injection.rs");
+        let retired = format!("RETIRED SOURCES (G+1, {}", "`docs/agentic-os/`)");
+        assert!(
+            src.contains(&retired),
+            "the header must name the retired sources, not list them as live"
+        );
+        let stale_claim = format!("Phase 1 sources are org-internal {}only", "");
+        assert!(
+            !src.contains(&stale_claim),
+            "the header must not claim the org classes are the live sources"
+        );
+        // The two module docs must now agree.
+        let org_mod = include_str!("mod.rs");
+        let retirement = format!("retired to {}Holon", "");
+        assert!(
+            org_mod.contains(&retirement) && src.contains(&retirement),
+            "the sibling doc and this header must both carry the retirement"
+        );
+    }
 }
 
 #[cfg(test)]
