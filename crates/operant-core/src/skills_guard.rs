@@ -146,8 +146,14 @@ pub struct InstallPolicy {
 pub struct GuardScanner;
 
 impl GuardScanner {
-    /// Create a new `GuardScanner`. All regex patterns are already pre-compiled
-    /// in the static initializer, so this is instant and lightweight.
+    /// Create a new `GuardScanner`. Constructs nothing, which is why it is
+    /// instant and lightweight — but note WHERE the regexes compile: the
+    /// `THREAT_PATTERNS` `LazyLock` compiles its ~80 patterns on the FIRST
+    /// scan, not here. RT-404: this doc used to claim the patterns were
+    /// "already pre-compiled in the static initializer", stating that the
+    /// construction call pays no compile cost because it was paid earlier — so
+    /// a reader expecting a uniformly cheap scanner met a one-time first-scan
+    /// pause with nothing in the record to explain it.
     pub fn new() -> Self {
         Self
     }
@@ -2139,6 +2145,33 @@ mod rt401_tests {
         assert!(
             src.contains(&false_killed),
             "the doc must record the claim that was verified false"
+        );
+    }
+}
+
+#[cfg(test)]
+mod rt404_tests {
+    /// RT-404: the constructor's doc claimed the regexes were "already
+    /// pre-compiled in the static initializer", so this call pays nothing —
+    /// while the `LazyLock` compiles its ~80 patterns on the FIRST scan, not
+    /// here. The doc must name where the cost lands. Source contract, needles
+    /// concatenation-built.
+    #[test]
+    fn the_constructor_doc_names_where_the_patterns_compile() {
+        let src = include_str!("skills_guard.rs");
+        // The claim in the file's bytes ends after "pre-compiled" (the doc's
+        // own line break) — a needle spanning the break would match nothing
+        // and assert vacuously.
+        let false_claim = format!("All regex patterns are already {}pre-compiled", "");
+        assert_eq!(
+            src.matches(&false_claim).count(),
+            0,
+            "the constructor must not claim the compile already happened"
+        );
+        let honest = format!("compiles its ~80 patterns on the FIRST {}scan", "");
+        assert!(
+            src.contains(&honest),
+            "the doc must name where the compile cost actually lands"
         );
     }
 }
