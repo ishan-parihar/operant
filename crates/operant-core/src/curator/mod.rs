@@ -1,9 +1,17 @@
 //! Curator — background skill lifecycle management.
 //!
 //! Ported from hermes-agent/agent/curator.py.
-//! Manages skill states (active → stale → archived), pinning,
-//! usage tracking, backup/rollback snapshots, and LLM-driven
-//! skill consolidation (merging overlapping skills into umbrellas).
+//! Manages skill states (active → archived), pinning, usage tracking,
+//! backup/rollback snapshots, and LLM-driven skill consolidation (merging
+//! overlapping skills into umbrellas).
+//!
+//! RT-392: the header used to read "active → stale → archived" and the review
+//! doc claimed skills are "marked stale" past `stale_after_days`. NO stale
+//! lifecycle state exists — `LifecycleState` (skill_usage.rs) is
+//! Active/Deprecated/Archived/Retired, nothing anywhere sets a stale variant,
+//! and a "stale" skill is a REPORT classification only: the name lands in the
+//! review's `stale` list and no persisted state changes. The archived
+//! transition IS real (the file moves and the tracker says Archived).
 
 pub mod archiver;
 pub mod backup;
@@ -41,6 +49,40 @@ fn strip_frontmatter(content: &str) -> String {
         parts[2].trim_start_matches('\n').to_string()
     } else {
         content.to_string()
+    }
+}
+
+#[cfg(test)]
+mod rt392_tests {
+    /// RT-392: three curator docs promised a `stale` lifecycle state that does
+    /// not exist — the module header's transition chain, run_review's
+    /// marking doc, and apply's walk doc. `LifecycleState` has no Stale
+    /// variant and nothing sets one; staleness is a report classification
+    /// only. Source contracts, needles concatenation-built — the negative
+    /// needles below are fragments the corrected docs do NOT quote, and this
+    /// test's own prose quotes none of them.
+    #[test]
+    fn the_stale_lifecycle_claims_match_the_code() {
+        // 1. The enum has no Stale variant (the structural fact underneath).
+        let usage = include_str!("../skill_usage.rs");
+        let stale_variant = format!("    {}Stale,\n    ///", "");
+        assert!(
+            !usage.contains(&stale_variant),
+            "no Stale variant exists — a doc may not promise one"
+        );
+        // 2. run_review's doc must not claim a persisted stale marking.
+        let src = include_str!("mod.rs");
+        let false_marking = format!("marks those past {}`stale_after_days` as stale", "");
+        assert!(
+            !src.contains(&false_marking),
+            "the review must be described as reporting, not marking"
+        );
+        // 3. The truth is named where readers look for it.
+        let named = format!("NO stale\n//! lifecycle state {}exists", "");
+        assert!(
+            src.contains(&named),
+            "the module header must name the nonexistent state"
+        );
     }
 }
 
@@ -201,8 +243,9 @@ impl CuratorEngine {
     /// Run a full curator review cycle.
     ///
     /// Scans agent-created skills, archives those past `archive_after_days`,
-    /// and marks those past `stale_after_days` as stale. Creates a backup
-    /// before any archiving when not in dry-run mode.
+    /// and REPORTS those past `stale_after_days` in the `stale` list (a report
+    /// classification, not a persisted state — see the module header, RT-392).
+    /// Creates a backup before any archiving when not in dry-run mode.
     pub async fn run_review(
         &self,
         dry_run: bool,
@@ -477,7 +520,8 @@ impl CuratorEngine {
 
     /// Apply automatic lifecycle transitions to agent-created skills.
     ///
-    /// Walks every curator-managed skill and moves active → stale → archived
+    /// Walks every curator-managed skill and moves active → archived (RT-392:
+    /// no stale lifecycle state exists — see the module header)
     /// based on the latest real activity timestamp. Pinned skills are never
     /// touched, and neither are skills a cron job references — the same rule
     /// the manual review applies (RT-267). Returns a counter dict describing
