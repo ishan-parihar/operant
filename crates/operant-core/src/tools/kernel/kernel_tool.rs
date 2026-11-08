@@ -84,7 +84,12 @@ impl OperantTool for KernelExecTool {
         let mut params = json!({
             "session_key": session_key,
             "code": args.code,
-            "cell_timeout_secs": settings.request_timeout_secs.saturating_sub(1),
+            // The one-second head-start lets the sidecar's own watchdog fire
+            // before the outer request deadline, so its message is the error
+            // the user sees. A 0-second setting saturates the subtraction to
+            // 0, and 0 to the sidecar means UNBOUNDED — the same floor
+            // `code_execution` carries (RT-335 / RT-337).
+            "cell_timeout_secs": settings.request_timeout_secs.saturating_sub(1).max(1),
         });
         // Bridge budget resets per cell; drainer enforces max_calls_per_exec.
         if settings.tool_bridge.enabled && self.rt.executor().is_some() {
