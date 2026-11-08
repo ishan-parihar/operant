@@ -222,7 +222,11 @@ fn check_required_params(action: &str, args: &DiscordArgs) -> Vec<String> {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, JsonSchema, Deserialize)]
-#[serde(rename_all = "camelCase")]
+// No `rename_all = "camelCase"`: the wire contract is the hand-written
+// schema, which advertises snake_case keys (`guild_id`, ...), and
+// `serde_json::from_value::<DiscordArgs>` SILENTLY DROPS unknown keys — so
+// the rename made every schema-compliant parameterized call fail its
+// required-param check (RT-315).
 struct DiscordArgs {
     /// The action to perform
     action: String,
@@ -1202,6 +1206,27 @@ mod tests {
         let params = &schema.parameters;
         assert!(params["properties"]["action"].is_object());
         assert!(params["required"][0] == "action");
+    }
+
+    /// RT-315: the schema (the wire contract) advertises snake_case keys, so
+    /// a schema-compliant call must deserialize into them. `from_value`
+    /// silently drops unknown keys, so the struct's `rename_all` made every
+    /// parameterized action fail its required-param check instead.
+    #[test]
+    fn a_schema_compliant_discord_call_keeps_its_snake_case_params() {
+        let parsed: DiscordArgs = serde_json::from_value(serde_json::json!({
+            "action": "server_info",
+            "guild_id": "123",
+            "channel_id": "456",
+        }))
+        .expect("a snake_case, schema-compliant call must deserialize");
+        assert_eq!(parsed.action, "server_info");
+        assert_eq!(parsed.guild_id.as_deref(), Some("123"));
+        assert_eq!(parsed.channel_id.as_deref(), Some("456"));
+        assert!(
+            check_required_params("server_info", &parsed).is_empty(),
+            "the required-param check must pass on a schema-compliant call"
+        );
     }
 
     #[tokio::test]

@@ -393,6 +393,53 @@ struct ToolExecutor {
     overrides: Arc<std::sync::Mutex<HashMap<String, Duration>>>,
 }
 
+/// `camelCase` key spelling to the `snake_case` spelling the tool bodies
+/// read (`aroundMessageId` → `around_message_id`).
+fn camel_to_snake(key: &str) -> String {
+    let mut out = String::with_capacity(key.len() + 4);
+    for ch in key.chars() {
+        if ch.is_ascii_uppercase() {
+            out.push('_');
+            out.push(ch.to_ascii_lowercase());
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
+/// Normalize the ONE shape a tool schema cannot make consistent.
+///
+/// Tool argument structs are generated with
+/// `#[serde(rename_all = "camelCase")]`, so the schema the model reads
+/// advertises `sessionId` / `filePath` / `messageThreadId` — while the
+/// tool bodies read the snake_case field names with `args.get("session_id")`.
+/// A model that follows the schema therefore hits "missing required
+/// parameter" on half the parameterized tools. Normalizing at the single
+/// dispatch seam fixes the class for every tool at once: a camelCase key
+/// gains its snake_case twin when that twin is absent (an explicit snake
+/// key always wins; a key with no uppercase letter is untouched, so the
+/// tools that never advertise camelCase — the majority — are byte-identical).
+fn normalize_arg_keys(args: Value) -> Value {
+    let Value::Object(map) = args else {
+        return args;
+    };
+    let renames: Vec<(String, Value)> = map
+        .iter()
+        .filter(|(k, _)| k.chars().any(|c| c.is_ascii_uppercase()))
+        .filter(|(k, _)| !map.contains_key(&camel_to_snake(k)))
+        .map(|(k, v)| (camel_to_snake(k), v.clone()))
+        .collect();
+    if renames.is_empty() {
+        return Value::Object(map);
+    }
+    let mut map = map;
+    for (snake, value) in renames {
+        map.insert(snake, value);
+    }
+    Value::Object(map)
+}
+
 impl ToolExecutor {
     fn new(timeout: Duration) -> Self {
         Self {
@@ -425,7 +472,7 @@ impl ToolExecutor {
         context: ToolContext,
     ) -> ToolResult {
         let effective = self.timeout_for(&tool_name);
-        let result = timeout(effective, tool.execute(args, context)).await;
+        let result = timeout(effective, tool.execute(normalize_arg_keys(args), context)).await;
 
         match result {
             Ok(mut result) => {
@@ -1108,6 +1155,91 @@ mod tests {
 
         assert!(result.success);
         assert!(result.content.contains("Processed:"));
+    }
+
+    /// RT-315: the schema advertises camelCase (rename_all on the args
+    /// struct), the bodies read snake_case — the ONE dispatch seam
+    /// normalizes so a schema-compliant call reaches the read.
+    #[tokio::test]
+    async fn a_camel_case_arg_reaches_the_snake_case_reader() {
+        struct SnakeReaderTool;
+
+        #[async_trait]
+        impl OperantTool for SnakeReaderTool {
+            fn name(&self) -> &str {
+                "snake_reader"
+            }
+
+            fn description(&self) -> &str {
+                "reads a snake_case key"
+            }
+
+            fn schema(&self) -> ToolSchema {
+                ToolSchema::from_type::<TestArgs>("snake_reader", "reads a snake_case key")
+            }
+
+            async fn execute(&self, args: Value, _context: ToolContext) -> ToolResult {
+                match args.get("around_message_id").and_then(|v| v.as_i64()) {
+                    Some(id) => {
+                        ToolResult::success("call_1", serde_json::json!({ "scrolled_to": id }))
+                    }
+                    None => ToolResult::error_with_name(
+                        "snake_reader",
+                        "call_1",
+                        "Missing 'around_message_id' argument",
+                    ),
+                }
+            }
+        }
+
+        let registry = ToolRegistry::new(Duration::from_secs(5));
+        registry.register(SnakeReaderTool).await.unwrap();
+
+        // The spelling the schema advertises.
+        let result = registry
+            .execute(
+                "snake_reader",
+                "call_1",
+                serde_json::json!({ "aroundMessageId": 42 }),
+                ToolContext::default(),
+            )
+            .await
+            .unwrap();
+        assert!(result.success, "camelCase call failed: {}", result.content);
+        assert!(
+            result.content.contains("\"scrolled_to\":42"),
+            "the snake reader never saw the value: {}",
+            result.content
+        );
+
+        // An explicit snake key always wins — normalization never overwrites.
+        let result = registry
+            .execute(
+                "snake_reader",
+                "call_1",
+                serde_json::json!({ "aroundMessageId": 42, "around_message_id": 7 }),
+                ToolContext::default(),
+            )
+            .await
+            .unwrap();
+        assert!(
+            result.content.contains("\"scrolled_to\":7"),
+            "the explicit snake key must win: {}",
+            result.content
+        );
+
+        // A no-uppercase args object is untouched (the common case stays
+        // byte-identical).
+        let result = registry
+            .execute(
+                "snake_reader",
+                "call_1",
+                serde_json::json!({ "query": "x" }),
+                ToolContext::default(),
+            )
+            .await
+            .unwrap();
+        assert!(!result.success, "a missing key must still fail");
     }
 
     #[tokio::test]
