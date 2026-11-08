@@ -548,3 +548,66 @@ Measured, not assumed:
   unwritable; that was false this round — the directory is writable and the
   blocker was the running process, which is a different (and solvable) thing.
   Recorded so the next round doesn't inherit the wrong lesson.
+
+## Round 12 (2026-11-08) — the shared-document hazard, and a fresh audit
+
+Eight pushed iterations (iter-1953..iter-1960, origin/main 629a8f8d). The
+round's protocol held: fix → mutation-proved test → RT row + changelog →
+index-script OK → commit+push.
+
+The fixes:
+
+- **Two more swallowed writes** (the round's dominant class, both in
+  agent/): the evolution-counter persists that leave the memory-review and
+  skill-nudge intervals hydrating stale counts (RT-365), and the skill-use
+  telemetry write that leaves the curator under-counting a skill (RT-367).
+- **Two gateway doc claims that outran the code**: the turn-exit
+  classifier's "journal column / retries-breakers-audits branch on THIS"
+  (RT-368 — the classifier is a correct, zero-caller surface; the LIVING
+  classification is a different enum) and the breaker's `Auth` class doc,
+  which named only the credential family while the router also sends
+  "chat not found" and "bot was blocked" (RT-369).
+- **The round's own two repairs**: the test-module boundaries my
+  insertions broke (RT-370 — the anchor consumed the existing module's
+  `#[cfg(test)]`, caught by the strict clippy gate), and the shared-
+  document hazard from the publishing side, below.
+
+### The shared-document hazard, hit from the publishing side (RT-367's repair record)
+
+My iter-1954 commit staged a STALE worktree copy of
+`docs/audit/2026-06-19-BUGS.md` — my last write of that file predated the
+peer's `950bb761`, which landed while my verification ran. The
+temporary-index recipe (`git read-tree HEAD` + explicit adds) does NOT
+protect a file whose worktree copy is stale: the explicit `git add`
+staged my old copy, and the published ledger lost the peer's RT-366 row
+and detail section (their code files survived; only the document was
+damaged). Detected by the id collision — both iterations had chosen
+RT-366 independently — and repaired forward in iter-1955 (their row
+restored verbatim; mine renumbered to RT-367 per the renumber-forward
+convention their own row records; the stale worktree copies of
+WORKLOG.md and the workflow board refreshed from HEAD, where the peer's
+eleven entries were intact).
+
+Lesson: a shared-document edit must be derived from the freshly FETCHED
+remote version, never from the worktree copy.
+
+### The fresh audit's findings that did not survive the read
+
+This round audited by first-hand verification, not by carrying the earlier
+sweeps' lists forward. Verified false and dropped (with the read that
+killed them): the memory_management sweep's tool names (they do not exist
+in this tree); `endpoints/carrier_pigeon_docs.rs` and `genetics.rs` (no
+such paths); `browser_tool`'s "dead redeclaration" (accessibility_tree is
+handled); `credential_pool`'s "unused constants" (read at :576);
+`models_dev`'s fetch path (wired to the TUI); `ponytail::kick_update_check`
+(wired at `operant-cli/src/main.rs:1713`); `trajectory`'s zero-init
+counters (a genuine accumulator, both filled at `prompting.rs:147-148`);
+`emit`'s best-effort channel send (receiver closing is terminal); the
+redaction module's wiring claims (all live); the kanban args (read
+multi-line); the schema-only tool structs reading raw JSON by design.
+
+The two gateway findings that DID survive came from the round's subagent
+sweep (7ce30cd0) with first-hand line-level evidence, and are RT-368 /
+RT-369 above. The sweep's un-reached scope (tools/ description-vs-execute,
+org/, config) was re-dispatched and its findings are pending at this
+round's close.

@@ -402,3 +402,16 @@ NOT supported (named, with the reason):
   tools, RT-359 persistence seam, RT-360 rate-limiter status) each need a
   product decision; the round's change is the honest doc plus a contract
   that pins the doc.
+
+## Round 12 (2026-11-08) — the shared-document hazard, verified
+
+- A stale worktree copy of a shared document is erased peer work — [V] — my iter-1954 commit dropped the peer's RT-366 row and section while their code survived, detected by the id collision's grep and repaired forward in iter-1955 from commit `950bb761` — unit 1
+- The temporary-index recipe does not protect a stale worktree copy — [V] — `git read-tree HEAD` + explicit adds stages the WORKTREE version of any file you `git add`; only the files you omit are protected — unit 1
+- The strict clippy gate catches a consumed `#[cfg(test)]` — [V] — iter-1956/iter-1958's insertions left two existing test modules un-gated and clippy's `-D warnings` run flagged the dead helpers and unused import in the same run — unit 1
+- The evolution-counter and telemetry swallows left named state wrong — [V] — the counters hydrate the review intervals (their own comments say so) and the telemetry is read by the curator; both contracts fail when the swallow is restored — unit 1
+- The turn-exit classifier is unwired while a different enum is live — [V] — `classify_turn_error`'s only references are its tests, and `agent::TurnExitReason` (six variants, no kill precedence) is what `turn_finalizer` feeds — unit 1
+
+NOT supported (named, with the reason):
+
+- The sweep claims for memory_management tool names, the two endpoint paths, browser_tool, credential_pool, models_dev, ponytail, trajectory, kanban, and the schema-only tool structs were all verified false first-hand this round and are recorded as dropped rather than fixed.
+- The tools/org/config re-sweep was still running at this round's close; its findings are not claimed here.
