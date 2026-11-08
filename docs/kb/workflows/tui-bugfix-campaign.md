@@ -60,6 +60,9 @@
 | tui-bugfix-campaign-075 | done | B79: the /review footer promised space-collapse in the detail pane, where space is gated out and inert | — | [2026-11-08] origin/main iter-1930 |
 | tui-bugfix-campaign-076 | done | B80: the memory file selector advertised a selection that nothing consumes — Enter is byte-for-byte Esc | — | [2026-11-08] origin/main iter-1931 |
 | tui-bugfix-campaign-077 | done | B81: the Dialog bucket claimed Enter for every dialog, and two dispatcher section headers named chords their sections no longer dispatch | — | [2026-11-08] origin/main iter-1932 |
+| tui-bugfix-campaign-078 | done | B82: scripts/build.sh — the only documented entry point — failed on a healthy tree: the cargo it resolved guarded on a STALE user-bus socket | — | [2026-11-08] origin/main iter-1933 |
+| tui-bugfix-campaign-079 | done | B83: the rewind selector's header promised a rewind while the filter was open, where Enter only closes the filter | — | [2026-11-08] origin/main iter-1934 |
+| tui-bugfix-campaign-080 | done | B84: the ask-user dialog's hint overflowed its panel and the border clipped the last claim — found by the session's class pin | — | [2026-11-08] origin/main iter-1935 |
 | tui-bugfix-campaign-018 | done | B23: the keybindings catalogue advertised Ctrl+Q as "Quit application" and nothing dispatched it (the exit-confirmation state machine has two halves, and only one named the chord) | — | [2026-11-05] origin/main iter-1758 |
 | tui-bugfix-campaign-019 | done | phase-5: the highlight test's cross-test frame race — the same palette resetter, reached through a second path | — | [2026-11-05] origin/main iter-1761 |
 | tui-bugfix-campaign-020 | done | B24: the settings screen dropped the operator's edited "File injection max size" (and its own guard never saw the row), the keybindings guard could not see a MODIFIER, and the accent test's palette race was re-broken by an unlocked App::new | — | [2026-11-05] origin/main iter-1760 |
