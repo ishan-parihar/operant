@@ -10,6 +10,16 @@
 //! When the kernel is off (`global_runtime()==None`), `install` returns
 //! `SeamUnavailable` → PENDING, so lessons wait until the sidecar is available
 //! instead of being lost. This is the lazy deletion: no data loss on fallback.
+//!
+//! UNWIRED (RT-359, named not shipped): nothing mounts these two instances.
+//! The doc above used to describe a two-instance mounting that does not
+//! exist — `PersistenceSeam` has no reference
+//! anywhere outside this module. Mounting is NOT a drop-in: `HarnessHost::
+//! add_seam` keys its seams by `name()`, and `PromptSlotSeam` already
+//! registers the "prompt" kind (the C1 slot seam that lands the prompt in the
+//! agent's frozen prefix), so adding `PersistenceSeam::prompt()` would EVICT
+//! it. Folding the persistence into the slot seam, or renaming this kind, is a
+//! design decision — named here, not silently wired.
 
 use async_trait::async_trait;
 use serde_json::Value;
@@ -18,7 +28,11 @@ use operant_harness::{Effect, HarnessError, Registration, Seam};
 
 /// Delegates `prompt` and `subagent` claims to the sidecar file store.
 /// One instance handles both kinds; `name()` returns the kind it was
-/// constructed for (the harness mounts two instances, one per kind).
+/// constructed for.
+///
+/// UNWIRED (RT-359, named not shipped): nothing mounts these instances (the
+/// old doc claimed a two-instance mounting). The name collision with
+/// `PromptSlotSeam` is the concrete blocker — see the module doc.
 pub struct PersistenceSeam {
     kind: &'static str,
 }
@@ -118,6 +132,27 @@ impl Seam for PersistenceSeam {
                     .await;
             })
         }))
+    }
+}
+
+#[cfg(test)]
+mod rt359_tests {
+    /// RT-359: the seam's docs describe a mounting that does not exist, and
+    /// the mounting is not a drop-in (the "prompt" kind would evict
+    /// `PromptSlotSeam`). Source contract, needles concatenation-built.
+    #[test]
+    fn the_persistence_seam_names_its_unwired_state() {
+        let src = include_str!("persistence_seam.rs");
+        let unwired = format!("UNWIRED (RT-359, named not {}shipped)", "");
+        assert!(
+            src.matches(&unwired).count() >= 2,
+            "both the module doc and the struct doc must name the unwired state"
+        );
+        let old_claim = format!("the harness mounts two instances, one per {}", "kind");
+        assert!(
+            !src.contains(&old_claim),
+            "the doc must not claim a mounting that does not exist"
+        );
     }
 }
 
