@@ -59,8 +59,17 @@ pub const PROBE_DEADLINE_SECS: u64 = 30;
 pub enum FailureClass {
     /// Network-layer unreachability: timeouts, refusals, DNS, resets.
     Transport,
-    /// Credentials are dead: 401/403/unauthorized/forbidden/bad-token.
-    /// The retry is pointless; the fix is operator action.
+    /// The channel is unusable for reasons a retry never fixes, so the fix is
+    /// operator action. TWO families share the class, and the doc used to name
+    /// only the first (RT-369):
+    ///   - credentials are dead: 401/403/unauthorized/forbidden/invalid-token/
+    ///     token-expired/bad-token — the fix is the credential;
+    ///   - the TARGET is dead: "chat not found" (the channel id is wrong, or
+    ///     the chat was deleted) and "bot was blocked" (the bot was removed
+    ///     from the chat or banned) — the fix is the target or the bot's
+    ///     membership, NOT the credential.
+    /// An operator reading a trip in this class must check both, and the
+    /// second family is the one a credential-focused reading misses.
     Auth,
     /// Everything else: 4xx (bad request), 5xx, malformed replies.
     Wedged,
@@ -508,6 +517,59 @@ fn state_str(state: BreakerState) -> &'static str {
 }
 
 #[cfg(test)]
+mod rt369_tests {
+    use super::*;
+
+    /// RT-369: the `Auth` doc named only the credential family while
+    /// `classify_error` routes two target faults into the same class — an
+    /// operator told "credentials are dead; the fix is operator action" would
+    /// look at the credential when the target is the fault. The doc must name
+    /// both families, and the routing must keep routing them. Source contract,
+    /// needles concatenation-built.
+    #[test]
+    fn the_auth_class_doc_names_both_families_the_router_sends_it() {
+        let src = include_str!("dispatch_breaker.rs");
+        // Doc-ONLY phrases: the router's marker list already contains the
+        // literal markers, so a needle on the marker alone cannot tell a doc
+        // naming from a router routing (the first cut of this contract passed
+        // on the mutant for exactly that reason).
+        let target_family = format!("the TARGET is {}dead", "");
+        assert!(
+            src.contains(&target_family),
+            "the doc must name the target-dead family the router sends here"
+        );
+        let chat_family = format!("membership, NOT the {}", "credential");
+        assert!(
+            src.contains(&chat_family),
+            "the doc must name the missing-chat family's fix, not the credential's"
+        );
+        // And the router keeps sending them (the doc fix must not be wired as
+        // a routing change by accident).
+        let route = format!("return FailureClass::{}", "Auth");
+        assert!(
+            src.contains(&route),
+            "the classification routing is unchanged by this doc fix"
+        );
+        // Behavioural half: a target fault really does land in Auth today, so
+        // the doc's promise about the class matches the code's.
+        assert_eq!(
+            classify_error("Bot was blocked by the user"),
+            FailureClass::Auth,
+            "a blocked bot is an Auth-class trip today"
+        );
+        assert_eq!(
+            classify_error("chat not found"),
+            FailureClass::Auth,
+            "a missing chat is an Auth-class trip today"
+        );
+        assert_eq!(
+            classify_error("HTTP 401 Unauthorized"),
+            FailureClass::Auth,
+            "the credential family is still Auth"
+        );
+    }
+}
+
 mod tests {
     use super::*;
 
