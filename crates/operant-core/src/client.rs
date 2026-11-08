@@ -1504,8 +1504,14 @@ fn sanitize_error_body(body: &str) -> String {
     // collapse \r\n + \r + \n → spaces; split_whitespace() below normalizes
     let clean = body.replace(['\r', '\n'], " ");
     let clean = clean.split_whitespace().collect::<Vec<_>>().join(" ");
-    if clean.len() > 500 {
-        format!("{}...", &clean[..500])
+    // CHAR-safe: a byte slice panics when the cut lands inside a multi-byte
+    // character, and this is the ERROR path — the panic would replace the
+    // error with a crash. Provider error bodies are arbitrary text (decoded
+    // lossily from up to 64 KiB), so CJK/emoji bodies are ordinary.
+    if clean.chars().count() > 500 {
+        let mut cut: String = clean.chars().take(500).collect();
+        cut.push_str("...");
+        cut
     } else {
         clean
     }
@@ -1998,6 +2004,24 @@ mod tests {
 
         client.set_base_url("");
         assert_eq!(client.base_url(), "http://old.example/v1");
+    }
+
+    /// RT-317: the provider error body's display cut byte-sliced free text.
+    /// A byte slice panics when byte 500 lands inside a multi-byte character
+    /// — and this is the ERROR path, where the panic would replace the error
+    /// with a crash. Live on every non-2xx response (`classify_http_error`).
+    #[test]
+    fn sanitize_error_body_never_panics_on_a_multibyte_boundary() {
+        // Byte 500 falls inside the crab emoji (4 bytes at offset 499).
+        let body = format!("{}🦀{}", "a".repeat(499), "tail".repeat(200));
+        let clean = sanitize_error_body(&body);
+        assert!(!clean.is_empty(), "the sanitizer must return the body");
+        assert!(
+            clean.chars().count() <= 504,
+            "the cut is char-bounded: {}",
+            clean.chars().count()
+        );
+        assert!(clean.ends_with("..."), "the ellipsis survives: {clean}");
     }
     use super::*;
 
