@@ -1518,6 +1518,68 @@ fn file_autocomplete_with_whitespace_prefix() {
     }
 }
 
+/// (iter-1939) The consumer half of the two @-autocomplete SETTINGS.
+///
+/// The settings screen's save path is already pinned ("every entry MUST be
+/// handled by `apply_and_save`", iter-1176, plus the autocomplete-limit
+/// round-trip), but NOTHING pinned that the saved value reaches the popup — the
+/// half that decides whether the row is real. Every earlier test here passed a
+/// fixed `15` and listed the REPO's own working directory, whose file count
+/// nobody knows, so a limit the popup ignored would still have been green.
+///
+/// This drives the real handler through a tempdir whose file count is known, so
+/// the limit and the hidden policy are observable:
+/// - limit 3 over 9 candidates yields 3, and limit 1 yields 1;
+/// - show_hidden=false hides the dotfile, true shows it.
+#[test]
+fn the_file_autocomplete_settings_reach_the_popup_that_renders_it() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    for i in 0..8 {
+        std::fs::write(dir.path().join(format!("file{i}.rs")), b"x").expect("write a visible file");
+    }
+    std::fs::write(dir.path().join(".hidden.rs"), b"x").expect("write a hidden file");
+
+    // An absolute prefix lists that directory — no dependence on the cwd, so
+    // this is deterministic under the suite's parallel test threads.
+    let prefix = format!("@{}/", dir.path().to_string_lossy());
+
+    let at = |limit: usize, hidden: bool| compute_file_suggestions(&prefix, limit, hidden);
+
+    // --- the limit: 9 candidates, 3 asked for -----------------------------
+    let capped = at(3, false);
+    assert_eq!(
+        capped.len(),
+        3,
+        "the @-autocomplete limit must bound the popup the operator sees — \
+         3 asked for, 9 available: {:?}",
+        capped.iter().map(|s| s.text.clone()).collect::<Vec<_>>()
+    );
+    let tighter = at(1, false);
+    assert_eq!(
+        tighter.len(),
+        1,
+        "a tighter limit must narrow the same popup — the setting is read live, \
+         not once at startup"
+    );
+
+    // --- the hidden policy: the dotfile is the discriminator --------------
+    let without_hidden = at(20, false);
+    assert!(
+        without_hidden.iter().all(|s| !s.text.contains(".hidden")),
+        "with hidden files off the popup must not offer .hidden.rs: {:?}",
+        without_hidden
+            .iter()
+            .map(|s| s.text.clone())
+            .collect::<Vec<_>>()
+    );
+    let with_hidden = at(20, true);
+    assert!(
+        with_hidden.iter().any(|s| s.text.contains(".hidden")),
+        "with hidden files on the popup must offer .hidden.rs — the row is \
+         advertised in the settings screen as controlling this"
+    );
+}
+
 #[test]
 fn file_autocomplete_detects_symlinks() {
     // This test verifies that symlinks/junction links are properly detected.
