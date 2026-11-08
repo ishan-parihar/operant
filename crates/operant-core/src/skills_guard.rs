@@ -1998,7 +1998,7 @@ fn collect_all_entries_inner(dir: &Path, entries: &mut Vec<PathBuf>) -> std::io:
         // recurses forever on a symlink cycle. The canonical path is the
         // visited-set key.
         let canonical = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
-        let visited = entries.iter().any(|p| *p == canonical);
+        let visited = entries.contains(&canonical);
         if path.is_dir() && !visited {
             collect_all_entries_inner(&path, entries)?;
         }
@@ -2098,9 +2098,9 @@ mod rt399_tests {
             src.contains(&curated),
             "the doc must name the list as curated"
         );
-        let named_langs = concat!("`.java`, `.rs`, `.go`, `.c`, `.h`, `.cpp`, `.cs`,");
+        let named_langs = ".java`, `.rs`, `.go`, `.c`, `.h`, `.cpp`, `.cs`,";
         assert!(
-            src.contains(&named_langs),
+            src.contains(named_langs),
             "the doc must name the unlisted text formats"
         );
         let unreachable = format!(
@@ -2141,9 +2141,9 @@ mod rt401_tests {
             src.contains(&honest),
             "the doc must say the digest covers the readable files"
         );
-        let false_killed = format!("the stronger claim FALSE before writing {}", "this");
+        let false_killed = "the stronger claim FALSE before writing this";
         assert!(
-            src.contains(&false_killed),
+            src.contains(false_killed),
             "the doc must record the claim that was verified false"
         );
     }

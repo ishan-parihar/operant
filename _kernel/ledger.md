@@ -734,3 +734,85 @@ a second RT-384, which the uniqueness check caught).
 Round-13 end-of-round gates: full suite exit 0 (46 targets), strict clippy
 exit 0, fmt clean, ledger index OK (index table and checkboxes agree, id space
 unique), genome lint 0 errors, red-team docs verification clean.
+
+## Round 14 (2026-11-09) — the skills_guard sweep plus two own findings, eleven rows shipped
+
+Twenty-two pushed iterations (iter-1980..iter-1992-to-close, origin/main
+feaecd42-descended). The dispatched skills_guard/skill_preprocessing sweep
+returned ten findings; seven shipped as defects, one shipped as doc-truth with
+its stronger claim verified FALSE, one shipped as doc-truth with a named
+follow-up policy decision, and one of its targets (the memory/ and skills/
+directories) did not exist as paths — the audit's coverage map recorded the
+real layout (flat memory.rs, memory_wire.rs, memory_provider.rs,
+memory_import.rs; skills logic lives in skills_guard.rs, skill_marketplace.rs,
+and tools/skills_tool.rs). Two further findings came from my own crate-wide
+swallow sweep.
+
+Shipped, each mutation-proved:
+- **RT-394** — four `gateway_session` state changes (suspend, resume-pending
+  mark, resume-pending clear, activity timestamp) discarded their persist, so a
+  failed write left the disk entry on its previous state with no log: a
+  suspended session returned after restart, a cleared resume flag stayed set
+  (a duplicate resume), a stale timestamp forever.
+- **RT-395** — the active-session lock writes were discarded, breaking the
+  module's own promise ("a busy session can never be evicted"): a failed
+  refresh evicted a BUSY session mid-conversation, and a failed create produced
+  a slot born stale.
+- **RT-396** — the inline-shell cap was in BYTES over a char label, so a
+  multibyte snippet hit byte 4000 mid-character and `String::truncate`
+  PANICKED inside `run_inline_shell` (the guarding test only fed ASCII).
+- **RT-397** — the `Trusted` skill tier matched any source PREFIXING a trusted
+  repo, so a look-alike path inherited the first-party install policy.
+- **RT-398** — the skill scanner FAILED OPEN: a scannable-extension file that
+  was not valid UTF-8 returned zero findings (a payload in a latin-1 "text
+  file" scanned Safe and was ALLOWED), and a path that was neither dir nor file
+  ran no branch and reported "clean scan, no threats detected".
+- **RT-399** — the extension gate framed a curated 23-extension list as "text
+  files only"; every other text format is skipped, so `java_runtime_exec`'s
+  pattern is unreachable. Doc-truth + RT-399-FOLLOW (which languages belong on
+  the list — a scanner-policy decision).
+- **RT-400** — the `too_many_files` count counted directories and symlinks
+  while reporting "files" (51 empty subdirectories tripped the limit).
+- **RT-401** — `content_hash`'s doc claimed "of all files" over a digest that
+  covers only the readable files. Doc-truth; the sweep's stronger claim
+  (a file becoming unreadable leaves the digest unchanged) was VERIFIED FALSE
+  and recorded, and my first (perturb-the-digest) fix was reverted because its
+  mutation run came back green.
+- **RT-402** — the skill file walk followed symlinks: a symlinked directory was
+  traversed (the scan and the content hash read host content outside the skill
+  tree) and symlinks were pushed as regular files; the all-entries walk could
+  recurse forever on a symlink cycle.
+- **RT-403** — the inline-shell timeout marker reported the request rather than
+  the enforced deadline (a 1s kill labelled "timeout after 0s").
+- **RT-404** — the `GuardScanner` constructor doc claimed the regexes compiled
+  in the initializer; they compile on the FIRST scan. Doc-truth.
+
+### The round's measured lessons
+
+- **A negative needle can be vacuous across a doc's own line break (RT-404)**:
+  the first mutation run came back green because the needle spanned the
+  doc-comment wrap and could never match; cut at the break, the proof
+  discriminated.
+- **A green mutation run can mean the fix was unnecessary (RT-401)**: the
+  perturb-the-digest fix's mutant passed, which is what exposed the finding's
+  stronger claim as false. A green run is not only a proof — it is also a
+  warning about the premise.
+- **The end-of-round clippy gate caught lints on my own additions (iter-1992)**:
+  `manual_contains` in the new symlink guard, `unneeded_formatting` on a static
+  needle, `needless_borrows_for_generic_args` on two `contains` args — values
+  unchanged, contracts re-run green after the fix.
+- **A stale anchor ships code without its ledger row (iter-1980/1981)**: the
+  peer pushed between my fetch and my ledger edit, my anchor had gone stale,
+  and the commit landed the code alone. The row and the changelog entry were
+  landed in the next iteration. The shared-document hazard is a fetch-then-edit
+  window, not only a stale-blob one.
+- **Compile-error mutants, twice more (RT-395, RT-401)**: line surgery left
+  dangling references or unbalanced blocks; both redone as whole-block
+  replacements and re-proved.
+- **Consumed `#[cfg(test)]` did NOT recur this round** (it has bitten five
+  times); every insertion re-emitted the consumed attribute in the same
+  replacement.
+
+Round-14 end-of-round gates: full suite exit 0 (46 targets), strict clippy exit
+0 (`-D warnings`), fmt clean, ledger index OK (RG-016, RG-021), genome lint 0
+errors.

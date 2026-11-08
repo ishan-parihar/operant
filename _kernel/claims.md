@@ -449,3 +449,24 @@ NOT supported (named, with the reason):
   six through ten this round — [V] — doc history notes and test comments
   quoting the claims they forbid, each caught by the mutation run coming back
   green and repaired by paraphrase before the proof counted — unit 1
+
+## Round 14 (2026-11-09) — the skills_guard sweep, verified and shipped
+
+- A security allowlist's doc can claim a rule its implementation does not
+  implement — [V] — the scanner's "text files only" gate is a curated
+  23-extension list, so every other text format is skipped and
+  `java_runtime_exec`'s pattern is unreachable (RT-399) — unit 1
+- A scanner can fail open on the inputs it cannot read — [V] — a
+  non-UTF-8 scannable file returned zero findings (a payload in a latin-1
+  "text file" scanned Safe and was ALLOWED) and an unscannable path reported
+  "clean scan, no threats detected" (RT-398) — unit 1
+- A trust tier matched by raw string prefix upgrades look-alike sources to the
+  first-party policy — [V] — "openai/skills-evil/x" was Trusted until the match
+  became a path-component match (RT-397) — unit 1
+- A green mutation run can mean the premise was false, not the fix proved —
+  [V] — the perturb-the-digest fix's mutant passed, which exposed the
+  content_hash finding's stronger claim as false and reverted the fix (RT-401)
+  — unit 1
+- `is_file()`/`is_dir()` follow symlinks, so a walk that promises regular files
+  reads host content outside the tree — [V] — the following mutant collected
+  the host file from outside the skill tree (RT-402) — unit 1
