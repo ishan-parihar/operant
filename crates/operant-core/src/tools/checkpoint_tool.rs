@@ -376,37 +376,101 @@ impl CheckpointManager {
         let max = self.config.lock().map(|g| g.max_snapshots).unwrap_or(20);
         let n = limit.unwrap_or(max).clamp(1, 100);
 
-        // Get commit log from the shadow store
+        // Get the commit log from the shadow store -- with `--shortstat`, so
+        // the diff stat each checkpoint's UI row promises is REAL rather than
+        // the hardcoded 0/0/0 every row used to report (RT-348).
         let log_output = Command::new("git")
-            .args(["log", "--format=%H|%h|%aI|%s", "-n", &n.to_string()])
+            .args([
+                "log",
+                "--format=%H|%h|%aI|%s",
+                "--shortstat",
+                "-n",
+                &n.to_string(),
+            ])
             .envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
             .output();
 
         match log_output {
             Ok(output) if output.status.success() => {
                 let stdout = String::from_utf8_lossy(&output.stdout);
-                stdout
-                    .lines()
-                    .filter_map(|line| {
-                        let parts: Vec<&str> = line.split('|').collect();
-                        if parts.len() >= 4 {
-                            Some(Checkpoint {
-                                hash: parts[0].to_string(),
-                                short_hash: parts[1].to_string(),
-                                timestamp: parts[2].to_string(),
-                                reason: parts[3].to_string(),
-                                files_changed: 0,
-                                insertions: 0,
-                                deletions: 0,
-                            })
-                        } else {
-                            None
-                        }
-                    })
-                    .collect()
+                Self::parse_checkpoint_log(&stdout)
             }
             _ => Vec::new(),
         }
+    }
+
+    /// Parse `git log --format=%H|%h|%aI|%s --shortstat` output into checkpoints.
+    ///
+    /// Each commit line is followed by its stat line (" 3 files changed, 12
+    /// insertions(+), 4 deletions(-)"); a commit with no changes (or the parse
+    /// failing) reports 0/0/0 as before, and a subject containing `|` is not
+    /// mistaken for a commit line because a hash must be 40 hex chars.
+    fn parse_checkpoint_log(stdout: &str) -> Vec<Checkpoint> {
+        let mut checkpoints: Vec<Checkpoint> = Vec::new();
+        for line in stdout.lines() {
+            let parts: Vec<&str> = line.split('|').collect();
+            let is_commit_line = parts.len() >= 4
+                && parts[0].len() == 40
+                && parts[0].chars().all(|c| c.is_ascii_hexdigit());
+            if is_commit_line {
+                checkpoints.push(Checkpoint {
+                    hash: parts[0].to_string(),
+                    short_hash: parts[1].to_string(),
+                    timestamp: parts[2].to_string(),
+                    reason: parts[3].to_string(),
+                    files_changed: 0,
+                    insertions: 0,
+                    deletions: 0,
+                });
+            } else if let Some(stat) = Self::parse_shortstat(line) {
+                // Attach the stat to the commit it follows.
+                if let Some(last) = checkpoints.last_mut() {
+                    last.files_changed = stat.0;
+                    last.insertions = stat.1;
+                    last.deletions = stat.2;
+                }
+            }
+        }
+        checkpoints
+    }
+
+    /// Parse one git `--shortstat` line into (files, insertions, deletions).
+    ///
+    /// Any component may be absent (a rename-only change shows no insertions or
+    /// deletions), and git uses the singular form for a count of one ("1 file
+    /// changed, 1 insertion(+)"). Returns `None` for a line that is not a stat
+    /// line at all.
+    fn parse_shortstat(line: &str) -> Option<(usize, usize, usize)> {
+        let mut files = 0usize;
+        let mut insertions = 0usize;
+        let mut deletions = 0usize;
+        let mut seen = false;
+        for part in line.split(',') {
+            let part = part.trim();
+            let (value, marker) = if let Some(rest) = part.strip_suffix("files changed") {
+                (rest, "files")
+            } else if let Some(rest) = part.strip_suffix("file changed") {
+                (rest, "one_file")
+            } else if let Some(rest) = part.strip_suffix("insertions(+)") {
+                (rest, "ins")
+            } else if let Some(rest) = part.strip_suffix("insertion(+)") {
+                (rest, "ins_one")
+            } else if let Some(rest) = part.strip_suffix("deletions(-)") {
+                (rest, "del")
+            } else if let Some(rest) = part.strip_suffix("deletion(-)") {
+                (rest, "del_one")
+            } else {
+                continue;
+            };
+            let value: usize = value.trim().parse().ok()?;
+            match marker {
+                "files" | "one_file" => files = value,
+                "ins" | "ins_one" => insertions = value,
+                _ => deletions = value,
+            }
+            seen = true;
+        }
+        seen.then_some((files, insertions, deletions))
     }
 
     /// Restore files to a checkpoint state (writes into the working directory)
@@ -867,15 +931,22 @@ fn ensure_store(store: &Path) -> std::result::Result<(), String> {
     // configurable, and a store at any other path would still snapshot
     // itself.
     let exclude = store.join("info").join("exclude");
-    let _ = std::fs::create_dir_all(store.join("info"));
+    // The exclude file is the ONLY thing that stops the store from
+    // snapshotting itself -- the comment above says so, and the self-
+    // snapshot loop is what it lets happen. So its write error PROPAGATES:
+    // the old `let _ =` swallowed it, `ensure_store` returned Ok, and the
+    // checkpoint walked straight into that loop (RT-297).
+    std::fs::create_dir_all(store.join("info"))
+        .map_err(|e| format!("Failed to create the checkpoint store info dir: {e}"))?;
     let store_path = store.to_string_lossy();
-    let _ = std::fs::write(
+    std::fs::write(
         &exclude,
         format!(
             ".git\nnode_modules/\ntarget/\n__pycache__/\n.venv/\nvenv/\ncheckpoints/\n{}\n",
             store_path
         ),
-    );
+    )
+    .map_err(|e| format!("Failed to write the checkpoint store exclude file: {e}"))?;
     Ok(())
 }
 
@@ -1241,24 +1312,33 @@ mod tests {
         let _ = std::fs::remove_dir_all(&home);
     }
 
-    /// The REAL store's exclude file is rewritten with the store's own
+    /// An EXISTING store's exclude file is rewritten with the store's own
     /// path, so a store created before the list grew stops snapshotting
     /// itself.
     ///
-    /// This test runs against the LIVE store on this box (it only ADDS an
-    /// exclude entry; it does not touch the store's contents), because the
-    /// whole point is that an EXISTING store — one created in August,
-    /// before the exclusion was added — must be repaired rather than
-    /// left to keep the list it was born with.
+    /// The test uses a TEMP store that already exists with a STALE exclude
+    /// file — the property that matters ("an existing store must be
+    /// repaired, not left to keep the list it was born with"). It used to
+    /// run against the LIVE store on the operator's box, which made it
+    /// depend on that box's home being writable (RT-297 made the write
+    /// error visible, and a read-only home is exactly the case the repair
+    /// now refuses loudly).
     #[test]
     fn an_existing_store_gets_its_exclude_file_repaired() {
-        let store =
-            std::path::PathBuf::from(std::env::var("OPERANT_TEST_STORE").unwrap_or_else(|_| {
-                "/home/ishanp/.operant/checkpoints/store/cdb4ee2aea69cc6a".to_string()
-            }));
-        if !store.exists() {
-            return; // no live store on this box
-        }
+        let dir = std::env::temp_dir().join(format!(
+            "operant_checkpoint_repair_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let store = dir.join("checkpoints").join("store").join("abc123");
+        std::fs::create_dir_all(store.join("info")).expect("store");
+        // The stale exclude file: the list as it was born, without the
+        // store's own path.
+        std::fs::write(store.join("info").join("exclude"), ".git\nnode_modules/\n")
+            .expect("the stale exclude file");
         let exclude = store.join("info").join("exclude");
         let before = std::fs::read_to_string(&exclude).unwrap_or_default();
 
@@ -1274,10 +1354,8 @@ mod tests {
             "the repaired exclude must name the store's own absolute path, got:\n{after}"
         );
         // The repair is what changed it.
-        assert!(
-            before != after || before.contains("checkpoints/"),
-            "the exclude file must have been rewritten"
-        );
+        assert!(before != after, "the exclude file must have been rewritten");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The shadow store must NOT snapshot itself.
@@ -1407,6 +1485,57 @@ mod tests {
         let mgr = CheckpointManager::new();
         assert!(!mgr.is_enabled());
         assert!(!mgr.ensure_checkpoint(".", "test"));
+    }
+
+    /// RT-348: `list_checkpoints` reported the diff stat as hardcoded 0/0/0 --
+    /// the UI row promised "N files changed" and every row said nothing had
+    /// changed, which is the one thing a checkpoint list exists to show.
+    #[test]
+    fn a_listed_checkpoint_reports_the_real_diff_stat() {
+        use std::process::Command as StdCommand;
+        if StdCommand::new("git").arg("--version").output().is_err() {
+            return;
+        }
+
+        let tmp = std::env::temp_dir().join(format!("operant_ckpt_{}", uuid::Uuid::new_v4()));
+        let base =
+            std::env::temp_dir().join(format!("operant_ckpt_store_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::fs::write(tmp.join("a.txt"), "hello").unwrap();
+
+        let mgr = CheckpointManager::new();
+        mgr.configure(CheckpointConfig {
+            base_dir: base.clone(),
+            enabled: true,
+            ..Default::default()
+        });
+        let dir = tmp.to_str().unwrap();
+
+        assert!(mgr.ensure_checkpoint(dir, "one"));
+
+        // A change with a known shape: 3 lines replace 1.
+        mgr.new_turn();
+        std::fs::write(tmp.join("a.txt"), "one\ntwo\nthree").unwrap();
+        assert!(mgr.ensure_checkpoint(dir, "two"));
+
+        let cps = mgr.list_checkpoints(dir, None);
+        assert_eq!(cps.len(), 2);
+        let latest = &cps[0]; // newest first
+        assert_eq!(
+            latest.files_changed, 1,
+            "the real files-changed count must be reported"
+        );
+        assert_eq!(
+            latest.insertions, 3,
+            "the real insertion count must be reported"
+        );
+        assert_eq!(
+            latest.deletions, 1,
+            "the real deletion count must be reported"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
@@ -1623,5 +1752,40 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&tmp);
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// RT-297: the checkpoint store's exclude file must be written or the
+    /// checkpoint refused.
+    ///
+    /// The exclude file is the only thing that stops the shadow store from
+    /// snapshotting itself. Its write error was dropped with `let _ =`, so
+    /// `ensure_store` returned Ok and the checkpoint proceeded into exactly
+    /// the self-snapshot loop the code comments about (the store's own
+    /// packed objects are not covered by the working-tree size bounds).
+    #[test]
+    fn ensure_store_fails_when_the_exclude_file_cannot_be_written() {
+        let dir = std::env::temp_dir().join(format!(
+            "operant_checkpoint_store_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let store = dir.join("shadow");
+        std::fs::create_dir_all(&store).expect("the store dir");
+        // The store looks like a git store already (so `ensure_store` does
+        // not run `git init` -- the failure under test is the EXCLUDE
+        // WRITE, not the init), and `info` is a FILE, so the info directory
+        // cannot be created and the exclude file cannot be written.
+        std::fs::write(store.join("HEAD"), b"ref: refs/heads/main").expect("HEAD");
+        std::fs::write(store.join("info"), b"not a directory").expect("the blocker");
+        let outcome = ensure_store(&store);
+        assert!(
+            outcome.is_err(),
+            "a store whose exclude file cannot be written must be refused: {outcome:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
