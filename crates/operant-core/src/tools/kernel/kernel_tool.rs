@@ -72,10 +72,13 @@ impl OperantTool for KernelExecTool {
             return ToolResult::error("kernel_exec", "'code' is required");
         }
         let settings = self.rt.settings();
-        let session_key = context
-            .get("session_id")
-            .map(str::to_string)
-            .or(args.namespace)
+        // The explicit namespace WINS — the field's doc says it "defaults to
+        // the current session id", which is the opposite of the session id
+        // overriding an explicit namespace (RT-328). The result echoes the
+        // namespace actually used, so the old precedence also misreported it.
+        let session_key = args
+            .namespace
+            .or_else(|| context.get("session_id").map(str::to_string))
             .unwrap_or_else(|| "default".to_string());
 
         let mut params = json!({

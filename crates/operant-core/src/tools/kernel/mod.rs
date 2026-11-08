@@ -268,7 +268,18 @@ mod tests {
 
     use super::*;
     use crate::config::KernelSettings;
+    use crate::tools::{OperantTool, ToolContext};
     use serde_json::json;
+
+    /// The kernel tools hand `ToolResult::success` an already-stringified
+    /// payload, so `content` is DOUBLE-encoded: parse it twice.
+    fn decoded(result: &crate::tools::ToolResult) -> Value {
+        let outer: Value = serde_json::from_str(&result.content).expect("outer");
+        match outer {
+            Value::String(inner) => serde_json::from_str(&inner).expect("inner"),
+            other => other,
+        }
+    }
 
     fn test_settings(state_root: &std::path::Path) -> KernelSettings {
         let s = KernelSettings {
@@ -402,6 +413,86 @@ mod tests {
             .await
             .expect("denied exec");
         assert!(v["stdout"].as_str().unwrap().contains("denied True"), "{v}");
+    }
+
+    /// RT-328: `kernel_exec`'s explicit `namespace` lost to the context's
+    /// session id, so the model could not pin a namespace and the result
+    /// misreported which one it used (the field's doc says the namespace
+    /// "defaults to the current session id" — the session id must be the
+    /// DEFAULT, not the winner).
+    #[tokio::test]
+    async fn kernel_exec_honours_an_explicit_namespace() {
+        let dir = tempfile::tempdir().unwrap();
+        let rt = KernelRuntime::new(test_settings(dir.path()));
+        let tool = super::kernel_tool::KernelExecTool::new(rt.clone());
+        let ctx = ToolContext::default().with_metadata("session_id", "s1");
+        let result = tool
+            .execute(json!({"code": "print('hi')", "namespace": "ns"}), ctx)
+            .await;
+        assert!(result.success, "{result:?}");
+        let parsed = decoded(&result);
+        assert_eq!(
+            parsed["session"],
+            json!("ns"),
+            "the explicit namespace must win over the context's session id"
+        );
+    }
+
+    /// RT-328: `kernel_state {kind: …}` with no id was routed to
+    /// `harness_overview`, which the sidecar runs with NO kind filter — so
+    /// the documented "list that kind's entries" was impossible. It now
+    /// routes to `harness_list`, whose per-kind key is the answer.
+    #[tokio::test]
+    async fn kernel_state_lists_the_requested_kind() {
+        let dir = tempfile::tempdir().unwrap();
+        let rt = KernelRuntime::new(test_settings(dir.path()));
+        let tool = super::harness_tools::KernelStateTool::new(rt.clone());
+        rt.request(
+            "harness_upsert",
+            json!({"kind": "prompt", "title": "Terse", "content": "Be terse.",
+                  "session_key": "k1"}),
+        )
+        .await
+        .expect("seed a prompt entry");
+        let result = tool
+            .execute(
+                json!({"kind": "prompt"}),
+                ToolContext::default().with_metadata("session_id", "k1"),
+            )
+            .await;
+        assert!(result.success, "{result:?}");
+        let parsed = decoded(&result);
+        assert!(
+            parsed.get("prompt").is_some(),
+            "harness_list's per-kind key must be present (the overview arm has none): {parsed}"
+        );
+    }
+
+    /// RT-328: the injection-cache invalidation list named `harness_set` —
+    /// a method the sidecar does not have — while the real write
+    /// (`harness_upsert`, the persistence seam's path) missed the
+    /// invalidation, so a lesson written this turn was absent from the
+    /// next turn's prompt for the 5s TTL.
+    #[tokio::test]
+    async fn a_harness_upsert_invalidates_the_injection_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        let rt = KernelRuntime::new(test_settings(dir.path()));
+        rt.store_injection("k1", 800, "STALE".to_string()).await;
+        assert!(
+            rt.cached_injection("k1", 800).await.is_some(),
+            "the cache is primed"
+        );
+        rt.request(
+            "harness_upsert",
+            json!({"kind": "prompt", "title": "Terse", "content": "Be terse.",
+                  "session_key": "k1"}),
+        )
+        .await
+        .expect("upsert");
+        assert!(
+            rt.cached_injection("k1", 800).await.is_none(),
+            "a harness write must invalidate the injection cache"
+        );
     }
 
     #[tokio::test]

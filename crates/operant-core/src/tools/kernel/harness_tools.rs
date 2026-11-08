@@ -32,7 +32,9 @@ fn scope_of(v: Option<&str>) -> String {
 struct KernelStateArgs {
     /// "prompt" | "subagent" | "overview" (default overview).
     kind: Option<String>,
-    /// Entry id — omit to list that kind's entries via overview.
+    /// Entry id — omit to list that kind's entries (routed to the sidecar's
+    /// `harness_list`, whose per-kind key summarizes presence; the response
+    /// also embeds the full overview, so filter client-side if needed).
     id: Option<String>,
     /// "local" (default) | "global". Local is scoped to the CURRENT session.
     scope: Option<String>,
@@ -89,8 +91,28 @@ impl OperantTool for KernelStateTool {
                     Err(e) => ToolResult::error("kernel_state", e),
                 };
             }
-            (Some("overview"), _) | (None, _) => "harness_overview",
-            (Some(_), None) => "harness_overview",
+            // A kind with no id lists that kind's entries — the field doc's
+            // "omit to list that kind's entries". The sidecar's
+            // `harness_overview` takes NO kind filter (only `harness_list`
+            // does), so routing here returned the whole unfiltered overview
+            // and the documented listing was impossible (RT-328).
+            (Some(kind), None) => {
+                return match self
+                    .rt
+                    .request(
+                        "harness_list",
+                        json!({"kind": kind, "scope": scope, "session_key": session_key}),
+                    )
+                    .await
+                {
+                    Ok(v) => ToolResult::success("kernel_state", v.to_string()),
+                    Err(e) => ToolResult::error("kernel_state", e),
+                };
+            }
+            // An explicit "overview" kind without an id now lists via
+            // harness_list like any other kind; only an ABSENT kind falls
+            // back to the plain overview.
+            (None, _) => "harness_overview",
         };
         match self
             .rt
