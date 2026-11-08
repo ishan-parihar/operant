@@ -14,10 +14,18 @@ use super::*;
 /// Routes:
 ///   POST /webhook/{route}  — receives a JSON payload, validates HMAC
 ///   signature (if configured), and forwards as an IncomingMessage.
-///   POST /webhook/notion   — with `[holon]` enabled: hands the event to the
-///   kernel's notion adapter in line (`apply`), so nothing resident stays
-///   between Notion and the organization (boundary doc R4; the poll remains
-///   the fallback).
+///   POST /webhook/{SECRET} — with `[holon]` enabled: the arm ALSO mounts at
+///   the instance's own secret route (read once at gateway start via the
+///   adapter's `webhook-path`; a random, unguessable path — NOT the literal
+///   "notion"). An event arriving there is handed to the kernel's notion
+///   adapter in line (`apply`), so nothing resident stays between Notion and
+///   the organization (boundary doc R4; the poll remains the fallback).
+///   RT-408: this doc used to advertise `POST /webhook/notion`, a route that
+///   does not exist and deliberately cannot: the CLI's O-08 note
+///   (gateway_runner.rs) names a literal "notion" route as exactly the
+///   guessable path the token-rotation guard prevents, and an operator who
+///   wired Notion to that URL sent every event into the generic
+///   `IncomingMessage` path below instead of the adapter.
 ///   GET  /health           — health check endpoint.
 pub struct WebhookAdapter {
     enabled: bool,
@@ -840,6 +848,52 @@ impl PlatformAdapter for WebhookAdapter {
     ) -> Result<String> {
         // Webhook adapter is inbound-only
         Ok(String::new())
+    }
+}
+
+#[cfg(test)]
+mod rt408_tests {
+    /// RT-408: the adapter doc advertised `POST /webhook/notion` as the
+    /// holon route — a route that does not exist and deliberately cannot: the
+    /// arm mounts at the instance's SECRET path (the CLI's O-08 note names the
+    /// literal as the guessable path the token-rotation guard prevents). An
+    /// operator who wired Notion to that URL sent every event into the generic
+    /// IncomingMessage path. Source contracts: the doc must name the secret
+    /// mount point, must not advertise the literal route, and the code must
+    /// still match the instance's path (not a literal). Needles
+    /// concatenation-built — and this test's prose does not quote the phrases it
+    /// forbids.
+    #[test]
+    fn the_route_doc_names_the_secret_mount_point() {
+        let src = include_str!("webhook.rs");
+        let phantom_route = format!("///   POST /webhook/{}notion   —", "");
+        assert_eq!(
+            src.matches(&phantom_route).count(),
+            0,
+            "the doc must not advertise a route the arm does not mount"
+        );
+        let secret = format!("///   POST /webhook/{{{}SECRET}} —", "");
+        assert!(
+            src.contains(&secret),
+            "the doc must name the secret mount point"
+        );
+        // And the code still matches the instance's path, never a literal.
+        let instance_match = format!("route == hook.webhook_path.trim_{}start_matches", "");
+        assert!(
+            src.contains(&instance_match),
+            "the arm's match is the instance's own path"
+        );
+        // The CLI-side evidence (gateway_runner.rs's O-08 note naming the
+        // literal route as the guard's reason) is cited in the doc's own text
+        // rather than asserted here: a core-crate contract that reads a
+        // sibling crate's file is the coupling this campaign already hit once
+        // (a core-only grep cannot see a cross-crate reader — and the reverse
+        // coupling is just as false).
+        let cli_named = format!("the CLI's O-08 note{}", "");
+        assert!(
+            src.contains(&cli_named),
+            "the doc must name the CLI-side evidence it rests on"
+        );
     }
 }
 
