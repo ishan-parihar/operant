@@ -29,6 +29,16 @@ pub fn set_reduce_motion(enabled: bool) {
     REDUCE_MOTION.store(enabled, Ordering::Relaxed);
 }
 
+/// The recorded `reduce_motion` preference, as [`set_reduce_motion`] stored it.
+///
+/// (iter-1914) The flag was written at startup and on every settings-screen
+/// toggle, and NOTHING read it: the perf policy recomputed its own tier from
+/// the host environment, so the operator's "Disable UI animations" reached
+/// `App::perf_tier` and nowhere else. This is the load half of that pair.
+pub fn reduce_motion() -> bool {
+    REDUCE_MOTION.load(Ordering::Relaxed)
+}
+
 /// Performance tier — controls animation FPS and redraw cadence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum PerformanceTier {

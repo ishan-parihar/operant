@@ -106,11 +106,37 @@ pub fn profile() -> &'static SystemProfile {
     PROFILE.get_or_init(detect)
 }
 
+/// The perf policy this process renders with.
+///
+/// (iter-1914) This used to build the policy from `profile()` directly, so the
+/// tier came from the host environment alone: `/settings`' "Reduce motion" row
+/// reached `App::perf_tier` (via `PerformanceTier::with_reduce_motion`) and
+/// nowhere else. Two surfaces computing the SAME tier from DIFFERENT inputs is
+/// the defect — the row promises to disable UI animations, and the prompt-entry
+/// fade, gated on `policy.enable_decorative_animations && policy.tier.
+/// prompt_entry_animation_enabled()`, kept animating on every host that
+/// detects as Full or Reduced. The clamp below is the same preference, applied
+/// to the policy's tier, so the two agree by construction.
 pub fn tui_policy() -> TuiPerfPolicy {
-    tui_policy_for(
-        profile(),
-        &crate::tui::operant_app::config_shim::config().display,
-    )
+    let detected = profile();
+    // Reduced: clamp to Minimal, the way `App::perf_tier` does. The clone only
+    // happens while the operator's preference is ON; unset (the default)
+    // takes the borrowed path and costs nothing per frame.
+    if crate::tui::redraw::reduce_motion() {
+        let clamped = SystemProfile {
+            tier: PerformanceTier::Minimal,
+            ..detected.clone()
+        };
+        tui_policy_for(
+            &clamped,
+            &crate::tui::operant_app::config_shim::config().display,
+        )
+    } else {
+        tui_policy_for(
+            detected,
+            &crate::tui::operant_app::config_shim::config().display,
+        )
+    }
 }
 
 pub fn tui_policy_for(
@@ -492,4 +518,89 @@ fn detect_memory() -> (Option<u64>, Option<u64>) {
 #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 fn detect_memory() -> (Option<u64>, Option<u64>) {
     (None, None)
+}
+
+#[cfg(test)]
+mod reduce_motion_tests {
+    use super::*;
+
+    /// The process-global reduce-motion flag, restored however this test exits.
+    ///
+    /// The flag is process-wide, so a test that sets it and resets it by hand
+    /// leaks the value whenever it PANICS before the reset — and the next test
+    /// that renders a frame then sees a policy it did not ask for, failing with
+    /// a message that looks like a product bug. Same guard shape as
+    /// `config_shim::reasoning_override_test_guard` (RT-149's fix), and the
+    /// same reason it drops rather than resets.
+    struct ReduceMotionGuard {
+        previous: bool,
+        _lock: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl Drop for ReduceMotionGuard {
+        fn drop(&mut self) {
+            crate::tui::redraw::set_reduce_motion(self.previous);
+        }
+    }
+
+    static GUARD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn reduced_motion() -> ReduceMotionGuard {
+        ReduceMotionGuard {
+            previous: crate::tui::redraw::reduce_motion(),
+            _lock: GUARD_LOCK
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        }
+    }
+
+    /// `/settings`' "Reduce motion" row must reach the perf policy.
+    ///
+    /// The row persisted a preference that `App::perf_tier` clamped to Minimal
+    /// and the policy ignored: `tui_policy()` built its tier from the host
+    /// environment alone, so the decorative animations it gates — the
+    /// prompt-entry fade above all — kept running on every host that detects
+    /// as Full or Reduced. This drives the operator's real path: the flag the
+    /// settings screen writes, read by the policy the render loop uses.
+    #[test]
+    fn the_policy_follows_the_reduce_motion_preference() {
+        // Guard FIRST, then the write: setting the flag before taking the lock
+        // lands in another test's window.
+        let _guard = reduced_motion();
+
+        crate::tui::redraw::set_reduce_motion(true);
+        let reduced = tui_policy();
+        assert_eq!(
+            reduced.tier,
+            PerformanceTier::Minimal,
+            "reduce_motion must clamp the policy's tier, the way App::perf_tier does"
+        );
+        assert!(
+            !reduced.enable_decorative_animations,
+            "the decorative gate must close: it is what the prompt-entry fade reads"
+        );
+        assert!(
+            !reduced.tier.prompt_entry_animation_enabled(),
+            "the prompt-entry fade must be disabled"
+        );
+        assert_eq!(
+            reduced.animation_fps, 1,
+            "no animation should be scheduled at all"
+        );
+
+        // And back: the same toggle the operator makes in /settings must
+        // restore the animation policy, which a cached clamp would not do.
+        crate::tui::redraw::set_reduce_motion(false);
+        let normal = tui_policy();
+        assert_eq!(
+            normal.tier,
+            profile().tier,
+            "turning the row back off must restore the DETECTED tier"
+        );
+        assert_eq!(
+            normal.enable_decorative_animations,
+            !matches!(profile().tier, PerformanceTier::Minimal),
+            "and the detected profile's decorative state with it"
+        );
+    }
 }
