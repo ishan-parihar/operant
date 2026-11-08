@@ -2778,6 +2778,101 @@ fn the_catalogue_rows_name_what_the_keys_actually_do() {
         }
     }
 }
+/// (iter-1931) The memory file selector's footer must not promise a selection
+/// that nothing consumes.
+///
+/// The selector (opened by `/context-files`) showed three claims:
+/// "↑↓ navigate · Enter select · Esc close". The dispatch arm for Enter is
+///
+///     KeyCode::Enter => {
+///         self.memory_file_selector.close();
+///     }
+///
+/// — byte-for-byte the Esc arm. `state.selected` is read by the RENDER only:
+/// no caller, command, or follow-up consumes the choice, so pressing Enter
+/// `selects` nothing and the claim names an effect that does not exist.
+/// Navigating with ↑↓ moves the highlight; Enter just closes, exactly like Esc.
+///
+/// This drives the REAL handler and renders the REAL dialog, so the clause
+/// cannot come back: the render must not advertise a selection, and the
+/// handler must show Enter doing precisely what Esc does.
+#[test]
+fn the_memory_selectors_footer_does_not_promise_an_enter_selection() {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+    use ratatui::crossterm::event::{KeyCode, KeyModifiers};
+
+    fn open(app: &mut crate::tui::app::App) {
+        app.memory_file_selector.visible = true;
+        app.memory_file_selector.files = vec![
+            crate::tui::memory_file_selector::MemoryFile {
+                display_path: "first.md".to_string(),
+                file_type: crate::tui::memory_file_selector::MemoryFileType::User,
+                exists: true,
+            },
+            crate::tui::memory_file_selector::MemoryFile {
+                display_path: "second.md".to_string(),
+                file_type: crate::tui::memory_file_selector::MemoryFileType::Project,
+                exists: true,
+            },
+        ];
+    }
+
+    let mut app = make_app();
+    open(&mut app);
+
+    // The render must not advertise a selection: nothing consumes it.
+    let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+    terminal
+        .draw(|frame| {
+            crate::tui::memory_file_selector::render_memory_file_selector(
+                &app.memory_file_selector,
+                frame.area(),
+                frame.buffer_mut(),
+            );
+        })
+        .unwrap();
+    let rendered: String = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|c| c.symbol().chars().next().unwrap_or(' '))
+        .collect();
+    assert!(
+        !rendered.contains("select") && !rendered.contains("Select"),
+        "the selector must not promise a selection: nothing consumes the chosen \
+         file — the render says: {rendered:?}"
+    );
+    assert!(
+        !rendered.contains("choose a file") && !rendered.contains("Choose a file"),
+        "the title named the dialog a chooser — the same promise in a second \
+         place; this surface browses memory files, it does not choose one: \
+         {rendered:?}"
+    );
+
+    // And the handler must show Enter doing exactly what Esc does: closing.
+    app.handle_key_event(press_key(KeyCode::Char('j'), KeyModifiers::NONE));
+    let moved = app.memory_file_selector.selected;
+    app.handle_key_event(press_key(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(
+        !app.memory_file_selector.visible,
+        "Enter must close the selector (it selects nothing)"
+    );
+    assert_eq!(
+        app.memory_file_selector.selected, moved,
+        "Enter must not change the selection — there is no selection to make"
+    );
+
+    let mut app = make_app();
+    open(&mut app);
+    app.handle_key_event(press_key(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(
+        !app.memory_file_selector.visible,
+        "Esc closes too, which is precisely why the footer cannot claim Enter \
+         does something more"
+    );
+}
 
 /// (plan 08) Hidden tool rows collapse to exactly one summary row per
 /// contiguous run; the underlying blocks are untouched so re-showing

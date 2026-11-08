@@ -134,7 +134,11 @@ pub fn render_memory_file_selector(state: &MemoryFileSelectorState, area: Rect, 
     let layout = begin_modal_buf(buf, area, 70, dialog_height, 1, 1);
     let inner = layout.body_area;
 
-    render_modal_title_buf(buf, layout.header_area, "Memory — choose a file", HINT_ESC);
+    // (iter-1931) The title also named the dialog a chooser ("Memory — choose a
+    // file"), which is the same promise in a second place: nothing consumes the
+    // picked row, so this is a browser, not a chooser. The title now says what
+    // the surface does — it shows where the memory files live.
+    render_modal_title_buf(buf, layout.header_area, "Memory files", HINT_ESC);
 
     let mut lines: Vec<Line> = Vec::new();
     lines.push(Line::from(""));
@@ -197,8 +201,20 @@ pub fn render_memory_file_selector(state: &MemoryFileSelectorState, area: Rect, 
     use ratatui::widgets::Widget;
     para.render(inner, buf);
 
+    // (iter-1931) THE "Enter select" CLAUSE IS GONE.
+    //
+    // The dispatch arm for Enter is byte-for-byte the Esc arm (`close()`), and
+    // `state.selected` — which the render's ► marks — is read by NOTHING: no
+    // caller, command, or follow-up consumes the chosen file. So the footer
+    // advertised a selection that does not exist: the operator picked a row,
+    // pressed Enter, and got a closed dialog exactly as if they had pressed Esc.
+    //
+    // The claim was the defect, so the claim goes rather than a selection
+    // mechanism being invented to honour it (the audit's phantom-capability
+    // rule: this is a browsing overlay, not a chooser). Navigation and closing
+    // are what the keys do, and that is what the footer now says.
     Paragraph::new(Line::from(vec![Span::styled(
-        "  \u{2191}\u{2193} navigate  Enter select  Esc close",
+        "  \u{2191}\u{2193} navigate  Esc close",
         Style::default().fg(theme_colors::muted()),
     )]))
     .style(Style::default().bg(theme_colors::panel_bg()))
