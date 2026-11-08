@@ -105,8 +105,25 @@ impl PlatformAdapter for EmailAdapter {
             })?;
             // Set a 30s timeout so a hung SMTP server doesn't block the
             // gateway forever.
-            let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(30)));
-            let _ = stream.set_write_timeout(Some(std::time::Duration::from_secs(30)));
+            // RT-412: both setters' results were discarded, so the stated
+            // protection was conditional on a fallible socket call whose failure
+            // was unobservable — a server that stops responding mid-conversation
+            // block the gateway's blocking thread indefinitely with no log and
+            // no timeout applied.
+            if let Err(e) = stream.set_read_timeout(Some(std::time::Duration::from_secs(30))) {
+                tracing::warn!(
+                    error = %e,
+                    "SMTP read timeout could not be set — a hung server blocks this \
+                     conversation's blocking thread indefinitely"
+                );
+            }
+            if let Err(e) = stream.set_write_timeout(Some(std::time::Duration::from_secs(30))) {
+                tracing::warn!(
+                    error = %e,
+                    "SMTP write timeout could not be set — a hung server blocks this \
+                     conversation's blocking thread indefinitely"
+                );
+            }
 
             // Helper: read a multi-line SMTP response.
             fn read_response(stream: &mut TcpStream, buf: &mut [u8]) -> std::result::Result<String, String> {
@@ -426,6 +443,52 @@ where
         full.push_str(&String::from_utf8_lossy(&buf[..n2]));
     }
     Ok(full)
+}
+
+#[cfg(test)]
+mod rt412_tests {
+    /// RT-412: the SMTP connect path's timeout "protection" was conditional on
+    /// two fallible socket setters whose results were discarded, so a server
+    /// that stops responding mid-conversation blocked the gateway's blocking
+    /// thread indefinitely with no log and no timeout applied. SOURCE contract
+    /// with its limitation named (the failure is IO-shaped, so no deterministic
+    /// unit fixture can force it). Needles concatenation-built — and this test's
+    /// own prose does not quote the phrases it forbids.
+    #[test]
+    fn the_smtp_timeout_setters_report_a_failed_apply() {
+        let src = include_str!("email.rs");
+        let prod = &src[..src.find("#[cfg(test)]").unwrap_or(src.len())];
+        let discarded_read = concat!("let _ = stream.set_read_", "timeout(");
+        assert_eq!(
+            prod.matches(discarded_read).count(),
+            0,
+            "the read timeout's apply must not be discarded"
+        );
+        let discarded_write = concat!("let _ = stream.set_write_", "timeout(");
+        assert_eq!(
+            prod.matches(discarded_write).count(),
+            0,
+            "the write timeout's apply must not be discarded"
+        );
+        let read_reported = concat!("if let Err(e) = stream.set_read_", "timeout(");
+        assert_eq!(
+            prod.matches(read_reported).count(),
+            1,
+            "the read timeout's failure must be reported"
+        );
+        let write_reported = concat!("if let Err(e) = stream.set_write_", "timeout(");
+        assert_eq!(
+            prod.matches(write_reported).count(),
+            1,
+            "the write timeout's failure must be reported"
+        );
+        let block_side = concat!("conversation's blocking thread", " indefinitely");
+        assert_eq!(
+            prod.matches(block_side).count(),
+            2,
+            "both reports must name the indefinite-block consequence"
+        );
+    }
 }
 
 #[cfg(test)]
