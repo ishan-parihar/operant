@@ -236,7 +236,7 @@ struct MemorySearchArgs {
     /// Optional exact key: recalls the row stored under key:<id> at rank 0.
     /// Absent = plain semantic search over `query`.
     key: Option<String>,
-    /// Max results to return (default 8).
+    /// Max results to return (default 10).
     max_results: Option<usize>,
     /// (iter-1321) The retired memory_smart_search's field name — an
     /// accepted alias for maxResults so the old wire shape keeps working
@@ -403,6 +403,27 @@ impl OperantTool for MemoryRecallTool {
 
 #[cfg(test)]
 mod tests {
+    /// RT-352: the `max_results` doc said "default 8" while the code
+    /// resolves an absent value to 10 — a caller sizing a window from the
+    /// schema read one number and got another. Source contract.
+    #[test]
+    fn the_memory_max_results_doc_matches_the_code() {
+        let src = include_str!("memory_tools.rs");
+        let stale = format!("(default {})", "8");
+        assert!(
+            !src.contains(&stale),
+            "the doc must not claim a default the code does not use"
+        );
+        let honest = format!("(default {})", "10");
+        assert!(src.contains(&honest), "the doc must state the real default");
+        let code = format!("unwrap_or({})", "10");
+        assert_eq!(
+            src.matches(&code).count(),
+            1,
+            "the code resolves an absent value to 10"
+        );
+    }
+
     use super::*;
     use serde_json::json;
 

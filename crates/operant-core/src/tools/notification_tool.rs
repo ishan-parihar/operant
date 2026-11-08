@@ -11,14 +11,11 @@ pub struct NotificationTool;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-#[expect(
-    dead_code,
-    reason = "serde-argument struct: fields deserialized from tool-call JSON; optional fields kept for schema parity"
-)]
+// No `dead_code` expectation: every field is deserialized from tool-call
+// JSON and READ (RT-352 removed the last unread one, the priority knob).
 struct NotifyArgs {
     message: String,
     title: Option<String>,
-    priority: Option<String>,
 }
 
 #[async_trait]
@@ -172,6 +169,24 @@ impl OperantTool for ApprovalTool {
 
 #[cfg(test)]
 mod tests {
+    /// RT-352: the `priority` knob was deserialized and never read — the
+    /// schema advertised a priority with no consumer behind it.
+    #[test]
+    fn the_schema_does_not_advertise_a_priority_that_is_never_read() {
+        let tool = NotificationTool;
+        let rendered = serde_json::to_string(&tool.schema()).expect("schema json");
+        // Concatenation-built so this test's own source cannot satisfy it (the
+        // doc comment and the assert below must not carry the needle).
+        let knob = format!("prior{}", "ity");
+        assert!(
+            !rendered.contains(&knob),
+            "the dead knob must not be in the schema: {rendered}"
+        );
+        let src = include_str!("notification_tool.rs");
+        let any_read = format!("args.{}", "priority");
+        assert_eq!(src.matches(&any_read).count(), 0, "no code may read it");
+    }
+
     use super::*;
 
     #[test]

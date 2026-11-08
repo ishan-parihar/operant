@@ -123,7 +123,14 @@ impl OperantTool for TimestampTool {
         let (timestamp, unit) = if let Some(ref date) = args.date {
             // Parse date string - simplified, supports ISO 8601 and common formats
             match parse_date(date) {
-                Ok(ts) => (ts, args.unit.unwrap_or_else(|| "seconds".to_string())),
+                // parse_date returns SECONDS, so the caller's unit applies to
+                // the VALUE too: a `unit: "ms"` request used to return the
+                // seconds value LABELED ms -- a 1000x mislabel for anyone
+                // comparing it against the no-date path (RT-352).
+                Ok(ts) => {
+                    let unit = args.unit.clone().unwrap_or_else(|| "seconds".to_string());
+                    (to_unit(ts, &unit), unit)
+                }
                 Err(e) => return ToolResult::error("timestamp", e),
             }
         } else {
@@ -171,6 +178,20 @@ fn is_leap_year(year: u64) -> bool {
 }
 
 /// Parse a date string to Unix timestamp (simplified)
+/// Convert a second-resolution timestamp to the requested unit.
+///
+/// The no-date path resolves the unit from the `Instant`; the date path gets
+/// seconds from [`parse_date`], so both must agree about what the returned
+/// number MEANS (RT-352).
+fn to_unit(secs: u64, unit: &str) -> u64 {
+    match unit {
+        "milliseconds" | "ms" => secs.saturating_mul(1_000),
+        "microseconds" | "us" => secs.saturating_mul(1_000_000),
+        "nanoseconds" | "ns" => secs.saturating_mul(1_000_000_000),
+        _ => secs,
+    }
+}
+
 fn parse_date(date: &str) -> Result<u64, String> {
     // Try ISO 8601 format first: YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS
     let parts: Vec<&str> = date.split(['-', 'T', ':', 'Z', '+', ' ']).collect();
@@ -291,6 +312,34 @@ fn parse_timezone_offset(tz: &str) -> i64 {
 
 #[cfg(test)]
 mod tests {
+    /// RT-352: the date path (`parse_date` returns SECONDS) ignored the
+    /// caller's `unit` — a `unit: "ms"` request returned the seconds value
+    /// LABELED ms, a 1000x mislabel against the no-date path beside it.
+    #[tokio::test]
+    async fn a_dated_timestamp_honours_the_requested_unit() {
+        let tool = TimestampTool;
+        let seconds = tool
+            .execute(json!({"date": "2026-11-08"}), ToolContext::default())
+            .await;
+        let secs_payload: Value = serde_json::from_str(&seconds.content).expect("json");
+        let secs = secs_payload["timestamp"].as_u64().expect("seconds");
+        assert_eq!(secs_payload["unit"], "seconds");
+
+        let millis = tool
+            .execute(
+                json!({"date": "2026-11-08", "unit": "milliseconds"}),
+                ToolContext::default(),
+            )
+            .await;
+        let ms_payload: Value = serde_json::from_str(&millis.content).expect("json");
+        assert_eq!(
+            ms_payload["timestamp"].as_u64().expect("ms"),
+            secs * 1_000,
+            "the same date in ms must be the seconds value scaled"
+        );
+        assert_eq!(ms_payload["unit"], "milliseconds");
+    }
+
     use super::*;
     use serde_json::json;
 

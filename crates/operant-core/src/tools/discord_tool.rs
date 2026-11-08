@@ -244,7 +244,9 @@ struct DiscordArgs {
     query: Option<String>,
     /// New thread name (create_thread)
     name: Option<String>,
-    /// Max results (default 50, max 100). Applies to fetch_messages, search_members.
+    /// Max results, clamped to 100. Applies to fetch_messages (default 50)
+    /// and search_members (default 20) — the two actions resolve an absent
+    /// limit differently (RT-352: the doc used to say "default 50" for both).
     limit: Option<i64>,
     /// Snowflake ID for reverse pagination (fetch_messages)
     before: Option<String>,
@@ -1193,6 +1195,27 @@ impl OperantTool for DiscordAdminTool {
 
 #[cfg(test)]
 mod tests {
+    /// RT-352: the shared `limit` doc said "default 50" for BOTH actions,
+    /// while `search_members` resolves an absent limit to 20 (fetch_messages
+    /// really is 50). A caller reading the schema got the wrong number for
+    /// one of the two. Source contract, needle concatenation-built.
+    #[test]
+    fn the_limit_doc_states_each_actions_real_default() {
+        let src = include_str!("discord_tool.rs");
+        let claim = format!("search_members (default {})", "20");
+        assert!(
+            src.contains(&claim),
+            "the doc must state search_members' real default of 20"
+        );
+        // And the code keeps that default (the doc is not the fix here).
+        let code = format!("unwrap_or({})", "20");
+        assert_eq!(
+            src.matches(&code).count(),
+            1,
+            "exactly one site resolves an absent limit to 20"
+        );
+    }
+
     use super::*;
 
     #[tokio::test]
