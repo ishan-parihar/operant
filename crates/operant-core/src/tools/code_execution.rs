@@ -343,6 +343,18 @@ fn result_json(
     v
 }
 
+/// The kernel cell timeout for a requested `timeout`.
+///
+/// The one-second head-start (`saturating_sub(1)`) lets the sidecar's own
+/// watchdog fire before the outer request deadline, so its message is the
+/// error the user sees. On a 0-second arg the subtraction used to produce
+/// 0 — and 0 to the sidecar means UNBOUNDED, so `code_execution
+/// timeout=0` (2s real) ran an infinite loop until the outer cap instead
+/// of the documented timeout (RT-335). One second is the floor.
+fn kernel_cell_timeout_secs(timeout: Duration) -> u64 {
+    timeout.as_secs().saturating_sub(1).max(1)
+}
+
 async fn execute_python(code: &str, timeout: Duration) -> Result<Value, String> {
     // 017-A unified python path: kernel is the single python runtime when
     // enabled (persistent namespace, state survives turns). Stateless
@@ -359,7 +371,7 @@ async fn execute_python(code: &str, timeout: Duration) -> Result<Value, String> 
                 serde_json::json!({
                     "session_key": "default",
                     "code": code,
-                    "cell_timeout_secs": timeout.as_secs().saturating_sub(1),
+                    "cell_timeout_secs": kernel_cell_timeout_secs(timeout),
                 }),
             )
             .await
@@ -520,6 +532,25 @@ async fn execute_rust(code: &str, timeout: Duration) -> Result<Value, String> {
 
 #[cfg(test)]
 mod tests {
+    /// RT-335: the one-second head-start turned a 0-second arg into
+    /// `cell_timeout_secs: 0`, which the sidecar reads as UNBOUNDED — the
+    /// 2s timeout that produced a clean sidecar timeout error let an
+    /// infinite loop run until the outer request cap instead.
+    #[test]
+    fn a_zero_second_python_timeout_still_bounds_the_cell() {
+        assert_eq!(
+            kernel_cell_timeout_secs(Duration::from_secs(0)),
+            1,
+            "a 0s arg must not become an UNBOUNDED cell"
+        );
+        assert_eq!(
+            kernel_cell_timeout_secs(Duration::from_secs(2)),
+            1,
+            "the head-start is retained"
+        );
+        assert_eq!(kernel_cell_timeout_secs(Duration::from_secs(30)), 29);
+    }
+
     use super::*;
     use serde_json::json;
 

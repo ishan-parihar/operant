@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -78,7 +80,12 @@ impl OperantTool for BrowserCdpTool {
                 if let Some(session_id) = parsed.session_id {
                     command["sessionId"] = Value::String(session_id);
                 }
-                match super::cdp_utils::send_cdp_command(&target_ws_url, &command).await {
+                match with_optional_timeout(
+                    parsed.timeout,
+                    super::cdp_utils::send_cdp_command(&target_ws_url, &command),
+                )
+                .await
+                {
                     Ok(response) => ToolResult::success(self.name(), response),
                     Err(e) => ToolResult::error(self.name(), format!("CDP error: {}", e)),
                 }
@@ -95,10 +102,13 @@ impl OperantTool for BrowserCdpTool {
                         .await
                         .ok(),
                 };
-                match crate::sourcehound_cdp::send_shared_session_cmd(
-                    &parsed.method,
-                    params,
-                    session_id.as_deref(),
+                match with_optional_timeout(
+                    parsed.timeout,
+                    crate::sourcehound_cdp::send_shared_session_cmd(
+                        &parsed.method,
+                        params,
+                        session_id.as_deref(),
+                    ),
                 )
                 .await
                 {
@@ -107,6 +117,26 @@ impl OperantTool for BrowserCdpTool {
                 }
             }
         }
+    }
+}
+
+/// Bound a CDP round-trip by the tool's optional `timeout` arg.
+///
+/// The schema advertised `timeout` since the tool shipped and nothing read
+/// it — a hung CDP socket hung the turn with no bound at all (RT-335).
+async fn with_optional_timeout<T, E>(
+    secs: Option<u64>,
+    fut: impl std::future::Future<Output = Result<T, E>>,
+) -> Result<T, String>
+where
+    E: std::fmt::Display,
+{
+    match secs {
+        Some(secs) => match tokio::time::timeout(Duration::from_secs(secs), fut).await {
+            Ok(res) => res.map_err(|e| e.to_string()),
+            Err(_) => Err(format!("CDP command timed out after {secs}s")),
+        },
+        None => fut.await.map_err(|e| e.to_string()),
     }
 }
 
@@ -165,6 +195,41 @@ async fn resolve_target_ws_url(cdp_url: &str, target_id: &str) -> Result<String,
 mod tests {
     use super::*;
     use crate::tools::ToolContext;
+
+    /// RT-335: the schema advertised `timeout` since the tool shipped and
+    /// nothing read it — a hung CDP socket hung the turn with no bound.
+    #[tokio::test]
+    async fn the_timeout_arg_bounds_a_cdp_round_trip() {
+        // A ready round-trip passes through untouched when no timeout is set.
+        let ok = with_optional_timeout(None, async { Ok::<_, String>(7) }).await;
+        assert_eq!(ok.unwrap(), 7, "no arg must not change the happy path");
+
+        // A 0s timeout fires on a pending socket: a hung CDP command can no
+        // longer hang the turn.
+        let hung =
+            with_optional_timeout(Some(0), std::future::pending::<Result<(), String>>()).await;
+        let err = hung.expect_err("the timeout must bound a pending call");
+        assert!(
+            err.contains("timed out"),
+            "the error names the bound: {err}"
+        );
+    }
+
+    /// RT-335 (call-site half): the helper alone is not the fix — the arg
+    /// must reach BOTH round-trip seams (the explicit endpoint and the
+    /// shared managed session). Source-grep contract, the needle split so
+    /// this test's own source cannot satisfy it; whitespace-robust because
+    /// rustfmt wraps the shared-session call across lines.
+    #[test]
+    fn the_timeout_arg_reaches_both_cdp_round_trips() {
+        let src = include_str!("browser_cdp_tool.rs");
+        let arg_use = format!("parsed.{}", "timeout");
+        assert_eq!(
+            src.matches(&arg_use).count(),
+            2,
+            "both CDP round-trip seams must be bounded by the arg"
+        );
+    }
 
     #[tokio::test]
     async fn test_browser_cdp_schema() {
