@@ -1123,7 +1123,10 @@ impl OperantTool for DiscordTool {
     }
 
     fn is_available(&self) -> bool {
-        std::env::var("DISCORD_BOT_TOKEN").is_ok() || std::env::var("DISCORD_TOKEN").is_ok()
+        // The runtime reads DISCORD_BOT_TOKEN ONLY (a missing or empty one
+        // is the configured error), so accepting DISCORD_TOKEN here reported
+        // the tool available for a setup where every call fails (RT-353).
+        std::env::var("DISCORD_BOT_TOKEN").is_ok()
     }
 
     fn schema(&self) -> ToolSchema {
@@ -1165,7 +1168,10 @@ impl OperantTool for DiscordAdminTool {
     }
 
     fn is_available(&self) -> bool {
-        std::env::var("DISCORD_BOT_TOKEN").is_ok() || std::env::var("DISCORD_TOKEN").is_ok()
+        // The runtime reads DISCORD_BOT_TOKEN ONLY (a missing or empty one
+        // is the configured error), so accepting DISCORD_TOKEN here reported
+        // the tool available for a setup where every call fails (RT-353).
+        std::env::var("DISCORD_BOT_TOKEN").is_ok()
     }
 
     fn schema(&self) -> ToolSchema {
@@ -1195,6 +1201,55 @@ impl OperantTool for DiscordAdminTool {
 
 #[cfg(test)]
 mod tests {
+    use crate::tools::OperantTool as _;
+
+    /// RT-353: `is_available` accepted DISCORD_TOKEN as well, while the
+    /// runtime reads DISCORD_BOT_TOKEN ONLY — so a DISCORD_TOKEN-only setup
+    /// reported the tool available and every call failed with "not
+    /// configured". The gate is the credential the runtime reads.
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn is_available_requires_the_token_the_runtime_reads() {
+        let _env_lock = crate::platform::test_env_lock().await;
+        let saved_bot = std::env::var("DISCORD_BOT_TOKEN").ok();
+        let saved_plain = std::env::var("DISCORD_TOKEN").ok();
+        let tool = DiscordTool;
+        let admin = DiscordAdminTool;
+
+        // The legacy DISCORD_TOKEN alone must NOT make the tool look available.
+        // SAFETY: test-only env mutation under the crate-wide lock.
+        unsafe {
+            std::env::remove_var("DISCORD_BOT_TOKEN");
+            std::env::set_var("DISCORD_TOKEN", "legacy");
+        }
+        assert!(
+            !tool.is_available(),
+            "a DISCORD_TOKEN-only setup cannot call the API"
+        );
+        assert!(
+            !admin.is_available(),
+            "the admin path reads the same credential"
+        );
+
+        // SAFETY: test-only env restoration under the crate-wide lock.
+        unsafe {
+            std::env::set_var("DISCORD_BOT_TOKEN", "bot");
+        }
+        assert!(tool.is_available(), "the credential the runtime reads");
+
+        // SAFETY: test-only env restoration under the crate-wide lock.
+        unsafe {
+            match saved_bot {
+                Some(v) => std::env::set_var("DISCORD_BOT_TOKEN", v),
+                None => std::env::remove_var("DISCORD_BOT_TOKEN"),
+            }
+            match saved_plain {
+                Some(v) => std::env::set_var("DISCORD_TOKEN", v),
+                None => std::env::remove_var("DISCORD_TOKEN"),
+            }
+        }
+    }
+
     /// RT-352: the shared `limit` doc said "default 50" for BOTH actions,
     /// while `search_members` resolves an absent limit to 20 (fetch_messages
     /// really is 50). A caller reading the schema got the wrong number for

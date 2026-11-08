@@ -760,7 +760,11 @@ impl OperantTool for HomeAssistantTool {
     }
 
     fn is_available(&self) -> bool {
-        std::env::var("HASS_TOKEN").is_ok() || std::env::var("HASS_URL").is_ok()
+        // HASS_URL DEFAULTS to http://homeassistant.local:8123, so the only
+        // required credential is HASS_TOKEN: accepting either meant a
+        // URL-only setup reported the tool available and every call 401'd
+        // (RT-353).
+        std::env::var("HASS_TOKEN").is_ok()
     }
 
     fn schema(&self) -> ToolSchema {
@@ -804,6 +808,49 @@ impl OperantTool for HomeAssistantTool {
 
 #[cfg(test)]
 mod tests {
+    use crate::tools::OperantTool as _;
+
+    /// RT-353: `is_available` accepted EITHER HASS_TOKEN or HASS_URL while
+    /// HASS_URL DEFAULTS to homeassistant.local — so a URL-only setup
+    /// reported the tool available and every call 401'd. The gate is the
+    /// credential the runtime actually requires.
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn is_available_requires_the_credential_the_runtime_reads() {
+        let _env_lock = crate::platform::test_env_lock().await;
+        let saved_token = std::env::var("HASS_TOKEN").ok();
+        let saved_url = std::env::var("HASS_URL").ok();
+        let tool = crate::tools::home_assistant_tool::HomeAssistantTool::default();
+
+        // URL only (the defaulted variable) -> NOT available.
+        // SAFETY: test-only env mutation under the crate-wide lock.
+        unsafe {
+            std::env::remove_var("HASS_TOKEN");
+            std::env::set_var("HASS_URL", "http://ha.example:8123");
+        }
+        assert!(
+            !tool.is_available(),
+            "a URL-only setup cannot authenticate; the tool must not look available"
+        );
+
+        // Token present -> available (with or without a URL).
+        // SAFETY: test-only env mutation under the crate-wide lock.
+        unsafe { std::env::set_var("HASS_TOKEN", "t") };
+        assert!(tool.is_available(), "the required credential is present");
+
+        // SAFETY: test-only env restoration under the crate-wide lock.
+        unsafe {
+            match saved_token {
+                Some(v) => std::env::set_var("HASS_TOKEN", v),
+                None => std::env::remove_var("HASS_TOKEN"),
+            }
+            match saved_url {
+                Some(v) => std::env::set_var("HASS_URL", v),
+                None => std::env::remove_var("HASS_URL"),
+            }
+        }
+    }
+
     use super::*;
 
     // =======================================================================
