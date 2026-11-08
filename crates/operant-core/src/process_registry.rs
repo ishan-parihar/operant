@@ -10,7 +10,8 @@ use tokio::time::sleep;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
-const MAX_OUTPUT_CHARS: usize = 200_000;
+/// Output tail bound, in BYTES (the trigger compares `String::len`).
+const MAX_OUTPUT_BYTES: usize = 200_000;
 /// Max concurrently tracked processes before finished sessions are pruned
 /// (hermes process_registry.py MAX_PROCESSES = 64).
 const MAX_PROCESSES: usize = 64;
@@ -106,6 +107,28 @@ pub struct ProcessRegistry {
     finished: Arc<RwLock<HashMap<String, ProcessSession>>>,
 }
 
+/// Keep only the last `MAX_OUTPUT_BYTES` bytes of an accumulated output
+/// buffer, cutting on a CHAR boundary.
+///
+/// A byte cut (`out[out.len() - MAX_OUTPUT_BYTES..]`) panics when the cut
+/// lands inside a multi-byte character — the RT-301 class — and this trim
+/// runs inside a spawned reader whose `JoinHandle` is DISCARDED, so the
+/// panic silently stops the drain, the child blocks on a full pipe forever
+/// and the session only completes at the wait timeout (RT-321).
+/// `drain(..cut)` keeps the buffer's capacity.
+fn trim_to_tail(out: &mut String) {
+    if out.len() <= MAX_OUTPUT_BYTES {
+        return;
+    }
+    // The smallest byte index >= out.len() - MAX_OUTPUT_BYTES that is a char
+    // boundary (`out.len()` itself always is, so the walk terminates).
+    let mut cut = out.len() - MAX_OUTPUT_BYTES;
+    while !out.is_char_boundary(cut) {
+        cut += 1;
+    }
+    out.drain(..cut);
+}
+
 impl ProcessRegistry {
     pub fn new() -> Self {
         Self {
@@ -161,10 +184,7 @@ impl ProcessRegistry {
                             if let Ok(text) = String::from_utf8(buf[..n].to_vec()) {
                                 let mut out = out_reader.write().await;
                                 out.push_str(&text);
-                                if out.len() > MAX_OUTPUT_CHARS {
-                                    *out = out[out.len().saturating_sub(MAX_OUTPUT_CHARS)..]
-                                        .to_string();
-                                }
+                                trim_to_tail(&mut out);
                                 drop(out);
                                 sleep(Duration::from_millis(1)).await;
                             }
@@ -184,10 +204,7 @@ impl ProcessRegistry {
                             if let Ok(text) = String::from_utf8(buf[..n].to_vec()) {
                                 let mut out = out_reader.write().await;
                                 out.push_str(&text);
-                                if out.len() > MAX_OUTPUT_CHARS {
-                                    *out = out[out.len().saturating_sub(MAX_OUTPUT_CHARS)..]
-                                        .to_string();
-                                }
+                                trim_to_tail(&mut out);
                                 drop(out);
                                 sleep(Duration::from_millis(1)).await;
                             }
@@ -379,6 +396,30 @@ impl Default for ProcessRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// RT-321: the output trim cut with a BYTE slice, so a multi-byte
+    /// character straddling the cut panicked INSIDE the spawned reader whose
+    /// `JoinHandle` is discarded — the drain silently stopped, the child
+    /// blocked on a full 64 KiB pipe, and the session completed only at the
+    /// wait timeout. 200_001 three-byte characters put the cut mid-character.
+    #[test]
+    fn the_output_trim_never_panics_on_a_multibyte_boundary() {
+        let mut out = "日".repeat(200_001); // 600_003 bytes; the cut at 400_003 is mid-char
+        trim_to_tail(&mut out);
+        assert!(
+            out.len() <= MAX_OUTPUT_BYTES,
+            "the buffer is still bounded: {}",
+            out.len()
+        );
+        assert!(
+            out.chars().all(|c| c == '日'),
+            "what survives is whole characters only"
+        );
+        // The TAIL survives (not the head): 600_003 bytes, the cut walks
+        // forward from byte 400_003 to the next boundary (400_005), leaving
+        // 199_998 bytes = 66_666 characters.
+        assert_eq!(out.chars().count(), 66_666, "the last characters survive");
+    }
 
     #[tokio::test]
     async fn test_spawn_and_poll() {

@@ -596,7 +596,7 @@ mod tests {
     ///
     /// A byte slice panics when the cut lands inside a multi-byte
     /// character — the same defect that killed `operant sessions list` on
-    /// the operator's own em-dash. Seven sites cut free text that way
+    /// the operator's own em-dash. Eight sites cut free text that way
     /// (the insights' model name, the learning graph's memory label, the
     /// webhook response body, the CLI discovery's description, this
     /// module's own error fallback — where the panic would replace the
@@ -607,7 +607,7 @@ mod tests {
     /// by concatenation so this test's own source cannot satisfy them.
     #[test]
     fn no_free_text_is_cut_with_a_byte_slice() {
-        let cases: [(&str, String); 7] = [
+        let cases: [(&str, String); 8] = [
             (
                 include_str!("agent/insights.rs"),
                 format!("&m.model[{n}]", n = "..28"),
@@ -632,6 +632,10 @@ mod tests {
             (
                 include_str!("client.rs"),
                 format!("&clean[{n}]", n = "..500"),
+            ),
+            (
+                include_str!("process_registry.rs"),
+                format!("out[out.len(){}..]", ".saturating_sub("),
             ),
         ];
         for (src, needle) in cases {
