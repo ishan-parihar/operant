@@ -872,7 +872,17 @@ impl OperantAgent {
                 // assigned here — write them unconditionally; a
                 // first-turn session just has nothing to read back yet.
                 for (key, val) in evo.persist_counters() {
-                    let _ = self.database.set_session_metadata(&session_id, key, &val);
+                    // The persist exists so the next run() hydrates the right
+                    // counters; a DROPPED write means the next run hydrates
+                    // stale counts and the memory review interval fires at
+                    // the wrong cadence (or never) (RT-365).
+                    if let Err(e) = self.database.set_session_metadata(&session_id, key, &val) {
+                        warn!(
+                            error = %e,
+                            key,
+                            "failed to persist the memory-review counter —                              the next run will hydrate stale counts"
+                        );
+                    }
                 }
                 trigger.should_review_memory
             }
@@ -2971,7 +2981,16 @@ impl OperantAgent {
                 // ── Persist evolution counters to session metadata ──
                 // After bumping, persist so the next run() can hydrate.
                 for (key, val) in evo.persist_counters() {
-                    let _ = self.database.set_session_metadata(&session_id, key, &val);
+                    // Same shape as the memory counters above (RT-365): a
+                    // dropped write leaves the skill-nudge interval hydrating
+                    // stale counts.
+                    if let Err(e) = self.database.set_session_metadata(&session_id, key, &val) {
+                        warn!(
+                            error = %e,
+                            key,
+                            "failed to persist the skill-nudge counter —                              the next run will hydrate stale counts"
+                        );
+                    }
                 }
 
                 trigger.should_review_skills
@@ -3729,6 +3748,48 @@ pub(super) fn guardrail_halt_reply(summary: &str) -> String {
         "I stopped this turn because a tool kept failing without making progress: {cause}\n\n\
          Tell me how you'd like to proceed, or send `continue` and I'll try a different approach."
     )
+}
+
+#[cfg(test)]
+mod rt365_tests {
+    /// RT-365: the evolution counters are persisted so the next run() hydrates
+    /// the right counts — and BOTH write sites dropped the Result, so a failed
+    /// write left the memory-review / skill-nudge intervals hydrating stale
+    /// counts silently (the same class as rewind's transcript write).
+    /// Source contract, needle concatenation-built.
+    #[test]
+    fn the_counter_persists_report_a_failed_write_instead_of_dropping_it() {
+        let src = include_str!("run.rs");
+        let dropped = format!(
+            "let _ = self.database.set_session{}(&session_id, key, &val)",
+            "_metadata"
+        );
+        assert_eq!(
+            src.matches(&dropped).count(),
+            0,
+            "a dropped persist leaves the intervals hydrating stale counts"
+        );
+        let reported = format!("failed to persist the {}-review counter", "memory");
+        assert!(
+            src.contains(&reported),
+            "the memory counter write must report its failure"
+        );
+        let reported2 = format!("failed to persist the {}-nudge counter", "skill");
+        assert!(
+            src.contains(&reported2),
+            "the skill counter write must report its failure"
+        );
+        // Both sites must have the same shape (two persists, two reports).
+        let site = format!(
+            "self.database.set_session{}(&session_id, key, &val)",
+            "_metadata"
+        );
+        assert_eq!(
+            src.matches(&site).count(),
+            2,
+            "both counter persist sites must go through the reporting path"
+        );
+    }
 }
 
 #[cfg(test)]
