@@ -1,4 +1,4 @@
-  Rewind to a previous prompt · Enter to rewind · f filter · Esc cancel
+  Rewind to a previous prompt · type to filter · ↑↓ step matches · Enter done · Esc close filter
   filter: parser█
 
   No rewindable turns yet — send a prompt first.

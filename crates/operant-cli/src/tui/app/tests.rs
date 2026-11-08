@@ -1575,6 +1575,101 @@ async fn watchdog_aborts_after_deadline() {
 
 /// 2026-10-14 batch, plan 05: /rewind opens the fullscreen selector; the
 /// filter narrows entries case-insensitively and Enter jumps to the first
+/// (iter-1934) The rewind selector's header must be honest in the state it is
+/// shown in — the filter is a second state, and the header's three claims all
+/// break there.
+///
+/// The header reads `· Enter to rewind · f filter · Esc cancel` in BOTH states.
+/// With the filter closed that is exactly what the keys do. With the filter
+/// OPEN it is false three times over: Enter closes the filter (it does NOT
+/// rewind — the handler's own comment records that Enter in filter means "I am
+/// done typing", deliberately not a jump), Esc closes the FILTER (it does not
+/// cancel the selector), and `f` types an f into the filter rather than opening
+/// it.
+///
+/// The operator follows the header's `f filter` to search, and the moment they
+/// are searching the same line tells them Enter will rewind — it will not.
+///
+/// This renders the REAL selector in both states and drives the REAL handler.
+#[test]
+fn the_rewind_headers_claims_hold_in_the_state_they_are_shown_in() {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    fn rendered(app: &crate::tui::app::App) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        terminal
+            .draw(|frame| {
+                crate::tui::rewind_selector::draw_rewind_selector(frame, frame.area(), app);
+            })
+            .unwrap();
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol().chars().next().unwrap_or(' '))
+            .collect()
+    }
+
+    // --- filter CLOSED: every claim is true, so the header may say them -----
+    let mut app = make_app();
+    app.handle_tui_command("rewind", "");
+    let closed = rendered(&app);
+    assert!(
+        closed.contains("Enter to rewind")
+            && closed.contains("f filter")
+            && closed.contains("Esc cancel"),
+        "with the filter closed the header names what the keys do: {closed:?}"
+    );
+
+    // Behaviourally: Enter with the filter closed starts the rewind path.
+    app.rewind_selector.entries = vec![crate::tui::rewind_selector::RewindEntry {
+        turn_id: 1,
+        text: "Fix the login bug".to_string(),
+        compacted: false,
+    }];
+    app.handle_key_event(press_key(KeyCode::Char('f'), KeyModifiers::NONE));
+    assert!(app.rewind_selector.filter_open, "f opens the filter");
+
+    // --- filter OPEN: the three claims are all false ----------------------
+    let open = rendered(&app);
+    assert!(
+        !open.contains("Enter to rewind"),
+        "with the filter open, Enter closes the filter — it does NOT rewind, so the \
+         header must not promise a rewind there: {open:?}"
+    );
+    assert!(
+        !open.contains("f filter"),
+        "with the filter open, `f` types an f into the filter — it does not open one: \
+         {open:?}"
+    );
+    assert!(
+        !open.contains("Esc cancel"),
+        "with the filter open, Esc closes the FILTER, not the selector — the header \
+         must not promise a cancel it does not perform: {open:?}"
+    );
+    // And it must say what IS true in that state.
+    assert!(
+        open.contains("filter") && open.contains("Enter") && open.contains("Esc"),
+        "the filter state's header must still name the keys that DO work there: {open:?}"
+    );
+
+    // The behavioural half, observed: Enter in the filter does not rewind.
+    app.handle_key_event(press_key(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(
+        app.rewind_selector.visible,
+        "Enter in the filter closes the filter — the selector stays open, so no rewind \
+         happened"
+    );
+    assert!(!app.rewind_selector.filter_open, "Enter closed the filter");
+    assert!(
+        app.rewind_selector.notice.is_none(),
+        "Enter in the filter must not start a rewind: {notice:?}",
+        notice = app.rewind_selector.notice
+    );
+}
+
 /// match; Esc closes.
 #[test]
 fn rewind_selector_open_filter_and_escape() {

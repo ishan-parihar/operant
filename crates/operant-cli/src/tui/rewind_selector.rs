@@ -259,9 +259,25 @@ pub fn draw_rewind_selector(frame: &mut Frame, area: Rect, app: &crate::tui::app
         .fg(theme::accent_color())
         .add_modifier(Modifier::BOLD);
     let dim = Style::default().fg(theme::dim_color());
+    // (iter-1934) THE HINT IS DERIVED FROM THE STATE, not one string in both.
+    //
+    // The header carried `· Enter to rewind · f filter · Esc cancel` in both
+    // states, and with the filter OPEN all three are false: Enter closes the
+    // filter (the handler's own comment records that it deliberately does not
+    // jump), Esc closes the FILTER rather than the selector, and `f` types an
+    // f into the field rather than opening one. The operator follows `f filter`
+    // to search, and the moment they are searching the same line tells them
+    // Enter will rewind — it will not.
+    let hint = if state.filter_open {
+        // What the keys do while typing: the field eats everything until
+        // Enter/Esc, and ↑↓ walk the MATCHES.
+        "· type to filter · ↑↓ step matches · Enter done · Esc close filter"
+    } else {
+        "· Enter to rewind · f filter · Esc cancel"
+    };
     let mut header: Vec<Line> = vec![Line::from(vec![
         Span::styled("  Rewind to a previous prompt ", title_style),
-        Span::styled("· Enter to rewind · f filter · Esc cancel", dim),
+        Span::styled(hint, dim),
     ])];
     if state.filter_open {
         header.push(Line::from(vec![
