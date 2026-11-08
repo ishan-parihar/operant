@@ -53,6 +53,10 @@ pub struct ProcessSession {
     pub status: ProcessStatus,
     pub exit_code: Option<i32>,
     pub output_buffer: String,
+    /// STORED, NEVER READ (RT-347, named not shipped): nothing in the crate
+    /// acts on this flag — there is no notification path from a completed
+    /// background process to a turn. It stays for the registry's serialized
+    /// shape; the tool arg that used to set it was retracted alongside.
     pub notify_on_complete: bool,
 }
 

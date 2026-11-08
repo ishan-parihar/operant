@@ -9,10 +9,8 @@ use crate::tools::{OperantTool, ToolContext, ToolResult};
 
 #[derive(JsonSchema, Deserialize)]
 #[serde(rename_all = "camelCase")]
-#[expect(
-    dead_code,
-    reason = "serde-argument struct: fields deserialized from tool-call JSON; optional fields kept for schema parity"
-)]
+// No `dead_code` expectation: every field is deserialized from tool-call
+// JSON and READ (RT-347 removed the last unread one, `notifyOnComplete`).
 struct ProcessToolArgs {
     /// Action: list, spawn, poll, wait, kill, get_output
     action: String,
@@ -24,8 +22,6 @@ struct ProcessToolArgs {
     session_id: Option<String>,
     /// Timeout in seconds (for wait action)
     timeout_secs: Option<u64>,
-    /// Whether to notify on completion (for spawn action)
-    notify_on_complete: Option<bool>,
 }
 
 #[derive(Serialize)]
@@ -183,6 +179,22 @@ impl OperantTool for ProcessTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// RT-347: the `notifyOnComplete` knob was deserialized and never read
+    /// at either layer (the tool arg, and the registry field it would have
+    /// set). The schema must not offer it again without a notification path.
+    #[test]
+    fn the_schema_does_not_advertise_a_notification_knob_with_no_notification() {
+        let schema = ToolSchema::from_type::<ProcessToolArgs>("process", "test");
+        let rendered = serde_json::to_string(&schema).expect("schema json");
+        // The needle is concatenation-built so this test's own source cannot
+        // satisfy it; camelCase is the spelling the schema serializes.
+        let knob = format!("notifyOn{}", "Complete");
+        assert!(
+            !rendered.contains(&knob),
+            "the dead knob must not be in the schema: {rendered}"
+        );
+    }
 
     #[test]
     fn test_process_schema() {
