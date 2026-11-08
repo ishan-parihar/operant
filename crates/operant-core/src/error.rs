@@ -592,21 +592,22 @@ mod tests {
         assert!(display.contains("Network error"), "got: {display}");
     }
 
-    /// RT-299: free text must never be cut with a BYTE slice.
+    /// RT-301: free text must never be cut with a BYTE slice.
     ///
     /// A byte slice panics when the cut lands inside a multi-byte
     /// character — the same defect that killed `operant sessions list` on
-    /// the operator's own em-dash. Five sites cut free text that way
+    /// the operator's own em-dash. Six sites cut free text that way
     /// (the insights' model name, the learning graph's memory label, the
-    /// webhook response body, the CLI discovery's description and this
+    /// webhook response body, the CLI discovery's description, this
     /// module's own error fallback — where the panic would replace the
-    /// error with a crash).
+    /// error with a crash — and the advisory view's tool-result cuts,
+    /// iter-1901).
     ///
     /// Source-grep contract (the repo's own shape): the needles are built
     /// by concatenation so this test's own source cannot satisfy them.
     #[test]
     fn no_free_text_is_cut_with_a_byte_slice() {
-        let cases: [(&str, String); 5] = [
+        let cases: [(&str, String); 6] = [
             (
                 include_str!("agent/insights.rs"),
                 format!("&m.model[{n}]", n = "..28"),
@@ -627,6 +628,7 @@ mod tests {
                 include_str!("error.rs"),
                 format!("&clean[{n}]", n = "..200"),
             ),
+            (include_str!("moa.rs"), format!("&text[{n}]", n = "..half")),
         ];
         for (src, needle) in cases {
             assert!(

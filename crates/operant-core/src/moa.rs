@@ -72,9 +72,19 @@ fn truncate_tool_result(text: &str) -> String {
     let half = ADVISORY_TOOL_RESULT_BUDGET / 2;
     let omitted = text.len() - 2 * half;
     let mut out = String::with_capacity(ADVISORY_TOOL_RESULT_BUDGET + 32);
-    out.push_str(&text[..half]);
+    // Both cuts are char-boundary-safe: a byte slice PANICS when the cut lands
+    // inside a multi-byte character (the RT-301/RT-312 class — tool output
+    // carries emoji, CJK and accented text, and this panic would take the
+    // turn with it, from the advisor and recap paths).
+    out.push_str(crate::agent::safe_truncate_str(text, half));
     out.push_str(&format!("\n[... {omitted} chars omitted ...]\n"));
-    out.push_str(&text[text.len() - half..]);
+    // The tail cut walks FORWARD to the next boundary (`text.len()` is always
+    // one, so the walk terminates).
+    let mut tail = text.len() - half;
+    while !text.is_char_boundary(tail) {
+        tail += 1;
+    }
+    out.push_str(&text[tail..]);
     out
 }
 
@@ -538,6 +548,33 @@ mod tests {
             "big results must be head+tail previewed"
         );
         assert!(text.len() < big.len());
+    }
+
+    #[test]
+    fn advisory_view_survives_a_multibyte_char_at_the_truncation_boundary() {
+        // A byte slice panics when the cut lands inside a multi-byte
+        // character — the RT-301/RT-312 class. Three-byte characters put
+        // byte 2000 AND byte (len - 2000) mid-character, which is ordinary
+        // for CJK/emoji-heavy tool output (git logs, web pages, file reads).
+        // The ASCII-only test above passes on the defective code; this one
+        // cannot.
+        let big = "日".repeat(4_000); // 12_000 bytes; both cuts land mid-char
+        let msgs = vec![
+            Message::user("q"),
+            Message::assistant("a"),
+            Message::tool("c1", &big),
+        ];
+        let view = build_advisory_messages(&msgs);
+        let text = &view[1].content;
+        assert!(
+            text.contains("chars omitted"),
+            "big results must be head+tail previewed"
+        );
+        assert!(text.len() < big.len());
+        assert!(
+            text.contains("[tool result:"),
+            "the folded block still names the result: {text}"
+        );
     }
 
     #[test]
