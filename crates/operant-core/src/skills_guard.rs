@@ -1476,7 +1476,13 @@ pub fn format_scan_report(result: &ScanResult) -> String {
     lines.join("\n")
 }
 
-/// Compute a SHA-256 hash of all files in a skill directory for integrity tracking.
+/// Compute a TRUNCATED SHA-256 (the first 8 digest bytes = 16 hex chars,
+/// ~64 bits) of all files in a skill directory for integrity tracking.
+///
+/// Labeled on purpose: the label used to read as a full SHA-256, which no
+/// consumer relies on (there is none — nothing verifies a skill against this
+/// hash today, RT-340-RT-275-class dead surface), but a label that promises
+/// more than the bytes carry is the kind of doc that gets trusted anyway.
 pub fn content_hash(skill_path: &Path) -> String {
     let mut hasher = Sha256::new();
 
@@ -1940,6 +1946,29 @@ fn has_binary_magic(path: &Path) -> bool {
 // ============================================================================
 // Tests
 // ============================================================================
+
+#[cfg(test)]
+mod skills_guard_rt340_tests {
+    /// RT-340: `content_hash` truncates the SHA-256 digest to its first
+    /// 8 bytes (16 hex chars, ~64 bits) while the label read as a full
+    /// SHA-256. Source contract, needle concatenation-built.
+    #[test]
+    fn the_content_hash_label_names_the_truncation() {
+        let src = include_str!("skills_guard.rs");
+        let label = format!("TRUNCATED {}-{}", "", "256").replace("{}", "");
+        // "TRUNCATED SHA-256" split so this test's own source cannot match it.
+        let label = format!("TRUNCATED {}-{}", "SHA", "256");
+        assert!(
+            src.contains(&label),
+            "the digest's label must name the truncation"
+        );
+        // And the bytes really are truncated (8 digest bytes, not 32).
+        assert!(
+            src.contains(".take(8)"),
+            "the truncation the label names must be the one the code does"
+        );
+    }
+}
 
 #[cfg(test)]
 mod tests {

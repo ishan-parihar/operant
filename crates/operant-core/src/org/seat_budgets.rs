@@ -218,11 +218,17 @@ impl SeatBudgetDb {
             }) {
             Ok(rows) => rows,
             Err(_) => {
-                // No legacy table — nothing to migrate.
-                let _ = conn.execute(
+                // No legacy table — nothing to migrate. The marker write is
+                // REPORTED, not swallowed: `let _ =` made a failed marker
+                // silent, and the copy then re-ran at every boot against the
+                // doc's own "best-effort: a failure here is reported (warn)"
+                // contract (RT-340).
+                if let Err(e) = conn.execute(
                     "INSERT OR REPLACE INTO seat_budget_migrations (key, applied_at) VALUES (?1, ?2)",
                     params![MIGRATION_KEY, chrono::Utc::now().to_rfc3339()],
-                );
+                ) {
+                    tracing::warn!(error = %e, "seat budget migration marker not written — the copy will repeat on the next boot");
+                }
                 return;
             }
         };
@@ -235,10 +241,12 @@ impl SeatBudgetDb {
                 tracing::warn!(error = %e, seat = %row.employee_id, "seat budget migration could not copy a row");
             }
         }
-        let _ = conn.execute(
+        if let Err(e) = conn.execute(
             "INSERT OR REPLACE INTO seat_budget_migrations (key, applied_at) VALUES (?1, ?2)",
             params![MIGRATION_KEY, chrono::Utc::now().to_rfc3339()],
-        );
+        ) {
+            tracing::warn!(error = %e, "seat budget migration marker not written — the copy will repeat on the next boot");
+        }
         tracing::info!(
             rows = legacy.len(),
             "migrated seat budget overrides from the app database to the org sibling"
@@ -357,6 +365,27 @@ impl SeatBudgetDb {
 
 #[cfg(test)]
 mod tests {
+    /// RT-340: the migration marker writes were `let _ = conn.execute(...)` —
+    /// silent, against the doc's own "best-effort: a failure here is reported
+    /// (warn)" contract, so a failed marker made the copy re-run at every
+    /// boot with no trace. Source contract, needle concatenation-built.
+    #[test]
+    fn a_failed_migration_marker_is_reported_not_swallowed() {
+        let src = include_str!("seat_budgets.rs");
+        let swallow = format!("let _ = conn.execute({}", "");
+        assert_eq!(
+            src.matches(&swallow).count(),
+            0,
+            "the marker writes must report a failure, not swallow it"
+        );
+        let warning = format!("marker not written{}", "");
+        assert!(
+            src.matches(&warning).count() >= 2,
+            "both marker writes must warn on failure (count: {})",
+            src.matches(&warning).count()
+        );
+    }
+
     use super::*;
 
     fn conn() -> Connection {

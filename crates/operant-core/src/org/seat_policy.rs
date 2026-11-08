@@ -227,10 +227,12 @@ pub fn decide(
 /// organism; the personal-mode policy rows keep storing it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DelegationPosture {
-    /// The seat may never hand work off. Every `delegate` call is denied.
+    /// STORED, NOT ENFORCED (RT-340): the consult path that judged this
+    /// retired with the organism, so the row's posture never gates a
+    /// `delegate` call — the tool-config gates (depth, allowlists, readonly)
+    /// own every verdict. The variant exists so a stored row round-trips.
     Forbidden,
-    /// The seat may delegate within its department, or cross-department on
-    /// a live grant covering the target.
+    /// STORED, NOT ENFORCED — see [`Self::Forbidden`].
     Bounded,
     /// Today's behaviour: the tool-config gates (depth, allowlists,
     /// readonly) own the verdict; governance is not consulted further.
@@ -272,6 +274,21 @@ pub trait SeatPolicySource: Send + Sync {
 
 #[cfg(test)]
 mod tests {
+    /// RT-340: the `DelegationPosture` variants document enforcement
+    /// ("every `delegate` call is denied") that the retired consult path
+    /// never performs — the posture is stored, the tool-config gates own
+    /// every verdict. Source contract, needle concatenation-built.
+    #[test]
+    fn the_delegation_posture_docs_name_what_is_not_enforced() {
+        let src = include_str!("seat_policy.rs");
+        let honest = format!("STORED, NOT {}ENFORCED", "");
+        assert!(
+            src.matches(&honest).count() >= 2,
+            "the unenforced variants must say so (count: {})",
+            src.matches(&honest).count()
+        );
+    }
+
     use super::*;
 
     fn policy(mode: SeatMode, allow: &[&str], deny: &[&str]) -> SeatPolicy {
