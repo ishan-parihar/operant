@@ -2712,6 +2712,73 @@ fn registry_lists_the_three_visibility_chords() {
     );
 }
 
+/// (iter-1919) The catalogue's rows must describe what the dispatch DOES.
+///
+/// `Ctrl+U` was catalogued "Page up" and `Ctrl+D` "Page down" in the Vim
+/// Normal context. Nothing in this TUI pages: the composer is a text field,
+/// the vim layer has no paging, and the dispatch arms do something else
+/// entirely — `Ctrl+U` kills the line back to the line start and `Ctrl+D`
+/// arms the two-press exit on an empty prompt. An operator who read `/keys`
+/// and pressed `Ctrl+U` lost the text they had typed.
+///
+/// This drives the REAL handler for each of those chords and requires the
+/// observed effect, so a row that names an action the dispatch does not
+/// perform cannot come back. The Prompt context's own `Ctrl+D` row — which
+/// names the truth — is the control: the same chord described honestly.
+#[test]
+fn the_catalogue_rows_name_what_the_keys_actually_do() {
+    use crate::tui::keybindings::{BindingContext, DEFAULT_KEYBINDINGS};
+
+    let catalogue = DEFAULT_KEYBINDINGS.catalogue();
+
+    // The paging claim is gone: no context may name a page motion.
+    for (context, binding) in &catalogue {
+        let description = binding.description.as_deref().unwrap_or_default();
+        assert!(
+            !description.contains("Page up") && !description.contains("Page down"),
+            "the catalogue claims {description:?} in {context:?} — nothing in this \
+             TUI pages; {binding:?} describes an action no code performs"
+        );
+    }
+
+    // And the chords themselves, driven through the real handler:
+    // Ctrl+U kills back to the line start.
+    let mut app = make_app();
+    for ch in "delete me".chars() {
+        app.handle_key_event(press_key(KeyCode::Char(ch), KeyModifiers::NONE));
+    }
+    assert_eq!(app.prompt_input.text, "delete me");
+    app.handle_key_event(press_key(KeyCode::Char('u'), KeyModifiers::CONTROL));
+    assert!(
+        app.prompt_input.text.is_empty(),
+        "Ctrl+U kills the line back to its start — it does not page: {:?}",
+        app.prompt_input.text
+    );
+
+    // Ctrl+D on an empty prompt arms the two-press exit, which the Prompt
+    // context's own row already names honestly.
+    let mut app = make_app();
+    assert!(app.prompt_input.is_empty(), "the prompt starts empty");
+    app.handle_key_event(press_key(KeyCode::Char('d'), KeyModifiers::CONTROL));
+    assert!(
+        app.last_exit_key_warning.is_some() && app.exit_key_sequence_start == Some('d'),
+        "Ctrl+D on an empty prompt must ARM the exit confirmation — the row that \
+         describes it is honest, and the one that called it \"Page down\" was not"
+    );
+
+    // The Vim Normal context must not carry the two chords as page motions.
+    let vim = DEFAULT_KEYBINDINGS.get_bindings(BindingContext::VimNormal);
+    for chord in ["Ctrl+u", "Ctrl+d"] {
+        let row = vim.iter().find(|b| b.chord() == chord);
+        if let Some(row) = row {
+            assert!(
+                !matches!(row.description.as_deref(), Some("Page up" | "Page down")),
+                "the Vim Normal context must not catalog {chord} as a page motion"
+            );
+        }
+    }
+}
+
 /// (plan 08) Hidden tool rows collapse to exactly one summary row per
 /// contiguous run; the underlying blocks are untouched so re-showing
 /// restores every row.

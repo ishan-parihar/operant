@@ -78,8 +78,6 @@ pub enum KeyAction {
     VimMotionWordEnd,
     VimMotionLineStart,
     VimMotionLineEnd,
-    VimMotionPageUp,
-    VimMotionPageDown,
     VimMotionFileStart,
     VimMotionFileEnd,
 

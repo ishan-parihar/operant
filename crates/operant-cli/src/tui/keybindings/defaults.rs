@@ -583,20 +583,6 @@ impl KeyBindingRegistry {
                 context: BindingContext::VimNormal,
                 description: "File end",
             },
-            DefaultBinding {
-                key: KeyCode::Char('u'),
-                modifiers: KeyModifiers::CONTROL,
-                action: KeyAction::VimMotionPageUp,
-                context: BindingContext::VimNormal,
-                description: "Page up",
-            },
-            DefaultBinding {
-                key: KeyCode::Char('d'),
-                modifiers: KeyModifiers::CONTROL,
-                action: KeyAction::VimMotionPageDown,
-                context: BindingContext::VimNormal,
-                description: "Page down",
-            },
             // Vim editing
             DefaultBinding {
                 key: KeyCode::Char('x'),
