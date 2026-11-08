@@ -658,3 +658,79 @@ contract was seen failing by name on the restored defect.
 Round-12 end-of-round gates: full suite exit 0 (46 targets), strict clippy
 exit 0, fmt clean, ledger index OK, genome lint 0 errors, red-team docs
 verification "no CLOSED finding regressed".
+
+## Round 13 (2026-11-09) — the session/cronjobs/curator sweep, all ten findings shipped
+
+Fifteen pushed iterations (iter-1967..iter-1981... close: iter-1967 through
+iter-1978, origin/main 824afa7a). The round's discipline held: every one of
+the dispatched sweep's ten findings was re-verified first-hand before an
+iteration was spent on it; the two that did not survive (the seat-budget
+claims, whose "gateway enforcement absent" premise died on the cross-crate
+reader in operant-cli) had their TRUE sub-part shipped earlier as RT-376.
+
+Shipped, each mutation-proved:
+- **RT-384** — the curator's "pre-archive" backup was taken AFTER the
+  archival it was named for (a safety mechanism that documented its contract
+  and then ran on the wrong side of it); the backup now precedes the loop and
+  a failed backup means the archival does not run at all.
+- **RT-385** — two curator archive paths dropped the tracker write that makes
+  the archive durable — the invariant the file itself names at :539, which
+  the apply path propagates with `?` while run_review and run_consolidation
+  used `let _ =`.
+- **RT-386** — the "reactivated" counter counted a change that never happened
+  (a defensive arm incremented and did nothing else, then the aggregate log
+  reported the reactivation); fixed by naming — the reactivation itself is a
+  product decision.
+- **RT-387** — the cron self-heal's persist was discarded, so a failed write
+  left the FIRED schedule diverging from the STORED one forever, unlogged.
+- **RT-388** — the cron rewrite's atomicity note was false: a mutex is not a
+  transaction, and a mid-loop failure left a half-rewritten job fleet; the
+  rewrite now runs inside ONE explicit transaction.
+- **RT-389** — the session `discard` doc promised a durable delete the body
+  never performs (it only removes the resident copy; the session stays
+  recoverable — the RT-285 product decision is the behaviour, this row is the
+  doc's additional false claim).
+- **RT-390** — the turn-summary doc promised a display bucket no formatter
+  renders.
+- **RT-391** — `repair_schedules`' doc claimed an interval expansion the
+  schedule module forbids (the 2026-10-24 expansion bug is why phrases stay
+  raw).
+- **RT-392** — three curator docs promised a `stale` lifecycle state that does
+  not exist (no enum variant, nothing sets one; staleness is report-only).
+- **RT-393** — the skill summary sent the first ten RAW file lines as the
+  description the doc promises from SKILL.md frontmatter; a parser now
+  extracts the field.
+
+Plus the round's two ledger chores: iter-1968's repair of the fourth
+shared-document erasure (my iter-1967 ledger blob was built from a stale
+worktree copy and dropped the peer's rows RT-378…RT-383 — detected by the
+commit's own diff stat, repaired forward from the parent's bytes, my row
+renumbered RT-377→RT-384 per the later-publisher convention), and iter-1978's
+fold of that repair note into the RT-384 section (its standalone id parsed as
+a second RT-384, which the uniqueness check caught).
+
+### The round's measured lessons (all recorded where the next round reads them)
+
+- **The consumed `#[cfg(test)]`, fourth instance**: my scheduler.rs contract
+  insertion consumed the existing test module's attribute; the plain
+  `cargo build` caught it as an unresolved import of a cfg(test)-only helper.
+  The lesson is unchanged and now proven four times: re-emit the consumed
+  attribute in the same replacement.
+- **The self-satisfaction trap, instances six through ten**: a doc history
+  note quoting the claim it corrects (RT-389), a test comment quoting the
+  claim it forbids (RT-390, RT-392), and a doc note quoting the phantom
+  bucket (RT-390's production note). Each paraphrased before the proof
+  counted.
+- **A helper's green test is not the seam's proof (RT-393)**: the parser's
+  unit test passed while the producer mutation was green; the seam assertions
+  were added and the proof re-run.
+- **Two vacuous fixtures caught by their own mutation runs**: RT-386's first
+  fixture (the never-used grace floor intercepted the record) and RT-388's
+  first trigger (keyed on the display name, not the minted id).
+- **A compile error is not a test proof (RT-387, RT-385)**: two mutation
+  attempts left dangling references or unbalanced blocks; both were redone as
+  whole-block replacements and re-proved.
+
+Round-13 end-of-round gates: full suite exit 0 (46 targets), strict clippy
+exit 0, fmt clean, ledger index OK (index table and checkboxes agree, id space
+unique), genome lint 0 errors, red-team docs verification clean.

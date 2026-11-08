@@ -431,3 +431,21 @@ NOT supported (named, with the reason):
 - A doc's history note quoting the old claim satisfies the "must not contain"
   needle — [V] — the worklog RT-373 contract passed on its own mutant until the
   note was reworded to paraphrase — unit 1
+
+## Round 13 (2026-11-09) — the sweep, verified and shipped
+
+- A safety mechanism can document its contract and then run on the wrong side
+  of it — [V] — the curator's "pre-archive" backup was created after the
+  archival loop had already moved the skills, so it could not roll back the
+  archive it was named for (RT-384) — unit 1
+- A file can name an invariant at one site and violate it at two others —
+  [V] — apply_automatic_transitions propagates the tracker write with `?`
+  while run_review and run_consolidation discarded it, under the comment that
+  describes the dropped write's consequence (RT-385) — unit 1
+- A mutex is not a transaction — [V] — the cron rewrite's "no partial
+  rewrites" note survived until an explicit transaction made it true; the
+  non-transactional mutant left job-1 already rewritten (RT-388) — unit 1
+- The campaign's self-satisfaction trap keeps finding new prose: instances
+  six through ten this round — [V] — doc history notes and test comments
+  quoting the claims they forbid, each caught by the mutation run coming back
+  green and repaired by paraphrase before the proof counted — unit 1
