@@ -485,7 +485,7 @@ fn build_schema_params(actions: &[&str]) -> Value {
                 "type": "integer",
                 "minimum": 1,
                 "maximum": 100,
-                "description": "Max results (default 50). Applies to fetch_messages, search_members."
+                "description": "Max results, clamped to 100. Applies to fetch_messages (default 50) and search_members (default 20) — the two actions resolve an absent limit differently (RT-352 fixed the struct doc; this hand-written schema string was the other copy)."
             },
             "before": {
                 "type": "string",
@@ -1266,6 +1266,21 @@ mod tests {
             src.matches(&code).count(),
             1,
             "exactly one site resolves an absent limit to 20"
+        );
+        // RT-371: the hand-written SCHEMA string was the second copy of the
+        // stale claim (the struct doc was the first). Both must agree.
+        let schema_claim = format!("search_members (default {})", "20");
+        assert!(
+            src.contains(&schema_claim),
+            "the model-visible schema string must state the real default too"
+        );
+        let stale_schema = format!(
+            "(default 50). Applies to fetch_messages, search_{}",
+            "members."
+        );
+        assert!(
+            !src.contains(&stale_schema),
+            "the schema string must not repeat the blanket 50 the struct doc retracted"
         );
     }
 
