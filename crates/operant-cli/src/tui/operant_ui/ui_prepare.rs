@@ -975,9 +975,27 @@ fn prepare_messages_inner(app: &dyn TuiState, width: u16, height: u16) -> Prepar
         };
         let mut wrapped_lines = header_prepared.wrapped_lines.clone();
 
+        // (iter-1929) THE NUMBERED AFFORDANCE AND ITS HINT ARE GONE.
+        //
+        // This block advertised a line telling the operator to press the number of
+        // the card above it, and
+        // prefixed every starter card with "[1]", "[2]", … — a selection
+        // mechanism that does not exist. The ONLY digit dispatch in the TUI is
+        // the ask-user dialog's `select_by_number`, gated on
+        // `self.ask_user_dialog.options.is_some()` (key_handling.rs); with the
+        // composer focused, pressing "1" INSERTS THE CHARACTER, so an operator
+        // who read this line and pressed 2 typed a "2" and nothing else.
+        //
+        // The `suggestion_prompts()` seam is a [port-decision] stub returning
+        // empty, so the whole block is unreachable today. That made the claim
+        // LATENT rather than visible: it would start lying the moment starter
+        // cards were authored — which is exactly the "phantom capability" the
+        // audit's rule 4 forbids. Per that rule the claim is the defect, so the
+        // claim goes, not the feature: the card rows stay (the seam can still
+        // be wired) but they no longer promise keys that do not dispatch.
         if !suggestions.is_empty() {
             wrapped_lines.push(Line::from(""));
-            for (i, (label, prompt)) in suggestions.iter().enumerate() {
+            for (label, prompt) in suggestions.iter() {
                 let is_login = prompt.starts_with('/');
                 let pad = if is_centered { "" } else { "  " };
                 let spans = if is_login {
@@ -994,30 +1012,18 @@ fn prepare_messages_inner(app: &dyn TuiState, width: u16, height: u16) -> Prepar
                         ),
                     ]
                 } else {
-                    vec![
-                        Span::styled(
-                            format!("{}[{}] ", pad, i + 1),
-                            Style::default().fg(rgb(138, 180, 248)),
-                        ),
-                        Span::styled(label.clone(), Style::default().fg(rgb(200, 200, 200))),
-                    ]
+                    // No "[N]" prefix: there is no key that selects a card by
+                    // number, and a bracket that implies one is a promise the
+                    // dispatch cannot keep.
+                    vec![Span::styled(
+                        format!("{}{}", pad, label),
+                        Style::default().fg(rgb(200, 200, 200)),
+                    )]
                 };
                 wrapped_lines.push(Line::from(spans).alignment(suggestion_align));
             }
-            if suggestions.len() > 1 {
-                wrapped_lines.push(Line::from(""));
-                wrapped_lines.push(
-                    Line::from(Span::styled(
-                        format!(
-                            "{}Press 1-{} or type anything to start",
-                            if is_centered { "" } else { "  " },
-                            suggestions.len()
-                        ),
-                        Style::default().fg(dim_color()),
-                    ))
-                    .alignment(suggestion_align),
-                );
-            }
+            // No number-press line: see the block comment above. Typing the
+            // card's own text is the action, and the composer says so.
         }
 
         // Vertically center the initial empty screen, but compute the padding

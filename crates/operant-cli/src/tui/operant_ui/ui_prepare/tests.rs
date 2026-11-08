@@ -273,3 +273,67 @@ fn header_cache_ttl_is_not_sized_to_the_frame_rate() {
          signature, so the TTL should only bound slow background drift"
     );
 }
+
+/// (iter-1929) The onboarding screen must not advertise a selection mechanism
+/// that does not exist.
+///
+/// The initial-empty screen prefixed every starter card with a bracketed
+/// ordinal and closed with a line telling the operator to press the number
+/// above the card. The ONLY digit dispatch in the TUI is the ask-user
+/// dialog's `select_by_number`, gated on
+/// `self.ask_user_dialog.options.is_some()`; with the composer focused a digit
+/// is just text. So the line named keys that do not dispatch, and the bracket
+/// implied a picker that does not exist.
+///
+/// The block sits behind `suggestion_prompts()` — a [port-decision] stub
+/// returning empty — so the claim is LATENT: no operator sees it today, and it
+/// would have started lying the moment starter cards were authored. Per the
+/// audit's rule 4 the claim is the defect, so the claim goes, not the feature:
+/// the card rows stay for the seam to wire, without a number.
+///
+/// Because the rows are unreachable while the seam is empty, a RENDER
+/// assertion cannot see them — that is why this pin reads the source for the
+/// two claim strings (the `include_str!` contract the RT-331 unwired-state pin
+/// uses for the same reason) AND drives the real handler for the numbered key,
+/// so the behavioural half is observed rather than assumed.
+#[test]
+fn the_onboarding_screen_does_not_promise_numbered_selection() {
+    use crate::tui::app::tests::make_app;
+    use ratatui::crossterm::event::{KeyCode, KeyModifiers};
+
+    // The two claim strings, searched in the source that paints this screen:
+    // the rows are unreachable while the seam is empty, so a render assertion
+    // would pass vacuously. `include_str!` is the contract RT-331's unwired-state
+    // pin uses for the same reason.
+    let src = include_str!("../ui_prepare.rs");
+    // Both needles are built from pieces so the lines that build them cannot
+    // satisfy their own assertion (RT-331's rule), and each matches the CLAIM
+    // as the code writes it — a format string with a placeholder, not the
+    // rendered words: the original line read `"{}Press 1-{} or type anything
+    // to start"`, so a needle for the rendered text would never have caught it.
+    let press_needle = ["Press 1", "-"].concat();
+    assert!(
+        !src.contains(&press_needle),
+        "the onboarding screen must not promise that a digit selects a card: pressing \
+         one in the composer inserts the character, and the ask-user dialog is the \
+         only place a digit selects an option"
+    );
+    let bracket_needle = ["[", "{}] "].concat();
+    assert!(
+        !src.contains(&bracket_needle),
+        "no starter card may carry a [N] prefix: that bracket promises a \
+         number-selection picker that does not exist"
+    );
+
+    // And the handler must agree, observed rather than assumed: a digit in the
+    // composer is TEXT.
+    let mut app = make_app();
+    app.handle_key_event(ratatui::crossterm::event::KeyEvent::new(
+        KeyCode::Char('1'),
+        KeyModifiers::NONE,
+    ));
+    assert_eq!(
+        app.prompt_input.text, "1",
+        "pressing 1 must type a 1 — there is no card selection to perform"
+    );
+}
