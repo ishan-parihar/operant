@@ -28,7 +28,12 @@ const MIN_TOOLLESS_SECONDS: f64 = 2.0;
 const MAX_SEGMENTS: usize = 4;
 
 /// (verb, singular noun, plural noun) for curated tool groups.
-/// Tools not listed fall into a generic "called N tools" bucket.
+///
+/// RT-390: unlisted tools do NOT get a segment of their own — the doc used to
+/// promise a generic per-tool-count bucket, which no code path renders. They
+/// are counted into `other_tools`, which the formatter folds into the
+/// "+N more" tail above alongside the verb groups the `MAX_SEGMENTS` cap hid
+/// (turn_summary.rs:283-292). One line, one tail, no second display shape.
 const VERB_GROUPS: &[(&str, &str, &str, &str)] = &[
     ("file_write", "edited", "file", "files"),
     ("file_edit", "edited", "file", "files"),
@@ -298,6 +303,29 @@ pub fn format_turn_summary(tally: &TurnTally, elapsed_seconds: f64) -> String {
         format_elapsed(elapsed_seconds),
         segments.join(" · ")
     )
+}
+
+#[cfg(test)]
+mod rt390_tests {
+    /// RT-390: the VERB_GROUPS doc promised a generic per-tool-count bucket
+    /// for unlisted tools, which no code path renders — they are counted into
+    /// `other_tools` and folded into the "+N more" tail. Source contract,
+    /// needles concatenation-built — and the test's own prose does not quote
+    /// the phrase it forbids.
+    #[test]
+    fn the_verb_groups_doc_names_the_tail_the_tools_really_land_in() {
+        let src = include_str!("turn_summary.rs");
+        let phantom_bucket = format!("generic \"called N {}tools\" bucket", "");
+        assert!(
+            !src.contains(&phantom_bucket),
+            "the doc must not promise a bucket no formatter renders"
+        );
+        let real_dest = format!("folded into the \"+N more\" {}tail", "");
+        assert!(
+            src.contains(&real_dest),
+            "the doc must name the tail unlisted tools actually land in"
+        );
+    }
 }
 
 #[cfg(test)]
