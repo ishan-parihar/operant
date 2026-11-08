@@ -609,7 +609,14 @@ impl ContextInjector {
                     continue;
                 }
                 if used_total + text.len() > s.total_char_cap {
-                    break;
+                    // `continue`, not `break`: items are ranked by SCORE, not
+                    // length, so abandoning the rest of the class on one long
+                    // item starved shorter items that still fit the remaining
+                    // total budget (RT-327). The roll-over pool cannot
+                    // recover them — only quota-overflow items are pooled,
+                    // and an item that exceeds the total cap here exceeds it
+                    // there too.
+                    continue;
                 }
                 used_class += text.len();
                 used_total += text.len();
@@ -740,6 +747,59 @@ mod tests {
         )
         .expect("injector");
         (dir, injector)
+    }
+
+    /// RT-327: an item that FITS the remaining total budget used to be
+    /// silently dropped. The class loop `break`ed on the first item that
+    /// exceeded the total cap, abandoning the rest of the class — and those
+    /// items never reached the roll-over pool (only quota-overflow items are
+    /// pooled), so the pool could not recover them. Items rank by SCORE, not
+    /// length, so one long high-score item starved short items that fit.
+    #[test]
+    fn a_short_item_still_renders_when_a_longer_one_exceeds_the_total_cap() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let injector = ContextInjector::open(
+            &dir.path().join("app.sqlite"),
+            crate::config::ContextInjectionSettings {
+                // The long item truncates to MAX_ITEM_CHARS (400), so the
+                // cap must sit below that for it to genuinely not fit.
+                total_char_cap: 300,
+                dm_quota: 5_000, // the class quota must not be the constraint
+                ..settings()
+            },
+        )
+        .expect("injector");
+        let now = chrono::Utc::now().timestamp();
+        let long_text = "L".repeat(600);
+        let short_text = "S".repeat(100);
+        let items = vec![
+            // The LONG item ranks FIRST (a 24h halflife makes the newer item
+            // score clearly higher), so a `break` on it starves the short one
+            // even though 400 chars of total budget remain.
+            ContextItem {
+                class: ContextClass::Dm,
+                author: "peer".into(),
+                ts: now,
+                text: long_text.clone(),
+                hash: 1,
+            },
+            ContextItem {
+                class: ContextClass::Dm,
+                author: "peer".into(),
+                ts: now - 86_400,
+                text: short_text.clone(),
+                hash: 2,
+            },
+        ];
+        let rendered = injector.render(items, None);
+        assert!(
+            rendered.contains(&short_text),
+            "the short item must render — the long one only breaks ITS OWN slot: {rendered}"
+        );
+        assert!(
+            !rendered.contains(&long_text),
+            "the long item genuinely cannot fit the total cap"
+        );
     }
 
     #[test]
