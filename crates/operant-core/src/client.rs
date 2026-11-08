@@ -339,13 +339,29 @@ impl OpenAIClient {
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
 
         // Authorization — runtime override (pool rotation) wins over the
-        // configured key (hermes runtime `api_key` swap parity).
+        // configured key (hermes runtime `api_key` swap parity). After a
+        // runtime retarget the configured key belongs to the OLD endpoint:
+        // NEVER send it to the new host — the invariant `effective_api_key`
+        // implements, and this is the one place the header is actually
+        // written (it used to bypass the invariant and leak the old key,
+        // RT-318).
         let effective_key = self
             .api_key_override
             .read()
             .ok()
             .and_then(|guard| guard.clone())
-            .or_else(|| self.config.api_key.clone());
+            .filter(|k| !k.is_empty())
+            .or_else(|| {
+                let retargeted = self
+                    .base_url_override
+                    .read()
+                    .is_ok_and(|slot| slot.is_some());
+                if retargeted {
+                    None
+                } else {
+                    self.config.api_key.clone()
+                }
+            });
         if let Some(api_key) = effective_key {
             let auth_value = format!("Bearer {}", api_key);
             headers.insert(
@@ -2022,6 +2038,47 @@ mod tests {
             clean.chars().count()
         );
         assert!(clean.ends_with("..."), "the ellipsis survives: {clean}");
+    }
+
+    /// RT-318: `build_headers` — the ONE place the Authorization header is
+    /// written — used to bypass the retarget invariant `effective_api_key`
+    /// implements, so a keyless `/connect` retarget sent the OLD provider's
+    /// configured key to the NEW host. The test above pins
+    /// `effective_api_key`; this one pins the header the wire actually sees.
+    #[test]
+    fn build_headers_after_a_keyless_retarget_sends_no_authorization_header() {
+        let client = OpenAIClient::new(ClientConfig {
+            base_url: "http://old.example/v1".to_string(),
+            api_key: Some("old-provider-key".to_string()),
+            ..ClientConfig::default()
+        });
+        // No retarget: the configured key is sent.
+        assert!(
+            client.build_headers().unwrap().contains_key(AUTHORIZATION),
+            "without a retarget the configured key still rides"
+        );
+
+        // The keyless retarget path — the sequence the pool's `set_endpoint`
+        // runs for a local keyless target (ollama / lm-studio): the new base
+        // URL, then the empty key that clears the rotation override.
+        client.set_base_url("http://localhost:11434/v1");
+        client.set_api_key("");
+        assert!(
+            !client.build_headers().unwrap().contains_key(AUTHORIZATION),
+            "the OLD provider's key must not ride the keyless retarget"
+        );
+
+        // A rotation override set AFTER the retarget is the new endpoint's
+        // key, so it is sent (the override wins over the retarget refusal —
+        // exactly `effective_api_key`'s precedence).
+        client.set_api_key("new-provider-key");
+        let auth = client
+            .build_headers()
+            .unwrap()
+            .get(AUTHORIZATION)
+            .expect("the post-retarget override is sent")
+            .clone();
+        assert_eq!(auth, "Bearer new-provider-key");
     }
     use super::*;
 
