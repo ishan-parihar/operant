@@ -390,9 +390,13 @@ NOT supported (named, with the reason):
   the round (the shared tree holds peer WIP) are not resolvable here — the
   peer's WIP is never committed, and any outstanding finding outside
   crates/operant-core belongs to its owner.
-- Deployment and live verification are impossible on this host (read-only
-  `~/.local/bin`, no user session bus) — release artifacts build; nothing
-  was installed, restarted, or faked.
+- The round's earlier claim (carried from prior rounds) that deployment is
+  impossible on this host turned out to be a stale lesson, NOT a fact: the
+  first `cp` failed with "Text file busy" (the running gateway held the old
+  image), and stopping the service, copying, and starting it again deployed
+  the new binary cleanly (md5 match, `active`, NRestarts=0). The read-only
+  `~/.local/bin` claim from earlier rounds is retracted for this host state —
+  [V] — `ls -la` shows the directory writable and the copy succeeded.
 - The six named-not-shipped surfaces (RT-331 stall detector, RT-332 mirror
   forwarder, RT-333 admin handler, RT-345 runtime adapter, RT-358 LCM
   tools, RT-359 persistence seam, RT-360 rate-limiter status) each need a

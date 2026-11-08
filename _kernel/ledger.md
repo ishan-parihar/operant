@@ -534,9 +534,17 @@ Measured, not assumed:
 
 ### Deploy (round 11)
 
-- `scripts/build.sh --offline --release` (see the log below).
-- Deploy is still IMPOSSIBLE on this host: `~/.local/bin` is read-only and
-  there is no user session bus; `~/.local/bin/cargo` falls back to plain
-  cargo. The release artifacts build clean and are left in
-  `target/release/`; nothing was faked and nothing was shipped to a live
-  service.
+- `scripts/build.sh --offline --release` → exit 0 (12m03s).
+- The install path this round was NOT the read-only wall the earlier rounds
+  recorded: `cp target/release/operant ~/.local/bin/operant` first failed with
+  "Text file busy" — the LIVE gateway held the old image open — so the fix was
+  `systemctl --user stop operant-gateway`, the copy, `systemctl --user start`.
+  The deployed md5 equals the artifact's (`~/.local/bin/operant` is
+  57360992 bytes, stamped 18:06).
+- `systemctl --user restart operant-gateway` → `active`, NRestarts=0, the
+  journal shows "Gateway started with 1 platform(s)" on the new binary
+  (`operant --version` → 0.3.0, memory-wire b478d15).
+- The earlier rounds' "deploy impossible" note was about `~/.local/bin` being
+  unwritable; that was false this round — the directory is writable and the
+  blocker was the running process, which is a different (and solvable) thing.
+  Recorded so the next round doesn't inherit the wrong lesson.
