@@ -177,11 +177,6 @@ fn toggle_or_cycle_current(screen: &mut SettingsScreen) {
                         screen.settings_snapshot.config.disable_claude_mds = new_value;
                         let _ = screen.settings_snapshot.save_sync();
                     }
-                    "fileInjectionEnabled" => {
-                        screen.file_injection_enabled = new_value;
-                        screen.settings_snapshot.config.file_injection_enabled = new_value;
-                        let _ = screen.settings_snapshot.save_sync();
-                    }
                     "fileAutocompleteShowHiddenFiles" => {
                         screen.file_autocomplete_show_hidden_files = new_value;
                         screen

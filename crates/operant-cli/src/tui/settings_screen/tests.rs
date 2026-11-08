@@ -61,34 +61,21 @@ fn with_sandbox_home<T>(f: impl FnOnce() -> T) -> T {
 /// applier handles fails here, which is exactly the drift it guards.
 #[test]
 fn every_settings_entry_has_an_applier() {
-    // BOTH screens are checked, and the second one must really offer MORE
-    // rows. The file-injection rows are only offered when file injection is
-    // enabled, so a guard that looked only at the DEFAULT screen never checked
-    // them — which is exactly how `fileInjectionMaxSize` survived with no
-    // applier: the operator turns injection on, edits the max size, and the
-    // edit is silently dropped. The assertion below keeps that hole closed:
-    // if the conditional branch ever changes shape, this test fails instead of
-    // quietly shrinking its own coverage.
-    // (iter-1776) Both screens are built in a sandbox home AND with their
-    // conditional flag set explicitly: the default screen must NOT offer the
-    // file-injection rows, and the ambient settings.json used to decide that
-    // (a test that had enabled file injection made the "default" screen offer
-    // them too, and this guard failed for a reason unrelated to the guard).
-    let (default_screen, injection_screen) = with_sandbox_home(|| {
-        let mut default_screen = SettingsScreen::new();
-        default_screen.file_injection_enabled = false;
-        let mut injection_screen = SettingsScreen::new();
-        injection_screen.file_injection_enabled = true;
-        (default_screen, injection_screen)
-    });
-    let entries = all_entries(&default_screen);
-    let conditional = all_entries(&injection_screen);
-    assert!(
-        conditional.len() > entries.len(),
-        "the file-injection screen must offer MORE rows than the default one — \
-         otherwise this test silently stops checking the conditional entries"
-    );
-    let entries: Vec<&SettingsEntry> = entries.iter().chain(conditional.iter()).collect();
+    // (iter-1895) ONE screen is checked: there are no conditional rows any
+    // more. The two file-injection rows the second screen used to offer were
+    // dead — nothing ever read their values — and the @-autocomplete's own
+    // two rows, which DO do something, were only offered when that dead
+    // toggle was on. With no conditional branch left, the single screen
+    // covers every row, and the "the second screen must offer MORE rows"
+    // assertion (which only made sense while a conditional existed) goes
+    // with it.
+    //
+    // The shape it replaced is worth keeping in mind: a guard that derives
+    // its list from the UI is only as complete as the UI STATE it derives it
+    // from, and the two-screen form was the fix for exactly that.
+    let screen = with_sandbox_home(SettingsScreen::new);
+    let entries = all_entries(&screen);
+    let entries: Vec<&SettingsEntry> = entries.iter().collect();
     assert!(
         !entries.is_empty(),
         "all_entries must offer settings; an empty list makes this test vacuous"
@@ -186,50 +173,70 @@ fn apply_and_save_preserves_unrelated_operator_preferences() {
         );
     })
 }
-/// The file-injection rows are only OFFERED when file injection is enabled,
-/// so the screen has a state where an operator edits a setting that
-/// `apply_and_save` does not handle: the value renders, lands in
-/// `pending_changes`, and is silently dropped on save — while the whole
-/// settings.json is rewritten from the snapshot. That is the RT-171 defect
-/// class, and it survived RT-171's own fix because the guard only ever looked
-/// at the DEFAULT screen, where those rows are not offered at all.
+/// The @-autocomplete's own settings are what the operator actually needs,
+/// and they must apply.
 ///
-/// This test walks the operator's real path: turn file injection on, then edit
-/// the max size.
+/// (iter-1895) They used to be offered ONLY when the dead "File injection (@)"
+/// toggle was on, so turning that toggle off hid them while the feature they
+/// configure kept working. This walks the operator's real path: edit the
+/// limit, save, and the value must land in the settings the app reads.
 #[test]
-fn the_file_injection_rows_apply_when_file_injection_is_enabled() {
+fn the_file_autocomplete_rows_apply() {
     with_sandbox_home(|| {
         let mut screen = SettingsScreen::new();
         let mut config = AppConfig::default();
         let mut settings = Settings::default();
 
-        // Step 1: the operator enables file injection.
-        screen
-            .pending_changes
-            .insert("fileInjectionEnabled".to_string(), "true".to_string());
-        screen.apply_and_save(&mut config, &mut settings);
-        assert!(
-            screen.file_injection_enabled,
-            "precondition: file injection is on, so the max-size row is offered"
-        );
         assert!(
             all_entries(&screen)
                 .iter()
-                .any(|entry| entry.key == "fileInjectionMaxSize"),
-            "precondition: the screen offers the max-size row in this state"
+                .any(|entry| entry.key == "fileAutocompleteLimit"),
+            "the @-autocomplete limit row must always be offered — it is what \
+             the operator configures the feature they actually use"
         );
 
-        // Step 2: the operator edits the max size.
         screen
             .pending_changes
-            .insert("fileInjectionMaxSize".to_string(), "2048".to_string());
+            .insert("fileAutocompleteLimit".to_string(), "7".to_string());
         screen.apply_and_save(&mut config, &mut settings);
         assert_eq!(
-            settings.config.file_injection_max_size, 2048,
-            "the edited max size was dropped on save — the screen showed the new \
-             value and the settings file kept the old one"
+            settings.config.file_autocomplete_limit, 7,
+            "the edited autocomplete limit was dropped on save — the screen \
+             showed the new value and the settings file kept the old one"
         );
     })
+}
+
+/// The settings screen must not offer a row whose value nothing reads.
+///
+/// (iter-1895) "File injection (@)" — "Auto-inject @file references into
+/// message context" — and "File injection max size" — "Max file size to
+/// auto-inject" — were ported in with the claurst settings surface, but
+/// NOTHING ever read `file_injection_enabled` or `file_injection_max_size`:
+/// the @-file suggestions insert a PATH (the agent reads the file with its
+/// own tools), and no code path injects a file's CONTENT. The operator could
+/// toggle the switch, edit the number, watch both persist into
+/// settings.json, and change nothing at all.
+///
+/// The pin is the screen's own row list: the two dead keys must not be
+/// offered, and the two @-autocomplete rows that DO do something must be.
+#[test]
+fn the_settings_screen_offers_no_row_nothing_reads() {
+    let screen = SettingsScreen::new();
+    let entries = all_entries(&screen);
+    for dead in ["fileInjectionEnabled", "fileInjectionMaxSize"] {
+        assert!(
+            !entries.iter().any(|entry| entry.key == dead),
+            "/settings offers {dead} again — nothing reads its value, so the \
+             operator's edit is a promise nothing keeps"
+        );
+    }
+    for live in ["fileAutocompleteLimit", "fileAutocompleteShowHiddenFiles"] {
+        assert!(
+            entries.iter().any(|entry| entry.key == live),
+            "/settings must offer {live}: the @-autocomplete reads it"
+        );
+    }
 }
 #[test]
 fn settings_screen_new_has_sensible_defaults() {
@@ -245,7 +252,8 @@ fn settings_screen_new_has_sensible_defaults() {
 fn all_entries_returns_expected_settings() {
     let screen = SettingsScreen::new();
     let entries = all_entries(&screen);
-    // Base settings are always present, plus 0-3 conditional file injection settings
+    // The base settings plus the two @-autocomplete rows, which are
+    // unconditional now (iter-1895).
     assert!(
         entries.len() >= 16,
         "Should have at least 16 editable settings, got {}",

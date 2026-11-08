@@ -31,10 +31,8 @@ impl SettingsScreen {
             auto_commits: false,
             output_format: "text".to_string(),
             disable_claude_mds: false,
-            file_injection_enabled: true,
             file_autocomplete_limit: "15".to_string(),
             file_autocomplete_show_hidden_files: false,
-            file_injection_max_size: "100".to_string(),
         };
         // Apply settings from snapshot immediately on initialization
         screen.apply_settings_from_snapshot();
@@ -69,7 +67,6 @@ impl SettingsScreen {
             }
         };
         self.disable_claude_mds = self.settings_snapshot.config.disable_claude_mds;
-        self.file_injection_enabled = self.settings_snapshot.config.file_injection_enabled;
         self.file_autocomplete_limit = self
             .settings_snapshot
             .config
@@ -79,11 +76,6 @@ impl SettingsScreen {
             .settings_snapshot
             .config
             .file_autocomplete_show_hidden_files;
-        self.file_injection_max_size = self
-            .settings_snapshot
-            .config
-            .file_injection_max_size
-            .to_string();
     }
 
     pub fn open(&mut self) {
@@ -181,23 +173,6 @@ impl SettingsScreen {
                     settings.config.file_autocomplete_show_hidden_files = on;
                     self.file_autocomplete_show_hidden_files = on;
                 }
-                "fileInjectionEnabled" => {
-                    let on = matches!(value.as_str(), "true" | "on" | "1" | "yes");
-                    settings.config.file_injection_enabled = on;
-                    self.file_injection_enabled = on;
-                }
-                "fileInjectionMaxSize" => {
-                    // The row is only OFFERED when file injection is enabled,
-                    // which is why this arm went missing without the guard
-                    // noticing: `apply_and_save` had no case for it, so the
-                    // operator's edit rendered, landed in `pending_changes` and
-                    // was dropped on save (RT-171's defect class, one row
-                    // over).
-                    if let Ok(n) = value.parse::<usize>() {
-                        settings.config.file_injection_max_size = n;
-                        self.file_injection_max_size = value.clone();
-                    }
-                }
                 "auto_compact" => {
                     let on = matches!(value.as_str(), "true" | "on" | "1" | "yes");
                     settings.auto_compact = on;
@@ -269,22 +244,20 @@ impl SettingsScreen {
         }
         // The snapshot is rebuilt wholesale below, and until iter-1176 that
         // rebuild ALSO threw away values the screen does not edit:
-        // `verbose`, `cursor_blink_enabled`, `disable_claude_mds`,
-        // `file_injection_enabled` and `output_format` were written as
-        // constants instead of carried forward, so saving ANY setting reset
-        // them. Every field below is now taken from `settings`, which this
-        // loop has just updated with whatever the operator changed.
+        // `verbose`, `cursor_blink_enabled`, `disable_claude_mds` and
+        // `output_format` were written as constants instead of carried
+        // forward, so saving ANY setting reset them. Every field below is now
+        // taken from `settings`, which this loop has just updated with
+        // whatever the operator changed.
         self.settings_snapshot.config = crate::tui::adapter_types::config::InnerConfig {
             verbose: settings.config.verbose,
             cursor_blink_enabled: settings.config.cursor_blink_enabled,
             auto_commits: settings.config.auto_commits,
             disable_claude_mds: settings.config.disable_claude_mds,
-            file_injection_enabled: settings.config.file_injection_enabled,
             file_autocomplete_limit: settings.config.file_autocomplete_limit,
             file_autocomplete_show_hidden_files: settings
                 .config
                 .file_autocomplete_show_hidden_files,
-            file_injection_max_size: settings.config.file_injection_max_size,
             output_style: settings.output_style.clone(),
             output_format: settings.config.output_format.clone(),
             compact_threshold: config.agent.context_compression_threshold,
@@ -312,7 +285,7 @@ impl Default for SettingsScreen {
 // ---------------------------------------------------------------------------
 
 pub(crate) fn all_entries(screen: &SettingsScreen) -> Vec<SettingsEntry> {
-    let mut entries = vec![
+    let entries = vec![
         SettingsEntry {
             key: "max_tokens",
             label: "Max Tokens",
@@ -457,30 +430,18 @@ pub(crate) fn all_entries(screen: &SettingsScreen) -> Vec<SettingsEntry> {
             }
             .to_string(),
         },
+        // (iter-1895) The @-autocomplete's own two settings are UNCONDITIONAL
+        // now. They used to be pushed only when "File injection (@)" was on —
+        // a toggle nothing ever read, so turning it off hid the settings of a
+        // feature that kept working exactly as before.
         SettingsEntry {
-            key: "fileInjectionEnabled",
-            label: "File injection (@)",
-            description: "Auto-inject @file references into message context.",
-            kind: SettingKind::Bool,
-            value: if screen.file_injection_enabled {
-                "true"
-            } else {
-                "false"
-            }
-            .to_string(),
-        },
-    ];
-
-    // Only show these if file injection is enabled
-    if screen.file_injection_enabled {
-        entries.push(SettingsEntry {
             key: "fileAutocompleteLimit",
             label: "File autocomplete limit",
             description: "Max suggestions shown in @ autocomplete (type more to narrow results).",
             kind: SettingKind::Number,
             value: screen.file_autocomplete_limit.clone(),
-        });
-        entries.push(SettingsEntry {
+        },
+        SettingsEntry {
             key: "fileAutocompleteShowHiddenFiles",
             label: "Show hidden files",
             description: "Include hidden files (.) in @ autocomplete.",
@@ -491,15 +452,8 @@ pub(crate) fn all_entries(screen: &SettingsScreen) -> Vec<SettingsEntry> {
                 "false"
             }
             .to_string(),
-        });
-        entries.push(SettingsEntry {
-            key: "fileInjectionMaxSize",
-            label: "File injection max size",
-            description: "Max file size to auto-inject (KB, 0=no limit).",
-            kind: SettingKind::Number,
-            value: screen.file_injection_max_size.clone(),
-        });
-    }
+        },
+    ];
 
     entries
 }
