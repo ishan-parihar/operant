@@ -309,9 +309,17 @@ impl CronDb {
     }
 
     /// Self-heal pass for jobs created before schedule normalization existed:
-    /// normalizes stored schedules (5-field / "every Nh" → 6-field) and
-    /// backfills any missing `next_run_at`. Returns the number of jobs healed.
-    /// Called on scheduler start and `operant cron tick`.
+    /// normalizes stored schedules and backfills any missing `next_run_at`.
+    /// Returns the number of jobs healed. Called on scheduler start and
+    /// `operant cron tick`.
+    ///
+    /// RT-391: the doc used to claim the normalization covers 5-field AND
+    /// "every Nh" → 6-field. The second half contradicts the schedule module's
+    /// own contract: interval phrases are DURATIONS persisted RAW, never
+    /// rewritten into cron steps — the 2026-10-24 expansion bug (the old code
+    /// turned "every 48h" into `day-of-month */2`, which fired Jan 31 then
+    /// Feb 1) is exactly why. This heal normalizes 5-field expressions only;
+    /// an interval job's stored phrase is its canonical form.
     pub fn repair_schedules(&self) -> Result<usize, Error> {
         let conn = self.lock_conn()?;
         let mut stmt = conn
@@ -1072,6 +1080,39 @@ impl CronDb {
             jobs.push(row.map_err(|e| Error::Agent(format!("Row error: {}", e)))?);
         }
         Ok(jobs)
+    }
+}
+
+#[cfg(test)]
+mod rt391_tests {
+    /// RT-391: repair_schedules' doc claimed the self-heal normalizes
+    /// "every Nh" interval phrases into 6-field cron expressions — the schedule
+    /// module keeps phrases RAW by design (the 2026-10-24 expansion bug), so
+    /// that half of the claim is false and contradicts its own contract.
+    /// Source contract, needles concatenation-built.
+    #[test]
+    fn the_repair_doc_names_the_transformation_that_actually_happens() {
+        let src = include_str!("db.rs");
+        let false_claim = format!(
+            "normalizes stored schedules (5-field / \"every Nh\" {}→ 6-field)",
+            ""
+        );
+        assert!(
+            !src.contains(&false_claim),
+            "the doc must not claim the interval expansion the schedule module forbids"
+        );
+        let honest = format!("are DURATIONS persisted {}", "RAW");
+        assert!(
+            src.contains(&honest),
+            "the doc must say interval phrases keep their raw form"
+        );
+        // And the schedule module's own rule stays.
+        let schedule_mod = include_str!("schedule.rs");
+        let raw_rule = format!("The phrase is persisted {}RAW", "");
+        assert!(
+            schedule_mod.contains(&raw_rule),
+            "the schedule module's raw-phrase rule must still be there"
+        );
     }
 }
 
