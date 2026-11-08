@@ -431,13 +431,49 @@ pub fn build_skill_invocation_message_in(
 /// The file is the SAME one the skills tool writes (`<skills_dir>/.curator/
 /// usage.json`) and the curator reads, and the write goes through
 /// `with_exclusive_lock` so it cannot lose a concurrent record.
+///
+/// RT-366: the lock protects a concurrent record; it does not protect a
+/// FAILED one. The write result used to be discarded outright — the load or
+/// save inside the lock can fail (an unwritable skills dir, a full disk), and
+/// the curator then reads telemetry that silently under-counts the skill.
 fn record_skill_use(skills_dir: &std::path::Path, name: &str) {
     let tracker =
         crate::skill_usage::SkillUsageTracker::new(skills_dir.join(".curator").join("usage.json"));
-    let _ = tracker.with_exclusive_lock(|t| {
+    if let Err(e) = tracker.with_exclusive_lock(|t| {
         t.bump_use(name);
         Ok(())
-    });
+    }) {
+        tracing::warn!(
+            skill = %name,
+            error = %e,
+            "failed to record the skill use in the curator telemetry — \
+             the use count under-counts this skill"
+        );
+    }
+}
+
+mod rt366_tests {
+    /// RT-366: `record_skill_use` discarded the telemetry write's Result. The
+    /// lock protects a concurrent record; it does not protect a FAILED one, so
+    /// a failed load/save left the curator reading telemetry that under-counts
+    /// the skill. Source contract, needle concatenation-built.
+    #[test]
+    fn the_skill_use_telemetry_reports_a_failed_write() {
+        let src = include_str!("skill_preprocessing.rs");
+        let dropped = format!("let _ = tracker.with_exclusive{}(|t| {{", "_lock");
+        assert!(
+            !src.contains(&dropped),
+            "the telemetry write must not be discarded — the curator reads it"
+        );
+        let reported = format!(
+            "failed to record the skill use in the curator {}telemetry",
+            ""
+        );
+        assert!(
+            src.contains(&reported),
+            "a failed telemetry write must be reported, naming the under-count"
+        );
+    }
 }
 
 #[cfg(test)]
