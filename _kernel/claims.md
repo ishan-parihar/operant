@@ -415,3 +415,19 @@ NOT supported (named, with the reason):
 
 - The sweep claims for memory_management tool names, the two endpoint paths, browser_tool, credential_pool, models_dev, ponytail, trajectory, kanban, and the schema-only tool structs were all verified false first-hand this round and are recorded as dropped rather than fixed.
 - The tools/org/config re-sweep was still running at this round's close; its findings are not claimed here.
+
+## Round 12, second half (2026-11-08) — the sweep, verified
+
+- A sweep finding is a hypothesis, and a core-only grep cannot see a cross-crate
+  reader — [V] — the "no gateway turn is budget-gated" claim died on
+  `operant-cli/gateway_runner.rs:2909-2955`; its true sub-claim shipped as
+  RT-376 — unit 1
+- A tool's schema can be built TWO ways, and a retraction that fixes one copy
+  leaves the other — [V] — RT-352 fixed the struct doc while the hand-written
+  `json!` schema string still promised the old default (RT-371) — unit 1
+- Two module docs can contradict, each looking authoritative — [V] — the
+  context-injection header described three live sources the collector returns
+  empty for, while `crate::org`'s own doc recorded the retirement (RT-372) — unit 1
+- A doc's history note quoting the old claim satisfies the "must not contain"
+  needle — [V] — the worklog RT-373 contract passed on its own mutant until the
+  note was reworded to paraphrase — unit 1

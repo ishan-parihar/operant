@@ -611,3 +611,50 @@ sweep (7ce30cd0) with first-hand line-level evidence, and are RT-368 /
 RT-369 above. The sweep's un-reached scope (tools/ description-vs-execute,
 org/, config) was re-dispatched and its findings are pending at this
 round's close.
+
+## Round 12, second half (2026-11-08) — the tools/org/config sweep, verified and shipped
+
+Six more iterations (iter-1962..iter-1965, origin/main abc2a9ea), all from the
+dispatched tools/org/config sweep. The discipline that decided what shipped:
+EVERY sweep finding was re-verified first-hand before an iteration was spent on
+it, and two of the sweep's eight claims did not survive.
+
+Verified FALSE and dropped (with the read that killed them):
+- The sweep's finding #1/#2 (seat budgets): it claimed no gateway turn is
+  budget-gated, on a core-only grep. The gateway DOES gate — `operant-cli's
+  gateway_runner.rs:2909-2955` reads `employee_window_usage` and refuses (hard)
+  or runs (soft) at the turn boundary. What WAS true in that claim — that
+  mid-flight enforcement has since shipped — shipped as RT-376 below.
+- (For the record, the sweep itself killed five candidates before reporting:
+  tts_tool's incomplete provider enumeration, cron_tool's omitted pause/resume,
+  `context_lcm_db`'s default — TRUE, the consumer lives in operant-cli — the
+  two method lists omitting OPTIONS, and the sourcehound token measurement.)
+
+Shipped, each mutation-proved:
+- RT-371 — the discord tool's hand-written SCHEMA STRING still promised
+  "default 50" for search_members while the action resolves 20 (the second
+  copy of the RT-352 claim; the contract now pins both).
+- RT-372 — the context-injection header described three org classes as the
+  live phase-1 pipeline while the collector returns `Ok(Vec::new())` for all
+  three (retired to Holon), contradicting `crate::org`'s own module doc.
+- RT-373/374/375 — one bundled iteration: `UsageAccumulator`'s docs named a
+  `result.usage` seam no struct implements (in two docs, one the module
+  summary); `KaizenProposal`'s doc asserted a framework caller that does not
+  exist (the type is dead with a false provenance story); and a ponytail
+  comment grounded a static claim in a RETIRED config migration key.
+- RT-376 — the seat-budget docs said mid-flight enforcement was "a recorded
+  follow-up"; it has shipped (run.rs stops a token-basis turn mid-flight at
+  the cap), so an operator believed a hard cap could not bound an in-flight
+  turn.
+
+The needle hazard's third instance this round, recorded in RT-376's row: two
+of the contracts' first-cut needles were vacuous (a doubled backtick; a split
+point that produced `preferred_pprovider`), a third was satisfied by the doc's
+own history note quoting the old claim, and the contract-insertion pattern
+consumed two existing modules' `#[cfg(test)]` for the THIRD time this
+campaign. Every proof was re-run after the repair and only counted once the
+contract was seen failing by name on the restored defect.
+
+Round-12 end-of-round gates: full suite exit 0 (46 targets), strict clippy
+exit 0, fmt clean, ledger index OK, genome lint 0 errors, red-team docs
+verification "no CLOSED finding regressed".
