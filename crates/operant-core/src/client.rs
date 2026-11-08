@@ -752,6 +752,19 @@ impl OpenAIClient {
 
             let status = response.status();
             let retry_after_hdr = parse_retry_after_header(response.headers());
+
+            // A success body is NOT an error body: read it whole. The bounded
+            // reader exists for error bodies (a hostile 500 can be huge, and
+            // the wall-clock bound is the point). Reading the success path
+            // through it silently truncated every response over 64 KiB —
+            // `embeddings` (≈21 KiB per vector, up to 32 per batch) and long
+            // non-streaming chat bodies then failed to parse (RT-319). Same
+            // shape the streaming path above already uses.
+            if status.is_success() {
+                let body_text = response.text().await.unwrap_or_default();
+                return Ok((status, body_text));
+            }
+
             let body_text = read_bounded_error_body(response).await;
 
             // 3. Handle 429 rate limiting.
@@ -798,7 +811,8 @@ impl OpenAIClient {
                 continue;
             }
 
-            // 5. Success or non-retryable error — return to caller.
+            // 5. Non-retryable error — return the status and the bounded
+            // error body to the caller (the success case returned above).
             return Ok((status, body_text));
         }
 
@@ -2079,6 +2093,71 @@ mod tests {
             .expect("the post-retarget override is sent")
             .clone();
         assert_eq!(auth, "Bearer new-provider-key");
+    }
+
+    /// RT-319: the non-streaming success path read its body through the
+    /// ERROR-body reader, so every 200 response over 64 KiB was silently
+    /// truncated — `embeddings` (≈21 KiB per vector, up to 32 per batch)
+    /// and long chat bodies then failed to parse. Pinned with a >64 KiB
+    /// 200 body whose parse only succeeds if the whole body arrived.
+    #[tokio::test]
+    async fn a_successful_response_larger_than_the_error_body_cap_is_not_truncated() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            if let Ok((mut sock, _)) = listener.accept().await {
+                let mut buf = [0u8; 4096];
+                let _ = sock.read(&mut buf).await;
+                // Well past MAX_ERROR_BODY_BYTES (64 KiB); the tail marker
+                // lives beyond the cut the bounded reader would have made.
+                let content = format!("{}TAIL_MARKER", "x".repeat(70_000));
+                let body = format!(
+                    r#"{{"id":"1","object":"chat.completion","created":0,"model":"demo","choices":[{{"index":0,"message":{{"role":"assistant","content":"{content}"}},"finish_reason":"stop"}}],"usage":{{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}}}"#
+                );
+                assert!(body.len() > 64 * 1024, "the body must exceed the cap");
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = sock.write_all(response.as_bytes()).await;
+                let _ = sock.shutdown().await;
+            }
+        });
+
+        let config = ClientConfig {
+            base_url: format!("http://{addr}"),
+            api_key: Some("test-key".into()),
+            timeout: Duration::from_secs(10),
+            max_context_length: 8000,
+            rate_limit: crate::config::RateLimitSettings {
+                max_retries: 1,
+                base_delay_secs: 0,
+                max_delay_secs: 1,
+                bucket_capacity: 100,
+                bucket_refill_rate: 100.0,
+            },
+            prompt_cache_ttl: Default::default(),
+        };
+        let client = OpenAIClient::new(config);
+        let response = client
+            .chat("demo", &[Message::user("hi")], None, None, None)
+            .await
+            .expect("a >64 KiB success body must parse — it was truncated before");
+        let text = response
+            .choices
+            .first()
+            .and_then(|c| c.message.content.clone())
+            .expect("the completion carries content");
+        assert!(
+            text.ends_with("TAIL_MARKER"),
+            "the tail past the old 64 KiB cut must survive: {} chars",
+            text.len()
+        );
+        server.abort();
     }
     use super::*;
 
