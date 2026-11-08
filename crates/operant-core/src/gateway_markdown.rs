@@ -1,9 +1,11 @@
-//! Convert markdown text to Telegram-compatible HTML.
+//! Convert markdown text to a platform's outbound dialect.
 //!
-//! This module provides a single public function [`markdown_to_telegram_html`]
-//! that converts AI-generated markdown text into Telegram-compatible HTML
-//! format. It handles bold, italic, code blocks, inline code, headers,
-//! strikethrough, links, and blockquotes.
+//! Three public functions: [`markdown_to_telegram_html`] (Telegram's HTML
+//! subset) and the fence-aware asterisk-dialect pair
+//! [`markdown_to_slack_mrkdwn`] / [`markdown_to_whatsapp`] (Slack mrkdwn
+//! and the WhatsApp port — the mapped subset coincides). They handle bold,
+//! italic, code blocks, inline code, headers, strikethrough, links, and
+//! blockquotes.
 //!
 //! Markdown inside code blocks and inline code spans is preserved verbatim.
 //! All remaining HTML special characters are escaped to prevent injection.
@@ -748,12 +750,24 @@ fn asterisk_dialect(text: &str) -> String {
     let mut chars = text.chars().peekable();
     while let Some(ch) = chars.next() {
         // Detect code fence toggles.
-        if ch == '`' && chars.peek() == Some(&'`') && chars.peek() == Some(&'`') {
-            // Triple backtick — toggle code block state.
-            in_code_block = !in_code_block;
-            result.push_str("```");
-            chars.next();
-            chars.next();
+        //
+        // CONSUME-AND-CHECK, not double-peek: `Peekable::peek()` does not
+        // advance, so `ch == '`' && peek() == '`' && peek() == '`'` only
+        // proves TWO backticks exist and then consumes THREE — eating the
+        // character after a `` `` `` pair and flipping code state for the
+        // rest of the message (RT-326).
+        if ch == '`' && chars.peek() == Some(&'`') {
+            chars.next(); // the second backtick
+            if chars.peek() == Some(&'`') {
+                chars.next(); // the third — a real ``` fence
+                in_code_block = !in_code_block;
+                result.push_str("```");
+            } else {
+                // A two-backtick span (markdown's ``code`` escape, an empty
+                // `` `` ``, or two backticks in CLI/JSON output) passes
+                // through untouched, and the next character is NOT eaten.
+                result.push_str("``");
+            }
             continue;
         }
 
@@ -812,6 +826,31 @@ mod slack_tests {
         // must reach WhatsApp verbatim (WhatsApp renders ``` as mono).
         let src = "```rs\nlet x = **not bold**;\n```";
         assert_eq!(markdown_to_whatsapp(src), src);
+    }
+
+    /// RT-326: the fence detector double-`peek()`ed — `Peekable::peek()`
+    /// does not advance, so both calls observed the SECOND backtick — and
+    /// then consumed THREE items. A `` `` `` pair (markdown's ``code``
+    /// escape, an empty `` `` ``, or two backticks in CLI/JSON output)
+    /// therefore ate the next character, gained a spurious ``` fence, and
+    /// flipped code state for the rest of the message — suppressing
+    /// bold/italic conversion in every Slack and WhatsApp outbound message
+    /// that carries one.
+    #[test]
+    fn asterisk_dialect_does_not_eat_the_char_after_two_backticks() {
+        assert_eq!(
+            markdown_to_whatsapp("use `` for empty"),
+            "use `` for empty",
+            "a two-backtick span passes through and the next character survives"
+        );
+        assert_eq!(
+            markdown_to_whatsapp("a ``b`` **c**"),
+            "a ``b`` *c*",
+            "formatting still converts after a double backtick"
+        );
+        // A real fence still toggles (the code block above and below).
+        let fenced = "```rs\nlet x = **not bold**;\n```";
+        assert_eq!(markdown_to_slack_mrkdwn(fenced), fenced);
     }
 
     #[test]
