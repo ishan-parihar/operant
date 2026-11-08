@@ -19,10 +19,16 @@ static BACKEND_MAP: LazyLock<HashMap<&'static str, (&'static [&'static str], &'s
                 // The four deleted engines were advertised here as
                 // switchable long after they were gone (RT-302).
                 &["sourcehound"][..],
-                // ponytail: static claim of the config default
-                // (tools.web.preferred_provider = "sourcehound", config.rs);
-                // a live read of the per-session override adds config plumbing
-                // this introspection tool has never needed.
+                // ponytail: static claim of the config default — CORRECTED by
+                // RT-375: the comment used to ground this in
+                // `tools.web.preferred_provider = "sourcehound" (config.rs)`,
+                // but that key is a RETIRED migration key (`#[serde(
+                // skip_serializing)]`, defaulting to `None` and warned about by
+                // `warn_legacy_keys`) — no such config default exists. The live
+                // source of the list is `build_search_candidates` in web_tools.rs
+                // (sourcehound-only). A live read of the per-session override
+                // adds config plumbing this introspection tool has never
+                // needed.
                 "sourcehound",
             ),
         );
@@ -96,6 +102,35 @@ impl OperantTool for ToolBackendTool {
 }
 
 #[cfg(test)]
+mod rt375_tests {
+    /// RT-375: the ponytail comment grounded a static backend claim in
+    /// `tools.web.preferred_provider = "sourcehound" (config.rs)` — a RETIRED
+    /// migration key that defaults to `None`. The comment must name the real
+    /// source of the list. Source contract, needle concatenation-built.
+    #[test]
+    fn the_backend_comment_names_the_real_source_of_the_list() {
+        let src = include_str!("tool_backend_helpers.rs");
+        let false_ground = format!(
+            "(tools.web.{}provider = \"sourcehound\", config.rs)",
+            "preferred_"
+        );
+        assert!(
+            !src.contains(&false_ground),
+            "the comment must not ground the static claim in a retired config key"
+        );
+        let named = format!("RT-{}", "375");
+        assert!(
+            src.contains(&named),
+            "the correction must be named in the comment"
+        );
+        let retired = format!("RETIRED migration {}", "key");
+        assert!(
+            src.contains(&retired),
+            "the comment must say the key is retired, not a live default"
+        );
+    }
+}
+
 mod tests {
     use super::*;
 

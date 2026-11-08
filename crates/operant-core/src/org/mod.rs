@@ -11,7 +11,9 @@
 //! - [`seat_authority`] — personal mode's interactive escalation core;
 //! - [`context_injection`] — channel-sourced aspects (DM, feed);
 //!   `self`/`dept`/`global` sources retired to Holon's brief and memory;
-//! - [`worklog`] — the `UsageAccumulator` (feeds `result.usage`) and
+//! - [`worklog`] — the `UsageAccumulator` (drained by the cron scheduler;
+//!   RT-373: no `result.usage` seam exists, and there is no gateway usage
+//!   meter reading it) and
 //!   outcome signal types; the worklog store itself retired to Holon's
 //!   `runs`/`outputs`/`events`.
 //!

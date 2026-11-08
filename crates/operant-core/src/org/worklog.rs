@@ -18,8 +18,12 @@
 //! - [`KaizenProposal`] — the one field of the retired row that carried an
 //!   opinion, kept as a type;
 //! - [`UsageAccumulator`] — the only part that earns its keep: it folds a
-//!   turn's token totals and feeds `result.usage`, read by the personal cron
-//!   scheduler and the gateway's usage meter;
+//!   turn's token totals and is drained by the personal cron scheduler
+//!   (`drain_run_usage`, which writes the session store's token totals and
+//!   seat spend). RT-373: the doc used to claim the accumulator hands its
+//!   totals to a `result.usage` field read by the gateway's usage meter — no
+//!   such field exists anywhere in the tree (the accumulator's sole consumer
+//!   is the cron scheduler), so the claim named a seam no struct implements.
 //! - [`derive_employee_id`] — the deterministic seat id a cron job derives for
 //!   its session key, moved here from the retired `employee` module and still
 //!   called by the scheduler, `cmd_cron` and their isolation tests.
@@ -206,8 +210,13 @@ pub const KAIZEN_LIMIT: usize = crate::turn_end::RESULT_SUMMARY_LIMIT;
 /// agent cannot be trusted to grade itself)". A bare `String` invites the
 /// cheap mistake — a tool argument, a `what_done` suffix, a comment. Naming
 /// the field's *authorship* in its type is what makes the constraint
-/// greppable: the only construction site is [`KaizenProposal::new`], and the
-/// only caller of that is the framework's session-end task.
+/// RETIRED SURFACE (RT-374): the doc used to claim "the only construction
+/// site is [`KaizenProposal::new`], and the only caller of that is the
+/// framework's session-end task". Repo-wide grep finds NO caller of `new` in
+/// any crate — the asserted framework producer does not exist, so the kaizen
+/// column is permanently NULL and this type is dead with a false provenance
+/// story. Wiring the session-end producer (or deleting the type) is a product
+/// decision, named rather than implied.
 ///
 /// Wave 1 default is `None`, which the schema stores as `NULL` — a real
 /// column that is honestly empty, not free text smuggled onto another field.
@@ -339,6 +348,42 @@ pub fn derive_employee_id(cron_job_id: &str) -> String {
 }
 
 #[cfg(test)]
+mod rt373_tests {
+    /// RT-373/RT-374: the module doc named a `result.usage` seam no struct
+    /// implements (with a gateway usage meter that does not exist), and the
+    /// `KaizenProposal` doc claimed a framework caller that does not exist.
+    /// Source contracts, needles concatenation-built.
+    #[test]
+    fn the_org_docs_do_not_name_seams_or_callers_that_do_not_exist() {
+        let src = include_str!("worklog.rs");
+        let phantom = format!("feeds `result.{}`", "usage");
+        assert!(
+            !src.contains(&phantom),
+            "no `result.usage` seam exists — the doc must not name one"
+        );
+        let false_producer = format!(
+            "the only caller of that is the framework's {}session-end task",
+            ""
+        );
+        assert!(
+            !src.contains(&false_producer),
+            "no caller of KaizenProposal::new exists — the doc must not claim one"
+        );
+        let named = format!("RETIRED SURFACE (RT-{}", "374)");
+        assert!(
+            src.contains(&named),
+            "the dead type must be named as retired, with the decision flagged"
+        );
+        // And the phantom must not reappear in the sibling module doc.
+        let org_mod = include_str!("mod.rs");
+        let sibling_phantom = format!("feeds `result.{}`", "usage");
+        assert!(
+            !org_mod.contains(&sibling_phantom),
+            "the org module doc must not repeat the phantom seam"
+        );
+    }
+}
+
 mod tests {
     use super::*;
 
