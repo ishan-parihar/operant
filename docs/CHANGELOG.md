@@ -4,7 +4,7 @@
 
 - **iter-1891 — `web_fetch` read the whole response body into memory (RT-306).** Its sibling `http_request` reads through a 2 MiB chunked cap — the fix R48-7 was filed for — but `web_fetch` called `response.text().await` and kept the whole body, one large (or hostile) endpoint away from taking the agent's process down. It also drifted on the method: the sibling uppercases it, `web_fetch` matched the raw string, so `{"method":"post"}` was rejected. **Fixed**: `web_fetch` uses the shared bounded reader and normalises the method case exactly like its sibling. **Pinned** by `web_fetch_reads_its_body_through_the_bounded_reader` — mutation-proven.
 
-- **iter-1892 — `config_manage show` leaked the SMTP password (RT-307).** The tool's doc says it dumps the effective configuration "with secrets masked", but the mask rule covered `api_key` / `token` / `secret` / `password` / `auth` — and the config's field is `email_smtp_pass`, which matches none of them, so the credential was returned verbatim to the model and into the transcript. **Fixed**: the mask rule also covers `pass`. **Pinned** by `redact_masks_email_smtp_pass` — mutation-proven.
+- **iter-1894 — `config_manage show` leaked the SMTP password (RT-307).** The tool's doc says it dumps the effective configuration "with secrets masked", but the mask rule covered `api_key` / `token` / `secret` / `password` / `auth` — and the config's field is `email_smtp_pass`, which matches none of them, so the credential was returned verbatim to the model and into the transcript. **Fixed**: the mask rule also covers `pass`. **Pinned** by `redact_masks_email_smtp_pass` — mutation-proven.
 
 - [\[Unreleased\]](#unreleased)
 - [\[0.3.0\] - 2026-10-26](#030---2026-10-26)

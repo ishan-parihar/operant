@@ -212,6 +212,10 @@ fn redact_secrets(value: &Value) -> Value {
                     || lower.contains("token")
                     || lower.contains("secret")
                     || lower.contains("password")
+                    // `email_smtp_pass` matches NONE of the rules above, so
+                    // the SMTP password was returned VERBATIM to the model
+                    // and into the transcript (RT-307).
+                    || lower.contains("pass")
                     || lower == "auth";
                 if secret_like {
                     out.insert(k.clone(), Value::String("***".to_string()));
@@ -242,6 +246,31 @@ fn config_file_path() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// RT-305: the config dump must mask the SMTP password.
+    ///
+    /// The tool's own doc says it "dump[s] the effective configuration as
+    /// JSON with secrets masked", but `email_smtp_pass` matched none of the
+    /// mask rules — so the credential reached the model (and the
+    /// transcript) verbatim.
+    #[test]
+    fn redact_masks_email_smtp_pass() {
+        let config = serde_json::json!({
+            "email_smtp_host": "smtp.example.com",
+            "email_smtp_pass": "hunter2",
+            "telegram_token": "tg-secret",
+        });
+        let redacted = redact_secrets(&config);
+        assert_eq!(
+            redacted["email_smtp_pass"], "***",
+            "the SMTP password must be masked"
+        );
+        assert_eq!(redacted["telegram_token"], "***");
+        assert_eq!(
+            redacted["email_smtp_host"], "smtp.example.com",
+            "a host is not a secret"
+        );
+    }
 
     #[test]
     fn coerce_boolean_and_number() {
