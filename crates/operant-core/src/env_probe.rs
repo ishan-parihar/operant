@@ -82,6 +82,28 @@ impl EnvSource {
     }
 }
 
+/// A secret pattern matches at an ENV-NAME SEGMENT boundary: the character
+/// before and after must be non-alphanumeric (`_`, `-`, or the string end).
+///
+/// Substring matching called `MY_AUTHORIZATION_LEVEL` a secret (it contains
+/// `auth`) and `TOKENIZERS_PARALLELISM` one (it contains `token`). Harmless
+/// on its own — but a report that cries wolf on `tokenizers_parallelism`
+/// teaches the operator to ignore the report, which is the tool's whole
+/// value (RT-341).
+fn matches_at_boundary(haystack: &str, needle: &str) -> bool {
+    haystack.match_indices(needle).any(|(i, m)| {
+        let before_ok = haystack[..i]
+            .chars()
+            .next_back()
+            .is_none_or(|c| !c.is_alphanumeric());
+        let after_ok = haystack[i + m.len()..]
+            .chars()
+            .next()
+            .is_none_or(|c| !c.is_alphanumeric());
+        before_ok && after_ok
+    })
+}
+
 fn looks_secret(name: &str) -> Option<String> {
     let lower = name.to_lowercase();
     // Skip known non-secret matches first (checked before the secret
@@ -94,8 +116,10 @@ fn looks_secret(name: &str) -> Option<String> {
     }
     for pattern in SECRET_NAME_PATTERNS {
         // Match the full name so `openai_api_key` hits `api_key` (the
-        // underscore is significant — splitting on it broke the match).
-        if lower.contains(pattern) {
+        // underscore is significant — splitting on it broke the match) —
+        // at a segment boundary, so `authorization` and `tokenizers`
+        // do not hit `auth` / `token`.
+        if matches_at_boundary(&lower, pattern) {
             return Some(format!("name contains '{pattern}'"));
         }
     }
@@ -186,6 +210,34 @@ pub fn format_exposure_report(findings: &[EnvExposure]) -> String {
 
 #[cfg(test)]
 mod tests {
+    /// RT-341: the secret-name patterns matched as SUBSTRINGS, so
+    /// `MY_AUTHORIZATION_LEVEL` tripped `auth` and
+    /// `TOKENIZERS_PARALLELISM` tripped `token` — a report that cries wolf
+    /// trains the operator to ignore it. Matching now requires a segment
+    /// boundary on both sides; the documented `openai_api_key` →
+    /// `api_key` case still hits.
+    #[test]
+    fn a_secret_name_matches_at_a_segment_boundary_only() {
+        // The documented case still hits.
+        assert!(looks_secret("openai_api_key").is_some());
+        assert!(looks_secret("GITHUB_TOKEN").is_some());
+        assert!(looks_secret("DB_PASSWORD").is_some());
+        assert!(looks_secret("SECRET_KEY").is_some());
+        // The false positives are gone.
+        assert!(
+            looks_secret("MY_AUTHORIZATION_LEVEL").is_none(),
+            "`authorization` must not trip `auth`"
+        );
+        assert!(
+            looks_secret("TOKENIZERS_PARALLELISM").is_none(),
+            "`tokenizers` must not trip `token`"
+        );
+        // Boundary shapes still hit (hyphens, leading/trailing positions).
+        assert!(looks_secret("MY-PASS-2").is_some());
+        assert!(looks_secret("API_KEY").is_some());
+        assert!(looks_secret("MY_TOKEN_2").is_some());
+    }
+
     use super::*;
 
     #[test]
