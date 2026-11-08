@@ -239,14 +239,22 @@ fn render_settings_list(frame: &mut Frame, screen: &SettingsScreen, area: Rect) 
         lines.push(line);
     }
 
-    // Scroll tracking is handled in update_scroll_offset_for_selection()
-
-    // Apply manual scrolling
-    let visible_lines: Vec<Line> = lines
-        .into_iter()
-        .skip(screen.scroll_offset)
-        .take(visible_rows.max(1))
-        .collect();
+    // (iter-1917) THE RENDER OWNS THE WINDOW. The keyboard used to track it
+    // with a hardcoded estimate of ten rows ("Rough estimate, will be actual
+    // in real usage"), and the paint sliced with the REAL height — two
+    // windows, two numbers. On any terminal short enough that this list shows
+    // fewer than ten rows (80x24 paints five) the estimate never advanced, so
+    // the selection could be walked past the last painted row: the ► marker
+    // vanished, the row could not be seen, read or toggled, and the
+    // description pane kept describing a row nobody could reach. Three of the
+    // eight rows were unreachable that way. One window, measured here.
+    let window = visible_rows.max(1);
+    let scroll = if screen.selected_idx < window {
+        0
+    } else {
+        screen.selected_idx + 1 - window
+    };
+    let visible_lines: Vec<Line> = lines.into_iter().skip(scroll).take(window).collect();
 
     let para = Paragraph::new(visible_lines);
     frame.render_widget(para, area);

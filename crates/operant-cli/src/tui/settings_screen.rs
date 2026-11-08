@@ -35,7 +35,6 @@ pub struct SettingsScreen {
     pub visible: bool,
     pub search_query: String,
     pub selected_idx: usize,
-    pub scroll_offset: usize,
     /// Which field is being edited (field name as key).
     pub edit_field: Option<String>,
     /// Current buffer content while editing a field.

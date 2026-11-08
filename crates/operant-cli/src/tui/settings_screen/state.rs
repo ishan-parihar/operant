@@ -12,7 +12,6 @@ impl SettingsScreen {
             visible: false,
             search_query: String::new(),
             selected_idx: 0,
-            scroll_offset: 0,
             edit_field: None,
             edit_value: String::new(),
             settings_snapshot: settings_snapshot.clone(),
@@ -63,7 +62,6 @@ impl SettingsScreen {
         self.edit_value.clear();
         self.search_query.clear();
         self.selected_idx = 0;
-        self.scroll_offset = 0;
         self.visible = true;
 
         // Wire real settings from snapshot

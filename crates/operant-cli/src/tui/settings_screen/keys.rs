@@ -77,7 +77,6 @@ pub fn handle_settings_key(
 /// owns the rule, and the wheel is a vertical key.
 pub(crate) fn select_prev_visible(screen: &mut SettingsScreen) {
     screen.select_prev();
-    update_scroll_offset_for_selection(screen);
 }
 
 /// Move the settings screen's selection DOWN one row — the rule ↓ uses.
@@ -93,16 +92,6 @@ pub(crate) fn select_next_visible(screen: &mut SettingsScreen) {
         })
         .collect();
     screen.select_next(filtered.len());
-    update_scroll_offset_for_selection(screen);
-}
-
-fn update_scroll_offset_for_selection(screen: &mut SettingsScreen) {
-    let visible_rows = 10; // Rough estimate, will be actual in real usage
-    if screen.selected_idx < screen.scroll_offset {
-        screen.scroll_offset = screen.selected_idx;
-    } else if screen.selected_idx >= screen.scroll_offset + visible_rows {
-        screen.scroll_offset = screen.selected_idx.saturating_sub(visible_rows - 1);
-    }
 }
 
 fn toggle_or_cycle_current(screen: &mut SettingsScreen) {

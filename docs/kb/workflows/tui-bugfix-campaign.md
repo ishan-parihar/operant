@@ -54,6 +54,7 @@
 | tui-bugfix-campaign-069 | done | B73: /settings offered five more rows whose values nothing read (the last of the family), and two of them were not simple ported rows | — | [2026-11-08] origin/main iter-1904 |
 | tui-bugfix-campaign-070 | done | B74: the typeahead golden's command count follows the /statusbar retirement | — | [2026-11-08] origin/main iter-1906 |
 | tui-bugfix-campaign-071 | done | B75: /settings offered "Reduce motion" and the value reached a global nothing read — the one surviving dead row a grep could not see | — | [2026-11-08] origin/main iter-1914 |
+| tui-bugfix-campaign-072 | done | B76: on a short terminal /settings let the operator walk the selection off the painted list — two windows, two numbers | — | [2026-11-08] origin/main iter-1917 |
 | tui-bugfix-campaign-018 | done | B23: the keybindings catalogue advertised Ctrl+Q as "Quit application" and nothing dispatched it (the exit-confirmation state machine has two halves, and only one named the chord) | — | [2026-11-05] origin/main iter-1758 |
 | tui-bugfix-campaign-019 | done | phase-5: the highlight test's cross-test frame race — the same palette resetter, reached through a second path | — | [2026-11-05] origin/main iter-1761 |
 | tui-bugfix-campaign-020 | done | B24: the settings screen dropped the operator's edited "File injection max size" (and its own guard never saw the row), the keybindings guard could not see a MODIFIER, and the accent test's palette race was re-broken by an unlocked App::new | — | [2026-11-05] origin/main iter-1760 |

@@ -1,0 +1,24 @@
+
+
+
+           Settings — Operant                           Esc to close
+           Type to search settings...
+ operant
+ operant       Show current directory                  true
+ /model        Show git branch                         true
+ v0.3.0        Auto-compact threshold                  0
+ /login        File autocomplete limit                 0
+ ● anthr     ► Show hidden files                       false
+ ~
+           Include hidden files (.) in @ autocomplete.
+
+
+› Ask op
+
+                                                                         Capture
+
+
+                   ↑↓ navigate   Enter toggle/edit   Esc close
+
+
+

@@ -1,0 +1,19 @@
+{
+  "name": "settings-screen-scrolled",
+  "surface": "crates/operant-cli/src/tui/settings_screen.rs::render_settings_screen",
+  "opens_with": "/settings",
+  "keys": "/settings<enter><down><down><down><down><down><down><down><wait:2>",
+  "size": "80x24",
+  "assert": [
+    "overlays.settings_screen == true",
+    "any_modal_open == true"
+  ],
+  "assert_screen": [
+    "contains:Auto-compact threshold",
+    "contains:File autocomplete limit",
+    "contains:Show hidden files"
+  ],
+  "baseline": "settings-screen-scrolled.txt",
+  "style_baseline": "settings-screen-scrolled.style.txt",
+  "notes": "(iter-1917) The narrow SCROLLED state of /settings, split into its own scenario the way scroll-pageup-third-press was: a second 80x24 variant on settings-screen would overwrite that scenario's own golden, and the unscrolled narrow layout is what the base variant pins. Seven downs land the selection on the last row. This closes the gap the campaign recorded after iter-1896 \u2014 the narrow golden showed the FIRST FIVE rows and nothing pinned the rest, which is how a defect in them survived five iterations of sweeps \u2014 and it pins the bug the gap concealed: the keyboard estimated the list window at ten rows while the paint sliced with the real five, so at 80x24 the operator could walk \u2193 past the last painted row: the \u25ba marker vanished and three of the eight rows could not be seen, read or toggled at all. The window now follows the selection, measured in the one place that knows the height."
+}

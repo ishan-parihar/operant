@@ -410,3 +410,56 @@ fn the_dead_settings_fields_are_gone_from_the_persisted_shape() {
         );
     }
 }
+
+/// (iter-1917) The settings list paints the SELECTED row on a short terminal.
+///
+/// The keyboard tracked the window with a hardcoded estimate of ten rows
+/// ("Rough estimate, will be actual in real usage") while the render sliced
+/// with the real height — two windows, two numbers. At 80x24 the list paints
+/// five rows, so the estimate never advanced: the operator walked ↓ past the
+/// fifth row, the ► marker vanished, and the row could not be seen, read or
+/// toggled. Three of the eight rows were unreachable that way.
+///
+/// This renders the REAL surface at the REAL narrow size and drives the
+/// operator's real key, so a second window cannot reappear without failing
+/// here: whatever the selected row is, it must be on screen.
+#[test]
+fn the_settings_list_paints_the_selected_row_on_a_short_terminal() {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    // 80x24 is the corpus's narrow variant — the size where the list paints
+    // five rows and the old estimate (ten) disagreed with the real window.
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+    let mut screen = SettingsScreen::new();
+    screen.open();
+    let total = all_entries(&screen).len();
+
+    for step in 0..total {
+        screen.select_next(total);
+        terminal
+            .draw(|frame| {
+                render_settings_screen(frame, &screen, frame.area());
+            })
+            .unwrap();
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol().to_string())
+            .collect::<String>();
+        let selected = &all_entries(&screen)[screen.selected_idx];
+        assert!(
+            rendered.contains(selected.label),
+            "step {step}: the selected row {:?} must be painted at 80x24 — the \
+             window let the selection run off the end",
+            selected.label
+        );
+        assert!(
+            rendered.contains('►'),
+            "step {step}: the ► marker must be painted — the selection left \
+             the visible window"
+        );
+    }
+}
