@@ -154,8 +154,9 @@ impl GuardScanner {
 
     /// Scan a single file for threat patterns and invisible unicode characters.
     ///
-    /// Skips files with non-scannable extensions (binary files, images, etc.)
-    /// unless the file is named `SKILL.md`.
+    /// Skips files whose extension is not in [`SCANNABLE_EXTENSIONS`] (binary
+    /// files, images, and every unlisted text format — RT-399) unless the file
+    /// is named `SKILL.md`.
     ///
     /// Returns `SecurityFinding`s deduplicated per pattern per line.
     pub fn scan_file(&self, path: &Path) -> Vec<SecurityFinding> {
@@ -238,7 +239,18 @@ const MAX_TOTAL_SIZE: u64 = 1024 * 1024;
 /// Maximum size of an individual file in bytes (256 KB).
 const MAX_SINGLE_FILE_SIZE: u64 = 256 * 1024;
 
-/// File extensions that are scanned (text files only).
+/// File extensions that are scanned.
+///
+/// RT-399: the doc read "text files only", implying the unlisted set is binary
+/// and image files. It is not: this is a CURATED list of 23 extensions, and
+/// every other text format — `.java`, `.rs`, `.go`, `.c`, `.h`, `.cpp`, `.cs`,
+/// `.kt`, `.swift`, `.lua`, `.ps1`, `.bat`, `.sql` — is skipped by the gate at
+/// the top of `scan_file_inner`. The consequence is named, not shipped: a
+/// threat pattern whose language is not on this list can never fire
+/// (`java_runtime_exec`'s `Runtime.getRuntime().exec(` is unreachable because
+/// no `.java` file is ever read). EXTENDING the list is a scanner-policy
+/// decision for the owner — the doc is correct about what happens, which is
+/// what this fix promises.
 const SCANNABLE_EXTENSIONS: &[&str] = &[
     ".md", ".txt", ".py", ".sh", ".bash", ".js", ".ts", ".rb", ".yaml", ".yml", ".json", ".toml",
     ".cfg", ".ini", ".conf", ".html", ".css", ".xml", ".tex", ".r", ".jl", ".pl", ".php",
@@ -2013,6 +2025,45 @@ mod skills_guard_rt340_tests {
         assert!(
             src.contains(".take(8)"),
             "the truncation the label names must be the one the code does"
+        );
+    }
+}
+
+#[cfg(test)]
+mod rt399_tests {
+    /// RT-399: the extension gate's docs framed the unlisted set as "binary
+    /// files, images, etc." while the gate is a curated 23-extension list —
+    /// every other text format (`.java`, `.rs`, `.go`, …) is skipped, so a
+    /// pattern whose language is not listed (`java_runtime_exec`) can never
+    /// fire. The doc must say what the gate does, and name the gap.
+    /// Source contract, needles concatenation-built — and this test's prose
+    /// avoids quoting the phrases it forbids.
+    #[test]
+    fn the_extension_gate_docs_name_what_is_and_is_not_scanned() {
+        let src = include_str!("skills_guard.rs");
+        let text_only = format!("File extensions that are scanned (text files {}only)", "");
+        assert_eq!(
+            src.matches(&text_only).count(),
+            0,
+            "the doc must not imply the unlisted set is binary/images only"
+        );
+        let curated = format!("this is a CURATED list of {}23 extensions", "");
+        assert!(
+            src.contains(&curated),
+            "the doc must name the list as curated"
+        );
+        let named_langs = concat!("`.java`, `.rs`, `.go`, `.c`, `.h`, `.cpp`, `.cs`,");
+        assert!(
+            src.contains(&named_langs),
+            "the doc must name the unlisted text formats"
+        );
+        let unreachable = format!(
+            "(`java_runtime_exec`'s `Runtime.getRuntime().exec(` is {}unreachable",
+            ""
+        );
+        assert!(
+            src.contains(&unreachable),
+            "the doc must name the unreachable-pattern consequence"
         );
     }
 }
