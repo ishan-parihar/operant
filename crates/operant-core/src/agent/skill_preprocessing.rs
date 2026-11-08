@@ -115,6 +115,12 @@ pub fn substitute_template_vars(
 /// computed and discarded — `let _timeout = ...` around a blocking
 /// `cmd.output()` — so `!`sleep 9999`` hung the whole agent turn, parking a
 /// tokio worker thread with it).
+///
+/// RT-403: the deadline is `timeout_secs.max(1)` — a 1-second floor, because a
+/// zero-second deadline would kill every snippet instantly — so a caller
+/// passing 0 gets a 1s deadline, and the marker reports the ENFORCED deadline
+/// (it used to report the raw `timeout_secs`, printing "timeout after 0s" for a
+/// 1s kill — a number that is not the deadline used).
 pub fn run_inline_shell(command: &str, cwd: Option<&Path>, timeout_secs: u64) -> String {
     use std::io::Read;
     use std::process::{Command, Stdio};
@@ -183,7 +189,11 @@ pub fn run_inline_shell(command: &str, cwd: Option<&Path>, timeout_secs: u64) ->
     let stderr = err_handle.join().unwrap_or_default();
 
     if !completed {
-        return format!("[inline-shell timeout after {timeout_secs}s: {command}]");
+        // RT-403: report the ENFORCED deadline, not the raw request — a 0
+        // request becomes a 1s floor, and "timeout after 0s" for a 1s kill
+        // stated a deadline nobody used.
+        let enforced = timeout.as_secs();
+        return format!("[inline-shell timeout after {enforced}s: {command}]");
     }
 
     let mut out = stdout.trim_end().to_string();
@@ -826,5 +836,23 @@ fn run_inline_shell_truncates_multibyte_output_on_a_char_boundary() {
     assert!(
         output.len() > INLINE_SHELL_MAX_OUTPUT,
         "the byte length legitimately exceeds 4000 for multibyte text"
+    );
+}
+
+/// RT-403: the timeout marker used to report the RAW `timeout_secs` while the
+/// enforced deadline is `timeout_secs.max(1)` — a caller passing 0 got a 1s
+/// kill labelled "timeout after 0s". BEHAVIORAL: the marker names the deadline
+/// that actually fired, and the 1s floor is documented.
+#[test]
+fn the_timeout_marker_reports_the_enforced_deadline() {
+    // A snippet longer than the 1-second floor, with a 0 request.
+    let output = run_inline_shell("sleep 3", None, 0);
+    assert!(
+        output.starts_with("[inline-shell timeout after "),
+        "a killed snippet reports the timeout marker: {output}"
+    );
+    assert!(
+        output.contains("timeout after 1s"),
+        "the marker names the ENFORCED deadline (1s), not the 0 request: {output}"
     );
 }
