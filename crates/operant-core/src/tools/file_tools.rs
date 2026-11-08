@@ -492,7 +492,17 @@ impl OperantTool for FileSearchTool {
         {
             Ok(re) => re,
             Err(e) => {
-                return ToolResult::error("file_search", format!("Invalid regex pattern: {}", e));
+                // The pattern is ESCAPED before this build, so the match is
+                // LITERAL and this arm cannot fire for anything a caller can
+                // type — the only failure left is the regex engine's
+                // compiled-size limit, which a multi-megabyte pattern can
+                // hit. The message used to read "Invalid regex pattern",
+                // advertising regex semantics the tool does not have
+                // (RT-357).
+                return ToolResult::error(
+                    "file_search",
+                    format!("Pattern too large for the search engine: {}", e),
+                );
             }
         };
 
@@ -710,6 +720,41 @@ impl OperantTool for FileListTool {
 
 #[cfg(test)]
 mod tests {
+    /// RT-357: `file_search` escapes its pattern before building the regex,
+    /// so the match is LITERAL — a "." in the query must not act as "any
+    /// char". The dead "Invalid regex pattern" arm (an escaped literal cannot
+    /// fail to compile) advertised regex semantics the tool does not have.
+    #[tokio::test]
+    async fn file_search_matches_the_pattern_literally_not_as_a_regex() {
+        use crate::tools::OperantTool as _;
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("a.txt"), "the literal a.b here\n").expect("write");
+        std::fs::write(dir.path().join("b.txt"), "the expanded axb here\n").expect("write");
+
+        let tool = FileSearchTool;
+        let result = tool
+            .execute(
+                serde_json::json!({"path": dir.path().to_str(), "pattern": "a.b"}),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(
+            result.success,
+            "the search must run: {}",
+            result.error.clone().unwrap_or_default()
+        );
+        assert!(
+            result.content.contains("a.txt"),
+            "the literal pattern must match a.txt: {}",
+            result.content
+        );
+        assert!(
+            !result.content.contains("b.txt"),
+            "regex metacharacters in the query must not expand the match: {}",
+            result.content
+        );
+    }
+
     use super::*;
     use serde_json::json;
 
