@@ -3594,24 +3594,81 @@ fn output_style_takes_a_level_argument() {
     );
 }
 
+/// (iter-1944) The message context menu must NOT offer a fork.
+///
+/// It did: "Fork new chat" filled `/branch <message>` and the status notice
+/// promised "Fork at message N - press Enter to confirm". Neither was true.
+/// The TUI's `/branch` is the session hub's branch filter and takes no
+/// argument - iter-1766 corrected its registry row, but the menu still sent
+/// the number, which the arm silently discarded, so confirming opened a
+/// filtered session list where the operator expected a branch at that message.
+/// The fork itself exists only on the gateway's chat path
+/// (`gateway_commands.rs`: `branch`, "Fork into new session"); the TUI has no
+/// seam for it. The claim goes, not the feature.
+///
+/// The old test here pinned the REMOVED behaviour as expected, with a comment
+/// ("/branch - the same feature, actually wired") that was the source of the
+/// false belief. It now pins that the menu offers Copy only, and that Copy is
+/// still wired - the removal may not take the real feature with it.
 #[test]
-fn test_context_menu_fork_targets_clicked_message() {
+fn the_message_context_menu_offers_only_the_actions_that_exist() {
     let mut app = make_app();
     app.add_message(Role::User, "one".to_string());
     app.add_message(Role::Assistant, "two".to_string());
     app.add_message(Role::User, "three".to_string());
 
-    app.handle_context_menu_action(
-        ContextMenuItem::Fork,
-        ContextMenuKind::Message { message_index: 1 },
+    // The offer: only Copy, for both context kinds.
+    assert_eq!(
+        App::context_menu_items(ContextMenuKind::Message { message_index: 1 }),
+        &[ContextMenuItem::Copy],
+        "the message context menu must not advertise a fork the TUI has no seam for"
+    );
+    assert_eq!(
+        App::context_menu_items(ContextMenuKind::Selection),
+        &[ContextMenuItem::Copy],
     );
 
-    // (2026-10-14 batch, plan 02) /fork was removed with the dead-command
-    // sweep; the menu now fills /branch — the same feature, actually wired.
-    assert_eq!(app.prompt_input.text, "/branch 2");
+    // And Copy must still work - the removal is surgical, not a regression.
+    let before = app.prompt_input.text.clone();
+    app.handle_context_menu_action(
+        ContextMenuItem::Copy,
+        ContextMenuKind::Message { message_index: 1 },
+    );
     assert_eq!(
-        app.status_message.as_deref(),
-        Some("Fork at message 2 - press Enter to confirm")
+        app.prompt_input.text, before,
+        "Copy must not touch the composer - it copies the message text"
+    );
+
+    // The PAINTED half. The claim the operator receives is the rendered menu,
+    // and the catalogue is painted from THREE places (the two label tables in
+    // mouse.rs and the literal in render/selection.rs), so a removal that
+    // leaves one of them behind keeps advertising the fork. Open the MESSAGE
+    // menu: `at_cursor` opens a Selection kind, whose rows never carried the
+    // fork, so a Selection here would pass this half vacuously.
+    let mut menu_app = make_app();
+    menu_app.add_message(Role::User, "one".to_string());
+    menu_app.show_context_menu(2, 0, ContextMenuKind::Message { message_index: 0 });
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 24)).unwrap();
+    terminal
+        .draw(|frame| {
+            crate::tui::render::selection::render_context_menu(frame, &menu_app);
+        })
+        .unwrap();
+    let painted: String = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|c| c.symbol().chars().next().unwrap_or(' '))
+        .collect();
+    assert!(
+        !painted.contains("Fork"),
+        "the painted context menu must not advertise a fork the TUI has no seam for"
+    );
+    assert_eq!(
+        painted.matches("Copy").count(),
+        1,
+        "exactly one Copy row must be painted - no second row from a stale copy"
     );
 }
 

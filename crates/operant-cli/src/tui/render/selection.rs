@@ -350,10 +350,9 @@ pub(crate) fn render_context_menu(frame: &mut Frame, app: &App) {
     if let Some(menu) = app.context_menu_state {
         let selection_present = !app.selection_text.borrow().trim().is_empty();
         let items: Vec<(&str, bool)> = match menu.kind {
-            ContextMenuKind::Message { message_index } => vec![
-                ("Copy", app.messages.get(message_index).is_some()),
-                ("Fork new chat", app.messages.get(message_index).is_some()),
-            ],
+            ContextMenuKind::Message { message_index } => {
+                vec![("Copy", app.messages.get(message_index).is_some())]
+            }
             ContextMenuKind::Selection => vec![("Copy", selection_present)],
         };
 

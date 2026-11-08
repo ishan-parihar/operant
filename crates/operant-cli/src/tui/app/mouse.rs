@@ -104,7 +104,13 @@ impl App {
 
     pub(super) fn context_menu_items(kind: ContextMenuKind) -> &'static [ContextMenuItem] {
         match kind {
-            ContextMenuKind::Message { .. } => &[ContextMenuItem::Copy, ContextMenuItem::Fork],
+            // Only Copy. The message menu's other item advertised a fork into
+            // a new session, but the TUI has no fork seam: /branch is the
+            // session hub's branch filter (iter-1766 corrected its registry
+            // row), and while the gateway's `branch` forks a session, the TUI's
+            // arm does not. The claim is removed, not replaced — building the
+            // fork is a product decision, not an audit's to invent.
+            ContextMenuKind::Message { .. } => &[ContextMenuItem::Copy],
             ContextMenuKind::Selection => &[ContextMenuItem::Copy],
         }
     }
@@ -587,19 +593,6 @@ impl App {
                     debug!("Copy action triggered, text: {} chars", text.len());
                 }
             }
-            ContextMenuItem::Fork => {
-                if let ContextMenuKind::Message { message_index } = kind {
-                    let branch_point = message_index + 1;
-                    // /fork was removed in the 2026-10-14 dead-command sweep
-                    // (plan 02) — /branch is the same feature and is wired.
-                    self.prompt_input
-                        .replace_text(format!("/branch {}", branch_point));
-                    self.set_status_notice(format!(
-                        "Fork at message {} - press Enter to confirm",
-                        branch_point
-                    ));
-                }
-            }
         }
     }
 
@@ -1030,7 +1023,6 @@ impl App {
                     .iter()
                     .map(|i| match i {
                         ContextMenuItem::Copy => "Copy",
-                        ContextMenuItem::Fork => "Fork new chat",
                     })
                     .collect();
                 let menu_width =
@@ -1237,7 +1229,6 @@ impl App {
                         .iter()
                         .map(|i| match i {
                             ContextMenuItem::Copy => "Copy",
-                            ContextMenuItem::Fork => "Fork new chat",
                         })
                         .collect();
                     let menu_width =

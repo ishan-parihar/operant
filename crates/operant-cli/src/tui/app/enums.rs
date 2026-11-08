@@ -76,7 +76,6 @@ pub enum ContextMenuKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ContextMenuItem {
     Copy,
-    Fork,
 }
 
 /// Dialog priority for key routing.
