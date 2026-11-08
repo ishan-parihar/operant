@@ -313,15 +313,22 @@ fn a_git_diff_is_read_off_the_loop_and_taken_once_it_arrives() {
 /// footer used to end with `d toggle scope`, and NOTHING dispatched 'd' —
 /// the panel has no scope to toggle, so the operator pressed it and nothing
 /// happened.
+///
+/// (iter-1930) The checked set is the pane-independent half; the pane-gated
+/// clause is pinned separately by `the_space_clause_rides_the_pane_that_dispatches_it`.
 #[test]
 fn the_diff_viewers_footer_only_names_keys_it_dispatches() {
     /// Each claim: the label the footer shows, the key it means, and the
     /// handler's arm that implements it.
+    ///
+    /// (iter-1930) These are the PANE-INDEPENDENT claims — the ones the shared
+    /// constant carries because they dispatch in both panes. The space clause
+    /// moved out of the constant (it only dispatches in the file-list pane) and
+    /// is pinned by `the_space_clause_rides_the_pane_that_dispatches_it`.
     const CLAIMS: &[(&str, &str, &str)] = &[
         ("tab switch pane", "Tab", "KeyCode::Tab"),
         ("↑↓ navigate", "Up/Down", "KeyCode::Up"),
         ("pgup/pgdn", "PageUp/PageDown", "KeyCode::PageUp"),
-        ("space collapse", "Space", "KeyCode::Char(' ')"),
     ];
 
     let footer = super::render::FOOTER_HINT;
@@ -344,5 +351,120 @@ fn the_diff_viewers_footer_only_names_keys_it_dispatches() {
     assert!(
         !footer.contains(&format!("{} {}", "toggle", "scope")),
         "the footer must not name a key the panel does not dispatch: {footer:?}"
+    );
+}
+
+/// (iter-1930) The pane-dependent clause is only reachable from its pane.
+///
+/// RT-272's check above asks "does an arm exist somewhere for this key".
+/// That is necessary but not sufficient: the space arm is GUARDED by
+/// `active_pane == DiffPane::FileList`, so the clause was displayed in the
+/// detail pane where the key is inert. A claim shown in a context its arm
+/// excludes is still a promise the panel does not keep, so the two halves of
+/// the footer are now derived from the live pane and this pins both.
+#[test]
+fn the_space_clause_rides_the_pane_that_dispatches_it() {
+    // The shared claims dispatch in both panes; the space clause in only one.
+    let file_list = super::render::footer_hint(super::DiffPane::FileList);
+    let detail = super::render::footer_hint(super::DiffPane::Detail);
+
+    for shared in ["switch pane", "navigate", "pgup/pgdn"] {
+        assert!(
+            file_list.contains(shared) && detail.contains(shared),
+            "{shared:?} dispatches in both panes, so both footers carry it"
+        );
+    }
+    assert!(
+        file_list.contains("space") && file_list.contains("collapse"),
+        "the file-list pane dispatches space, so its footer names it: {file_list:?}"
+    );
+    assert!(
+        !detail.contains("space") && !detail.contains("collapse"),
+        "the detail pane does not dispatch space, so its footer must not: {detail:?}"
+    );
+
+    // And the handler's guard is what makes that true: the space arm is the
+    // reason the clause is pane-dependent, so this pins the footer that
+    // describes it AND the gate it describes. (The needles are built from
+    // pieces so this test's own source cannot satisfy them.)
+    let handler = include_str!("../app/key_handling.rs");
+    let fn_name = ["handle_diff", "_viewer_key"].concat();
+    let fn_at = handler
+        .find(&fn_name)
+        .unwrap_or_else(|| panic!("the handler has no diff-viewer dispatcher"));
+    let dispatcher = &handler[fn_at..];
+    let space_arm = ["KeyCode::Char", "(' ')"].concat();
+    let space_at = dispatcher
+        .find(&space_arm)
+        .unwrap_or_else(|| panic!("the diff dispatcher has no space arm at all"));
+    let arm = &dispatcher[space_at..space_at + 320];
+    let guard = ["DiffPane", "::FileList"].concat();
+    let body = ["toggle", "_file_collapse"].concat();
+    assert!(
+        arm.contains(&guard) && arm.contains(&body),
+        "the space arm stays gated to the file-list pane, so the footer's clause is \
+         pane-dependent — got arm: {arm:?}"
+    );
+}
+
+/// (iter-1930) The diff viewer's footer must be honest in the pane where it is
+/// shown.
+///
+/// The footer names four claims: "tab switch pane · ↑↓ navigate · pgup/pgdn/
+/// wheel scroll · space collapse". The first three are reachable from BOTH
+/// panes (Tab/Left/Right switch, ↑↓ navigate or scroll, the page keys scroll the
+/// detail). The fourth is not: `handle_diff_viewer_key` guards the space arm
+/// with `if self.diff_viewer.active_pane == DiffPane::FileList`, so with the
+/// detail pane focused the key falls through to `_ => {}` and does NOTHING —
+/// while the footer still tells the operator it collapses.
+///
+/// RT-272's pin checks that each named key has an arm SOMEWHERE in the
+/// handler; this is the next level of the same rule — a claim displayed in a
+/// context where the arm is gated out is still a promise the panel does not
+/// keep. The operator who Tabs to the detail pane (which the footer itself
+/// tells them to do) and presses space gets silence.
+#[test]
+fn the_diff_footers_space_claim_is_only_shown_where_space_dispatches() {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    /// The whole rendered dialog as text, for the state's CURRENT pane.
+    fn rendered(state: &mut super::DiffViewerState) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        terminal
+            .draw(|frame| {
+                super::render::render_diff_dialog(state, frame.area(), frame.buffer_mut());
+            })
+            .unwrap();
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol().chars().next().unwrap_or(' '))
+            .collect()
+    }
+
+    let mut state = super::DiffViewerState::new();
+    state.visible = true;
+    state.files = vec![make_file("src/lib.rs", 5, 2, false)];
+    state.collapsed = vec![false; state.files.len()];
+
+    // The file-list pane: every claim is reachable, space included.
+    assert_eq!(state.active_pane, super::DiffPane::FileList);
+    let list_footer = rendered(&mut state);
+    assert!(
+        list_footer.contains("space") && list_footer.contains("collapse"),
+        "the file-list pane dispatches space, so the footer may name it: {list_footer:?}"
+    );
+
+    // The detail pane: space is gated out, so the footer must not promise it.
+    state.switch_pane();
+    assert_eq!(state.active_pane, super::DiffPane::Detail);
+    let detail_footer = rendered(&mut state);
+    assert!(
+        !detail_footer.contains("space") || !detail_footer.contains("collapse"),
+        "the detail pane does not dispatch space — the footer must not promise it there: \
+         {detail_footer:?}"
     );
 }

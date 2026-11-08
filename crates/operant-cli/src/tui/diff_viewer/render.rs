@@ -24,8 +24,26 @@ use crate::tui::vendor::style::theme;
 /// The claims are pinned by `the_diff_viewers_footer_only_names_keys_it_dispatches`
 /// (diff_viewer/tests.rs), which reads this constant and checks each claimed
 /// key against the handler's arms.
-pub(crate) const FOOTER_HINT: &str =
-    " tab switch pane  ·  ↑↓ navigate  ·  pgup/pgdn/wheel scroll  ·  space collapse";
+///
+/// (iter-1930) This is the PANE-INDEPENDENT part: every clause here dispatches
+/// in both panes (↑↓ navigates or scrolls depending on focus, and the page keys
+/// scroll the detail pane, which stays visible beside the file list either way).
+/// The `space collapse` clause lived here unconditionally until iter-1930 — but
+/// the handler guards the space arm with `active_pane == DiffPane::FileList`, so
+/// with the detail pane focused the key fell through to `_ => {}` and did
+/// NOTHING while the footer still promised it. See `footer_hint`, which adds
+/// that clause only where the key dispatches.
+pub(crate) const FOOTER_HINT: &str = " tab switch pane  ·  ↑↓ navigate  ·  pgup/pgdn/wheel scroll";
+
+/// The footer for the state's CURRENT pane: the shared claims, plus the clause
+/// only that pane dispatches. A footer is a contract, so a clause must not
+/// appear in a pane whose handler does not keep it.
+pub(crate) fn footer_hint(active_pane: DiffPane) -> String {
+    match active_pane {
+        DiffPane::FileList => format!("{FOOTER_HINT}  ·  space collapse"),
+        DiffPane::Detail => FOOTER_HINT.to_string(),
+    }
+}
 
 pub fn render_diff_dialog(state: &mut DiffViewerState, area: Rect, buf: &mut Buffer) {
     if !state.visible {
@@ -100,7 +118,7 @@ pub fn render_diff_dialog(state: &mut DiffViewerState, area: Rect, buf: &mut Buf
     render_file_list(state, panes[0], buf);
     render_diff_detail(state, panes[2], buf);
     Paragraph::new(Line::from(vec![Span::styled(
-        FOOTER_HINT,
+        footer_hint(state.active_pane),
         Style::default()
             .fg(theme_colors::muted())
             .add_modifier(Modifier::ITALIC),
