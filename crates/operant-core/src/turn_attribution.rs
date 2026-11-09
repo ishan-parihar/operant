@@ -213,7 +213,14 @@ impl SpanDuration {
     }
 }
 
-/// The four spans of one completed turn, exclusive by construction.
+/// The four spans of one completed turn.
+///
+/// RT-431: this used to claim the spans are exclusive as a matter of
+/// construction.
+/// They are exclusive while the measured spans fit inside the turn's wall
+/// clock; when they do NOT, the derived overhead saturates at zero and the
+/// four spans sum to MORE than the total. `is_exclusive` is the question
+/// that answers whether they do.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TurnBreakdown {
     total: Duration,
@@ -306,7 +313,15 @@ pub enum TurnAttribution {
         measured: TurnBreakdown,
         missing: Vec<TurnSpan>,
     },
-    /// All four spans measured and exclusive.
+    /// All four spans were MEASURED.
+    ///
+    /// RT-431: this used to claim the spans were also "exclusive". The
+    /// classifier checks measurement, not arithmetic: `of` returns
+    /// `Complete` when no span is `Unmeasured`, and never consults
+    /// `TurnBreakdown::is_exclusive`. A turn whose measured spans exceed
+    /// its wall clock is therefore `Complete` while its spans do not sum to
+    /// the total — `is_exclusive` is the separate question, and it says
+    /// false there.
     Complete(TurnBreakdown),
 }
 
@@ -380,6 +395,75 @@ impl TurnAttribution {
     /// True when the four spans partition the turn exactly.
     pub fn is_exclusive(&self) -> bool {
         matches!(self, Self::Complete(b) if b.is_exclusive())
+    }
+}
+
+#[cfg(test)]
+mod rt431_tests {
+    use super::*;
+
+    /// RT-431: `Complete` means every span was MEASURED — the classifier
+    /// does not consult exclusivity. BEHAVIORAL: a turn whose measured
+    /// spans exceed its wall clock is `Complete` (the residual saturates
+    /// at zero) while `is_exclusive` says false. The docs now say exactly
+    /// that, so a subscriber matching on `Complete` is not misled.
+    #[test]
+    fn complete_means_measured_and_exclusivity_is_a_separate_question() {
+        let breakdown = TurnBreakdown::build(
+            Duration::from_millis(100),
+            SpanDuration::measured(Duration::from_millis(80)),
+            SpanDuration::measured(Duration::from_millis(80)),
+            SpanDuration::measured(Duration::from_millis(80)),
+        );
+        assert!(
+            !breakdown.is_exclusive(),
+            "the measured spans exceed the total, so the spans do not sum to it"
+        );
+        assert!(
+            matches!(TurnAttribution::of(breakdown), TurnAttribution::Complete(_)),
+            "the classifier judges measurement, not arithmetic: every span was \
+             measured, so the turn is Complete"
+        );
+    }
+
+    /// RT-431: the docs must not claim the `Complete` variant is exclusive.
+    /// SOURCE contract (the behaviour above is the subject; this pins the
+    /// words around it) — and this test's own prose does not quote the
+    /// phrases it forbids.
+    #[test]
+    fn the_docs_do_not_claim_the_complete_variant_is_exclusive() {
+        let src = include_str!("turn_attribution.rs");
+        let prod = &src[..src.find("#[cfg(test)]").unwrap_or(src.len())];
+        let measured_and_exclusive = concat!("measured and", " exclusive.");
+        assert_eq!(
+            prod.matches(measured_and_exclusive).count(),
+            0,
+            "the Complete variant is about measurement, not arithmetic"
+        );
+        let by_construction = concat!("exclusive BY", " CONSTRUCTION.");
+        assert_eq!(
+            prod.matches(by_construction).count(),
+            0,
+            "the breakdown's spans are not exclusive by construction — the \
+             residual saturates"
+        );
+    }
+
+    /// RT-431: and a turn whose spans DO sum to the total is both Complete
+    /// and exclusive — the two questions agree there.
+    #[test]
+    fn a_balanced_turn_is_complete_and_exclusive() {
+        let breakdown = TurnBreakdown::build(
+            Duration::from_millis(100),
+            SpanDuration::measured(Duration::from_millis(40)),
+            SpanDuration::measured(Duration::from_millis(30)),
+            SpanDuration::measured(Duration::from_millis(20)),
+        );
+        assert!(breakdown.is_exclusive());
+        assert!(matches!(
+            TurnAttribution::of(breakdown),
+            TurnAttribution::Complete(_)
+        ));
     }
 }
 
