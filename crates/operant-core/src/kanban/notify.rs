@@ -85,6 +85,23 @@ impl NotifyManager {
         Ok(subs)
     }
 
+    /// Record the subscribers an event matches.
+    ///
+    /// RT-430: this used to log an imperative line naming the task, the
+    /// platform, the chat, the event and the payload — as though the
+    /// subscriber had been told. Nothing was sent: the
+    /// manager holds the subscription database and no platform handle (the
+    /// platform adapters live in the gateway), and the function has no
+    /// caller in the workspace. The log now says what actually happened, so
+    /// an operator reading it is not told a delivery occurred.
+    ///
+    /// `last_event_id` is deliberately NOT advanced: it is the "since"
+    /// cursor a delivery would use, and advancing it without delivering
+    /// would drop the events it was supposed to carry.
+    ///
+    /// RT-430-FOLLOW: wiring the delivery is a product decision — where
+    /// the notifier gets its platform handle, and what it sends — not a
+    /// repair pass.
     pub fn notify_subscribers(
         &self,
         task_id: &str,
@@ -96,8 +113,8 @@ impl NotifyManager {
             return Ok(());
         }
         for sub in &subs {
-            tracing::info!(
-                "Notify {} on {} ({}) about '{}': {}",
+            tracing::warn!(
+                "kanban subscription matched, NOT delivered: task {} on {} ({}) about '{}': {} — the notification delivery path is not wired",
                 sub.task_id,
                 sub.platform,
                 sub.chat_id,
