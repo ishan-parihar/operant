@@ -144,10 +144,19 @@ pub fn holon_policy_commands(run_dir: &std::path::Path) -> Option<Vec<String>> {
 
 /// W6 (audit O-22, invariant 4): in a Holon run, learning writes become
 /// annotations in the run directory — never files in the operant home.
-/// One JSON line per annotation, keyed by kind: `skill_changes`,
-/// `learnings`, `proposals` — the driver's end-of-run writer merges them
-/// into result.json the way refusals merge (kernel H-03 reads them as
-/// the run's learning record).
+/// One JSON line per annotation, keyed by kind. The LIVE kinds are
+/// `skill_changes`, `learnings`, `learning_changes`. The driver's end-of-run
+/// writer merges them into result.json the way refusals merge (kernel H-03
+/// reads them as the run's learning record).
+///
+/// RT-435: the kinds this note used to list were wrong in both directions.
+/// It named `skill_changes`, `learnings` and `proposals`; the LIVE kinds
+/// are `skill_changes`, `learnings` and `learning_changes` — the
+/// knowledge-base edits land under `learning_changes`, and NOTHING writes
+/// `proposals` today. A consumer keying on the old list missed the
+/// knowledge-base edits and waited for proposals that never arrive. The
+/// list below is checked against the emitters by
+/// `tests/annotation_kinds.rs`, so it cannot drift from them again.
 pub fn record_learning_annotation(
     run_dir: &std::path::Path,
     kind: &str,
