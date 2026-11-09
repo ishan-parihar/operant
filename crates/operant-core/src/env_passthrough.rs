@@ -152,13 +152,6 @@ pub fn reload_dotenv() -> DotenvReload {
 mod tests {
     use super::*;
 
-    /// The reload reads its path from the process environment, so the tests
-    /// that drive it cannot run in parallel with each other: one would set
-    /// the path and the other would read the first one's file. One lock
-    /// serializes them, the same shape as the other env-mutating tests in
-    /// this crate.
-    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
     fn write_env_file(tag: &str, body: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!(
             "operant_dotenv_{tag}_{}_{}",
@@ -184,7 +177,15 @@ mod tests {
     /// client.
     #[test]
     fn the_reload_reports_the_credential_it_found() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // RT-420: this test mutates process-wide env vars (OPERANT_ENV_FILE,
+        // and HERMES_HOME in the documented-env-file case). It used to hold a
+        // LOCAL `ENV_LOCK` — a second lock beside the crate's shared one, so
+        // it was serialized against its own file's tests and against NOTHING
+        // else: a profile test changing HERMES_HOME mid-run broke the clone
+        // ("Source profile 'source' does not exist"). The shared
+        // `platform::test_env_lock` is the one lock every env-mutating test
+        // in this crate holds, and the local one is gone.
+        let _guard = crate::platform::test_env_lock_blocking();
         let file = write_env_file(
             "reload",
             "# a comment\nOPENAI_API_KEY=\"rotated-key\"\nOPENAI_BASE_URL=http://rotated.example/v1\nOTHER=ignored\n",
@@ -193,7 +194,8 @@ mod tests {
         // The reload reads the path from the environment, so it is set
         // around the call and restored after.
         let previous = std::env::var("OPERANT_ENV_FILE").ok();
-        // SAFETY: test-only env mutation, serialized by ENV_LOCK.
+        // SAFETY: test-only env mutation, serialized by the crate's shared
+        // env lock (the guard above).
         unsafe { std::env::set_var("OPERANT_ENV_FILE", &file) };
 
         let rotated = reload_dotenv();
@@ -226,7 +228,15 @@ mod tests {
     /// `~/.operant/.env` — the per-turn rotation silently did nothing.
     #[test]
     fn the_reload_reads_the_documented_env_file() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // RT-420: this test mutates process-wide env vars (OPERANT_ENV_FILE,
+        // and HERMES_HOME in the documented-env-file case). It used to hold a
+        // LOCAL `ENV_LOCK` — a second lock beside the crate's shared one, so
+        // it was serialized against its own file's tests and against NOTHING
+        // else: a profile test changing HERMES_HOME mid-run broke the clone
+        // ("Source profile 'source' does not exist"). The shared
+        // `platform::test_env_lock` is the one lock every env-mutating test
+        // in this crate holds, and the local one is gone.
+        let _guard = crate::platform::test_env_lock_blocking();
         let dir = std::env::temp_dir().join(format!(
             "operant_dotenv_home_{}_{}",
             std::process::id(),
@@ -240,7 +250,8 @@ mod tests {
 
         let previous_home = std::env::var("HERMES_HOME").ok();
         let previous_file = std::env::var("OPERANT_ENV_FILE").ok();
-        // SAFETY: test-only env mutation, serialized by ENV_LOCK.
+        // SAFETY: test-only env mutation, serialized by the crate's shared
+        // env lock (the guard above).
         unsafe {
             std::env::set_var("HERMES_HOME", &dir);
             std::env::remove_var("OPERANT_ENV_FILE");
@@ -269,11 +280,20 @@ mod tests {
     /// does not clear a working credential.
     #[test]
     fn a_reload_without_a_credential_reports_nothing() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // RT-420: this test mutates process-wide env vars (OPERANT_ENV_FILE,
+        // and HERMES_HOME in the documented-env-file case). It used to hold a
+        // LOCAL `ENV_LOCK` — a second lock beside the crate's shared one, so
+        // it was serialized against its own file's tests and against NOTHING
+        // else: a profile test changing HERMES_HOME mid-run broke the clone
+        // ("Source profile 'source' does not exist"). The shared
+        // `platform::test_env_lock` is the one lock every env-mutating test
+        // in this crate holds, and the local one is gone.
+        let _guard = crate::platform::test_env_lock_blocking();
         let file = write_env_file("empty", "# nothing here\nOTHER=value\n");
 
         let previous = std::env::var("OPERANT_ENV_FILE").ok();
-        // SAFETY: test-only env mutation, serialized by ENV_LOCK.
+        // SAFETY: test-only env mutation, serialized by the crate's shared
+        // env lock (the guard above).
         unsafe { std::env::set_var("OPERANT_ENV_FILE", &file) };
 
         let rotated = reload_dotenv();

@@ -1778,6 +1778,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_token_storage_roundtrip() {
+        // RT-420: HERMES_HOME is process-wide; without the shared lock this
+        // test races every other env-mutating test in the crate.
+        let _guard = crate::platform::test_env_lock().await;
         let dir = std::env::temp_dir().join(format!("oauth-test-{}", uuid::Uuid::new_v4()));
         let _ = std::fs::create_dir_all(&dir);
 

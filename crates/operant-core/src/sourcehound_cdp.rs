@@ -599,7 +599,6 @@ mod tests {
     use super::*;
 
     // env-mutating tests share one lock (the process env is global)
-    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     /// R-02: one CDP endpoint, two historical names. The canonical
     /// `BROWSER_CDP_URL` wins; the legacy `OBS_CDP_URL` still routes so a
@@ -607,8 +606,13 @@ mod tests {
     #[serial_test::serial]
     #[test]
     fn cdp_env_name_r02_canonical_wins_legacy_falls_back() {
-        let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-        // SAFETY: serialized by ENV_LOCK; restored below.
+        // RT-420: this test mutates BROWSER_CDP_URL / OBS_CDP_URL — the same
+        // process-wide variables `tools/browser_cdp_tool.rs`'s tests mutate
+        // under the crate's SHARED lock. It used to hold a LOCAL lock, so
+        // those two could run at the same time and hand each other the other's
+        // endpoint. One lock for one environment.
+        let _g = crate::platform::test_env_lock_blocking();
+        // SAFETY: serialized by the shared env lock; restored below.
         unsafe {
             std::env::remove_var("BROWSER_CDP_URL");
             std::env::remove_var("OBS_CDP_URL");

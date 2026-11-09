@@ -970,6 +970,9 @@ mod tests {
     #[test]
     #[serial]
     fn bylaws_category_is_gone_with_the_organism() {
+        // RT-420: HERMES_HOME is process-wide; without the shared lock this
+        // test races every other env-mutating test in the crate.
+        let _guard = crate::platform::test_env_lock_blocking();
         // G+1: the bylaws checks retired (Holon owns the organization's
         // health); the doctor's categories are exactly the kept set.
         let tmp = tempfile::TempDir::new().unwrap();
