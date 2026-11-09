@@ -86,3 +86,40 @@ fn the_build_script_compiles_the_stub_file() {
         "the build script must link the compiled stub library"
     );
 }
+
+#[test]
+fn the_deployability_plan_does_not_claim_the_link_needs_libsonic() {
+    // RT-417: the plan (a snapshot against iter-430) stated that
+    // operant-core's build script emits `cargo:rustc-link-lib=sonic` and that
+    // only the repo-local `local/lib/libsonic.a` rescues the link. Both were
+    // false by the time a reader would act on them: the flag was deleted at
+    // iter-499, and after RT-416 the link needs no libsonic artifact at all
+    // (the seven sonic symbols are stubbed). A reader following the plan would
+    // provision a native payload the build does not need.
+    let plan = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(|p| p.parent())
+            .expect("the workspace root is two levels up")
+            .join("docs/DEPLOYABILITY-PLAN.md"),
+    )
+    .expect("the deployability plan exists");
+
+    // The stale claim, marked as superseded rather than left standing.
+    let stale = "unconditionally emits\n  `cargo:rustc-link-lib=sonic`";
+    assert!(
+        !plan.contains(stale),
+        "the plan must not assert the link needs a libsonic artifact"
+    );
+    let superseded = "SUPERSEDED 2026-11-10 (RT-416)";
+    assert!(
+        plan.contains(superseded),
+        "the plan must carry the dated correction that names the change"
+    );
+    // And the plan must say what the build needs NOW.
+    let stub_named = "crates/operant-core/espeak_audio_stubs.c";
+    assert!(
+        plan.contains(stub_named),
+        "the plan must name where the sonic symbols come from now"
+    );
+}

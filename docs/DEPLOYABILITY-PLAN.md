@@ -10,6 +10,40 @@ Everything below is evidence-backed. Where something is unverified it says so.
 
 ---
 
+## Status (updated 2026-11-10)
+
+This plan is a snapshot against `origin/main` @ `79de8c31` (iter-430). Two of
+its claims about the native build chain have since been overtaken, both by
+RT-416 (see `docs/audit/2026-06-19-BUGS.md`):
+
+- **B1's first bullet is stale.** `crates/operant-core/build.rs` no longer
+  emits `cargo:rustc-link-lib=sonic` — the flag was deleted at iter-499, and
+  the build script now says why in a comment.
+- **B2's premise no longer holds, and its accept criterion is now MET.** The
+  build no longer needs a libsonic artifact at all: espeak-ng's sonic
+  speed-up symbols are stubbed in `crates/operant-core/espeak_audio_stubs.c`,
+  so the link succeeds on any host with or without libsonic installed.
+
+Evidence for the second point (measured, not inferred): on this host — which
+HAS libsonic installed, so espeak-ng detects and compiles it — the binary
+failed to link before RT-416 and links after it:
+
+```
+$ cargo build -p operant-cli          # before RT-416
+error: linking with `cc` failed: exit status: 1
+rust-lld: error: undefined symbol: sonicDestroyStream
+rust-lld: error: undefined symbol: sonicFlushStream
+$ echo $?
+101
+$ cargo build -p operant-cli          # after RT-416
+$ echo $?
+0
+```
+
+Everything else below stands as written.
+
+---
+
 ## Where the project actually stands
 
 **Verified good:**
@@ -92,8 +126,12 @@ mechanically-evidenced, not reproduced.
 
 ### B1. The documented install path provisions none of the native build deps
 
-- `crates/operant-core/build.rs:7` unconditionally emits
-  `cargo:rustc-link-lib=sonic`.
+- **SUPERSEDED 2026-11-10 (RT-416):** this plan recorded that
+  `crates/operant-core/build.rs` emitted `cargo:rustc-link-lib=sonic`. The
+  flag was deleted at iter-499 (untracking the archive removed the only copy a
+  fresh checkout could link, and `unable to find library -lsonic` followed);
+  the build script explains the deletion in a comment. The symbols it was
+  about now come from a stub file — see B2.
 - `scripts/install.sh:9` runs a bare `cargo build --release -p operant-cli`. It
   does not source `dev-env.sh` and does not call `provision-build-deps.sh`.
 - `kokoro-tiny = "0.1.0"` (`operant-core/Cargo.toml:54`) is **non-optional**,
@@ -122,7 +160,20 @@ $ ls /usr/lib/x86_64-linux-gnu/libsonic.so.0
 No such file or directory
 ```
 
-Only the 18 KB `.a` rescues the link here. `build.yml` nonetheless targets
+**UPDATED 2026-11-10 (RT-416):** "Only the 18 KB `.a` rescues the link here"
+is no longer true — the link needs NO libsonic artifact now. espeak-ng
+compiles its sonic speed-up path whenever it DETECTS a system libsonic (it is
+detected, not configured), so on a host that has one the archive referenced
+seven `sonic*` symbols that nothing linked (`espeak-rs-sys`'s build script
+forwards only the libraries it built itself), and `cargo build -p operant-cli`
+exited 101 with undefined symbols. The seven are now stubbed in
+`crates/operant-core/espeak_audio_stubs.c`, next to the audio-backend stubs
+already there — so the build needs neither the library nor its header on any
+host, and the accept criterion below ("libsonic is either optional behind a
+feature or resolved per-target") is MET by the stronger form: libsonic is not
+required at all.
+
+`build.yml` nonetheless targets
 `aarch64-apple-darwin`, `x86_64-pc-windows-msvc` and 6 musl/cross targets,
 where an ELF/Linux `.a` is useless. **Whether those legs link is unverified.**
 
