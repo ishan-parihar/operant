@@ -179,13 +179,30 @@ impl PlatformAdapter for EmailAdapter {
                 // fatal.
                 let loaded = rustls_native_certs::load_native_certs();
                 if !loaded.errors.is_empty() {
+                    // RT-414: the count was the whole report — an operator
+                    // debugging a TLS init or handshake failure had "some native
+                    // root certificates could not be loaded" with a number and
+                    // no way to identify the offending entry. The errors
+                    // themselves are the report (there are few in practice).
                     tracing::warn!(
                         count = loaded.errors.len(),
+                        first = ?loaded.errors.first(),
+                        errors = ?loaded.errors,
                         "some native root certificates could not be loaded"
                     );
                 }
                 for cert in loaded.certs {
-                    let _ = roots.add(cert);
+                    // RT-414: the per-certificate add error was discarded
+                    // outright, so a cert the trust store rejected was silently
+                    // omitted — the TLS config is built from whatever subset
+                    // happened to parse, with no signal at all (not even the
+                    // count the load errors got).
+                    if let Err(e) = roots.add(cert) {
+                        tracing::warn!(
+                            error = ?e,
+                            "a loaded native root certificate was rejected by the trust store"
+                        );
+                    }
                 }
                 // The provider is named EXPLICITLY: `builder()` resolves it
                 // from the crate features and PANICS when they are
@@ -487,6 +504,45 @@ mod rt412_tests {
             prod.matches(block_side).count(),
             2,
             "both reports must name the indefinite-block consequence"
+        );
+    }
+}
+
+#[cfg(test)]
+mod rt414_tests {
+    /// RT-414: the native-cert loader's comment promises "a bad store entry is
+    /// skipped, not fatal" — but the load errors were reduced to a COUNT (an
+    /// operator debugging a TLS failure could not identify the offending entry)
+    /// and the per-certificate store rejection was discarded outright, so the
+    /// TLS config was built from whatever subset happened to parse with no signal
+    /// at all. SOURCE contract with its limitation named (both failures are
+    /// environment-shaped, so no deterministic unit fixture can force them).
+    /// Needles concatenation-built — and this test's own prose does not quote the
+    /// phrases it forbids.
+    #[test]
+    fn the_cert_load_paths_report_what_they_skip() {
+        let src = include_str!("email.rs");
+        let prod = &src[..src.find("#[cfg(test)]").unwrap_or(src.len())];
+        // 1. The load errors are reported, not just counted. (The count itself
+        // legitimately stays — the defect was that it was the WHOLE report.)
+        let errors_itself = concat!("errors = ?loaded.errors,", "");
+        assert_eq!(
+            prod.matches(errors_itself).count(),
+            1,
+            "the load errors themselves must be in the report"
+        );
+        // 2. The per-cert rejection is reported, not discarded.
+        let discarded_add = concat!("let _ = roots.add(", "cert);");
+        assert_eq!(
+            prod.matches(discarded_add).count(),
+            0,
+            "the trust-store rejection must not be discarded"
+        );
+        let reported_add = concat!("if let Err(e) = roots.add(", "cert)");
+        assert_eq!(
+            prod.matches(reported_add).count(),
+            1,
+            "the rejection must be reported"
         );
     }
 }
