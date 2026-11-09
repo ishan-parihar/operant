@@ -134,11 +134,17 @@ impl KanbanManager {
     }
 
     /// Delete a board database file (cannot delete "default").
+    ///
+    /// RT-421: the guard compared the SLUG, so it missed the empty slug —
+    /// which `resolve_path` treats as an alias of "default". `operant kanban
+    /// delete-board ""` therefore deleted the DEFAULT board's entire
+    /// database. The guard now compares the RESOLVED path, so every alias
+    /// that reaches the default board is refused.
     pub fn delete_board(&self, slug: &str) -> Result<(), Error> {
-        if slug == "default" {
+        let path = self.resolve_path(slug);
+        if path == self.resolve_path("default") {
             return Err(Error::Agent("Cannot delete the default board".to_string()));
         }
-        let path = self.resolve_path(slug);
         if !path.exists() {
             return Err(Error::Agent(format!("Board '{}' does not exist", slug)));
         }
@@ -238,6 +244,38 @@ mod tests {
         let mgr = KanbanManager::new(dir.clone());
         assert_eq!(mgr.resolve_path("default"), dir.join("operant_kanban.db"));
         assert_eq!(mgr.resolve_path(""), dir.join("operant_kanban.db"));
+    }
+
+    /// RT-421: `delete_board("")` deleted the DEFAULT board's database —
+    /// the guard compared the slug, and the empty slug is an alias of
+    /// "default" (the code resolves both to `operant_kanban.db`).
+    #[test]
+    fn deleting_the_empty_slug_cannot_delete_the_default_board() {
+        let dir = temp_kanban_dir();
+        let mgr = KanbanManager::new(dir.clone());
+        mgr.open_board("default").unwrap();
+        assert!(mgr.resolve_path("default").exists());
+
+        let err = mgr
+            .delete_board("")
+            .expect_err("the empty slug names the default board");
+        assert!(
+            err.to_string().contains("default"),
+            "the error must name the board it refused: {err}"
+        );
+        assert!(
+            mgr.resolve_path("default").exists(),
+            "the default board's database must still be there"
+        );
+
+        // The named slug is refused the same way, for the same reason.
+        assert!(mgr.delete_board("default").is_err());
+        assert!(mgr.resolve_path("default").exists());
+
+        // And a real board still deletes.
+        mgr.create_board("work").unwrap();
+        assert!(mgr.delete_board("work").is_ok());
+        assert!(!mgr.resolve_path("work").exists());
     }
 
     #[test]

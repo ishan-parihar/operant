@@ -64,9 +64,16 @@ pub fn read_refusals(run_dir: &std::path::Path) -> Vec<serde_json::Value> {
         .collect()
 }
 
-/// O-18: the policy's `roots` for this run — None when the run carries no
-/// policy.json or the policy lists no roots (an empty root list means
-/// "the workdir only" upstream, but here None = ungoverned, Some = fenced).
+/// O-18: the policy's `roots` for this run — the fence's allowlist.
+///
+/// None = UNGOVERNED: the run carries no policy.json, or the policy has no
+/// `roots` key at all. Some(list) = FENCED: a write must land under one of
+/// the listed roots or under the run directory itself.
+///
+/// RT-422: an empty `roots` array is NOT the ungoverned case — it yields a
+/// fence of exactly the run directory (the narrowest fence there is, and
+/// upstream's "the workdir only"). The fence therefore STAYS ACTIVE for an
+/// empty list, and this note now says so.
 pub fn holon_policy_roots(run_dir: &std::path::Path) -> Option<Vec<std::path::PathBuf>> {
     let policy = std::fs::read_to_string(run_dir.join("policy.json")).ok()?;
     let doc: serde_json::Value = serde_json::from_str(&policy).ok()?;
@@ -92,9 +99,14 @@ pub fn holon_budget_cap(run_dir: &std::path::Path) -> Option<u64> {
 /// O-18: the policy's terminal allowlist for this run — the kernel merges
 /// the grade's `commands` and `act_commands` (act postures only) into one
 /// sorted `commands` list at policy generation (holon execution/policy.py).
-/// None = ungoverned (no policy or the policy lists nothing — the fence
-/// stays inert, matching the roots fence's convention); Some(names) = only
-/// these command names may run.
+/// None = ungoverned (no policy, no `commands` key, or an empty list — an
+/// empty allowlist upstream means ungoverned, not deny-all); Some(names) =
+/// only these command names may run.
+///
+/// RT-422: the two fences do NOT share one convention. An empty command list
+/// leaves THIS fence inert, while an empty `roots` list leaves the roots
+/// fence ACTIVE (narrowed to the run directory). The old note claimed the
+/// roots fence matched this one.
 pub fn holon_policy_commands(run_dir: &std::path::Path) -> Option<Vec<String>> {
     let policy = std::fs::read_to_string(run_dir.join("policy.json")).ok()?;
     let doc: serde_json::Value = serde_json::from_str(&policy).ok()?;
@@ -145,4 +157,81 @@ pub fn read_learning_annotations(run_dir: &std::path::Path) -> Vec<serde_json::V
     text.lines()
         .filter_map(|l| serde_json::from_str(l).ok())
         .collect()
+}
+
+#[cfg(test)]
+mod rt422_tests {
+    use super::*;
+
+    /// A run directory carrying `policy.json` with the given body.
+    fn run_dir_with_policy(body: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "operant-org-rt422-{}-{:?}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).expect("create run dir");
+        std::fs::write(dir.join("policy.json"), body).expect("write policy");
+        dir
+    }
+
+    /// RT-422: the roots fence's CONVENTION — an empty `roots` list is the
+    /// NARROWEST fence (the run directory alone), not the ungoverned case.
+    /// BEHAVIORAL: the policy file is a real temp file, so the fence's
+    /// behavior is measured, not read off a comment.
+    #[test]
+    fn an_empty_roots_list_fences_to_the_run_directory() {
+        let dir = run_dir_with_policy(r#"{"roots": []}"#);
+        let roots = holon_policy_roots(&dir)
+            .expect("an empty roots list still yields a fence — it is not ungoverned");
+        assert_eq!(
+            roots,
+            vec![dir.clone()],
+            "the fence must be exactly the run directory"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// RT-422: and the ungoverned case is the one with NO policy at all.
+    #[test]
+    fn a_run_without_policy_is_ungoverned() {
+        let dir = std::env::temp_dir().join(format!(
+            "operant-org-rt422-none-{}-{:?}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).expect("create run dir");
+        assert!(
+            holon_policy_roots(&dir).is_none(),
+            "no policy means no fence"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// RT-422: the two fences do NOT share one convention, and the notes say
+    /// so. SOURCE contract: the needles are concatenation-built, and the
+    /// assertions read the notes' own claims rather than the code's.
+    #[test]
+    fn the_notes_state_the_two_fences_have_different_conventions() {
+        let src = include_str!("mod.rs");
+        let prod = &src[..src.find("#[cfg(test)]").unwrap_or(src.len())];
+        let empty_is_fenced = concat!("an empty `roots` array is NOT the ungoverned", " case");
+        assert_eq!(
+            prod.matches(empty_is_fenced).count(),
+            1,
+            "the roots note must state that an empty list still fences"
+        );
+        let not_matching = concat!("the two fences do NOT share one", " convention");
+        assert_eq!(
+            prod.matches(not_matching).count(),
+            1,
+            "the commands note must state that the conventions differ"
+        );
+    }
 }
