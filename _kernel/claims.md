@@ -493,3 +493,36 @@ NOT supported (named, with the reason):
 - A rewritten line number re-arms the rot it fixed — [V] — RT-407's repair
   was itself a fresh line number until the doc gate showed the class was
   still live; the durable repair names the symbol (RT-410) — unit 1
+
+## Round 16 (2026-11-09/10) — the build chain, the env locks, and a swept cluster, verified and shipped
+
+- A library-target gate cannot see a link defect — [V] — `cargo build -p
+  operant-core` passed while `cargo build -p operant-cli` exited 101 with
+  undefined `sonic*` symbols: a library rlib never resolves the reference
+  (RT-416) — unit 1
+- A dependency's DETECTED (not configured) native dependency is a build-shape
+  dependency — [V] — espeak-ng compiled its sonic speed-up path on any host
+  that had libsonic installed, and nothing forwarded the link (RT-416) —
+  unit 1
+- A second lock beside the shared one serializes nothing outside its file —
+  [V] — two local `ENV_LOCK`s in one crate meant the same variable could be
+  mutated under two locks at once, observed as a real suite failure
+  (RT-420) — unit 1
+- A swallowed permission write leaves the posture wrong with nothing said —
+  [V] — the OAuth directory's 0700 and the downloaded binary's 0755 (RT-419)
+  — unit 1
+- A doc's dated correction that quotes the claim re-creates the claim — [V]
+  — the deployability plan's corrections matched the contract's negative
+  needles until all three were paraphrased (RT-417) — unit 1
+- A guard that compares a NAME misses every ALIAS of it — [V] — the delete
+  guard compared the slug while the resolver treats "" as "default", so the
+  default board's database was deleted (RT-421) — unit 1
+- A loud error that feeds a permissive default is still the widening the
+  docs forbid — [V] — the corrupt seat-policy row re-opened a lockdown
+  seat's safe tools (RT-423) — unit 1
+- A unit mismatch is a silent content loss — [V] — quotas documented in
+  characters and charged in bytes dropped non-ASCII context items (RT-424)
+  — unit 1
+- A cursor that jumps over pending items deletes them — [V] — the newest-N
+  collection plus a max-advance left the older backlog below the cursor
+  forever (RT-425) — unit 1

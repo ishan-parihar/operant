@@ -1004,9 +1004,11 @@ mod rt424_tests {
     #[test]
     fn a_non_ascii_dm_is_charged_in_characters_not_bytes() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let mut settings = crate::config::ContextInjectionSettings::default();
-        settings.dm_quota = 60;
-        settings.total_char_cap = 60;
+        let settings = crate::config::ContextInjectionSettings {
+            dm_quota: 60,
+            total_char_cap: 60,
+            ..crate::config::ContextInjectionSettings::default()
+        };
         let injector =
             ContextInjector::open(&dir.path().join("app.sqlite"), settings).expect("injector");
 
@@ -1050,9 +1052,11 @@ mod rt425_tests {
     #[test]
     fn a_backlog_larger_than_the_limit_is_fully_collected_over_time() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let mut settings = crate::config::ContextInjectionSettings::default();
-        settings.dm_quota = 100_000;
-        settings.total_char_cap = 100_000;
+        let settings = crate::config::ContextInjectionSettings {
+            dm_quota: 100_000,
+            total_char_cap: 100_000,
+            ..crate::config::ContextInjectionSettings::default()
+        };
         let injector =
             ContextInjector::open(&dir.path().join("app.sqlite"), settings).expect("injector");
 

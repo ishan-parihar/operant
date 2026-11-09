@@ -910,3 +910,136 @@ Shipped, each mutation-proved:
 Round-15 end-of-round gates: full suite exit 0 (46 targets), strict clippy
 exit 0 (`-D warnings`), fmt clean, the doc-link gate exit 0, ledger index OK
 (RG-016, RG-021), genome lint 0 errors.
+
+## Round 16 (2026-11-09/10) — the build chain, the env locks, and a swept cluster
+
+Twenty-two pushed iterations (iter-2006..iter-2017 plus this close). The round
+began with a gap in the tree: a chore commit prepared in a previous session
+had never been pushed, and the peer had independently taken its iteration id —
+so the round opened by RENUMBERING (iter-2005 → iter-2006) and rebuilding the
+shared documents from the FETCHED tip's bytes rather than the worktree's (the
+worktree's ledger lacked the peer's RT-415 row — the sixth shared-document
+erasure waiting to happen).
+
+Shipped, each mutation-proved:
+- **RT-416 (M)** — **the operant-cli binary did not LINK on any host with
+  libsonic installed.** espeak-ng's cmake build DETECTS a system libsonic
+  (detected, not configured), so `USE_LIBSONIC` compiles seven `sonic*`
+  references into the archive; espeak-rs-sys's build script forwards only the
+  libraries it built itself, never espeak-ng's PRIVATE system dependency, so
+  nothing emitted `-lsonic` and the final link failed. `cargo build -p
+  operant-cli` exited 101. The repo's own `build.rs` carried the false
+  premise ("Nothing references a sonic symbol … true only where espeak-ng's
+  build does not detect a system libsonic"). Fixed by stubbing the seven
+  symbols in the existing `espeak_audio_stubs.c` — the audio backend is
+  stubbed anyway, so the speed-up has nothing to speed up, and no host
+  library or header is needed. The workspace builds clean again (zero
+  warnings).
+- **RT-417 (L, scope completed in iter-2009)** — the deployability plan
+  still claimed the build needs a libsonic artifact: three Phase-B bullets
+  (the deleted `-lsonic` flag, the installer's "bare build", the env scripts'
+  hardcoded `/home/z` paths) were corrected with a dated marker, and B2's
+  accept criterion is now met by the stronger form — libsonic is not required
+  at all.
+- **RT-418 (L)** — the config write's mode round-trip was documented as
+  unconditional ("must survive the round-trip") while its `set_permissions`
+  result was discarded; a failed carry-over silently left the file
+  owner-only. The fallback is the SAFER mode, so the fix reports rather than
+  changing the policy.
+- **RT-419 (M, class)** — two more swallowed permission writes: the OAuth
+  directory's 0700 and the downloaded bridge binary's 0755 (a binary
+  installed at the path the bridge EXECUTES, without its execute bit). One
+  shared helper (`fs_secrets::set_mode_reporting`) now applies the mode and
+  reports the failure with the consequence the caller names.
+- **RT-420 (M, class)** — **the crate had THREE locks for one process-wide
+  environment.** Observed as a real suite failure ("Source profile 'source'
+  does not exist"): `env_passthrough.rs` and `sourcehound_cdp.rs` each held a
+  LOCAL `ENV_LOCK`, which serializes only its own file — and
+  `sourcehound_cdp.rs` mutated `BROWSER_CDP_URL` under its local lock while
+  `tools/browser_cdp_tool.rs` mutated the SAME variable under the shared
+  lock. The local locks are gone; every shared-variable mutation holds the
+  crate's one lock.
+- **RT-421 (H)** — **`delete_board("")` DELETED the default board's
+  database.** `resolve_path` treats the empty slug and `"default"` as the
+  same board; the delete guard compared the SLUG, so the empty slug passed
+  and `remove_file` took the default board's entire database. The guard now
+  compares the RESOLVED path.
+- **RT-422 (L)** — the roots fence's note claimed an empty `roots` list is
+  UNGOVERNED; the code fences it to the run directory (the narrowest fence,
+  and upstream's "the workdir only"). Both notes now state the truth, and the
+  sibling's "matching the roots fence's convention" was false — the two
+  fences differ.
+- **RT-423 (H)** — **a corrupt seat-policy row WIDENED the seat.** The read
+  was loud (an error, as the doc says), but `policy_for` turned it into
+  "no policy" = ungoverned, so a typo'd `lockdown` spelling re-opened every
+  SAFE tool the seat was shut out of — the exact widening the module doc
+  calls impossible. The seam now FAILS CLOSED (lockdown: every tool
+  escalates).
+- **RT-424 (M)** — the context-injection quotas are documented in CHARACTERS
+  and were charged in BYTES, so non-ASCII content was charged up to 4x its
+  character count, overflowed the class quota, went to the pool, overflowed
+  the total cap, and was DROPPED. The accounting counts characters now.
+- **RT-425 (M)** — the context collector took the NEWEST pending items and
+  the cursor then jumped to their max, so a backlog over the per-class limit
+  left its OLDER items below the cursor forever: never collected, never
+  rendered, no trace — while the module doc promises "at-least-once". The
+  query now takes the OLDEST pending items, so the cursor walks through the
+  backlog.
+
+### The round's measured lessons
+
+- **A build that cannot link is invisible to a library-target gate.**
+  `cargo build -p operant-core` passed while `cargo build -p operant-cli`
+  failed: a library rlib never resolves the reference, and the test binaries
+  that had been linked earlier were cached — the breakage surfaced only when
+  a relink was forced. A gate that only builds libraries cannot see a link
+  defect; the workspace build can.
+- **A host-detected dependency is a build-shape dependency.** espeak-ng's
+  cmake DETECTS libsonic rather than being configured for it, so the same
+  source produced a linkable archive on one host and an unlinkable one on
+  another. The repair made the build host-independent rather than
+  provisioning a payload for one host.
+- **"Serialized by ENV_LOCK" was true of the file, not of the crate** — the
+  second-lock class is invisible from inside a file, and only a CRATE-WIDE
+  sweep finds it.
+- **A needle that names an instance misses a renamed instance** (RT-420):
+  the class contract first matched `static ENV_LOCK`, so a mutant that
+  renamed the lock passed; it now matches the SHAPE. And a shared-variable
+  set must count DISTINCT FILES, not mutations.
+- **A dated correction that QUOTES the claim it corrects re-creates the
+  claim** (RT-417): the contract's negative needles matched the corrections
+  themselves, so all three were rewritten as paraphrases — the
+  self-satisfaction trap's sixteenth instance, and the standing rule for
+  every dated correction.
+- **A guard that compares a NAME misses every ALIAS of that name**
+  (RT-421): the delete guard compared the slug; the code that RESOLVES the
+  slug treats the empty string as "default". Compare the resolved value.
+- **A doc can be false in the SAFE direction** (RT-422): the code fenced
+  more tightly than the note promised. The fix was the note, not the code —
+  and the sibling note ("matching the roots fence's convention") was false
+  in the other direction, so both had to be read.
+- **"An error on read" is not "the run path does not widen"** (RT-423): the
+  read was loud; the SEAM converted the loud error into the exact widening
+  the doc forbids. A loud failure that feeds a permissive default is still a
+  widening.
+- **A pre-existing test can pin the DEFECT** (RT-423): its assertion
+  expected `None` under the comment "rather than silently widening the
+  seat" — `None` WAS the widening the sentence claimed to prevent. When a
+  test's comment and its assertion disagree, the comment is the spec.
+- **A unit mismatch is a silent content loss** (RT-424): chars versus bytes
+  agreed for ASCII and charged everything else 4x, so the quota overflowed
+  and the content was dropped — with no error anywhere.
+- **A cursor that jumps over pending items deletes them, and the fix must
+  hold with a MONOTONIC cursor** (RT-425): the first attempt advanced the
+  watermark to the OLDEST collected item, which cannot advance past the
+  current cursor (the update is `MAX(last_ts, excluded.last_ts)`) and so
+  stalled. FIFO collection is the fix that holds.
+- **A partial revert can be MASKED by another path** (RT-424): reverting
+  only the class-quota charge still passed the test, because the roll-over
+  pool's own (character) charge re-admitted the item. The proof that counts
+  reverts the WHOLE fix.
+
+Round-16 end-of-round gates: full suite exit 0, strict clippy exit 0
+(`-D warnings`), fmt clean, the doc-link gate exit 0, the WORKSPACE build
+exit 0 with zero warnings, ledger index OK (RG-016, RG-021), genome lint 0
+errors.
