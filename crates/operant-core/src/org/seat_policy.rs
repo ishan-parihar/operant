@@ -34,7 +34,14 @@ use std::str::FromStr;
 /// A seat's operating mode. Plan §1.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SeatMode {
-    /// Every tool open, no prompts. Still under the hardline blocklist.
+    /// Every tool the seat has not denied, no prompts.
+    ///
+    /// RT-434: this used to name ONE exception ("Still under the hardline
+    /// blocklist"). There are TWO: the hardline blocklist (RULE 1) and the
+    /// seat's OWN deny list, which this file's precedence list calls
+    /// "absolute over everything below" and which `decide` applies BEFORE
+    /// the Yolo branch. A seat with a deny row does not get "every tool
+    /// open" just because it is in Yolo.
     Yolo,
     /// Today's behaviour: dangerous tools escalate, safe tools run.
     Standard,
@@ -310,6 +317,32 @@ mod tests {
             decide(None, "shell", true, false, false),
             SeatDecision::Deny(_)
         ));
+    }
+
+    /// RT-434: the `Yolo` mode's doc must name BOTH exceptions — the
+    /// hardline blocklist AND the seat's own deny list — because the
+    /// precedence list calls the deny list "absolute over everything
+    /// below" and `decide` applies it before the Yolo branch. SOURCE
+    /// contract: the BEHAVIOUR is already pinned by
+    /// `deny_list_beats_grant_allow_and_yolo`; this pins the words.
+    #[test]
+    fn the_yolo_doc_names_both_exceptions() {
+        let src = include_str!("seat_policy.rs");
+        let prod = &src[..src.find("#[cfg(test)]").unwrap_or(src.len())];
+        let blocklist = concat!("the hardline blocklist", " (RULE 1)");
+        assert_eq!(
+            prod.matches(blocklist).count(),
+            1,
+            "the Yolo doc must name the hardline blocklist"
+        );
+        // A single-line fragment: the phrase spans the doc's own line break.
+        let own_deny = concat!("seat's OWN deny list", "");
+        assert_eq!(
+            prod.matches(own_deny).count(),
+            1,
+            "the Yolo doc must name the seat's own deny list — it bites under \
+             Yolo too"
+        );
     }
 
     #[test]
