@@ -106,8 +106,9 @@
 //!
 //! Recommendation was (1): it answers the question the numbers exist for,
 //! at a fraction of the risk, and it keeps the request path untouched.
-//! **iter-1631 implemented (1).** `TurnEnd` carries the `Option<TurnBreakdown>`
-//! (115 bytes, cloned per subscriber, bounded), `run()` folds every
+//! **iter-1631 implemented (1).** `TurnEnd` carries the
+//! `Option<TurnAttribution>` — the three-state CLASSIFICATION, not the bare
+//! breakdown (104 bytes, cloned per subscriber, bounded), `run()` folds every
 //! `llm_duration` into a per-turn accumulator and reads `turn_tool_duration()`
 //! for the tools span, and `user_wait` is honestly `Unmeasured` because
 //! nothing at that seam measures it. Option (2) was rejected on cost and on
@@ -423,6 +424,38 @@ mod rt431_tests {
             matches!(TurnAttribution::of(breakdown), TurnAttribution::Complete(_)),
             "the classifier judges measurement, not arithmetic: every span was \
              measured, so the turn is Complete"
+        );
+    }
+
+    /// RT-432: the module's implementation note named the type the delivered
+    /// event does NOT carry: `TurnEnd::attribution` is an
+    /// `Option<TurnAttribution>` (the three-state classification), not the
+    /// bare breakdown. A reader following the note would look for the wrong
+    /// payload — and the module's own header says so in as many words.
+    ///
+    /// The size is pinned too, so the note cannot drift from the type again:
+    /// the delivered field is 104 bytes today.
+    #[test]
+    fn the_delivered_field_carries_the_classification_not_the_bare_breakdown() {
+        let src = include_str!("turn_attribution.rs");
+        let prod = &src[..src.find("#[cfg(test)]").unwrap_or(src.len())];
+        let bare = concat!("carries the `Option<TurnBreakdown>`", "");
+        assert_eq!(
+            prod.matches(bare).count(),
+            0,
+            "the note must name the type the event actually carries"
+        );
+        let classified = concat!("carries the\n//! `Option<TurnAttribution>`", "");
+        assert_eq!(
+            prod.matches(classified).count(),
+            1,
+            "the note must name the classification the event carries"
+        );
+        // The delivered field's type, measured rather than asserted in prose.
+        assert_eq!(
+            std::mem::size_of::<Option<TurnAttribution>>(),
+            104,
+            "the delivered attribution's size changed — update the note"
         );
     }
 
