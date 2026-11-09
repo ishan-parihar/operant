@@ -248,10 +248,21 @@ fn lexical_overlap(item_text: &str, affinity: &str) -> f64 {
 }
 
 /// The phase-1 injector: reads `context_items` (dm/feed), ranks, quotas,
-/// renders, and advances the per-seat watermarks. All state lives in the app database
-/// (`context_watermarks` — table-not-a-file, the seat_policies discipline).
+/// renders, and advances the per-seat watermarks.
+///
+/// RT-436: this used to place the state in the app database. It is not
+/// there: `open` resolves the ORG SIBLING
+/// (`operant_kanban.db` beside the app database) — the "one sibling
+/// kanban file" rule — and the field that holds the path was named
+/// after the APP database, so the doc and the field name both pointed a
+/// reader at the wrong file. That is the exact "invisible no-op" `open`'s
+/// own doc recounts: a reader looking in the app database finds nothing.
+///
+/// The state is still table-not-a-file (the seat_policies discipline); it
+/// is simply in the ORG database.
 pub struct ContextInjector {
-    app_db: PathBuf,
+    /// The ORG sibling database (`operant_kanban.db`) — see `open`.
+    db_path: PathBuf,
     settings: crate::config::ContextInjectionSettings,
 }
 
@@ -286,7 +297,7 @@ impl ContextInjector {
         conn.execute_batch(CONTEXT_ITEMS_SCHEMA)
             .map_err(|e| Error::Agent(format!("context injection: items schema: {e}")))?;
         Ok(Self {
-            app_db: org_sibling,
+            db_path: org_sibling,
             settings,
         })
     }
@@ -309,7 +320,7 @@ impl ContextInjector {
         if !self.settings.enabled {
             return prompt.to_string();
         }
-        let Ok(conn) = Connection::open(&self.app_db) else {
+        let Ok(conn) = Connection::open(&self.db_path) else {
             return prompt.to_string(); // fail-open: injection never fails a run
         };
         let items = match self.collect(&conn, seat_id, exclude) {
@@ -413,7 +424,7 @@ impl ContextInjector {
         if !self.settings.enabled {
             return;
         }
-        let Ok(conn) = Connection::open(&self.app_db) else {
+        let Ok(conn) = Connection::open(&self.db_path) else {
             return;
         };
         let text = crate::agent::safe_truncate_str(text.trim(), 800);
@@ -923,7 +934,7 @@ mod tests {
         // in record_item is the only bound. A row older than the retention
         // window must disappear on the NEXT capture; a fresh row survives.
         let (_dir, injector) = injector_db();
-        let conn = Connection::open(&injector.app_db).expect("conn");
+        let conn = Connection::open(&injector.db_path).expect("conn");
         let ancient = chrono::Utc::now().timestamp() - 30 * 86_400;
         conn.execute(
             "INSERT INTO context_items (class, author, ts, content_hash, seat_hint, text)\n             VALUES ('feed', 'old-timer', ?1, 1, 'premiere', 'stale group chatter')",
@@ -977,6 +988,71 @@ mod tests {
         assert_eq!(
             injector.render_section("premiere", None, "PROMPT", &[]),
             "PROMPT"
+        );
+    }
+}
+
+#[cfg(test)]
+mod rt436_tests {
+    use super::ContextInjector;
+
+    /// RT-436: the injector's doc said "All state lives in the app
+    /// database" — it lives in the ORG SIBLING (`operant_kanban.db` beside
+    /// the app database, the "one sibling kanban file" rule). A reader
+    /// looking in the app database finds nothing, which is the exact
+    /// "invisible no-op" `open`'s own doc recounts.
+    ///
+    /// SOURCE contract: the location is not a behaviour to measure, so what
+    /// is pinned is that the doc and the FIELD name both say where the
+    /// state lives. The path itself is asserted behaviorally below.
+    #[test]
+    fn the_injector_doc_and_field_name_the_org_sibling() {
+        let src = include_str!("context_injection.rs");
+        let prod = &src[..src.find("#[cfg(test)]").unwrap_or(src.len())];
+        let app_db_claim = concat!("All state lives in the app", " database");
+        assert_eq!(
+            prod.matches(app_db_claim).count(),
+            0,
+            "the doc must not send a reader to the app database"
+        );
+        let struct_doc = concat!("the ORG SIBLING", "");
+        assert_eq!(
+            prod.matches(struct_doc).count(),
+            1,
+            "the struct's doc must name the ORG SIBLING"
+        );
+        let field_doc = concat!("The ORG sibling database", "");
+        assert_eq!(
+            prod.matches(field_doc).count(),
+            1,
+            "the field that holds the path must say which database it is"
+        );
+        // The field that holds the path must not be named after the app
+        // database: that misnomer is what made the doc believable.
+        assert_eq!(
+            prod.matches("app_db").count(),
+            0,
+            "no field may carry the app-database misnomer"
+        );
+    }
+
+    /// RT-436: and the path really is the org sibling — measured, not read
+    /// off a comment.
+    #[test]
+    fn the_injector_opens_the_org_sibling_database() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let app_db = dir.path().join("database.db");
+        let injector =
+            ContextInjector::open(&app_db, crate::config::ContextInjectionSettings::default())
+                .expect("injector");
+        let org_sibling = dir.path().join("operant_kanban.db");
+        assert!(
+            org_sibling.exists(),
+            "the org sibling must be the file the injector created"
+        );
+        assert!(
+            !app_db.exists(),
+            "the app database must NOT be the injector's file"
         );
     }
 }
