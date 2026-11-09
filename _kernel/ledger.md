@@ -1043,3 +1043,142 @@ Round-16 end-of-round gates: full suite exit 0, strict clippy exit 0
 (`-D warnings`), fmt clean, the doc-link gate exit 0, the WORKSPACE build
 exit 0 with zero warnings, ledger index OK (RG-016, RG-021), genome lint 0
 errors.
+
+## Round 17 (2026-11-10) — a swept cluster: twelve rows, and the class the sweep exposed
+
+Twelve pushed iterations (iter-2019..iter-2030 plus this close). The round
+started from a subagent's first-hand sweep of the kanban/org/context cluster
+(18 findings, 16 confirmed, 2 dropped as false) and closed with every one of
+the confirmed findings fixed, mutation-proved, and shipped.
+
+Shipped:
+- **RT-421 (H)** — `delete_board("")` DELETED the default board's database.
+  `resolve_path` treats the empty slug and `"default"` as the same board; the
+  delete guard compared the SLUG, so the empty slug passed and `remove_file`
+  took the default board's whole database. The guard now compares the
+  RESOLVED path.
+- **RT-422 (L)** — the roots fence's note claimed an empty `roots` list is
+  ungoverned; the code fences it to the run directory (the narrowest fence).
+  Both notes now state the truth, and the sibling's "matching the roots
+  fence's convention" was false — the two fences differ.
+- **RT-423 (H)** — a corrupt seat-policy row WIDENED the seat to ungoverned.
+  The read was loud (an error, as the doc says), but `policy_for` turned it
+  into "no policy" = every SAFE tool runs — the exact widening the module
+  doc calls impossible. The seam now FAILS CLOSED.
+- **RT-424 (M)** — the context-injection quotas are documented in CHARACTERS
+  and were charged in BYTES, so non-ASCII content was charged up to 4x its
+  character count, overflowed the class quota, went to the pool, overflowed
+  the total cap, and was DROPPED.
+- **RT-425 (M)** — the context collector took the NEWEST pending items and
+  the cursor then jumped to their max, so a backlog over the per-class limit
+  left its OLDER items below the cursor forever: never collected, never
+  rendered, no trace — while the module doc promises "at-least-once".
+- **RT-426 (M, class)** — four writes whose failures were discarded: the
+  run's refusal record (a POLICY DENIAL with no audit trail), the run's
+  learning record, the refused skill write's ROLLBACK (a scan-refused file
+  could stay on disk with the agent told only that the scan refused it), and
+  the half-created skill directory's cleanup. All four report now, and the
+  refusal names the still-on-disk consequence.
+- **RT-427 (M)** — a DENIED seat escalation carried no resolution string.
+  `SeatApprover`'s doc promises the resolver's name is on "the resolution
+  string an operator sees"; `approve` returned one, `deny` returned
+  `Ok(())`. `deny` and `expire` now return the same shape, and the gateway
+  surfaces it.
+- **RT-428 (L)** — `next_round` promised `None` "when the retrieval already
+  completed", but an EARLY completion was never recorded, so a retrieval
+  that finished in round 1 got another recall.
+- **RT-429 (L)** — the stale-task diagnostic reported "-1s" for a task that
+  had NEVER heartbeated — a negative elapsed time for exactly the case it
+  flags. The elapsed time is now the one since the task STARTED.
+- **RT-430 (L)** — the kanban subscriber log claimed a notification that
+  never happened (the manager holds no platform handle, and the function has
+  no caller). The log says it was NOT delivered; the delivery wiring is a
+  NAMED product decision.
+- **RT-431 (L)** — the turn-attribution docs claimed the spans were
+  "exclusive"; the classifier checks MEASUREMENT, and the residual saturates
+  at zero, so a >100% turn is `Complete` while `is_exclusive` says false.
+- **RT-433 (L)** — the turn-attribution module's note named the type the
+  delivered event does NOT carry (the bare `TurnBreakdown` instead of the
+  classification) with a stale size. Renumbered from RT-432 when the peer
+  took that id.
+- **RT-434 (L)** — the `Yolo` seat mode's doc named ONE exception; the
+  seat's OWN deny list bites under Yolo too (the file's own precedence list
+  calls it "absolute over everything below").
+- **RT-435 (L)** — the learning annotation's documented kind list named a
+  kind nothing writes (`proposals`) and missed the one that IS written
+  (`learning_changes`, the knowledge-base edits). The list is now checked
+  against the emitters by a SELF-MAINTAINING contract.
+- **RT-436 (L)** — the context injector's doc sent a reader to the app
+  database and the field name sent them there; `open` resolves the ORG
+  SIBLING — the exact "invisible no-op" `open`'s own doc recounts.
+- **RT-437 (L)** — the context-injection schema comments named class sets
+  that are neither live nor retired-honestly (`feed` was "future"; the
+  retired org classes were listed as live).
+- **RT-438 (L)** — the cosine similarity's doc claimed the range is [0, 1];
+  the function returns the RAW cosine. The bounded range is a CALLER's
+  policy (`context_management.rs` clamps; `context/lcm.rs` sorts
+  descending).
+
+### The round's measured lessons
+
+- **A crate-wide sweep is how a CLASS is found; a single report is how one
+  instance of it is found.** RT-426's four sites shared a shape (a discarded
+  write) in two modules — none of them had been reported. The sweep
+  (`let _ = writeln!`, `let _ = fs::write`, `let _ = fs::remove_*`) is
+  cheap and finds what a reading pass does not.
+- **A rollback that discards its result leaves the REFUSED state in
+  place.** The skill scan refused a write and the rollback's failure was
+  invisible — so the file the scan rejected stayed on disk while the agent
+  was told only that the scan refused it. The rollback became fallible, and
+  the refusal now names the consequence.
+- **A pre-existing test can PIN THE DEFECT.** RT-423's
+  `a_bad_mode_string_errors_on_read_not_defaults` asserted `policy_for ==
+  None` under the comment "rather than silently widening the seat" — `None`
+  WAS the widening the sentence claimed to prevent. When a test's comment
+  and its assertion disagree, the comment is the spec.
+- **A loud error that feeds a permissive default is still the widening the
+  docs forbid.** The seat-policy READ was an error; the SEAM turned it into
+  "no policy", and "no policy" is the wide door.
+- **A unit mismatch is a silent content loss.** Chars versus bytes agreed
+  for ASCII and charged everything else 4x, so a quota overflowed and the
+  content was dropped — with no error anywhere.
+- **A cursor that jumps over pending items DELETES them, and the fix must
+  hold with a MONOTONIC cursor.** The first attempt advanced the watermark
+  to the OLDEST collected item, which cannot advance past the current cursor
+  (the update is `MAX(last_ts, excluded.last_ts)`) and so stalled. FIFO
+  collection is the fix that holds.
+- **A guard that compares a NAME misses every ALIAS of that name.**
+  `delete_board("")` deleted the default board's database because the guard
+  compared the slug and the resolver treats "" as "default". Compare the
+  RESOLVED value.
+- **A field name can make a wrong doc BELIEVABLE.** The injector held the
+  org sibling's path in a field called `app_db`, and the doc on the struct
+  said the state lives in the app database. Both were wrong in the same
+  direction; the rename (`db_path`) removed the trap.
+- **A BEHAVIORAL test alone cannot catch a DOC regression.** RT-438's first
+  mutant restored the false range claim and the test still PASSED — the
+  behavioral test measures the function, not its comment. A doc needs its
+  own contract.
+- **A doc that lists an enumeration can be CHECKED AGAINST THE CODE.**
+  RT-435's contract derives the annotation kinds from the emitters and
+  compares them with the note — a self-maintaining list that cannot drift.
+- **An operator-facing message with a negative number is a bug.**
+  "-1s without heartbeat" was the diagnostic for the case it exists to flag.
+- **A dated correction that QUOTES the claim it corrects re-creates the
+  claim.** Five instances this round (RT-426, RT-431, RT-432, RT-436,
+  RT-438): every corrected doc was rewritten to paraphrase.
+- **A needle that spans a message's own line break matches NOTHING.**
+  Four instances this round: the needle must be a single-line fragment.
+- **A PART-reverted fix can be MASKED by another path.** RT-424's first
+  mutant reverted only the class-quota charge, and the roll-over pool's own
+  (character) charge re-admitted the item — the rendered output cannot tell
+  "admitted by the class quota" from "admitted by the pool". The proof that
+  counts reverts the WHOLE fix.
+- **The peer takes ledger ids CONCURRENTLY.** RT-432 was published by the
+  peer between this work's fetch and its write; the later publisher
+  renumbers forward and records an ID NOTE (RT-433).
+
+Round-17 end-of-round gates: the WORKSPACE test suite exit 0 (88 targets
+ok), strict clippy exit 0 on the core and on the CLI, fmt clean on both,
+the doc-link gate exit 0, the WORKSPACE build exit 0 with zero warnings,
+the ledger index OK (RG-016, RG-021), genome lint 0 errors.

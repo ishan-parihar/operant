@@ -1100,7 +1100,8 @@ mod rt436_tests {
     fn the_injector_opens_the_org_sibling_database() {
         let dir = tempfile::tempdir().expect("tempdir");
         let app_db = dir.path().join("database.db");
-        let injector =
+        // The binding is for its SIDE EFFECT: opening creates the file.
+        let _injector =
             ContextInjector::open(&app_db, crate::config::ContextInjectionSettings::default())
                 .expect("injector");
         let org_sibling = dir.path().join("operant_kanban.db");

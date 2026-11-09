@@ -526,3 +526,54 @@ NOT supported (named, with the reason):
 - A cursor that jumps over pending items deletes them — [V] — the newest-N
   collection plus a max-advance left the older backlog below the cursor
   forever (RT-425) — unit 1
+
+## Round 17 (2026-11-10) — a swept cluster, verified and shipped
+
+- A crate-wide sweep finds the CLASS a single report cannot — [V] — four
+  discarded writes across two modules, none previously reported (RT-426) —
+  unit 1
+- A rollback that discards its result leaves the REFUSED state in place —
+  [V] — a scan-refused skill file stayed on disk while the agent was told
+  only that the scan refused it (RT-426) — unit 1
+- A pre-existing test can pin the DEFECT — [V] — its comment and its
+  assertion disagreed about whether "no policy" widens the seat (RT-423) —
+  unit 1
+- A loud error that feeds a permissive default is still the widening the
+  docs forbid — [V] — the corrupt seat-policy row re-opened a lockdown
+  seat's safe tools (RT-423) — unit 1
+- A unit mismatch is a silent content loss — [V] — quotas documented in
+  characters and charged in bytes dropped non-ASCII context items
+  (RT-424) — unit 1
+- A cursor that jumps over pending items DELETES them, and the fix must hold
+  with a MONOTONIC cursor — [V] — the newest-N collection plus a max-advance
+  left the older backlog below the cursor forever (RT-425) — unit 1
+- A guard that compares a NAME misses every ALIAS of it — [V] — the delete
+  guard compared the slug while the resolver treats "" as "default", so the
+  default board's database was deleted (RT-421) — unit 1
+- A field name can make a wrong doc BELIEVABLE — [V] — the injector held
+  the org sibling's path in a field called `app_db`, and the struct's doc
+  agreed with the misnomer (RT-436) — unit 1
+- A BEHAVIORAL test alone cannot catch a DOC regression — [V] — the cosine's
+  first mutant restored the false range claim and the behavioral test still
+  passed (RT-438) — unit 1
+- A doc that lists an enumeration can be CHECKED AGAINST THE CODE — [V] —
+  the annotation kinds are derived from the emitters and compared with the
+  note (RT-435) — unit 1
+- An operator-facing message with a negative number is a bug — [V] — "-1s
+  without heartbeat" was the diagnostic for the case it exists to flag
+  (RT-429) — unit 1
+- A doc that names only one exception can hide a second, absolute one — [V]
+  — the `Yolo` mode's doc omitted the seat's own deny list (RT-434) —
+  unit 1
+- A dated correction that QUOTES the claim re-creates it — [V] — five
+  instances this round, each fixed by paraphrasing (RT-426, RT-431, RT-432,
+  RT-436, RT-438) — unit 1
+- A needle that spans a message's own line break matches NOTHING — [V] —
+  four instances this round, each fixed by a single-line fragment
+  (RT-426, RT-430, RT-434, RT-436) — unit 1
+- A PART-reverted fix can be MASKED by another path — [V] — the roll-over
+  pool re-admitted the item the class-quota mutant had rejected (RT-424) —
+  unit 1
+- The peer takes ledger ids CONCURRENTLY; the later publisher renumbers
+  forward and records an ID NOTE — [V] — RT-432 became RT-433 (RT-433) —
+  unit 1
