@@ -126,7 +126,15 @@ pub fn render_settings_screen(frame: &mut Frame, screen: &SettingsScreen, area: 
     frame.render_widget(desc_para, description_area);
 
     // Footer
-    let footer = if screen.edit_field.is_some() {
+    let footer = if let Some(err) = &screen.apply_error {
+        // (iter-1948) A state-gated footer: while an apply error stands, the
+        // footer IS the error, so the operator cannot miss that the value they
+        // typed was not taken. The key hints return once it clears.
+        Line::from(Span::styled(
+            err.clone(),
+            Style::default().fg(theme_colors::warning()),
+        ))
+    } else if screen.edit_field.is_some() {
         Line::from(vec![
             Span::styled(
                 " Enter ",

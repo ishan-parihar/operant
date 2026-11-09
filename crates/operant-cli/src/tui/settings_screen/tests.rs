@@ -463,3 +463,88 @@ fn the_settings_list_paints_the_selected_row_on_a_short_terminal() {
         );
     }
 }
+
+/// (iter-1948) A settings screen that accepts an edit must say when it could
+/// not take effect.
+///
+/// The edit buffer accepts ANY character (`KeyCode::Char(c) => push(c)`), and
+/// the three numeric rows resolved with `if let Ok(n) = value.parse()`. So
+/// `/settings` → "Max Tokens" → type `abc` → Enter saved nothing and said
+/// nothing: the config kept its old value, the displayed value kept the old
+/// string, and the operator had no way to tell their edit had been dropped.
+/// Same class as /rewind's silently discarded `[N]` (iter-1947).
+#[test]
+fn an_unreadable_number_says_so_instead_of_saving_silently() {
+    let (mut config, mut settings) = (AppConfig::default(), Settings::default());
+
+    // A valid number still applies and clears the error.
+    let mut screen = SettingsScreen::new();
+    screen
+        .pending_changes
+        .insert("max_tokens".to_string(), "4242".to_string());
+    screen.apply_and_save(&mut config, &mut settings);
+    assert_eq!(config.agent.context_window, 4242);
+    assert_eq!(screen.apply_error, None, "a valid value reports no error");
+
+    // An invalid one is reported, and nothing is saved.
+    let (mut config, mut settings) = (AppConfig::default(), Settings::default());
+    let mut screen = SettingsScreen::new();
+    screen
+        .pending_changes
+        .insert("max_tokens".to_string(), "abc".to_string());
+    screen.apply_and_save(&mut config, &mut settings);
+    assert_eq!(
+        config.agent.context_window,
+        AppConfig::default().agent.context_window,
+        "an unreadable value must not touch the config"
+    );
+    let err = screen.apply_error.clone().expect("and must say why");
+    assert!(
+        err.contains("Max Tokens") && err.contains("abc"),
+        "the error names the row and the value the operator typed: {err:?}"
+    );
+    assert!(
+        screen.pending_changes.is_empty(),
+        "a failed apply is still consumed, so it cannot be retried forever"
+    );
+
+    // The PAINTED half: the operator receives the footer, so the footer IS
+    // the error while one stands, and the key hints return once it clears.
+    let mut screen = SettingsScreen::new();
+    fn painted(screen: &SettingsScreen) -> String {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        terminal
+            .draw(|frame| {
+                render_settings_screen(frame, screen, frame.area());
+            })
+            .unwrap();
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol().chars().next().unwrap_or(' '))
+            .collect()
+    }
+
+    screen.open();
+    screen.apply_error =
+        Some("Not a number: Max Tokens \"abc\" — kept the previous value".to_string());
+    let errored = painted(&screen);
+    assert!(
+        errored.contains("abc"),
+        "the painted footer carries the unread value: {errored:?}"
+    );
+    assert!(
+        !errored.contains("navigate"),
+        "and the key hints yield to it while it stands: {errored:?}"
+    );
+    screen.apply_error = None;
+    let cleared = painted(&screen);
+    assert!(
+        cleared.contains("navigate"),
+        "the key hints return once no error stands: {cleared:?}"
+    );
+}

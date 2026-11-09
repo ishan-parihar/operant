@@ -16,6 +16,7 @@ impl SettingsScreen {
             edit_value: String::new(),
             settings_snapshot: settings_snapshot.clone(),
             pending_changes: HashMap::new(),
+            apply_error: None,
             output_style: "default".to_string(),
             reduce_motion: false,
             show_cwd: true,
@@ -118,11 +119,16 @@ impl SettingsScreen {
 
     /// Apply all pending changes to settings and persist them.
     pub fn apply_and_save(&mut self, config: &mut AppConfig, settings: &mut Settings) {
+        // (iter-1948) A new apply supersedes the previous verdict.
+        self.apply_error = None;
+        let mut unread: Vec<String> = Vec::new();
         for (field, value) in &self.pending_changes {
             match field.as_str() {
                 "max_tokens" => {
                     if let Ok(n) = value.parse::<usize>() {
                         config.agent.context_window = n;
+                    } else {
+                        unread.push(format!("Max Tokens \"{value}\""));
                     }
                 }
                 "output_style" => {
@@ -136,12 +142,16 @@ impl SettingsScreen {
                     if let Ok(n) = value.parse::<f64>() {
                         config.agent.context_compression_threshold = n;
                         self.compact_threshold = value.clone();
+                    } else {
+                        unread.push(format!("Auto-compact threshold \"{value}\""));
                     }
                 }
                 "fileAutocompleteLimit" => {
                     if let Ok(n) = value.parse::<usize>() {
                         settings.config.file_autocomplete_limit = n;
                         self.file_autocomplete_limit = value.clone();
+                    } else {
+                        unread.push(format!("File autocomplete limit \"{value}\""));
                     }
                 }
                 "fileAutocompleteShowHiddenFiles" => {
@@ -184,6 +194,19 @@ impl SettingsScreen {
         self.settings_snapshot.effort_level = settings.effort_level.clone();
         self.settings_snapshot.vim_enabled = settings.vim_enabled;
 
+        if !unread.is_empty() {
+            // The edit was accepted, so the operator has every reason to
+            // believe it took effect. Saying nothing makes the row a control
+            // that silently does nothing. The failed entries are consumed
+            // with the rest: keeping them pending would make every later
+            // save re-report a value the operator has already been told about.
+            self.apply_error = Some(format!(
+                "Not a number: {} — kept the previous value, nothing was saved.",
+                unread.join(", ")
+            ));
+            self.pending_changes.clear();
+            return;
+        }
         let _ = self.settings_snapshot.save_sync();
         self.pending_changes.clear();
     }

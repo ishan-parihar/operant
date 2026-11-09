@@ -43,6 +43,10 @@ pub struct SettingsScreen {
     pub settings_snapshot: Settings,
     /// Pending changes (field_name → new_value string).
     pub pending_changes: HashMap<String, String>,
+    /// Why the last apply could not take effect — the settings screen accepted
+    /// the operator's edit and then silently discarded it, which is the same
+    /// "an unread argument made that a lie" class /rewind had (iter-1947).
+    pub apply_error: Option<String>,
 
     // ---- Real settings fields ----
     pub output_style: String,
