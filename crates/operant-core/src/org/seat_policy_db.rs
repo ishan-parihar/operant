@@ -17,6 +17,12 @@
 //! typo'd `lockdown` degrading to `standard` would silently re-open tools a
 //! seat was shut out of, which is the exact widening the bylaws exists to
 //! make impossible.
+//!
+//! RT-423: the READ was always an error, but the run path turned that error
+//! into "no policy" — which is the widening this section forbids (no policy
+//! means ungoverned: every safe tool runs). The seam now FAILS CLOSED: a
+//! corrupt row reads as lockdown, so every tool escalates to a human, and
+//! the log says so.
 
 use crate::error::Error;
 use crate::org::seat_policy::{SeatMode, SeatPolicy, SeatPolicySource};
@@ -246,10 +252,22 @@ impl SeatPolicySource for SeatPolicyDb {
         match self.get(employee_id) {
             Ok(policy) => policy,
             Err(e) => {
+                // RT-423: the run path must NOT widen. A corrupt row (a
+                // typo'd mode spelling, say) used to become "no policy" —
+                // ungoverned — so a lockdown seat's SAFE tools ran again,
+                // which is the exact widening this module's own doc says the
+                // bylaws exists to make impossible. Fail CLOSED instead: the
+                // seat escalates everything, which is lockdown's posture for
+                // a tool no allow list names. The error is still logged
+                // loudly; now the verdict matches the log.
                 tracing::error!(
-                    "seat policy read failed for {employee_id}; treating as ungoverned: {e}"
+                    "seat policy read failed for {employee_id}; failing closed (every tool escalates): {e}"
                 );
-                None
+                Some(SeatPolicy {
+                    mode: SeatMode::Lockdown,
+                    allow: Vec::new(),
+                    deny: Vec::new(),
+                })
             }
         }
     }
@@ -283,6 +301,52 @@ mod tests {
         );
         db.upsert("emp-1", &p).expect("upsert");
         assert_eq!(db.get("emp-1").expect("get"), Some(p));
+    }
+
+    /// RT-423: a CORRUPT policy row must not widen the seat to "no policy".
+    /// BEHAVIORAL: the row is written raw (a typo'd mode spelling), so the
+    /// read really fails, and the verdict is measured through `decide` — a
+    /// safe tool, which an ungoverned seat would RUN.
+    #[test]
+    fn a_corrupt_row_fails_closed_instead_of_becoming_ungoverned() {
+        let db = mem_db();
+        {
+            let conn = db.conn().lock().expect("lock the connection");
+            conn.execute(
+                "INSERT INTO seat_policies \
+                 (employee_id, mode, allow, deny, delegation, updated_at) \
+                 VALUES (?1, ?2, '[]', '[]', NULL, ?3)",
+                rusqlite::params!["emp-1", "lockdownn", "2026-01-01T00:00:00Z"],
+            )
+            .expect("write a raw row with a typo'd mode spelling");
+        }
+
+        // The read itself is an error — that part was always true.
+        assert!(
+            db.get("emp-1").is_err(),
+            "an unknown mode spelling must be an error on read"
+        );
+
+        // And the run path must NOT turn that into "no policy".
+        let policy = db
+            .policy_for("emp-1")
+            .expect("a corrupt row must still yield a policy — it fails closed");
+        assert_eq!(
+            policy.mode,
+            SeatMode::Lockdown,
+            "the corrupt row must fail closed, not widen to ungoverned"
+        );
+        let verdict = crate::org::seat_policy::decide(
+            Some(&policy),
+            "content_read",
+            false,
+            false, // a SAFE tool: an ungoverned seat would run it
+            false,
+        );
+        assert!(
+            matches!(verdict, crate::org::seat_policy::SeatDecision::Escalate(_)),
+            "a safe tool must escalate under a corrupt row, not run: {verdict:?}"
+        );
     }
 
     #[test]
@@ -334,9 +398,23 @@ mod tests {
             err.to_string().contains("lockdwn"),
             "error must name the raw string: {err}"
         );
-        // And the storage seam reports the same refusal rather than
-        // silently widening the seat.
-        assert_eq!(db.policy_for("emp-1"), None);
+        // And the storage seam does not silently widen the seat. RT-423:
+        // this assertion used to expect `None` — but `None` IS the
+        // widening (no policy = ungoverned = every safe tool runs), which
+        // is what the sentence above claimed to prevent. The seam now
+        // fails CLOSED: a corrupt row reads as lockdown, so every tool
+        // escalates.
+        let policy = db
+            .policy_for("emp-1")
+            .expect("a corrupt row must fail closed, not become ungoverned");
+        assert_eq!(policy.mode, SeatMode::Lockdown);
+        assert!(
+            matches!(
+                crate::org::seat_policy::decide(Some(&policy), "content_read", false, false, false),
+                crate::org::seat_policy::SeatDecision::Escalate(_)
+            ),
+            "a safe tool must escalate under a corrupt row"
+        );
     }
 
     #[test]
