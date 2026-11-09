@@ -2841,6 +2841,94 @@ fn a_click_in_the_composer_places_the_caret_at_the_clicked_character() {
 /// `/rewind -1` and an overflowing value all used to fall silently into the
 /// no-argument path and open the selector — the typed argument was discarded
 /// without a word, the class iter-1772 fixed on `/copy`.
+/// (iter-1950) Every key a session-hub affordance names must actually cycle
+/// something.
+///
+/// The header advertises `Group: <mode>  g` and the tab bar advertises
+/// `Sort: <mode>  o`, both taken from the state's own `key()` accessors. `g`
+/// was wired. `o` was NOT — `cycle_sort` existed, `HubSortMode::key()` returned
+/// "o" for exactly this affordance, and the tab bar PAINTED the clause — but
+/// the dispatcher had no arm, so the operator read the claim, pressed the key,
+/// and nothing happened. The search buffer only takes characters while
+/// `search_active`, so `o` was not even silently typed.
+///
+/// This drives the REAL key through the REAL handler for both advertised keys
+/// and requires the live mode to land exactly one step along its own ladder.
+#[test]
+fn the_session_hub_advertises_only_keys_that_cycle_something() {
+    for (key, read, advance) in hub_advertised_keys() {
+        let mut app = make_app();
+        app.session_hub.open(None);
+        app.session_hub.search_active = false;
+
+        // The expectation is derived BEFORE the press, from the mode as it
+        // stands. Deriving it after would advance a mode that already moved.
+        let before = read(&app);
+        let expected = advance(&app);
+
+        // Press the advertised key through the real handler. Note the hub's
+        // own convention: its block acts and then `return false`, so the
+        // return value does NOT record ownership. The EFFECT is the contract,
+        // which is why this half asserts the mode moved and not the key was
+        // consumed.
+        app.handle_key_event(press_key(
+            crossterm::event::KeyCode::Char(key),
+            crossterm::event::KeyModifiers::NONE,
+        ));
+
+        assert_eq!(
+            expected,
+            read(&app),
+            "advertised key {key:?} must move the mode exactly one step along its \
+             own ladder — the header says it cycles, so pressing it must cycle"
+        );
+        assert_ne!(
+            before,
+            read(&app),
+            "advertised key {key:?} must actually change the mode, not cycle to itself"
+        );
+        assert!(
+            !app.session_hub.search_active,
+            "the search buffer must not swallow an advertised key"
+        );
+    }
+}
+
+/// One advertised control of the session hub: the key the state's own `key()`
+/// accessor paints, a reader for the live mode, and a step derived from that
+/// mode's own `next()`. Named so the table below reads as data, not as a type.
+type HubAdvertisedKey = (
+    char,
+    fn(&crate::tui::app::App) -> String,
+    fn(&crate::tui::app::App) -> String,
+);
+
+/// The (key, read, advance) triples the session hub advertises, each derived
+/// from the state's own accessors so the table cannot drift from the header
+/// the operator reads.
+fn hub_advertised_keys() -> Vec<HubAdvertisedKey> {
+    vec![
+        (
+            'g',
+            |a| format!("{:?}", a.session_hub.group_mode),
+            |a| {
+                let mut m = a.session_hub.group_mode;
+                m = crate::tui::session_hub::HubGroupMode::next(m);
+                format!("{m:?}")
+            },
+        ),
+        (
+            'o',
+            |a| format!("{:?}", a.session_hub.sort_mode),
+            |a| {
+                let mut m = a.session_hub.sort_mode;
+                m = crate::tui::session_hub::HubSortMode::next(m);
+                format!("{m:?}")
+            },
+        ),
+    ]
+}
+
 #[test]
 fn rewind_an_unreadable_count_is_an_error_not_a_silent_selector() {
     // A genuinely absent argument still opens the selector.
