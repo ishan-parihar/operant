@@ -3177,15 +3177,21 @@ fn restore_default_sigpipe_disposition() {
 ///
 /// The CLI restores the default disposition so a closed pipe kills the tool
 /// quietly — the Unix-tool behaviour `operant doctor | head -5` needs. A
-/// DAEMON must NOT have that disposition: when a CHILD closes its pipe, the
-/// write has to return EPIPE so the caller can report it, not raise SIGPIPE
-/// and kill the whole process.
+/// DAEMON or an interactive SESSION must NOT have that disposition: when a
+/// CHILD closes its pipe, the write has to return EPIPE so the caller can
+/// report it, not raise SIGPIPE and kill the whole process.
 ///
 /// MEASURED on this host (2026-11-07): the gateway writes NDJSON to the AFT
-/// bridge's child on stdin; that child prints its help text and exits, so
+/// bridge's child on stdin; that child printed its help text and exited, so
 /// the write hit a closed pipe and the gateway DIED of SIGPIPE seconds after
 /// every start — a crash loop of 870+ restarts, with the operator's session
 /// unable to stay up.
+///
+/// MEASURED on this host (2026-11-09): the same mechanism killed the TUI
+/// itself. `operant` with no subcommand died ~1.7 s after launch on every
+/// run, killed by signal 13 (SIGPIPE) before the first frame rendered — the
+/// session arms below now ignore SIGPIPE too, but the sigpipe-arm guard
+/// `the_interactive_sessions_ignore_sigpipe` keeps them that way.
 fn ignore_sigpipe_disposition() {
     #[cfg(unix)]
     // Safety: `signal` is async-signal-safe; this runs before the daemon's
@@ -3361,6 +3367,10 @@ async fn run(
             record_trajectory,
             moa,
         }) => {
+            // Long-lived session: a child that closes its pipe must be a
+            // reportable error, not the death of the process (see
+            // `ignore_sigpipe_disposition`).
+            ignore_sigpipe_disposition();
             if *autonomous {
                 if query.is_some() {
                     anyhow::bail!(
@@ -3397,6 +3407,10 @@ async fn run(
             }
         }
         Some(Commands::Chat { system }) => {
+            // Long-lived session: a child that closes its pipe must be a
+            // reportable error, not the death of the process (see
+            // `ignore_sigpipe_disposition`).
+            ignore_sigpipe_disposition();
             if loaded.config.tui.rich_output && tui_available() {
                 TuiApp::enter(
                     loaded.config.clone(),
@@ -3417,6 +3431,10 @@ async fn run(
             cmd_tools::handle_tools_command(&loaded.config, cmd.clone()).await?;
         }
         Some(Commands::Autonomous { system }) => {
+            // Long-lived session: a child that closes its pipe must be a
+            // reportable error, not the death of the process (see
+            // `ignore_sigpipe_disposition`).
+            ignore_sigpipe_disposition();
             autonomous::run_autonomous(loaded.config.clone(), system.clone()).await?;
         }
         Some(Commands::Test { tool_name, args }) => {
@@ -3606,7 +3624,12 @@ async fn run(
             println!("Razorpay (UPI) : https://rzp.io/rzp/ishan-parihar");
         }
         None => {
-            // No command provided - launch TUI in interactive mode
+            // No command provided - launch TUI in interactive mode.
+            // A long-lived session keeps SIGPIPE ignored: every request to an
+            // AFT bridge or MCP stdio server is written through a child pipe,
+            // and a child that exits first turns the next write into a signal
+            // that kills the process (see `ignore_sigpipe_disposition`).
+            ignore_sigpipe_disposition();
             if loaded.config.tui.rich_output {
                 TuiApp::enter(
                     loaded.config.clone(),
@@ -3650,6 +3673,32 @@ mod tests {
             source.contains(&needle),
             "the gateway arm must ignore SIGPIPE — a child that closes its \
              pipe must produce a reportable error, not the death of the daemon"
+        );
+    }
+
+    /// THE INTERACTIVE SESSIONS MUST NOT DIE OF SIGPIPE.
+    ///
+    /// MEASURED (2026-11-09): `operant` with no subcommand — the TUI — was
+    /// killed by SIGPIPE ~1.7 s after launch, on every run, before the first
+    /// frame rendered. `main` restores SIG_DFL (so `operant doctor | head -5`
+    /// dies like `yes | head`), and only the gateway daemon arm re-ignored
+    /// SIGPIPE. The TUI writes NDJSON to the AFT bridge's child on stdin, so
+    /// a child that exits first turned the next write into signal 13.
+    ///
+    /// The four long-lived session arms must therefore ignore SIGPIPE too:
+    /// bare `operant`, `chat`, `run`, and `autonomous` (each also covers its
+    /// non-TUI fallback). The needle is built by concatenation so this test's
+    /// own source cannot satisfy it.
+    #[test]
+    fn the_interactive_sessions_ignore_sigpipe() {
+        let source = include_str!("main.rs");
+        let needle = format!("ignore_sigpipe_{}();", "disposition");
+        let call_sites = source.matches(&needle).count();
+        assert!(
+            call_sites >= 5,
+            "the gateway daemon arm plus the four long-lived session arms \
+             (bare `operant`, chat, run, autonomous) must ignore SIGPIPE — \
+             found {call_sites} call site(s)"
         );
     }
 

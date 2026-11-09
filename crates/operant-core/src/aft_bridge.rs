@@ -156,11 +156,23 @@ pub async fn resolve_aft_binary() -> Result<PathBuf> {
                 .arg("--version")
                 .stdin(std::process::Stdio::null())
                 .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::null())
+                .stderr(std::process::Stdio::piped())
                 .output()
         })
         .await;
-        let healthy = matches!(ran, Ok(Ok(out)) if out.status.success());
+        let healthy = match ran {
+            Ok(Ok(out)) => {
+                let reported = format!(
+                    "{}{}",
+                    String::from_utf8_lossy(&out.stdout),
+                    String::from_utf8_lossy(&out.stderr)
+                );
+                path_probe_is_servable(out.status.success(), &reported)
+            }
+            // A spawn failure or a probe task that was cancelled proves
+            // nothing about the candidate; treat it as unusable.
+            Ok(Err(_)) | Err(_) => false,
+        };
         if healthy {
             return Ok(path);
         }
@@ -209,6 +221,29 @@ pub async fn resolve_aft_binary() -> Result<PathBuf> {
 
 fn operant_home() -> PathBuf {
     crate::platform::operant_home()
+}
+
+/// Whether a PATH `aft --version` probe proves the candidate can serve
+/// `aft bridge`.
+///
+/// Exit status alone is not enough. MEASURED on this host (2026-11-09): the
+/// `@cortexkit/aft` npm CLI is first on PATH, prints its own banner plus
+/// `aft binary   not installed`, and exits 0. Accepted as healthy, every
+/// later `aft bridge` spawn then printed that help text and exited, so the
+/// bridge's first NDJSON write hit a closed pipe — with the CLI's SIG_DFL
+/// disposition the whole TUI died of SIGPIPE ~1.7 s after launch.
+///
+/// The npm CLI names its own state, so a probe that reports the binary as
+/// not installed is rejected here and resolution falls through to the
+/// managed cache (which holds the real binary). stdin stays
+/// `Stdio::null()`: writing a protocol ping to a child that has already
+/// exited would raise SIGPIPE before any error could be returned.
+fn path_probe_is_servable(status_ok: bool, version_output: &str) -> bool {
+    if !status_ok {
+        return false;
+    }
+    let reported = version_output.to_lowercase();
+    !reported.contains("not installed")
 }
 
 // Negative-resolution cache: after a failed auto-download we write a marker
@@ -1345,6 +1380,43 @@ mod tests {
             "v0.49.x publishes raw binaries, not tarballs — got {}",
             name
         );
+    }
+
+    #[test]
+    fn a_path_probe_that_reports_the_binary_uninstalled_is_not_servable() {
+        // The @cortexkit/aft npm CLI, verbatim from this host's PATH: it exits
+        // 0 and prints its own banner, which is what made the old status-only
+        // probe accept it.
+        let npm_cli = "  AFT versions\n\n  @cortexkit/aft (this CLI)   v0.52.1\n  aft binary                  not installed\n";
+        assert!(
+            !path_probe_is_servable(true, npm_cli),
+            "a wrapper CLI that says its binary is not installed can never serve `aft bridge`"
+        );
+    }
+
+    #[test]
+    fn a_path_probe_from_the_real_binary_is_servable() {
+        // The real cached binary answers `--version` with just its version.
+        assert!(path_probe_is_servable(true, "aft 0.63.5\n"));
+    }
+
+    #[test]
+    fn a_failed_path_probe_is_never_servable() {
+        // Exit status still gates the answer: a non-zero probe is rejected no
+        // matter what it printed (an orphaned mise shim cannot even run).
+        assert!(!path_probe_is_servable(false, "aft 0.63.5\n"));
+        // A cancelled probe task or a spawn failure proves nothing about the
+        // candidate; the caller treats both as unusable.
+        assert!(!path_probe_is_servable(false, ""));
+    }
+
+    #[test]
+    fn a_successful_probe_with_no_version_banner_is_servable() {
+        // Empty output on success is NOT evidence of a broken binary: the
+        // real server prints nothing for `--version` on some builds, and
+        // rejecting it would silently disable AFT for those users.
+        assert!(path_probe_is_servable(true, ""));
+        assert!(path_probe_is_servable(true, "\n"));
     }
 
     #[tokio::test]
