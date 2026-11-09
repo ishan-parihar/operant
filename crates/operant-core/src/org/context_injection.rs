@@ -605,12 +605,20 @@ impl ContextInjector {
             let mut used_class = 0usize;
             for (score, item) in class_items {
                 let text = truncate_chars(&item.text, MAX_ITEM_CHARS);
+                // RT-424: the quotas are CHARACTERS (`total_char_cap` is
+                // documented "Hard ceiling for the whole rendered section,
+                // chars"; the per-aspect quotas are "char quotas"), but the
+                // accounting charged `text.len()` — BYTES. Non-ASCII text was
+                // charged up to 4x its character count, so a DM that fits the
+                // 800-char quota in characters overflowed it in bytes and
+                // was pooled or dropped.
+                let text_chars = text.chars().count();
                 let directive_exempt = class == ContextClass::Global && item.author == "premiere";
-                if !directive_exempt && used_class + text.len() > quota_for(class) {
+                if !directive_exempt && used_class + text_chars > quota_for(class) {
                     pool.push((score, item));
                     continue;
                 }
-                if used_total + text.len() > s.total_char_cap {
+                if used_total + text_chars > s.total_char_cap {
                     // `continue`, not `break`: items are ranked by SCORE, not
                     // length, so abandoning the rest of the class on one long
                     // item starved shorter items that still fit the remaining
@@ -620,8 +628,8 @@ impl ContextInjector {
                     // there too.
                     continue;
                 }
-                used_class += text.len();
-                used_total += text.len();
+                used_class += text_chars;
+                used_total += text_chars;
                 chosen.push(item);
             }
         }
@@ -630,10 +638,12 @@ impl ContextInjector {
         for (score, item) in pool {
             let text = truncate_chars(&item.text, MAX_ITEM_CHARS);
             let _ = score;
-            if used_total + text.len() > s.total_char_cap {
+            // RT-424: chars, not bytes — the cap is documented in chars.
+            let text_chars = text.chars().count();
+            if used_total + text_chars > s.total_char_cap {
                 break;
             }
-            used_total += text.len();
+            used_total += text_chars;
             chosen.push(item);
         }
         if chosen.is_empty() {
@@ -949,6 +959,59 @@ mod tests {
         assert_eq!(
             injector.render_section("premiere", None, "PROMPT", &[]),
             "PROMPT"
+        );
+    }
+}
+
+#[cfg(test)]
+mod rt424_tests {
+    use super::*;
+
+    /// RT-424: the quotas are CHARACTERS — `total_char_cap` is documented
+    /// "Hard ceiling for the whole rendered section, chars", the per-aspect
+    /// quotas are "char quotas" — but the accounting charged `text.len()`,
+    /// which is BYTES. Non-ASCII text was charged up to 4x its character
+    /// count.
+    ///
+    /// BEHAVIORAL: a DM of 40 four-byte characters (160 bytes) fits a
+    /// 60-character quota, so it must be rendered. Under the byte
+    /// accounting it overflowed the class quota, went to the roll-over
+    /// pool, and then overflowed the total cap too — so it was DROPPED and
+    /// the section rendered EMPTY.
+    ///
+    /// What this pins: the COMBINED accounting. A partial revert (only the
+    /// class-quota charge in bytes) is masked by the pool, which charges the
+    /// same unit and would re-admit the item — the rendered output cannot
+    /// tell "admitted by the class quota" from "admitted by the pool".
+    #[test]
+    fn a_non_ascii_dm_is_charged_in_characters_not_bytes() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut settings = crate::config::ContextInjectionSettings::default();
+        settings.dm_quota = 60;
+        settings.total_char_cap = 60;
+        let injector =
+            ContextInjector::open(&dir.path().join("app.sqlite"), settings).expect("injector");
+
+        let text = "🙂".repeat(40);
+        assert_eq!(text.chars().count(), 40, "the fixture is 40 CHARACTERS");
+        assert_eq!(
+            text.len(),
+            160,
+            "and 160 BYTES — the two must not be confused"
+        );
+
+        let item = ContextItem {
+            class: ContextClass::Dm,
+            author: "peer".into(),
+            ts: chrono::Utc::now().timestamp(),
+            text,
+            hash: 1,
+        };
+        let rendered = injector.render(vec![item], None);
+        assert!(
+            rendered.contains("🙂"),
+            "a 40-character DM fits a 60-character quota and must be rendered; \
+             got: {rendered}"
         );
     }
 }
