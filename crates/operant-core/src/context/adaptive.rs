@@ -61,6 +61,12 @@ struct RetrievalState {
     rounds_done: usize,
     evidence_node_ids: Vec<i64>,
     last_used_millis: u64,
+    /// RT-428: the retrieval met its evidence requirement (early
+    /// completion). The round reported `complete: true`, but the state did
+    /// not remember it — so `next_round`'s "already completed" guard could
+    /// never fire for an early completion, and a finished retrieval ran
+    /// another recall.
+    complete: bool,
 }
 
 /// Multi-round retrieval registry. Rounds are stateful and interactive: the
@@ -118,6 +124,7 @@ impl AdaptiveRetrievalRegistry {
                     rounds_done: 0,
                     evidence_node_ids: Vec::new(),
                     last_used_millis: Self::now_millis(),
+                    complete: false,
                 },
             );
         }
@@ -145,7 +152,10 @@ impl AdaptiveRetrievalRegistry {
             let Some(state) = states.get_mut(retrieval_id) else {
                 return Ok(None);
             };
-            if state.rounds_done >= MAX_ROUNDS {
+            // RT-428: "the retrieval already completed" — an early
+            // completion (its evidence requirement met) counts, not only
+            // the round cap.
+            if state.complete || state.rounds_done >= MAX_ROUNDS {
                 return Ok(None);
             }
             state.last_used_millis = Self::now_millis();
@@ -259,6 +269,10 @@ impl AdaptiveRetrievalRegistry {
         if let Some(state) = states.get_mut(retrieval_id) {
             state.rounds_done = round_number;
             state.last_used_millis = Self::now_millis();
+            // RT-428: the completion the round just reported is remembered.
+            if complete {
+                state.complete = true;
+            }
             for e in evidence {
                 if !state.evidence_node_ids.contains(&e.node_id) {
                     state.evidence_node_ids.push(e.node_id);
@@ -354,6 +368,43 @@ mod tests {
             "evidence must contain the exact phrase"
         );
         assert!(round.complete, "requirement of 1 met in round 1");
+    }
+
+    /// RT-428: `next_round` promises `None` "when the id is unknown or the
+    /// retrieval already completed" — but an EARLY completion (the evidence
+    /// requirement met in round 1) was never recorded, so the guard could
+    /// not fire for it and a finished retrieval ran another recall.
+    #[tokio::test]
+    async fn a_completed_retrieval_does_not_continue() {
+        let engine = test_engine();
+        let session = "sess_adaptive_completed";
+        seed(
+            &engine,
+            session,
+            &["The magic number for this session is forty-two-point-seven."],
+        )
+        .await;
+        let reg = AdaptiveRetrievalRegistry::new();
+        let round = reg
+            .start(&engine, Some(session), "forty-two-point-seven", 1)
+            .await
+            .unwrap();
+        assert!(round.complete, "requirement of 1 met in round 1");
+
+        let next = reg
+            .next_round(
+                &engine,
+                Some(session),
+                &round.retrieval_id,
+                Some("anything"),
+            )
+            .await
+            .unwrap();
+        assert!(
+            next.is_none(),
+            "a completed retrieval must not continue — the round cap is 3, so \
+             only the completion can stop it"
+        );
     }
 
     /// RT-295: a broken recall engine must not read as "zero hits".
