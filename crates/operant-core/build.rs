@@ -4,13 +4,23 @@ fn main() {
     // `local/lib/libsonic.a`, which ld64 rejected on macOS), then deleted
     // outright — because untracking that archive (iter-499) removed the only
     // copy any fresh checkout could link, and `Native (Linux x86_64)` failed
-    // with `unable to find library -lsonic`. Nothing references a sonic
-    // symbol: espeak-rs-sys links its own bundled speechPlayer/espeak-ng/ucd
-    // (plus per-platform extras), libsonic is an audio-BACKEND dependency,
-    // and the backend is stubbed out below. Proven by deletion twice: the
-    // Linux link is clean with the flag gone AND with no sonic artifact on
-    // disk at all. If an environment ever builds the real audio backend, the
-    // symbols come back — re-add the flag then, not before.
+    // with `unable to find library -lsonic`.
+    //
+    // RT-416 corrected the premise that deletion rested on. "Nothing
+    // references a sonic symbol" was true only where espeak-ng's cmake build
+    // does NOT detect a system libsonic: the detection is automatic, so on
+    // any host with libsonic installed, espeak-ng compiles its sonic
+    // speed-up path (USE_LIBSONIC) and the binary needs -lsonic — which
+    // espeak-rs-sys's build script never forwards (it emits only the
+    // libraries it built itself). The link then fails with undefined
+    // sonic* symbols, and operant-cli does not build at all.
+    //
+    // The fix is the stub file below, not the flag: espeak's audio backend
+    // is stubbed here anyway, so the speed-up has nothing to speed up, and
+    // stubbing it needs neither the system library nor its header on any
+    // host. The flag stays out — a host with a real audio backend and a real
+    // libsonic can then link the real one by adding the flag AND dropping
+    // the stub, which is a deliberate change, not a default.
     //
     // The payload dir is a machine-local prerequisite: repo-local `local/lib`
     // (gitignored) or $OPERANT_NATIVE_LIB_DIR. The search path MUST come from
