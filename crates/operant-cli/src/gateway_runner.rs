@@ -1644,8 +1644,15 @@ fn resolve_seat_escalation_on_deny(req: &operant_core::agent::ToolPermissionRequ
         tracing::warn!(request = %ask.request_id, "no seat approver installed — the denial is not recorded");
         return;
     };
-    if let Err(e) = approver.deny(ask) {
-        tracing::warn!(request = %ask.request_id, error = %e, "recording the denial failed");
+    // RT-427: the denial now carries its resolution (the resolver's name);
+    // this path records it rather than dropping it.
+    match approver.deny(ask) {
+        Ok(resolution) => {
+            tracing::info!(request = %ask.request_id, resolution = %resolution, "seat escalation denied");
+        }
+        Err(e) => {
+            tracing::warn!(request = %ask.request_id, error = %e, "recording the denial failed");
+        }
     }
 }
 
@@ -1661,8 +1668,13 @@ fn resolve_seat_escalation_on_expire(req: &operant_core::agent::ToolPermissionRe
         tracing::warn!(request = %ask.request_id, "no seat approver installed — the lapse is not recorded");
         return;
     };
-    if let Err(e) = approver.expire(ask) {
-        tracing::warn!(request = %ask.request_id, error = %e, "recording the lapse failed");
+    match approver.expire(ask) {
+        Ok(resolution) => {
+            tracing::info!(request = %ask.request_id, resolution = %resolution, "seat escalation lapsed");
+        }
+        Err(e) => {
+            tracing::warn!(request = %ask.request_id, error = %e, "recording the lapse failed");
+        }
     }
 }
 

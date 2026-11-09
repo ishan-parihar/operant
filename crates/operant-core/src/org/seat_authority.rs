@@ -139,16 +139,28 @@ impl SeatApprover {
     }
 
     /// Resolve an escalation by denying it.
-    pub fn deny(&self, ask: &SeatEscalation) -> Result<(), String> {
-        let _ = ask;
-        Ok(())
+    ///
+    /// RT-427: the denial produced NO resolution string, so the resolver's
+    /// name — which this struct's doc promises is "recorded on the
+    /// resolution string an operator sees" — was nowhere on a denial. The
+    /// string is the same shape as the approval's.
+    pub fn deny(&self, ask: &SeatEscalation) -> Result<String, String> {
+        Ok(format!(
+            "denied by {}: {} may not run {} ({})",
+            self.approver_id, ask.employee_id, ask.tool, ask.why
+        ))
     }
 
     /// A lapsed ask (60s interactive window, or an unattended run) expires
     /// unresolved — the waiting tool call already saw its denial.
-    pub fn expire(&self, ask: &SeatEscalation) -> Result<(), String> {
-        let _ = ask;
-        Ok(())
+    ///
+    /// RT-427: the lapse carries its resolution string too: nobody decided,
+    /// but the record still names the approver the ask sat with.
+    pub fn expire(&self, ask: &SeatEscalation) -> Result<String, String> {
+        Ok(format!(
+            "expired without a decision (approver {}): {} did not resolve {} ({})",
+            self.approver_id, ask.employee_id, ask.tool, ask.why
+        ))
     }
 }
 
@@ -216,5 +228,53 @@ mod tests {
         assert!(approver.approve(&ask).is_ok());
         assert!(approver.deny(&ask).is_ok());
         assert!(approver.expire(&ask).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod rt427_tests {
+    use super::*;
+
+    /// RT-427: the struct's doc promises "The resolver's name is still
+    /// recorded on the resolution string an operator sees" — but `deny` and
+    /// `expire` returned `Ok(())`, so a denial carried NO resolution string
+    /// and the resolver was named nowhere. BEHAVIORAL: every resolution
+    /// names the approver.
+    #[test]
+    fn every_resolution_names_the_resolver() {
+        let approver = SeatApprover::new("op-42");
+        let ask = SeatEscalation {
+            request_id: "pr_1".into(),
+            employee_id: "seat-7".into(),
+            tool: "terminal".into(),
+            why: "not on the allow list".into(),
+        };
+
+        let approved = approver.approve(&ask).expect("approval resolves");
+        let denied = approver.deny(&ask).expect("denial resolves");
+        let expired = approver.expire(&ask).expect("lapse resolves");
+
+        for (label, resolution) in [
+            ("approval", &approved),
+            ("denial", &denied),
+            ("lapse", &expired),
+        ] {
+            assert!(
+                resolution.contains("op-42"),
+                "the {label}'s resolution must name the resolver: {resolution}"
+            );
+            assert!(
+                resolution.contains("seat-7"),
+                "the {label}'s resolution must name the seat: {resolution}"
+            );
+            assert!(
+                resolution.contains("terminal"),
+                "the {label}'s resolution must name the tool: {resolution}"
+            );
+        }
+        assert!(
+            denied.starts_with("denied by"),
+            "the denial's resolution must read as a denial: {denied}"
+        );
     }
 }

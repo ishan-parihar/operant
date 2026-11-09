@@ -3132,11 +3132,19 @@ pub fn handle_command(cmd_name: &str, _args: &str, ctx: &CommandContext<'_>) -> 
                 .and_then(|store| take_pending_permission(store, ctx.channel_id));
             if let Some(req) = req {
                 // F2: a denied seat escalation resolves its queue row too.
+                // RT-427: the denial's RESOLUTION names the resolver — the
+                // operator is told who denied it, which is what
+                // SeatApprover's doc promises ("the resolver's name is still
+                // recorded on the resolution string an operator sees").
                 if let Some(ask) = req.seat_escalation.as_ref()
                     && let Some(approver) = crate::gateway_runner::seat_approver()
-                    && let Err(e) = approver.deny(ask)
                 {
-                    tracing::warn!(request = %ask.request_id, error = %e, "recording the denial failed");
+                    match approver.deny(ask) {
+                        Ok(resolution) => msg.push_str(&format!("\n{resolution}")),
+                        Err(e) => {
+                            tracing::warn!(request = %ask.request_id, error = %e, "recording the denial failed");
+                        }
+                    }
                 }
                 let _ = req
                     .response_tx
