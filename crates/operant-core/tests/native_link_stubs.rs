@@ -111,7 +111,7 @@ fn the_deployability_plan_does_not_claim_the_link_needs_libsonic() {
         !plan.contains(stale),
         "the plan must not assert the link needs a libsonic artifact"
     );
-    let superseded = "SUPERSEDED 2026-11-10 (RT-416)";
+    let superseded = "SUPERSEDED 2026-11-10 (RT-417)";
     assert!(
         plan.contains(superseded),
         "the plan must carry the dated correction that names the change"
@@ -121,5 +121,28 @@ fn the_deployability_plan_does_not_claim_the_link_needs_libsonic() {
     assert!(
         plan.contains(stub_named),
         "the plan must name where the sonic symbols come from now"
+    );
+    // The other two stale Phase-B bullets: the installer is NOT a bare cargo
+    // build any more (it checks the native deps and dies with one actionable
+    // sentence naming the package), and the env scripts no longer hardcode a
+    // machine-specific path.
+    let bare_build = "runs a bare `cargo build --release -p operant-cli`";
+    assert!(
+        !plan.contains(bare_build),
+        "the plan must not claim the installer is a bare cargo build — it \
+         checks cmake/pkg-config and names the package to install"
+    );
+    let hardcoded = "Both env scripts hardcode a path that does not exist";
+    assert!(
+        !plan.contains(hardcoded),
+        "the plan must not claim the env scripts hardcode a machine-specific \
+         path — dev-env.sh derives every path from LOCAL_DIR"
+    );
+    // Both corrections carry the dated marker, so a reader can tell which
+    // claims were verified when.
+    assert_eq!(
+        plan.matches("SUPERSEDED 2026-11-10 (RT-417)").count(),
+        3,
+        "each corrected bullet carries the dated marker"
     );
 }

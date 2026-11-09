@@ -126,21 +126,31 @@ mechanically-evidenced, not reproduced.
 
 ### B1. The documented install path provisions none of the native build deps
 
-- **SUPERSEDED 2026-11-10 (RT-416):** this plan recorded that
+- **SUPERSEDED 2026-11-10 (RT-417):** this plan recorded that
   `crates/operant-core/build.rs` emitted `cargo:rustc-link-lib=sonic`. The
   flag was deleted at iter-499 (untracking the archive removed the only copy a
   fresh checkout could link, and `unable to find library -lsonic` followed);
   the build script explains the deletion in a comment. The symbols it was
   about now come from a stub file — see B2.
-- `scripts/install.sh:9` runs a bare `cargo build --release -p operant-cli`. It
-  does not source `dev-env.sh` and does not call `provision-build-deps.sh`.
+- **SUPERSEDED 2026-11-10 (RT-417):** this plan recorded the installer as an
+  unchecked release build of `operant-cli`. It no longer is: the installer
+  checks for `cmake` and `pkg-config` first
+  and, when one is missing, dies with one actionable sentence naming the
+  package and the per-distro command (`apt-get` / `dnf` / `pacman` /
+  `zypper` / `apk` / `brew`) — which is this finding's own accept criterion.
+  The rest still stands: the installer does not source `dev-env.sh` and does
+  not call `provision-build-deps.sh`.
 - `kokoro-tiny = "0.1.0"` (`operant-core/Cargo.toml:54`) is **non-optional**,
   pulling `ort`, `ort-sys`, `espeak-rs-sys` and `cpal` — all in `Cargo.lock` —
   which need libclang, ONNX Runtime, cmake and alsa.
-- Both env scripts hardcode a path that does not exist on this machine
-  (`/home/z/my-project/local/...`, `/home/z/.venv/bin`). This box is
-  `/home/ishanp`. `.cargo/config.toml` says outright that the native search
-  path "is NOT configured here" and must be set per machine.
+- **SUPERSEDED 2026-11-10 (RT-417):** this plan recorded the env scripts as
+  carrying one developer's absolute paths (`/home/z/my-project/local/...`,
+  `/home/z/.venv/bin`). They no longer do:
+  `scripts/dev-env.sh` derives every path from `LOCAL_DIR` (defaulting to the
+  repo's own `local/`), and `scripts/setup-build-env.sh` exists to replace the
+  old hardcoded paths. `/home/z` survives only in the comments that record the
+  removal. What still stands: `.cargo/config.toml` says outright that the
+  native search path "is NOT configured here" and must be set per machine.
 
 *Accept:* on a clean machine with only rustup + build-essential,
 `./scripts/install.sh` either succeeds or fails with one actionable sentence
