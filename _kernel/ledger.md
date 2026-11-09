@@ -816,3 +816,97 @@ Shipped, each mutation-proved:
 Round-14 end-of-round gates: full suite exit 0 (46 targets), strict clippy exit
 0 (`-D warnings`), fmt clean, ledger index OK (RG-016, RG-021), genome lint 0
 errors.
+
+## Round 15 (2026-11-09) — the gateway/oauth sweep, a new doc gate, and eight rows shipped
+
+Twenty-three pushed iterations (iter-1993..iter-2004 plus this close,
+origin/main 608733d3-descended). The dispatched gateway-adapters/oauth
+sweep returned ten findings; seven shipped as defects, two as doc-truth
+with a named follow-up decision, and one (the `previous_refresh` promise)
+shipped as doc-truth whose missing wiring was named for its owner. Two
+further findings came from my own crate-wide sweeps (the stale line
+citation, the doc-link class).
+
+Shipped, each mutation-proved:
+- **RT-407** — the model-roles header cited a blank line as the home of
+  `OperantAgent::set_model`; a reader following the doc's own pointer
+  landed on nothing and could conclude the self-switching behavior does
+  not exist. Then, in RT-410, the FIX was found to re-arm the rot (a
+  rewritten line number drifts again) and was replaced by a symbol anchor
+  that rustdoc resolves at build time.
+- **RT-408** — the webhook adapter advertised `POST /webhook/notion`, a
+  route that does not exist and deliberately cannot: the arm mounts at the
+  instance's SECRET path, and the CLI's O-08 note names the literal as
+  exactly the guessable path the token-rotation guard prevents. An operator
+  wiring Notion to the advertised URL sent every event into the generic
+  `IncomingMessage` path.
+- **RT-409** — the device-flow `poll` doc promised a `previous_refresh`
+  seed the signature does not carry (the parse passes no seed), so a
+  device-code response without a `refresh_token` yields an unrefreshable
+  credential. The parser under it DOES support the seed — the auth-code
+  flow supplies one. Threading a real parameter is RT-409-FOLLOW: the
+  reachability was ESTABLISHED (bare, module-qualified, re-export, and
+  type spellings) — no production caller exists.
+- **RT-410** — the crate's doc links had no checker. The first run of
+  `RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links" cargo doc --no-deps
+  -p operant-core` was RED: four dangling symbols, one of them
+  `composites_match_the_live_server`, named as "the test that catches the
+  drift" for a table whose contract drift is caught by NO test. The gate is
+  green now — the row doubles as the class entry.
+- **RT-411** — the refresh coordinator's follower comment claimed a
+  recovery ("Sender dropped without a result — reachable only if the
+  leader's future panicked") that cannot run: `Flight` owns the
+  `watch::Sender` and BOTH the map and the follower hold an `Arc` across
+  the await, so the sender cannot drop while a follower waits — a panicking
+  leader wedges every follower FOREVER (probe-verified against the
+  workspace's tokio). Waking them is RT-411-FOLLOW: real machinery, a
+  design decision.
+- **RT-412** — the SMTP timeout "protection" was conditional on two
+  discarded fallible setters, so a hung server blocks the conversation's
+  blocking thread indefinitely with no timeout applied and nothing logged.
+- **RT-413** — the token response's `scope` was read and thrown away by an
+  unnamed bare discard, so a narrowed-grant response is indistinguishable
+  from a full one. A scope field would grow an API no consumer reads:
+  RT-413-FOLLOW, the credential store owner's decision.
+- **RT-414** — the native-cert loader reduced its load errors to a COUNT
+  (the offending entry unidentifiable when debugging a TLS failure) and
+  discarded the per-certificate trust-store rejection outright.
+
+### The round's measured lessons
+
+- **A fix row's own prose is a doc, and the guards read it.** My RT-407
+  ledger row named the exact stale line the RT-209 guard forbids; the
+  round's own suite run caught it. The iter-1996 REPAIR NOTE then repeated
+  the mistake by quoting what it repaired. Both fixed; the lesson is that
+  a fix row and a repair note are checked by the same guards as production
+  docs.
+- **Rewriting a line number re-arms the same rot** (RT-407 → RT-410).
+  The durable repair is structural: name the symbol, and let rustdoc's
+  broken-link gate fail the build when it moves.
+- **The self-satisfaction trap's instances twelve through fifteen.** A doc
+  quoting the claim it forbids (RT-409, RT-413); a needle matching its own
+  definition (RT-409, RT-407); a needle matching the text past the
+  `#[cfg(test)]` boundary (RT-409 — the boundary in that file is at line
+  28, NOT at the test module); a needle spanning a doc's own line break
+  (RT-411, RT-409, RT-413). Each repaired before the proof counted.
+- **A negative needle can be mis-designed** (RT-414): it forbade the error
+  COUNT, which legitimately survives alongside the errors — the defect was
+  that the count was the WHOLE report. The needle was removed, not bent.
+- **The fetch-then-EDIT window erased the peer's rows twice more.** iter-1993
+  shipped code without its ledger row (the peer's changelog anchor had
+  gone stale between my fetch and my edit), and iter-1994 repaired it
+  forward from the parent's bytes, renumbering my row RT-405 → RT-406 →
+  RT-407 as the peer took ids in between. The note recording the
+  renumber had to stop carrying the row's own id (it parsed as a second
+  section — the sixth instance of that hazard).
+- **A flake named honestly, not fixed on an unreproduced failure**: three
+  `working_diff_tool` tests failed once in a parallel full-suite run, pass
+  in isolation, and stayed green across three subsequent full-suite runs
+  and three targeted repeats. The shape is identified (they spawn git
+  without `test_env_lock` against env-mutating tests) and the file is
+  peer-touched, so the preserved log plus the named remedy is the honest
+  action.
+
+Round-15 end-of-round gates: full suite exit 0 (46 targets), strict clippy
+exit 0 (`-D warnings`), fmt clean, the doc-link gate exit 0, ledger index OK
+(RG-016, RG-021), genome lint 0 errors.

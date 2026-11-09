@@ -290,12 +290,12 @@ mod rt413_tests {
         );
         let consequence = concat!("response is indistinguishable from a full", " one");
         assert!(
-            src.contains(&consequence),
+            src.contains(consequence),
             "the note must name the indistinguishable-grant consequence"
         );
         let decision = concat!("belongs to the owner of the credential", " store");
         assert!(
-            src.contains(&decision),
+            src.contains(decision),
             "the note must name the decision's owner"
         );
     }

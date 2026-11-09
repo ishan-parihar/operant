@@ -902,12 +902,12 @@ fn the_composites_doc_names_the_guards_that_exist() {
         ", `composite_table_has_no_duplicates`"
     );
     assert!(
-        src.contains(&real_guards),
+        src.contains(real_guards),
         "the doc must name the real guards"
     );
     let gap_named = "against the live server, so contract drift";
     assert!(
-        src.contains(&gap_named),
+        src.contains(gap_named),
         "the doc must name the uncaught-drift gap"
     );
 }

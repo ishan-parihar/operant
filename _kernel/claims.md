@@ -470,3 +470,26 @@ NOT supported (named, with the reason):
 - `is_file()`/`is_dir()` follow symlinks, so a walk that promises regular files
   reads host content outside the tree — [V] — the following mutant collected
   the host file from outside the skill tree (RT-402) — unit 1
+
+## Round 15 (2026-11-09) — the gateway/oauth sweep, verified and shipped
+
+- A public contract can point at a route the system deliberately refuses
+  to mount — [V] — the webhook doc advertised `POST /webhook/notion` while
+  the arm mounts at the instance's secret path, and the CLI's O-08 note
+  names the literal as the guessable path the token-rotation guard
+  prevents (RT-408) — unit 1
+- A doc link has no checker until one is run — [V] — the first run of the
+  broken-intra-doc-links gate was RED on the crate with four dangling
+  symbols, one naming a test that does not exist for a table whose contract
+  drift is caught by nothing (RT-410) — unit 1
+- A recovery arm can be unreachable while its comment says it handles the
+  case — [V] — `Flight` owns the `watch::Sender` and both the map and the
+  follower hold an `Arc` across the await, so a panicking leader wedges
+  every follower forever (probe-verified) (RT-411) — unit 1
+- A stated safety property can depend on a call whose failure is thrown
+  away — [V] — the SMTP timeout was applied through two discarded
+  fallible setters, so a hung server blocks the conversation's blocking
+  thread indefinitely, unlogged (RT-412) — unit 1
+- A rewritten line number re-arms the rot it fixed — [V] — RT-407's repair
+  was itself a fresh line number until the doc gate showed the class was
+  still live; the durable repair names the symbol (RT-410) — unit 1
