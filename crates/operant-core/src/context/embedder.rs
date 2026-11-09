@@ -49,8 +49,14 @@ impl Embedder for OpenAIEmbedder {
     }
 }
 
-/// Cosine similarity in [0, 1] (vectors must share a dimension; 0 on
-/// mismatch/empty so a bad vector never dominates ranking).
+/// Cosine similarity — the RAW cosine, in [-1, 1].
+///
+/// RT-438: this used to claim the range is [0, 1]. It is not: opposite
+/// vectors score -1. The bounded range is a CALLER's policy, not this
+/// function's: `context_management.rs` clamps with `.max(0.0)` so a bad
+/// vector never dominates ranking, and `context/lcm.rs` sorts descending,
+/// so a negative score ranks last. Vectors must share a dimension; a
+/// mismatch or an empty vector scores 0.
 pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     if a.len() != b.len() || a.is_empty() {
         return 0.0;
@@ -157,6 +163,64 @@ impl Embedder for MockEmbedder {
 }
 
 /// Shared by the mock and the vector-recall tests.
+#[cfg(test)]
+mod rt438_tests {
+    use super::cosine_similarity;
+
+    /// RT-438: the doc must not claim the bounded range — the function
+    /// returns the RAW cosine, and the clamp belongs to the caller.
+    #[test]
+    fn the_doc_does_not_claim_the_bounded_range() {
+        let src = include_str!("embedder.rs");
+        let prod = &src[..src.find("#[cfg(test)]").unwrap_or(src.len())];
+        let bounded = concat!("Cosine similarity in [0, 1]", "");
+        assert_eq!(
+            prod.matches(bounded).count(),
+            0,
+            "the function returns the raw cosine — the bounded range is the \
+             caller's clamp"
+        );
+        let raw = concat!("the RAW cosine, in [-1, 1]", "");
+        assert_eq!(
+            prod.matches(raw).count(),
+            1,
+            "the doc must state the raw range"
+        );
+    }
+
+    /// RT-438: the doc claimed the range is [0, 1]; the function returns the
+    /// raw cosine, so opposite vectors score -1. BEHAVIORAL: the measured
+    /// range is the raw one, and the callers' clamp is where the [0, 1]
+    /// bound lives.
+    #[test]
+    fn the_cosine_is_the_raw_one_and_can_be_negative() {
+        let same = cosine_similarity(&[1.0, 0.0, 0.0], &[1.0, 0.0, 0.0]);
+        assert!(
+            (same - 1.0).abs() < 1e-6,
+            "identical vectors score 1: {same}"
+        );
+
+        let opposite = cosine_similarity(&[1.0, 0.0], &[-1.0, 0.0]);
+        assert!(
+            (opposite + 1.0).abs() < 1e-6,
+            "opposite vectors score -1 — the raw cosine is not clamped here: \
+             {opposite}"
+        );
+
+        let orthogonal = cosine_similarity(&[1.0, 0.0], &[0.0, 1.0]);
+        assert!(orthogonal.abs() < 1e-6, "orthogonal vectors score 0");
+
+        // The clamp is the CALLER's policy — the goal-similarity seam in
+        // context_management.rs does exactly this.
+        let clamped = cosine_similarity(&[1.0, 0.0], &[-1.0, 0.0]).max(0.0);
+        assert_eq!(clamped, 0.0, "the caller clamps to [0, 1]");
+
+        // A bad vector scores 0 rather than dominating.
+        assert_eq!(cosine_similarity(&[1.0], &[1.0, 2.0]), 0.0);
+        assert_eq!(cosine_similarity(&[], &[]), 0.0);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
