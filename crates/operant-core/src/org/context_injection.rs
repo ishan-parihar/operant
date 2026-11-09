@@ -52,7 +52,7 @@ use std::path::{Path, PathBuf};
 pub const CONTEXT_WATERMARKS_SCHEMA: &str = r#"
     CREATE TABLE IF NOT EXISTS context_watermarks (
         seat_id TEXT NOT NULL,
-        class   TEXT NOT NULL,   -- dm | global | dept | self
+        class   TEXT NOT NULL,   -- dm | feed (the live classes; global/dept/self are retired)
         last_ts INTEGER NOT NULL DEFAULT 0,  -- unix seconds
         PRIMARY KEY (seat_id, class)
     );
@@ -67,7 +67,7 @@ pub const CONTEXT_WATERMARKS_SCHEMA: &str = r#"
 pub const CONTEXT_ITEMS_SCHEMA: &str = r#"
     CREATE TABLE IF NOT EXISTS context_items (
         id           INTEGER PRIMARY KEY AUTOINCREMENT,
-        class        TEXT NOT NULL,   -- dm (future: feed sources)
+        class        TEXT NOT NULL,   -- dm | feed (both live)
         author       TEXT NOT NULL,   -- platform username / sender label
         ts           INTEGER NOT NULL,  -- unix seconds
         content_hash INTEGER NOT NULL,   -- cross-class dedup key
@@ -988,6 +988,64 @@ mod tests {
         assert_eq!(
             injector.render_section("premiere", None, "PROMPT", &[]),
             "PROMPT"
+        );
+    }
+}
+
+#[cfg(test)]
+mod rt437_tests {
+    use super::*;
+
+    /// RT-437: the two schema comments named class sets that were neither
+    /// live nor retired-and-honest: the watermarks' comment listed
+    /// `dm | global | dept | self` (the last three are RETIRED, and the live
+    /// `feed` was missing) and the items' comment called `feed` a "future"
+    /// source — it is live: the gateway taps feed posts into the table, the
+    /// feed collector reads them, and a feed watermark row is written.
+    ///
+    /// BEHAVIORAL: a feed item and its watermark row are written today, and
+    /// the comments name exactly the live classes.
+    #[test]
+    fn the_schema_comments_name_the_live_classes() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let injector = ContextInjector::open(
+            &dir.path().join("database.db"),
+            crate::config::ContextInjectionSettings::default(),
+        )
+        .expect("injector");
+        injector.record_feed_item("seat-1", "peer", "a feed post");
+        let conn = Connection::open(dir.path().join("operant_kanban.db")).expect("open");
+        let items: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM context_items WHERE class = 'feed'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count");
+        assert_eq!(items, 1, "the feed class is live — a feed item is written");
+    }
+
+    #[test]
+    fn the_schema_comments_do_not_call_the_feed_class_future() {
+        let src = include_str!("context_injection.rs");
+        let prod = &src[..src.find("#[cfg(test)]").unwrap_or(src.len())];
+        let future = concat!("future: feed", "");
+        assert_eq!(
+            prod.matches(future).count(),
+            0,
+            "the feed class is live -- the items schema must not call it future"
+        );
+        let retired_classes = concat!("dm | global | dept | self", "");
+        assert_eq!(
+            prod.matches(retired_classes).count(),
+            0,
+            "the watermarks schema must not list the retired classes as live"
+        );
+        // Both comments name the live pair.
+        assert_eq!(
+            prod.matches("dm | feed").count(),
+            2,
+            "both schema comments must name the live classes"
         );
     }
 }
