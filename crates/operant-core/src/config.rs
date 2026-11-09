@@ -2900,7 +2900,20 @@ pub fn persist_config_key(dotted: &str, raw_value: &str) -> Result<PathBuf> {
     crate::fs_secrets::write_secret_file(&tmp, rendered.as_bytes())
         .map_err(|e| crate::error::Error::Config(format!("write {}: {e}", tmp.display())))?;
     if let Ok(mode) = std::fs::metadata(&path).map(|m| m.permissions()) {
-        let _ = std::fs::set_permissions(&tmp, mode);
+        // RT-418: the mode round-trip's failure was discarded, so the file
+        // above promised to keep the original's mode ("must survive the
+        // round-trip") silently did not: the temp file stays owner-only
+        // (0600, from write_secret_file) and that is what the rename puts in
+        // place. The fallback is the SAFER mode, so this is not a leak — but
+        // the user's config file changes permissions with nothing said.
+        if let Err(e) = std::fs::set_permissions(&tmp, mode) {
+            tracing::warn!(
+                path = %path.display(),
+                error = %e,
+                "the config file's original mode could not be carried over — the \
+                 rewritten file keeps the owner-only mode it was created with"
+            );
+        }
     }
     if let Err(e) = parse_config_file(&tmp) {
         let _ = std::fs::remove_file(&tmp);
@@ -3477,6 +3490,42 @@ fn apply_path_override(name: &str, target: &mut PathBuf) -> Result<()> {
         *target = PathBuf::from(value);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod rt418_tests {
+    /// RT-418: the config write's mode round-trip was documented as
+    /// unconditional ("The mode … must survive the round-trip"), but the
+    /// `set_permissions` result was discarded — so on a filesystem where the
+    /// chmod fails, the file the rename puts in place keeps the owner-only
+    /// mode it was created with instead of the original's, silently. The
+    /// fallback is the SAFER mode (no leak), so the fix is to REPORT it, not
+    /// to change the mode policy. Source contract, needles
+    /// concatenation-built — and this test's own prose does not quote the
+    /// phrases it forbids.
+    #[test]
+    fn the_config_mode_round_trip_reports_a_failed_carry_over() {
+        let src = include_str!("config.rs");
+        let prod = &src[..src.find("#[cfg(test)]").unwrap_or(src.len())];
+        let discarded = concat!("let _ = std::fs::set_permissions(&tmp, mode);", "");
+        assert_eq!(
+            prod.matches(discarded).count(),
+            0,
+            "the mode carry-over's failure must not be discarded"
+        );
+        let reported = concat!("if let Err(e) = std::fs::set_permissions(&tmp, mode)", "");
+        assert_eq!(
+            prod.matches(reported).count(),
+            1,
+            "the mode carry-over's failure must be reported"
+        );
+        let consequence = concat!("keeps the owner-only mode it was created", " with");
+        assert_eq!(
+            prod.matches(consequence).count(),
+            1,
+            "the report must name the mode the file keeps instead"
+        );
+    }
 }
 
 #[cfg(test)]
