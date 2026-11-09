@@ -454,11 +454,19 @@ async fn download_aft_release(tag: &str) -> Result<PathBuf> {
         .await
         .map_err(|e| Error::Agent(format!("aft download: failed to write binary: {e}")))?;
 
-    // Make executable on Unix
+    // Make executable on Unix. RT-419: the failure was discarded, so a
+    // binary installed without its execute bit sat at the path the bridge
+    // EXECUTES — the feature was broken with nothing in the log. A chmod is
+    // a metadata syscall, so the sync call does not block the executor for
+    // any meaningful time.
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = tokio::fs::set_permissions(&tmp_path, std::fs::Permissions::from_mode(0o755)).await;
+        crate::fs_secrets::set_mode_reporting(
+            &tmp_path,
+            0o755,
+            "the downloaded bridge binary is installed WITHOUT its execute bit \
+             — the bridge will not be able to run it",
+        )?;
     }
 
     tokio::fs::rename(&tmp_path, &bin_path)

@@ -87,6 +87,40 @@ pub fn set_secret_perms(_path: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// Apply `mode` to `path`, reporting a failure with the consequence the
+/// caller names.
+///
+/// RT-419: a permission write whose result was DISCARDED left the file's
+/// posture wrong with nothing said anywhere — an OAuth directory that stayed
+/// at the umask default, an installed bridge binary without its execute bit.
+/// The mode POLICY stays with the caller (this helper never widens, never
+/// fails the caller's operation): it makes the failure observable, which is
+/// what the swallow took away.
+///
+/// `consequence` is the sentence the operator reads — name what is wrong
+/// with the file when the chmod did not land.
+pub fn set_mode_reporting(path: &Path, mode: u32, consequence: &str) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).inspect_err(|e| {
+            tracing::warn!(
+                path = %path.display(),
+                mode = format!("{mode:o}"),
+                error = %e,
+                "{consequence}"
+            );
+        })
+    }
+    #[cfg(not(unix))]
+    {
+        // No POSIX mode bits: the platform default applies, and there is
+        // nothing to report.
+        let _ = (path, mode, consequence);
+        Ok(())
+    }
+}
+
 /// Tighten the permissions of `path` to 0o600 if currently looser.
 ///
 /// Idempotent: no-op when the file already has 0o600 or stricter (0o400).
@@ -165,6 +199,68 @@ mod tests {
 
     use super::*;
     use std::io::Read;
+
+    /// RT-419: the CLASS — a permission write whose result was discarded. Two
+    /// production sites swallowed it (the OAuth directory's 0700 and the
+    /// downloaded bridge binary's 0755), so both now route through the one
+    /// helper. SOURCE contract for the coverage (the failure is IO-shaped, so
+    /// no deterministic fixture can force it at those sites), with
+    /// concatenation-built needles.
+    #[test]
+    fn every_swallowed_permission_write_routes_through_the_helper() {
+        // The two sites that swallowed it.
+        let oauth = include_str!("mcp_oauth.rs");
+        assert_eq!(
+            oauth.matches("set_mode_reporting(").count(),
+            1,
+            "the OAuth directory's mode must be set through the helper"
+        );
+        let aft = include_str!("aft_bridge.rs");
+        assert_eq!(
+            aft.matches("set_mode_reporting(").count(),
+            1,
+            "the downloaded binary's mode must be set through the helper"
+        );
+        // And no production site swallows a permission write any more.
+        for src in [oauth, aft] {
+            let prod = &src[..src.find("#[cfg(test)]").unwrap_or(src.len())];
+            assert_eq!(
+                prod.matches("let _ = std::fs::set_permissions(").count()
+                    + prod.matches("let _ = tokio::fs::set_permissions(").count(),
+                0,
+                "a permission write must not be discarded"
+            );
+        }
+    }
+
+    /// RT-419: the helper's whole point is that a FAILED chmod is visible.
+    /// BEHAVIORAL: pointing it at a path that cannot be chmodded (a
+    /// non-existent file) must return the error — and the caller decides
+    /// what to do with it. The helper never widens and never fails the
+    /// caller's operation itself.
+    #[cfg(unix)]
+    #[test]
+    fn set_mode_reporting_surfaces_the_failure_and_applies_the_mode() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempdir();
+        let path = dir.join("mode-target");
+        std::fs::write(&path, "x").expect("write");
+
+        // The happy path: the mode lands.
+        set_mode_reporting(&path, 0o700, "unused on the happy path").expect("set mode");
+        let mode = std::fs::metadata(&path).expect("meta").permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700, "the requested mode must be applied");
+
+        // The failure path: the error is RETURNED (the caller reports it).
+        let missing = dir.join("does-not-exist");
+        let err = set_mode_reporting(&missing, 0o700, "unused on the failure path")
+            .expect_err("a missing path cannot be chmodded");
+        assert_eq!(
+            err.kind(),
+            io::ErrorKind::NotFound,
+            "the failure must surface to the caller, not vanish"
+        );
+    }
 
     #[test]
     fn write_secret_file_sets_0600() {

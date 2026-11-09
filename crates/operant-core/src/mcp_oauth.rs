@@ -372,12 +372,18 @@ fn write_json<T: serde::Serialize>(path: &Path, data: &T) -> Result<()> {
         ))
     })?;
 
-    // Tighten parent directory permissions
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700));
-    }
+    // Tighten parent directory permissions. RT-419: the failure was
+    // discarded, so a directory that stayed at the umask default (0755) was
+    // invisible to the log while it held the OAuth token store. The token
+    // FILE is owner-only (0600) either way, so this is about the directory's
+    // posture, not a token leak — but it is still a security shape that
+    // should not change silently.
+    crate::fs_secrets::set_mode_reporting(
+        parent,
+        0o700,
+        "the OAuth directory keeps its default mode — the token store's file \
+         names are visible to other users",
+    )?;
 
     let json = serde_json::to_string_pretty(data)
         .map_err(|e| Error::Agent(format!("Failed to serialize OAuth data: {}", e)))?;
