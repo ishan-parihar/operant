@@ -25,6 +25,14 @@
 //! forever, crowding out later items — at-least-once semantics plus the
 //! render-time content-hash dedup make a re-collect harmless).
 //!
+//! RT-425: the per-class query takes the OLDEST pending items (up to its
+//! limit), not the newest. It used to take the newest, and the cursor then
+//! jumped to their max — so a class with more pending items than the limit
+//! left the OLDER ones below the cursor forever: never collected, never
+//! rendered, never seen. Collecting oldest-first walks the cursor through
+//! the backlog instead of over it, which is what the at-least-once promise
+//! above requires.
+//!
 //! Failure posture: any store error degrades to "no injection" and the
 //! prompt is returned byte-identical — the iter-666 contract. Injection
 //! must never fail a run.
@@ -119,6 +127,16 @@ pub struct ContextItem {
 /// ponytail: a constant, not config — raise deliberately when a real feed
 /// needs longer items, not speculatively.
 const MAX_ITEM_CHARS: usize = 400;
+
+/// How many pending items one class contributes per collection.
+///
+/// RT-425: a class with more pending items than this used to SKIP the
+/// older ones permanently — the query took the NEWEST 20 and the watermark
+/// then jumped to their max, so the rest fell below the cursor and were
+/// never collected again. The query now takes the OLDEST 20, so the cursor
+/// advances through the backlog and every pending item is collected exactly
+/// once (the "at-least-once" the module doc promises).
+const COLLECT_LIMIT: usize = 20;
 
 /// Capture retention (days). `context_items` is append-only by design
 /// (watermarks are the read cursor, not a TTL) — but an active group
@@ -441,11 +459,11 @@ impl ContextInjector {
             // here because the Bot API gives a bot exactly one look at a DM.
             ContextClass::Dm => {
                 let mut stmt = conn
-                    .prepare(
+                    .prepare(&format!(
                         "SELECT author, ts, text FROM context_items \
-                         WHERE class = 'dm' AND seat_hint = ?1 AND ts > ?2 \
-                         ORDER BY ts DESC LIMIT 20",
-                    )
+                             WHERE class = 'dm' AND seat_hint = ?1 AND ts > ?2 \
+                             ORDER BY ts ASC LIMIT {COLLECT_LIMIT}"
+                    ))
                     .map_err(|e| Error::Agent(format!("context injection: stmt: {e}")))?;
                 let rows = stmt
                     .query_map(params![seat_id, watermark], |row| {
@@ -465,11 +483,11 @@ impl ContextInjector {
             // Bot API gives the poll one look at each post.
             ContextClass::Feed => {
                 let mut stmt = conn
-                    .prepare(
+                    .prepare(&format!(
                         "SELECT author, ts, text FROM context_items \
-                         WHERE class = 'feed' AND seat_hint = ?1 AND ts > ?2 \
-                         ORDER BY ts DESC LIMIT 20",
-                    )
+                             WHERE class = 'feed' AND seat_hint = ?1 AND ts > ?2 \
+                             ORDER BY ts ASC LIMIT {COLLECT_LIMIT}"
+                    ))
                     .map_err(|e| Error::Agent(format!("context injection: stmt: {e}")))?;
                 let rows = stmt
                     .query_map(params![seat_id, watermark], |row| {
@@ -532,7 +550,7 @@ impl ContextInjector {
             ContextClass::Dept,
             ContextClass::Self_,
         ] {
-            let Some(max_ts) = items
+            let Some(new_ts) = items
                 .iter()
                 .filter(|item| item.class == class)
                 .map(|item| item.ts)
@@ -545,7 +563,7 @@ impl ContextInjector {
                  VALUES (?1, ?2, ?3)
                  ON CONFLICT(seat_id, class) DO UPDATE SET
                      last_ts = MAX(last_ts, excluded.last_ts)",
-                params![seat_id, class.as_str(), max_ts],
+                params![seat_id, class.as_str(), new_ts],
             )
             .map_err(|e| Error::Agent(format!("context injection: watermark write: {e}")))?;
         }
@@ -1012,6 +1030,68 @@ mod rt424_tests {
             rendered.contains("🙂"),
             "a 40-character DM fits a 60-character quota and must be rendered; \
              got: {rendered}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod rt425_tests {
+    use super::*;
+
+    /// RT-425: the collector's per-class LIMIT used to SKIP the older
+    /// pending items permanently — the query took the newest 20 and the
+    /// watermark then jumped to their max, so the rest fell below the cursor
+    /// and were never collected again, despite the module doc's
+    /// "at-least-once semantics".
+    ///
+    /// BEHAVIORAL: 25 DMs are recorded, and the collection is driven until
+    /// every one of them has been seen. The pre-fix cursor jumps straight to
+    /// the newest DM, so the older five are never collected.
+    #[test]
+    fn a_backlog_larger_than_the_limit_is_fully_collected_over_time() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut settings = crate::config::ContextInjectionSettings::default();
+        settings.dm_quota = 100_000;
+        settings.total_char_cap = 100_000;
+        let injector =
+            ContextInjector::open(&dir.path().join("app.sqlite"), settings).expect("injector");
+
+        // 25 DMs with distinct timestamps, oldest first. The rows go in
+        // directly (the capture tap stamps "now", so a test needs its own
+        // timestamps) into the ORG SIBLING the injector opened.
+        let base = chrono::Utc::now().timestamp() - 100;
+        {
+            let conn = Connection::open(dir.path().join("operant_kanban.db")).expect("open");
+            for i in 0..25i64 {
+                let text = format!("dm-{i}");
+                conn.execute(
+                    "INSERT INTO context_items (class, author, ts, content_hash, seat_hint, text) \
+                     VALUES ('dm', 'peer', ?1, ?2, 'seat-1', ?3)",
+                    rusqlite::params![base + i, content_hash(&text) as i64, text],
+                )
+                .expect("insert");
+            }
+        }
+
+        let mut seen: std::collections::HashSet<i64> = std::collections::HashSet::new();
+        // Drive the collection the way a prompt cycle does.
+        for _ in 0..10 {
+            let rendered = injector.render_section("seat-1", None, "PROMPT", &[]);
+            for i in 0..25i64 {
+                if rendered.contains(&format!("dm-{i}")) {
+                    seen.insert(i);
+                }
+            }
+            if seen.len() == 25 {
+                break;
+            }
+        }
+        assert_eq!(
+            seen.len(),
+            25,
+            "every pending DM must be collected eventually — the older ones must \
+             not fall below the cursor unseen (collected {} of 25)",
+            seen.len()
         );
     }
 }
