@@ -73,6 +73,61 @@ fn the_write_fence_refuses_outside_and_passes_inside() {
     assert!(operant_core::tools::file_tools::holon_write_fence("/anywhere/at-all.txt").is_ok());
 }
 
+/// RT-445: a write whose PARENT did not exist yet used to PASS the fence.
+///
+/// The fence canonicalized the path; when the parent was missing the
+/// canonicalization returned None and the fence returned `Ok(())` — "the
+/// strict checks below handle it". They do not: `validate_path` has no
+/// roots check at all (only the hard-deny list, the credential registry
+/// and `..` traversal), and the write tool CREATES the missing parents.
+/// So the write landed outside the run's policy roots, with no refusal
+/// recorded.
+#[test]
+fn a_write_whose_parent_does_not_exist_yet_is_still_fenced() {
+    let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let (_dir, run) = holon_run_dir_with(
+        r#"{"version":1,"stage":"execute","posture":"act","roots":["/tmp"],"writes":[],"commands":[],"deny":[],"budget":{"tokens":null,"cost":null}}"#,
+    );
+    // SAFETY: serialized test; the run env is the only variable.
+    unsafe { std::env::set_var("HOLON_RUN_DIR", &run) };
+
+    // The parent does NOT exist — the write tool would have created it.
+    let missing_parent = format!("/etc/w3-fence-missing-parent-{}", std::process::id());
+    assert!(
+        !Path::new(&missing_parent).exists(),
+        "the fixture's parent must not exist"
+    );
+    let outside = format!("{missing_parent}/evil.txt");
+    let err = operant_core::tools::file_tools::holon_write_fence(&outside)
+        .expect_err("a write outside the roots must be refused");
+    assert!(err.contains("outside the run's policy roots"), "{err}");
+    let refusals = operant_core::org::read_refusals(&run);
+    assert!(
+        refusals
+            .iter()
+            .any(|r| r["tool"] == "file_write" && r["policy_rule"] == "policy.json:roots"),
+        "the fence recorded its refusal: {refusals:?}"
+    );
+    assert!(
+        !Path::new(&missing_parent).exists(),
+        "a refused write never creates anything"
+    );
+
+    // A path INSIDE the roots whose parent does not exist yet still passes:
+    // the fence resolves through the nearest existing ancestor, it does not
+    // refuse everything that is not there yet.
+    let inside = format!(
+        "/tmp/w3-fence-not-created-yet-{}/file.txt",
+        std::process::id()
+    );
+    assert!(
+        operant_core::tools::file_tools::holon_write_fence(&inside).is_ok(),
+        "a write inside the roots is not fenced, missing parent or not"
+    );
+
+    unsafe { std::env::remove_var("HOLON_RUN_DIR") };
+}
+
 /// O-18: an empty `roots` list means "the run directory only" — the same
 /// semantics the kernel's workdir guard uses. Writes inside the run pass,
 /// outside are refused.

@@ -192,8 +192,22 @@ pub fn holon_write_fence(raw_path: &str) -> Result<(), String> {
         return Ok(()); // a personal run is not fenced
     };
     let path = PathBuf::from(raw_path);
+    // RT-445: an unresolvable path used to PASS the fence ("the strict
+    // checks below handle it") — but the strict checks (`validate_path`)
+    // have no roots check at all: only the hard-deny list, the credential
+    // registry and `..` traversal. So a write whose PARENT did not exist
+    // yet (the write tool CREATES the missing parents) landed outside the
+    // run's policy roots, with no refusal recorded. The fence now
+    // resolves the path through its nearest existing ancestor, and a path
+    // that cannot be resolved at all is REFUSED (fail closed).
     let Some(canon) = early_canonical(&path) else {
-        return Ok(()); // unresolvable: the strict checks below handle it
+        let why = format!(
+            "path {} could not be resolved — refusing the write (the run's policy \
+             roots fence cannot judge an unresolvable path)",
+            path.display()
+        );
+        crate::org::record_refusal(&run_dir, "file_write", &why, "policy.json:roots");
+        return Err(why);
     };
     let Some(roots) = crate::org::holon_policy_roots(&run_dir) else {
         return Ok(()); // no policy roots: ungoverned fence (observe has none anyway)
@@ -219,9 +233,40 @@ fn early_canonical(path: &std::path::Path) -> Option<PathBuf> {
     if let Ok(p) = path.canonicalize() {
         return Some(p);
     }
-    let parent = path.parent()?;
-    let canon_parent = parent.canonicalize().ok()?;
-    Some(canon_parent.join(path.file_name()?))
+    // The path does not exist. Canonicalize the nearest EXISTING ancestor
+    // and re-join the components below it: the write creates the missing
+    // parents, so the fence must judge where the file would LAND, not give
+    // up on a path that is merely not there yet.
+    let mut tail: Vec<std::ffi::OsString> = Vec::new();
+    if let Some(name) = path.file_name() {
+        tail.push(name.to_os_string());
+    }
+    let mut current = path.parent();
+    loop {
+        let parent = current?;
+        if parent.as_os_str().is_empty() {
+            // A relative path: the base is the current directory.
+            let mut out = std::env::current_dir().ok()?;
+            for part in tail.iter().rev() {
+                out.push(part);
+            }
+            return Some(out);
+        }
+        match parent.canonicalize() {
+            Ok(canon) => {
+                let mut out = canon;
+                for part in tail.iter().rev() {
+                    out.push(part);
+                }
+                return Some(out);
+            }
+            Err(_) => {
+                let name = parent.file_name()?.to_os_string();
+                tail.push(name);
+                current = parent.parent();
+            }
+        }
+    }
 }
 
 pub(crate) fn validate_path(raw_path: &str) -> Result<PathBuf, String> {
