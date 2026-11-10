@@ -268,6 +268,18 @@ impl OpenAIClient {
 
     /// Retarget this client at another OpenAI-compatible endpoint without
     /// rebuilding it. An empty `base_url` clears the override.
+    ///
+    /// RT-484: the `[proxy]` service key is chosen from the CONFIGURED
+    /// base URL when the HTTP client is built, and the proxy is baked into
+    /// that client — so a retarget to another provider keeps the OLD
+    /// provider's proxy (and its proxy credentials) for the new host. The
+    /// key follows the endpoint in the vocabulary, not at runtime.
+    ///
+    /// **RT-484-FOLLOW**: making the proxy follow the retarget means either
+    /// rebuilding the HTTP client on every retarget (the client field
+    /// becomes swappable, and a SYNC setter cannot take an async lock) or
+    /// moving the proxy to a per-request `reqwest::Proxy` (a config API
+    /// addition). That is a design decision, not a one-liner.
     pub fn set_base_url(&self, base_url: &str) {
         let value = Some(base_url.trim().to_string()).filter(|u| !u.is_empty());
         if let Ok(mut slot) = self.base_url_override.write() {
@@ -2154,6 +2166,29 @@ mod tests {
         );
         let rule = format!("configured key belongs to the {}", "OLD endpoint");
         assert!(prod.contains(&rule), "the doc must state the retarget rule");
+    }
+
+    /// RT-484: the `[proxy]` service key is chosen from the CONFIGURED base
+    /// URL when the HTTP client is built, and the proxy is baked into that
+    /// client — so a retarget to another provider keeps the OLD provider's
+    /// proxy (and its proxy credentials) for the new host.
+    ///
+    /// SOURCE contract over the doc (the behaviour is a named follow-up: the
+    /// fix needs a sync/async lock decision or a per-request proxy).
+    #[test]
+    fn the_retarget_doc_names_the_proxy_consequence() {
+        let src = include_str!("client.rs");
+        let prod = &src[..src.find("#[cfg(test)]").unwrap_or(src.len())];
+        let named = "keeps the OLD";
+        assert!(
+            prod.contains("RT-484-FOLLOW"),
+            "the retarget doc must name the follow-up that makes the proxy \
+             follow the retarget"
+        );
+        assert!(
+            prod.contains(named),
+            "the retarget doc must name the proxy consequence"
+        );
     }
 
     #[test]
