@@ -91,7 +91,12 @@ impl EmptyResponseCounter {
 /// named-reason stopped notice instead, which is strictly more honest.
 pub fn is_degenerate_final_text(text: &str) -> bool {
     let t = text.trim();
-    t.is_empty() || (t.len() < 80 && !t.chars().any(char::is_whitespace))
+    // RT-455: the ceiling was measured in BYTES (`t.len()`), while the
+    // doc speaks of characters — so a 30-character single-word CJK summary
+    // (90 bytes) sailed past a gate that catches the same artifact in
+    // ASCII, and the threshold behaved differently per script. Count
+    // characters.
+    t.is_empty() || (t.chars().count() < 80 && !t.chars().any(char::is_whitespace))
 }
 
 // REMOVED: the `EmptyExhausted` sentinel and `EmptyResponseCounter::exhausted()`.
@@ -201,6 +206,26 @@ mod tests {
         let summary = format!("Progress report: {}.", "x".repeat(924));
         assert_eq!(summary.len(), 942);
         assert!(!is_degenerate_final_text(&summary));
+    }
+
+    /// RT-455: the ceiling is in CHARACTERS ("a genuine sub-80-char
+    /// single-word summary"), but the code measured BYTES — so a
+    /// 30-character single-word CJK summary (90 bytes) was NOT flagged,
+    /// while the same artifact in ASCII was. The threshold must not
+    /// depend on the script.
+    #[test]
+    fn a_multi_byte_single_word_summary_hits_the_same_ceiling() {
+        let summary = "日".repeat(30);
+        assert_eq!(summary.chars().count(), 30);
+        assert_eq!(summary.len(), 90, "the fixture is 90 BYTES");
+        assert!(
+            is_degenerate_final_text(&summary),
+            "a 30-character single-word summary is under the 80-character ceiling"
+        );
+        // And the ASCII equivalent behaves the same.
+        assert!(is_degenerate_final_text(&"x".repeat(30)));
+        // Just over the ceiling survives, in either script.
+        assert!(!is_degenerate_final_text(&"日".repeat(81)));
     }
 
     #[test]
