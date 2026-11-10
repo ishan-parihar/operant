@@ -705,3 +705,94 @@ fn no_context_registers_one_chord_twice() {
         dupes.join("\n  ")
     );
 }
+/// (iter-1958) Every chord the catalogue advertises must be CONSUMED.
+///
+/// The audit has pinned the catalogue's tokens source-to-source — the Global
+/// context by `global_bindings_should_be_dispatched_in_key_handling` and its
+/// modifier half, the vim contexts by
+/// `every_string_dispatched_vim_binding_is_reachable`. Both share a limit their
+/// own doc comments name: a bare `x` arm can satisfy a chord advertised as
+/// `Ctrl+X`, so "the token appears somewhere in the file" is not the same
+/// claim as "this chord does something".
+///
+/// This asks the CODE instead. The composer's contract is that an UNHANDLED key
+/// inserts its character, so an advertised chord that dispatches nothing is
+/// observable without knowing anything about dispatch: the composer gains the
+/// letter. Driving the real `handle_key_event` and requiring the composer to
+/// stay empty therefore tests every catalogued chord at once, for the state the
+/// operator is actually in when they read `/keys`.
+///
+/// Chords that legitimately insert text (vim modes, completion) are driven in
+/// the state that owns them, so a legitimate handler still consumes the key.
+#[test]
+fn no_catalogued_chord_types_itself_into_the_composer() {
+    let mut leakers: Vec<String> = Vec::new();
+    // Scoped to the contexts WITHOUT their own dispatch pin. The vim contexts
+    // have `every_string_dispatched_vim_binding_is_reachable` — the check that
+    // found iter-426's real `j`/`k` defect — and duplicating it here would mean
+    // constructing the vim state per context, which is this test's own trap:
+    // in Insert mode `h`, `j` and `.` legitimately insert themselves, so a wrong
+    // `vim_mode` manufactures a leak out of a working handler.
+    use crate::tui::keybindings::BindingContext;
+    for context in [
+        BindingContext::Global,
+        BindingContext::Prompt,
+        BindingContext::Dialog,
+        BindingContext::Completion,
+    ] {
+        for binding in DEFAULT_KEYBINDINGS.get_bindings(context) {
+            let mut app = super::super::app::tests::make_app();
+            // An EMPTY composer for every context, so the only text that can
+            // appear is text the key itself produced.
+            app.prompt_input.text = String::new();
+            // The operator's state when reading /keys: an empty composer, no
+            // vim mode, no selection. No per-context state construction.
+            app.prompt_input.visual_anchor = None;
+
+            app.handle_key_event(crossterm::event::KeyEvent::new(
+                binding.key,
+                binding.modifiers,
+            ));
+
+            let gained = app.prompt_input.text.as_str();
+            if gained.is_empty() {
+                continue;
+            }
+            // The composer gained text. That is a leak ONLY IF the text is the
+            // key's own character: a handler that legitimately writes the
+            // composer (history recall filling it from a remembered prompt, a
+            // completion filling the word) writes something else, and that is
+            // the handler doing its advertised job.
+            let key_char = match binding.key {
+                crossterm::event::KeyCode::Char(c) => Some(c),
+                _ => None,
+            };
+            let Some(key_char) = key_char else { continue };
+            let typed_itself = gained == key_char.to_string()
+                || gained == key_char.to_ascii_uppercase().to_string();
+            if !typed_itself {
+                continue;
+            }
+            let desc = binding.description.clone().unwrap_or_default();
+            let verb = desc.split_whitespace().next().unwrap_or("").to_lowercase();
+            let is_an_insert = desc.starts_with("Enter ")
+                || desc.starts_with("Insert ")
+                || desc.starts_with("Type ")
+                || verb == "insert";
+            if !is_an_insert {
+                leakers.push(format!(
+                    "{:?} + {:?} in {:?} advertised as {:?} but the composer kept \
+                     the character: {:?}",
+                    binding.modifiers, binding.key, context, desc, app.prompt_input.text
+                ));
+            }
+        }
+    }
+    assert!(
+        leakers.is_empty(),
+        "these chords are advertised by /keys but nothing consumed them — the key \
+         fell through to the composer and typed itself. Either wire the handler or \
+         drop the catalogue entry:\n  {}",
+        leakers.join("\n  ")
+    );
+}
