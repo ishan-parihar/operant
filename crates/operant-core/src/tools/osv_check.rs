@@ -40,6 +40,54 @@ struct PackageInfo {
     ecosystem: String,
 }
 
+/// Tokens that are SUBCOMMANDS of the runner, not package names.
+///
+/// `pipx run black` runs the package "black" — "run" is the verb. The
+/// runner's own vocabulary, plus the `pip install` form the branch below
+/// already handled.
+const SUBCOMMAND_TOKENS: &[&str] = &[
+    "run",
+    "install",
+    "inject",
+    "uninject",
+    "upgrade",
+    "reinstall",
+    "list",
+    "runpip",
+    "download",
+    "exec",
+];
+
+/// Flags whose VALUE is the package (`npx -p <pkg> <cmd>`).
+const PACKAGE_VALUE_FLAGS: &[&str] = &["-p", "--package"];
+
+/// The package token of a runner command, skipping the verbs and flags.
+///
+/// RT-453: the first token after the prefix was taken verbatim, so
+/// "pipx run black" checked the package "run", "pipx install black" checked
+/// "install", and "npx -y @scope/pkg" checked "-y" — none of which exist.
+/// The OSV lookup found no advisories for them and the malware gate
+/// reported `known_malware: false` for a package it never checked.
+fn first_package_token(rest: &str) -> Option<String> {
+    let mut tokens = rest.split_whitespace();
+    while let Some(token) = tokens.next() {
+        if token.starts_with('-') {
+            // A flag that takes the package as its value.
+            if PACKAGE_VALUE_FLAGS.contains(&token) {
+                return tokens.next().map(|pkg| pkg.to_string());
+            }
+            // A boolean flag ("-y", "--yes"): skip it.
+            continue;
+        }
+        if SUBCOMMAND_TOKENS.contains(&token) {
+            // A verb ("run", "install"): the package is the next token.
+            continue;
+        }
+        return Some(token.to_string());
+    }
+    None
+}
+
 /// Parse a command string to extract the package name and ecosystem.
 /// Supports: npx, uvx, npx.cmd, uvx.cmd, pipx
 fn parse_command(command: &str) -> Vec<PackageInfo> {
@@ -54,7 +102,7 @@ fn parse_command(command: &str) -> Vec<PackageInfo> {
         ("pipx ", "PyPI"),
     ] {
         if let Some(rest) = trimmed.strip_prefix(prefix) {
-            if let Some(pkg) = rest.split_whitespace().next() {
+            if let Some(pkg) = first_package_token(rest) {
                 packages.push(PackageInfo {
                     name: pkg.trim().to_string(),
                     ecosystem: ecosystem.to_string(),
@@ -322,11 +370,38 @@ mod tests {
         assert_eq!(pkgs[0].name, "some-package");
     }
 
+    /// RT-453: the runner's VERB is not the package. "pipx run black" runs
+    /// the package "black" — the old parser checked a package named "run",
+    /// which exists on no registry, so the OSV lookup found nothing and the
+    /// malware gate reported `known_malware: false` for a package it never
+    /// checked.
     #[test]
     fn test_parse_pipx() {
         let pkgs = parse_command("pipx run black");
         assert_eq!(pkgs.len(), 1);
-        assert_eq!(pkgs[0].name, "run");
+        assert_eq!(pkgs[0].name, "black");
+    }
+
+    /// RT-453: and the other shapes: the install verb, and a flag before
+    /// the package.
+    #[test]
+    fn a_verb_or_a_flag_is_not_the_package() {
+        let pkgs = parse_command("pipx install black");
+        assert_eq!(pkgs[0].name, "black");
+
+        let pkgs = parse_command("npx -y @scope/pkg");
+        assert_eq!(pkgs[0].name, "@scope/pkg");
+
+        let pkgs = parse_command("npx --yes some-package");
+        assert_eq!(pkgs[0].name, "some-package");
+
+        // A flag that TAKES the package as its value.
+        let pkgs = parse_command("npx -p @scope/pkg some-command");
+        assert_eq!(pkgs[0].name, "@scope/pkg");
+
+        // The plain shapes still work.
+        let pkgs = parse_command("uvx some-package --flag value");
+        assert_eq!(pkgs[0].name, "some-package");
     }
 
     #[test]
