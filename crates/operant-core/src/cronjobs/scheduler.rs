@@ -1099,7 +1099,7 @@ mod rt387_tests {
         );
         // And the message must still say what it means (the same sentence
         // the RT-387 contract pins).
-        let said = format!("schedule stays on its legacy form");
+        let said = "schedule stays on its legacy form";
         assert_eq!(
             prod.matches(&said).count(),
             1,

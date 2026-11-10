@@ -291,21 +291,6 @@ mod tests {
         )
     }
 
-    /// ── THE REGRESSION TEST ──────────────────────────────────────────
-    ///
-    /// Replays the 2026-09-29 incident exactly: `gateway.log` shows four
-    /// `Stream error, error: Network error: error decoding response body`
-    /// lines at 12:15:45, 12:16:45, 12:17:45, 12:18:45, then the turn ends
-    /// with the user message persisted and no assistant row. The provider
-    /// takes 60s to fail each attempt, so the attempt-count bound (3) buys
-    /// four minutes of silence.
-    ///
-    /// Against `decide_stream_retry` — the function the ladder actually
-    /// calls — the very first failure at t=60s is already past the 45s wall
-    /// clock, so the ladder must refuse to re-issue. This test fails if the
-    /// wall-clock term is removed from the decision, which is exactly the
-    /// pre-fix behaviour.
-    #[test]
     /// RT-461: the production predicate re-armed the budget on the turn's
     /// FIRST failure ("or is the turn's first"), so the clock restarted at
     /// the first drop and the first attempt's stall was EXEMPT — the
@@ -352,6 +337,28 @@ mod tests {
         );
     }
 
+    /// ── THE REGRESSION TEST ──────────────────────────────────────────
+    ///
+    /// Replays the 2026-09-29 incident exactly: `gateway.log` shows four
+    /// `Stream error, error: Network error: error decoding response body`
+    /// lines at 12:15:45, 12:16:45, 12:17:45, 12:18:45, then the turn ends
+    /// with the user message persisted and no assistant row. The provider
+    /// takes 60s to fail each attempt, so the attempt-count bound (3) buys
+    /// four minutes of silence.
+    ///
+    /// Against `decide_stream_retry` — the function the ladder actually
+    /// calls — the very first failure at t=60s is already past the 45s wall
+    /// clock, so the ladder must refuse to re-issue. This test fails if the
+    /// wall-clock term is removed from the decision, which is exactly the
+    /// pre-fix behaviour.
+    /// RT-461: the production predicate re-armed the budget on the turn's
+    /// FIRST failure ("or is the turn's first"), so the clock restarted at
+    /// the first drop and the first attempt's stall was EXEMPT — the
+    /// opposite of what this module is for ("the clock starts at
+    /// construction … rather than at the first failure").
+    ///
+    /// BEHAVIORAL: a pure stall (no output at all) must NOT re-arm; a cut
+    /// after real output must.
     #[test]
     fn incident_provider_is_cut_at_the_first_failure() {
         let decision = decide(Duration::from_secs(60), /* attempts */ 0);

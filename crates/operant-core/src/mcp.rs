@@ -2691,8 +2691,6 @@ impl McpManager {
 
 #[cfg(test)]
 mod rt459_tests {
-    use super::*;
-
     /// RT-459: three protocol sends/writes whose failures were discarded:
     /// the stdio transport's error RESPONSES to a server's request (two
     /// sites — sampling and elicitation) and the SSE transport's response

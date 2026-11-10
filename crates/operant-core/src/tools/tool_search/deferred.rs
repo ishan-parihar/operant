@@ -286,11 +286,6 @@ mod tests {
     /// BEHAVIORAL: a 3-letter token alone must NOT materialise the tool.
     #[test]
     fn a_three_letter_token_alone_does_not_materialise() {
-        let cat = catalog();
-        let tool = cat
-            .iter()
-            .find(|s| s.name == "mcp_linear_search_issues")
-            .expect("fixture tool");
         // "api" is three letters and appears in the tool's name and
         // description -- with a length-3 floor it would match.
         let three_letter = ToolSchema::new("mcp_api", "Call the api", json!({ "type": "object" }))
