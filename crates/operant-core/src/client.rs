@@ -1068,7 +1068,20 @@ fn apply_reasoning_field(
             if let Some(max) = max_tokens
                 && budget >= max
             {
-                budget = max.saturating_sub(1024).max(1024);
+                // RT-474: the clamp was `max.saturating_sub(1024).max(1024)`
+                // — which for `max_tokens = 512` produced 1024 (ABOVE the
+                // cap) and for `max_tokens = 1024` produced 1024 (NOT below
+                // it). Anthropic requires `budget_tokens < max_tokens`, so
+                // such a request is rejected with a 400. The branch was
+                // unreachable while the shape could not be forced (RT-473);
+                // it is live now. The clamp keeps the old value where it was
+                // valid (a cap above 1024 leaves room for the answer) and
+                // only falls back to "one below the cap" where it was not.
+                budget = if max > 1024 {
+                    max - 1024
+                } else {
+                    max.saturating_sub(1).max(1)
+                };
             }
             request["thinking"] = json!({"type": "enabled", "budget_tokens": budget});
             if let Some(obj) = request.as_object_mut() {
@@ -3377,11 +3390,46 @@ Connection: close
         clippy::expect_used,
         reason = "test fixture: the request is built from literal options; a build failure is a test bug"
     )]
+    /// RT-474: the Anthropic thinking branch clamped the budget with
+    /// `max.saturating_sub(1024).max(1024)` — which for `max_tokens = 512`
+    /// produced 1024 (ABOVE the cap) and for `max_tokens = 1024` produced
+    /// 1024 (NOT below it). Anthropic requires `budget_tokens <
+    /// max_tokens`, so such a request is rejected with a 400.
+    ///
+    /// BEHAVIORAL: the budget must be below the cap, at every cap.
+    #[test]
+    fn the_anthropic_thinking_budget_stays_below_max_tokens() {
+        let client = OpenAIClient::new(ClientConfig::default());
+        let messages = [Message::user("hi")];
+        for max_tokens in [512u32, 1024, 2048, 4096] {
+            let body = client
+                .build_chat_request(
+                    "demo",
+                    &messages,
+                    None,
+                    false,
+                    Some(max_tokens),
+                    None,
+                    Some("medium"),
+                    ReasoningShape::AnthropicThinking,
+                )
+                .expect("the request builds");
+            let budget = body["thinking"]["budget_tokens"]
+                .as_u64()
+                .expect("a budget");
+            assert!(
+                budget < max_tokens as u64,
+                "the thinking budget must be below max_tokens — Anthropic \
+                 rejects the request otherwise: budget={budget} \
+                 max_tokens={max_tokens}"
+            );
+        }
+    }
+
     /// `build_chat_request` now threads `max_tokens` and `temperature` into
     /// the JSON body. Previously these fields existed on `ChatRequest` but
     /// were dropped by the OpenAI adapter — config-level values never reached
     /// the provider.
-
     #[test]
     fn build_chat_request_includes_max_tokens_and_temperature_when_set() {
         let client = OpenAIClient::new(ClientConfig::default());
