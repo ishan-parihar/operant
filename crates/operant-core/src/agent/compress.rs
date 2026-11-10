@@ -131,7 +131,8 @@ pub fn fast_trim_tool_results(messages: &mut [Message], cfg: &PreflightConfig) -
         if msg.role != Role::Tool {
             continue;
         }
-        if msg.content.len() <= max {
+        // RT-465: the budget is in characters (see `truncate_head_tail`).
+        if msg.content.chars().count() <= max {
             continue;
         }
         if cfg
@@ -144,9 +145,9 @@ pub fn fast_trim_tool_results(messages: &mut [Message], cfg: &PreflightConfig) -
         if msg.content.contains("data:image/") {
             continue;
         }
-        let original_len = msg.content.len();
+        let original_len = msg.content.chars().count();
         msg.content = truncate_tool_content(&msg.content, max);
-        saved += original_len - msg.content.len();
+        saved += original_len.saturating_sub(msg.content.chars().count());
     }
     saved
 }
@@ -174,34 +175,51 @@ fn truncate_tool_content(content: &str, max_chars: usize) -> String {
 // inert text in the text-only summarizer path; add the nudge if a vision
 // summarizer ever consumes trimmed tool output.
 fn truncate_head_tail(s: &str, max_chars: usize) -> String {
-    if s.len() <= max_chars {
+    // RT-465: the budget is documented in CHARACTERS ("Returns total
+    // characters saved", "Truncate a tool message body to `max_chars`", and
+    // the marker says "characters truncated") but the arithmetic was in
+    // BYTES (`s.len()`), so a CJK tool result kept ~667 characters under a
+    // 2000-character budget, and the marker reported a byte count as a
+    // character count — a wrong number the model reasons over. The repo
+    // already fixed this class in turn_rules.rs (RT-455).
+    let total_chars = s.chars().count();
+    if total_chars <= max_chars {
         return s.to_string();
     }
     let head_len = max_chars * 2 / 3;
     let tail_len = max_chars.saturating_sub(head_len);
-    let mut head_end = head_len.min(s.len());
-    while head_end > 0 && !s.is_char_boundary(head_end) {
-        head_end -= 1;
-    }
-    let mut tail_start = s.len().saturating_sub(tail_len);
-    while tail_start < s.len() && !s.is_char_boundary(tail_start) {
-        tail_start += 1;
-    }
+    // The byte offsets of the char boundaries the head and tail end on.
+    let head_end = s
+        .char_indices()
+        .nth(head_len)
+        .map(|(i, _)| i)
+        .unwrap_or(s.len());
+    // The byte offset of the first character of the tail: the tail is
+    // exactly `tail_len` characters long (an empty tail when it is zero).
+    let tail_start = s
+        .char_indices()
+        .nth(total_chars.saturating_sub(tail_len))
+        .map(|(i, _)| i)
+        .unwrap_or(s.len());
     if head_end >= tail_start {
-        let mut end = max_chars.min(s.len());
-        while end > 0 && !s.is_char_boundary(end) {
-            end -= 1;
-        }
+        // Not enough room for both halves: keep the head.
+        let end = s
+            .char_indices()
+            .nth(max_chars)
+            .map(|(i, _)| i)
+            .unwrap_or(s.len());
+        let kept = s[..end].chars().count();
         return format!(
             "{}\n\n[... {} characters truncated ...]",
             &s[..end],
-            s.len() - end
+            total_chars - kept
         );
     }
+    let kept = s[..head_end].chars().count() + s[tail_start..].chars().count();
     format!(
         "{}\n\n[... {} characters truncated ...]\n\n{}",
         &s[..head_end],
-        tail_start - head_end,
+        total_chars - kept,
         &s[tail_start..]
     )
 }
@@ -930,6 +948,64 @@ mod preflight_tests {
     }
 
     // ── inline tool-result trim (c) ────────────────────────────────────
+
+    /// RT-465: the trim's budget is documented in CHARACTERS but the
+    /// arithmetic was in BYTES, so a CJK tool result kept ~667 characters
+    /// under a 2000-character budget, and the marker reported a byte count
+    /// as a character count — a wrong number the model reasons over. The
+    /// repo already fixed this class in turn_rules.rs (RT-455).
+    ///
+    /// BEHAVIORAL: the budget must hold characters, in any script.
+    #[test]
+    fn the_tool_result_trim_budget_counts_characters() {
+        let cjk = "漢".repeat(4000);
+        let trimmed = truncate_head_tail(&cjk, 2000);
+        // The marker reports CHARACTERS truncated, not bytes.
+        let marker = trimmed
+            .split("[... ")
+            .nth(1)
+            .and_then(|rest| rest.split(" characters truncated").next())
+            .expect("the truncation marker");
+        let reported: usize = marker.parse().expect("a number");
+        // The head is 2/3 of the budget and the tail 1/3, so 2,000 of the
+        // 4,000 characters survive and 2,000 are reported as removed.
+        let head = trimmed.split("\n\n[... ").next().unwrap_or_default();
+        let tail = trimmed
+            .split(" characters truncated ...]\n\n")
+            .nth(1)
+            .unwrap_or_default();
+        let body_chars = head.chars().count() + tail.chars().count();
+        assert_eq!(
+            reported, 2000,
+            "the marker must report the CHARACTERS removed, not the bytes"
+        );
+        assert_eq!(
+            body_chars, 2000,
+            "the kept body must be within the character budget"
+        );
+
+        // The fast path's accounting is in characters too.
+        let mut messages = vec![msg(Role::Tool, &cjk)];
+        let cfg = PreflightConfig {
+            tool_result_retrim_chars: 2000,
+            protect_first_n: 0,
+            protect_last_n: 0,
+            ..Default::default()
+        };
+        let saved = fast_trim_tool_results(&mut messages, &cfg);
+        let kept_chars = messages[0].content.chars().count();
+        assert_eq!(
+            saved,
+            4000 - kept_chars,
+            "the saved count must be in characters"
+        );
+        assert!(
+            (2000..2100).contains(&kept_chars),
+            "the kept result must be about the 2000-CHARACTER budget — under \
+             the old byte arithmetic it kept ~667 characters (and the \
+             marker reported a byte count as a character count): {kept_chars}"
+        );
+    }
 
     #[test]
     fn fast_trim_protects_first_and_last_n() {
