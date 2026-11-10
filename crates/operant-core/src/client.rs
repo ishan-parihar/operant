@@ -246,8 +246,15 @@ impl OpenAIClient {
     /// Swap the runtime API key (credential-pool rotation).
     ///
     /// The override takes precedence over `config.api_key` in
-    /// `build_headers` until cleared. Setting an empty
-    /// string clears the override and falls back to the configured key.
+    /// `build_headers` until cleared. Setting an empty string clears the
+    /// override.
+    ///
+    /// RT-478: this doc used to promise that clearing the override hands
+    /// the CONFIGURED key back. That is true only while the client still
+    /// talks to its configured host: after a runtime retarget the
+    /// configured key belongs to the OLD endpoint — "never send it to the
+    /// new host" — so the cleared client sends no key at all. Set the new
+    /// endpoint's key explicitly.
     pub fn set_api_key(&self, api_key: &str) {
         let value = if api_key.trim().is_empty() {
             None
@@ -2122,6 +2129,31 @@ mod tests {
         ] {
             assert!(!is_local_endpoint(remote), "{remote}");
         }
+    }
+
+    /// RT-478: `set_api_key("")`'s doc promised that clearing the override
+    /// hands the CONFIGURED key back. That is true only while the client
+    /// still talks to its configured host: after a runtime retarget the
+    /// configured key belongs to the OLD endpoint ("never send it to the
+    /// new host"), so the cleared client sends no key at all.
+    ///
+    /// SOURCE contract over the doc, needle concatenation-built (the
+    /// behaviour itself is pinned by the test below it).
+    #[test]
+    fn the_api_key_doc_states_the_retarget_rule() {
+        let src = include_str!("client.rs");
+        let prod = &src[..src.find("#[cfg(test)]").unwrap_or(src.len())];
+        // Single-line fragments: a needle that spans a doc comment's own
+        // line break matches NOTHING.
+        let false_claim = format!("override and falls back to the {}", "configured key");
+        assert_eq!(
+            prod.matches(&false_claim).count(),
+            0,
+            "the doc must not promise the configured key back — after a \
+             retarget it belongs to the old host"
+        );
+        let rule = format!("configured key belongs to the {}", "OLD endpoint");
+        assert!(prod.contains(&rule), "the doc must state the retarget rule");
     }
 
     #[test]
