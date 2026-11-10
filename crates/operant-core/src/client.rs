@@ -1752,6 +1752,21 @@ impl Stream for ChatStreamResponse {
                 return Poll::Ready(Some(event));
             }
 
+            // RT-477: a parse that DROPPED a corrupt payload may have left
+            // a VALID event in the buffer behind it. Polling the inner
+            // stream before re-parsing meant a quiet connection (the server
+            // sent everything and holds the socket open, with no [DONE])
+            // armed the idle timer and reported a stall -- the valid event
+            // was never yielded, and the turn ended with a stall error
+            // instead of the content. The Ready(None) drain path below was
+            // fixed for this (iter-754); the Pending path was not.
+            //
+            // Re-parse first. Each `continue` implies a drop, and a drop
+            // consumes the buffer, so the loop terminates.
+            if dropped_here > 0 {
+                continue;
+            }
+
             let polled = Pin::new(&mut this.inner).poll_next(cx);
             if let Some(idle) = this.idle_timeout {
                 if polled.is_pending() {
@@ -3114,6 +3129,58 @@ Connection: close
             dropped.load(std::sync::atomic::Ordering::Relaxed),
             2,
             "both corrupted payloads counted as dropped"
+        );
+    }
+
+    /// RT-477: a parse that DROPPED a corrupt payload could leave a VALID
+    /// event in the buffer behind it. The parser polled the inner stream
+    /// before re-parsing, so a quiet connection (the server sent everything
+    /// and holds the socket open, with no [DONE]) armed the idle timer and
+    /// reported a stall — the valid event was never yielded, and the turn
+    /// ended with a stall error instead of the content. The Ready(None)
+    /// drain path was fixed for this (iter-754); the Pending path was not.
+    ///
+    /// BEHAVIORAL: the valid event must be yielded BEFORE the idle
+    /// timeout fires.
+    #[tokio::test]
+    async fn a_valid_event_behind_a_corrupt_one_beats_the_idle_timeout() {
+        use futures::StreamExt;
+
+        // A corrupt payload, then a valid one, then silence forever (the
+        // server holds the socket open).
+        let body = "data: {corrupt\n\ndata: {\"id\":\"2\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"demo\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Ok\"},\"finish_reason\":null}]}\n\n";
+        let chunks: Vec<std::result::Result<Bytes, reqwest::Error>> = vec![Ok(Bytes::from(body))];
+        let stream = futures::stream::iter(chunks).chain(futures::stream::pending());
+
+        // The idle timeout is generous (500ms) so the measurement is not a
+        // coin flip: the parser polls the inner stream before it re-parses
+        // the buffer, so the valid event waits for the NEXT wake-up — which,
+        // on a quiet connection, is the idle timer. The event is not lost
+        // (the end-of-body drain yields it), but it is delayed by up to the
+        // whole idle timeout, which in production is a minute.
+        let mut response =
+            ChatStreamResponse::new(stream).with_idle_timeout(Duration::from_millis(500));
+        let started = std::time::Instant::now();
+        let event = response
+            .next()
+            .await
+            .expect("an event must arrive")
+            .expect("the event must not be an error");
+        let content = event
+            .choices
+            .first()
+            .and_then(|c| c.delta.content.clone())
+            .expect("the event carries content");
+        assert_eq!(
+            content, "Ok",
+            "the valid event behind the corrupt one must be yielded"
+        );
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < std::time::Duration::from_millis(100),
+            "the valid event must not wait for the idle timeout: {elapsed:?} \
+             (the idle is 500ms — the parser polled the stream before it \
+             re-parsed the buffer)"
         );
     }
 
