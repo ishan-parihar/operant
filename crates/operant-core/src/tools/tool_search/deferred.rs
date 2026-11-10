@@ -11,7 +11,7 @@
 //! # Exactly what the trigger is
 //!
 //! A **lexical overlap heuristic**. A deferred tool materialises when at
-//! least [`MIN_OVERLAP`] *distinct* content tokens (length >= 3, case
+//! least [`MIN_OVERLAP`] *distinct* content tokens (length >= 4, case
 //! folded, alphanumeric runs) of the turn text also appear in the tool's
 //! `name` or `description`. No embedding, no model call, no scoring, no
 //! ranking. First match wins; ties are irrelevant because a match is
@@ -273,6 +273,58 @@ mod tests {
             relevance("search my linear issues please", tool),
             3, // "search" + "linear" + "issues"
             "relevance must count DISTINCT overlapping tokens"
+        );
+    }
+
+    /// RT-456: the module doc put the content tokens' length floor at
+    /// three while the code's floor is four — and the floor matters (the
+    /// constant's own comment says so: three-letter English is dominated
+    /// by function words, so a lower floor made every server tool match
+    /// every turn). A caller reasoning from the doc believed three-letter
+    /// tokens could trigger materialisation.
+    ///
+    /// BEHAVIORAL: a 3-letter token alone must NOT materialise the tool.
+    #[test]
+    fn a_three_letter_token_alone_does_not_materialise() {
+        let cat = catalog();
+        let tool = cat
+            .iter()
+            .find(|s| s.name == "mcp_linear_search_issues")
+            .expect("fixture tool");
+        // "api" is three letters and appears in the tool's name and
+        // description -- with a length-3 floor it would match.
+        let three_letter = ToolSchema::new("mcp_api", "Call the api", json!({ "type": "object" }))
+            .with_exposure(crate::tools::ToolExposure::Deferred);
+        assert!(
+            !is_relevant("api", &three_letter),
+            "a three-letter token is below the floor and must not materialise"
+        );
+        // The same token at length 4 does.
+        let four_letter = ToolSchema::new("mcp_api", "Call the apis", json!({ "type": "object" }))
+            .with_exposure(crate::tools::ToolExposure::Deferred);
+        assert!(
+            is_relevant("apis", &four_letter),
+            "a four-letter token is at the floor and does materialise"
+        );
+    }
+
+    /// RT-456: and the DOC must state the floor the code keeps — a
+    /// behavioral test cannot catch a doc regression.
+    ///
+    /// SOURCE contract.
+    #[test]
+    fn the_module_doc_states_the_token_floor_the_code_keeps() {
+        let src = include_str!("deferred.rs");
+        // The PRODUCTION region only: the test module quotes the old floor
+        // while explaining the defect.
+        let prod = &src[..src.find("#[cfg(test)]").unwrap_or(src.len())];
+        assert!(
+            prod.contains("length >= 4"),
+            "the module doc must state the floor the code keeps"
+        );
+        assert!(
+            !prod.contains("length >= 3"),
+            "the module doc must not state a floor the code does not keep"
         );
     }
 
