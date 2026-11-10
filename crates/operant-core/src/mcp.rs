@@ -725,11 +725,38 @@ impl McpClient {
             .post(&self.url)
             .header("Content-Type", "application/json");
 
+        // RT-440: the notification used to be sent as a BARE post — no
+        // session id, no streamable Accept. The session id is the serious
+        // one: every request after the initialize must echo it, so a
+        // notification without it lands in a NEW session, and the server
+        // forgets the state it was initialized with. The notification that
+        // tells the server the client is ready was therefore addressed to
+        // a session that did not exist. The headers now match the request
+        // path's, exactly.
+        if self.streamable {
+            req_builder = req_builder.header("Accept", MCP_STREAMABLE_ACCEPT);
+            if let Some(session) = self.session_id.lock().await.as_ref() {
+                req_builder = req_builder.header(MCP_SESSION_ID_HEADER, session.as_str());
+            }
+        }
+
         if let Some(ref token) = self.auth_token {
             req_builder = req_builder.header("Authorization", format!("Bearer {}", token));
         }
 
-        let _ = req_builder.json(&request).send().await;
+        // RT-439: the send's result was DISCARDED, so a failed request —
+        // a connection error, a 500, anything — was invisible: the caller
+        // was told the notification went out. The SSE transport already
+        // reported it this way; this one now matches.
+        req_builder
+            .json(&request)
+            .send()
+            .await
+            .map_err(|e| crate::error::Error::Agent(format!("MCP notification failed: {e}")))?
+            .error_for_status()
+            .map_err(|e| {
+                crate::error::Error::Agent(format!("MCP notification returned an error: {e}"))
+            })?;
         Ok(())
     }
 }
@@ -1518,10 +1545,25 @@ impl McpStdioClient {
         request_line.push('\n');
 
         let mut io_guard = self.io.lock().await;
-        if let Some(io) = io_guard.as_mut() {
-            let _ = io.stdin.write_all(request_line.as_bytes()).await;
-            let _ = io.stdin.flush().await;
-        }
+        // RT-439: the write and the flush were both discarded, and a
+        // MISSING transport was silently skipped — so this function could
+        // not fail, whatever happened to the notification. It carries the
+        // protocol's "initialized" notification, so a lost one leaves the
+        // client believing it is connected to a server that was never told.
+        let Some(io) = io_guard.as_mut() else {
+            return Err(crate::error::Error::Agent(
+                "MCP stdio: no transport — the notification was not sent".to_string(),
+            ));
+        };
+        io.stdin
+            .write_all(request_line.as_bytes())
+            .await
+            .map_err(|e| {
+                crate::error::Error::Agent(format!("MCP stdio: notification write failed: {e}"))
+            })?;
+        io.stdin.flush().await.map_err(|e| {
+            crate::error::Error::Agent(format!("MCP stdio: notification flush failed: {e}"))
+        })?;
 
         Ok(())
     }
@@ -2605,6 +2647,61 @@ impl McpManager {
 }
 
 #[cfg(test)]
+mod rt439_tests {
+    use super::*;
+
+    /// RT-439: two of the three `send_notification` implementations could
+    /// not fail — the stdio one discarded the write and the flush and
+    /// silently skipped a missing transport, the streamable-HTTP one
+    /// discarded the whole send. The notification they carry is the
+    /// protocol's "initialized": a lost one leaves the client believing it
+    /// is connected to a server that was never told.
+    ///
+    /// BEHAVIORAL: a stdio client with no transport must REPORT the lost
+    /// notification instead of returning Ok(()).
+    #[tokio::test]
+    async fn a_stdio_notification_without_a_transport_is_reported() {
+        let client = McpStdioClient::new("true", vec![], HashMap::new());
+        let err = client
+            .send_notification("notifications/initialized", Value::Null)
+            .await
+            .expect_err("a notification that was never sent must not report success");
+        assert!(
+            err.to_string().contains("was not sent"),
+            "the error must say the notification was not sent: {err}"
+        );
+    }
+
+    /// RT-439: and the source shape — a notification whose result is
+    /// discarded cannot report anything. SOURCE contract: the class, across
+    /// every transport in the file.
+    #[test]
+    fn no_transport_discards_a_notification_result() {
+        let src = include_str!("mcp.rs");
+        let prod = &src[..src.find("#[cfg(test)]").unwrap_or(src.len())];
+        assert_eq!(
+            prod.matches("let _ = req_builder.json(&request).send().await;")
+                .count(),
+            0,
+            "a discarded send means a lost notification is invisible"
+        );
+        assert_eq!(
+            prod.matches("let _ = io.stdin.write_all(request_line.as_bytes()).await;")
+                .count(),
+            0,
+            "a discarded write means a lost notification is invisible"
+        );
+        // The stdio path must not skip a missing transport silently.
+        assert_eq!(
+            prod.matches("if let Some(io) = io_guard.as_mut() {")
+                .count(),
+            0,
+            "a missing transport must be reported, not skipped"
+        );
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -3067,6 +3164,20 @@ while True:
             .create_async()
             .await;
 
+        // The initialized notification: a notification has NO response
+        // expected, so a spec-compliant server accepts it and answers 202.
+        // RT-439: the client now REPORTS a notification it could not
+        // deliver (the streamable-HTTP transport used to discard the
+        // whole send), so this mock is here for the conformance it
+        // requires -- without it, mockito answers an unmatched POST with
+        // 501 and the handshake correctly fails.
+        let initialized = server
+            .mock("POST", "/mcp")
+            .match_header("Mcp-Session-Id", "sess-123")
+            .with_status(202)
+            .create_async()
+            .await;
+
         // The tools/list: must echo the session id the server handed out.
         let tools_list = server
             .mock("POST", "/mcp")
@@ -3082,6 +3193,7 @@ while True:
         client.connect().await.expect("the streamable handshake");
 
         initialize.assert_async().await;
+        initialized.assert_async().await;
         tools_list.assert_async().await;
     }
 
