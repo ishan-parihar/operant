@@ -640,7 +640,18 @@ impl OpenAIClient {
                 return Ok(ChatStreamResponse::new(stream).with_idle_timeout(idle));
             }
 
-            let body = read_bounded_error_body(response).await;
+            let body = match read_bounded_error_body(response).await {
+                Ok(text) => text,
+                Err(reason) => {
+                    warn!(
+                        status = %status,
+                        reason = %reason,
+                        "the provider's error body could not be read — the status is \
+                         reported with an empty body"
+                    );
+                    String::new()
+                }
+            };
 
             if status == 429 {
                 self.rate_limiter
@@ -761,11 +772,31 @@ impl OpenAIClient {
             // non-streaming chat bodies then failed to parse (RT-319). Same
             // shape the streaming path above already uses.
             if status.is_success() {
-                let body_text = response.text().await.unwrap_or_default();
+                // RT-460: the read's failure was discarded, so a transport
+                // failure while reading a 200 body (a provider reset
+                // mid-body, a truncated chunked response) became an EMPTY
+                // body -- and the caller then reported a JSON parse error,
+                // as if the provider had answered with garbage. The
+                // network failure is now what the caller sees.
+                let body_text = response
+                    .text()
+                    .await
+                    .map_err(|e| Error::Network(e.into()))?;
                 return Ok((status, body_text));
             }
 
-            let body_text = read_bounded_error_body(response).await;
+            let body_text = match read_bounded_error_body(response).await {
+                Ok(text) => text,
+                Err(reason) => {
+                    warn!(
+                        status = %status,
+                        reason = %reason,
+                        "the provider's error body could not be read — the status is \
+                         reported with an empty body"
+                    );
+                    String::new()
+                }
+            };
 
             // 3. Handle 429 rate limiting.
             if status == 429 {
@@ -1467,7 +1498,15 @@ pub struct StreamingToolCallDelta {
 pub(crate) const MAX_ERROR_BODY_BYTES: usize = 64 * 1024;
 pub(crate) const ERROR_BODY_READ_TIMEOUT: Duration = Duration::from_secs(10);
 
-pub(crate) async fn read_bounded_error_body(response: reqwest::Response) -> String {
+/// The body's text, or the reason it could not be read.
+///
+/// RT-460: the reader broke out of the loop on a transport error and
+/// returned whatever it had -- usually nothing -- so the caller reported
+/// "the provider answered with an empty body" for a connection that had
+/// actually failed mid-body. The reason comes back now.
+pub(crate) async fn read_bounded_error_body(
+    response: reqwest::Response,
+) -> std::result::Result<String, String> {
     use futures_util::StreamExt;
 
     let mut stream = response.bytes_stream();
@@ -1483,7 +1522,10 @@ pub(crate) async fn read_bounded_error_body(response: reqwest::Response) -> Stri
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
         let chunk = match tokio::time::timeout(remaining, stream.next()).await {
             Ok(Some(Ok(chunk))) => chunk,
-            Ok(Some(Err(_))) | Ok(None) => break,
+            Ok(Some(Err(e))) => {
+                return Err(format!("the error body read failed: {e}"));
+            }
+            Ok(None) => break,
             Err(_) => break, // timed out waiting for the next chunk
         };
         if buf.len() + chunk.len() > MAX_ERROR_BODY_BYTES {
@@ -1494,7 +1536,7 @@ pub(crate) async fn read_bounded_error_body(response: reqwest::Response) -> Stri
         buf.extend_from_slice(&chunk);
     }
 
-    String::from_utf8_lossy(&buf).into_owned()
+    Ok(String::from_utf8_lossy(&buf).into_owned())
 }
 
 /// Classify an HTTP error from the provider API into a structured Error variant.
@@ -2160,6 +2202,61 @@ mod tests {
         server.abort();
     }
     use super::*;
+
+    /// RT-460: a failed read of a 200 response body was swallowed, so the
+    /// caller received an EMPTY body and reported a JSON parse error — a
+    /// network failure presented as garbage from the provider. The
+    /// classification then treated it as unknown/retryable rather than a
+    /// network failure, and the user saw a parse error for a dropped
+    /// connection.
+    ///
+    /// BEHAVIORAL: a server that declares a body it does not send must
+    /// produce a NETWORK failure, not a parse failure.
+    #[tokio::test]
+    async fn a_truncated_success_body_is_reported_as_a_network_failure() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            if let Ok((mut sock, _)) = listener.accept().await {
+                let mut buf = [0u8; 4096];
+                let _ = sock.read(&mut buf).await;
+                // The headers promise 100 bytes; only 5 arrive, and the
+                // connection closes — a body that never arrived whole.
+                let response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 100\r\nConnection: close\r\n\r\n{\"id\"";
+                let _ = sock.write_all(response.as_bytes()).await;
+                let _ = sock.shutdown().await;
+            }
+        });
+
+        let config = ClientConfig {
+            base_url: format!("http://{addr}"),
+            api_key: Some("test-key".into()),
+            timeout: Duration::from_secs(10),
+            max_context_length: 8000,
+            rate_limit: crate::config::RateLimitSettings {
+                max_retries: 0,
+                base_delay_secs: 0,
+                max_delay_secs: 1,
+                bucket_capacity: 100,
+                bucket_refill_rate: 100.0,
+            },
+            prompt_cache_ttl: Default::default(),
+        };
+        let client = OpenAIClient::new(config);
+        let err = client
+            .chat("demo", &[Message::user("hi")], None, None, None)
+            .await
+            .expect_err("a truncated body must fail");
+        assert!(
+            matches!(err, Error::Network(_)),
+            "a body that never arrived whole is a network failure, not a parse \
+             failure: {err:?}"
+        );
+        server.abort();
+    }
 
     /// `[client.rate_limit] max_retries = 0` must mean "make the request
     /// once, do not retry" — not "make no request".
@@ -2906,7 +3003,11 @@ Connection: close
             .send()
             .await
             .expect("request should succeed");
-        let body = read_bounded_error_body(resp).await;
+        // RT-460: the reader now reports a failed read (here the body
+        // arrived whole, so it is Ok).
+        let body = read_bounded_error_body(resp)
+            .await
+            .expect("the body arrived whole");
         assert!(
             body.len() <= MAX_ERROR_BODY_BYTES,
             "body capped at {}",
@@ -2948,7 +3049,9 @@ Connection: close
             .send()
             .await
             .expect("request should succeed");
-        let body = read_bounded_error_body(resp).await;
+        let body = read_bounded_error_body(resp)
+            .await
+            .expect("the body arrived whole");
         assert_eq!(body, small);
         server.abort();
     }
