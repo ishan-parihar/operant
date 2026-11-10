@@ -668,8 +668,15 @@ impl OperantAgent {
         request: ChatRequest,
         prompt: usize,
         reported: bool,
-        _shape: crate::client::ReasoningShape,
+        shape: crate::client::ReasoningShape,
     ) -> ChatRequest {
+        // RT-472: the resolved shape was bound to `_shape` and DROPPED, so
+        // the operator's `reasoning_effort_param` never reached the wire:
+        // the adapter hardcoded `Auto`, so "none" still sent a
+        // `reasoning_effort` field on every non-openrouter host and the
+        // forced shapes had no production caller at all. The shape travels
+        // with the request now.
+        let request = request.with_reasoning_shape(shape);
         match crate::context_management::fit_output_tokens(
             request.max_tokens,
             self.effective_context_window(),
@@ -948,6 +955,30 @@ mod preflight_tests {
     }
 
     // ── inline tool-result trim (c) ────────────────────────────────────
+
+    /// RT-472: the agent RESOLVED the operator's `reasoning_effort_param`
+    /// into a wire shape and then dropped it (`_shape`), so the shape never
+    /// reached the request — and the adapter hardcoded `Auto`, so
+    /// "none" still sent a `reasoning_effort` field on every non-openrouter
+    /// host.
+    ///
+    /// SOURCE contract over the seam: the resolved shape must be attached to
+    /// the request, not bound to an unused parameter.
+    #[test]
+    fn the_resolved_reasoning_shape_is_attached_to_the_request() {
+        let src = include_str!("compress.rs");
+        // The needle is split so the contract's own text does not match it.
+        let dropped = format!("_shape: crate::client::{}", "ReasoningShape");
+        assert!(
+            !src.contains(&dropped),
+            "the resolved shape must not be bound to an unused parameter"
+        );
+        let attached = format!("request.with_reasoning_shape({})", "shape");
+        assert!(
+            src.contains(&attached),
+            "the resolved shape must travel with the request"
+        );
+    }
 
     /// RT-465: the trim's budget is documented in CHARACTERS but the
     /// arithmetic was in BYTES, so a CJK tool result kept ~667 characters

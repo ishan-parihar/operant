@@ -3302,6 +3302,74 @@ Connection: close
         let err = classify_http_error(429, "not json at all");
         assert!(matches!(err, Error::RateLimited { .. }));
     }
+    /// RT-472: the operator's `agent.reasoning_effort_param` never reached
+    /// the wire — the adapter hardcoded `Auto` — so "none" still sent
+    /// `reasoning_effort` on every non-openrouter host, "anthropic_thinking"
+    /// never emitted a `thinking` block, and the forced branches of
+    /// `apply_reasoning_field` had NO production caller at all.
+    ///
+    /// BEHAVIORAL: the forced shapes must reach the serialized body.
+    #[test]
+    fn the_reasoning_shape_reaches_the_wire() {
+        let client = OpenAIClient::new(ClientConfig::default());
+        let messages = [Message::user("hi")];
+
+        // "None" — never send the field.
+        let body = client
+            .build_chat_request(
+                "demo",
+                &messages,
+                None,
+                false,
+                None,
+                None,
+                Some("high"),
+                ReasoningShape::None,
+            )
+            .expect("the request builds");
+        assert!(
+            !body.get("reasoning_effort").is_some()
+                && !body.get("reasoning").is_some()
+                && !body.get("thinking").is_some(),
+            "the None shape must send no reasoning field: {body}"
+        );
+
+        // The forced object shape.
+        let body = client
+            .build_chat_request(
+                "demo",
+                &messages,
+                None,
+                false,
+                None,
+                None,
+                Some("high"),
+                ReasoningShape::ReasoningObject,
+            )
+            .expect("the request builds");
+        assert_eq!(
+            body["reasoning"]["effort"], "high",
+            "the forced object shape must reach the wire: {body}"
+        );
+
+        // The forced Anthropic thinking shape.
+        let body = client
+            .build_chat_request(
+                "demo",
+                &messages,
+                None,
+                false,
+                None,
+                None,
+                Some("medium"),
+                ReasoningShape::AnthropicThinking,
+            )
+            .expect("the request builds");
+        assert_eq!(
+            body["thinking"]["type"], "enabled",
+            "the forced thinking shape must reach the wire: {body}"
+        );
+    }
 
     // --- iter-23: max_tokens / temperature pass-through tests ---
 
@@ -3313,6 +3381,7 @@ Connection: close
     /// the JSON body. Previously these fields existed on `ChatRequest` but
     /// were dropped by the OpenAI adapter — config-level values never reached
     /// the provider.
+
     #[test]
     fn build_chat_request_includes_max_tokens_and_temperature_when_set() {
         let client = OpenAIClient::new(ClientConfig::default());

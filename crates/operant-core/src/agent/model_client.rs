@@ -7,7 +7,7 @@
 use async_trait::async_trait;
 use futures::stream::BoxStream;
 
-use crate::client::{ChatResponse, Message, ToolCall, Usage};
+use crate::client::{ChatResponse, Message, ReasoningShape, ToolCall, Usage};
 use crate::error::Result;
 use crate::schema::ToolSchema;
 
@@ -29,6 +29,15 @@ pub struct ChatRequest {
     /// review) — only main turns carry effort, and only when the user set
     /// one and the model hasn't rejected the field.
     pub reasoning_effort: Option<String>,
+    /// The WIRE SHAPE for the reasoning field (2026-10-14 batch, plan 03).
+    ///
+    /// RT-472: the operator's `agent.reasoning_effort_param` never reached
+    /// the wire — the adapter hardcoded `Auto` — so "none" still sent
+    /// `reasoning_effort` on every non-openrouter host, and the forced
+    /// shapes had no production caller at all. The shape travels with the
+    /// request (the agent resolves it once, from its config), so every
+    /// adapter honours the operator's choice.
+    pub reasoning_shape: ReasoningShape,
 }
 
 impl ChatRequest {
@@ -42,6 +51,7 @@ impl ChatRequest {
             tools: Vec::new(),
             stream: false,
             reasoning_effort: None,
+            reasoning_shape: ReasoningShape::Auto,
         }
     }
 
@@ -60,6 +70,12 @@ impl ChatRequest {
     /// Attach the reasoning effort (plan 03). Main turns only.
     pub fn with_reasoning_effort(mut self, effort: Option<String>) -> Self {
         self.reasoning_effort = effort;
+        self
+    }
+
+    /// Attach the reasoning field's wire shape (plan 03). Main turns only.
+    pub fn with_reasoning_shape(mut self, shape: ReasoningShape) -> Self {
+        self.reasoning_shape = shape;
         self
     }
 }

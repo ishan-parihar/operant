@@ -80,7 +80,7 @@ impl ModelClient for OpenAIModelClient {
                 request.max_tokens,
                 request.temperature,
                 request.reasoning_effort.as_deref(),
-                crate::client::ReasoningShape::Auto,
+                request.reasoning_shape,
             )
             .await
     }
@@ -104,7 +104,7 @@ impl ModelClient for OpenAIModelClient {
                 request.max_tokens,
                 request.temperature,
                 request.reasoning_effort.as_deref(),
-                crate::client::ReasoningShape::Auto,
+                request.reasoning_shape,
             )
             .await?;
         Ok(map_sse_stream(stream))
@@ -293,6 +293,87 @@ fn extract_tool_calls_from_stream_event(
 
 #[cfg(test)]
 mod tests {
+    /// RT-472: the operator's `agent.reasoning_effort_param` never reached
+    /// the wire — the adapter hardcoded `Auto` — so "none" still sent
+    /// `reasoning_effort` on every non-openrouter host, and the forced
+    /// branches of `apply_reasoning_field` had NO production caller at all.
+    ///
+    /// BEHAVIORAL: the request's shape must reach the SENT body — this
+    /// drives the real adapter against a local server and reads the body it
+    /// sent.
+    #[tokio::test]
+    async fn the_requests_shape_reaches_the_sent_body() {
+        use std::sync::Arc;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let body_seen = Arc::new(std::sync::Mutex::new(String::new()));
+        let body_for_server = Arc::clone(&body_seen);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind a loopback port");
+        let addr = listener.local_addr().expect("the bound address");
+        tokio::spawn(async move {
+            // Two requests: one per shape.
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    return;
+                };
+                let mut buf = vec![0u8; 16 * 1024];
+                let read = socket.read(&mut buf).await.unwrap_or(0);
+                let head = String::from_utf8_lossy(&buf[..read]).to_string();
+                let body = head.split("\r\n\r\n").nth(1).unwrap_or("").to_string();
+                *body_for_server.lock().unwrap() = body;
+                let response = r#"{"id":"1","object":"chat.completion","created":0,"model":"demo","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}"#;
+                let out = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                    response.len(),
+                    response
+                );
+                let _ = socket.write_all(out.as_bytes()).await;
+                let _ = socket.flush().await;
+            }
+        });
+
+        let client = OpenAIClient::new(crate::client::ClientConfig {
+            base_url: format!("http://{addr}/v1"),
+            api_key: Some("k".to_string()),
+            ..crate::client::ClientConfig::default()
+        });
+        let adapter = OpenAIModelClient::new(client);
+
+        // The "None" shape: no reasoning field at all.
+        let request =
+            ChatRequest::new("demo".to_string(), vec![crate::client::Message::user("hi")])
+                .with_reasoning_effort(Some("high".to_string()))
+                .with_reasoning_shape(crate::client::ReasoningShape::None);
+        adapter
+            .chat(request)
+            .await
+            .expect("the request must succeed");
+        let body = body_seen.lock().unwrap().clone();
+        assert!(
+            !body.contains("reasoning_effort")
+                && !body.contains("\"reasoning\"")
+                && !body.contains("thinking"),
+            "the None shape must send no reasoning field: {body}"
+        );
+
+        // The forced object shape.
+        let request =
+            ChatRequest::new("demo".to_string(), vec![crate::client::Message::user("hi")])
+                .with_reasoning_effort(Some("high".to_string()))
+                .with_reasoning_shape(crate::client::ReasoningShape::ReasoningObject);
+        adapter
+            .chat(request)
+            .await
+            .expect("the request must succeed");
+        let body = body_seen.lock().unwrap().clone();
+        assert!(
+            body.contains("\"reasoning\""),
+            "the forced object shape must reach the sent body: {body}"
+        );
+    }
+
     use super::*;
     use crate::client::{
         ChatStreamEvent, StreamChoice, StreamingMessageDelta, StreamingToolCallDelta,
