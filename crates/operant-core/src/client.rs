@@ -73,7 +73,17 @@ pub fn is_local_endpoint(base_url: &str) -> bool {
     };
     match url.host() {
         Some(url::Host::Ipv4(ip)) => ip.is_loopback() || ip.is_private() || ip.is_link_local(),
-        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+        // RT-469: the IPv6 arm checked loopback only, while the IPv4 arm
+        // also checked the private and link-local ranges — so a keyless
+        // server on `http://[fd00::1]:1234/v1` (a unique-local address) or
+        // `http://[fe80::1]:1234/v1` (link-local) was classified as a PUBLIC
+        // host: the pooled client refused the keyless passthrough and the
+        // CLI reported "missing setup step" instead of "an unauthenticated
+        // local server". The function's doc says "this machine or its
+        // private network".
+        Some(url::Host::Ipv6(ip)) => {
+            ip.is_loopback() || ip.is_unique_local() || ip.is_unicast_link_local()
+        }
         Some(url::Host::Domain(d)) => {
             let d = d.to_ascii_lowercase();
             d == "localhost"
@@ -2058,6 +2068,10 @@ mod tests {
             "http://192.168.1.20:1234/v1",
             "http://10.0.0.5/v1",
             "http://gpu-box.local:8000/v1",
+            // RT-469: the IPv6 private and link-local ranges are as local
+            // as their IPv4 counterparts.
+            "http://[fd00::1]:1234/v1",
+            "http://[fe80::1]:1234/v1",
         ] {
             assert!(is_local_endpoint(local), "{local}");
         }
