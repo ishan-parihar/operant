@@ -1443,8 +1443,23 @@ impl McpStdioClient {
                             let mut err_line = serde_json::to_string(&error_response)
                                 .expect("error_response is serializable");
                             err_line.push('\n');
-                            let _ = io.stdin.write_all(err_line.as_bytes()).await;
-                            let _ = io.stdin.flush().await;
+                            // RT-459: the response write's failure was
+                            // discarded, so a server waiting for the answer
+                            // (sampling, elicitation) simply never got one,
+                            // and the client's log said nothing about it.
+                            if let Err(e) = io.stdin.write_all(err_line.as_bytes()).await {
+                                tracing::warn!(
+                                    error = %e,
+                                    method = %method,
+                                    "MCP stdio: the error response could not be written to the server"
+                                );
+                            } else if let Err(e) = io.stdin.flush().await {
+                                tracing::warn!(
+                                    error = %e,
+                                    method = %method,
+                                    "MCP stdio: the error response could not be flushed to the server"
+                                );
+                            }
                         }
                     }
                     "elicitation/create" => {
@@ -1462,8 +1477,23 @@ impl McpStdioClient {
                             let mut err_line = serde_json::to_string(&error_response)
                                 .expect("error_response is serializable");
                             err_line.push('\n');
-                            let _ = io.stdin.write_all(err_line.as_bytes()).await;
-                            let _ = io.stdin.flush().await;
+                            // RT-459: the response write's failure was
+                            // discarded, so a server waiting for the answer
+                            // (sampling, elicitation) simply never got one,
+                            // and the client's log said nothing about it.
+                            if let Err(e) = io.stdin.write_all(err_line.as_bytes()).await {
+                                tracing::warn!(
+                                    error = %e,
+                                    method = %method,
+                                    "MCP stdio: the error response could not be written to the server"
+                                );
+                            } else if let Err(e) = io.stdin.flush().await {
+                                tracing::warn!(
+                                    error = %e,
+                                    method = %method,
+                                    "MCP stdio: the error response could not be flushed to the server"
+                                );
+                            }
                         }
                     }
                     "notifications/progress" | "notifications/cancelled" => {
@@ -1741,7 +1771,20 @@ impl McpSseClient {
                                             // The error goes back as an
                                             // error, with the server's
                                             // code and message.
-                                            let _ = tx.send(sse_response_payload(&parsed));
+                                            // RT-459: the send's failure was
+                                            // discarded — the caller sees a
+                                            // bare "channel closed", with
+                                            // nothing in the log saying the
+                                            // response was lost on the way
+                                            // out.
+                                            // The oneshot's error carries the
+                                            // UNSENT payload, not a message.
+                                            if tx.send(sse_response_payload(&parsed)).is_err() {
+                                                tracing::warn!(
+                                                    "MCP SSE: the response could not be delivered to its caller \
+                                                     (the caller is gone)"
+                                                );
+                                            }
                                         }
                                     }
                                     // Server-initiated requests (sampling, elicitation, etc.)
@@ -2643,6 +2686,36 @@ impl McpManager {
             }
         }
         restarted
+    }
+}
+
+#[cfg(test)]
+mod rt459_tests {
+    use super::*;
+
+    /// RT-459: three protocol sends/writes whose failures were discarded:
+    /// the stdio transport's error RESPONSES to a server's request (two
+    /// sites — sampling and elicitation) and the SSE transport's response
+    /// delivery. A server waiting for an answer never got one, and the
+    /// client's log said nothing about it.
+    ///
+    /// SOURCE contract over the class: no protocol write or send in this
+    /// file may have its result discarded.
+    #[test]
+    fn no_protocol_write_or_send_discards_its_result() {
+        let src = include_str!("mcp.rs");
+        let prod = &src[..src.find("#[cfg(test)]").unwrap_or(src.len())];
+        for discarded in [
+            "let _ = io.stdin.write_all(",
+            "let _ = io.stdin.flush()",
+            "let _ = tx.send(",
+        ] {
+            assert_eq!(
+                prod.matches(discarded).count(),
+                0,
+                "a discarded protocol write means a lost message is invisible: {discarded}"
+            );
+        }
     }
 }
 
