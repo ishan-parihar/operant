@@ -27,7 +27,7 @@ use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener as TokioTcpListener;
 use tokio::sync::{Mutex as AsyncMutex, RwLock, oneshot};
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 use url::Url;
 
 use crate::error::{Error, Result};
@@ -602,18 +602,38 @@ impl TokenStorage {
     // -- Cleanup ----------------------------------------------------------
 
     /// Delete all stored OAuth state for this server.
+    ///
+    /// RT-457: the deletions' errors were discarded and the function
+    /// returned `Ok(())` unconditionally — so a credential file that could
+    /// not be removed (a read-only mount, a permission change) stayed on
+    /// disk while the caller was told the removal succeeded. A file that is
+    /// NOT THERE is already removed, and is not a failure.
     pub fn remove(&self) -> Result<()> {
+        let mut failures: Vec<String> = Vec::new();
         for path in &[
             self.tokens_path(),
             self.client_info_path(),
             self.metadata_path(),
         ] {
-            let _ = std::fs::remove_file(path);
+            if let Err(e) = std::fs::remove_file(path)
+                && e.kind() != std::io::ErrorKind::NotFound
+            {
+                failures.push(format!("{}: {e}", path.display()));
+            }
         }
-        // Remove directory if empty
+        // The directory is cosmetic — the credentials are the files above —
+        // so its removal is best-effort and does not fail the call.
         let _ = std::fs::remove_dir(&self.dir);
-        info!(hash = %self.hash, "OAuth storage removed");
-        Ok(())
+        if failures.is_empty() {
+            info!(hash = %self.hash, "OAuth storage removed");
+            Ok(())
+        } else {
+            Err(Error::Agent(format!(
+                "OAuth storage for {} could not be fully removed: {}",
+                self.hash,
+                failures.join("; ")
+            )))
+        }
     }
 
     /// Check if tokens exist on disk (may be expired).
@@ -1630,17 +1650,27 @@ impl OAuthManager {
     }
 
     /// Remove a server from the cache AND delete its tokens from disk.
+    ///
+    /// RT-457: the storage's result was discarded and the "removed from
+    /// disk" line was logged UNCONDITIONALLY — so a failed deletion was
+    /// reported as a successful one. The claim is now made only when the
+    /// deletion actually happened.
     pub fn remove(&self, server_url: &str) {
         self.clear_cache(server_url);
 
         // Delete tokens from disk
         let storage = TokenStorage::new(server_url);
-        let _ = storage.remove();
-
-        info!(
-            "MCP OAuth: evicted from cache and removed from disk: {}",
-            server_url
-        );
+        match storage.remove() {
+            Ok(()) => info!(
+                "MCP OAuth: evicted from cache and removed from disk: {}",
+                server_url
+            ),
+            Err(e) => error!(
+                "MCP OAuth: evicted from cache, but the stored credentials for {} were \
+                 NOT removed: {}",
+                server_url, e
+            ),
+        }
     }
 }
 
@@ -1665,6 +1695,68 @@ pub fn reset_manager_for_tests() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// RT-457: the storage's removal discarded the deletions' errors and
+    /// returned `Ok(())` unconditionally — so a credential file that could
+    /// not be removed stayed on disk while the caller was told the removal
+    /// succeeded (and the manager logged "removed from disk" either way).
+    ///
+    /// BEHAVIORAL: a token store whose file cannot be removed must report
+    /// the failure.
+    #[test]
+    fn a_credential_that_cannot_be_removed_is_reported() {
+        let _guard = crate::platform::test_env_lock_blocking();
+        let home = std::env::temp_dir().join(format!(
+            "operant_oauth_remove_test_{}_{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&home).expect("home");
+        // SAFETY: the crate-wide env lock is held.
+        unsafe { std::env::set_var("HERMES_HOME", &home) };
+
+        let url = "https://mcp.example.com/mcp";
+        let storage = TokenStorage::new(url);
+        // Make the token path un-removable: a DIRECTORY cannot be unlinked
+        // by `remove_file` (and that holds for root too).
+        std::fs::create_dir_all(&storage.dir).expect("the store dir");
+        std::fs::create_dir_all(storage.tokens_path()).expect("the token path");
+        std::fs::write(storage.client_info_path(), "{}").expect("the client info");
+
+        let err = storage
+            .remove()
+            .expect_err("a credential that could not be removed must be reported");
+        assert!(
+            err.to_string().contains("could not be fully removed"),
+            "the error must say the removal was incomplete: {err}"
+        );
+
+        // SAFETY: the crate-wide env lock is held.
+        unsafe { std::env::remove_var("HERMES_HOME") };
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    /// RT-457: and a store whose files are all gone (or were never there)
+    /// removes cleanly — an absent file is already removed, not a failure.
+    #[test]
+    fn removing_an_absent_store_succeeds() {
+        let _guard = crate::platform::test_env_lock_blocking();
+        let home = std::env::temp_dir().join(format!(
+            "operant_oauth_remove_ok_test_{}_{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&home).expect("home");
+        // SAFETY: the crate-wide env lock is held.
+        unsafe { std::env::set_var("HERMES_HOME", &home) };
+
+        let storage = TokenStorage::new("https://mcp.example.com/mcp");
+        storage.remove().expect("an absent store removes cleanly");
+
+        // SAFETY: the crate-wide env lock is held.
+        unsafe { std::env::remove_var("HERMES_HOME") };
+        let _ = std::fs::remove_dir_all(&home);
+    }
 
     #[test]
     fn test_server_hash_consistency() {
