@@ -910,9 +910,13 @@ impl OperantAgent {
         let mut stream_retry_budget = self::stream_retry_budget::StreamRetryBudget::new();
         // When the last mid-stream failure happened. The budget measures one
         // unbroken run of failures: a failure that follows fresh stream
-        // progress (or is the turn's first) re-arms it, so healthy streaming
-        // time never counts — 2026-10-13: a stream cut after 60s of output
-        // gave up with "0 retries over 60s".
+        // progress re-arms it, so healthy streaming time never counts —
+        // 2026-10-13: a stream cut after 60s of output gave up with "0
+        // retries over 60s". A PURE stall (no output at all) does NOT
+        // re-arm it: its time counts against the bound, which is what the
+        // budget was built for (2026-09-29: the provider accepted the
+        // request and said nothing for 60s, and the ladder gave up after
+        // that attempt instead of paying for a second).
         let mut last_stream_failure: Option<std::time::Instant> = None;
         // A halt recorded by an earlier turn that ended on another path must
         // not end this one.
@@ -1459,6 +1463,13 @@ impl OperantAgent {
                 // lifecycle with mark_exhausted_and_rotate, not just
                 // connection establishment).
                 let processed = loop {
+                    // RT-461: the agent's progress stamp is the last chunk of
+                    // ANY stream call, so the failure path could not tell
+                    // whether THIS attempt produced output. Snapshot it per
+                    // attempt: the wall clock must count a pure stall (the
+                    // 2026-09-29 incident) while exempting a cut after real
+                    // output (the 2026-10-13 incident).
+                    let progress_before_this_attempt = self.stream_progress_at();
                     // T2: the whole stream consumption runs under the loop
                     // budget ceiling (with the R2 reasoning floor) and the
                     // interrupt flag, so a Ctrl-C mid-stream aborts the
@@ -1497,12 +1508,11 @@ impl OperantAgent {
                             // testable without a live agent and a live
                             // provider. See `agent/stream_retry_budget.rs`.
                             let attempts_left = !retry_state.is_exhausted();
-                            let progressed_since_failure =
-                                match (last_stream_failure, self.stream_progress_at()) {
-                                    (None, _) => true,
-                                    (Some(failed), Some(progress)) => progress > failed,
-                                    (Some(_), None) => false,
-                                };
+                            let progressed_since_failure = stream_retry_budget::should_rearm(
+                                last_stream_failure,
+                                self.stream_progress_at(),
+                                progress_before_this_attempt,
+                            );
                             if progressed_since_failure {
                                 stream_retry_budget.reset();
                             }

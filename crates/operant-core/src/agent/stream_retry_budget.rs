@@ -113,6 +113,51 @@ pub enum StreamRetryGiveUp {
 /// retries have already been spent on this call, and `turn_budget_left`
 /// reflects the caller-independent turn-level failure bound.
 ///
+/// Whether the wall-clock ladder should be re-armed before the next attempt.
+///
+/// RT-461: the production predicate treated the turn's FIRST failure as
+/// progress — "a failure that follows fresh stream progress (or is the
+/// turn's first) re-arms it" — so the clock restarted at the first drop and
+/// the first attempt's stall was EXEMPT. That is the opposite of what this
+/// module is for: "the clock starts at construction … rather than at the
+/// first failure. A budget that began counting at the first drop would
+/// exempt the very attempt that cost the most" — the 2026-09-29 incident,
+/// whose first stream error was already 60s into the turn.
+///
+/// The two incidents pull in opposite directions, and the difference
+/// between them is whether the failing attempt produced OUTPUT:
+///
+/// - a cut after 60s of real output (2026-10-13) — the attempt was
+///   productive, so the ladder must earn its retries;
+/// - a provider that accepts the request and says nothing for 60s
+///   (2026-09-29) — a pure stall, so the time must count against the
+///   bound and the ladder gives up after that attempt.
+///
+/// `progress_now` is the agent's last-chunk stamp (it only moves forward);
+/// `progress_before_this_attempt` is that stamp as it was BEFORE this
+/// attempt started, so "the stamp moved" means "this attempt produced
+/// output".
+pub fn should_rearm(
+    last_failure: Option<Instant>,
+    progress_now: Option<Instant>,
+    progress_before_this_attempt: Option<Instant>,
+) -> bool {
+    match last_failure {
+        // The turn's first failure: re-arm only if THIS attempt produced
+        // output.
+        None => match (progress_now, progress_before_this_attempt) {
+            (Some(now), before) => match before {
+                Some(before) => now > before,
+                None => true,
+            },
+            (None, _) => false,
+        },
+        // A later failure: re-arm only if the stream made progress since
+        // the last failure.
+        Some(failed) => progress_now.is_some_and(|progress| progress > failed),
+    }
+}
+
 /// The wall clock is checked **first and unconditionally**, before the
 /// attempt count. Order matters: a provider that has already made the user
 /// wait past the bound should not consume another attempt regardless of how
@@ -260,6 +305,53 @@ mod tests {
     /// clock, so the ladder must refuse to re-issue. This test fails if the
     /// wall-clock term is removed from the decision, which is exactly the
     /// pre-fix behaviour.
+    #[test]
+    /// RT-461: the production predicate re-armed the budget on the turn's
+    /// FIRST failure ("or is the turn's first"), so the clock restarted at
+    /// the first drop and the first attempt's stall was EXEMPT — the
+    /// opposite of what this module is for ("the clock starts at
+    /// construction … rather than at the first failure").
+    ///
+    /// BEHAVIORAL: a pure stall (no output at all) must NOT re-arm; a cut
+    /// after real output must.
+    #[test]
+    fn a_pure_stall_does_not_rearm_the_ladder() {
+        let start = Instant::now();
+        // A stall: no chunk ever arrived, so the progress stamp is where it
+        // was before the attempt (or absent).
+        assert!(
+            !should_rearm(None, None, None),
+            "a pure stall must not re-arm the ladder — its time counts against \
+             the bound"
+        );
+        let before = Instant::now();
+        assert!(
+            !should_rearm(None, Some(before), Some(before)),
+            "a stall that did not move the progress stamp must not re-arm"
+        );
+        // A cut after real output: the stamp moved during the attempt.
+        let after = before + Duration::from_millis(10);
+        assert!(
+            should_rearm(None, Some(after), Some(before)),
+            "a cut after real output must re-arm — the attempt was productive"
+        );
+        // The very first chunk of the agent's life counts as progress too.
+        assert!(
+            should_rearm(None, Some(start), None),
+            "the first chunk of the agent's life is progress"
+        );
+        // A LATER failure re-arms only on progress since that failure.
+        let failed = Instant::now();
+        assert!(
+            !should_rearm(Some(failed), Some(failed - Duration::from_secs(1)), None),
+            "progress from BEFORE the last failure does not re-arm"
+        );
+        assert!(
+            should_rearm(Some(failed), Some(failed + Duration::from_secs(1)), None),
+            "progress since the last failure re-arms"
+        );
+    }
+
     #[test]
     fn incident_provider_is_cut_at_the_first_failure() {
         let decision = decide(Duration::from_secs(60), /* attempts */ 0);
