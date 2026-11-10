@@ -576,7 +576,18 @@ impl OperantTool for FileSearchTool {
 
                 let path = entry.path();
 
-                if path.is_dir() {
+                // RT-446: no symlink following. `path.is_dir()` resolves a
+                // `loop -> .` link forever (a stack overflow, not an
+                // error), and `path.is_file()` reads THROUGH a link — a
+                // symlink to a sensitive file inside an allowed directory
+                // would be read past the deny list. `entry.file_type()`
+                // does not follow them, and a symlink is neither a real
+                // file nor a real directory.
+                let Ok(ft) = entry.file_type() else {
+                    continue;
+                };
+
+                if ft.is_dir() {
                     // Skip hidden directories and common non-relevant dirs
                     if let Some(name) = path.file_name().and_then(|n| n.to_str())
                         && !name.starts_with('.')
@@ -586,7 +597,7 @@ impl OperantTool for FileSearchTool {
                     {
                         search_recursive(&path, re, results, max_results);
                     }
-                } else if path.is_file()
+                } else if ft.is_file()
                     && let Ok(content) = std::fs::read_to_string(&path)
                 {
                     for (line_num, line) in content.lines().enumerate() {
@@ -711,11 +722,15 @@ impl OperantTool for FileListTool {
 
                 let path = entry.path();
                 let metadata = entry.metadata().ok();
+                // RT-446: the recursion must not follow symlinks, and a
+                // symlink is reported as what it is (not as the directory
+                // it points at).
+                let is_dir = entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false);
 
                 let entry_json = serde_json::json!({
                     "name": name,
                     "path": path.to_string_lossy(),
-                    "is_dir": path.is_dir(),
+                    "is_dir": is_dir,
                     "size": metadata.as_ref().map(|m| m.len()).unwrap_or(0),
                     "modified": metadata.as_ref()
                         .and_then(|m| m.modified().ok())
@@ -724,7 +739,7 @@ impl OperantTool for FileListTool {
 
                 entries.push(entry_json);
 
-                if recursive && path.is_dir() {
+                if recursive && is_dir {
                     list_recursive(&path, entries, recursive, include_hidden);
                 }
             }

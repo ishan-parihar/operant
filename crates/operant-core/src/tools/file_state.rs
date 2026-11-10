@@ -82,9 +82,17 @@ fn collect_dir_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
     };
     for entry in read.flatten() {
         let path = entry.path();
-        if path.is_dir() {
+        // RT-446: `path.is_dir()` FOLLOWS symlinks, so a `loop -> .`
+        // symlink made this recurse forever -- a stack overflow, not an
+        // error. The repo's own rule (checkpoint_tool) is "symlinks are
+        // never followed": `entry.file_type()` does not follow them, and a
+        // symlink is neither a real file nor a real directory.
+        let Ok(ft) = entry.file_type() else {
+            continue;
+        };
+        if ft.is_dir() {
             collect_dir_files(&path, out);
-        } else {
+        } else if ft.is_file() {
             out.push(path);
         }
     }
