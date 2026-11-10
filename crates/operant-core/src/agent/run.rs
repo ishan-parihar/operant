@@ -772,9 +772,16 @@ impl OperantAgent {
         self.iteration_budget.reset();
 
         // Clear streaming ToolStart dedup set — each turn starts fresh.
-        if let Ok(mut set) = self.stream_emitted_tool_starts.lock() {
-            set.clear();
-        }
+        //
+        // RT-476: the clear was skipped SILENTLY when the lock was
+        // poisoned (`if let Ok`), while the sibling locks in this function
+        // treat a poison as a programmer error. A skipped clear means the
+        // turn's ToolStarts are suppressed as duplicates — the turn's tool
+        // rows never appear — with nothing said about it.
+        self.stream_emitted_tool_starts
+            .lock()
+            .expect("stream_emitted_tool_starts lock poisoned")
+            .clear();
         // And the per-turn tool-duration map (iter-1505), for the same reason
         // plus a memory one: without this a long-lived agent accumulates one
         // entry per tool call for its whole life.
@@ -1575,9 +1582,15 @@ impl OperantAgent {
                                 // suppressed as duplicates, so the turn's tool
                                 // rows never appear — the recovered turn ran
                                 // the tools invisibly.
-                                if let Ok(mut set) = self.stream_emitted_tool_starts.lock() {
-                                    set.clear();
-                                }
+                                // RT-476: the replay's clear was skipped
+                                // silently on a poisoned lock — the
+                                // recovered turn's tools then ran
+                                // invisibly, which is exactly what this
+                                // clear prevents.
+                                self.stream_emitted_tool_starts
+                                    .lock()
+                                    .expect("stream_emitted_tool_starts lock poisoned")
+                                    .clear();
                                 let tools = self.tools_for_turn(&messages).await;
                                 let retry_request =
                                     self.fitted_request(&self.effective_model(), &messages, tools);
@@ -3822,6 +3835,39 @@ pub(super) fn guardrail_halt_reply(summary: &str) -> String {
         "I stopped this turn because a tool kept failing without making progress: {cause}\n\n\
          Tell me how you'd like to proceed, or send `continue` and I'll try a different approach."
     )
+}
+
+#[cfg(test)]
+mod rt476_tests {
+    /// RT-476: the streaming ToolStart dedup set was cleared with
+    /// `if let Ok(...)`, so a poisoned lock SKIPPED the clear silently —
+    /// and the sibling locks in the same function treat a poison as a
+    /// programmer error. A skipped clear means the turn's ToolStarts are
+    /// suppressed as duplicates: the turn's tool rows never appear.
+    ///
+    /// SOURCE contract over the class, needle concatenation-built.
+    #[test]
+    fn the_dedup_set_clear_is_not_skipped_silently() {
+        let src = include_str!("run.rs");
+        let skipped = format!(
+            "if let Ok(mut set) = self.stream_emitted_tool_starts.{}()",
+            "lock"
+        );
+        assert_eq!(
+            src.matches(&skipped).count(),
+            0,
+            "a silently skipped clear makes the turn's tool rows disappear"
+        );
+        let loud = format!(
+            "self.stream_emitted_tool_starts\n            .{}()\n            .expect(",
+            "lock"
+        );
+        assert!(
+            src.contains(&loud),
+            "the clear must fail loudly on a poisoned lock, like the sibling \
+             locks in the same function"
+        );
+    }
 }
 
 #[cfg(test)]

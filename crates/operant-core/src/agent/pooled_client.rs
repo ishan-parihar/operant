@@ -93,9 +93,17 @@ impl PooledModelClient {
     /// and the selection strategy (`FillFirst` by default) decides which
     /// one that is.
     fn remember_credential(&self, cred: &PooledCredential) {
-        if let Ok(mut slot) = self.last_credential_id.lock() {
-            *slot = Some(cred.id.clone());
-        }
+        // RT-476: the anchor was written only when the lock was healthy,
+        // so a poisoned lock silently DROPPED it — and the rotation then
+        // replaced the FIRST pool credential's secret instead of the one in
+        // use, which is exactly what the anchor exists to prevent. The
+        // state is a plain Option<String>: a poison carries no invariant,
+        // so the value is recovered rather than lost.
+        let mut slot = self
+            .last_credential_id
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *slot = Some(cred.id.clone());
     }
 
     /// Extract a provider-supplied recovery timestamp from the error, when
