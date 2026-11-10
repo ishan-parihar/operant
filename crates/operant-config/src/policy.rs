@@ -445,7 +445,10 @@ enum QuoteState {
 ///
 /// Characters inside single or double quotes are treated as literals, so
 /// `sqlite3 db "SELECT 1; SELECT 2;"` remains a single segment.
-fn split_unquoted_segments(command: &str) -> Vec<String> {
+///
+/// Public because the Holon command fence applies the SAME rule to the
+/// lines that run through a shell (RT-454): one splitter, one rule.
+pub fn split_unquoted_segments(command: &str) -> Vec<String> {
     let mut segments = Vec::new();
     let mut current = String::new();
     let mut quote = QuoteState::None;

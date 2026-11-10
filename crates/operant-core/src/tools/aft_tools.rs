@@ -744,7 +744,12 @@ impl OperantTool for AftBashTool {
         // O-18: the policy-commands fence — same allowlist the basic
         // terminal tool carries; a Holon run cannot bypass it by switching
         // tool families.
-        if let Err(why) = crate::tools::file_tools::holon_command_fence(&args.command) {
+        // RT-454: aft_bash always runs the line through bash, so the fence
+        // judges every command in it — `git status; rm -rf /` cannot smuggle
+        // the second command past the policy's allowlist.
+        if let Err(why) =
+            crate::tools::file_tools::holon_command_fence_with_shell(&args.command, true)
+        {
             return ToolResult::error("aft_bash", why);
         }
         let project_root = project_root_from_context(&context);

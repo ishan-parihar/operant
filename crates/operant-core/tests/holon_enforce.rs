@@ -128,6 +128,89 @@ fn a_write_whose_parent_does_not_exist_yet_is_still_fenced() {
     unsafe { std::env::remove_var("HOLON_RUN_DIR") };
 }
 
+/// RT-454: a line that runs through a SHELL can carry several commands
+/// (`git status; rm -rf /`), and the fence judged only the FIRST token —
+/// so the second command escaped the policy's allowlist entirely. The
+/// kernel's allowlist judges every segment; the fence now does too.
+///
+/// BEHAVIORAL: the chained command must be refused.
+#[test]
+fn a_shell_line_cannot_smuggle_a_command_past_the_allowlist() {
+    let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let (_dir, run) = holon_run_dir_with(
+        r#"{"version":1,"stage":"execute","posture":"act","roots":[],"writes":[],"commands":["git","rg"],"deny":[],"budget":{"tokens":null,"cost":null}}"#,
+    );
+    // SAFETY: serialized test; the run env is the only variable.
+    unsafe { std::env::set_var("HOLON_RUN_DIR", &run) };
+
+    // Without a shell the line is ONE command with arguments: the first
+    // token is the binary, and the rest are its arguments.
+    assert!(
+        operant_core::tools::file_tools::holon_command_fence_with_shell(
+            "git status; rm -rf /",
+            false
+        )
+        .is_ok(),
+        "without a shell the line is one command"
+    );
+
+    // With a shell, both commands run — so both binaries must be allowed.
+    let err = operant_core::tools::file_tools::holon_command_fence_with_shell(
+        "git status; rm -rf /",
+        true,
+    )
+    .expect_err("the chained command must be refused");
+    assert!(
+        err.contains("'rm' is not in the run's policy commands"),
+        "{err}"
+    );
+    let refusals = operant_core::org::read_refusals(&run);
+    assert!(
+        refusals
+            .iter()
+            .any(|r| r["tool"] == "terminal" && r["policy_rule"] == "policy.json:commands"),
+        "the fence recorded its refusal: {refusals:?}"
+    );
+
+    // A line whose every command is allowed passes.
+    assert!(
+        operant_core::tools::file_tools::holon_command_fence_with_shell("git status; rg foo", true)
+            .is_ok(),
+        "every command in the line is allowed"
+    );
+
+    // A quoted separator stays inside its argument (the kernel's splitter
+    // is quote-aware), so it is not a second command.
+    assert!(
+        operant_core::tools::file_tools::holon_command_fence_with_shell(
+            "git log --grep=\"a; b\"",
+            true
+        )
+        .is_ok(),
+        "a quoted separator is an argument, not a command"
+    );
+
+    unsafe { std::env::remove_var("HOLON_RUN_DIR") };
+}
+
+/// RT-454: the fence's own doc must state the rule the code keeps — and
+/// must not keep promising the re-tokenization the code never did.
+///
+/// SOURCE contract: a behavioral test cannot catch a doc regression.
+#[test]
+fn the_command_fence_doc_states_the_rule_the_code_keeps() {
+    let src = include_str!("../src/tools/file_tools.rs");
+    let prod = &src[..src.find("#[cfg(test)]").unwrap_or(src.len())];
+    assert!(
+        !prod.contains("shlex"),
+        "the fence never tokenized through shlex — the doc must not claim it"
+    );
+    assert!(
+        prod.contains("the fence judges the line as the backend executes it"),
+        "the doc must state the rule the code keeps"
+    );
+}
+
 /// O-18: an empty `roots` list means "the run directory only" — the same
 /// semantics the kernel's workdir guard uses. Writes inside the run pass,
 /// outside are refused.

@@ -137,48 +137,91 @@ fn current_umask() -> u32 {
 /// kernel merges the grade's commands + act_commands at generation), only
 /// those command names may execute; anything else is refused and recorded
 /// before the command runs. Personal runs and ungoverned policies pass
-/// through. The first token of the command line names the binary — the
-/// same tokenization the kernel's allowlist means. `use_shell` lines are
-/// tokenized through `sh -c` rules via shlex, so `sh -c 'rm …'` is judged
-/// on the INNER command's first token too (a shell wrap cannot smuggle a
-/// refused binary past the fence).
-/// Test/boundary seam: public so the W3 acceptance tests can drive it.
+/// through. The first token of a command names the binary — the same
+/// tokenization the kernel's allowlist means. A shell WRAP (`sh -c 'rm …'`)
+/// names `sh`: the fence judges the line as the backend executes it
+/// (direct: the binary; shell: the shell), the same claim the kernel's
+/// allowlist makes.
+///
+/// RT-454: this doc used to promise something the code never did — that a
+/// line running through a shell is re-tokenized the way `sh -c` does, so
+/// that the inner command's binary would be judged too, and a shell wrap
+/// could not carry a refused binary past the fence. The code never did
+/// that, and the acceptance test pins the opposite (the line names the
+/// shell). The promise is withdrawn.
+///
+/// What the kernel's allowlist DOES do — and what this fence now does too
+/// — is judge EVERY SEGMENT of a line that runs through a shell: with a
+/// shell, `git status; rm -rf /` runs TWO commands, so the second one's
+/// binary has to be on the allowlist as well. Without a shell the line is
+/// one command with arguments, and the first token is the binary.
+///
+/// Test/boundary seam: public so the W3 acceptance tests (and any
+/// embedder) can drive it directly.
 pub fn holon_command_fence(command: &str) -> Result<(), String> {
+    holon_command_fence_with_shell(command, false)
+}
+
+/// The fence, told whether the line runs through a shell.
+///
+/// RT-454: a line that runs through a shell can carry several commands
+/// (`git status; rm -rf /`), and the fence judged only the FIRST token —
+/// so the second command escaped the policy's allowlist entirely. The
+/// segments are now judged one by one, exactly as the kernel's allowlist
+/// does (the splitter is shared, not reimplemented).
+pub fn holon_command_fence_with_shell(command: &str, use_shell: bool) -> Result<(), String> {
     let Some(run_dir) = crate::platform::holon_run_dir() else {
         return Ok(()); // a personal run is not fenced
     };
     let Some(allow) = crate::org::holon_policy_commands(&run_dir) else {
         return Ok(()); // no policy commands: ungoverned fence
     };
-    // first token, quote-aware without a new dependency: the leading word
-    // ends at whitespace and strips wrapping quotes (`'/usr/bin/git' --foo`
-    // names git). A shell WRAP (`sh -c 'rm …') names `sh` — the fence
-    // judges the line as the backend executes it (direct: the binary;
-    // shell: the shell), the same claim the kernel's allowlist makes.
-    let name = command
-        .trim_start()
-        .split([' ', '\t'])
-        .next()
-        .unwrap_or("")
-        .trim_matches(|c| c == '\'' || c == '"')
-        .to_string();
-    if name.is_empty() {
+    // The commands to judge: the line's segments when it runs through a
+    // shell, the whole line otherwise.
+    let segments: Vec<String> = if use_shell {
+        operant_config::policy::split_unquoted_segments(command)
+    } else {
+        vec![command.to_string()]
+    };
+    let segments: Vec<String> = segments
+        .into_iter()
+        .filter(|s| !s.trim().is_empty())
+        .collect();
+    if segments.is_empty() {
         let why = "the command is empty".to_string();
         crate::org::record_refusal(&run_dir, "terminal", &why, "policy.json:commands");
         return Err(why);
     }
-    // strip a leading path: /usr/bin/git is still git
-    let bare = name.rsplit('/').next().unwrap_or(&name);
-    if allow.iter().any(|a| a == bare) {
-        return Ok(());
+    for segment in &segments {
+        // first token, quote-aware without a new dependency: the leading
+        // word ends at whitespace and strips wrapping quotes
+        // (`'/usr/bin/git' --foo` names git).
+        let name = segment
+            .trim_start()
+            .split([' ', '\t'])
+            .next()
+            .unwrap_or("")
+            .trim_matches(|c| c == '\'' || c == '"')
+            .to_string();
+        if name.is_empty() {
+            let why = "the command is empty".to_string();
+            crate::org::record_refusal(&run_dir, "terminal", &why, "policy.json:commands");
+            return Err(why);
+        }
+        // strip a leading path: /usr/bin/git is still git
+        let bare = name.rsplit('/').next().unwrap_or(&name);
+        if !allow.iter().any(|a| a == bare) {
+            let why = format!(
+                "command '{bare}' is not in the run's policy commands (allowed: {})",
+                allow.join(", ")
+            );
+            crate::org::record_refusal(&run_dir, "terminal", &why, "policy.json:commands");
+            return Err(why);
+        }
     }
-    let why = format!(
-        "command '{bare}' is not in the run's policy commands (allowed: {})",
-        allow.join(", ")
-    );
-    crate::org::record_refusal(&run_dir, "terminal", &why, "policy.json:commands");
-    Err(why)
+    Ok(())
 }
+
 /// O-18 (W3): the policy-roots fence for WRITE tools — a Holon run's
 /// `roots` (plus its own run dir) are the only writable places; anything
 /// else is refused and recorded before the write happens. Reads are not

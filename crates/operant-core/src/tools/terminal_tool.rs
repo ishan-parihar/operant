@@ -53,7 +53,15 @@ impl OperantTool for TerminalTool {
         // lists allowed commands refuses everything else up front, with
         // the refusal recorded for the result envelope. Personal runs and
         // ungoverned policies pass straight through.
-        if let Err(why) = crate::tools::file_tools::holon_command_fence(&args.command) {
+        // RT-454: the fence judges every command in the line when the line
+        // runs through a shell (the backend hands the whole line to it), so
+        // `git status; rm -rf /` cannot smuggle the second command past the
+        // policy's allowlist. Without a shell the line is one command with
+        // arguments, and the first token is the binary.
+        let use_shell = args.use_shell.unwrap_or(false);
+        if let Err(why) =
+            crate::tools::file_tools::holon_command_fence_with_shell(&args.command, use_shell)
+        {
             return ToolResult::error("terminal", why);
         }
 
@@ -66,7 +74,6 @@ impl OperantTool for TerminalTool {
 
         let cwd = args.working_dir.as_deref().map(std::path::Path::new);
         let env_vars = args.env_vars.unwrap_or_default();
-        let use_shell = args.use_shell.unwrap_or(false);
 
         let backend = match terminal_backend::create_backend(&runtime_config()) {
             Ok(b) => b,
