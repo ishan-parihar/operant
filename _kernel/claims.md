@@ -692,3 +692,21 @@ NOT supported (named, with the reason):
 - A PROVIDER THAT SENDS A CORRUPT PAYLOAD MUST NOT COST THE NEXT EVENT A MINUTE — [V] — the
   SSE parser's poll-before-reparse delayed the valid event by the whole idle timeout
   (RT-477) — unit 1
+
+## Round 21 (2026-11-10) — three more doc claims and a cooldown that vanished, verified and shipped
+
+- A DOC THAT DESCRIBES A CHOICE MUST MATCH THE CODE'S CHOICE — [V] — the "reported" flag's
+  preference (RT-482) — unit 1
+- A FALLBACK MUST NOT INVERT THE MEANING — [V] — the chrono conversion's failure turned
+  "wait longer than chrono can express" into "do not wait" (RT-483) — unit 1
+- A CONFIGURED-VALUE SNAPSHOT IS A STALE VALUE AFTER A RETARGET — [V] — the proxy's service
+  key is read once, at build time, from a value that can change at runtime (RT-485) — unit 1
+- A FETCH-THEN-WRITE WINDOW IS A SHARED-DOCUMENT HAZARD — [V] — the peer pushed between the
+  fetch and the commit and their ledger row was overwritten (iter-2072, restored in
+  iter-2073) — unit 1
+- A MUTANT MUST RESTORE THE ORIGINAL TEXT EXACTLY — [V] — a reflowed doc comment moved the
+  needle's phrase off its line, and the contract "passed" against a mutant that was not the
+  defect (RT-482) — unit 1
+- A CORRECTION MUST PARAPHRASE THE CLAIM IT CORRECTS — [V] — the RT-482 correction quotes no
+  phrase of the old claim, so the contract's needle cannot match the correction (RT-482) —
+  unit 1

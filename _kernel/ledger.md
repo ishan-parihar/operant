@@ -1417,3 +1417,83 @@ core's test suite exit 0 (3006 tests), fmt clean, the ledger index OK (RG-016, R
 WORKSPACE suite ran with ONE failure in the CLI's TUI keybindings
 (`no_catalogued_chord_types_itself_into_the_composer`) — the peer's in-flight work, outside
 operant-core; the core's own targets were green.
+
+## Round 21 (2026-11-10) — three more doc claims, a cooldown that vanished, and the residuals that need a decision
+
+Three pushed iterations (iter-2070..iter-2071 plus this close) and three more rows
+(RT-482, RT-483, RT-484).
+
+Shipped:
+- **RT-482 (L)** — `fitted_request`'s doc described the "reported" flag as tracking the
+  estimator's own preference, but the code hardcodes it to FALSE (the provider's count is
+  exact but STALE — it is the previous request's, missing every tool result since).
+- **RT-483 (M)** — an unrepresentable provider retry-after became a ZERO cooldown
+  (`unwrap_or_default()` on the chrono conversion), so the credential pool retried the
+  credential IMMEDIATELY — exactly when the provider asked it to wait.
+- **RT-485 (M)** — the `[proxy]` service key is computed from the CONFIGURED base URL when
+  the HTTP client is built, so a runtime retarget (`set_base_url`) keeps the OLD provider's
+  proxy — and its proxy credentials — for the new host. The proxy is baked into the
+  `reqwest::Client`, so the fix is a design choice, not a one-liner (see the residuals).
+  (First drafted as RT-484; the peer took that id concurrently — see the lesson below.)
+
+What the round taught:
+- **A DOC THAT DESCRIBES A CHOICE MUST MATCH THE CODE'S CHOICE.** RT-482: the doc promised a
+  per-request decision the code never makes.
+- **A FALLBACK MUST NOT INVERT THE MEANING.** RT-483: the conversion's failure mode
+  (`unwrap_or_default`) turned "wait longer than chrono can express" into "do not wait".
+- **A CONFIGURED-VALUE SNAPSHOT IS A STALE VALUE AFTER A RETARGET.** RT-485: the proxy's
+  service key is read once, at build time, from a value that can change at runtime.
+- **A FETCH-THEN-WRITE WINDOW IS A SHARED-DOCUMENT HAZARD.** iter-2072 rebuilt the audit
+  ledger from a fetched tip and the peer pushed BETWEEN that fetch and the commit: their row
+  was overwritten and the id collided. The rebuild protocol (fetch → rebuild from
+  `git show origin/main:` → check the id space) narrows the window but does not close it — the
+  closing move is to rebuild from the tip AGAIN immediately before the commit, or to re-apply
+  the peer's rows if the post-commit diff shows a loss. iter-2073 restored the peer's row and
+  renumbered ours to RT-485 with an ID NOTE.
+
+### Residuals — named, with the decision each one needs
+
+The campaign's rule is to NAME a residual rather than guess at it. These are the open items
+carried by this round and the earlier ones:
+
+1. **The retargetable client's proxy is bound at build time (RT-485).** The fix is either
+   rebuilding the HTTP client on every retarget (the client field becomes swappable — a lock
+   and a per-request lookup) or moving the proxy to a per-request `reqwest::Proxy` (a
+   config API addition). **Decision needed:** which shape.
+2. **The credential pool's setters are not serialized with the request path (the agent
+   sweep's L2).** `set_api_key` / `rotate_credential_value` / `set_endpoint` mutate the
+   shared inner client while a request may be in flight; the gate is a `tokio::Mutex` the
+   sync setters cannot take. **Decision needed:** a sync/async lock split, or a doc that
+   stops promising serialization.
+3. **The reasoning-effort shape's home (the provider sweep's M2, now RT-473).** SHIPPED as a
+   `ChatRequest` field; the residual is that the enum exists in BOTH `config.rs` and
+   `client.rs` with a manual mapping between them. **Decision needed:** one type, or keep the
+   config's enum provider-agnostic and map once (today's choice).
+4. **`max_retries`' authoritative meaning (RT-471).** SHIPPED as "retries after the first
+   attempt" per the config and the example TOML. The residual is that the default of 3 now
+   means FOUR requests, which changes every provider's load. **Decision needed:** confirm, or
+   re-document and re-pick the default.
+5. **The MCP OAuth credential-revocation wiring (RT-457).** The removal path now reports
+   honestly, but nothing in the product CALLS it. **Decision needed:** which command owns
+   "revoke this credential".
+6. **The Anthropic thinking budget's ceiling (RT-474).** SHIPPED as "below max_tokens", but
+   the effort's budget (up to 32,000 tokens) still exceeds a small cap and is clamped to
+   `max_tokens - 1` — i.e. the whole cap becomes thinking. **Decision needed:** whether a
+   small cap should disable thinking instead.
+7. **The seat-memory writer being test-only.** The socialisation coordinator is not in this
+   tree, so the memory write path has no production caller. **Decision needed:** where it
+   belongs.
+8. **The dead code the sweeps found** (named, not deleted — the repo rule is "mention it,
+   don't delete it"): `OpenAIModelClient::inner()` (its doc's example, audio generation, has
+   no caller), `IterationBudget::remaining()` (only its own tests),
+   `close_interrupted_tool_sequence` (run.rs says it is "gone"), `next_probe_tier` and
+   `parse_context_limit_from_error` (only their own tests), the error classifier's unused
+   `Format`/`Network` variants, and `IterationBudget`'s remaining fields.
+   **Decision needed:** delete, or wire.
+9. **The carried decisions from earlier rounds** (unchanged): RT-285's three decisions;
+   RT-399/409/411/413/430's follow-ups; the KaizenProposal's session-end producer (RT-374);
+   the `turn_exit` classifier wiring (RT-368); DN-0058/DN-0059; the admin-wipe decision; the
+   curator reactivation (RT-386); the autocompaction mount (RT-385/389's durable delete); the
+   RT-452 residual (an incomplete report as a separate field rather than `error`); the
+   command-fence's shell-wrap semantics; and the RT-481 lesson that a half-applied fix looks
+   complete until the strict gate sees it.
