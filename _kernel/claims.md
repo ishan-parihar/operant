@@ -664,3 +664,31 @@ NOT supported (named, with the reason):
   trim (RT-465) — unit 1
 - A protocol send whose result is discarded makes a lost message invisible — [V] — three
   more sites after RT-441 (RT-459) — unit 1
+
+## Round 20 (2026-11-10) — the provider client's last mile, verified and shipped
+
+- A FIX THAT CONNECTS CODE EXPOSES THE DEFECTS IN IT — [V] — making the Anthropic thinking
+  branch reachable exposed the clamp that did not clamp (RT-473, RT-474) — unit 1
+- A DEAD HELPER is the signature of a HALF-APPLIED FIX — [V] — the guard's helper was shipped
+  while the call site kept the old form; only the strict clippy gate saw it (RT-481) — unit 1
+- A GATE LIST is a BACKSTOP, not a formality — [V] — the iteration that shipped the half-applied
+  fix ran the format and the module's tests, and skipped the clippy (RT-481) — unit 1
+- A CONTRACT THAT COMPARES TWO EMPTY LISTS PROVES NOTHING — [V] — the classifier's first
+  contract parsed neither list and "passed" against the mutant (RT-480) — unit 1
+- A NEEDLE THAT SPANS A DOC COMMENT'S OWN LINE BREAK MATCHES NOTHING — [V] — the API-key doc
+  contract "passed" against the mutant for exactly that reason (RT-479) — unit 1
+- A MEASUREMENT is a REGRESSION TEST — [V] — the SSE defect was a DELAY (501ms against the
+  fix's 0ms), which no boolean assertion would have caught (RT-477) — unit 1
+- A DOC THAT LISTS AN ENUMERATION CAN BE CHECKED AGAINST THE CODE — [V] — the classifier's
+  pipeline list is derived from the code's own step markers (RT-480) — unit 1
+- A POISONED LOCK must not SILENTLY SKIP the work it protects — [V] — the ToolStart dedup
+  clear and the credential pool's rotation anchor (RT-476) — unit 1
+- A KNOB'S NAME is a contract, and so is its VALUE — [V] — `reasoning_effort_param` never
+  reached the wire (RT-473); `max_retries` counted attempts (RT-471) — unit 1
+- A PARALLEL ARRAY is a silent contract — [V] — the interrupt drain paired ids from the
+  surviving calls with the positions of all the calls (RT-462) — unit 1
+- A BATCH is not its FIRST ELEMENT — [V] — the repetition guard signed one call of a batch
+  and called the whole batch identical (RT-475) — unit 1
+- A PROVIDER THAT SENDS A CORRUPT PAYLOAD MUST NOT COST THE NEXT EVENT A MINUTE — [V] — the
+  SSE parser's poll-before-reparse delayed the valid event by the whole idle timeout
+  (RT-477) — unit 1

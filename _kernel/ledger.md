@@ -1354,3 +1354,66 @@ Round-19 end-of-round gates: the WORKSPACE test suite exit 0 (89 targets ok), st
 exit 0 on the core and on the CLI, fmt clean, the doc-link gate exit 0, the WORKSPACE build
 exit 0 with zero warnings, the ledger index OK (RG-016, RG-021), genome lint 0 errors (5
 pre-existing warnings).
+
+## Round 20 (2026-11-10) — the provider client's last mile and the agent's parallel arrays: nine rows, and the half-applied fix the gate caught
+
+Nine pushed iterations (iter-2061..iter-2068), nine ledger rows (RT-473..RT-481). The round
+closed the two sweeps' remaining confirmed findings: the reasoning-effort knob that never
+reached the wire, the Anthropic clamp it exposed, the repetition guard's first-call signature,
+the poisoned locks, the SSE parser's poll-before-reparse, and three doc claims that the code
+contradicted.
+
+Shipped:
+- **RT-473 (M)** — the operator's `agent.reasoning_effort_param` NEVER reached the wire: the
+  agent resolved the shape and dropped it (`_shape`), and the only production adapter hardcoded
+  `Auto`. So "none" still sent `reasoning_effort` on every non-openrouter host, "anthropic_thinking"
+  never emitted a `thinking` block, and the forced branches of `apply_reasoning_field` had no
+  production caller at all.
+- **RT-474 (M)** — the Anthropic thinking clamp (`max.saturating_sub(1024).max(1024)`) did not
+  clamp below `max_tokens`: for a cap of 512 it produced 1024 — ABOVE the cap — and Anthropic
+  rejects such a request. The branch was unreachable while the shape could not be forced
+  (RT-473); fixing RT-473 made it live.
+- **RT-475 + RT-481 (M)** — the cross-iteration repetition guard signed only the batch's FIRST
+  call, so `[A,B]` then `[A,C]` counted as "identical" and the turn was force-ended with "I
+  repeated the same tool call 6 times in a row". RT-475 shipped the helper; RT-481 shipped the
+  CALL SITE (the first edit had been lost, and the strict clippy gate caught the half-applied
+  fix as an unused function).
+- **RT-476 (M)** — two poisoned locks were handled by SILENTLY skipping the work they protect:
+  the streaming ToolStart dedup set's clear (so a recovered turn's tool rows never appear) and
+  the credential pool's rotation anchor (so the rotation replaced the FIRST credential's secret
+  instead of the one in use).
+- **RT-477 (M)** — the SSE parser polled the inner stream before re-parsing its buffer, so a
+  valid event behind a corrupt payload waited for the NEXT wake-up — up to the whole idle
+  timeout, a minute in production — and could be lost to a stall.
+- **RT-479 (L)** — `set_api_key("")`'s doc promised the CONFIGURED key back, but after a runtime
+  retarget that key belongs to the OLD host and is deliberately never sent.
+- **RT-480 (L)** — the error classifier's doc listed a pipeline step ("Transport error
+  heuristics") the code does not have, and numbered the fallback accordingly.
+
+What the round taught:
+- **A FIX THAT CONNECTS CODE EXPOSES THE DEFECTS IN IT.** RT-473 made the Anthropic thinking
+  branch reachable for the first time — and RT-474 (the clamp that did not clamp) was waiting
+  there.
+- **A DEAD HELPER IS THE SIGNATURE OF A HALF-APPLIED FIX.** RT-475's helper, its test and its
+  mutation proof all passed while the production call site still used the old form. The strict
+  clippy gate — `function 'batch_signature' is never used` — was the only thing that saw it.
+- **A GATE LIST IS A BACKSTOP, NOT A FORMALITY.** RT-475's iteration ran the format and the
+  module's tests and skipped the clippy; the round's gates caught it.
+- **A CONTRACT THAT COMPARES TWO EMPTY LISTS PROVES NOTHING.** RT-480's first contract parsed
+  neither list and "passed" against the mutant; the fix was to make the needles find something
+  and to assert they did.
+- **A NEEDLE THAT SPANS A DOC COMMENT'S OWN LINE BREAK MATCHES NOTHING.** RT-479's contract
+  "passed" against the mutant for exactly that reason — the same trap as before, in a new
+  shape.
+- **A MEASUREMENT IS A REGRESSION TEST.** RT-477's defect was a DELAY (the event was not lost,
+  it waited); the test measures the delay (501ms against the fix's 0ms) — a behavioural test
+  that no boolean assertion would have caught.
+- **A DOC THAT LISTS AN ENUMERATION CAN BE CHECKED AGAINST THE CODE.** RT-480's contract derives
+  both lists (the code's step markers and the doc's numbered lines) and compares them — the
+  RT-435 pattern, applied to a pipeline instead of a set of annotation kinds.
+
+Round-20 end-of-round gates: the core's strict clippy exit 0 (lib + all features + tests), the
+core's test suite exit 0 (3006 tests), fmt clean, the ledger index OK (RG-016, RG-021). The
+WORKSPACE suite ran with ONE failure in the CLI's TUI keybindings
+(`no_catalogued_chord_types_itself_into_the_composer`) — the peer's in-flight work, outside
+operant-core; the core's own targets were green.
