@@ -1512,3 +1512,10 @@ End-state test: the live operator config can no longer be overwritten by a unit 
 | 6 | [ ] Repair session rehydration tool-group boundaries | a resumed request contains either a complete tool-call group or none | 1 | C1,C6,C9 |
 | 7 | [ ] Repair verification false-green/process cleanup | missing test phase cannot report ok; timed-out starts kill their process group | 1 | C1,C6,C9 |
 | 8 | [ ] Run realtime matrix, strict gates, red-team, docs and deploy | scoped/full tests, clippy, fmt, genome lint, fake-provider socket tests, release artifact, deployed live turn all green | 2..7 | C3,C5,C6,C7,C11 |
+### iter-2075 evidence (pushed `a7af53af`)
+
+- Live incident: operator `context_window = 4242` restored to 1,000,000; gateway restarted active with `NRestarts=0` before code repair.
+- Writer isolation: explicit-path persistence and read-only config loads do not move `loaded_config_path`; skill preprocessing reads only installed runtime config; TUI persists `agent.context_window` only to `config.config_path`.
+- Context truth: `ContextExhausted.required` carries the protected floor; protected overflow names the required/configured tokens and `agent.context_window`, never `/compact`; only foldable exhaustion (`required == 0`) triggers gateway compact-and-retry.
+- Gates: full `operant-core` lib+integration suite green (3,011 tests), focused CLI settings 15/15, strict core and CLI clippy green, fmt clean, genome lint 0 errors (5 existing warnings).
+- Upstream peer commits `ae436c4b`/`3a34f649` were integrated first; peer audit ids RT-486/RT-487 were preserved and this fix uses RT-488.
