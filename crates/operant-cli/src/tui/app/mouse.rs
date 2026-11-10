@@ -576,22 +576,34 @@ impl App {
                     }
                 };
 
-                if let Some(text) = text {
-                    let outcome = crate::tui::clipboard::copy(&text);
+                // (iter-1956) The `if let Some(text)` used to be the only path,
+                // so a menu item the operator could SEE and EXECUTE fell out of
+                // the guard with no notice at all when there was nothing to
+                // copy: they picked "Copy" and saw nothing happen. The menu
+                // offers Copy for both kinds unconditionally, and the fallback
+                // branch opens it with no selection — so this arm is reachable.
+                // An action a surface offers must either work or say why not.
+                let Some(text) = text else {
                     self.push_notice(
-                        if outcome.is_copied() {
-                            NotificationKind::Info
-                        } else {
-                            NotificationKind::Warning
-                        },
-                        if outcome.is_copied() {
-                            format!("Copied {} chars to clipboard.", text.len())
-                        } else {
-                            outcome.status_message()
-                        },
+                        NotificationKind::Info,
+                        "Nothing to copy — select text or a message first.".to_string(),
                     );
-                    debug!("Copy action triggered, text: {} chars", text.len());
-                }
+                    return;
+                };
+                let outcome = crate::tui::clipboard::copy(&text);
+                self.push_notice(
+                    if outcome.is_copied() {
+                        NotificationKind::Info
+                    } else {
+                        NotificationKind::Warning
+                    },
+                    if outcome.is_copied() {
+                        format!("Copied {} chars to clipboard.", text.len())
+                    } else {
+                        outcome.status_message()
+                    },
+                );
+                debug!("Copy action triggered, text: {} chars", text.len());
             }
         }
     }

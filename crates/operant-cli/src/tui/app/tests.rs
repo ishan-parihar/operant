@@ -2869,6 +2869,41 @@ fn a_click_in_the_composer_places_the_caret_at_the_clicked_character() {
 /// deliberate (a documented port-decision, not an oversight); what is NOT
 /// deliberate is that nothing proves it is closed. When someone wires
 /// `get_active_diagrams`, this fails and forces the test with it.
+/// (iter-1956) The right-click context menu must not offer a Copy it cannot
+/// perform, and must never fail silently when it cannot.
+///
+/// `context_menu_items` returns `&[ContextMenuItem::Copy]` for BOTH kinds
+/// unconditionally, and `open_context_menu_at_cursor`'s last branch opens the
+/// menu with `ContextMenuKind::Selection` when there is no message at the row
+/// AND no selection — so the menu appears, offers Copy, and executing it walks
+/// `handle_context_menu_action`'s `if let Some(text)` guard and drops out with
+/// no notice at all. The operator picked a menu item and saw nothing.
+///
+/// The fix gives the operator the answer either way: when there is nothing to
+/// copy, executing Copy says so instead of no-opping.
+#[test]
+fn a_copy_the_context_menu_cannot_perform_says_so() {
+    let mut app = make_app();
+    // An empty transcript: no message at the row, no selection. (A fresh app
+    // has no selection text.)
+    assert!(app.selection_text.borrow().trim().is_empty());
+
+    app.open_context_menu_at_cursor();
+    assert!(
+        app.context_menu_state.is_some(),
+        "the menu may still open — closing it instead would hide the surface"
+    );
+    app.execute_context_menu_item();
+
+    let notice = app
+        .status_notice()
+        .expect("executing Copy with nothing selected must say so, not no-op");
+    assert!(
+        notice.to_lowercase().contains("copy"),
+        "the notice names what was attempted: {notice:?}"
+    );
+}
+
 #[test]
 fn the_pinned_diagram_seam_is_closed_and_its_painter_never_runs() {
     let mut app = make_app();
