@@ -2378,13 +2378,9 @@ impl OperantAgent {
 
                     // Capture the executed-call signature BEFORE the batch is
                     // moved into execute_tools (repetition guard below).
-                    let executed_sig: Option<u64> = tool_calls.first().map(|tc| {
-                        use std::hash::{Hash, Hasher};
-                        let mut h = std::collections::hash_map::DefaultHasher::new();
-                        tc.function.name.hash(&mut h);
-                        tc.function.arguments.hash(&mut h);
-                        h.finish()
-                    });
+                    // RT-475: the batch's WHOLE signature — the first
+                    // call alone made `[A,B]` and `[A,C]` identical.
+                    let executed_sig = batch_signature(&tool_calls);
 
                     // iter-688: the iteration's canonical output signature
                     // (narration + ordered tool batch) for the output-side
@@ -3883,6 +3879,29 @@ mod rt475_tests {
                 arguments: args.to_string(),
             },
         }
+    }
+
+    /// RT-481: RT-475's fix shipped the HELPER but the production call
+    /// site still signed the first call only — the strict clippy gate
+    /// caught it as an unused function. The call site must use the
+    /// helper, and the helper must sign the WHOLE batch.
+    ///
+    /// SOURCE contract over the seam.
+    #[test]
+    fn the_repetition_guard_uses_the_whole_batch_signature() {
+        let src = include_str!("run.rs");
+        let prod = &src[..src.find("#[cfg(test)]").unwrap_or(src.len())];
+        let call_site = "let executed_sig = batch_signature(&tool_calls);";
+        assert!(
+            prod.contains(call_site),
+            "the production call site must use the whole-batch signature"
+        );
+        let first_only = format!("let executed_sig: Option<u64> = tool_calls.{}()", "first");
+        assert_eq!(
+            prod.matches(&first_only).count(),
+            0,
+            "the guard must not sign the batch's first call alone"
+        );
     }
 
     /// RT-475: the repetition guard signed only the batch's FIRST call, so
