@@ -2854,6 +2854,60 @@ fn a_click_in_the_composer_places_the_caret_at_the_clicked_character() {
 ///
 /// This drives the REAL key through the REAL handler for both advertised keys
 /// and requires the live mode to land exactly one step along its own ladder.
+/// (iter-1951) The pinned-diagram pane is an UNWIRED SEAM, and its renderer
+/// still paints a whole keyboard contract the operator can never reach.
+///
+/// `operant_ui::draw` derives the pane's candidate list from a hardcoded empty
+/// Vec (`mod.rs:2622-2628`, marked `[port-decision]` — "wire at
+/// operant_app::mermaid::get_active_diagrams"), so `diagrams.len()` is always
+/// 0, `pinned_diagram` is always `None`, and `draw_pinned_diagram` — the
+/// function whose title paints ` o open`, ` hide`, ` ⇄ side`, ` Ctrl+←/→` and
+/// ` Ctrl+H/L focus` — is never called.
+///
+/// This drives mermaid content through the REAL transcript so the pane would
+/// have every reason to appear, and asserts none of it paints. The seam is
+/// deliberate (a documented port-decision, not an oversight); what is NOT
+/// deliberate is that nothing proves it is closed. When someone wires
+/// `get_active_diagrams`, this fails and forces the test with it.
+#[test]
+fn the_pinned_diagram_seam_is_closed_and_its_painter_never_runs() {
+    let mut app = make_app();
+    // A real mermaid block in the transcript: the pane's own candidate.
+    app.add_message(
+        Role::Assistant,
+        "```mermaid\ngraph TD;\n  A-->B;\n```".to_string(),
+    );
+    app.add_message(Role::User, "and a follow-up".to_string());
+
+    // The REAL full-frame render — the same entry the event loop drives.
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 40)).unwrap();
+    terminal
+        .draw(|f| {
+            crate::tui::render::render_app(f, &app);
+        })
+        .unwrap();
+    let painted: String = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|c| c.symbol().chars().next().unwrap_or(' '))
+        .collect();
+    for claim in [
+        " pinned ",
+        " o open",
+        " ⇄ side",
+        " Ctrl+←/→",
+        "Ctrl+H/L focus",
+    ] {
+        assert!(
+            !painted.contains(claim),
+            "the pinned-diagram renderer must not paint {claim:?} while its seam is open — \
+             that keyboard contract is unreachable, so painting it would be a latent claim"
+        );
+    }
+}
+
 #[test]
 fn the_session_hub_advertises_only_keys_that_cycle_something() {
     for (key, read, advance) in hub_advertised_keys() {
