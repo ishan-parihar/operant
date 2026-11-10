@@ -63,6 +63,18 @@ impl From<&ClientSettings> for ClientConfig {
     }
 }
 
+/// The number of ATTEMPTS a retry budget buys.
+///
+/// RT-471: `[client.rate_limit] max_retries` is documented — in the config
+/// and in `operant.example.toml` — as "Maximum number of retry attempts
+/// **after** a 429 or transient error", but the loops used it as the
+/// TOTAL attempt count, so the shipped default of 3 made three requests
+/// (two retries) instead of the four the operator asked for. A budget of 0
+/// still means "one request, no retry".
+fn attempt_count(max_retries: u32) -> u32 {
+    if max_retries == 0 { 1 } else { max_retries + 1 }
+}
+
 /// Whether `base_url` points at this machine or its private network — the
 /// only places an unauthenticated OpenAI-compatible server is plausible
 /// (ollama, lm-studio, a LAN gateway). A public host with no key is a
@@ -584,20 +596,20 @@ impl OpenAIClient {
             });
         }
 
-        // The attempt count is clamped to at least 1. `max_retries` comes
-        // from `[client.rate_limit] max_retries` in the config, and a user
-        // who sets it to 0 meant "do not retry" — not "do not make the
-        // request". With the raw value, the `1..=0` range is EMPTY, the
-        // loop body never runs, and the fall-through below was reached: the
-        // first loop returned an error (fixed in iter-139), and the second
-        // one hit an `unreachable!()` and PANICKED. In the gateway daemon
-        // that is a crash. Clamping keeps "one attempt, no retry", which
-        // is what the setting means.
-        let max_retries = self.config.rate_limit.max_retries.max(1);
+        // The attempt count. `max_retries` comes from `[client.rate_limit]
+        // max_retries` in the config, and it counts the RETRIES after the
+        // first attempt (RT-471) — so N buys N+1 attempts, and 0 buys
+        // exactly one request. A user who sets it to 0 meant "do not
+        // retry" — not "do not make the request": with the raw value the
+        // `1..=0` range is EMPTY, the loop body never runs, and the
+        // fall-through below was reached (the first loop returned an
+        // error, fixed in iter-139; the second one hit an `unreachable!()`
+        // and PANICKED — a crash in the gateway daemon).
+        let max_attempts = attempt_count(self.config.rate_limit.max_retries);
         let base_delay = self.config.rate_limit.base_delay_secs;
         let max_delay = self.config.rate_limit.max_delay_secs;
 
-        for attempt in 1..=max_retries {
+        for attempt in 1..=max_attempts {
             // Retry transient network errors at the transport level (e.g.
             // connection reset, TLS drop, proxy close) with exponential
             // backoff — mirroring `execute_with_retry`. Previously a failed
@@ -618,7 +630,7 @@ impl OpenAIClient {
             let response = match tokio::time::timeout(idle, send).await {
                 Ok(Ok(response)) => response,
                 Ok(Err(e)) => {
-                    if attempt < max_retries {
+                    if attempt < max_attempts {
                         let delay_s = exponential_backoff_secs(attempt, base_delay, max_delay);
                         warn!(
                             model = %model,
@@ -633,7 +645,7 @@ impl OpenAIClient {
                     return Err(Error::Network(e.into()));
                 }
                 Err(_) => {
-                    if attempt < max_retries {
+                    if attempt < max_attempts {
                         warn!(model = %model, attempt, idle_secs = idle.as_secs(), "No response headers in time, retrying");
                         continue;
                     }
@@ -670,7 +682,7 @@ impl OpenAIClient {
             }
 
             // Retry on 5xx if attempts remain.
-            if status.as_u16() >= 500 && attempt < max_retries {
+            if status.as_u16() >= 500 && attempt < max_attempts {
                 let delay_s = exponential_backoff_secs(attempt, base_delay, max_delay);
                 warn!(
                     model = %model,
@@ -710,15 +722,14 @@ impl OpenAIClient {
         headers: HeaderMap,
         body: serde_json::Value,
     ) -> Result<(reqwest::StatusCode, String)> {
-        // Clamped to at least 1, for the same reason as the streaming loop
-        // above: `max_retries = 0` must mean "one attempt, no retry", not
-        // "no attempt". Without the clamp the range is empty and the
-        // fall-through below was reached.
-        let max_retries = self.config.rate_limit.max_retries.max(1);
+        // The same attempt count as the streaming loop above: `max_retries`
+        // counts the RETRIES after the first attempt (RT-471), and 0 means
+        // "one attempt, no retry".
+        let max_attempts = attempt_count(self.config.rate_limit.max_retries);
         let base_delay = self.config.rate_limit.base_delay_secs;
         let max_delay = self.config.rate_limit.max_delay_secs;
 
-        for attempt in 1..=max_retries {
+        for attempt in 1..=max_attempts {
             // 1. Proactive rate-limit check (consume a token).
             if let Err(e) = self
                 .rate_limiter
@@ -736,7 +747,7 @@ impl OpenAIClient {
                     wait_ms = wait.as_millis(),
                     "Proactive rate limit engaged, waiting",
                 );
-                if attempt < max_retries {
+                if attempt < max_attempts {
                     tokio::time::sleep(wait).await;
                     continue;
                 }
@@ -755,7 +766,7 @@ impl OpenAIClient {
             {
                 Ok(r) => r,
                 Err(e) => {
-                    if attempt < max_retries {
+                    if attempt < max_attempts {
                         let delay_s = exponential_backoff_secs(attempt, base_delay, max_delay);
                         warn!(
                             model = %model,
@@ -818,7 +829,7 @@ impl OpenAIClient {
                     Duration::from_secs(exponential_backoff_secs(attempt, base_delay, max_delay))
                 });
 
-                if attempt < max_retries {
+                if attempt < max_attempts {
                     warn!(
                         model = %model,
                         attempt,
@@ -839,7 +850,7 @@ impl OpenAIClient {
             }
 
             // 4. Handle transient server errors.
-            if status.as_u16() >= 500 && attempt < max_retries {
+            if status.as_u16() >= 500 && attempt < max_attempts {
                 let delay_s = exponential_backoff_secs(attempt, base_delay, max_delay);
                 warn!(
                     model = %model,
@@ -2288,6 +2299,79 @@ mod tests {
              failure: {err:?}"
         );
         server.abort();
+    }
+
+    /// RT-471: `[client.rate_limit] max_retries` is documented as the
+    /// number of retry attempts AFTER a 429 or transient error, but the
+    /// loops used it as the TOTAL attempt count — so the shipped default
+    /// of 3 made three requests (two retries) instead of the four the
+    /// operator asked for.
+    ///
+    /// BEHAVIORAL: the request count must be the retries plus the first
+    /// attempt.
+    #[tokio::test]
+    async fn a_retry_budget_buys_retries_after_the_first_attempt() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        // A server that answers 500 every time: the transient path, which
+        // RE-ISSUES the request (a 429 drains the rate-limit bucket
+        // instead, so it never reaches the server again).
+        let hits = Arc::new(AtomicUsize::new(0));
+        let hits_for_server = hits.clone();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind a loopback port");
+        let addr = listener.local_addr().expect("the bound address");
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    break;
+                };
+                hits_for_server.fetch_add(1, Ordering::SeqCst);
+                use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                let mut buf = [0u8; 4096];
+                let _ = socket.read(&mut buf).await;
+                let body = r#"{"error":{"message":"boom"}}"#;
+                let response = format!(
+                    "HTTP/1.1 500 Internal Server Error\r\nContent-Type: application/json\r\n\
+                     Content-Length: {}\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = socket.write_all(response.as_bytes()).await;
+                let _ = socket.flush().await;
+            }
+        });
+
+        let client = OpenAIClient::new(ClientConfig {
+            base_url: format!("http://{addr}/v1"),
+            api_key: Some("k".to_string()),
+            rate_limit: crate::config::RateLimitSettings {
+                max_retries: 2,
+                base_delay_secs: 0,
+                max_delay_secs: 0,
+                ..crate::config::RateLimitSettings::default()
+            },
+            ..ClientConfig::default()
+        });
+
+        let result = client
+            .chat(
+                "gpt-4",
+                &[crate::client::Message::user("hi")],
+                None,
+                None,
+                None,
+            )
+            .await;
+        assert!(result.is_err(), "a 500 must be an error, not a success");
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            3,
+            "two retries after the first attempt means THREE requests — the \
+             setting counts retries, not attempts"
+        );
     }
 
     /// `[client.rate_limit] max_retries = 0` must mean "make the request
