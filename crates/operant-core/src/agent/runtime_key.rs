@@ -214,7 +214,14 @@ fn peel_revision(slug: &str) -> (String, ModelRevision) {
         return (base.to_string(), ModelRevision::Floating);
     }
     // `-YYYYMMDD` — 9 trailing characters, the leading one being the separator.
-    if slug.len() > 9 {
+    //
+    // RT-443: `slug.len()` is in BYTES, so a slug whose last 9 bytes fall
+    // inside a multi-byte character made `split_at` panic. A real model name
+    // does it (e.g. "a日日日日x"): the byte offset 14-9 lands inside a
+    // character, and the panic is reachable from config — a provider
+    // registry entry's `model` field flows here through
+    // `RuntimeKey::parse_in` on the runtime's fallback path.
+    if slug.len() > 9 && slug.is_char_boundary(slug.len() - 9) {
         let (base, stamp) = slug.split_at(slug.len() - 9);
         if stamp.starts_with('-') && stamp[1..].bytes().all(|b| b.is_ascii_digit()) {
             return (
@@ -223,8 +230,9 @@ fn peel_revision(slug: &str) -> (String, ModelRevision) {
             );
         }
     }
-    // `-YYYY-MM-DD` — 11 trailing characters.
-    if slug.len() > 11 {
+    // `-YYYY-MM-DD` — 11 trailing characters. RT-443: the same byte-offset
+    // guard — a date suffix is ASCII, so a non-boundary offset cannot be one.
+    if slug.len() > 11 && slug.is_char_boundary(slug.len() - 11) {
         let (base, stamp) = slug.split_at(slug.len() - 11);
         let b = stamp.as_bytes();
         if stamp.starts_with('-')
@@ -262,6 +270,57 @@ impl RouteCost {
     /// fallbacks, never to bill — real spend follows the actual token mix.
     pub fn blended_per_million(&self) -> f64 {
         (self.input_per_million + self.output_per_million) / 2.0
+    }
+}
+
+#[cfg(test)]
+mod rt443_tests {
+    use super::*;
+
+    /// RT-443: `peel_revision` split the slug at a BYTE offset from its
+    /// end, so a slug whose tail fell inside a multi-byte character
+    /// PANICKED ("byte index is not a char boundary"). BEHAVIORAL: such a
+    /// slug must parse as an unpinned revision — and, above all, not panic.
+    #[test]
+    fn a_slug_whose_tail_cuts_a_multi_byte_character_does_not_panic() {
+        // 14 bytes: "a" + four 3-byte characters + "x". 14-9 = 5 lands
+        // inside the second character.
+        let slug = "a日日日日x";
+        assert_eq!(slug.len(), 14);
+        assert!(
+            !slug.is_char_boundary(5),
+            "the fixture must cut a character"
+        );
+
+        let (base, revision) = peel_revision(slug);
+        assert_eq!(base, slug, "an unpinned slug is unchanged");
+        assert_eq!(revision, ModelRevision::Default);
+
+        // The 11-byte form too: 14-11 = 3 lands inside the first character.
+        assert!(
+            !slug.is_char_boundary(3),
+            "the fixture must cut a character"
+        );
+        let (base, revision) = peel_revision(slug);
+        assert_eq!(base, slug);
+        assert_eq!(revision, ModelRevision::Default);
+    }
+
+    /// RT-443: and the REAL forms still parse — the guard must not skip a
+    /// valid ASCII date suffix.
+    #[test]
+    fn the_ascii_date_suffixes_still_parse() {
+        let (base, revision) = peel_revision("gpt-4o-20250101");
+        assert_eq!(base, "gpt-4o");
+        assert!(matches!(revision, ModelRevision::Pinned(_)), "{revision:?}");
+
+        let (base, revision) = peel_revision("gpt-4o-2025-01-01");
+        assert_eq!(base, "gpt-4o");
+        assert!(matches!(revision, ModelRevision::Pinned(_)), "{revision:?}");
+
+        let (base, revision) = peel_revision("gpt-4o-latest");
+        assert_eq!(base, "gpt-4o");
+        assert_eq!(revision, ModelRevision::Floating);
     }
 }
 
