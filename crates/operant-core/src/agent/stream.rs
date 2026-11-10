@@ -316,13 +316,21 @@ impl OperantAgent {
                     if let Some(chunk_tool_calls) = chunk.tool_calls {
                         let mut native_pending: Vec<(String, String, String)> = Vec::new();
                         for tc in chunk_tool_calls {
-                            let is_new = !tool_calls.iter().any(|e| e.id == tc.id);
+                            // RT-466: the lookup after the merge found the
+                            // FIRST call with a non-empty name, not the one
+                            // that was just merged — so an SSE event
+                            // carrying two native tool calls announced the
+                            // first and left the second without a
+                            // ToolStart (its row appeared late, or never
+                            // when the turn was interrupted first). The
+                            // XML flush path already used the id.
+                            let tc_id = tc.id.clone();
+                            let is_new = !tool_calls.iter().any(|e| e.id == tc_id);
                             let has_name = !tc.function.name.is_empty();
                             merge_stream_tool_call(&mut tool_calls, tc);
                             if is_new
                                 && has_name
-                                && let Some(full) =
-                                    tool_calls.iter().find(|e| !e.function.name.is_empty())
+                                && let Some(full) = tool_calls.iter().find(|e| e.id == tc_id)
                             {
                                 let id = full.id.clone();
                                 let already = self
@@ -2008,6 +2016,120 @@ mod rt462_tests {
         );
         assert_eq!(ids[1], "call-2", "each id sits at its own call's index");
         assert_eq!(ids[2], "call-3", "each id sits at its own call's index");
+    }
+}
+
+#[cfg(test)]
+mod rt466_tests {
+    use super::*;
+    use crate::agent::model_client::ChatRequest;
+    use crate::agent::model_client::StreamChunk;
+    use crate::client::{ToolCall, ToolCallFunction};
+    use tokio::sync::mpsc;
+
+    struct UnusedClient;
+
+    #[async_trait::async_trait]
+    impl crate::agent::model_client::ModelClient for UnusedClient {
+        async fn chat(&self, _request: ChatRequest) -> Result<crate::client::ChatResponse> {
+            Err(crate::error::Error::Agent("unused".into()))
+        }
+        async fn chat_streaming(
+            &self,
+            _request: ChatRequest,
+        ) -> Result<BoxStream<'static, Result<StreamChunk>>> {
+            Err(crate::error::Error::Agent("unused".into()))
+        }
+        fn provider_name(&self) -> &str {
+            "unused"
+        }
+    }
+
+    fn call(id: &str, name: &str) -> ToolCall {
+        ToolCall {
+            id: id.to_string(),
+            function: ToolCallFunction {
+                name: name.to_string(),
+                arguments: "{}".to_string(),
+            },
+        }
+    }
+
+    /// RT-466: after merging a native tool call, the lookup found the FIRST
+    /// call with a non-empty name — not the one just merged — so an SSE
+    /// event carrying two native tool calls announced only the first, and
+    /// the second's row appeared late (or never, when the turn was
+    /// interrupted first).
+    ///
+    /// BEHAVIORAL: both calls in one chunk must get their own ToolStart.
+    #[tokio::test]
+    async fn two_native_tool_calls_in_one_chunk_each_get_a_tool_start() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db = crate::database::Database::init(temp_dir.path().join("rt466.sqlite")).unwrap();
+        let (tx, mut rx) = mpsc::channel(64);
+        let agent = OperantAgent::with_events(
+            AgentConfig {
+                reasoning_effort: String::new(),
+                reasoning_effort_param: Default::default(),
+                context_semantic_compaction: false,
+                model: "demo".to_string(),
+                max_trajectories: 0,
+                show_turn_attribution: true,
+                max_iterations: 3,
+                tool_timeout: Duration::from_secs(5),
+                request_timeout: Duration::from_secs(5),
+                system_prompt: None,
+                stream: true,
+                context_window: 8000,
+                max_tool_result_share: crate::context_management::DEFAULT_MAX_TOOL_RESULT_SHARE,
+                max_healing_attempts: 1,
+                fallback_models: Vec::new(),
+                fallback_on_errors: false,
+                loop_detection_enabled: false,
+                approval_mode: "off".to_string(),
+                approval_allowlist: Vec::new(),
+                approval_allowlist_path: None,
+                record_trajectories: false,
+                guardrail_exempt_tools: Vec::new(),
+                skill_nudge_interval: 0,
+                memory_review_interval: 0,
+                max_retries: 1,
+                tool_search: Default::default(),
+                ponytail: Default::default(),
+            },
+            Box::new(UnusedClient),
+            crate::ToolRegistry::new(Duration::from_secs(5)),
+            std::sync::Arc::new(db),
+            tx,
+        );
+
+        let chunk = StreamChunk {
+            content: None,
+            reasoning: None,
+            tool_calls: Some(vec![call("call-a", "alpha"), call("call-b", "beta")]),
+            extra_content: None,
+            usage: None,
+            finish_reason: Some("tool_calls".to_string()),
+            dropped_events: None,
+        };
+        let stream: BoxStream<'static, Result<StreamChunk>> =
+            Box::pin(futures::stream::once(async move { Ok(chunk) }));
+        agent
+            .process_stream(stream)
+            .await
+            .expect("the stream must be processed");
+
+        let mut ids: Vec<String> = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            if let AgentEvent::ToolStart { tool_call_id, .. } = event {
+                ids.push(tool_call_id);
+            }
+        }
+        assert!(
+            ids.contains(&"call-a".to_string()) && ids.contains(&"call-b".to_string()),
+            "both native calls must get their own ToolStart — the lookup after \
+             the merge found the FIRST named call: {ids:?}"
+        );
     }
 }
 
