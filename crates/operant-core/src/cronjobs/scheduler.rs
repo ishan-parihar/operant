@@ -957,7 +957,9 @@ impl CronScheduler {
                     stored = %job.schedule,
                     normalized = %schedule,
                     error = %e,
-                    "cron schedule self-heal could not be persisted — the stored                      schedule stays on its legacy form while this run fires the                      normalized one"
+                    "cron schedule self-heal could not be persisted — the stored \
+                     schedule stays on its legacy form while this run fires the \
+                     normalized one"
                 );
             }
         }
@@ -1078,6 +1080,33 @@ mod rt387_tests {
     /// proof lives beside it rather than in an integration test. The contract
     /// pins that the swallow is gone and that the report names BOTH forms the
     /// divergence is between. Needles concatenation-built.
+    /// RT-458: the self-heal's warning had its sentence breaks COLLAPSED
+    /// into runs of spaces ("the stored                      schedule stays"),
+    /// so the operator read a mangled line. A multi-line message literal
+    /// loses its breaks silently when something reflows it.
+    ///
+    /// SOURCE contract: the message must carry no collapsed line break.
+    #[test]
+    fn the_cron_self_heal_message_has_no_collapsed_line_break() {
+        let src = include_str!("scheduler.rs");
+        let prod = &src[..src.find("#[cfg(test)]").unwrap_or(src.len())];
+        // A RUN of spaces, of any length: the collapsed break was 22 wide.
+        let mangled = regex::Regex::new(r"the stored\s{4,}schedule stays").expect("the needle");
+        assert_eq!(
+            mangled.find_iter(prod).count(),
+            0,
+            "the operator-facing message must not carry a collapsed line break"
+        );
+        // And the message must still say what it means (the same sentence
+        // the RT-387 contract pins).
+        let said = format!("schedule stays on its legacy form");
+        assert_eq!(
+            prod.matches(&said).count(),
+            1,
+            "the message must still name the stored side of the divergence"
+        );
+    }
+
     #[test]
     fn the_cron_self_heal_reports_a_failed_persist() {
         let src = include_str!("scheduler.rs");
