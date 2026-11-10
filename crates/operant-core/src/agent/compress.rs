@@ -610,9 +610,14 @@ impl OperantAgent {
     /// overflow-compressor can never rescue (and side turns have no recovery
     /// at all). This sizes `max_tokens` to `window − prompt − headway` so the
     /// request is always admissible; a cap that already fits is left alone.
-    /// `prompt_is_reported` follows `estimate_current_tokens`'s preference:
-    /// the provider's own count is exact (no margin), the heuristic is padded
-    /// by 10% so undercounting cannot reproduce the rejection.
+    ///
+    /// RT-482: this doc used to describe the "reported" flag as tracking the
+    /// estimator's own choice between the provider's count and the padded
+    /// heuristic. The code does not: it hardcodes the flag to FALSE and
+    /// explains why in the body — the provider's count is exact but STALE
+    /// (it is the PREVIOUS request's, missing every tool result since), so
+    /// the margin always applies. The doc described a behaviour the code did
+    /// not have.
     pub(crate) fn fitted_request(
         &self,
         model: &str,
@@ -955,6 +960,32 @@ mod preflight_tests {
     }
 
     // ── inline tool-result trim (c) ────────────────────────────────────
+
+    /// RT-482: the doc said the "reported" flag follows
+    /// `estimate_current_tokens`'s preference, but the code hardcodes it to
+    /// FALSE (with the reason in the body: the provider's count is exact but
+    /// STALE). The doc described a behaviour the code does not have.
+    ///
+    /// SOURCE contract over the doc, needle concatenation-built.
+    #[test]
+    fn the_fitted_request_doc_does_not_promise_a_preference_the_code_lacks() {
+        let src = include_str!("compress.rs");
+        let prod = &src[..src.find("#[cfg(test)]").unwrap_or(src.len())];
+        // Single-line fragments: a needle that spans a doc comment's own
+        // line break matches NOTHING.
+        let false_claim = format!("`estimate_current_tokens`'s {}", "preference");
+        assert_eq!(
+            prod.matches(&false_claim).count(),
+            0,
+            "the doc must not promise a preference the hardcoded flag does not \
+             follow"
+        );
+        let rule = format!("hardcodes the flag to {}", "FALSE");
+        assert!(
+            prod.contains(&rule),
+            "the doc must state what the code does"
+        );
+    }
 
     /// RT-472: the agent RESOLVED the operator's `reasoning_effort_param`
     /// into a wire shape and then dropped it (`_shape`), so the shape never
