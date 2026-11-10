@@ -373,6 +373,18 @@ impl ModelClient for RecClient {
         if let Ok(mut seen) = self.0.seen.lock() {
             seen.push(bytes);
         }
+        // RT-463: the CONTENT of every request, so a test can assert on what
+        // the model was actually told (the spend guard's marker).
+        if let Ok(mut bodies) = self.0.bodies.lock() {
+            bodies.push(
+                request
+                    .messages
+                    .iter()
+                    .map(|m| m.content.clone())
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            );
+        }
         let n = self
             .0
             .calls
@@ -401,6 +413,9 @@ impl ModelClient for RecClient {
 /// Holds the recorded request sizes and the call counter.
 struct RecordingClient {
     seen: Mutex<Vec<usize>>,
+    /// RT-463: the content of every request, so a test can assert on what
+    /// the model was actually told.
+    bodies: Mutex<Vec<String>>,
     calls: Mutex<usize>,
 }
 
@@ -408,6 +423,7 @@ impl RecordingClient {
     fn new() -> Arc<Self> {
         Arc::new(Self {
             seen: Mutex::new(Vec::new()),
+            bodies: Mutex::new(Vec::new()),
             calls: Mutex::new(0),
         })
     }
@@ -572,7 +588,8 @@ async fn an_oversized_tool_schema_is_cut_before_it_reaches_the_model() {
     // test writes, and that guard was worthless: rust runs tests in parallel,
     // so the second test usually read the atomic as 0 before this one wrote it
     // and took its early-return path. It passed with a FABRICATED measured
-    // value of 999 against REAL_GROWTH of 1018. A guard a race can silently
+    // value of 999 against REAL_GROWTH of 1018 (1025 after RT-463). A guard
+    // a race can silently
     // disable is not a guard, so the check moved to where the value is produced.
     assert_eq!(
         growth, REAL_GROWTH,
@@ -610,6 +627,51 @@ async fn an_oversized_tool_schema_is_cut_before_it_reaches_the_model() {
 //
 // This test runs the fixture and closes that hole, using the same
 // inside-the-measuring-test form that fixed the race in the real-regime check.
+/// RT-463: the SPEND GUARD ran AFTER the 4096-byte absolute cap, so the
+/// guard never saw more than 4096 bytes. At the default 128K context window
+/// the guard's limit is ~6195 tokens (~24.8K chars) — so the guard could
+/// NEVER fire: `max_tool_result_share` was inert for any window above ~28K
+/// tokens, and the model got the generic truncation marker instead of the
+/// documented one (the result's real size, its share of the window, its
+/// price).
+///
+/// BEHAVIORAL: at the default window the request must carry the guard's
+/// marker.
+#[tokio::test]
+async fn the_spend_guard_fires_at_the_default_context_window() {
+    let dir = tempfile::tempdir().unwrap();
+    let registry = ToolRegistry::new(Duration::from_secs(30));
+    registry.register(HugeSchemaTool).await.unwrap();
+    let client = RecordingClient::new();
+
+    let mut cfg = config();
+    // The shipped default (config.rs:955) — the window every real run uses.
+    cfg.context_window = 128_000;
+
+    let agent = OperantAgent::new(
+        cfg,
+        Box::new(RecClient(Arc::clone(&client))),
+        registry,
+        Arc::new(Database::init(dir.path().join("db.sqlite")).unwrap()),
+    );
+
+    agent
+        .run("use the probe tool".to_string())
+        .await
+        .expect("the turn must complete");
+
+    let bodies = client.bodies.lock().unwrap().clone();
+    let with_result = bodies.last().expect("the agent asked the model twice");
+    assert!(
+        with_result.contains("[operant: oversized tool result for call"),
+        "the spend guard must report the result at its real size, its share \
+         of the window and its price — at the default 128K window the cap \
+         leaves ~1024 tokens, far below the guard's ~6195, so the guard can \
+         only fire if it runs BEFORE the cap. The request carried: {}",
+        &with_result[..with_result.len().min(400)]
+    );
+}
+
 #[tokio::test]
 async fn the_vacuous_regime_is_measured_not_assumed() {
     let dir = tempfile::tempdir().unwrap();
@@ -690,7 +752,12 @@ const VACUOUS_GROWTH: usize = 623;
 
 // Real regime: the 2,000-field schema, truncated into the request. Measured by
 // the main test, which likewise asserts its own value against this constant.
-const REAL_GROWTH: usize = 1018;
+//
+// RT-463: the growth moved from 1018 to 1025 because the SPEND GUARD now runs
+// before the absolute cap: the marker it leaves reports the result's REAL
+// size (the whole ~495 KB schema) instead of the size the cap had already
+// cut it to, so the marker is seven characters longer.
+const REAL_GROWTH: usize = 1025;
 
 /// The floor must sit strictly above the vacuous regime. It is compared with
 /// `>=`, so a floor equal to the vacuous growth ACCEPTS the vacuous case - the

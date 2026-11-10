@@ -2659,8 +2659,18 @@ impl OperantAgent {
                         // price; the cap then trims whatever the guard let
                         // through. Both bounds are explicit — the model is
                         // always told when output was withheld.
+                        //
+                        // RT-463: the code did the opposite -- the cap ran
+                        // FIRST, so the guard never saw more than 4096
+                        // bytes. At the default 128K context window the
+                        // guard's limit is ~6195 tokens (~24.8K chars), so
+                        // the guard could NEVER fire: `max_tool_result_share`
+                        // was inert for any window above ~28K tokens, and
+                        // the model got the generic truncation marker
+                        // instead of the documented one (the result's real
+                        // size, its share of the window, and its price).
                         let body = if result.success {
-                            truncate_tool_result(&result.name, &result.content)
+                            result.content.clone()
                         } else {
                             result.error.clone().unwrap_or_else(|| "Error".to_string())
                         };
@@ -2688,9 +2698,18 @@ impl OperantAgent {
                             _ => body,
                         };
                         let body = crate::redaction::redact_sensitive_text_if_enabled(&body);
-                        let content = self
+                        let body = self
                             .guard_tool_output_spend(&result.tool_call_id, &result.name, body)
                             .await;
+                        // The absolute cap trims whatever the guard let
+                        // through -- after the guard, so the guard saw the
+                        // result at its REAL size.
+                        let body = if result.success {
+                            truncate_tool_result(&result.name, &body)
+                        } else {
+                            body
+                        };
+                        let content = body;
 
                         // ── Memory write mirroring (hermes parity) ────────
                         // When a built-in memory tool writes an entry
