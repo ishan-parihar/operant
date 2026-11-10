@@ -245,9 +245,29 @@ fn bundle_cache() -> &'static RwLock<Option<BundleCache>> {
     BUNDLE_CACHE.get_or_init(|| RwLock::new(None))
 }
 
-/// Current mtime of the bundles directory, if it exists.
+/// Current mtime of the bundles directory AND its newest file.
+///
+/// RT-450: the key was the DIRECTORY's mtime alone. On Linux, editing a
+/// file's content does not change the parent directory's mtime — only
+/// create/delete/rename does — so an EDITED bundle was never re-read, and
+/// the stale guidance kept being injected into every turn for the life of
+/// the process. The newest FILE's mtime is part of the key now, so an edit
+/// invalidates the cache exactly like an addition or a removal does.
 fn bundles_dir_mtime(dir: &Path) -> Option<SystemTime> {
-    std::fs::metadata(dir).and_then(|m| m.modified()).ok()
+    let dir_mtime = std::fs::metadata(dir).and_then(|m| m.modified()).ok();
+    let newest_file = std::fs::read_dir(dir).ok().and_then(|entries| {
+        entries
+            .filter_map(|entry| entry.ok())
+            .filter_map(|entry| entry.metadata().ok())
+            .filter_map(|meta| meta.modified().ok())
+            .max()
+    });
+    match (dir_mtime, newest_file) {
+        (Some(dir), Some(file)) => Some(dir.max(file)),
+        (Some(dir), None) => Some(dir),
+        (None, Some(file)) => Some(file),
+        (None, None) => None,
+    }
 }
 
 /// Get all bundles using a cached scan result.
@@ -459,6 +479,58 @@ mod tests {
         assert!(get_skill_bundles().is_empty());
         let _ = std::fs::remove_dir_all(&dir);
         // SAFETY: env var manipulation in single-threaded test context
+        unsafe {
+            if let Some(v) = old {
+                std::env::set_var("OPERANT_BUNDLES_DIR", v);
+            } else {
+                std::env::remove_var("OPERANT_BUNDLES_DIR");
+            }
+        }
+    }
+
+    /// RT-450: the cache key was the DIRECTORY's mtime alone. On Linux,
+    /// editing a file's content does not change the parent directory's
+    /// mtime — only create/delete/rename does — so an EDITED bundle was
+    /// never re-read, and the stale guidance kept being injected into every
+    /// turn for the life of the process. The doc promises "a bundle was
+    /// added, edited, or removed → the next call transparently rescans".
+    ///
+    /// BEHAVIORAL: edit a bundle in place, then read the bundles again with
+    /// NO explicit refresh — the new content must be there.
+    #[test]
+    fn an_edited_bundle_is_rescanned_without_an_explicit_refresh() {
+        let _guard = bundles_env_lock().lock().unwrap();
+        let old = std::env::var("OPERANT_BUNDLES_DIR").ok();
+        let dir =
+            std::env::temp_dir().join(format!("operant_bundle_edit_test_{}", std::process::id()));
+        // SAFETY: env var manipulation is serialized by bundles_env_lock.
+        unsafe {
+            std::env::set_var("OPERANT_BUNDLES_DIR", &dir);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("one.yaml");
+        std::fs::write(&file, "name: one\ndescription: first\nskills:\n  - demo\n").unwrap();
+
+        let first = get_skill_bundles();
+        assert_eq!(
+            first.get("/one").map(|b| b.description.clone()),
+            Some("first".to_string()),
+            "the first scan must see the bundle"
+        );
+
+        // Edit the SAME file in place — the directory's mtime does not move.
+        std::fs::write(&file, "name: one\ndescription: second\nskills:\n  - demo\n").unwrap();
+
+        let second = get_skill_bundles();
+        assert_eq!(
+            second.get("/one").map(|b| b.description.clone()),
+            Some("second".to_string()),
+            "an edited bundle must be rescanned without an explicit refresh"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+        // SAFETY: env var manipulation is serialized by bundles_env_lock.
         unsafe {
             if let Some(v) = old {
                 std::env::set_var("OPERANT_BUNDLES_DIR", v);
