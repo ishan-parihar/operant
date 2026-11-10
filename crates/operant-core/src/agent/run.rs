@@ -2075,17 +2075,32 @@ impl OperantAgent {
                         finish_reason.clone(),
                     )
                     .await;
-                    self.database
-                        .save_session(
-                            &session_id,
-                            None,
-                            "agent",
-                            &chrono::Utc::now().to_rfc3339(),
-                            &chrono::Utc::now().to_rfc3339(),
-                        )
-                        .ok();
-                    if let Ok(total) = self.session_cost_usd.read() {
-                        self.database.update_session_cost(&session_id, *total).ok();
+                    // RT-470: the session-row writes dropped their Result,
+                    // so a failed write left the session list showing a
+                    // STALE last-activity time and a STALE cost, with the
+                    // agent proceeding as if the row had been updated. The
+                    // sibling counter persists (RT-365) report; these must
+                    // too.
+                    if let Err(e) = self.database.save_session(
+                        &session_id,
+                        None,
+                        "agent",
+                        &chrono::Utc::now().to_rfc3339(),
+                        &chrono::Utc::now().to_rfc3339(),
+                    ) {
+                        warn!(
+                            error = %e,
+                            "failed to persist the session's last-activity timestamp"
+                        );
+                    }
+                    if let Ok(total) = self.session_cost_usd.read()
+                        && let Err(e) = self.database.update_session_cost(&session_id, *total)
+                    {
+                        warn!(
+                            error = %e,
+                            "failed to persist the session's cost — the session list \
+                             shows a stale cost"
+                        );
                     }
 
                     // If no tool calls, we're done
@@ -2794,17 +2809,26 @@ impl OperantAgent {
                                 "failed to persist tool result"
                             );
                         }
-                        self.database
-                            .save_session(
-                                &session_id,
-                                None,
-                                "agent",
-                                &chrono::Utc::now().to_rfc3339(),
-                                &chrono::Utc::now().to_rfc3339(),
-                            )
-                            .ok();
-                        if let Ok(total) = self.session_cost_usd.read() {
-                            self.database.update_session_cost(&session_id, *total).ok();
+                        if let Err(e) = self.database.save_session(
+                            &session_id,
+                            None,
+                            "agent",
+                            &chrono::Utc::now().to_rfc3339(),
+                            &chrono::Utc::now().to_rfc3339(),
+                        ) {
+                            warn!(
+                                error = %e,
+                                "failed to persist the session's last-activity timestamp"
+                            );
+                        }
+                        if let Ok(total) = self.session_cost_usd.read()
+                            && let Err(e) = self.database.update_session_cost(&session_id, *total)
+                        {
+                            warn!(
+                                error = %e,
+                                "failed to persist the session's cost — the session list \
+                                 shows a stale cost"
+                            );
                         }
                         // Emit ToolCall observer event
                         if let Some(ref obs) = self.observer {
@@ -3817,6 +3841,47 @@ mod rt365_tests {
             src.matches(&site).count(),
             2,
             "both counter persist sites must go through the reporting path"
+        );
+    }
+
+    /// RT-470: the SESSION-ROW writes (the last-activity timestamp and the
+    /// cost) dropped their Result on both paths -- the assistant-answer
+    /// path and the per-tool-result path -- so a failed write left the
+    /// session list showing a STALE last-activity time and a STALE cost,
+    /// with the agent proceeding as if the row had been updated.
+    ///
+    /// SOURCE contract over the class, needle concatenation-built.
+    #[test]
+    fn the_session_row_writes_report_a_failed_write_instead_of_dropping_it() {
+        let src = include_str!("run.rs");
+        for dropped in [
+            format!(
+                "self.database.save_session(&session_id, None, \"{}\",",
+                "agent"
+            ),
+            format!(
+                "self.database.update_session_cost(&session_id, *total){}",
+                ".ok()"
+            ),
+        ] {
+            assert_eq!(
+                src.matches(&dropped).count(),
+                0,
+                "a dropped session write leaves the session list stale: {dropped}"
+            );
+        }
+        let reported = format!("failed to persist the session's {}", "cost");
+        assert!(
+            src.contains(&reported),
+            "the session cost write must report its failure"
+        );
+        let reported2 = format!(
+            "failed to persist the session's {}",
+            "last-activity timestamp"
+        );
+        assert!(
+            src.contains(&reported2),
+            "the session timestamp write must report its failure"
         );
     }
 }
