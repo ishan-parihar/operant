@@ -524,13 +524,26 @@ mod tests {
             1,
             "run.rs must hold exactly one turn-end emission site"
         );
+        assert_eq!(
+            run_rs.matches("finalize_terminal_reply(").count(),
+            6,
+            "one shared finalizer definition plus one call per terminal reply path"
+        );
+        assert!(
+            run_rs.contains(
+                "self.finalize_terminal_reply(\n                            &session_id,"
+            ),
+            "normal, grace, and breaker paths must use the shared finalizer"
+        );
         // ...and that site must actually CARRY the turn's breakdown. iter-1629
         // (row 3 / RT-209) added `attribution` to `TurnEnd`: an emit call that
         // passes `None` compiles fine and silently makes every span invisible,
         // so the wiring is pinned at the source. Caught a mutation that removed
         // the argument here (all 12 runtime tests passed without it).
         assert!(
-            run_rs.contains("self.turn_attribution(turn_start, turn_inference, saw_inference)"),
+            run_rs.contains(
+                "self.turn_attribution(timing.start, timing.inference, timing.saw_inference)"
+            ),
             "the turn-end emission must pass the computed TurnBreakdown, not None"
         );
         assert!(

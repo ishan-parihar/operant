@@ -731,3 +731,5 @@ NOT supported (named, with the reason):
 - RT-488 gateway recovery: only foldable exhaustion (`required == 0`) triggers compact-and-retry; protected overflow is surfaced immediately.
 
 - RT-489 runtime fallback: `FallbackModelClient` now starts each request with `request.model`, not the startup primary; restoring the old primary makes the behavioral regression fail with `startup-primary` instead of `runtime-override`.
+
+- RT-490 terminal finalization: normal text, grace, and both circuit-breaker exits share one finalizer for the TurnEnd hook, memory sync, prefetch, and TurnEnd bus; behavioral tests observe each exactly once on grace/breaker replies, and removing the breaker finalizer makes the regression fail with no memory write.

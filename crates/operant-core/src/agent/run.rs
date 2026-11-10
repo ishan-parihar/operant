@@ -42,6 +42,25 @@ fn learned_limit_key(provider: &str, model: &str) -> String {
 /// One struct because they travel together (the log line, the poke's gate)
 /// and a seven-arg function is a function nobody can read at the call site.
 #[derive(Clone, Copy)]
+struct TurnTiming {
+    /// When this turn began.
+    start: std::time::Instant,
+    /// Cumulative model-call time in this turn.
+    inference: Duration,
+    /// Whether at least one model call happened.
+    saw_inference: bool,
+}
+
+#[derive(Clone)]
+struct TurnEndContext<'a> {
+    session_id: &'a str,
+    user_query: &'a str,
+    counters: TurnCounters,
+    review_fired: bool,
+    timing: TurnTiming,
+}
+
+#[derive(Clone, Copy)]
 struct TurnCounters {
     /// The loop's iteration counter.
     iteration: usize,
@@ -222,15 +241,15 @@ impl OperantAgent {
     /// during the turn, the spawn was deferred to turn exit; the grace path
     /// is one of those exits, so it fires the one review after emitting
     /// `Done` (Interrupt/Error paths pass `false`).
-    pub(crate) async fn attempt_grace_call(
+    async fn attempt_grace_call(
         &self,
         messages: &[Message],
-        session_id: &str,
-        iterations: usize,
-        tool_calls: usize,
         final_response: Option<&Message>,
-        review_fired: bool,
+        end: &TurnEndContext<'_>,
     ) -> Result<GraceOutcome> {
+        let session_id = end.session_id;
+        let iterations = end.counters.iteration;
+        let tool_calls = end.counters.tool_calls;
         // The wrap-up is the LAST call of a budget-exhausted turn, so a
         // summary that runs out of room is CONTINUED (bounded) instead of
         // being returned half-written — the generic recovery jcode uses for
@@ -343,15 +362,7 @@ impl OperantAgent {
                         );
                     }
                 }
-                self.announce_grace_end(
-                    session_id,
-                    messages,
-                    &result,
-                    iterations,
-                    tool_calls,
-                    review_fired,
-                )
-                .await;
+                self.announce_grace_end(messages, &result, end).await;
                 Ok(GraceOutcome::Answer(result))
             }
             Err(e) => {
@@ -420,13 +431,14 @@ impl OperantAgent {
     /// operator the turn was over before the poke gave it one more pass.
     async fn announce_grace_end(
         &self,
-        session_id: &str,
         messages: &[Message],
         result: &Message,
-        iterations: usize,
-        tool_calls: usize,
-        review_fired: bool,
+        end: &TurnEndContext<'_>,
     ) {
+        let session_id = end.session_id;
+        let iterations = end.counters.iteration;
+        let tool_calls = end.counters.tool_calls;
+        let review_fired = end.review_fired;
         self.emit(AgentEvent::Done {
             message: result.clone(),
             // S5: the grace path must not report `text_response` —
@@ -471,12 +483,86 @@ impl OperantAgent {
                 )
                 .await;
         }
+        self.finalize_terminal_reply(
+            session_id,
+            end.user_query,
+            result,
+            iterations,
+            tool_calls,
+            end.timing,
+        )
+        .await;
         // S3: deferred skill review — review the complete transcript
         // AFTER the turn's final answer is committed/emitted, so the
         // review never competes with the turn for provider slots.
         if review_fired {
             self.spawn_background_review(messages, session_id, true, false)
                 .await;
+        }
+    }
+
+    /// Run the shared post-turn finalization for a terminal reply.
+    ///
+    /// Normal text, grace, and circuit-breaker exits all complete a turn.
+    /// They differ in why they stopped, not in the post-turn obligations:
+    /// memory sync, next-turn prefetch, the lifecycle hook, and the
+    /// `TurnEnd` bus must each happen exactly once for every terminal reply.
+    async fn finalize_terminal_reply(
+        &self,
+        session_id: &str,
+        user_query: &str,
+        result: &Message,
+        iteration: usize,
+        total_tool_calls: usize,
+        timing: TurnTiming,
+    ) {
+        if let Some(ref hooks) = self.hook_registry {
+            let ctx = crate::gateway_pipeline::HookContext::new()
+                .with_session(session_id)
+                .with_metadata("iterations", iteration.to_string())
+                .with_metadata("tool_calls", total_tool_calls.to_string());
+            hooks
+                .emit(crate::gateway_pipeline::HookEvent::TurnEnd, ctx)
+                .await;
+        }
+
+        let write_bank = self.memory_provider.as_ref().and_then(|p| p.write_bank());
+        if turn_retains()
+            && let Ok(exec_guard) = self.memory_sync_executor.try_lock()
+        {
+            if let Some(executor) = exec_guard.as_ref() {
+                executor.submit_sync_turn(user_query, &result.content, write_bank);
+            } else if let Some(provider) = &self.memory_provider {
+                let user_text = user_query.to_string();
+                let assistant_text = result.content.clone();
+                let provider_clone = provider.clone();
+                crate::daemon_pool::spawn("memory-sync", async move {
+                    if let Err(e) = provider_clone
+                        .sync_turn_in_bank(write_bank.as_deref(), &user_text, &assistant_text)
+                        .await
+                    {
+                        tracing::warn!(error = %e, "Memory provider sync_turn hook failed");
+                    }
+                });
+            }
+        }
+        if let Some(provider) = &self.memory_provider {
+            provider.queue_prefetch(user_query);
+        }
+
+        if let Some(ref bus) = self.turn_end_bus {
+            let attribution =
+                self.turn_attribution(timing.start, timing.inference, timing.saw_inference);
+            if let Some(ref attribution) = attribution {
+                crate::turn_end::TurnEndBus::log_attribution(attribution);
+            }
+            bus.emit(
+                session_id,
+                iteration,
+                total_tool_calls,
+                &result.content,
+                attribution,
+            );
         }
     }
 
@@ -502,22 +588,13 @@ impl OperantAgent {
     async fn wrap_up_or_poke(
         &self,
         messages: &mut Vec<Message>,
-        session_id: &str,
-        counters: TurnCounters,
-        review_fired: bool,
         poke: &mut crate::agent::auto_poke::PokeState,
         allow_poke: bool,
+        end: &TurnEndContext<'_>,
     ) -> Result<Option<Message>> {
-        let outcome = self
-            .attempt_grace_call(
-                messages,
-                session_id,
-                counters.iteration,
-                counters.tool_calls,
-                None,
-                review_fired,
-            )
-            .await?;
+        let session_id = end.session_id;
+        let counters = end.counters;
+        let outcome = self.attempt_grace_call(messages, None, end).await?;
         match outcome {
             GraceOutcome::Answer(message) => return Ok(Some(message)),
             GraceOutcome::Empty => {}
@@ -600,15 +677,7 @@ impl OperantAgent {
         // No poke: announce the empty end now (the same announcement the
         // wrap-up used to make inline) and hand the empty answer back.
         let empty = Message::assistant(String::new());
-        self.announce_grace_end(
-            session_id,
-            messages,
-            &empty,
-            counters.iteration,
-            counters.tool_calls,
-            review_fired,
-        )
-        .await;
+        self.announce_grace_end(messages, &empty, end).await;
         Ok(Some(empty))
     }
 
@@ -1028,15 +1097,23 @@ impl OperantAgent {
                 match self
                     .wrap_up_or_poke(
                         &mut messages,
-                        &session_id,
-                        TurnCounters {
-                            iteration,
-                            tool_calls: total_tool_calls,
-                            succeeded: successful_tool_calls,
-                        },
-                        review_fired,
                         &mut poke,
                         true,
+                        &TurnEndContext {
+                            session_id: &session_id,
+                            user_query: &user_query,
+                            counters: TurnCounters {
+                                iteration,
+                                tool_calls: total_tool_calls,
+                                succeeded: successful_tool_calls,
+                            },
+                            review_fired,
+                            timing: TurnTiming {
+                                start: turn_start,
+                                inference: turn_inference,
+                                saw_inference,
+                            },
+                        },
                     )
                     .await?
                 {
@@ -1066,15 +1143,23 @@ impl OperantAgent {
                 match self
                     .wrap_up_or_poke(
                         &mut messages,
-                        &session_id,
-                        TurnCounters {
-                            iteration,
-                            tool_calls: total_tool_calls,
-                            succeeded: successful_tool_calls,
-                        },
-                        review_fired,
                         &mut poke,
                         true,
+                        &TurnEndContext {
+                            session_id: &session_id,
+                            user_query: &user_query,
+                            counters: TurnCounters {
+                                iteration,
+                                tool_calls: total_tool_calls,
+                                succeeded: successful_tool_calls,
+                            },
+                            review_fired,
+                            timing: TurnTiming {
+                                start: turn_start,
+                                inference: turn_inference,
+                                saw_inference,
+                            },
+                        },
                     )
                     .await?
                 {
@@ -1127,15 +1212,23 @@ impl OperantAgent {
                 match self
                     .wrap_up_or_poke(
                         &mut messages,
-                        &session_id,
-                        TurnCounters {
-                            iteration,
-                            tool_calls: total_tool_calls,
-                            succeeded: successful_tool_calls,
-                        },
-                        review_fired,
                         &mut poke,
                         false,
+                        &TurnEndContext {
+                            session_id: &session_id,
+                            user_query: &user_query,
+                            counters: TurnCounters {
+                                iteration,
+                                tool_calls: total_tool_calls,
+                                succeeded: successful_tool_calls,
+                            },
+                            review_fired,
+                            timing: TurnTiming {
+                                start: turn_start,
+                                inference: turn_inference,
+                                saw_inference,
+                            },
+                        },
                     )
                     .await?
                 {
@@ -1214,15 +1307,23 @@ impl OperantAgent {
                 match self
                     .wrap_up_or_poke(
                         &mut messages,
-                        &session_id,
-                        TurnCounters {
-                            iteration,
-                            tool_calls: total_tool_calls,
-                            succeeded: successful_tool_calls,
-                        },
-                        review_fired,
                         &mut poke,
                         true,
+                        &TurnEndContext {
+                            session_id: &session_id,
+                            user_query: &user_query,
+                            counters: TurnCounters {
+                                iteration,
+                                tool_calls: total_tool_calls,
+                                succeeded: successful_tool_calls,
+                            },
+                            review_fired,
+                            timing: TurnTiming {
+                                start: turn_start,
+                                inference: turn_inference,
+                                saw_inference,
+                            },
+                        },
                     )
                     .await?
                 {
@@ -2186,22 +2287,24 @@ impl OperantAgent {
                             info!("{}", diag.log_message());
                         }
 
-                        // ── TurnEnd lifecycle hook ───────────────────────────────
-                        // Emit TurnEnd with iteration and tool call counts.
-                        if let Some(ref hooks) = self.hook_registry {
-                            let ctx = crate::gateway_pipeline::HookContext::new()
-                                .with_session(&session_id)
-                                .with_metadata("iterations", iteration.to_string())
-                                .with_metadata("tool_calls", total_tool_calls.to_string());
-                            hooks
-                                .emit(crate::gateway_pipeline::HookEvent::TurnEnd, ctx)
-                                .await;
-                        }
-
                         self.emit(AgentEvent::Done {
-                            message: assistant_msg,
+                            message: assistant_msg.clone(),
                             reason: TurnExitReason::TextResponse,
                         })
+                        .await;
+
+                        self.finalize_terminal_reply(
+                            &session_id,
+                            &user_query,
+                            &assistant_msg,
+                            iteration,
+                            total_tool_calls,
+                            TurnTiming {
+                                start: turn_start,
+                                inference: turn_inference,
+                                saw_inference,
+                            },
+                        )
                         .await;
 
                         // S3: deferred skill review — fires AFTER the turn's
@@ -2217,85 +2320,6 @@ impl OperantAgent {
                         // even when the session never sends a message.
                         self.touch_session_activity(&session_id, "turn complete")
                             .await;
-
-                        // Memory provider: sync_turn + queue_prefetch hooks.
-                        // sync_turn persists the completed turn to graph memory
-                        // (entity extraction + auto-wiring). queue_prefetch
-                        // queues background recall for the next turn.
-                        // This is the native equivalent of the hermes-agent
-                        // MemoryManager.sync_all() + queue_prefetch_all() pattern.
-                        //
-                        // Uses the MemorySyncExecutor for ordered, non-blocking
-                        // background writes. Falls back to direct spawn when the
-                        // executor isn't available (e.g. no memory provider).
-                        // KB-7: read the bank now, at enqueue, not when the worker runs.
-                        let write_bank = self.memory_provider.as_ref().and_then(|p| p.write_bank());
-                        if turn_retains()
-                            && let Ok(exec_guard) = self.memory_sync_executor.try_lock()
-                        {
-                            if let Some(executor) = exec_guard.as_ref() {
-                                executor.submit_sync_turn(&user_query, &result.content, write_bank);
-                            } else if let Some(provider) = &self.memory_provider {
-                                let user_text = user_query.clone();
-                                let assistant_text = result.content.clone();
-                                let provider_clone = provider.clone();
-                                crate::daemon_pool::spawn("memory-sync", async move {
-                                    if let Err(e) = provider_clone
-                                        .sync_turn_in_bank(
-                                            write_bank.as_deref(),
-                                            &user_text,
-                                            &assistant_text,
-                                        )
-                                        .await
-                                    {
-                                        tracing::warn!(error = %e, "Memory provider sync_turn hook failed");
-                                    }
-                                });
-                            }
-                        }
-                        // Memory provider: queue background recall for the
-                        // NEXT turn (hermes `queue_prefetch_all` call-site
-                        // parity). The authoritative search runs in prefetch()
-                        // at the top of the next turn; queue_prefetch is a
-                        // non-blocking hook the provider can use to warm its
-                        // backend — a slow provider can never block the
-                        // turn-completion path.
-                        if let Some(provider) = &self.memory_provider {
-                            provider.queue_prefetch(&user_query);
-                        }
-
-                        // ── TurnEnd post-turn seam ──────────────────────────
-                        // One `TurnEnd` per completed turn, emitted after the
-                        // memory hooks above so subscribers observe the same
-                        // ordering the sync_turn path does. This is the seam
-                        // reflection / advisor / dreaming attach to.
-                        //
-                        // Zero-subscriber cost: `turn_end_bus` is `None`
-                        // unless a feature attached one, so the check below
-                        // constructs nothing, awaits nothing, and never
-                        // touches `messages` — the pre-seam lines above stay
-                        // byte-identical. `emit` is synchronous by contract:
-                        // a slow subscriber can never block the turn.
-                        if let Some(ref bus) = self.turn_end_bus {
-                            let attribution =
-                                self.turn_attribution(turn_start, turn_inference, saw_inference);
-                            // The consumer RT-209 deferred: without this, the
-                            // four spans are computed, classified, emitted, and
-                            // read by nothing. Guarded rather than unguarded
-                            // because the log line must cost nothing when the
-                            // operator turned attribution off (`None`), which is
-                            // the common case.
-                            if let Some(ref attribution) = attribution {
-                                crate::turn_end::TurnEndBus::log_attribution(attribution);
-                            }
-                            bus.emit(
-                                &session_id,
-                                iteration,
-                                total_tool_calls,
-                                &result.content,
-                                attribution,
-                            );
-                        }
 
                         // Emit AgentEnd hook
                         if let Some(ref hooks) = self.hook_registry {
@@ -2602,6 +2626,19 @@ impl OperantAgent {
                             reason: TurnExitReason::CircuitBreaker,
                         })
                         .await;
+                        self.finalize_terminal_reply(
+                            &session_id,
+                            &user_query,
+                            &abort_msg,
+                            iteration,
+                            total_tool_calls,
+                            TurnTiming {
+                                start: turn_start,
+                                inference: turn_inference,
+                                saw_inference,
+                            },
+                        )
+                        .await;
                         // ── Turn diagnostics (circuit-breaker abort) ──────
                         warn!(
                             "{}",
@@ -2677,6 +2714,19 @@ impl OperantAgent {
                             message: abort_msg.clone(),
                             reason: TurnExitReason::CircuitBreaker,
                         })
+                        .await;
+                        self.finalize_terminal_reply(
+                            &session_id,
+                            &user_query,
+                            &abort_msg,
+                            iteration,
+                            total_tool_calls,
+                            TurnTiming {
+                                start: turn_start,
+                                inference: turn_inference,
+                                saw_inference,
+                            },
+                        )
                         .await;
                         // ── Turn diagnostics (circuit-breaker abort) ──────
                         warn!(
@@ -2985,6 +3035,19 @@ impl OperantAgent {
                             message: reply.clone(),
                             reason: TurnExitReason::CircuitBreaker,
                         })
+                        .await;
+                        self.finalize_terminal_reply(
+                            &session_id,
+                            &user_query,
+                            &reply,
+                            iteration,
+                            total_tool_calls,
+                            TurnTiming {
+                                start: turn_start,
+                                inference: turn_inference,
+                                saw_inference,
+                            },
+                        )
                         .await;
                         return Ok(reply);
                     }

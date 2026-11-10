@@ -62,8 +62,10 @@ use operant_core::client::{
 };
 use operant_core::database::Database;
 use operant_core::error::{Error, Result};
+use operant_core::memory_provider::MemoryProvider;
 use operant_core::schema::ToolSchema;
 use operant_core::tools::{OperantTool, ToolContext, ToolRegistry, ToolResult};
+use operant_core::turn_end::TurnEndBus;
 
 /// The shared prefix of every breaker abort body. Nothing the model writes
 /// starts with this, so it is the reliable discriminator between shape 1
@@ -159,6 +161,43 @@ impl OperantTool for FailingTool {
 struct ScriptedClient {
     responses: Mutex<Vec<ChatResponse>>,
     seen: Mutex<Vec<Vec<String>>>,
+}
+
+/// Records the post-turn obligations that used to be skipped by breaker exits.
+struct FinalizationObserver {
+    synced: Mutex<Vec<(String, String)>>,
+    queued: Mutex<Vec<String>>,
+}
+
+#[async_trait]
+impl MemoryProvider for FinalizationObserver {
+    fn name(&self) -> &str {
+        "finalization_observer"
+    }
+
+    fn is_available(&self) -> bool {
+        true
+    }
+
+    async fn initialize(&self, _session_id: &str) -> Result<()> {
+        Ok(())
+    }
+
+    async fn prefetch(&self, _query: &str) -> String {
+        String::new()
+    }
+
+    async fn sync_turn(&self, user: &str, assistant: &str) -> Result<()> {
+        self.synced
+            .lock()
+            .unwrap()
+            .push((user.to_string(), assistant.to_string()));
+        Ok(())
+    }
+
+    fn queue_prefetch(&self, query: &str) {
+        self.queued.lock().unwrap().push(query.to_string());
+    }
 }
 
 impl ScriptedClient {
@@ -579,5 +618,153 @@ async fn budget_exhaustion_with_failing_grace_call_is_a_hard_error() {
         client.requests(),
         4,
         "the failing grace call was still attempted"
+    );
+}
+
+/// Every terminal reply completes the same post-turn obligations. A breaker
+/// abort is still a turn: memory sees it, the next turn can prefetch it, the
+/// lifecycle hook fires, and the `TurnEnd` bus sees exactly one event.
+#[tokio::test]
+async fn a_circuit_breaker_exit_finalizes_the_turn_exactly_once() {
+    let temp = tempfile::tempdir().unwrap();
+    let client = Arc::new(ScriptedClient::new(identical_calls("ok_probe", 6)));
+    let provider = Arc::new(FinalizationObserver {
+        synced: Mutex::new(Vec::new()),
+        queued: Mutex::new(Vec::new()),
+    });
+    let bus = TurnEndBus::new();
+    let mut turn_ends = bus.subscribe();
+    let hook_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let hook_count_for_handler = Arc::clone(&hook_count);
+    let hooks = Arc::new(operant_core::gateway_pipeline::HookRegistry::new());
+    hooks
+        .register(
+            operant_core::gateway_pipeline::HookEvent::TurnEnd,
+            Arc::new(move |_event, _ctx| {
+                let count = Arc::clone(&hook_count_for_handler);
+                Box::pin(async move {
+                    count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                })
+            }),
+        )
+        .await;
+
+    let agent = build_agent(
+        Arc::clone(&client),
+        OkTool,
+        6,
+        temp.path().join("r35_finalization.sqlite"),
+    )
+    .await
+    .with_memory_provider(Arc::clone(&provider) as Arc<dyn MemoryProvider>)
+    .with_turn_end_bus(bus)
+    .with_hook_registry(hooks);
+
+    let query = "call the probe repeatedly";
+    let result = agent.run(query.to_string()).await.unwrap();
+    agent.shutdown_memory_executor().await;
+
+    assert!(result.content.starts_with(ABORT_PREFIX));
+    assert_eq!(
+        provider.synced.lock().unwrap().as_slice(),
+        [(query.to_string(), result.content.clone())],
+        "the breaker reply must reach memory exactly once"
+    );
+    assert_eq!(
+        provider.queued.lock().unwrap().as_slice(),
+        [query.to_string()],
+        "the breaker turn must queue the next prefetch exactly once"
+    );
+    assert_eq!(
+        turn_ends
+            .try_recv()
+            .expect("one TurnEnd event")
+            .result_summary,
+        result.content,
+        "the TurnEnd bus must carry the breaker reply"
+    );
+    assert!(
+        turn_ends.try_recv().is_err(),
+        "the breaker turn must emit exactly one TurnEnd event"
+    );
+    assert_eq!(
+        hook_count.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the TurnEnd lifecycle hook must fire exactly once"
+    );
+}
+
+/// A grace summary is also a completed turn. Its post-turn obligations must
+/// match the breaker path: one memory write, one prefetch, one lifecycle hook,
+/// and one `TurnEnd` event.
+#[tokio::test]
+async fn a_grace_exit_finalizes_the_turn_exactly_once() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut responses = varying_calls("fail_probe", 3);
+    responses.push(text_response("summary of partial work"));
+    let client = Arc::new(ScriptedClient::new(responses));
+    let provider = Arc::new(FinalizationObserver {
+        synced: Mutex::new(Vec::new()),
+        queued: Mutex::new(Vec::new()),
+    });
+    let bus = TurnEndBus::new();
+    let mut turn_ends = bus.subscribe();
+    let hook_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let hook_count_for_handler = Arc::clone(&hook_count);
+    let hooks = Arc::new(operant_core::gateway_pipeline::HookRegistry::new());
+    hooks
+        .register(
+            operant_core::gateway_pipeline::HookEvent::TurnEnd,
+            Arc::new(move |_event, _ctx| {
+                let count = Arc::clone(&hook_count_for_handler);
+                Box::pin(async move {
+                    count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                })
+            }),
+        )
+        .await;
+
+    let agent = build_agent(
+        Arc::clone(&client),
+        FailingTool,
+        3,
+        temp.path().join("grace_finalization.sqlite"),
+    )
+    .await
+    .with_memory_provider(Arc::clone(&provider) as Arc<dyn MemoryProvider>)
+    .with_turn_end_bus(bus)
+    .with_hook_registry(hooks);
+
+    let query = "do some work";
+    let result = agent.run(query.to_string()).await.unwrap();
+    agent.shutdown_memory_executor().await;
+
+    assert_eq!(result.content, "summary of partial work");
+    assert_eq!(
+        provider.synced.lock().unwrap().as_slice(),
+        [(query.to_string(), result.content.clone())],
+        "the grace summary must reach memory exactly once"
+    );
+    assert_eq!(
+        provider.queued.lock().unwrap().as_slice(),
+        [query.to_string()],
+        "the grace turn must queue the next prefetch exactly once"
+    );
+    assert_eq!(
+        turn_ends
+            .try_recv()
+            .expect("one TurnEnd event")
+            .result_summary,
+        result.content,
+        "the TurnEnd bus must carry the grace summary"
+    );
+    assert!(
+        turn_ends.try_recv().is_err(),
+        "the grace turn must emit exactly one TurnEnd event"
+    );
+    assert_eq!(
+        hook_count.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the TurnEnd lifecycle hook must fire exactly once"
     );
 }

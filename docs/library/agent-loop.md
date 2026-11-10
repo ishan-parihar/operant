@@ -96,6 +96,12 @@ instead of wrapping the agent loop — the attachment point for reflection,
 the advisor, recap, and dreaming. See
 [context-injection.md](context-injection.md) for what subscribes.
 
+Normal text, grace-summary, and circuit-breaker replies all pass through the
+same terminal finalizer: the `TurnEnd` lifecycle hook, memory `sync_turn`,
+next-turn prefetch, and the `TurnEndBus` event each run exactly once. The
+exit reason changes why the turn stopped; it does not change its
+post-turn obligations.
+
 ## Self-healing summary
 
 | Failure | Mechanism | Where |
