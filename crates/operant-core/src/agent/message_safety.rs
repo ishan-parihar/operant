@@ -330,7 +330,18 @@ pub fn repair_message_sequence(messages: &mut Vec<Message>) -> usize {
                     let mut merged_calls = prev_calls;
                     merged_calls.extend(new_calls);
                     messages[i - 1].tool_calls = Some(merged_calls);
-                } else if messages[i - 1].tool_calls.is_none() {
+                } else if messages[i - 1].tool_calls.is_none() && !prev_calls.is_empty() {
+                    // RT-464: an empty list is not the same as no list —
+                    // `drop_orphaned_tool_messages` (which runs BEFORE this
+                    // repair) says so: "providers read `Some([])`
+                    // differently from `None`". This branch re-created the
+                    // very shape that repair removes: `unwrap_or_default()`
+                    // yields an EMPTY list, so two consecutive assistant
+                    // messages that called nothing ended up with
+                    // `Some([])` — and `to_value` puts that on the wire as
+                    // `"tool_calls": []`, plus a fabricated
+                    // `reasoning_content` (the client keys that on
+                    // `tool_calls.is_some()`).
                     messages[i - 1].tool_calls = Some(prev_calls);
                 }
                 // Keep the newer content
@@ -645,6 +656,29 @@ mod tests {
     /// literal secret values and `NAME=value`, not a bare `$VAR`. So the sites
     /// log SHAPE instead. This asserts the invariant those sites rely on: a
     /// preview cut at the first `$` cannot carry a variable name.
+    /// RT-464: the assistant→assistant repair re-created the very shape
+    /// that `drop_orphaned_tool_messages` removes — `Some([])`, which
+    /// "providers read differently from `None`" and which `to_value` puts
+    /// on the wire as `"tool_calls": []` plus a fabricated
+    /// `reasoning_content`.
+    ///
+    /// BEHAVIORAL: two consecutive assistant messages that called nothing
+    /// must end with NO call list — and the serialized message must carry
+    /// no `tool_calls` key.
+    #[test]
+    fn two_plain_assistant_messages_do_not_manufacture_an_empty_call_list() {
+        let mut messages = vec![Message::assistant("first"), Message::assistant("second")];
+        repair_message_sequence(&mut messages);
+        assert_eq!(messages.len(), 1, "the two messages are merged");
+        assert!(
+            messages[0].tool_calls.is_none(),
+            "a message that called nothing must carry NO call list — Some([]) is \
+             a different thing on the wire"
+        );
+        // The wire shape is pinned in the client's own test module (its
+        // `to_value` is private to that module).
+    }
+
     #[test]
     fn preview_cut_cannot_carry_a_credential_name() {
         let leaked = r#"if [ -n "$TAVILY_API_KEY" ]; then echo ok; fi"#;

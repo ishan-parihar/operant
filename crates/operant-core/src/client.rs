@@ -1220,7 +1220,16 @@ impl Message {
         let mut map = serde_json::Map::new();
         map.insert("role".to_string(), json!(self.role.as_str()));
 
-        if let Some(ref tool_calls) = self.tool_calls {
+        // RT-464: an EMPTY call list is not a call list. The message
+        // safety repair normalises `Some([])` to `None` for exactly this
+        // reason ("providers read `Some([])` differently from `None`"), and
+        // the wire shape is the last place that can be enforced: an empty
+        // array goes out as `"tool_calls": []`, which a validating provider
+        // rejects, and it also keys the fabricated `reasoning_content`
+        // below.
+        if let Some(ref tool_calls) = self.tool_calls
+            && !tool_calls.is_empty()
+        {
             let tc_array: Vec<Value> = tool_calls
                 .iter()
                 .map(|tc| {
@@ -1287,7 +1296,10 @@ impl Message {
         // providers ignore the extra field, so this is safe to emit
         // unconditionally for tool-call assistant turns.
         // Refs: operant-agent #15250, #17341, #17400.
-        let has_tool_calls = self.tool_calls.is_some();
+        let has_tool_calls = self
+            .tool_calls
+            .as_ref()
+            .is_some_and(|calls| !calls.is_empty());
         match self.reasoning.as_deref() {
             Some(reasoning) if !reasoning.is_empty() => {
                 map.insert("reasoning_content".to_string(), json!(reasoning));
@@ -2407,6 +2419,28 @@ mod tests {
         assert_eq!(
             value["reasoning_content"], " ",
             "missing reasoning on tool-call assistant turn must be padded to ' '"
+        );
+    }
+
+    /// RT-464: an EMPTY call list is not a call list. The message-safety
+    /// repair normalises `Some([])` to `None` for exactly this reason
+    /// ("providers read `Some([])` differently from `None`"), and the wire
+    /// shape is the last place that can be enforced: the empty array goes
+    /// out as `"tool_calls": []` (a validating provider rejects it) and it
+    /// also keys the fabricated `reasoning_content`.
+    #[test]
+    fn an_empty_call_list_does_not_reach_the_wire() {
+        let msg = Message::assistant("plain").with_tool_calls(vec![]);
+        let value = msg.to_value();
+        let map = value.as_object().expect("an object");
+        assert!(
+            !map.contains_key("tool_calls"),
+            "an empty call list must not go on the wire as an empty array: {value}"
+        );
+        assert!(
+            !map.contains_key("reasoning_content"),
+            "a message that called nothing must not carry a fabricated \
+             reasoning_content: {value}"
         );
     }
 
