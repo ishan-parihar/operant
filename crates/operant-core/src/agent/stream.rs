@@ -1726,8 +1726,16 @@ impl OperantAgent {
 
             // (plan 04) ids captured before `pending` is consumed — the
             // interrupt path pairs unfinished calls by id.
-            let tool_call_ids: Vec<String> =
-                pending.iter().map(|(_, tc, _)| tc.id.clone()).collect();
+            //
+            // RT-462: the ids were collected from `pending` (the calls that
+            // SURVIVED pre-flight) but indexed with the position in
+            // `call_names` (ALL the calls). A pre-flight rejection therefore
+            // shifted every pairing after it — the wrong `tool_call_id` on
+            // the cancelled results, which strict providers reject — and a
+            // batch with more calls than pending indexed PAST the end of
+            // the vector: an out-of-bounds panic that killed the turn task.
+            // The original index travels with the id now.
+            let tool_call_ids = ids_by_call_index(call_names.len(), &pending);
             let futures: Vec<_> = pending
                 .into_iter()
                 .map(|(idx, tool_call, args)| {
@@ -1922,6 +1930,27 @@ fn append_guidance(result: &mut ToolResult, label: &str, message: &str) {
 
 /// Collect results in call order, stamping each nameless result with its
 /// call's name (empty names become "(unnamed)").
+/// The id of each call, indexed by its ORIGINAL position in the batch.
+///
+/// RT-462: the ids used to be collected from `pending` alone (the calls
+/// that survived pre-flight) and then indexed with the position in
+/// `call_names` (ALL the calls) — so a pre-flight rejection shifted every
+/// pairing after it, and a batch with more calls than pending indexed
+/// past the end of the vector (a panic that killed the turn task). The
+/// vector covers every call, and each id sits at its own call's index.
+fn ids_by_call_index(
+    call_count: usize,
+    pending: &[(usize, ToolCall, serde_json::Value)],
+) -> Vec<String> {
+    let mut ids = vec![String::new(); call_count];
+    for (idx, tool_call, _) in pending {
+        if *idx < ids.len() {
+            ids[*idx] = tool_call.id.clone();
+        }
+    }
+    ids
+}
+
 fn stamp_result_names(early: Vec<Option<ToolResult>>, call_names: &[String]) -> Vec<ToolResult> {
     early
         .into_iter()
@@ -1937,6 +1966,49 @@ fn stamp_result_names(early: Vec<Option<ToolResult>>, call_names: &[String]) -> 
             Some(result)
         })
         .collect()
+}
+
+#[cfg(test)]
+mod rt462_tests {
+    use super::*;
+
+    fn call(id: &str) -> ToolCall {
+        ToolCall {
+            id: id.to_string(),
+            function: crate::client::ToolCallFunction {
+                name: "demo".to_string(),
+                arguments: "{}".to_string(),
+            },
+        }
+    }
+
+    /// RT-462: the ids were collected from `pending` (the calls that
+    /// survived pre-flight) and then indexed with the position in
+    /// `call_names` (ALL the calls) — so a pre-flight rejection shifted
+    /// every pairing after it, and a batch with more calls than pending
+    /// indexed PAST the end of the vector: an out-of-bounds panic that
+    /// killed the turn task.
+    ///
+    /// BEHAVIORAL: the id vector must cover every call and carry each id
+    /// at its own call's index.
+    #[test]
+    fn the_cancelled_results_pair_with_their_own_call_ids() {
+        // Three calls; the first was rejected in pre-flight, so only the
+        // last two reached `pending`.
+        let pending: Vec<(usize, ToolCall, serde_json::Value)> = vec![
+            (1, call("call-2"), serde_json::json!({})),
+            (2, call("call-3"), serde_json::json!({})),
+        ];
+        let ids = ids_by_call_index(3, &pending);
+        assert_eq!(
+            ids.len(),
+            3,
+            "the vector must cover EVERY call — the old one had two entries \
+             for three calls, and the drain indexed all three"
+        );
+        assert_eq!(ids[1], "call-2", "each id sits at its own call's index");
+        assert_eq!(ids[2], "call-3", "each id sits at its own call's index");
+    }
 }
 
 #[cfg(test)]
