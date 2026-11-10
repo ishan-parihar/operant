@@ -654,3 +654,54 @@ fn the_default_keymap_has_no_conflicts() {
         conflicts.join("\n  ")
     );
 }
+/// (iter-1957) One chord in one context may carry exactly one claim.
+///
+/// `register` PUSHES, and `find` returns the FIRST match, so two entries for
+/// the same chord in the same context leave the second unreachable while
+/// `/keys` and `/hotkeys` render BOTH. The operator then sees one chord with
+/// two promised effects and usually gets only one of them.
+///
+/// This was real: `Ctrl+O` was registered twice in `Global` — "Expand latest
+/// tool output" and "Toggle tool-call visibility". The arm is
+/// `toggle_latest_tool_expansion()`, and no `toggle_tool_call_visibility`
+/// exists anywhere in the crate, so the second entry promised a mechanism that
+/// does not exist while `/keys` displayed it as a live binding.
+///
+/// The vim sweep (see `every_string_dispatched_vim_binding_is_reachable`)
+/// states the rule for its own contexts — "the registry has no unreachable
+/// duplicate" — without a machine check. This is that check, for every context.
+#[test]
+fn no_context_registers_one_chord_twice() {
+    let mut seen: std::collections::HashMap<
+        (
+            crate::tui::keybindings::BindingContext,
+            crossterm::event::KeyCode,
+            crossterm::event::KeyModifiers,
+        ),
+        Vec<String>,
+    > = std::collections::HashMap::new();
+    for context in crate::tui::keybindings::BindingContext::ALL {
+        for binding in DEFAULT_KEYBINDINGS.get_bindings(context) {
+            seen.entry((context, binding.key, binding.modifiers))
+                .or_default()
+                .push(binding.description.clone().unwrap_or_default());
+        }
+    }
+    let dupes: Vec<String> = seen
+        .iter()
+        .filter(|(_, descriptions)| descriptions.len() > 1)
+        .map(|((context, key, modifiers), descriptions)| {
+            format!(
+                "{:?} + {:?} in {:?}: {} entries, described as {:?} —                  register() pushes them all but find() returns the first",
+                modifiers, key, context,
+                descriptions.len(), descriptions
+            )
+        })
+        .collect();
+    assert!(
+        dupes.is_empty(),
+        "these chords are registered more than once in the SAME context. /keys          lists every entry, but only the first one dispatches:
+  {}",
+        dupes.join("\n  ")
+    );
+}
