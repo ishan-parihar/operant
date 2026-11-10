@@ -12,6 +12,119 @@ use crossterm::event::{KeyCode, KeyModifiers};
 /// and the PageUp/Down descriptions still promised a fixed "10" the dispatch
 /// never used. This pin normalizes whitespace and matches the full arm
 /// pattern so a deleted or modifier-changed arm fails the catalogue honestly.
+/// (iter-1959) The catalogue makes exactly one promise for the Dialog context:
+/// `Esc` is bound to "Close dialog". Every MODAL dialog must keep it.
+///
+/// `key_handling.rs` names `KeyCode::Esc` in 38 arms, so the promise is
+/// plausible — but a chord being somewhere in the file is not the same claim as
+/// it being on every surface. The audit learned that twice over: a bare `x` arm
+/// satisfies an advertised `Ctrl+X`, and a chord that dispatches on one surface
+/// can simply be absent from another. This asks the code: open the modal
+/// dialogs, press the ONE key the catalogue promises, and require them to close.
+///
+/// Each surface exposes the same `visible: bool` the renderer reads, so the
+/// fixture is one field per surface and the assertion is unambiguous.
+///
+/// **The usage overlay is deliberately EXCLUDED, and the exclusion is pinned.**
+/// `key_handling.rs`'s own comment on the F8 arm reads "Not modal, so it stays
+/// up until the next press", and `usage_overlay::toggle_flips_visibility` pins
+/// that F8 toggles it. A panel that persists until the next press is not a
+/// dialog, and the catalogue does not list it as one — so Esc is not its
+/// contract. My first draft asserted all six and reported the usage overlay as
+/// the defect, which was my test's premise being wrong, not the code's: the
+/// fourth time this audit's own probe manufactured a defect the code does not
+/// have. Rather than delete the case, the exception is asserted as an
+/// exception, so a future change that makes the overlay modal has to notice.
+#[test]
+fn every_modal_dialog_closes_on_the_escape_the_catalogue_promises() {
+    use crossterm::event::{KeyCode, KeyModifiers};
+
+    let open_modal = |app: &mut crate::tui::app::App| {
+        app.stats_dialog.visible = true;
+        app.export_dialog.visible = true;
+        app.free_mode_dialog.visible = true;
+        app.key_input_dialog.visible = true;
+        app.custom_provider_dialog.visible = true;
+    };
+    let modal_still_open = |app: &crate::tui::app::App| -> Vec<&'static str> {
+        let mut open = Vec::new();
+        if app.stats_dialog.visible {
+            open.push("stats_dialog");
+        }
+        if app.export_dialog.visible {
+            open.push("export_dialog");
+        }
+        if app.free_mode_dialog.visible {
+            open.push("free_mode_dialog");
+        }
+        if app.key_input_dialog.visible {
+            open.push("key_input_dialog");
+        }
+        if app.custom_provider_dialog.visible {
+            open.push("custom_provider_dialog");
+        }
+        open
+    };
+
+    let mut app = crate::tui::app::tests::make_app();
+    open_modal(&mut app);
+    assert!(
+        !modal_still_open(&app).is_empty(),
+        "the fixture must open something"
+    );
+
+    app.handle_key_event(crossterm::event::KeyEvent::new(
+        KeyCode::Esc,
+        KeyModifiers::NONE,
+    ));
+
+    // Routing closes the highest-priority surface first, so repeat until every
+    // modal dialog has had its turn. A surface that never closes is the defect;
+    // a surface that takes two presses is a different contract and would make
+    // this loop bound, which it does not.
+    for _ in 0..modal_still_open(&app).len() + 4 {
+        if modal_still_open(&app).is_empty() {
+            break;
+        }
+        app.handle_key_event(crossterm::event::KeyEvent::new(
+            KeyCode::Esc,
+            KeyModifiers::NONE,
+        ));
+    }
+
+    assert!(
+        modal_still_open(&app).is_empty(),
+        "these dialogs stayed open through repeated Esc: {:?}. Pressing the key \
+         the catalogue promises for the Dialog context does nothing on them, so \
+         the operator's only advertised way out is to find another key.",
+        modal_still_open(&app)
+    );
+
+    // The pinned exception: the usage overlay is a PANEL, not a dialog. It must
+    // NOT close on Esc (that is its documented contract), and it MUST close on
+    // F8, the key that owns it.
+    app.usage_overlay.visible = true;
+    app.handle_key_event(crossterm::event::KeyEvent::new(
+        KeyCode::Esc,
+        KeyModifiers::NONE,
+    ));
+    assert!(
+        app.usage_overlay.visible,
+        "the usage overlay closed on Esc, so it stopped being the non-modal \
+         panel key_handling.rs documents and toggle_flips_visibility pins — \
+         either that comment and its test are now stale, or this is a change \
+         nobody decided"
+    );
+    app.handle_key_event(crossterm::event::KeyEvent::new(
+        KeyCode::F(8),
+        KeyModifiers::NONE,
+    ));
+    assert!(
+        !app.usage_overlay.visible,
+        "F8 must close the usage overlay it opens"
+    );
+}
+
 #[test]
 fn scroll_ladder_catalogue_matches_dispatch() {
     let dispatch = include_str!("../app/key_handling.rs");

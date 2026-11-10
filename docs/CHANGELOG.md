@@ -379,6 +379,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **iter-1958 — The catalogue was never checked BEHAVIOURALLY: an advertised chord that dispatches nothing types itself, and nothing tested that (found 2026-11-10) (RT-484).** **CLOSED iter-1958** — round 74 closed the duplicate-chord class; this closes the named residual "per-dialog keybinding catalogue contexts" the PROSE way it was recorded. Both existing pins (`global_bindings_should_be_dispatched_in_key_handling`, its modifier half, and `every_string_dispatched_vim_binding_is_reachable`) read the SOURCE, and their own doc comments name the limit: "a bare `x` arm can satisfy a chord advertised as `Ctrl+X`". `no_catalogued_chord_types_itself_into_the_composer` asks the CODE instead — the composer inserts an unhandled key's character, so an advertised chord that consumes nothing is observable without knowing anything about dispatch.
 
+- **iter-1959 — The catalogue's single Dialog promise ("Esc closes a dialog") was never tested against the surfaces it describes (found 2026-11-10) (RT-486).** **CLOSED iter-1959** — `key_handling.rs` names `KeyCode::Esc` in 38 arms, so the promise is plausible, but a chord being somewhere in the file is not the same claim as it being on every surface. `every_modal_dialog_closes_on_the_escape_the_catalogue_promises` opens the modal dialogs and drives the one key the catalogue promises, requiring each to close.
+
 
 ### Fixed
 
