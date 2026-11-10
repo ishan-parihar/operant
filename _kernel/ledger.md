@@ -1182,3 +1182,96 @@ Round-17 end-of-round gates: the WORKSPACE test suite exit 0 (88 targets
 ok), strict clippy exit 0 on the core and on the CLI, fmt clean on both,
 the doc-link gate exit 0, the WORKSPACE build exit 0 with zero warnings,
 the ledger index OK (RG-016, RG-021), genome lint 0 errors.
+
+## Round 18 (2026-11-10) — the agent/tools sweep: thirteen rows, and the two organs that disagreed
+
+Thirteen pushed iterations (iter-2032..iter-2043 plus this close). The round
+started from my own first-hand sweep of the MCP/config/session cluster and
+then took a subagent's first-hand sweep of `agent/**` and `tools/**` (11
+findings, 14 candidates dropped as false or not proven) — and closed with
+every confirmed finding fixed, mutation-proved, and shipped.
+
+Shipped:
+- **RT-441 (M)** — two of the three MCP `send_notification` implementations
+  could NOT fail: the stdio one discarded the write and the flush and
+  silently skipped a missing transport; the streamable-HTTP one discarded
+  the whole send. They carry the protocol's `notifications/initialized` — a
+  lost one leaves the client believing it is connected to a server that was
+  never told.
+- **RT-442 (M)** — the streamable-HTTP notification was sent as a BARE
+  post: no `Mcp-Session-Id`, so it landed in a NEW session the server had
+  never initialized. The discarded send (RT-441) hid it.
+- **RT-444 (M)** — `peel_revision` split the model slug at a BYTE offset, so
+  a slug whose tail cut a multi-byte character PANICKED — reachable from a
+  provider registry entry's `model` field on the runtime's fallback path.
+- **RT-445 (H)** — the Holon policy-roots WRITE fence FAILED OPEN when the
+  target's parent did not exist: the fence's own comment said "the strict
+  checks below handle it", and they have NO roots check. The write tool
+  creates the missing parents, so a governed run wrote outside its roots,
+  with no refusal recorded.
+- **RT-447 (M, class)** — the file tools' three recursive walkers FOLLOWED
+  symlinks (the repo's own rule says they must not): a symlinked FILE was
+  read through — past the deny list — and a symlink CYCLE made the walkers
+  walk the same tree at dozens of levels (82 entries instead of 2).
+- **RT-448 (M)** — the todo tool's MERGE mode dropped `details`, `priority`,
+  `assigned_to` and `blocked_by`: the model was told the item was updated
+  while the stored row (and the TUI card) kept the stale brief and owner.
+- **RT-449 (M)** — the patch tool's three tiers disagreed on an EMPTY
+  replace: a NAMED occurrence BLANKED the line where the other two tiers
+  deleted it — the exact defect the tool's own contract names.
+- **RT-451 (M)** — the skill-bundle cache was keyed on the DIRECTORY's
+  mtime, so an EDITED bundle was never re-read: stale guidance kept being
+  injected into every turn for the life of the process.
+- **RT-452 (M)** — the insights report DROPPED unreadable session rows
+  silently (and turned a wrong-typed counter into a silent 0), so it
+  presented itself as whole while sessions and tokens were missing: the
+  RT-294 contract failing at ROW granularity.
+- **RT-453 (M)** — the OSV malware gate checked the runner's VERB as the
+  package (`pipx run black` → "run"), so it reported `known_malware: false`
+  for packages it never checked. The repo's own test pinned the defect.
+- **RT-454 (M)** — the Holon command fence judged only the FIRST token of a
+  line, so a SHELL line could smuggle a second command past the allowlist
+  (`git status; rm -rf /`), and its doc promised a re-tokenization the code
+  never did.
+- **RT-455 (L)** — the degenerate-final-text gate measured its 80 ceiling in
+  BYTES while the doc speaks of characters, so the same reasoning-leak
+  artifact was flagged in ASCII and surfaced as an answer in CJK.
+- **RT-456 (L)** — the deferred-tool module's doc put the token floor at 3
+  while the code's floor is 4: the file contradicted itself.
+
+What the round taught:
+- **A DOC and its CODE can disagree INSIDE ONE FUNCTION.** The command
+  fence's doc promised the inner command would be judged; the comment
+  twelve lines below said the wrapper is. Both were born in one commit.
+  When a doc and an inline comment disagree, the ACCEPTANCE TEST decides —
+  and it was already pinning the code's behaviour.
+- **A promise about the WRAPPER is not a promise about what the wrapper
+  runs.** The kernel's allowlist judges a shell by its name, and the fence
+  now does the same — but it judges EVERY SEGMENT of a shell line, using the
+  kernel's own splitter, so the two organs share one rule instead of two.
+- **A pre-existing test can pin a DEFECT.** Two did this round: the OSV
+  parser's test asserted the package name "run", and the patch tool's
+  helper's timestamp-based filename let two parallel tests clobber each
+  other.
+- **A sweep's hypothesis can be WRONG in the direction that matters.** The
+  sweep reported a stack overflow for the symlink cycle; the path length
+  bounds the recursion, so it is a runaway, not an abort. The row states
+  what was measured (82 entries instead of 2).
+- **A byte/char mismatch is a CLASS, not an incident.** RT-424 (quotas),
+  RT-455 (the ceiling) and RT-444 (the slug split) are three instances of
+  the same mistake in three modules.
+- **A row-level failure defeats a QUERY-level contract.** RT-452: the
+  report handled a failed query faithfully and still lied about a partially
+  unreadable database.
+- **A security fence's own rule is the spec.** The fence promised "only
+  those command names may execute"; its stated reference (the kernel's
+  allowlist) judged every segment; the fence judged one token.
+- **The peer's ids move WHILE you work.** Five renumbers this round
+  (RT-441/442, RT-444, RT-447, RT-451): fetch, write from the tip's bytes,
+  and re-check the id space before every shared-document write.
+
+Round-18 end-of-round gates: the WORKSPACE test suite exit 0 (89 targets
+ok), strict clippy exit 0 on the core, the CLI and the config crate, fmt
+clean on all three, the doc-link gate exit 0, the WORKSPACE build exit 0
+with zero warnings, the ledger index OK (RG-016, RG-021), genome lint 0
+errors (5 pre-existing warnings).

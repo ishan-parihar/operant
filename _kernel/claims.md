@@ -577,3 +577,52 @@ NOT supported (named, with the reason):
 - The peer takes ledger ids CONCURRENTLY; the later publisher renumbers
   forward and records an ID NOTE — [V] — RT-432 became RT-433 (RT-433) —
   unit 1
+
+## Round 18 (2026-11-10) — the agent/tools sweep, verified and shipped
+
+- A DOC and its CODE can disagree INSIDE ONE FUNCTION — [V] — the command
+  fence's doc promised the inner command would be judged; the comment below
+  it said the wrapper is; the acceptance test pinned the code (RT-454) —
+  unit 1
+- A promise about the WRAPPER is not a promise about what it runs — [V] —
+  a shell wrap names the shell, so a run that allows a shell allows what
+  that shell runs (RT-454) — unit 1
+- Two organs that claim to share a rule must SHARE THE CODE — [V] — the
+  fence reimplemented the kernel's segment rule instead of calling it
+  (RT-454) — unit 1
+- A pre-existing test can pin the DEFECT — [V] — the OSV parser's test
+  asserted the package name "run" (RT-453), and the patch tool's helper let
+  two parallel tests clobber each other's file (RT-449) — unit 1
+- A sweep's hypothesis can be WRONG in the direction that matters — [V] —
+  the symlink cycle was reported as a stack overflow; the path length
+  bounds it, so it is a runaway (RT-447) — unit 1
+- A byte/char mismatch is a CLASS, not an incident — [V] — three instances
+  in three modules this round: quotas charged in bytes (RT-424), a ceiling
+  measured in bytes (RT-455), a slug split at a byte offset (RT-444) —
+  unit 1
+- A row-level failure defeats a QUERY-level contract — [V] — the insights
+  report handled a failed query faithfully and still lied about a partially
+  unreadable database (RT-452) — unit 1
+- A security fence's own rule is the SPEC — [V] — "only those command names
+  may execute", against the kernel's allowlist that judges every segment
+  (RT-454) — unit 1
+- A function that CANNOT fail is a function whose failure is INVISIBLE — [V]
+  — two of the three MCP notification senders could not report (RT-441) —
+  unit 1
+- A protocol message can be CORRECT and still land in the wrong place —
+  [V] — the initialized notification was sent without the session id, so it
+  addressed a session that did not exist (RT-442) — unit 1
+- A cache keyed on a PARENT's timestamp cannot see an EDIT — [V] — the
+  bundle cache never re-read an edited bundle (RT-451) — unit 1
+- A merge that copies SOME fields is a merge that DROPS the rest — [V] —
+  the todo merge kept content/status/phase/lane and silently lost the
+  brief, owner, priority and blockers (RT-448) — unit 1
+- A parser that takes the first token parses the SYNTAX, not the INTENT —
+  [V] — the malware gate looked up "run" because it was the first word
+  (RT-453) — unit 1
+- A fence that canonicalizes a path it cannot resolve must FAIL CLOSED —
+  [V] — a missing parent let a governed write land outside its roots
+  (RT-445) — unit 1
+- A doc correction that QUOTES the claim re-creates it — [V] — the
+  deferred module's own test comment quoted the stale floor and tripped its
+  own contract (RT-456) — unit 1
