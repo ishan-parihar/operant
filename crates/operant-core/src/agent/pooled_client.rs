@@ -119,7 +119,16 @@ impl PooledModelClient {
             } => Some(*d),
             _ => None,
         };
-        retry_after.map(|d| chrono::Utc::now() + chrono::Duration::from_std(d).unwrap_or_default())
+        // RT-483: an unrepresentable duration (a provider's retry-after
+        // beyond chrono::Duration's range) became `unwrap_or_default()` —
+        // a ZERO cooldown — so the pool retried the credential IMMEDIATELY,
+        // exactly when the provider asked it to wait. A value too large for
+        // chrono still means "not soon", so it is capped at a year: the
+        // wait stays long instead of vanishing.
+        retry_after.map(|d| {
+            chrono::Utc::now()
+                + chrono::Duration::from_std(d).unwrap_or_else(|_| chrono::Duration::days(365))
+        })
     }
 
     /// Bench the given credential for a classified credential error (hermes
@@ -471,6 +480,26 @@ impl std::fmt::Debug for PooledModelClient {
 
 #[cfg(test)]
 mod tests {
+    /// RT-483: an unrepresentable retry-after (a provider's value beyond
+    /// chrono::Duration's range) became `unwrap_or_default()` — a ZERO
+    /// cooldown — so the pool retried the credential IMMEDIATELY, exactly
+    /// when the provider asked it to wait.
+    ///
+    /// BEHAVIORAL: the bench timestamp must be in the future.
+    #[test]
+    fn an_unrepresentable_retry_after_is_not_a_zero_cooldown() {
+        let err = crate::error::Error::RateLimited {
+            retry_after: std::time::Duration::from_secs(u64::MAX),
+        };
+        let reset_at = PooledModelClient::reset_at_from_error(&err)
+            .expect("a rate-limited error carries a reset timestamp");
+        assert!(
+            reset_at > chrono::Utc::now(),
+            "a retry-after beyond chrono's range must still WAIT — a zero \
+             cooldown retries the credential immediately"
+        );
+    }
+
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
