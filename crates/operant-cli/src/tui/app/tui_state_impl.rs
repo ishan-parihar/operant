@@ -1080,16 +1080,21 @@ impl TuiState for App {
         self.current_dir.clone()
     }
 
+    fn git_branch(&self) -> Option<String> {
+        self.git_branch.clone()
+    }
+
+    // (iter-1952) The trait's default for both was `true`, so the header never
+    // read the /settings rows at all: `Settings::show_working_dir()` had existed
+    // since iter-1897, but nothing between the row and the header called it.
+    // These two lines are the missing consumer half — a settings row that
+    // persists and is displayed but changes nothing is a phantom control.
     fn show_working_dir(&self) -> bool {
         self.settings.show_working_dir()
     }
 
     fn show_branch(&self) -> bool {
         self.settings.show_branch()
-    }
-
-    fn git_branch(&self) -> Option<String> {
-        self.git_branch.clone()
     }
 
     fn now_millis(&self) -> u64 {
