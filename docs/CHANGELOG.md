@@ -381,6 +381,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **iter-1959 — The catalogue's single Dialog promise ("Esc closes a dialog") was never tested against the surfaces it describes (found 2026-11-10) (RT-486).** **CLOSED iter-1959** — `key_handling.rs` names `KeyCode::Esc` in 38 arms, so the promise is plausible, but a chord being somewhere in the file is not the same claim as it being on every surface. `every_modal_dialog_closes_on_the_escape_the_catalogue_promises` opens the modal dialogs and drives the one key the catalogue promises, requiring each to close.
 
+- **iter-1960 — The catalogue's single Dialog promise was tested on 5 of the 11 modal surfaces that describe it (found 2026-11-10) (RT-487).** **CLOSED iter-1960** — round 76's pin covered `stats`, `export`, `free_mode`, `key_input` and `custom_provider`, and left `bypass_permissions`, `connect`, `import_config`, `ask_user`, `help` and `history_search` untested. All six also expose the same `visible: bool` the renderer reads and are all gated in `key_handling.rs`, so the gap was the pin's coverage, not the code's.
+
 
 ### Fixed
 

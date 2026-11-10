@@ -45,6 +45,12 @@ fn every_modal_dialog_closes_on_the_escape_the_catalogue_promises() {
         app.free_mode_dialog.visible = true;
         app.key_input_dialog.visible = true;
         app.custom_provider_dialog.visible = true;
+        app.bypass_permissions_dialog.visible = true;
+        app.connect_dialog.visible = true;
+        app.import_config_dialog.visible = true;
+        app.ask_user_dialog.visible = true;
+        app.help_overlay.visible = true;
+        app.history_search_overlay.visible = true;
     };
     let modal_still_open = |app: &crate::tui::app::App| -> Vec<&'static str> {
         let mut open = Vec::new();
@@ -62,6 +68,24 @@ fn every_modal_dialog_closes_on_the_escape_the_catalogue_promises() {
         }
         if app.custom_provider_dialog.visible {
             open.push("custom_provider_dialog");
+        }
+        if app.bypass_permissions_dialog.visible {
+            open.push("bypass_permissions_dialog");
+        }
+        if app.connect_dialog.visible {
+            open.push("connect_dialog");
+        }
+        if app.import_config_dialog.visible {
+            open.push("import_config_dialog");
+        }
+        if app.ask_user_dialog.visible {
+            open.push("ask_user_dialog");
+        }
+        if app.help_overlay.visible {
+            open.push("help_overlay");
+        }
+        if app.history_search_overlay.visible {
+            open.push("history_search_overlay");
         }
         open
     };
