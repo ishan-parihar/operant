@@ -354,12 +354,12 @@ const EMPTY_RESPONSE_PATTERNS: &[&str] = &[
 /// Classify an API error into a structured recovery recommendation.
 ///
 /// Priority-ordered pipeline:
-///   1. Provider-specific patterns (thinking sigs, tier gates)
+///   1. Provider-specific patterns (thinking sigs, tier gates), then the
+///      SSL handshake shape
 ///   2. HTTP status code + message-aware refinement
 ///   3. Error code classification
 ///   4. Message pattern matching
-///   5. Transport error heuristics
-///   6. Fallback: unknown (retryable with backoff)
+///   5. Fallback: unknown (retryable with backoff)
 pub fn classify_api_error(
     status_code: Option<u16>,
     error_body: &str,
@@ -1255,6 +1255,64 @@ fn contains_any(haystack: &str, needles: &[&str]) -> bool {
 
 #[cfg(test)]
 mod tests {
+    /// RT-480: the doc listed a pipeline step ("Transport error heuristics")
+    /// that the code does not have, and the steps after it were numbered
+    /// accordingly — so a reader looking for the transport heuristics would
+    /// not find them, and the fallback looked like step 6.
+    ///
+    /// SOURCE contract: a doc that lists an enumeration is checked against
+    /// the code it enumerates (the RT-435 pattern).
+    #[test]
+    fn the_classifier_doc_lists_exactly_the_steps_the_code_has() {
+        let src = include_str!("error_classifier.rs");
+        let prod = &src[..src.find("#[cfg(test)]").unwrap_or(src.len())];
+        // The code's step markers: `// ── 1. …`, `// ── 2. …`, … (the SSL
+        // step is marked `1b`, so it is not a numbered step of its own).
+        let mut code_steps: Vec<u32> = Vec::new();
+        for line in prod.lines() {
+            let Some(index) = line.find("── ") else {
+                continue;
+            };
+            let rest = &line[index + "── ".len()..];
+            let Some((number, _)) = rest.split_once('.') else {
+                continue;
+            };
+            if let Ok(n) = number.parse::<u32>() {
+                code_steps.push(n);
+            }
+        }
+        // The doc's list: `///   1. …`, `///   2. …`, …
+        let mut doc_steps: Vec<u32> = Vec::new();
+        for line in prod.lines() {
+            let Some(rest) = line.trim().strip_prefix("/// ") else {
+                continue;
+            };
+            let rest = rest.trim();
+            let Some((number, _)) = rest.split_once(". ") else {
+                continue;
+            };
+            if let Ok(n) = number.parse::<u32>()
+                && !doc_steps.contains(&n)
+            {
+                doc_steps.push(n);
+            }
+        }
+        // A comparison of two EMPTY lists proves nothing -- the needles
+        // must find something.
+        assert!(
+            !code_steps.is_empty(),
+            "the code's step markers must be findable — the contract would be vacuous"
+        );
+        assert!(
+            !doc_steps.is_empty(),
+            "the doc's step list must be findable — the contract would be vacuous"
+        );
+        assert_eq!(
+            doc_steps, code_steps,
+            "the doc's pipeline must list exactly the steps the code has"
+        );
+    }
+
     use super::*;
 
     #[test]
