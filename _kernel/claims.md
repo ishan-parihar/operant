@@ -626,3 +626,41 @@ NOT supported (named, with the reason):
 - A doc correction that QUOTES the claim re-creates it — [V] — the
   deferred module's own test comment quoted the stale floor and tripped its
   own contract (RT-456) — unit 1
+
+## Round 19 (2026-11-10) — two sweeps of the agent and the provider client, verified and shipped
+
+- A PARALLEL ARRAY is a silent contract — [V] — the interrupt drain paired ids from the
+  calls that survived pre-flight with the positions of ALL the calls (RT-462) — unit 1
+- A guard can be dead by ORDER, not by omission — [V] — the spend guard was present,
+  documented and tested, and could never fire because the cap ahead of it had cut the body
+  below its threshold (RT-463) — unit 1
+- A knob's NAME is a contract — [V] — `max_retries` counted attempts while the config and
+  the example TOML said "retries after the first attempt" (RT-471) — unit 1
+- A test at a window where the bug still works hides the bug — [V] — the spend guard's
+  fixture used 8,000 tokens, where the wrong order happened to fire; the shipped default is
+  128,000 (RT-463) — unit 1
+- A MUTATION PROOF MUST CONFIRM THE TEST RAN — [V] — a filter that matches nothing exits 0,
+  so the first mutant of the byte/char trim "passed" for exactly that reason (RT-465) —
+  unit 1
+- A NEEDLE THAT MATCHES ITSELF matches the contract, not the code — [V] — the session-write
+  contract counted its own literal until the needle was split (RT-470) — unit 1
+- A duplicated `#[test]` runs a test TWICE and only the strict gate sees it — [V] —
+  (RT-461) — unit 1
+- A swallowed body read turns a network failure into a PARSE failure — [V] — the caller
+  reported "EOF while parsing a value" for a dropped connection (RT-460) — unit 1
+- Two incidents can pull one policy in OPPOSITE directions, and the difference can be a
+  MEASURABLE fact — [V] — "did THIS attempt produce output?" separates the two stream-drop
+  incidents (RT-461) — unit 1
+- A repair can RE-CREATE the shape the repair above it removes — [V] — the empty call list
+  (RT-464) — unit 1
+- The wire shape is the last place an invariant can be enforced — [V] — an empty call list
+  goes out as `"tool_calls": []` (RT-464) — unit 1
+- A sanitizer that is computed but not used is dead on exactly one path — [V] — the auth
+  branch (RT-468) — unit 1
+- An IPv4 rule that is not mirrored for IPv6 is a hole in the rule — [V] — the local-endpoint
+  ranges (RT-469) — unit 1
+- A byte/char mismatch is a CLASS, not an incident — [V] — four instances now: the quotas
+  (RT-424), the slug split (RT-444), the degenerate-text ceiling (RT-455), the tool-result
+  trim (RT-465) — unit 1
+- A protocol send whose result is discarded makes a lost message invisible — [V] — three
+  more sites after RT-441 (RT-459) — unit 1

@@ -1275,3 +1275,82 @@ ok), strict clippy exit 0 on the core, the CLI and the config crate, fmt
 clean on all three, the doc-link gate exit 0, the WORKSPACE build exit 0
 with zero warnings, the ledger index OK (RG-016, RG-021), genome lint 0
 errors (5 pre-existing warnings).
+
+## Round 19 (2026-11-10) — two first-hand sweeps of the agent and provider client: twenty rows, and the class the sweeps kept hitting
+
+Twenty-eight pushed iterations (iter-2045..iter-2059 plus this close), twenty ledger rows
+(RT-457..RT-471 plus the renumber). The round took TWO subagent sweeps — one over the
+provider client (`client.rs`, `model_client.rs`, `error_classifier.rs`,
+`stream_retry_budget.rs`, `iteration_budget.rs`, `clients/openai.rs`) and one over the agent
+execution loop (`run.rs`, `stream.rs`, `compress.rs`, `message_safety.rs`, `pooled_client.rs`)
+— and closed with every confirmed finding in those sweeps fixed, mutation-proved, and shipped.
+
+Shipped:
+- **RT-457 (M)** — the MCP OAuth token store's removal discarded the deletions' errors and
+  returned `Ok(())` unconditionally: a credential file that could not be removed stayed ON
+  DISK while the function reported success, and the manager logged "removed from disk" either
+  way.
+- **RT-458 (L)** — the cron self-heal's operator-facing warning had its sentence breaks
+  collapsed into runs of 22 spaces ("the stored                      schedule stays").
+- **RT-459 (M)** — three more MCP protocol sends discarded their results (the stdio
+  transport's error responses to a server's request ×2, the SSE transport's response
+  delivery): a server waiting for an answer never got one, and the log said nothing.
+- **RT-460 (M)** — the HTTP client's body reads lost the transport cause: a failed read of a
+  200 body became an empty body and a PARSE error, so a network failure was presented as
+  garbage from the provider; a failed error-body read became an empty body.
+- **RT-461 (M)** — the stream-retry ladder re-armed its wall clock on the turn's FIRST
+  failure, so the first attempt's stall was EXEMPT — the exact attempt the bound was built to
+  catch (the 2026-09-29 incident).
+- **RT-462 (M)** — the interrupt drain indexed a parallel id vector with the WRONG index: a
+  pre-flight rejection shifted every pairing, and a batch with more calls than pending
+  indexed past the end of the vector — an out-of-bounds PANIC that killed the turn task.
+- **RT-463 (M)** — the SPEND GUARD ran AFTER the 4096-byte absolute cap, so it never saw
+  more than 4096 bytes: at the shipped default 128K window it could NEVER fire, making
+  `max_tool_result_share` inert.
+- **RT-464 (M)** — the message-sequence repair MANUFACTURED `tool_calls: Some([])`, which
+  goes on the wire as `"tool_calls": []` plus a fabricated `reasoning_content`.
+- **RT-465 (M)** — the tool-result trim's budget is documented in CHARACTERS and was charged
+  in BYTES: a CJK result kept ~667 characters under a 2000-character budget, and the marker
+  reported a byte count as a character count.
+- **RT-466 (M)** — after merging a native tool call, the stream looked up the FIRST call with
+  a non-empty name instead of the one it just merged, so an SSE event carrying two native tool
+  calls announced only the first.
+- **RT-468 (L)** — the auth branch kept the RAW provider body, so the sanitizer was dead on
+  exactly one path.
+- **RT-469 (L)** — `is_local_endpoint` checked only the IPv4 private and link-local ranges, so
+  a keyless server on an IPv6 unique-local address was classified as a PUBLIC host.
+- **RT-470 (M)** — the session-row writes (the last-activity timestamp and the cost) DROPPED
+  their Result on both paths, so a failed write left the session list stale.
+- **RT-471 (M)** — `[client.rate_limit] max_retries` counted ATTEMPTS, not RETRIES: the
+  shipped default of 3 made three requests instead of four.
+
+What the round taught:
+- **A PARALLEL ARRAY is a silent contract.** RT-462: two vectors that must stay aligned, one
+  built from the calls that survived a filter and one from all of them. The mismatch cost a
+  panic and a wrong pairing.
+- **A guard can be dead by ORDER, not by omission.** RT-463: the spend guard was present,
+  documented, and tested — and could not fire, because the cap ahead of it had already
+  reduced the body below its threshold. A test at a window where the order still worked
+  (8K instead of the shipped 128K) hid it for good.
+- **A knob's NAME is a contract.** RT-471: `max_retries` counted attempts while the config
+  and the example TOML both said "retries after the first attempt".
+- **Two sweeps of the same file find DIFFERENT halves of one defect.** The provider sweep
+  found the body's read failure (RT-460) and the raw auth body (RT-468) in `client.rs`; the
+  agent sweep found the spend guard's order (RT-463) and the session writes (RT-470) in
+  `run.rs`.
+- **A MUTATION PROOF MUST CONFIRM THE TEST RAN.** A filter that matches nothing exits 0 —
+  the first RT-465 mutant "passed" for exactly that reason (the module is `preflight_tests`,
+  the filter said `preflight`).
+- **A NEEDLE THAT MATCHES ITSELF matches the contract, not the code.** The RT-470 contract's
+  own literal was counted as a violation until the needle was split, the way the RT-365
+  contract's is.
+- **A duplicated `#[test]` runs a test TWICE and only the strict gate sees it.**
+- **Two incidents can pull a policy in OPPOSITE directions.** RT-461: one wants the first
+  attempt's stall to count, the other wants a cut after real output to earn its retries. The
+  difference between them is not a preference — it is a measurable fact (did THIS attempt
+  produce output?).
+
+Round-19 end-of-round gates: the WORKSPACE test suite exit 0 (89 targets ok), strict clippy
+exit 0 on the core and on the CLI, fmt clean, the doc-link gate exit 0, the WORKSPACE build
+exit 0 with zero warnings, the ledger index OK (RG-016, RG-021), genome lint 0 errors (5
+pre-existing warnings).
