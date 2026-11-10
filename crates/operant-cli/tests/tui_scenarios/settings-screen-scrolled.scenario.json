@@ -9,7 +9,6 @@
     "any_modal_open == true"
   ],
   "assert_screen": [
-    "contains:Auto-compact threshold",
     "contains:File autocomplete limit",
     "contains:Show hidden files"
   ],

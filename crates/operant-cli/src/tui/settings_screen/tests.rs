@@ -548,3 +548,36 @@ fn an_unreadable_number_says_so_instead_of_saving_silently() {
         "the key hints return once no error stands: {cleared:?}"
     );
 }
+
+/// (iter-1953) A settings row's description is a contract: it must name a
+/// mechanism the TUI actually runs.
+///
+/// `/settings` offered "Auto-compact threshold — Context usage % at which to
+/// trigger auto-compact (0-100)". Nothing read it. The TUI's own auto-compact
+/// warnings (`check_token_warnings`, messaging.rs) fire at hardcoded 100, 95
+/// and 80 percent, and no code path anywhere in `tui/` reads
+/// `config.agent.context_compression_threshold`. The value is also not
+/// persisted: `apply_and_save` writes it onto the in-memory `AppConfig` and then
+/// saves `Settings` (settings.json), which has no such field.
+///
+/// So an operator could set the row to 50 and watch nothing change — the
+/// classic phantom control the audit's rule removes rather than invents for.
+///
+/// The pin is the reverse of the row: it asserts the surface no longer offers
+/// it, so re-adding the row without wiring a consumer fails here.
+#[test]
+fn the_settings_screen_offers_no_row_whose_value_changes_nothing() {
+    let mut screen = SettingsScreen::new();
+    screen.open();
+    let rows = all_entries(&screen);
+    assert!(
+        !rows.iter().any(|r| r.key == "compact_threshold"),
+        "the auto-compact threshold row is a phantom control: the TUI's warnings are \
+         hardcoded at 100/95/80 and no path in tui/ reads the field"
+    );
+
+    // A second, property-shaped half is deliberately NOT added: the warnings this
+    // row claimed to control are pinned by their own tests, and a negative
+    // control that cannot fail is decoration. The assertion that carries the
+    // contract is the row's absence, above.
+}

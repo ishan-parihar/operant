@@ -21,7 +21,6 @@ impl SettingsScreen {
             reduce_motion: false,
             show_cwd: true,
             show_git_branch: true,
-            compact_threshold: "95".to_string(),
             file_autocomplete_limit: "15".to_string(),
             file_autocomplete_show_hidden_files: false,
         };
@@ -44,7 +43,6 @@ impl SettingsScreen {
         // header will actually paint, and an absent key means shown.
         self.show_cwd = self.settings_snapshot.show_working_dir();
         self.show_git_branch = self.settings_snapshot.show_branch();
-        self.compact_threshold = self.settings_snapshot.config.compact_threshold.to_string();
         self.file_autocomplete_limit = self
             .settings_snapshot
             .config
@@ -137,14 +135,6 @@ impl SettingsScreen {
                     } else {
                         Some(value.clone())
                     };
-                }
-                "compact_threshold" => {
-                    if let Ok(n) = value.parse::<f64>() {
-                        config.agent.context_compression_threshold = n;
-                        self.compact_threshold = value.clone();
-                    } else {
-                        unread.push(format!("Auto-compact threshold \"{value}\""));
-                    }
                 }
                 "fileAutocompleteLimit" => {
                     if let Ok(n) = value.parse::<usize>() {
@@ -270,13 +260,6 @@ pub(crate) fn all_entries(screen: &SettingsScreen) -> Vec<SettingsEntry> {
                 "false"
             }
             .to_string(),
-        },
-        SettingsEntry {
-            key: "compact_threshold",
-            label: "Auto-compact threshold",
-            description: "Context usage % at which to trigger auto-compact (0-100).",
-            kind: SettingKind::Number,
-            value: screen.compact_threshold.clone(),
         },
         // (iter-1895) The @-autocomplete's own two settings are UNCONDITIONAL
         // now. They used to be pushed only when "File injection (@)" was on —

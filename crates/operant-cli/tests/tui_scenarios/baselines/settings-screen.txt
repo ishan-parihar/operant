@@ -9,9 +9,9 @@
                    Reduce motion                           false
                    Show current directory                  true
                    Show git branch                         true
-                   Auto-compact threshold                  0
                    File autocomplete limit                 0
- operant · r       Show hidden files                       false
+                   Show hidden files                       false
+ operant · r
  operant
  /model to s
  v0.3.0

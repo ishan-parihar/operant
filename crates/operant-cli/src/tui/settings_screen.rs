@@ -53,7 +53,6 @@ pub struct SettingsScreen {
     pub reduce_motion: bool,
     pub show_cwd: bool,
     pub show_git_branch: bool,
-    pub compact_threshold: String,
     pub file_autocomplete_limit: String,
     pub file_autocomplete_show_hidden_files: bool,
 }
