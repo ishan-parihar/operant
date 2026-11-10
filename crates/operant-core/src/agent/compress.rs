@@ -484,7 +484,7 @@ impl OperantAgent {
         &self,
         messages: Vec<Message>,
         budget_tokens: usize,
-    ) -> (Vec<Message>, bool) {
+    ) -> (Vec<Message>, bool, usize) {
         let (mut compacted, outcome) =
             crate::context_management::manage_context_reporting(messages, budget_tokens, 0);
         let orphans = crate::agent::message_safety::drop_orphaned_tool_messages(&mut compacted);
@@ -501,7 +501,7 @@ impl OperantAgent {
                 "Repaired message sequence violations after hard-cap compaction"
             );
         }
-        (compacted, outcome.within_budget)
+        (compacted, outcome.within_budget, outcome.protected_tokens)
     }
 
     /// Enforce the hard context cap mid-turn.
@@ -535,7 +535,8 @@ impl OperantAgent {
         })
         .await;
         let taken = std::mem::take(messages);
-        let (compacted, within_budget) = self.compact_to_hard_cap(taken, limits.hard);
+        let (compacted, within_budget, protected_tokens) =
+            self.compact_to_hard_cap(taken, limits.hard);
         *messages = compacted;
         let tokens_after = crate::context_management::estimate_total_tokens(messages);
         self.emit(AgentEvent::CompactionCompleted {
@@ -554,6 +555,7 @@ impl OperantAgent {
             return Err(crate::error::Error::ContextExhausted {
                 tokens: tokens_after,
                 window: limits.window,
+                required: protected_tokens,
             });
         }
         info!(

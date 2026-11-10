@@ -54,6 +54,8 @@ max_iterations = 20
 tool_timeout_secs = 30
 request_timeout_secs = 120
 stream = true
+# Total prompt + response capacity (tokens). Values below 4097 are rejected:
+# the runtime reserves 4096 tokens for the response.
 context_window = 128000
 # Context caps — BOTH axes bind, and the SMALLER one wins.
 #

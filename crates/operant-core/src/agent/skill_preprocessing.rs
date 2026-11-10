@@ -38,22 +38,22 @@ fn inline_shell_regex() -> &'static Regex {
     })
 }
 
-/// Load the `skills` section of operant.toml (best-effort).
+/// Load the `skills` section from the installed runtime config.
 ///
-/// Reads the preprocessing fields (template_vars / inline_shell /
-/// inline_shell_timeout) from `[skills]` when present; otherwise returns
-/// defaults (template_vars on, inline_shell off — hermes parity).
+/// This is read-only: it must never reload the config file, because loading a
+/// config also changes the process-global surgical-writer target. A read-only
+/// skill expansion must not redirect another thread's `persist_config_key`.
 pub fn load_skills_config() -> SkillsConfig {
-    let mut cfg = SkillsConfig::default();
-    if let Ok(app) = crate::config::load_app_config(None) {
-        cfg.template_vars = app.config.skills.template_vars;
-        cfg.inline_shell = app.config.skills.inline_shell;
-        let t = app.config.skills.inline_shell_timeout;
-        if t > 0 {
-            cfg.inline_shell_timeout = t;
-        }
+    let skills = crate::config::runtime_config().skills;
+    SkillsConfig {
+        template_vars: skills.template_vars,
+        inline_shell: skills.inline_shell,
+        inline_shell_timeout: if skills.inline_shell_timeout > 0 {
+            skills.inline_shell_timeout
+        } else {
+            DEFAULT_INLINE_SHELL_TIMEOUT
+        },
     }
-    cfg
 }
 
 /// Configuration for skill preprocessing.
@@ -718,6 +718,14 @@ mod tests {
             output.starts_with('x'),
             "the payload is the snippet's stdout"
         );
+    }
+
+    #[test]
+    fn loading_skill_settings_never_changes_the_config_writer_target() {
+        let _guard = crate::config::config_path_test_guard();
+        let before = crate::config::loaded_config_path();
+        let _ = load_skills_config();
+        assert_eq!(crate::config::loaded_config_path(), before);
     }
 
     #[test]

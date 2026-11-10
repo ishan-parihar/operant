@@ -115,6 +115,17 @@ Anthropic `cache_control` breakpoints are set on the system prompt
 (iter-54); OpenRouter-compatible endpoints get the `prompt_cache_ttl`
 config (`"5m"` default, `"1h"` available).
 
+## Context-window truth and recovery
+
+`agent.context_window` is the total prompt + response capacity, not an output-token limit. The runtime reserves 4,096 tokens for the response; a configured total below 4,097 is rejected before the agent starts.
+
+Context exhaustion has two different causes and therefore two different recoveries:
+
+- **Foldable history** still exceeds the usable budget after compaction. The error says how many tokens the conversation needs and asks for `/compact`; the gateway compacts the stored history and retries once.
+- **The protected prompt/current turn alone exceeds the usable budget.** Folding cannot shrink it. The error names the protected token floor, the window in force, and the minimum `agent.context_window` to configure; it does not advise `/compact`, and the gateway does not perform a futile compact-and-retry.
+
+The protected floor is measured after eviction, from the frozen system prompt and newest live message. Provider-reported overflows carry the same floor through the typed error, so a transient first overflow can still be retried while the terminal failure remains actionable.
+
 ## Guardrail: the tool-result share cap
 
 One tool result may occupy at most `agent.max_tool_result_share` (default

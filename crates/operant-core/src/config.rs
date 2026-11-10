@@ -2592,6 +2592,18 @@ fn ignored_config_files(chosen: &Path) -> Vec<PathBuf> {
 }
 
 pub fn load_app_config(explicit: Option<&Path>) -> Result<LoadedConfig> {
+    load_app_config_impl(explicit, true)
+}
+
+/// Load a config without changing the process-global surgical-writer target.
+///
+/// Read-only helpers use this seam. Parsing a file for inspection must not
+/// redirect another component's later `persist_config_key` call.
+pub fn load_app_config_read_only(explicit: Option<&Path>) -> Result<LoadedConfig> {
+    load_app_config_impl(explicit, false)
+}
+
+fn load_app_config_impl(explicit: Option<&Path>, record_target: bool) -> Result<LoadedConfig> {
     let (mut config, source) = if let Some(path) = explicit {
         if !path.exists() {
             return Err(Error::Config(format!(
@@ -2599,7 +2611,10 @@ pub fn load_app_config(explicit: Option<&Path>) -> Result<LoadedConfig> {
                 path.display()
             )));
         }
-        (parse_config_file(path)?, Some(path.to_path_buf()))
+        (
+            parse_config_file_without_recording(path)?,
+            Some(path.to_path_buf()),
+        )
     } else {
         let mut found = None;
         for path in default_config_paths() {
@@ -2612,7 +2627,7 @@ pub fn load_app_config(explicit: Option<&Path>) -> Result<LoadedConfig> {
             Some(path) => {
                 // Plan 002: auto-tighten pre-R42 loose config files on read.
                 let _ = crate::fs_secrets::tighten_if_loose(&path);
-                (parse_config_file(&path)?, Some(path))
+                (parse_config_file_without_recording(&path)?, Some(path))
             }
             None => {
                 // Nothing exists yet: fall back to defaults, but when
@@ -2691,7 +2706,7 @@ pub fn load_app_config(explicit: Option<&Path>) -> Result<LoadedConfig> {
     // RT-208: `parse_config_str` (called above) already recorded the same path
     // through `record_loaded_config_path`; record it once more here for the
     // no-file / OPERANT_CONFIG_DIR cases, which never reach that helper.
-    if let Some(src) = source.as_deref() {
+    if record_target && let Some(src) = source.as_deref() {
         record_loaded_config_path(src);
     }
 
@@ -2847,7 +2862,32 @@ pub fn persist_config_key(dotted: &str, raw_value: &str) -> Result<PathBuf> {
             "no config file is loaded in this process; nothing to persist into".to_string(),
         )
     })?;
-    let original = std::fs::read(&path)
+    persist_config_key_at(&path, dotted, raw_value)
+}
+
+/// Validate a configured context window before it reaches the agent.
+///
+/// The runtime reserves 4,096 tokens for a response. A smaller total window
+/// is therefore structurally unusable. The runtime still checks the exact
+/// deployment-specific protected-prefix floor after that prefix is known.
+pub fn validate_context_window(tokens: usize) -> Result<()> {
+    const MIN_CONTEXT_WINDOW_TOKENS: usize = 4_097;
+    if tokens < MIN_CONTEXT_WINDOW_TOKENS {
+        return Err(Error::Config(format!(
+            "agent.context_window must be at least {MIN_CONTEXT_WINDOW_TOKENS} tokens; \
+             {tokens} leaves no room for input beside the 4096-token response reserve"
+        )));
+    }
+    Ok(())
+}
+
+/// Set one dotted key in an explicit config file.
+///
+/// The caller owns the target. This is the test- and embedding-safe seam:
+/// tests never have to install a process-global write target, and a
+/// read-only helper cannot redirect another writer by loading a config.
+pub fn persist_config_key_at(path: &Path, dotted: &str, raw_value: &str) -> Result<PathBuf> {
+    let original = std::fs::read(path)
         .map_err(|e| crate::error::Error::Config(format!("read {}: {e}", path.display())))?;
 
     let mut doc: toml_edit::DocumentMut = std::str::from_utf8(&original)
@@ -2899,7 +2939,7 @@ pub fn persist_config_key(dotted: &str, raw_value: &str) -> Result<PathBuf> {
     let rendered = doc.to_string();
     crate::fs_secrets::write_secret_file(&tmp, rendered.as_bytes())
         .map_err(|e| crate::error::Error::Config(format!("write {}: {e}", tmp.display())))?;
-    if let Ok(mode) = std::fs::metadata(&path).map(|m| m.permissions()) {
+    if let Ok(mode) = std::fs::metadata(path).map(|m| m.permissions()) {
         // RT-418: the mode round-trip's failure was discarded, so the file
         // above promised to keep the original's mode ("must survive the
         // round-trip") silently did not: the temp file stays owner-only
@@ -2915,7 +2955,8 @@ pub fn persist_config_key(dotted: &str, raw_value: &str) -> Result<PathBuf> {
             );
         }
     }
-    if let Err(e) = parse_config_file(&tmp) {
+    let validation = parse_config_file_without_recording(&tmp);
+    if let Err(e) = validation {
         let _ = std::fs::remove_file(&tmp);
         return Err(crate::error::Error::Config(format!(
             "config key '{dotted}' was rejected by the config loader ({e}); \
@@ -2923,9 +2964,9 @@ pub fn persist_config_key(dotted: &str, raw_value: &str) -> Result<PathBuf> {
             path.display()
         )));
     }
-    std::fs::rename(&tmp, &path)
+    std::fs::rename(&tmp, path)
         .map_err(|e| crate::error::Error::Config(format!("rename {}: {e}", path.display())))?;
-    Ok(path)
+    Ok(path.to_path_buf())
 }
 
 /// Best-effort coercion of a CLI string argument into a typed JSON value.
@@ -3067,40 +3108,60 @@ pub fn parse_config_file(path: &Path) -> Result<AppConfig> {
 }
 
 pub fn parse_config_str(raw: &str, source: &Path) -> Result<AppConfig> {
-    toml::from_str(raw)
-        .map_err(|error| {
-            let message = match error.span() {
-                Some(span) => format!(
-                    "Invalid TOML in '{}': {} (bytes {}..{})",
-                    source.display(),
-                    error,
-                    span.start,
-                    span.end
-                ),
-                None => format!("Invalid TOML in '{}': {}", source.display(), error),
-            };
+    parse_config_str_impl(raw, source, true)
+}
 
-            Error::Config(message)
-        })
-        .map(|mut cfg: AppConfig| {
-            cfg.config_path = Some(source.to_path_buf());
-            // The same file the struct records, the GLOBAL records too —
-            // `persist_config_key` writes only into the global, so a config
-            // parsed here could be read (and its `config_path` consulted) by
-            // a writer that then found nothing loaded and refused. That is
-            // not hypothetical: `context optimize --apply` calls
-            // `persist_config_key("cli.inject_help", ..)` and failed with
-            // "no config file is loaded in this process" for ANY `-c <path>`
-            // run, while the tool-state half of the same command worked.
-            //
-            // RT-208: this is the OTHER writer of the global, and it runs
-            // INSIDE `load_app_config` before that function's own record
-            // below — so guarding only the one in `load_app_config` left the
-            // hole open and a concurrent test's load still won. One helper,
-            // one deferral rule, both call sites.
-            record_loaded_config_path(source);
-            cfg
-        })
+/// Parse a config without changing the process-global writer target.
+///
+/// Validation of a pending write must not redirect persistence to the
+/// temporary file: the temporary path is renamed away immediately after
+/// validation, leaving the next write aimed at a file that no longer exists.
+fn parse_config_file_without_recording(path: &Path) -> Result<AppConfig> {
+    let raw = std::fs::read_to_string(path).map_err(|error| {
+        Error::Config(format!(
+            "Failed to read config file '{}': {}",
+            path.display(),
+            error
+        ))
+    })?;
+    parse_config_str_impl(&raw, path, false)
+}
+
+fn parse_config_str_impl(raw: &str, source: &Path, record_target: bool) -> Result<AppConfig> {
+    let mut cfg: AppConfig = toml::from_str(raw).map_err(|error| {
+        let message = match error.span() {
+            Some(span) => format!(
+                "Invalid TOML in '{}': {} (bytes {}..{})",
+                source.display(),
+                error,
+                span.start,
+                span.end
+            ),
+            None => format!("Invalid TOML in '{}': {}", source.display(), error),
+        };
+
+        Error::Config(message)
+    })?;
+    validate_context_window(cfg.agent.context_window)?;
+    cfg.config_path = Some(source.to_path_buf());
+    // The same file the struct records, the GLOBAL records too —
+    // `persist_config_key` writes only into the global, so a config
+    // parsed here could be read (and its `config_path` consulted) by
+    // a writer that then found nothing loaded and refused. That is
+    // not hypothetical: `context optimize --apply` calls
+    // `persist_config_key("cli.inject_help", ..)` and failed with
+    // "no config file is loaded in this process" for ANY `-c <path>`
+    // run, while the tool-state half of the same command worked.
+    //
+    // RT-208: this is the OTHER writer of the global, and it runs
+    // INSIDE `load_app_config` before that function's own record
+    // below — so guarding only the one in `load_app_config` left the
+    // hole open and a concurrent test's load still won. One helper,
+    // one deferral rule, both call sites.
+    if record_target {
+        record_loaded_config_path(source);
+    }
+    Ok(cfg)
 }
 
 impl AppConfig {
@@ -3359,6 +3420,7 @@ impl AppConfig {
         )?;
         apply_string_value_override("HERMES_LOG_LEVEL", &mut self.logging.level);
         apply_path_override("HERMES_SKILLS_DIR", &mut self.skills.root_dir)?;
+        validate_context_window(self.agent.context_window)?;
         // RT-197: the env override is a path the operator wrote by hand too,
         // so it gets the same expansion as the file value.
         self.skills.expand_paths();
@@ -5166,6 +5228,60 @@ mod keybindings_tests {
     }
 }
 
+/// A read-only config load must not steal the surgical writer's target.
+///
+/// The operator's live config was overwritten because one test loaded the
+/// live file while another test persisted its temporary value. The explicit
+/// path seam makes the intended target unambiguous; this proves the reader
+/// no longer needs to install any global target at all.
+#[test]
+fn an_explicit_config_write_never_changes_the_process_global_target() {
+    let _guard = config_path_test_guard();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("operant.toml");
+    std::fs::write(&path, "[agent]\ncontext_window = 128000\n").expect("write config");
+
+    let before = loaded_config_path();
+    persist_config_key_at(&path, "agent.context_window", "200000").expect("persist explicit path");
+
+    assert_eq!(
+        loaded_config_path(),
+        before,
+        "an explicit write must not install or replace the process-global target"
+    );
+    let persisted = std::fs::read_to_string(&path).expect("read persisted");
+    assert!(persisted.contains("context_window = 200000"));
+}
+
+#[test]
+fn a_read_only_config_load_does_not_steal_the_write_target() {
+    let _guard = config_path_test_guard();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("operant.toml");
+    std::fs::write(&path, "[agent]\ncontext_window = 128000\n").expect("write config");
+
+    let before = loaded_config_path();
+    load_app_config_read_only(Some(&path)).expect("read config");
+    assert_eq!(
+        loaded_config_path(),
+        before,
+        "a read-only load must not install the surgical writer's target"
+    );
+}
+
+#[test]
+fn an_impossible_context_window_is_rejected_by_name() {
+    let error = parse_config_str(
+        "[agent]\ncontext_window = 4096\n",
+        Path::new("memory://impossible-window"),
+    )
+    .expect_err("a window below the response reserve cannot work");
+    let message = error.to_string();
+    assert!(message.contains("agent.context_window"), "{message}");
+    assert!(message.contains("4097"), "{message}");
+    assert!(message.contains("4096"), "{message}");
+}
+
 /// RT-208, the regression guard for the incident that damaged the operator's
 /// live config.
 ///
@@ -5191,14 +5307,14 @@ fn a_held_config_path_guard_stops_a_second_threads_load_from_stealing_the_write_
     let theirs = dir.path().join("theirs.toml");
     std::fs::write(&theirs, "[agent]\nmodel = \"their-model\"\n").expect("write theirs");
 
-    // Record MY path first, without the guard, so a write target exists.
+    // Record MY path first. The holder marker lets this thread record its
+    // own load even though the guard is already held.
+    let _guard = config_path_test_guard();
     let _loaded = load_app_config(Some(&mine)).expect("load mine");
     let target_before = loaded_config_path().expect("a path is recorded");
 
-    // Hold the guard, then load THEIR config on a SECOND thread. The
-    // loader takes the same guard, so it blocks until I release: it cannot
-    // become the write target while I am inside my window.
-    let _guard = config_path_test_guard();
+    // Load THEIR config on a SECOND thread. The peer cannot become the write
+    // target while this thread owns the guard.
     let (tx, rx) = std::sync::mpsc::channel::<(bool, Option<std::path::PathBuf>)>();
     let theirs_clone = theirs.clone();
     let handle = std::thread::spawn(move || {

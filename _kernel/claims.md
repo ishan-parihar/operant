@@ -710,3 +710,22 @@ NOT supported (named, with the reason):
 - A CORRECTION MUST PARAPHRASE THE CLAIM IT CORRECTS — [V] — the RT-482 correction quotes no
   phrase of the old claim, so the contract's needle cannot match the correction (RT-482) —
   unit 1
+
+## Round 22 (2026-11-10) — live context-window incident and operationality audit
+
+- The live `~/.operant/operant.toml` contains `context_window = 4242` — [V] — read 2026-11-10; the exact value is also the settings-test fixture — unit 1
+- The settings test applied 4242 without a sandbox/config-path guard — [V] — `crates/operant-cli/src/tui/settings_screen/tests.rs:477-486` — unit 1
+- A concurrent gateway skill test caused `load_app_config(None)` to record the live file as the process-global persistence target — [V] — `skill_preprocessing.rs:46-48`, `config.rs:2694-2696`, `gateway_runner/tests.rs:1695-1762` — unit 1
+- The live gateway rejected the request locally after decay/summarize/eviction because the protected 9,711-token prefix exceeded the 4,242-token window — [V] — `~/.operant/logs/gateway.log:636337-636401` — unit 1
+- The intended pre-incident live context window was 1,000,000 — [V] — `_kernel/ledger.md:474-476` and prior gateway preflight logs — unit 1
+- Runtime model overrides are discarded when fallback is enabled — [V] — `agent/run.rs:1302` builds the effective-model request; `agent/fallback.rs:349-385` replaces its model with the startup primary — unit 4
+- Grace and circuit-breaker exits bypass the normal memory/prefetch/TurnEnd finalization — [V] — `agent/run.rs:2574-2690` versus the text path at `2208-2286` — unit 5
+- Session rehydration selects raw DB rows without protecting tool-call groups — [V] — `session/mod.rs:449-476`; orphan repair later drops the unmatched half — unit 6
+- Verification can report success with no test phase — [V] — `verification.rs:166-190` and `310-337` — unit 7
+
+
+## Round 22 — implementation evidence
+
+- RT-488 writer isolation: explicit-path persistence and read-only config loads leave `loaded_config_path` unchanged; config validation uses the non-recording parse seam (core regressions green).
+- RT-488 context truth: the TUI row is `Context window`, writes only to the loaded config's explicit source, and rejects total windows that leave no input beside the 4,096-token response reserve; the protected-prefix floor is measured and the typed message names required/configured tokens without advising compaction.
+- RT-488 gateway recovery: only foldable exhaustion (`required == 0`) triggers compact-and-retry; protected overflow is surfaced immediately.

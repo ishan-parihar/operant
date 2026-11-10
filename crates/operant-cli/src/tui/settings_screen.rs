@@ -58,6 +58,8 @@ pub struct SettingsScreen {
     pub show_git_branch: bool,
     pub file_autocomplete_limit: String,
     pub file_autocomplete_show_hidden_files: bool,
+    /// Authoritative context capacity, seeded from the live AppConfig.
+    pub context_window: usize,
 }
 
 mod keys;

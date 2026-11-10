@@ -11,8 +11,10 @@ pub struct NotificationTool;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-// No `dead_code` expectation: every field is deserialized from tool-call
-// JSON and READ (RT-352 removed the last unread one, the priority knob).
+#[expect(
+    dead_code,
+    reason = "serde-argument struct: fields are used to generate the tool schema"
+)]
 struct NotifyArgs {
     message: String,
     title: Option<String>,

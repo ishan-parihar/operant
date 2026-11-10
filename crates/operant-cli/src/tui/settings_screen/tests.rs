@@ -44,7 +44,7 @@ fn with_sandbox_home<T>(f: impl FnOnce() -> T) -> T {
 ///
 /// This test exists because it failed when it was written (iter-1176):
 /// `all_entries` offered 19 editable settings and `apply_and_save` matched
-/// FOUR of them (`max_tokens`, `output_style`, `compact_threshold`,
+/// FOUR of them (`context_window`, `output_style`, `compact_threshold`,
 /// `fileAutocompleteLimit`, `fileInjectionMaxSize`), so toggling
 /// `notifications`, `verbose`, `vim`, `reduce_motion`, `show_cwd`,
 /// `fileInjectionEnabled` and the rest rendered the new value in the TUI,
@@ -268,14 +268,14 @@ fn search_filters_entries_correctly() {
     let all = all_entries(&screen);
     let filtered: Vec<_> = all
         .iter()
-        .filter(|e| e.label.to_lowercase().contains("token"))
+        .filter(|e| e.label.to_lowercase().contains("context"))
         .collect();
     assert_eq!(
         filtered.len(),
         1,
         "Should find exactly 1 entry matching 'token'"
     );
-    assert_eq!(filtered[0].label, "Max Tokens");
+    assert_eq!(filtered[0].label, "Context window");
 }
 
 #[test]
@@ -284,7 +284,7 @@ fn toggle_bool_entry_flips_value() {
     // (iter-1900) "notifications" was here until its dead row went; reduce
     // motion is live, so the row this exercises is a real one.
     screen.reduce_motion = false;
-    screen.open();
+    screen.open(AppConfig::default().agent.context_window);
 
     let initial = screen.reduce_motion;
     let all = all_entries(&screen);
@@ -368,7 +368,7 @@ fn the_settings_screen_offers_no_unread_row() {
     }
     // And the rows that DO something are still there.
     for live in [
-        "max_tokens",
+        "context_window",
         "output_style",
         "reduce_motion",
         "show_cwd",
@@ -432,7 +432,7 @@ fn the_settings_list_paints_the_selected_row_on_a_short_terminal() {
     // five rows and the old estimate (ten) disagreed with the real window.
     let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
     let mut screen = SettingsScreen::new();
-    screen.open();
+    screen.open(AppConfig::default().agent.context_window);
     let total = all_entries(&screen).len();
 
     for step in 0..total {
@@ -469,7 +469,7 @@ fn the_settings_list_paints_the_selected_row_on_a_short_terminal() {
 ///
 /// The edit buffer accepts ANY character (`KeyCode::Char(c) => push(c)`), and
 /// the three numeric rows resolved with `if let Ok(n) = value.parse()`. So
-/// `/settings` → "Max Tokens" → type `abc` → Enter saved nothing and said
+/// `/settings` → "Context window" → type `abc` → Enter saved nothing and said
 /// nothing: the config kept its old value, the displayed value kept the old
 /// string, and the operator had no way to tell their edit had been dropped.
 /// Same class as /rewind's silently discarded `[N]` (iter-1947).
@@ -477,21 +477,42 @@ fn the_settings_list_paints_the_selected_row_on_a_short_terminal() {
 fn an_unreadable_number_says_so_instead_of_saving_silently() {
     let (mut config, mut settings) = (AppConfig::default(), Settings::default());
 
-    // A valid number still applies and clears the error.
+    // A valid number still applies and clears the error. This test has no
+    // config source, so the value is live-only; persistence is covered by the
+    // explicit-path restart test below.
     let mut screen = SettingsScreen::new();
     screen
         .pending_changes
-        .insert("max_tokens".to_string(), "4242".to_string());
+        .insert("context_window".to_string(), "200000".to_string());
     screen.apply_and_save(&mut config, &mut settings);
-    assert_eq!(config.agent.context_window, 4242);
+    assert_eq!(config.agent.context_window, 200000);
     assert_eq!(screen.apply_error, None, "a valid value reports no error");
+
+    // An algebraically impossible window is rejected before it can affect
+    // the live agent or the operator file.
+    let (mut config, mut settings) = (AppConfig::default(), Settings::default());
+    let mut screen = SettingsScreen::new();
+    screen
+        .pending_changes
+        .insert("context_window".to_string(), "4096".to_string());
+    screen.apply_and_save(&mut config, &mut settings);
+    assert_eq!(
+        config.agent.context_window,
+        AppConfig::default().agent.context_window,
+        "an impossible window must not touch the live config"
+    );
+    let err = screen
+        .apply_error
+        .clone()
+        .expect("the rejected window says why");
+    assert!(err.contains("agent.context_window"), "{err}");
 
     // An invalid one is reported, and nothing is saved.
     let (mut config, mut settings) = (AppConfig::default(), Settings::default());
     let mut screen = SettingsScreen::new();
     screen
         .pending_changes
-        .insert("max_tokens".to_string(), "abc".to_string());
+        .insert("context_window".to_string(), "abc".to_string());
     screen.apply_and_save(&mut config, &mut settings);
     assert_eq!(
         config.agent.context_window,
@@ -500,7 +521,7 @@ fn an_unreadable_number_says_so_instead_of_saving_silently() {
     );
     let err = screen.apply_error.clone().expect("and must say why");
     assert!(
-        err.contains("Max Tokens") && err.contains("abc"),
+        err.contains("Context window") && err.contains("abc"),
         "the error names the row and the value the operator typed: {err:?}"
     );
     assert!(
@@ -529,9 +550,9 @@ fn an_unreadable_number_says_so_instead_of_saving_silently() {
             .collect()
     }
 
-    screen.open();
+    screen.open(AppConfig::default().agent.context_window);
     screen.apply_error =
-        Some("Not a number: Max Tokens \"abc\" — kept the previous value".to_string());
+        Some("Not a number: Context window \"abc\" — kept the previous value".to_string());
     let errored = painted(&screen);
     assert!(
         errored.contains("abc"),
@@ -568,7 +589,7 @@ fn an_unreadable_number_says_so_instead_of_saving_silently() {
 #[test]
 fn the_settings_screen_offers_no_row_whose_value_changes_nothing() {
     let mut screen = SettingsScreen::new();
-    screen.open();
+    screen.open(AppConfig::default().agent.context_window);
     let rows = all_entries(&screen);
     assert!(
         !rows.iter().any(|r| r.key == "compact_threshold"),
@@ -584,7 +605,7 @@ fn the_settings_screen_offers_no_row_whose_value_changes_nothing() {
 
 /// (iter-1954) A settings row's edit must survive a restart.
 ///
-/// `/settings`' "Max Tokens" row writes `config.agent.context_window`, which
+/// `/settings`' "Context window" row writes `config.agent.context_window`, which
 /// `check_token_warnings` reads live as the fallback window — so the row has a
 /// working CONSUMER (round 69's class). Its SAVE path was open on both ends:
 /// `apply_and_save` also copies the value into `InnerConfig.max_tokens` and
@@ -593,7 +614,7 @@ fn the_settings_screen_offers_no_row_whose_value_changes_nothing() {
 /// file the process actually loads. The repo already has the one surgical
 /// writer this needs (`persist_config_key`, used for `agent.model`).
 ///
-/// So an operator set Max Tokens to 200000, saw the footer agree, restarted,
+/// So an operator set Context window to 200000, saw the footer agree, restarted,
 /// and silently got the shipped default back.
 #[test]
 fn a_settings_edit_survives_the_restart_it_promised() {
@@ -617,11 +638,12 @@ fn a_settings_edit_survives_the_restart_it_promised() {
         .expect("write config");
         let loaded = operant_core::config::load_app_config(Some(&toml_path)).expect("load");
         operant_core::config::install_runtime_config(loaded.config.clone());
+        config.config_path = Some(toml_path.clone());
 
         let mut screen = SettingsScreen::new();
         screen
             .pending_changes
-            .insert("max_tokens".to_string(), "200000".to_string());
+            .insert("context_window".to_string(), "200000".to_string());
         screen.apply_and_save(&mut config, &mut settings);
 
         // The live consumer sees it.
@@ -633,7 +655,7 @@ fn a_settings_edit_survives_the_restart_it_promised() {
         let persisted = std::fs::read_to_string(&toml_path).expect("read the config back");
         assert!(
             persisted.contains("context_window = 200000"),
-            "Max Tokens must persist into the loaded config: {persisted}"
+            "Context window must persist into the loaded config: {persisted}"
         );
 
         // The ERROR half: a persist that cannot land is NAMED, not swallowed.
@@ -645,14 +667,14 @@ fn a_settings_edit_survives_the_restart_it_promised() {
         std::fs::remove_file(&toml_path).expect("remove the config so the write must fail");
         screen
             .pending_changes
-            .insert("max_tokens".to_string(), "300000".to_string());
+            .insert("context_window".to_string(), "300000".to_string());
         screen.apply_and_save(&mut config, &mut settings);
         let warn = screen
             .persist_warning
             .clone()
             .expect("a failed persist must say so, not be discarded");
         assert!(
-            warn.contains("Max Tokens")
+            warn.contains("Context window")
                 && warn.contains("300000")
                 && warn.contains("not persisted"),
             "the warning names the row, the value, and that it will not persist: {warn:?}"

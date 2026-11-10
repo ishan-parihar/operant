@@ -24,6 +24,7 @@ impl SettingsScreen {
             show_git_branch: true,
             file_autocomplete_limit: "15".to_string(),
             file_autocomplete_show_hidden_files: false,
+            context_window: operant_core::config::runtime_config().agent.context_window,
         };
         // Apply settings from snapshot immediately on initialization
         screen.apply_settings_from_snapshot();
@@ -55,8 +56,9 @@ impl SettingsScreen {
             .file_autocomplete_show_hidden_files;
     }
 
-    pub fn open(&mut self) {
+    pub fn open(&mut self, context_window: usize) {
         self.settings_snapshot = Settings::load_sync().unwrap_or_default();
+        self.context_window = context_window;
         self.pending_changes.clear();
         self.edit_field = None;
         self.edit_value.clear();
@@ -124,40 +126,44 @@ impl SettingsScreen {
         let mut unread: Vec<String> = Vec::new();
         for (field, value) in &self.pending_changes {
             match field.as_str() {
-                "max_tokens" => {
+                "context_window" => {
                     if let Ok(n) = value.parse::<usize>() {
-                        // (iter-1954) The CONSUMER half always worked - the
-                        // footer's window and the auto-compact fallback both
-                        // read the live field. The SAVE half did not: the value
-                        // reached `InnerConfig.max_tokens` in settings.json,
-                        // which nothing reads back, and `context_window` was
-                        // never written to the loaded operant.toml, so a restart
-                        // silently reverted it. `persist_config_key` is the one
-                        // surgical writer the repo already trusts with
-                        // `agent.model`: it edits the loaded file in place and
-                        // keeps every other key byte-for-byte.
-                        //
+                        if let Err(error) = operant_core::config::validate_context_window(n) {
+                            unread.push(format!("Context window \"{value}\" ({error})"));
+                            continue;
+                        }
                         // The live value is applied FIRST and the persist is
                         // reported, not gated: an environment that loaded no
-                        // config file (every headless run, some CLI paths) makes
-                        // persist_config_key refuse, and withholding the live
-                        // change there would turn a persistence gap into a
-                        // setting that does nothing at all.
+                        // config file makes persistence impossible, and
+                        // withholding the live change would turn a persistence
+                        // gap into a setting that does nothing at all.
                         config.agent.context_window = n;
-                        if let Err(e) = operant_core::config::persist_config_key(
-                            "agent.context_window",
-                            &n.to_string(),
-                        ) {
+                        self.context_window = n;
+                        let persisted = config.config_path.as_ref().map_or_else(
+                            || {
+                                Err(operant_core::error::Error::Config(
+                                    "the loaded config has no recorded source path".to_string(),
+                                ))
+                            },
+                            |path| {
+                                operant_core::config::persist_config_key_at(
+                                    path,
+                                    "agent.context_window",
+                                    &n.to_string(),
+                                )
+                            },
+                        );
+                        if let Err(e) = persisted {
                             // A value that WAS applied but will not survive a
                             // restart is a warning, not a rejection: the
                             // operator's edit took effect, and the part they
                             // cannot see is the persistence.
                             self.persist_warning = Some(format!(
-                                "Max Tokens \"{value}\" - applied for this session, but not persisted: {e}"
+                                "Context window \"{value}\" - applied for this session, but not persisted: {e}"
                             ));
                         }
                     } else {
-                        unread.push(format!("Max Tokens \"{value}\""));
+                        unread.push(format!("Context window \"{value}\""));
                     }
                 }
                 "output_style" => {
@@ -208,7 +214,6 @@ impl SettingsScreen {
             output_style: settings.output_style.clone(),
             compact_threshold: config.agent.context_compression_threshold,
             theme: settings.theme.clone(),
-            max_tokens: config.agent.context_window,
         };
         self.settings_snapshot.theme = settings.theme.clone();
         self.settings_snapshot.output_style = settings.output_style.clone();
@@ -246,11 +251,11 @@ impl Default for SettingsScreen {
 pub(crate) fn all_entries(screen: &SettingsScreen) -> Vec<SettingsEntry> {
     let entries = vec![
         SettingsEntry {
-            key: "max_tokens",
-            label: "Max Tokens",
-            description: "Maximum tokens per response.",
+            key: "context_window",
+            label: "Context window",
+            description: "Total prompt and response capacity in tokens.",
             kind: SettingKind::Number,
-            value: screen.settings_snapshot.config.max_tokens.to_string(),
+            value: screen.context_window.to_string(),
         },
         SettingsEntry {
             key: "output_style",

@@ -94,6 +94,8 @@ fn handle_set(key: String, value: String) -> Result<()> {
 
     let updated: AppConfig =
         serde_json::from_value(root).context("Failed to deserialise updated config")?;
+    operant_core::config::validate_context_window(updated.agent.context_window)
+        .context("invalid agent.context_window")?;
     install_runtime_config(updated);
 
     // (plan 09) persist through the ONE surgical writer — same as

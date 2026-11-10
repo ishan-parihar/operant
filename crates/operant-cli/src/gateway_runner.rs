@@ -3083,7 +3083,7 @@ impl MessageHandler for GatewayMessageHandler {
         // stored, and `run` skips re-adding it, so the retry does not duplicate it.
         if matches!(
             run_result,
-            Err(operant_core::error::Error::ContextExhausted { .. })
+            Err(operant_core::error::Error::ContextExhausted { required: 0, .. })
         ) {
             let (before, after) = self.agent.compact_history_now().await;
             tracing::warn!(

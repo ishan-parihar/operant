@@ -1429,6 +1429,8 @@ impl OperantAgent {
                                     {
                                         let tokens = crate::context_management::
                                             estimate_total_tokens(&messages);
+                                        let required = crate::context_management::
+                                            protected_floor_tokens(&messages);
                                         return Err(Error::ContextExhausted {
                                             tokens,
                                             // The window the check compared
@@ -1436,6 +1438,7 @@ impl OperantAgent {
                                             // in the error describe the
                                             // same comparison.
                                             window: self.effective_context_window(),
+                                            required,
                                         });
                                     }
                                     return Err(retry_err);
@@ -1733,9 +1736,14 @@ impl OperantAgent {
                                             crate::context_management::estimate_total_tokens(
                                                 &messages,
                                             );
+                                        let required =
+                                            crate::context_management::protected_floor_tokens(
+                                                &messages,
+                                            );
                                         return Err(Error::ContextExhausted {
                                             tokens,
                                             window: self.effective_context_window(),
+                                            required,
                                         });
                                     }
                                     return Err(retry_err);
@@ -1782,9 +1790,14 @@ impl OperantAgent {
                                                 crate::context_management::estimate_total_tokens(
                                                     &messages,
                                                 );
+                                            let required =
+                                                crate::context_management::protected_floor_tokens(
+                                                    &messages,
+                                                );
                                             return Err(Error::ContextExhausted {
                                                 tokens,
                                                 window: self.effective_context_window(),
+                                                required,
                                             });
                                         }
                                         return Err(retry_err);
@@ -3667,7 +3680,8 @@ impl OperantAgent {
             // The turn context rides the tail and is not part of `messages`
             // yet, so it is charged against the cap here.
             let hard_budget = limits.hard.saturating_sub(turn_context_tokens);
-            let (compacted, within_budget) = self.compact_to_hard_cap(messages, hard_budget);
+            let (compacted, within_budget, protected_tokens) =
+                self.compact_to_hard_cap(messages, hard_budget);
             messages = compacted;
             final_tokens =
                 crate::context_management::estimate_total_tokens(&messages) + turn_context_tokens;
@@ -3687,13 +3701,16 @@ impl OperantAgent {
                 return Err(Error::ContextExhausted {
                     tokens: final_tokens,
                     window,
+                    required: protected_tokens,
                 });
             }
         }
         if limits.over_hard(final_tokens) {
+            let required = crate::context_management::protected_floor_tokens(&messages);
             return Err(Error::ContextExhausted {
                 tokens: final_tokens,
                 window,
+                required,
             });
         }
 

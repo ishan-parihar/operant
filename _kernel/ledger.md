@@ -1497,3 +1497,18 @@ carried by this round and the earlier ones:
    RT-452 residual (an incomplete report as a separate field rather than `error`); the
    command-fence's shell-wrap semantics; and the RT-481 lesson that a half-applied fix looks
    complete until the strict gate sees it.
+
+## Round 22 (2026-11-10) — the live context-window incident and confirmed agentic-core gaps
+
+End-state test: the live operator config can no longer be overwritten by a unit test; a protected prompt larger than the configured window fails typed with an actionable message and no useless gateway retry; the runtime model override survives fallback; focused core/CLI regressions, strict clippy, fmt, genome lint, workspace tests, release build, deployment and a credentialed live turn all pass.
+
+| # | unit | done when | depends on | premises |
+|---|---|---|---|---|
+| 1 | [x] Prove the live outage cause and map the architecture surface | exact 4242 fixture + concurrent global-path race + live logs/config are recorded with evidence | — | A1,A2,C1,C2 |
+| 2 | [x] Make settings persistence hermetic and stop read helpers from changing the writer identity | no settings test can write outside a temp config; a read helper leaves `loaded_config_path` unchanged; mutation-proved | 1 | A1,C7,C8,C9 |
+| 3 | [x] Repair context-window semantics, validation and recovery | row says Context window; invalid windows are rejected; protected-floor failure names required/configured tokens and gateway does not retry when compaction cannot help | 2 | C2,C3,C9,C10 |
+| 4 | [ ] Repair runtime model fallback override | request model is the per-request primary under fallback; mutation-proved | 1 | C1,C9 |
+| 5 | [ ] Repair non-text turn finalization parity | grace/circuit exits run the same memory/prefetch/TurnEnd finalizer exactly once | 1 | C1,C6,C9 |
+| 6 | [ ] Repair session rehydration tool-group boundaries | a resumed request contains either a complete tool-call group or none | 1 | C1,C6,C9 |
+| 7 | [ ] Repair verification false-green/process cleanup | missing test phase cannot report ok; timed-out starts kill their process group | 1 | C1,C6,C9 |
+| 8 | [ ] Run realtime matrix, strict gates, red-team, docs and deploy | scoped/full tests, clippy, fmt, genome lint, fake-provider socket tests, release artifact, deployed live turn all green | 2..7 | C3,C5,C6,C7,C11 |

@@ -466,3 +466,11 @@ the ledger row it affects (RT-263) and in iter-1826.
 - The end-of-round gate found three round-owned regressions — [V] — the full suite (`cargo test -p operant-core --lib --tests --no-fail-fast`) exited 101 on `org::seat_budgets::tests::a_failed_migration_marker_is_reported_not_swallowed` and the clippy gate listed five findings, three of them from this round's own commits — unit 1
 - The seat_budgets contract had been unable to fail since iter-1928 — [V] — its doc comment quoted `let _ = conn.execute(...)`, the exact shape its assert required absent, so the count was 2 against an expected 0, and only the mutant form was exercised in that iteration — unit 1
 - Twelve newly written contracts could not discriminate on their first mutation run — [V] — each failure mode is recorded in its commit message (self-satisfying needles, camelCase schema spellings, doc comments leaking into schema descriptions, non-discriminating fixtures) — unit 1
+
+## 2026-11-10T16:16 → 17:35 (round 22 — live context-window incident and operationality audit)
+
+- Confirmed the live `context_window = 4242` incident: the operant-cli settings test persisted the exact fixture into the operator file after a concurrent skill test installed the live config path as the process-global writer target.
+- Ran three independent read-only audits mapped to the architecture pages. Confirmed high-severity gaps in fallback model routing, non-text turn finalization, session tool-group rehydration, verification false-green and process cleanup; confirmed context-window semantics/recovery defects.
+- The shared tree contains peer WIP with a pre-existing divergent index, so this round uses a clean, short-path worktree from `origin/main` and will push only after fetching and checking the tip.
+
+- 2026-11-10 iter-2075: repaired the live context incident at the writer root, then made context exhaustion truthful. The operator config was restored to 1,000,000 and the gateway restarted before code repair. Focused regressions green: config 57/57, error 20/20, protected-prefix 1/1, settings 15/15.

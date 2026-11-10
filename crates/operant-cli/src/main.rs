@@ -798,7 +798,7 @@ fn default_tui_log_file() -> std::path::PathBuf {
         .join("operant.log")
 }
 
-fn apply_cli_overrides(cli: &Cli, config: &mut AppConfig) {
+fn apply_cli_overrides(cli: &Cli, config: &mut AppConfig) -> Result<()> {
     if let Some(api_key) = &cli.api_key {
         config.client.api_key = Some(api_key.clone());
     }
@@ -819,6 +819,8 @@ fn apply_cli_overrides(cli: &Cli, config: &mut AppConfig) {
         config.client.timeout_secs = timeout;
     }
     if let Some(window) = cli.context_window {
+        operant_core::config::validate_context_window(window)
+            .context("invalid --context-window")?;
         config.agent.context_window = window;
         config.client.max_context_length = window;
     }
@@ -831,6 +833,7 @@ fn apply_cli_overrides(cli: &Cli, config: &mut AppConfig) {
     if cli.no_stream {
         config.agent.stream = false;
     }
+    Ok(())
 }
 
 /// Create the appropriate ModelClient based on the provider.
@@ -3292,7 +3295,7 @@ async fn run(
     }
 
     loaded.config.apply_env_overrides()?;
-    apply_cli_overrides(&cli, &mut loaded.config);
+    apply_cli_overrides(&cli, &mut loaded.config)?;
     install_runtime_config(loaded.config.clone());
 
     // First-run bootstrap: seed the bundled skill pool (ships with operant)
@@ -3654,6 +3657,21 @@ async fn run(
 mod tests {
     use super::*;
     use std::io::Cursor;
+
+    #[test]
+    fn an_impossible_cli_context_window_is_rejected() {
+        let cli = Cli::try_parse_from(["operant", "run", "--context-window", "4096"])
+            .expect("the CLI parser accepts the shape");
+        let mut config = AppConfig::default();
+        let error = apply_cli_overrides(&cli, &mut config)
+            .expect_err("an impossible window must be rejected");
+        let rendered = format!("{error:#}");
+        assert!(rendered.contains("agent.context_window"), "{rendered}");
+        assert_eq!(
+            config.agent.context_window,
+            AppConfig::default().agent.context_window
+        );
+    }
 
     /// THE GATEWAY MUST NOT DIE OF SIGPIPE.
     ///

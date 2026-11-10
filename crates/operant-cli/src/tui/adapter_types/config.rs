@@ -46,7 +46,6 @@ pub struct InnerConfig {
     pub output_style: Option<String>,
     pub compact_threshold: f64,
     pub theme: Theme,
-    pub max_tokens: usize,
 }
 
 // ---------- ProviderEntry (for Settings.providers) ----------

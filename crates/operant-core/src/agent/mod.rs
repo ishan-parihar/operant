@@ -2467,6 +2467,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_protected_prompt_too_large_for_the_window_names_the_floor() {
+        let (agent, _dir) = bust_test_agent(128_000);
+        agent
+            .add_message(Message::new(Role::User, "x".repeat(600_000)))
+            .await;
+
+        let Err(err) = agent.build_messages("protected-floor").await else {
+            panic!("a protected turn larger than the window must fail typed");
+        };
+        match err {
+            crate::error::Error::ContextExhausted {
+                window, required, ..
+            } => {
+                assert_eq!(window, 128_000);
+                assert!(
+                    required > window,
+                    "the protected floor is named: {required}"
+                );
+            }
+            other => panic!("expected ContextExhausted, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
     async fn a_tail_that_cannot_fit_fails_typed_instead_of_being_sent() {
         let (agent, _dir) = bust_test_agent(10_000);
         agent
@@ -2545,6 +2569,52 @@ mod tests {
     /// A provider context overflow must fail TYPED, and must not re-issue
     /// the request.
     ///
+    #[tokio::test]
+    async fn a_provider_overflow_that_cannot_be_compressed_names_the_protected_floor() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db = Arc::new(Database::init(dir.path().join("overflow-floor.sqlite")).expect("db"));
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let agent = OperantAgent::new(
+            AgentConfig {
+                context_window: 200_000,
+                ..AgentConfig::default()
+            },
+            Box::new(OverflowingClient {
+                calls: calls.clone(),
+            }),
+            ToolRegistry::new(Duration::from_secs(1)),
+            db,
+        );
+
+        let overflowed = vec![Message::user("x".repeat(160_000))];
+        agent.learn_context_limit(&overflowed);
+        let system = Message::new(Role::System, "s".repeat(148_000));
+        let newest = Message::new(Role::User, "n".repeat(148_000));
+        for i in 0..10 {
+            agent
+                .add_message(Message::new(Role::User, format!("old {i}")))
+                .await;
+        }
+        agent.add_message(system).await;
+        agent.add_message(newest).await;
+
+        let Err(err) = agent.run("go".to_string()).await else {
+            panic!("an uncompressible overflow must fail typed");
+        };
+        match err {
+            Error::ContextExhausted {
+                required, window, ..
+            } => {
+                assert!(required > 0, "the protected floor is named: {required}");
+                assert!(
+                    required + 4_096 > window,
+                    "the protected floor exceeds the usable window: {required} + 4096 > {window}"
+                );
+            }
+            other => panic!("expected ContextExhausted, got {other:?}"),
+        }
+    }
+
     /// The reactive overflow path compresses the conversation and retries.
     /// When the compression CANNOT fit the budget — because the PROTECTED
     /// messages (the system prompt and the newest turn) are larger than
