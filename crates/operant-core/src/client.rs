@@ -1562,7 +1562,13 @@ pub(crate) fn classify_http_error(status: u16, body: &str) -> Error {
     let retry_after = parse_retry_after_from_body(body);
     let clean_body = sanitize_error_body(body);
     match status {
-        401 | 403 => Error::Authentication(body.to_string()),
+        // RT-467: this branch kept the RAW body, so the sanitizer was dead
+        // on exactly one path: the auth error carried the provider's
+        // newlines and up to the full 64 KiB read cap, while its Display
+        // and the persisted bench record quoted it verbatim. The function's
+        // own doc says the body "is sanitized at construction time (newlines
+        // / carriage returns stripped, truncated to 500 chars)".
+        401 | 403 => Error::Authentication(clean_body),
         429 => Error::RateLimited {
             retry_after: retry_after.unwrap_or(Duration::from_secs(5)),
         },
@@ -3096,6 +3102,35 @@ Connection: close
     fn classify_401_as_authentication() {
         let err = classify_http_error(401, "Invalid API key");
         assert!(matches!(err, Error::Authentication(_)));
+    }
+
+    /// RT-467: the auth branch kept the RAW body, so the sanitizer was dead
+    /// on exactly one path — the auth error carried the provider's
+    /// newlines and up to the full 64 KiB read cap, and its Display and
+    /// the persisted bench record quoted it verbatim.
+    ///
+    /// BEHAVIORAL: the auth payload is sanitized like every other body.
+    #[test]
+    fn the_auth_body_is_sanitized_like_every_other_body() {
+        let raw = "{\"error\":{\"message\":\"bad key\"}}\r\n\r\nsecond line";
+        let err = classify_http_error(401, raw);
+        let Error::Authentication(body) = err else {
+            panic!("an auth error is expected");
+        };
+        assert!(
+            !body.contains('\n') && !body.contains('\r'),
+            "the auth body must be single-line: {body:?}"
+        );
+        assert!(
+            body.chars().count() <= 503,
+            "the auth body must be truncated to the sanitizer's cap: {} chars",
+            body.chars().count()
+        );
+        // And the provider's actual message survives.
+        assert!(
+            body.contains("bad key"),
+            "the sanitized body must still carry the provider's message: {body:?}"
+        );
     }
 
     #[test]
