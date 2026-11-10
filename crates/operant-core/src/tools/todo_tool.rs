@@ -446,6 +446,30 @@ impl OperantTool for TodoTool {
                         if item.lane.is_some() {
                             merged[i].lane = item.lane;
                         }
+                        // RT-448: the brief, the priority, the owner and the
+                        // blockers were DROPPED here: the merge copied only
+                        // content/status/phase/lane, so the old values
+                        // survived an update that named new ones. The
+                        // model was told the item was updated while the
+                        // stored row kept the stale brief ("carried through
+                        // the write/read round trip so a swarm worker's
+                        // assignment is not starved of context by a short
+                        // title" — the field's own doc).
+                        //
+                        // The same rule as phase/lane: an OMITTED field
+                        // leaves the old value; a named one replaces it.
+                        if item.details.is_some() {
+                            merged[i].details = item.details;
+                        }
+                        if item.priority.is_some() {
+                            merged[i].priority = item.priority;
+                        }
+                        if item.assigned_to.is_some() {
+                            merged[i].assigned_to = item.assigned_to;
+                        }
+                        if !item.blocked_by.is_empty() {
+                            merged[i].blocked_by = item.blocked_by;
+                        }
                     } else {
                         index.insert(item.id.clone(), merged.len());
                         merged.push(item);
@@ -727,6 +751,92 @@ mod tests {
         let result = tool.execute(payload, default_context()).await;
         let parsed: Value = serde_json::from_str(&result.content).unwrap_or(Value::Null);
         (result.success, parsed, result.error)
+    }
+
+    /// RT-448: the merge mode copied only content/status/phase/lane, so
+    /// `details`, `priority`, `assigned_to` and `blocked_by` were DROPPED:
+    /// an update that named a new brief or owner left the OLD values in the
+    /// stored row. The `details` field's own doc promises it is "carried
+    /// through the write/read round trip so a swarm worker's assignment is
+    /// not starved of context by a short title".
+    #[tokio::test]
+    async fn a_merge_carries_the_brief_the_owner_and_the_blockers() {
+        let _store = StoreGuard::new();
+        let (ok, _, _) = execute_tool(serde_json::json!({
+            "todos": [{
+                "id": "a", "content": "one", "status": "pending",
+                "details": "v1", "assignedTo": "alice", "blockedBy": ["b"],
+                "priority": "low"
+            }],
+            "sessionId": "test-session-merge"
+        }))
+        .await;
+        assert!(ok);
+
+        // The merge names NEW values for the same id.
+        let (ok, parsed, _) = execute_tool(serde_json::json!({
+            "todos": [{
+                "id": "a", "content": "one", "status": "in_progress",
+                "details": "v2", "assignedTo": "bob", "blockedBy": ["c"],
+                "priority": "high"
+            }],
+            "merge": true,
+            "sessionId": "test-session-merge"
+        }))
+        .await;
+        assert!(ok);
+
+        let item = &parsed["todos"][0];
+        assert_eq!(item["status"], "in_progress", "the status is updated");
+        assert_eq!(
+            item["details"], "v2",
+            "the merge must carry the new brief: {item}"
+        );
+        assert_eq!(
+            item["assigned_to"], "bob",
+            "the merge must carry the new owner: {item}"
+        );
+        assert_eq!(
+            item["priority"], "high",
+            "the merge must carry the new priority: {item}"
+        );
+        assert_eq!(
+            item["blocked_by"][0], "c",
+            "the merge must carry the new blockers: {item}"
+        );
+    }
+
+    /// RT-448: and an OMITTED field leaves the old value (the same rule
+    /// phase/lane already follow) — a merge that names only the status must
+    /// not wipe the brief.
+    #[tokio::test]
+    async fn a_merge_that_omits_a_field_keeps_the_old_value() {
+        let _store = StoreGuard::new();
+        let (ok, _, _) = execute_tool(serde_json::json!({
+            "todos": [{
+                "id": "a", "content": "one", "status": "pending",
+                "details": "keep me", "assignedTo": "alice"
+            }],
+            "sessionId": "test-session-merge-keep"
+        }))
+        .await;
+        assert!(ok);
+
+        let (ok, parsed, _) = execute_tool(serde_json::json!({
+            "todos": [{ "id": "a", "content": "one", "status": "completed" }],
+            "merge": true,
+            "sessionId": "test-session-merge-keep"
+        }))
+        .await;
+        assert!(ok);
+
+        let item = &parsed["todos"][0];
+        assert_eq!(item["status"], "completed");
+        assert_eq!(
+            item["details"], "keep me",
+            "an omitted field leaves the old value: {item}"
+        );
+        assert_eq!(item["assigned_to"], "alice");
     }
 
     #[tokio::test]
