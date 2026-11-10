@@ -347,10 +347,10 @@ impl FallbackModelClient {
     }
 
     /// Build the ordered list of models to try:
-    /// `[primary_model, fallback_model_1, fallback_model_2, ...]`.
-    fn model_chain(&self) -> Vec<String> {
+    /// `[request_model, fallback_model_1, fallback_model_2, ...]`.
+    fn model_chain(&self, request_model: &str) -> Vec<String> {
         let mut models = Vec::with_capacity(1 + self.fallback_models.len());
-        models.push(self.primary_model.clone());
+        models.push(request_model.to_string());
         models.extend(self.fallback_models.iter().cloned());
         models
     }
@@ -370,7 +370,7 @@ impl FallbackModelClient {
         F: Fn(ChatRequest) -> Fut,
         Fut: std::future::Future<Output = Result<T>>,
     {
-        let models = self.model_chain();
+        let models = self.model_chain(&request.model);
         let mut attempted: Vec<String> = Vec::with_capacity(models.len());
         let mut last_error: Option<Error> = None;
 
@@ -387,7 +387,7 @@ impl FallbackModelClient {
                 Ok(response) => {
                     if attempted.len() > 1 {
                         info!(
-                            primary = %self.primary_model,
+                            primary = %request.model,
                             fallback = %model,
                             "Fallback model succeeded"
                         );
@@ -400,11 +400,11 @@ impl FallbackModelClient {
                         // The switch itself is the reportable event: the primary
                         // (or an earlier fallback) just failed, so this model is
                         // about to be attempted instead.
-                        if *model != self.primary_model {
+                        if *model != request.model {
                             self.emit_fallback(model, &failover.event_reason());
                         }
                         warn!(
-                            primary = %self.primary_model,
+                            primary = %request.model,
                             model = %model,
                             error = %e,
                             "Model failed with retryable error, trying next fallback"
@@ -585,6 +585,33 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
+    struct RecordingModelClient {
+        models: std::sync::Mutex<Vec<String>>,
+    }
+
+    #[async_trait]
+    impl ModelClient for RecordingModelClient {
+        fn provider_name(&self) -> &str {
+            "recording"
+        }
+
+        async fn chat(&self, request: ChatRequest) -> Result<ChatResponse> {
+            self.models
+                .lock()
+                .map_err(|_| Error::Agent("model recorder lock poisoned".into()))?
+                .push(request.model.clone());
+            Ok(chat_response(&request.model))
+        }
+
+        async fn chat_streaming(
+            &self,
+            _request: ChatRequest,
+        ) -> Result<BoxStream<'static, Result<StreamChunk>>> {
+            Err(Error::Agent("streaming not mocked".into()))
+        }
+    }
+
     #[async_trait]
     impl ModelClient for MockModelClient {
         fn provider_name(&self) -> &str {
@@ -706,6 +733,28 @@ mod tests {
         assert_eq!(classified.status_code, Some(429));
         assert!(classified.retryable);
         assert!(classified.should_rotate_credential);
+    }
+
+    #[tokio::test]
+    async fn the_request_model_is_the_primary_under_fallback() {
+        let inner = Arc::new(RecordingModelClient::default());
+        let client = FallbackModelClient::new(
+            inner.clone(),
+            "startup-primary".into(),
+            vec!["configured-fallback".into()],
+            true,
+        );
+
+        let result = client
+            .chat(ChatRequest::new("runtime-override", vec![]))
+            .await
+            .expect("the request must succeed");
+
+        assert_eq!(result.model, "runtime-override");
+        assert_eq!(
+            inner.models.lock().expect("model recorder lock").as_slice(),
+            ["runtime-override"]
+        );
     }
 
     #[tokio::test]

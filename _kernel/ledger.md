@@ -1507,7 +1507,7 @@ End-state test: the live operator config can no longer be overwritten by a unit 
 | 1 | [x] Prove the live outage cause and map the architecture surface | exact 4242 fixture + concurrent global-path race + live logs/config are recorded with evidence | — | A1,A2,C1,C2 |
 | 2 | [x] Make settings persistence hermetic and stop read helpers from changing the writer identity | no settings test can write outside a temp config; a read helper leaves `loaded_config_path` unchanged; mutation-proved | 1 | A1,C7,C8,C9 |
 | 3 | [x] Repair context-window semantics, validation and recovery | row says Context window; invalid windows are rejected; protected-floor failure names required/configured tokens and gateway does not retry when compaction cannot help | 2 | C2,C3,C9,C10 |
-| 4 | [ ] Repair runtime model fallback override | request model is the per-request primary under fallback; mutation-proved | 1 | C1,C9 |
+| 4 | [x] Repair runtime model fallback override | request model is the per-request primary under fallback; mutation-proved | 1 | C1,C9 |
 | 5 | [ ] Repair non-text turn finalization parity | grace/circuit exits run the same memory/prefetch/TurnEnd finalizer exactly once | 1 | C1,C6,C9 |
 | 6 | [ ] Repair session rehydration tool-group boundaries | a resumed request contains either a complete tool-call group or none | 1 | C1,C6,C9 |
 | 7 | [ ] Repair verification false-green/process cleanup | missing test phase cannot report ok; timed-out starts kill their process group | 1 | C1,C6,C9 |

@@ -729,3 +729,5 @@ NOT supported (named, with the reason):
 - RT-488 writer isolation: explicit-path persistence and read-only config loads leave `loaded_config_path` unchanged; config validation uses the non-recording parse seam (core regressions green).
 - RT-488 context truth: the TUI row is `Context window`, writes only to the loaded config's explicit source, and rejects total windows that leave no input beside the 4,096-token response reserve; the protected-prefix floor is measured and the typed message names required/configured tokens without advising compaction.
 - RT-488 gateway recovery: only foldable exhaustion (`required == 0`) triggers compact-and-retry; protected overflow is surfaced immediately.
+
+- RT-489 runtime fallback: `FallbackModelClient` now starts each request with `request.model`, not the startup primary; restoring the old primary makes the behavioral regression fail with `startup-primary` instead of `runtime-override`.
