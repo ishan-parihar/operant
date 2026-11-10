@@ -735,3 +735,5 @@ NOT supported (named, with the reason):
 - RT-490 terminal finalization: normal text, grace, and both circuit-breaker exits share one finalizer for the TurnEnd hook, memory sync, prefetch, and TurnEnd bus; behavioral tests observe each exactly once on grace/breaker replies, and removing the breaker finalizer makes the regression fail with no memory write.
 
 - RT-491 session rehydration: the bounded newest window now selects complete assistant tool-call groups; a partial-group regression fails when the raw row cut is restored, while a complete tail group remains intact.
+
+- RT-492 verification truth: success requires a test phase, and start commands own a process group terminated on readiness or timeout; the false-green and descendant-PID regressions both fail when their old behaviors are restored.
