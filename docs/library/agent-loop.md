@@ -102,6 +102,12 @@ next-turn prefetch, and the `TurnEndBus` event each run exactly once. The
 exit reason changes why the turn stopped; it does not change its
 post-turn obligations.
 
+Session rehydration applies the same pairing rule at its boundary. The
+count/byte-bounded newest window contains complete assistant tool-call groups
+only: every retained result has its request, and every retained request has
+all of its results. A cut through a group removes that partial group instead
+of sending unmatched tool messages to the provider.
+
 ## Self-healing summary
 
 | Failure | Mechanism | Where |

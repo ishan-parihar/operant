@@ -733,3 +733,5 @@ NOT supported (named, with the reason):
 - RT-489 runtime fallback: `FallbackModelClient` now starts each request with `request.model`, not the startup primary; restoring the old primary makes the behavioral regression fail with `startup-primary` instead of `runtime-override`.
 
 - RT-490 terminal finalization: normal text, grace, and both circuit-breaker exits share one finalizer for the TurnEnd hook, memory sync, prefetch, and TurnEnd bus; behavioral tests observe each exactly once on grace/breaker replies, and removing the breaker finalizer makes the regression fail with no memory write.
+
+- RT-491 session rehydration: the bounded newest window now selects complete assistant tool-call groups; a partial-group regression fails when the raw row cut is restored, while a complete tail group remains intact.
