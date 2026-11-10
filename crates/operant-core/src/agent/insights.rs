@@ -20,10 +20,16 @@ pub struct InsightsReport {
     pub days: u32,
     pub source_filter: Option<String>,
     pub empty: bool,
-    /// The failure that made this report empty, when the query FAILED.
-    /// `None` = the report is genuinely empty (no activity in the window).
-    /// Without this the model cannot tell a broken database from a quiet
-    /// week (RT-294).
+    /// The failure that made this report empty or INCOMPLETE.
+    ///
+    /// `None` = the report is whole: either genuinely empty (no activity in
+    /// the window) or complete. Without this the model cannot tell a broken
+    /// database from a quiet week (RT-294).
+    ///
+    /// RT-452: a row that failed to convert was DROPPED silently, so the
+    /// report presented itself as whole while sessions were missing — the
+    /// RT-294 failure at ROW granularity. The dropped rows are named here
+    /// now.
     pub error: Option<String>,
     pub overview: OverviewStats,
     pub models: Vec<ModelStats>,
@@ -136,8 +142,8 @@ impl<'a> InsightsEngine<'a> {
     pub fn generate(&self, days: u32, source: Option<&str>) -> InsightsReport {
         let cutoff = (chrono::Utc::now() - chrono::Duration::days(days as i64)).to_rfc3339();
 
-        let sessions = match self.fetch_sessions(&cutoff, source) {
-            Ok(s) => s,
+        let (sessions, dropped_rows) = match self.fetch_sessions(&cutoff, source) {
+            Ok(pair) => pair,
             Err(e) => {
                 tracing::warn!(error = %e, "Failed to fetch sessions for insights");
                 // The report says the query FAILED. Returning the plain
@@ -149,26 +155,71 @@ impl<'a> InsightsEngine<'a> {
             }
         };
 
+        // RT-452: the dropped rows make the report INCOMPLETE — say so,
+        // even when nothing readable came back at all (an empty report and
+        // a broken one must not look alike).
+        let mut dropped_note = if dropped_rows.is_empty() {
+            None
+        } else {
+            Some(format!(
+                "{} session row(s) could not be read and are missing from this \
+                 report (first error: {})",
+                dropped_rows.len(),
+                dropped_rows[0]
+            ))
+        };
+
         if sessions.is_empty() {
-            return empty_report(days, source);
+            let mut report = empty_report(days, source);
+            report.error = dropped_note;
+            return report;
         }
 
         let conn = self.db.conn();
+        // RT-452: the tool breakdown drops rows the same way; its drops join
+        // the report's error note.
+        let (tools, dropped_tools) = compute_tool_breakdown_from_db(&sessions, &conn);
+        if !dropped_tools.is_empty() {
+            dropped_note = Some(match dropped_note {
+                Some(existing) => format!(
+                    "{existing}; and {} tool-usage row(s) could not be read (first \
+                     error: {})",
+                    dropped_tools.len(),
+                    dropped_tools[0]
+                ),
+                None => format!(
+                    "{} tool-usage row(s) could not be read and are missing from this \
+                     report (first error: {})",
+                    dropped_tools.len(),
+                    dropped_tools[0]
+                ),
+            });
+        }
         InsightsReport {
             days,
             source_filter: source.map(String::from),
             empty: false,
-            error: None,
+            error: dropped_note,
             overview: compute_overview(&sessions),
             models: compute_model_breakdown(&sessions),
             platforms: compute_platform_breakdown(&sessions),
-            tools: compute_tool_breakdown_from_db(&sessions, &conn),
+            tools,
             activity: compute_activity_patterns(&sessions),
             top_sessions: compute_top_sessions(&sessions),
         }
     }
 
-    fn fetch_sessions(&self, cutoff: &str, source: Option<&str>) -> Result<Vec<SessionRow>> {
+    /// The sessions in the window, and the rows that could NOT be read.
+    ///
+    /// RT-452: the rows were collected with `filter_map(|r| r.ok())`, which
+    /// discards a row whose columns fail to convert — and the query itself
+    /// succeeded, so the report said "no error" while sessions were
+    /// missing. The dropped rows come back so the report can say so.
+    fn fetch_sessions(
+        &self,
+        cutoff: &str,
+        source: Option<&str>,
+    ) -> Result<(Vec<SessionRow>, Vec<String>)> {
         let conn = self.db.conn();
 
         // Always use the same query pattern to avoid type inference issues
@@ -181,7 +232,7 @@ impl<'a> InsightsEngine<'a> {
             )
             .map_err(|e| crate::error::Error::Agent(format!("Query prep failed: {}", e)))?;
 
-        let rows: Vec<SessionRow> = stmt
+        let collected = stmt
             .query_map(params![cutoff], |row| {
                 Ok(SessionRow {
                     id: row.get(0)?,
@@ -189,14 +240,32 @@ impl<'a> InsightsEngine<'a> {
                     source: row.get(2)?,
                     started_at: row.get(3)?,
                     ended_at: row.get(4)?,
-                    message_count: row.get::<_, i64>(5).unwrap_or(0),
-                    tool_call_count: row.get::<_, i64>(6).unwrap_or(0),
-                    input_tokens: row.get::<_, i64>(7).unwrap_or(0),
-                    output_tokens: row.get::<_, i64>(8).unwrap_or(0),
+                    // RT-452: these were `unwrap_or(0)`, so a counter
+                    // stored with the WRONG TYPE became a silent zero and
+                    // the totals understated the spend. A NULL is still the
+                    // schema's default (0); a value that is not an integer
+                    // makes the row UNREADABLE -- and an unreadable row is
+                    // dropped and NAMED in the report's error, not folded
+                    // into the numbers as a zero.
+                    message_count: row.get::<_, Option<i64>>(5)?.unwrap_or(0),
+                    tool_call_count: row.get::<_, Option<i64>>(6)?.unwrap_or(0),
+                    input_tokens: row.get::<_, Option<i64>>(7)?.unwrap_or(0),
+                    output_tokens: row.get::<_, Option<i64>>(8)?.unwrap_or(0),
                 })
             })
-            .map_err(|e| crate::error::Error::Agent(format!("Query failed: {}", e)))?
-            .filter_map(|r| r.ok())
+            .map_err(|e| crate::error::Error::Agent(format!("Query failed: {}", e)))?;
+
+        let mut dropped: Vec<String> = Vec::new();
+        let rows: Vec<SessionRow> = collected
+            .filter_map(|r| match r {
+                Ok(row) => Some(row),
+                Err(e) => {
+                    if dropped.len() < 5 {
+                        dropped.push(e.to_string());
+                    }
+                    None
+                }
+            })
             .collect();
 
         // Filter by source in Rust instead of SQL to avoid type inference issues
@@ -208,7 +277,7 @@ impl<'a> InsightsEngine<'a> {
             rows
         };
 
-        Ok(filtered)
+        Ok((filtered, dropped))
     }
 
     pub fn format_terminal(&self, report: &InsightsReport) -> String {
@@ -336,19 +405,24 @@ fn estimate_session_cost(session: &SessionRow, prices: &HashMap<String, (f64, f6
     input_cost + output_cost
 }
 
+/// The per-tool breakdown, and the rows that could NOT be read.
+///
+/// RT-452: same shape as the session rows — a row that failed to convert
+/// was dropped, and a failed query became an empty list (which reads as
+/// "no tools were used"). The drops come back so the report can say so.
 fn compute_tool_breakdown_from_db(
     sessions: &[SessionRow],
     conn: &rusqlite::Connection,
-) -> Vec<ToolStats> {
+) -> (Vec<ToolStats>, Vec<String>) {
     let total: usize = sessions.iter().map(|s| s.tool_call_count as usize).sum();
     if total == 0 {
-        return Vec::new();
+        return (Vec::new(), Vec::new());
     }
 
     // Collect session IDs to query per-tool breakdown
     let session_ids: Vec<&str> = sessions.iter().map(|s| s.id.as_str()).collect();
     if session_ids.is_empty() {
-        return Vec::new();
+        return (Vec::new(), Vec::new());
     }
 
     // Build a parameterized IN clause using standard ? placeholders
@@ -376,33 +450,50 @@ fn compute_tool_breakdown_from_db(
         Ok(s) => s,
         Err(e) => {
             tracing::warn!(error = %e, "Failed to prepare tool breakdown query");
-            return vec![ToolStats {
-                tool: "total_tool_calls".to_string(),
-                count: total,
-                percentage: 100.0,
-            }];
+            return (
+                vec![ToolStats {
+                    tool: "total_tool_calls".to_string(),
+                    count: total,
+                    percentage: 100.0,
+                }],
+                vec![format!("the tool breakdown query failed to prepare: {e}")],
+            );
         }
     };
 
-    let tool_counts: Vec<(String, usize)> = stmt
-        .query_map(param_refs.as_slice(), |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, usize>(1)?))
-        })
-        .ok()
-        .into_iter()
-        .flatten()
-        .filter_map(|r| r.ok())
-        .collect();
+    let mut dropped: Vec<String> = Vec::new();
+    let tool_counts: Vec<(String, usize)> = match stmt.query_map(param_refs.as_slice(), |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, usize>(1)?))
+    }) {
+        Ok(rows) => rows
+            .filter_map(|r| match r {
+                Ok(row) => Some(row),
+                Err(e) => {
+                    if dropped.len() < 5 {
+                        dropped.push(e.to_string());
+                    }
+                    None
+                }
+            })
+            .collect(),
+        Err(e) => {
+            dropped.push(format!("the tool breakdown query failed: {e}"));
+            Vec::new()
+        }
+    };
 
     if tool_counts.is_empty() {
-        return vec![ToolStats {
-            tool: "total_tool_calls".to_string(),
-            count: total,
-            percentage: 100.0,
-        }];
+        return (
+            vec![ToolStats {
+                tool: "total_tool_calls".to_string(),
+                count: total,
+                percentage: 100.0,
+            }],
+            dropped,
+        );
     }
 
-    tool_counts
+    let stats = tool_counts
         .into_iter()
         .map(|(tool, count)| ToolStats {
             tool,
@@ -413,7 +504,8 @@ fn compute_tool_breakdown_from_db(
                 0.0
             },
         })
-        .collect()
+        .collect();
+    (stats, dropped)
 }
 
 fn compute_activity_patterns(sessions: &[SessionRow]) -> ActivityPatterns {
@@ -706,6 +798,60 @@ mod tests {
         let prices = HashMap::from([("claude-x".to_string(), (3.0, 15.0))]);
         assert!((estimate_session_cost(&session, &prices) - 21.0).abs() < 1e-9);
         assert_eq!(estimate_session_cost(&session, &HashMap::new()), 0.0);
+    }
+
+    /// RT-452: the session rows were collected with `filter_map(|r| r.ok())`,
+    /// which discards a row whose columns fail to convert — while the QUERY
+    /// succeeded, so the report said "no error" and presented itself as
+    /// whole with sessions missing. The RT-294 contract ("the model cannot
+    /// tell a broken database from a quiet week") failed at ROW granularity.
+    ///
+    /// BEHAVIORAL: a session row whose `message_count` is TEXT (not an
+    /// integer) must make the report say so, not vanish silently.
+    #[test]
+    fn a_session_row_that_cannot_be_read_is_named_in_the_report() {
+        let path = std::env::temp_dir().join(format!(
+            "operant_insights_row_test_{}_{}.db",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let db = std::sync::Arc::new(crate::database::Database::init(path).expect("test db"));
+        let now = chrono::Utc::now().to_rfc3339();
+        // One readable row and one whose message_count is TEXT: the row
+        // cannot convert to i64. The lock is released before the report is
+        // generated (the engine takes it itself).
+        {
+            let conn = db.conn();
+            conn
+                .execute(
+                    "INSERT INTO sessions (id, source, started_at, message_count) VALUES (?1, ?2, ?3, ?4)",
+                    rusqlite::params!["good", "local", now, 3i64],
+                )
+                .expect("the good row");
+            conn
+                .execute(
+                    "INSERT INTO sessions (id, source, started_at, message_count) VALUES (?1, ?2, ?3, ?4)",
+                    rusqlite::params!["bad", "local", now, "not-a-number"],
+                )
+                .expect("the unreadable row");
+        }
+
+        let engine = InsightsEngine::new(&db);
+        let report = engine.generate(7, None);
+
+        let error = report
+            .error
+            .as_ref()
+            .expect("an unreadable row must be named in the report");
+        assert!(
+            error.contains("could not be read"),
+            "the report must say a row was unreadable: {error}"
+        );
+        // And the readable row is still counted — the report is incomplete,
+        // not empty.
+        assert!(!report.empty, "the readable session is still in the report");
+        assert_eq!(report.overview.total_sessions, 1);
     }
 
     #[test]
