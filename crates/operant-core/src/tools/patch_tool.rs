@@ -335,8 +335,42 @@ impl OperantTool for PatchTool {
                             while let Some(at) = rest.find(&args.find) {
                                 if seen == picked {
                                     out.push_str(&rest[..at]);
-                                    out.push_str(&args.replace);
-                                    rest = &rest[at + args.find.len()..];
+                                    let after = &rest[at + args.find.len()..];
+                                    // RT-449: an EMPTY replacement on a
+                                    // WHOLE-LINE match must remove the LINE,
+                                    // not leave a blank one behind -- the
+                                    // contract `delete_lines_matching`
+                                    // states, and the OTHER two tiers honour
+                                    // (the fuzzy tier drops the block; the
+                                    // default exact tier calls the helper).
+                                    // This branch substituted the empty
+                                    // string, so a NAMED occurrence blanked
+                                    // the line where the default deleted it.
+                                    if args.replace.is_empty() {
+                                        let line_prefix = out.rsplit('\n').next().unwrap_or("");
+                                        let after_line = after.split('\n').next().unwrap_or("");
+                                        let whole_line = line_prefix.trim().is_empty()
+                                            && after_line.trim().is_empty();
+                                        if whole_line {
+                                            // Drop the line's ending too.
+                                            let skip = if after.starts_with("\r\n") {
+                                                2
+                                            } else if after.starts_with('\n') {
+                                                1
+                                            } else {
+                                                0
+                                            };
+                                            rest = &after[skip..];
+                                        } else {
+                                            // A fragment delete: remove just
+                                            // the fragment (the behaviour a
+                                            // substring delete should have).
+                                            rest = after;
+                                        }
+                                    } else {
+                                        out.push_str(&args.replace);
+                                        rest = after;
+                                    }
                                     break;
                                 }
                                 let end = at + args.find.len();
@@ -441,17 +475,125 @@ mod tests {
         ToolContext::default()
     }
 
+    /// RT-449: the name was built from a nanosecond timestamp, so two
+    /// parallel tests could land on the SAME path -- and the second write
+    /// clobbered the first's content, which showed up as an intermittent
+    /// refusal in a test that had nothing to do with the timestamp. The pid
+    /// plus a per-process counter cannot collide.
     fn create_temp_file(content: &str) -> std::path::PathBuf {
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let dir = std::env::temp_dir();
         let path = dir.join(format!(
-            "operant_patch_test_{}.txt",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
+            "operant_patch_test_{}_{}.txt",
+            std::process::id(),
+            n
         ));
         std::fs::write(&path, content).unwrap();
         path
+    }
+
+    /// RT-449: the three tiers disagreed about an EMPTY replacement on a
+    /// whole-line find. The contract (`delete_lines_matching`): "An empty
+    /// `replace` on a whole-line `find` means 'remove that line' … so the
+    /// tool could blank a line and never remove one." The fuzzy tier drops
+    /// the block and the default exact tier calls the helper — but the
+    /// CHOSEN-occurrence tier substituted the empty string, so naming an
+    /// occurrence BLANKED the line where the default deleted it.
+    ///
+    /// BEHAVIORAL: a named occurrence with an empty replace must remove the
+    /// line, exactly like the default path.
+    #[tokio::test]
+    async fn a_named_occurrence_with_an_empty_replace_removes_the_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("f.txt");
+        std::fs::write(&path, "a\nb\na\n").unwrap();
+
+        let tool = PatchTool;
+        let result = tool
+            .execute(
+                serde_json::json!({
+                    "path": path.to_string_lossy(),
+                    "find": "a",
+                    "replace": "",
+                    "occurrence": 0
+                }),
+                default_context(),
+            )
+            .await;
+        assert!(
+            result.success,
+            "the patch must apply: {}",
+            result.error.unwrap_or_default()
+        );
+
+        let after = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            after, "b\na\n",
+            "the named occurrence must remove the LINE, not blank it"
+        );
+    }
+
+    /// RT-449: and the DEFAULT path still deletes the line the same way —
+    /// the two tiers must agree.
+    #[tokio::test]
+    async fn the_default_path_and_the_named_path_agree_on_a_line_delete() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("f.txt");
+        std::fs::write(&path, "a\nb\nc\n").unwrap();
+
+        let tool = PatchTool;
+        let result = tool
+            .execute(
+                serde_json::json!({
+                    "path": path.to_string_lossy(),
+                    "find": "b",
+                    "replace": ""
+                }),
+                default_context(),
+            )
+            .await;
+        assert!(
+            result.success,
+            "the patch must apply: {}",
+            result.error.unwrap_or_default()
+        );
+
+        let after = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(after, "a\nc\n", "the default path deletes the line");
+    }
+
+    /// RT-449: a FRAGMENT delete still removes just the fragment — the
+    /// line-removal rule applies to whole-line matches only.
+    #[tokio::test]
+    async fn a_fragment_delete_with_a_named_occurrence_still_removes_the_fragment() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("f.txt");
+        std::fs::write(&path, "keep a keep\nkeep a keep\n").unwrap();
+
+        let tool = PatchTool;
+        let result = tool
+            .execute(
+                serde_json::json!({
+                    "path": path.to_string_lossy(),
+                    "find": "a",
+                    "replace": "",
+                    "occurrence": 1
+                }),
+                default_context(),
+            )
+            .await;
+        assert!(
+            result.success,
+            "the patch must apply: {}",
+            result.error.unwrap_or_default()
+        );
+
+        let after = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            after, "keep a keep\nkeep  keep\n",
+            "a fragment delete removes just the fragment"
+        );
     }
 
     #[tokio::test]
