@@ -47,6 +47,9 @@ pub struct SettingsScreen {
     /// the operator's edit and then silently discarded it, which is the same
     /// "an unread argument made that a lie" class /rewind had (iter-1947).
     pub apply_error: Option<String>,
+    /// A value that WAS applied but could not be persisted — a different fact
+    /// from `apply_error`, which means the value was never taken.
+    pub persist_warning: Option<String>,
 
     // ---- Real settings fields ----
     pub output_style: String,

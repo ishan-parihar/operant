@@ -134,6 +134,15 @@ pub fn render_settings_screen(frame: &mut Frame, screen: &SettingsScreen, area: 
             err.clone(),
             Style::default().fg(theme_colors::warning()),
         ))
+    } else if let Some(warn) = &screen.persist_warning {
+        // (iter-1954) A value that WAS applied but will not survive a restart.
+        // A different fact from an unread value, so a different message: the
+        // operator must not read "kept the previous value" for a change that
+        // took effect.
+        Line::from(Span::styled(
+            warn.clone(),
+            Style::default().fg(theme_colors::warning()),
+        ))
     } else if screen.edit_field.is_some() {
         Line::from(vec![
             Span::styled(

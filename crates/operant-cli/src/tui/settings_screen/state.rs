@@ -17,6 +17,7 @@ impl SettingsScreen {
             settings_snapshot: settings_snapshot.clone(),
             pending_changes: HashMap::new(),
             apply_error: None,
+            persist_warning: None,
             output_style: "default".to_string(),
             reduce_motion: false,
             show_cwd: true,
@@ -119,12 +120,42 @@ impl SettingsScreen {
     pub fn apply_and_save(&mut self, config: &mut AppConfig, settings: &mut Settings) {
         // (iter-1948) A new apply supersedes the previous verdict.
         self.apply_error = None;
+        self.persist_warning = None;
         let mut unread: Vec<String> = Vec::new();
         for (field, value) in &self.pending_changes {
             match field.as_str() {
                 "max_tokens" => {
                     if let Ok(n) = value.parse::<usize>() {
+                        // (iter-1954) The CONSUMER half always worked - the
+                        // footer's window and the auto-compact fallback both
+                        // read the live field. The SAVE half did not: the value
+                        // reached `InnerConfig.max_tokens` in settings.json,
+                        // which nothing reads back, and `context_window` was
+                        // never written to the loaded operant.toml, so a restart
+                        // silently reverted it. `persist_config_key` is the one
+                        // surgical writer the repo already trusts with
+                        // `agent.model`: it edits the loaded file in place and
+                        // keeps every other key byte-for-byte.
+                        //
+                        // The live value is applied FIRST and the persist is
+                        // reported, not gated: an environment that loaded no
+                        // config file (every headless run, some CLI paths) makes
+                        // persist_config_key refuse, and withholding the live
+                        // change there would turn a persistence gap into a
+                        // setting that does nothing at all.
                         config.agent.context_window = n;
+                        if let Err(e) = operant_core::config::persist_config_key(
+                            "agent.context_window",
+                            &n.to_string(),
+                        ) {
+                            // A value that WAS applied but will not survive a
+                            // restart is a warning, not a rejection: the
+                            // operator's edit took effect, and the part they
+                            // cannot see is the persistence.
+                            self.persist_warning = Some(format!(
+                                "Max Tokens \"{value}\" - applied for this session, but not persisted: {e}"
+                            ));
+                        }
                     } else {
                         unread.push(format!("Max Tokens \"{value}\""));
                     }

@@ -581,3 +581,90 @@ fn the_settings_screen_offers_no_row_whose_value_changes_nothing() {
     // control that cannot fail is decoration. The assertion that carries the
     // contract is the row's absence, above.
 }
+
+/// (iter-1954) A settings row's edit must survive a restart.
+///
+/// `/settings`' "Max Tokens" row writes `config.agent.context_window`, which
+/// `check_token_warnings` reads live as the fallback window — so the row has a
+/// working CONSUMER (round 69's class). Its SAVE path was open on both ends:
+/// `apply_and_save` also copies the value into `InnerConfig.max_tokens` and
+/// saves settings.json, but NOTHING reads `InnerConfig.max_tokens` back, and
+/// `config.agent.context_window` is never written to operant.toml — the only
+/// file the process actually loads. The repo already has the one surgical
+/// writer this needs (`persist_config_key`, used for `agent.model`).
+///
+/// So an operator set Max Tokens to 200000, saw the footer agree, restarted,
+/// and silently got the shipped default back.
+#[test]
+fn a_settings_edit_survives_the_restart_it_promised() {
+    with_sandbox_home(|| {
+        let mut config = AppConfig::default();
+        let mut settings = Settings::default();
+
+        // A real config file, loaded the way the process loads one, so
+        // persist_config_key has a target. The guard is the repo's own: two
+        // tests loading temp configs in parallel race on the global path, and
+        // the loser's write landed in a neighbour's file once already.
+        let _cfg_guard = operant_core::config::config_path_test_guard();
+        let sandbox = std::path::PathBuf::from(
+            std::env::var("HERMES_HOME").expect("the sandbox sets HERMES_HOME"),
+        );
+        let toml_path = sandbox.join("operant.toml");
+        std::fs::write(
+            &toml_path,
+            "[agent]\nmodel = \"gpt-4o\"\n\n[client]\nbase_url = \"http://localhost:9/v1\"\n",
+        )
+        .expect("write config");
+        let loaded = operant_core::config::load_app_config(Some(&toml_path)).expect("load");
+        operant_core::config::install_runtime_config(loaded.config.clone());
+
+        let mut screen = SettingsScreen::new();
+        screen
+            .pending_changes
+            .insert("max_tokens".to_string(), "200000".to_string());
+        screen.apply_and_save(&mut config, &mut settings);
+
+        // The live consumer sees it.
+        assert_eq!(config.agent.context_window, 200000);
+
+        // And the value the operator typed is in the FILE the process loads,
+        // so a restart reads it back — not only in the in-memory config and
+        // not only in settings.json, which nothing reads for this field.
+        let persisted = std::fs::read_to_string(&toml_path).expect("read the config back");
+        assert!(
+            persisted.contains("context_window = 200000"),
+            "Max Tokens must persist into the loaded config: {persisted}"
+        );
+
+        // The ERROR half: a persist that cannot land is NAMED, not swallowed.
+        // The live value still applies — withholding it would turn a persistence
+        // gap into a setting that does nothing at all in any environment that
+        // loaded no config file — but the operator is told the change will not
+        // survive a restart, which is the part they cannot see.
+        let mut screen = SettingsScreen::new();
+        std::fs::remove_file(&toml_path).expect("remove the config so the write must fail");
+        screen
+            .pending_changes
+            .insert("max_tokens".to_string(), "300000".to_string());
+        screen.apply_and_save(&mut config, &mut settings);
+        let warn = screen
+            .persist_warning
+            .clone()
+            .expect("a failed persist must say so, not be discarded");
+        assert!(
+            warn.contains("Max Tokens")
+                && warn.contains("300000")
+                && warn.contains("not persisted"),
+            "the warning names the row, the value, and that it will not persist: {warn:?}"
+        );
+        assert_eq!(
+            config.agent.context_window, 300000,
+            "the live value still applies; only its persistence failed"
+        );
+        assert!(
+            screen.apply_error.is_none(),
+            "a value that WAS applied must not also report as unread: {:?}",
+            screen.apply_error
+        );
+    });
+}
