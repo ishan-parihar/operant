@@ -113,6 +113,27 @@ pub fn turn_retains() -> bool {
 /// considered: assistant turns and tool results are model-generated, so
 /// matching against them would let the model materialise anything simply by
 /// hallucinating a tool name in its own reasoning.
+/// The signature of a tool BATCH for the cross-iteration repetition guard.
+///
+/// RT-475: the guard signed only the batch's FIRST call, so a batch whose
+/// first call repeated while the rest changed — `[A,B]` then `[A,C]` —
+/// counted as "identical", and the turn was force-ended with "I repeated
+/// the same tool call 6 times in a row", which is only true of the first
+/// tool. The WHOLE batch is signed now: the same calls in the same order
+/// are the same batch, and anything else is not.
+fn batch_signature(tool_calls: &[crate::client::ToolCall]) -> Option<u64> {
+    if tool_calls.is_empty() {
+        return None;
+    }
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    for tc in tool_calls {
+        tc.function.name.hash(&mut h);
+        tc.function.arguments.hash(&mut h);
+    }
+    Some(h.finish())
+}
+
 fn last_user_turn(messages: &[Message]) -> String {
     messages
         .iter()
@@ -3801,6 +3822,57 @@ pub(super) fn guardrail_halt_reply(summary: &str) -> String {
         "I stopped this turn because a tool kept failing without making progress: {cause}\n\n\
          Tell me how you'd like to proceed, or send `continue` and I'll try a different approach."
     )
+}
+
+#[cfg(test)]
+mod rt475_tests {
+    use super::*;
+    use crate::client::{ToolCall, ToolCallFunction};
+
+    fn call(name: &str, args: &str) -> ToolCall {
+        ToolCall {
+            id: format!("call-{name}-{args}"),
+            function: ToolCallFunction {
+                name: name.to_string(),
+                arguments: args.to_string(),
+            },
+        }
+    }
+
+    /// RT-475: the repetition guard signed only the batch's FIRST call, so
+    /// a batch whose first call repeated while the rest changed — `[A,B]`
+    /// then `[A,C]` — counted as "identical", and the turn was force-ended
+    /// with "I repeated the same tool call 6 times in a row", which is only
+    /// true of the first tool.
+    ///
+    /// BEHAVIORAL: the signature must cover the WHOLE batch.
+    #[test]
+    fn the_repetition_signature_covers_the_whole_batch() {
+        let ab = vec![call("alpha", "{}"), call("beta", "{}")];
+        let ac = vec![call("alpha", "{}"), call("gamma", "{}")];
+        assert_eq!(
+            batch_signature(&ab),
+            batch_signature(&ab),
+            "the same batch must sign the same"
+        );
+        assert_ne!(
+            batch_signature(&ab),
+            batch_signature(&ac),
+            "a batch whose SECOND call changed is not the same batch — the \
+             old signature covered only the first call"
+        );
+        // The first call alone is not the signature either.
+        assert_ne!(
+            batch_signature(&ab),
+            batch_signature(&ab[..1]),
+            "a one-call batch is not a two-call batch"
+        );
+        assert_eq!(
+            batch_signature(&[]),
+            None,
+            "an empty batch has no signature"
+        );
+    }
 }
 
 #[cfg(test)]
