@@ -257,8 +257,15 @@ enum MenuRow {
 /// inserted at the top of the object, after the opening brace, which keeps the
 /// edit small and works whether or not the file already has content.
 fn ensure_menu_row() -> Result<MenuRow> {
-    let path = menu_file();
-    let existing = match std::fs::read_to_string(&path) {
+    ensure_menu_row_at(&menu_file())
+}
+
+/// Insert the Operant row into a menu extension file.
+///
+/// The path is a parameter so the insertion can be proven on a real JSONC file
+/// in a test, rather than only on the operator's live menu.
+fn ensure_menu_row_at(path: &Path) -> Result<MenuRow> {
+    let existing = match std::fs::read_to_string(path) {
         Ok(text) => text,
         Err(_) => {
             if let Some(parent) = path.parent() {
@@ -266,7 +273,7 @@ fn ensure_menu_row() -> Result<MenuRow> {
                     .with_context(|| format!("creating {}", parent.display()))?;
             }
             let seeded = format!("{{\n{MENU_ROW}\n}}\n");
-            std::fs::write(&path, seeded).with_context(|| format!("writing {}", path.display()))?;
+            std::fs::write(path, seeded).with_context(|| format!("writing {}", path.display()))?;
             return Ok(MenuRow::Added);
         }
     };
@@ -285,7 +292,7 @@ fn ensure_menu_row() -> Result<MenuRow> {
     updated.push('\n');
     updated.push_str(MENU_ROW);
     updated.push_str(&existing[insertion..]);
-    std::fs::write(&path, updated).with_context(|| format!("writing {}", path.display()))?;
+    std::fs::write(path, updated).with_context(|| format!("writing {}", path.display()))?;
     Ok(MenuRow::Added)
 }
 
@@ -400,5 +407,88 @@ mod tests {
             OMARCHY_OPERANT.contains("org.omarchy.agent"),
             "every agent window shares one app-id for window rules"
         );
+    }
+
+    /// A menu file shaped like the live one: comments, several rows, and a
+    /// trailing comment block.
+    const MENU_FIXTURE: &str = r#"{
+  // >>> a plugin block (managed by someone) >>>
+  "style.bar.barber": {
+    "icon": "x",
+    "label": "Barber"
+  },
+  // <<< a plugin block <<<
+  "setup.default.agent.jcode": {
+    "icon": "y",
+    "label": "jcode"
+  }
+}
+"#;
+
+    /// The insertion must not cost the operator a row they already had.
+    ///
+    /// The live menu file is the operator's own: it carries the jcode row and
+    /// whatever plugin blocks they installed. An edit that drops one of them
+    /// would silently break an agent they use, which is the worst outcome an
+    /// integration installer can have.
+    #[test]
+    fn the_menu_row_is_inserted_without_losing_the_existing_rows() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("omarchy-menu.jsonc");
+        std::fs::write(&path, MENU_FIXTURE).expect("write");
+
+        assert_eq!(ensure_menu_row_at(&path).expect("insert"), MenuRow::Added);
+
+        let updated = std::fs::read_to_string(&path).expect("read");
+        assert!(updated.contains(MENU_KEY), "the operant row is there");
+        assert!(updated.contains("style.bar.barber"), "the plugin row survives");
+        assert!(
+            updated.contains("setup.default.agent.jcode"),
+            "the jcode row survives — it is the agent the operator already used"
+        );
+        assert!(
+            updated.contains(">>> a plugin block (managed by someone) >>>"),
+            "the comments survive: the file is JSONC and the shell reads them"
+        );
+        // The inserted fragment carries its own separator, so the object stays
+        // balanced.
+        let opens = updated.matches('{').count();
+        let closes = updated.matches('}').count();
+        assert_eq!(opens, closes, "the object literal is still balanced");
+    }
+
+    /// A second run must be a no-op: the row is added once, not twice.
+    #[test]
+    fn the_menu_row_is_added_once() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("omarchy-menu.jsonc");
+        std::fs::write(&path, MENU_FIXTURE).expect("write");
+
+        ensure_menu_row_at(&path).expect("first insert");
+        let after_first = std::fs::read_to_string(&path).expect("read");
+        assert_eq!(ensure_menu_row_at(&path).expect("second insert"), MenuRow::Present);
+        let after_second = std::fs::read_to_string(&path).expect("read");
+
+        assert_eq!(after_first, after_second, "the second run changed nothing");
+        assert_eq!(
+            after_second.matches(MENU_KEY).count(),
+            1,
+            "the row is present exactly once"
+        );
+    }
+
+    /// A missing menu file is seeded with the row, so a machine that never
+    /// customised the menu still gets the option.
+    #[test]
+    fn a_missing_menu_file_is_seeded() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("nested").join("omarchy-menu.jsonc");
+
+        assert_eq!(ensure_menu_row_at(&path).expect("seed"), MenuRow::Added);
+        let seeded = std::fs::read_to_string(&path).expect("read");
+        assert!(seeded.contains(MENU_KEY));
+        let opens = seeded.matches('{').count();
+        let closes = seeded.matches('}').count();
+        assert_eq!(opens, closes, "the seeded file is a balanced object");
     }
 }
