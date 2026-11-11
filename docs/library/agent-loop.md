@@ -82,6 +82,9 @@ the context? `ContextOverflow` triggers auto-compression via
 `FallbackModelClient` wraps the primary model with a fallback chain: on a
 retryable error (5xx, 429, network) the next model in the chain is tried.
 Fallback is **per-request** — every call starts again at the primary.
+A provider-stage failure walks every configured alternate route until one
+succeeds; no alternate route is retained as the active route for a later
+request.
 Two config sources: `agent.fallback_models` (same-client, same-provider)
 and cross-provider chains via `[providers]`. Reasoning-model quirks are
 classed per provider (`ThinkingSignature`, `ReasoningParamRejected`,

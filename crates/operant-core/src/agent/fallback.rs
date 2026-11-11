@@ -293,28 +293,39 @@ impl FallbackModelClient {
         failover: &Failover,
     ) -> Option<Result<ChatResponse>> {
         let registry = self.provider_registry.as_ref()?;
-        // switch_to_next*() skips providers in cooldown and returns None if all exhausted.
-        let next_provider = match failover.decision {
-            // Merely rate-limited: the model is healthy, so a cheaper sibling
-            // beats the next configured route. Unknown prices keep chain order.
-            FailoverDecision::RetrySame { .. } => registry.switch_to_next_cheapest()?,
-            _ => registry.switch_to_next()?,
-        };
-        let next_client = registry.get_client(&next_provider.name)?;
-        let mut fallback_req = request.clone();
-        fallback_req.model.clone_from(&next_provider.model);
-        info!(
-            to_provider = %next_provider.name,
-            to_model = %next_provider.model,
-            reason = %failover.event_reason(),
-            "Provider failover — switching to fallback provider"
-        );
-        self.emit_fallback(&next_provider.model, &failover.event_reason());
-        let result = next_client.chat(fallback_req).await;
-        if result.is_err() {
-            registry.arm_cooldown(&next_provider.name);
+        let candidates = registry.fallback_candidates_after(0);
+        if candidates.is_empty() {
+            return None;
         }
-        Some(result)
+        let mut last_error = None;
+        for next_provider in candidates {
+            let Some(next_client) = registry.get_client(&next_provider.name) else {
+                continue;
+            };
+            let mut fallback_req = request.clone();
+            fallback_req.model.clone_from(&next_provider.model);
+            info!(
+                to_provider = %next_provider.name,
+                to_model = %next_provider.model,
+                reason = %failover.event_reason(),
+                "Provider failover — switching to fallback provider"
+            );
+            self.emit_fallback(&next_provider.model, &failover.event_reason());
+            let result = next_client.chat(fallback_req).await;
+            match result {
+                Ok(response) => {
+                    registry.clear_failure_count(&next_provider.name);
+                    return Some(Ok(response));
+                }
+                Err(error) => {
+                    registry.arm_cooldown(&next_provider.name);
+                    last_error = Some(error);
+                }
+            }
+        }
+        Some(Err(last_error.unwrap_or_else(|| {
+            Error::Agent("All configured fallback providers failed".to_string())
+        })))
     }
 
     /// Try the next provider from the registry for streaming.
@@ -325,25 +336,39 @@ impl FallbackModelClient {
         failover: &Failover,
     ) -> Option<Result<BoxStream<'static, Result<StreamChunk>>>> {
         let registry = self.provider_registry.as_ref()?;
-        let next_provider = match failover.decision {
-            FailoverDecision::RetrySame { .. } => registry.switch_to_next_cheapest()?,
-            _ => registry.switch_to_next()?,
-        };
-        let next_client = registry.get_client(&next_provider.name)?;
-        let mut fallback_req = request.clone();
-        fallback_req.model.clone_from(&next_provider.model);
-        info!(
-            to_provider = %next_provider.name,
-            to_model = %next_provider.model,
-            reason = %failover.event_reason(),
-            "Provider failover — switching to fallback provider"
-        );
-        self.emit_fallback(&next_provider.model, &failover.event_reason());
-        let result = next_client.chat_streaming(fallback_req).await;
-        if result.is_err() {
-            registry.arm_cooldown(&next_provider.name);
+        let candidates = registry.fallback_candidates_after(0);
+        if candidates.is_empty() {
+            return None;
         }
-        Some(result)
+        let mut last_error = None;
+        for next_provider in candidates {
+            let Some(next_client) = registry.get_client(&next_provider.name) else {
+                continue;
+            };
+            let mut fallback_req = request.clone();
+            fallback_req.model.clone_from(&next_provider.model);
+            info!(
+                to_provider = %next_provider.name,
+                to_model = %next_provider.model,
+                reason = %failover.event_reason(),
+                "Provider failover — switching to fallback provider"
+            );
+            self.emit_fallback(&next_provider.model, &failover.event_reason());
+            let result = next_client.chat_streaming(fallback_req).await;
+            match result {
+                Ok(stream) => {
+                    registry.clear_failure_count(&next_provider.name);
+                    return Some(Ok(stream));
+                }
+                Err(error) => {
+                    registry.arm_cooldown(&next_provider.name);
+                    last_error = Some(error);
+                }
+            }
+        }
+        Some(Err(last_error.unwrap_or_else(|| {
+            Error::Agent("All configured fallback providers failed".to_string())
+        })))
     }
 
     /// Build the ordered list of models to try:
@@ -1075,6 +1100,79 @@ mod tests {
         let err = client.chat(make_request()).await.unwrap_err();
         // Should return the 503 error, NOT switch providers
         assert!(matches!(&err, Error::Provider { status: 503, .. }));
+    }
+
+    #[tokio::test]
+    async fn provider_fallback_walks_to_the_third_provider() {
+        use crate::agent::provider_registry::{ProviderEntry, ProviderRegistry};
+
+        let primary_client = MockModelClient::new("openai", vec![MockResult::AuthError]);
+        let second_client = MockModelClient::new("anthropic", vec![MockResult::AuthError]);
+        let third_client =
+            MockModelClient::new("google", vec![MockResult::Ok(chat_response("gemini"))]);
+        let mut clients = std::collections::HashMap::new();
+        clients.insert("openai".to_string(), primary_client);
+        clients.insert("anthropic".to_string(), second_client);
+        clients.insert("google".to_string(), third_client);
+        let chain = vec![
+            ProviderEntry {
+                name: "openai".into(),
+                model: "gpt-4".into(),
+            },
+            ProviderEntry {
+                name: "anthropic".into(),
+                model: "claude-3".into(),
+            },
+            ProviderEntry {
+                name: "google".into(),
+                model: "gemini".into(),
+            },
+        ];
+        let registry = Arc::new(ProviderRegistry::new(clients, chain));
+        let inner = MockModelClient::new("openai", vec![MockResult::AuthError]);
+        let client = FallbackModelClient::new(inner, "gpt-4".into(), vec![], true)
+            .with_provider_registry(registry);
+
+        let result = client.chat(make_request()).await.unwrap();
+        assert_eq!(result.model, "gemini");
+    }
+
+    #[tokio::test]
+    async fn provider_fallback_is_request_local() {
+        use crate::agent::provider_registry::{ProviderEntry, ProviderRegistry};
+
+        let primary_client = MockModelClient::new("openai", vec![MockResult::AuthError]);
+        let fallback_client =
+            MockModelClient::new("anthropic", vec![MockResult::Ok(chat_response("claude-3"))]);
+        let mut clients = std::collections::HashMap::new();
+        clients.insert("openai".to_string(), primary_client);
+        clients.insert("anthropic".to_string(), fallback_client);
+        let chain = vec![
+            ProviderEntry {
+                name: "openai".into(),
+                model: "gpt-4".into(),
+            },
+            ProviderEntry {
+                name: "anthropic".into(),
+                model: "claude-3".into(),
+            },
+        ];
+        let registry = Arc::new(ProviderRegistry::new(clients, chain));
+        let inner = MockModelClient::new(
+            "openai",
+            vec![
+                MockResult::AuthError,
+                MockResult::Ok(chat_response("primary")),
+            ],
+        );
+        let client = FallbackModelClient::new(inner, "gpt-4".into(), vec![], true)
+            .with_provider_registry(registry.clone());
+
+        let first = client.chat(make_request()).await.unwrap();
+        assert_eq!(first.model, "claude-3");
+        let second = client.chat(make_request()).await.unwrap();
+        assert_eq!(second.model, "primary");
+        assert_eq!(registry.active_provider().as_deref(), Some("openai"));
     }
 
     #[tokio::test]
