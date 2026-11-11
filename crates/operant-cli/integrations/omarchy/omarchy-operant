@@ -51,7 +51,20 @@ if [[ -n $prompt ]]; then
   if command -v wl-copy >/dev/null 2>&1; then
     printf '%s' "$prompt" | wl-copy
     if command -v omarchy-notification-send >/dev/null 2>&1; then
-      omarchy-notification-send -g 󰅇 "Operant" "The prompt is on the clipboard — paste it as the first message."
+      # Omarchy translates its own notifications, so the launcher asks it for
+      # the text the same way the packaged launcher does. The English string
+      # is the fallback for an Omarchy without that key.
+      title="The prompt is on the clipboard — paste it as the first message."
+      body=""
+      if command -v omarchy-i18n >/dev/null 2>&1; then
+        title=$(omarchy-i18n agents.promptOnClipboard "Operant" 2>/dev/null || echo "$title")
+        body=$(omarchy-i18n agents.promptOnClipboardBody 2>/dev/null || echo "")
+      fi
+      if [[ -n $body ]]; then
+        omarchy-notification-send -g 󰅇 "$title" "$body"
+      else
+        omarchy-notification-send -g 󰅇 "$title"
+      fi
     fi
   else
     echo "wl-copy is not available, so the prompt could not be put on the clipboard." >&2

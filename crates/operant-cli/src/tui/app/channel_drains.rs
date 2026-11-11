@@ -495,6 +495,17 @@ impl App {
         } else {
             format!("{}\n{}", req.description, req.danger_explanation)
         };
+        // Herdr's `blocked` means "an approval or question UI", and this
+        // approval prompt is the most common way an Operant session stops
+        // waiting on the operator. Reporting it is what makes the pane show
+        // up as needing attention rather than as a session that is merely
+        // busy. The reason carries the tool, so the Herdr UI can say what is
+        // being asked for.
+        //
+        // The tool name and the reason are moved into the dialog below, so
+        // they are captured before that happens.
+        let blocked_message = format!("{}: {reason}", req.tool_name);
+        self.report_herdr_blocked(&blocked_message);
         let dialog = match req.input_preview {
             Some(command) if SHELL_TOOLS.contains(&req.tool_name.as_str()) => {
                 let suggested_prefix = plain_command_prefix(&command);

@@ -107,6 +107,55 @@ fn home() -> PathBuf {
         .unwrap_or_default()
 }
 
+/// The placeholder in the shipped wrapper's agent-list header.
+///
+/// The list is FILLED IN AT INSTALL TIME from the packaged script's own list,
+/// so the wrapper never advertises a shorter agent list than Omarchy ships.
+/// A hand-copied list was already out of date (ten agents against the
+/// packaged script's twenty-four) and would have drifted again with the next
+/// Omarchy release.
+const AGENT_LIST_PLACEHOLDER: &str = "{{OMARCHY_AGENT_LIST}}";
+
+/// The packaged script whose agent list the wrapper mirrors.
+const PACKAGED_DEFAULT_AGENT: &str = "/usr/bin/omarchy-default-agent";
+
+/// The agent list the installed wrapper advertises.
+///
+/// The packaged list, plus every extra agent this installer registers.
+fn agent_list() -> String {
+    let mut agents = packaged_agent_list();
+    for extra in REGISTRABLE {
+        if !agents.iter().any(|agent| agent == extra) {
+            agents.push((*extra).to_string());
+        }
+    }
+    agents.join("|")
+}
+
+/// The agent names the packaged script advertises, parsed from its header.
+fn packaged_agent_list() -> Vec<String> {
+    let Ok(text) = std::fs::read_to_string(PACKAGED_DEFAULT_AGENT) else {
+        return Vec::new();
+    };
+    text.lines()
+        .find_map(|line| {
+            let rest = line.trim().strip_prefix("# omarchy:args=[")?;
+            let list = rest.strip_suffix(']')?;
+            Some(
+                list.split('|')
+                    .map(|agent| agent.trim().to_string())
+                    .filter(|agent| !agent.is_empty())
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .unwrap_or_default()
+}
+
+/// The wrapper as it should be installed, with the agent list filled in.
+fn wrapper_contents() -> String {
+    OMARCHY_DEFAULT_AGENT.replace(AGENT_LIST_PLACEHOLDER, &agent_list())
+}
+
 /// The install state of the Omarchy integration.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct OmarchyStatus {
@@ -126,8 +175,12 @@ pub struct OmarchyStatus {
 
 /// Inspect the installed integration.
 pub fn status() -> OmarchyStatus {
+    // The default-agent wrapper's expected content is the template with the
+    // agent list filled in, so "stale" means "the installed list no longer
+    // matches what Omarchy ships" — not "the template changed".
+    let expected_default_agent = wrapper_contents();
     let stale = [
-        ("omarchy-default-agent", OMARCHY_DEFAULT_AGENT),
+        ("omarchy-default-agent", expected_default_agent.as_str()),
         ("omarchy-agent", OMARCHY_AGENT),
     ]
     .iter()
@@ -179,9 +232,13 @@ pub fn install() -> Result<Vec<String>> {
         .with_context(|| format!("creating {}", extra_agents_dir().display()))?;
     for agent in REGISTRABLE {
         let launcher = format!("omarchy-{agent}");
-        if agent != &"operant" && !launcher_on_path(&launcher) {
-            // Only register an extra agent whose own launcher exists. jcode is
-            // registered because this machine already launches it.
+        // The hand-written wrapper this replaces tested the AGENT's own binary
+        // (`~/.local/bin/jcode`); the launcher is a separate file. Either one
+        // means the agent is installed, so either one earns the registration —
+        // and registering it gives the operator this integration's own
+        // "not installed" message instead of the packaged script's usage text.
+        let installed = launcher_on_path(&launcher) || launcher_on_path(agent);
+        if agent != &"operant" && !installed {
             continue;
         }
         let path = extra_agents_dir().join(agent);
@@ -214,7 +271,7 @@ pub fn install() -> Result<Vec<String>> {
 
     // 3. The wrappers and Operant's launcher.
     for (name, contents, executable) in [
-        ("omarchy-default-agent", OMARCHY_DEFAULT_AGENT, true),
+        ("omarchy-default-agent", wrapper_contents().as_str(), true),
         ("omarchy-agent", OMARCHY_AGENT, true),
         ("omarchy-operant", OMARCHY_OPERANT, true),
     ] {
@@ -378,6 +435,50 @@ mod tests {
         assert!(REGISTRABLE.contains(&"jcode"));
     }
 
+    /// The wrapper's advertised agent list must be the PACKAGED list plus the
+    /// extras — never a hand-copied subset.
+    ///
+    /// A hand-written list was already out of date: it named ten agents while
+    /// the packaged script named twenty-four. The header drives `omarchy
+    /// --help`, so a short list misinforms the operator about what they can
+    /// choose.
+    #[test]
+    fn the_advertised_agent_list_covers_the_packaged_agents_and_the_extras() {
+        let list = agent_list();
+        let packaged = packaged_agent_list();
+        if packaged.is_empty() {
+            // No packaged script on this machine (the test host may not have
+            // Omarchy); the extras still have to be advertised.
+            assert!(list.contains("operant"));
+            return;
+        }
+        for agent in &packaged {
+            assert!(
+                list.split('|').any(|entry| entry == agent),
+                "the packaged agent {agent} must stay advertised"
+            );
+        }
+        for extra in REGISTRABLE {
+            assert!(
+                list.split('|').any(|entry| entry == *extra),
+                "the extra agent {extra} must be advertised"
+            );
+        }
+    }
+
+    /// The placeholder must never reach the installed file: a literal
+    /// `{{OMARCHY_AGENT_LIST}}` in the header would be shown to the operator
+    /// by `omarchy --help`.
+    #[test]
+    fn the_installed_wrapper_has_no_placeholder_left() {
+        let contents = wrapper_contents();
+        assert!(
+            !contents.contains(AGENT_LIST_PLACEHOLDER),
+            "the agent list must be filled in"
+        );
+        assert!(contents.contains("# omarchy:args=["));
+    }
+
     #[test]
     fn the_wrappers_delegate_unknown_agents_to_the_packaged_script() {
         for wrapper in [OMARCHY_DEFAULT_AGENT, OMARCHY_AGENT] {
@@ -441,7 +542,10 @@ mod tests {
 
         let updated = std::fs::read_to_string(&path).expect("read");
         assert!(updated.contains(MENU_KEY), "the operant row is there");
-        assert!(updated.contains("style.bar.barber"), "the plugin row survives");
+        assert!(
+            updated.contains("style.bar.barber"),
+            "the plugin row survives"
+        );
         assert!(
             updated.contains("setup.default.agent.jcode"),
             "the jcode row survives — it is the agent the operator already used"
@@ -466,7 +570,10 @@ mod tests {
 
         ensure_menu_row_at(&path).expect("first insert");
         let after_first = std::fs::read_to_string(&path).expect("read");
-        assert_eq!(ensure_menu_row_at(&path).expect("second insert"), MenuRow::Present);
+        assert_eq!(
+            ensure_menu_row_at(&path).expect("second insert"),
+            MenuRow::Present
+        );
         let after_second = std::fs::read_to_string(&path).expect("read");
 
         assert_eq!(after_first, after_second, "the second run changed nothing");

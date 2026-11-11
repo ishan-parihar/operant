@@ -195,11 +195,36 @@ struct Shared {
 
 static REPORTER: OnceLock<Option<HerdrReporter>> = OnceLock::new();
 
+/// Whether the Herdr integration is switched on.
+///
+/// The default is on. The CLI sets this once from `[integrations.herdr]
+/// enabled`, which is read here — at the single point every caller funnels
+/// through — so a switch-off covers the reports AND the release. The release
+/// path used to bypass this and issued a `release-agent` for a pane the agent
+/// had never claimed, which is a pointless call and a confusing log line.
+static ENABLED: AtomicBool = AtomicBool::new(true);
+
+/// Turn the Herdr integration on or off.
+///
+/// Call this before the first [`reporter()`] call; the reporter is cached on
+/// first use, so a later call only changes what the release path does.
+pub fn set_enabled(enabled: bool) {
+    ENABLED.store(enabled, Ordering::SeqCst);
+}
+
+/// Whether the Herdr integration is currently switched on.
+pub fn enabled() -> bool {
+    ENABLED.load(Ordering::SeqCst)
+}
+
 /// The process-wide reporter, if this process runs inside a Herdr pane.
 ///
-/// Returns `None` outside Herdr. The first call reads the environment; later
-/// calls reuse the same handle.
+/// Returns `None` outside Herdr, and when the integration is switched off.
+/// The first call reads the environment; later calls reuse the same handle.
 pub fn reporter() -> Option<&'static HerdrReporter> {
+    if !enabled() {
+        return None;
+    }
     REPORTER
         .get_or_init(|| HerdrReporter::start(HerdrContext::from_env()))
         .as_ref()
@@ -300,8 +325,14 @@ impl HerdrReporter {
 
     /// Give the pane back to Herdr.
     ///
-    /// Called when Operant exits. Herdr clears the agent name, the state and
-    /// the resume command from the pane.
+    /// Called when Operant exits. Herdr clears the agent name and the state
+    /// from the pane.
+    ///
+    /// The resume command is NOT sent: Herdr can restore a session after a
+    /// server restart when the agent reports one, but Operant has no command
+    /// that reopens a specific session (`operant sessions resume` prints a
+    /// recap, it does not re-enter the conversation), so there is nothing
+    /// truthful to report.
     pub fn release(&self) {
         let seq = self.next_seq();
         self.enqueue(Command::Release { seq });
@@ -448,7 +479,24 @@ fn deliver(ctx: &HerdrContext, command: &Command) {
 ///
 /// A failure is ignored on purpose: a missing herdr binary, a stopped server
 /// or a rejected report must never affect the agent.
+///
+/// A NON-ZERO EXIT is retried once. Herdr's CLI exits non-zero when the server
+/// is momentarily busy or the socket is being replaced — a transient that a
+/// single dropped report would turn into a stale badge with no signal. The
+/// retry is bounded and silent: a report that fails twice is lost, which is
+/// the same outcome as before this change, and never affects the agent.
 fn run_with_timeout(ctx: &HerdrContext, args: &[String]) {
+    if run_once(ctx, args) {
+        return;
+    }
+    // A short pause before the retry: the busy window that caused the failure
+    // is usually shorter than the report timeout itself.
+    std::thread::sleep(Duration::from_millis(150));
+    let _ = run_once(ctx, args);
+}
+
+/// Run one herdr invocation. Returns whether it succeeded.
+fn run_once(ctx: &HerdrContext, args: &[String]) -> bool {
     let mut child = match std::process::Command::new(&ctx.bin_path)
         .args(args)
         .stdin(std::process::Stdio::null())
@@ -457,23 +505,23 @@ fn run_with_timeout(ctx: &HerdrContext, args: &[String]) {
         .spawn()
     {
         Ok(child) => child,
-        Err(_) => return,
+        Err(_) => return false,
     };
     let deadline = Instant::now() + REPORT_TIMEOUT;
     loop {
         match child.try_wait() {
-            Ok(Some(_)) => return,
+            Ok(Some(status)) => return status.success(),
             Ok(None) => {
                 if Instant::now() >= deadline {
                     let _ = child.kill();
                     let _ = child.wait();
-                    return;
+                    return false;
                 }
                 std::thread::sleep(Duration::from_millis(20));
             }
             Err(_) => {
                 let _ = child.kill();
-                return;
+                return false;
             }
         }
     }
@@ -508,6 +556,24 @@ mod tests {
         assert!(HerdrContext::from_env_with(env(&[("HERDR_PANE_ID", "w1:p1")])).is_none());
         assert!(HerdrContext::from_env_with(env(&[("HERDR_ENV", "0")])).is_none());
         assert!(HerdrContext::from_env_with(env(&[("HERDR_ENV", "1")])).is_none());
+    }
+
+    /// The switch must cover the RELEASE path too.
+    ///
+    /// The release used to bypass the switch and issue a `release-agent` for a
+    /// pane the agent had never claimed — a pointless call that also told
+    /// Herdr something untrue.
+    #[test]
+    fn the_switch_turns_the_whole_integration_off() {
+        let was = enabled();
+        set_enabled(false);
+        assert!(!enabled());
+        // No context is needed to prove the point: the switch is consulted
+        // before the environment, so a disabled integration never starts a
+        // reporter at all.
+        assert!(reporter().is_none());
+        set_enabled(was);
+        assert_eq!(enabled(), was);
     }
 
     #[test]

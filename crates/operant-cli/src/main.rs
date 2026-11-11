@@ -3231,6 +3231,11 @@ fn main() -> Result<()> {
     // warning prints once (BUGS CR-5).
     let loaded = load_app_config(cli.config.as_deref())?;
     operant_core::config::apply_startup_proxy(&loaded)?;
+    // The Herdr integration's switch lives in the config, and the reporter is
+    // a process-wide singleton, so the decision is made here — once, before
+    // anything can ask for a reporter. Everything downstream (the reports and
+    // the release) reads the same flag.
+    operant_core::herdr::set_enabled(loaded.config.integrations.herdr.enabled);
 
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()

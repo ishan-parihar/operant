@@ -217,6 +217,139 @@ fn write_assets(root: &Path) -> Result<()> {
     Ok(())
 }
 
+/// One agent Herdr currently knows about.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LiveAgent {
+    /// The name Herdr shows (`operant` when our reporter is active).
+    pub agent: String,
+    /// The lifecycle state Herdr holds.
+    pub status: String,
+    /// The pane the agent runs in.
+    pub pane_id: String,
+}
+
+/// A pane where Operant is running but Herdr labels it as something else.
+///
+/// This is the failure the operator actually reported: without a reporter,
+/// Herdr's screen-based detection matches the Pi manifest against Operant's
+/// TUI and the pane shows up as a Pi agent. Nothing is wrong with Operant and
+/// nothing is wrong with Herdr — the binary in that pane is simply older than
+/// the integration, or it was started outside the reporter's reach.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MislabelledPane {
+    pub pane_id: String,
+    /// The name Herdr shows for the pane.
+    pub label: String,
+}
+
+/// The agents Herdr currently lists.
+pub fn live_agents() -> Vec<LiveAgent> {
+    let Some(output) = run_herdr(&["agent", "list"]) else {
+        return Vec::new();
+    };
+    parse_live_agents(&output)
+}
+
+/// Parse the `herdr agent list` payload.
+///
+/// Split from [`live_agents`] so the shape can be tested without a Herdr
+/// server: the JSON is Herdr's, and a change in it would silently empty the
+/// doctor's live view otherwise.
+fn parse_live_agents(payload: &[u8]) -> Vec<LiveAgent> {
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(payload) else {
+        return Vec::new();
+    };
+    value
+        .get("result")
+        .and_then(|r| r.get("agents"))
+        .and_then(|a| a.as_array())
+        .map(|agents| {
+            agents
+                .iter()
+                .map(|agent| LiveAgent {
+                    agent: string_field(agent, "agent"),
+                    status: string_field(agent, "agent_status"),
+                    pane_id: string_field(agent, "pane_id"),
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The panes where Operant is running but Herdr calls it something else.
+///
+/// The scan is bounded: Herdr is asked about each pane's foreground process,
+/// which is one CLI call per pane, so only the first few panes are examined.
+/// A machine with more panes than that still gets the Operant panes reported
+/// (those need no scan), and the mislabel check degrades to "not checked".
+pub fn mislabelled_operant_panes() -> Vec<MislabelledPane> {
+    const SCAN_LIMIT: usize = 16;
+    let agents = live_agents();
+    let mut mislabelled = Vec::new();
+    for agent in agents
+        .iter()
+        .filter(|a| a.agent != "operant" && !a.pane_id.is_empty())
+        .take(SCAN_LIMIT)
+    {
+        if pane_runs_operant(&agent.pane_id) {
+            mislabelled.push(MislabelledPane {
+                pane_id: agent.pane_id.clone(),
+                label: agent.agent.clone(),
+            });
+        }
+    }
+    mislabelled
+}
+
+/// Whether the pane's foreground process is Operant.
+fn pane_runs_operant(pane_id: &str) -> bool {
+    let Some(output) = run_herdr(&["pane", "process-info", "--pane", pane_id]) else {
+        return false;
+    };
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(&output) else {
+        return false;
+    };
+    value
+        .get("result")
+        .and_then(|r| r.get("process_info"))
+        .and_then(|p| p.get("foreground_processes"))
+        .and_then(|p| p.as_array())
+        .map(|processes| {
+            processes.iter().any(|process| {
+                let name = string_field(process, "name");
+                let cmdline = string_field(process, "cmdline");
+                name == "operant"
+                    || cmdline
+                        .rsplit('/')
+                        .next()
+                        .map(|base| base == "operant")
+                        .unwrap_or(false)
+            })
+        })
+        .unwrap_or(false)
+}
+
+/// Run a herdr command and return its stdout.
+fn run_herdr(args: &[&str]) -> Option<Vec<u8>> {
+    let output = std::process::Command::new(herdr_bin())
+        .args(args)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    Some(output.stdout)
+}
+
+/// Read a string field, defaulting to empty.
+fn string_field(value: &serde_json::Value, key: &str) -> String {
+    value
+        .get(key)
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string()
+}
+
 /// Mark a file executable for its owner.
 ///
 /// Unix mode bits only; on a platform without them the scripts would not run
@@ -311,5 +444,30 @@ mod tests {
             MANIFEST.contains(&format!("id = \"{PLUGIN_ID}\"")),
             "the manifest id must match the id link/status look for"
         );
+    }
+
+    /// The doctor's live view is built from Herdr's JSON, so the shape of that
+    /// JSON is a contract. An empty parse would silently make the doctor
+    /// report "herdr sees nothing" on a machine where it sees plenty.
+    #[test]
+    fn the_live_agent_view_is_parsed_from_herdr_payloads() {
+        let payload = br#"{"id":"cli:agent:list","result":{"type":"agent_list","agents":[
+            {"agent":"operant","agent_status":"working","pane_id":"w1:p1"},
+            {"agent":"jcode","agent_status":"idle","pane_id":"w2:p2"}]}}"#;
+        let agents = parse_live_agents(payload);
+        assert_eq!(agents.len(), 2);
+        assert_eq!(agents[0].agent, "operant");
+        assert_eq!(agents[0].status, "working");
+        assert_eq!(agents[0].pane_id, "w1:p1");
+        assert_eq!(agents[1].agent, "jcode");
+    }
+
+    /// A payload Herdr changes shape on must not read as "no agents at all"
+    /// with a panic — it reads as an empty view, which is what the doctor
+    /// reports as "herdr sees nothing".
+    #[test]
+    fn an_unexpected_payload_reads_as_an_empty_view() {
+        assert!(parse_live_agents(b"not json").is_empty());
+        assert!(parse_live_agents(br#"{"result":{}}"#).is_empty());
     }
 }

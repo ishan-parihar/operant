@@ -107,6 +107,53 @@ fn check_herdr(issues: &mut Vec<String>, manual_issues: &mut Vec<String>) {
     } else {
         check_ok("herdr", "the Operant plugin is installed and registered");
     }
+
+    // WHAT HERDR SEES RIGHT NOW.
+    //
+    // This is the question the operator asked ("can herdr see my operant
+    // sessions?"), and the plugin being installed does not answer it: the
+    // reporter only runs inside a pane, so the live view is the only evidence
+    // that matters.
+    let live = herdr_plugin::live_agents();
+    let operant_panes: Vec<&str> = live
+        .iter()
+        .filter(|agent| agent.agent == "operant")
+        .map(|agent| agent.pane_id.as_str())
+        .collect();
+    if operant_panes.is_empty() {
+        check_info(
+            "herdr sees no operant agent right now (expected until an Operant session runs in a Herdr pane)",
+        );
+    } else {
+        check_ok(
+            "herdr",
+            &format!(
+                "herdr sees {} operant agent(s): {}",
+                operant_panes.len(),
+                operant_panes.join(", ")
+            ),
+        );
+    }
+
+    // THE MISLABEL.
+    //
+    // Without a reporter, Herdr's screen-based detection matches the Pi
+    // manifest against Operant's TUI, so the pane shows up as a Pi agent. The
+    // pane is running Operant and Herdr is calling it something else — that is
+    // a fault, not a preference, and it is the one the operator reported.
+    for pane in &herdr_plugin::mislabelled_operant_panes() {
+        check_fail(
+            "herdr",
+            &format!(
+                "herdr calls pane {} '{}' but operant is running in it — the binary in that pane predates the integration; restart it",
+                pane.pane_id, pane.label
+            ),
+        );
+        issues.push(format!(
+            "herdr: pane {} runs operant but herdr labels it '{}'",
+            pane.pane_id, pane.label
+        ));
+    }
 }
 
 /// The Omarchy integration.
@@ -120,6 +167,22 @@ fn check_omarchy(issues: &mut Vec<String>, manual_issues: &mut Vec<String>) {
         return;
     }
     check_ok("omarchy", "the packaged agent launcher is present");
+
+    // The menu row launches `operant` from PATH. A row that cannot launch is
+    // worse than no row: the operator picks the agent and nothing happens.
+    match which("operant") {
+        Some(path) => check_ok(
+            "omarchy",
+            &format!("operant is on PATH ({})", path.display()),
+        ),
+        None => {
+            check_fail(
+                "omarchy",
+                "operant is not on PATH — the menu row would fail to launch it",
+            );
+            issues.push("omarchy: operant is not on PATH".to_string());
+        }
+    }
 
     let status = omarchy_agent::status();
 

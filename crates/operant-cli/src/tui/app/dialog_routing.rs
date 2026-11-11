@@ -153,6 +153,10 @@ impl App {
             let _ = tx.send(response);
         }
         self.permission_request = None;
+        // The approval is answered, so the session is no longer waiting on the
+        // operator. (If another request was queued, `open_next_permission_
+        // request` below re-reports the blocked state.)
+        self.report_herdr_unblocked();
         // The dialog was the blocker; the turn goes back to the model unless
         // it was cancelled while the dialog was open.
         self.turn_state = if self.is_streaming {
