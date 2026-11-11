@@ -85,24 +85,14 @@ impl App {
         let Some(reporter) = self.herdr_reporter() else {
             return;
         };
-        let state = match event {
-            AgentEvent::Thinking { .. }
-            | AgentEvent::Reasoning { .. }
-            | AgentEvent::Content { .. }
-            | AgentEvent::ToolStart { .. }
-            | AgentEvent::ToolComplete { .. }
-            | AgentEvent::ToolError { .. }
-            | AgentEvent::IterationComplete { .. } => AgentState::Working,
-            AgentEvent::Done { .. } | AgentEvent::Error { .. } => AgentState::Idle,
-            // The turn's boundaries: the session id is minted on the first
-            // turn and can change on a retarget, and both happen here.
-            AgentEvent::TurnStarted { .. } => {
-                self.sync_herdr_session();
-                AgentState::Working
-            }
-            _ => return,
-        };
-        reporter.report_state(state);
+        // The turn's boundaries: the session id is minted on the first turn and
+        // can change on a retarget, and both happen here.
+        if matches!(event, AgentEvent::TurnStarted { .. }) {
+            self.sync_herdr_session();
+        }
+        if let Some(state) = herdr_state_for_event(event) {
+            reporter.report_state(state);
+        }
     }
 
     /// Report that Operant is waiting on the operator to answer a question.
@@ -141,6 +131,32 @@ impl App {
     }
 }
 
+/// The Herdr lifecycle state an agent event maps to, if any.
+///
+/// A pure function on purpose: this mapping is the whole contract between
+/// what Operant is doing and what Herdr shows, and it has to be provable
+/// without a model, a pane, or a Herdr server. An event that says nothing
+/// about the turn's progress (a token count, a cost, a rate-limit notice)
+/// maps to `None` — no report, so the state Herdr shows stays the last one
+/// that was true.
+fn herdr_state_for_event(event: &AgentEvent) -> Option<AgentState> {
+    match event {
+        // The agent produced something: it is working.
+        AgentEvent::Thinking { .. }
+        | AgentEvent::Reasoning { .. }
+        | AgentEvent::Content { .. }
+        | AgentEvent::ToolStart { .. }
+        | AgentEvent::ToolComplete { .. }
+        | AgentEvent::ToolError { .. }
+        | AgentEvent::IterationComplete { .. }
+        | AgentEvent::TurnStarted { .. } => Some(AgentState::Working),
+        // The turn ended: a final answer, or an error. Either way Operant is
+        // ready for the next prompt.
+        AgentEvent::Done { .. } | AgentEvent::Error { .. } => Some(AgentState::Idle),
+        _ => None,
+    }
+}
+
 /// Give the pane back to Herdr.
 ///
 /// Herdr clears the agent name, the state and the resume command from the
@@ -151,5 +167,90 @@ impl App {
 pub(crate) fn release_herdr_agent() {
     if let Some(reporter) = operant_core::herdr::reporter() {
         reporter.release();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use operant_core::agent::AgentEvent;
+
+    /// The events that mean "the agent is doing something".
+    #[test]
+    fn production_events_mean_working() {
+        for event in [
+            AgentEvent::Thinking {
+                content: String::new(),
+            },
+            AgentEvent::Reasoning {
+                text: String::new(),
+            },
+            AgentEvent::Content {
+                text: String::new(),
+            },
+            AgentEvent::ToolStart {
+                tool_call_id: "t1".to_string(),
+                name: "read".to_string(),
+                arguments: "{}".to_string(),
+            },
+            AgentEvent::ToolComplete {
+                result: operant_core::tools::ToolResult::success("t1", "ok"),
+            },
+            AgentEvent::ToolError {
+                tool_call_id: "t1".to_string(),
+                name: "read".to_string(),
+                error: "boom".to_string(),
+            },
+            AgentEvent::IterationComplete { iteration: 1 },
+            AgentEvent::TurnStarted { turn_id: 1 },
+        ] {
+            assert_eq!(
+                herdr_state_for_event(&event),
+                Some(AgentState::Working),
+                "{event:?} must mean working"
+            );
+        }
+    }
+
+    /// The events that end the turn.
+    #[test]
+    fn the_end_of_a_turn_means_idle() {
+        // A finished tool is NOT the end of the turn — the model usually runs
+        // another iteration after it — so the completion event is `working`
+        // while only `Done` and `Error` are `idle`.
+        assert_eq!(
+            herdr_state_for_event(&AgentEvent::IterationComplete { iteration: 2 }),
+            Some(AgentState::Working)
+        );
+
+        let done = AgentEvent::Done {
+            message: operant_core::client::Message::assistant("done"),
+            reason: operant_core::agent::TurnExitReason::TextResponse,
+        };
+        assert_eq!(herdr_state_for_event(&done), Some(AgentState::Idle));
+
+        let error = AgentEvent::Error {
+            error: "the provider is unreachable".to_string(),
+        };
+        assert_eq!(herdr_state_for_event(&error), Some(AgentState::Idle));
+    }
+
+    /// An event that says nothing about progress must not change the state.
+    #[test]
+    fn bookkeeping_events_report_nothing() {
+        assert_eq!(
+            herdr_state_for_event(&AgentEvent::Usage {
+                input_tokens: 1,
+                output_tokens: 2,
+                total_tokens: 3,
+            }),
+            None
+        );
+        assert_eq!(
+            herdr_state_for_event(&AgentEvent::RateLimitNotice {
+                retry_after_secs: Some(30)
+            }),
+            None
+        );
     }
 }

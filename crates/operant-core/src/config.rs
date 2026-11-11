@@ -339,19 +339,11 @@ impl Default for SocializationSettings {
 /// Every integration here is optional and off the critical path: a machine
 /// without the counterpart program is a supported machine, and the section
 /// only decides whether Operant PLUGS IN when it is there.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct IntegrationsSettings {
     /// The Herdr pane integration (`[integrations.herdr]`).
     #[serde(default)]
     pub herdr: HerdrSettings,
-}
-
-impl Default for IntegrationsSettings {
-    fn default() -> Self {
-        Self {
-            herdr: HerdrSettings::default(),
-        }
-    }
 }
 
 /// The Herdr integration (`[integrations.herdr]`).
