@@ -449,8 +449,42 @@ fn cmd_status(config: &AppConfig, deep: bool, json: bool) -> Result<()> {
     Ok(())
 }
 
+/// The systemd unit text for the gateway service.
+///
+/// ONE owner for this text. `operant service install` delegates here
+/// instead of writing its own unit: the two surfaces used to drift, and
+/// the drift shipped a unit whose `ExecStart` named a `daemon` subcommand
+/// the CLI never had — a service that could not start, under
+/// `Restart=on-failure` (RT-507).
+pub(crate) fn systemd_unit_content(bin: &str, workdir_line: &str) -> String {
+    format!(
+        r#"[Unit]
+Description=Operant Multi-Platform Gateway
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecStart={bin} gateway run
+{workdir}Restart=always
+RestartSec=5
+TimeoutStopSec=90
+KillMode=mixed
+KillSignal=SIGTERM
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target
+"#,
+        bin = bin,
+        workdir = workdir_line,
+    )
+}
+
 /// Install systemd service for automatic gateway startup.
-fn cmd_install(_config: &AppConfig, force: bool, system: bool) -> Result<()> {
+pub(crate) fn cmd_install(_config: &AppConfig, force: bool, system: bool) -> Result<()> {
     let operant_bin = std::env::current_exe().context("Failed to determine operant binary path")?;
 
     let (unit_dir, scope_label) = if system {
@@ -497,30 +531,7 @@ fn cmd_install(_config: &AppConfig, force: bool, system: bool) -> Result<()> {
         )
     };
 
-    let unit_content = format!(
-        r#"[Unit]
-Description=Operant Multi-Platform Gateway
-After=network-online.target
-Wants=network-online.target
-StartLimitIntervalSec=0
-
-[Service]
-Type=simple
-ExecStart={bin} gateway run
-{workdir}Restart=always
-RestartSec=5
-TimeoutStopSec=90
-KillMode=mixed
-KillSignal=SIGTERM
-StandardOutput=journal
-StandardError=journal
-
-[Install]
-WantedBy=default.target
-"#,
-        bin = operant_bin.display(),
-        workdir = workdir_line,
-    );
+    let unit_content = systemd_unit_content(&operant_bin.display().to_string(), &workdir_line);
 
     std::fs::write(&unit_path, unit_content.as_bytes())
         .with_context(|| format!("Failed to write {}", unit_path.display()))?;
@@ -843,11 +854,11 @@ fn cmd_migrate_legacy() -> Result<()> {
         .join("systemd")
         .join("user");
 
-    let legacy_names = [
-        "operant.service",
-        "operant-agent.service",
-        "operant-gateway.service",
-    ];
+    // `operant-gateway.service` is NOT legacy: it is the unit
+    // `operant gateway install` writes and this command's own sibling
+    // `cmd_install` owns. Listing it here told the operator to `rm` the
+    // live unit (RT-507).
+    let legacy_names = ["operant.service", "operant-agent.service"];
     let mut found = false;
 
     for name in &legacy_names {

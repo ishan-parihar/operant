@@ -29,16 +29,24 @@ pub enum ServiceSubcommand {
     },
 }
 
-const SERVICE_NAME: &str = "operant";
+/// The systemd unit this surface manages.
+///
+/// Operant has ONE daemon — the gateway daemon. It used to be two:
+/// `operant service install` wrote its own `operant.service` whose
+/// `ExecStart` named a `daemon` subcommand the CLI never had, so the unit
+/// could not start and `Restart=on-failure` turned it into an endless
+/// restart loop (RT-507). This surface now manages the unit the gateway
+/// installer writes.
+const SERVICE_NAME: &str = "operant-gateway";
 
 pub fn handle_service_command(
-    _config: &AppConfig,
+    config: &AppConfig,
     cmd: ServiceSubcommand,
     json: bool,
 ) -> Result<()> {
     match cmd {
         ServiceSubcommand::Install => {
-            let result = install_service();
+            let result = install_service(config);
             if json {
                 println!(
                     "{}",
@@ -161,51 +169,52 @@ pub fn handle_service_command(
     }
 }
 
-/// Install systemd/launchd service
-fn install_service() -> Result<String> {
-    let exe = std::env::current_exe()?;
-
+/// Install the daemon service unit.
+///
+/// Delegates to the gateway installer, which is the ONE owner of the unit
+/// text. The unit this surface used to write (`operant.service`, with
+/// `ExecStart=<bin> daemon`) could never start: the CLI has no `daemon`
+/// subcommand, and the unit's `Restart=on-failure` + `RestartSec=5` turned
+/// every `systemctl --user start operant` into an endless restart loop
+/// (RT-507).
+fn install_service(_config: &AppConfig) -> Result<String> {
     #[cfg(target_os = "linux")]
     {
-        let service_content = format!(
-            r#"[Unit]
-Description=Operant AI Agent Runtime
-After=network.target
-
-[Service]
-Type=simple
-ExecStart={} daemon
-Restart=on-failure
-RestartSec=5
-Environment=RUST_LOG=info
-
-[Install]
-WantedBy=default.target
-"#,
-            exe.display()
-        );
-
-        let service_dir = dirs::home_dir()
-            .unwrap_or_default()
-            .join(".config")
-            .join("systemd")
-            .join("user");
-        std::fs::create_dir_all(&service_dir)?;
-        let service_file = service_dir.join("operant.service");
-        std::fs::write(&service_file, &service_content)?;
-
-        // Reload systemd
-        let _ = std::process::Command::new("systemctl")
-            .args(["--user", "daemon-reload"])
-            .status();
-
-        Ok(format!("Service installed to {}", service_file.display()))
+        crate::cmd_gateway::cmd_install(_config, false, false)?;
+        Ok(format!("Service installed (unit: {SERVICE_NAME})"))
     }
 
     #[cfg(target_os = "macos")]
     {
-        let plist_content = format!(
-            r#"<?xml version="1.0" encoding="UTF-8"?>
+        let exe = std::env::current_exe()?;
+        let plist = launchd_plist_content(&exe.display().to_string());
+        let launch_dir = dirs::home_dir()
+            .unwrap_or_default()
+            .join("Library")
+            .join("LaunchAgents");
+        std::fs::create_dir_all(&launch_dir)?;
+        let plist_file = launch_dir.join("com.operant.agent.plist");
+        std::fs::write(&plist_file, plist)?;
+        Ok(format!("Service installed to {}", plist_file.display()))
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        Err(anyhow::anyhow!(
+            "Service installation not supported on this platform. Run `operant gateway run` directly."
+        ))
+    }
+}
+
+/// The launchd agent that starts the gateway on macOS.
+///
+/// `gateway run` — NOT `daemon`, which the CLI has never had (RT-507).
+/// Compiled for macOS and for the test that pins the argument, so the test
+/// runs on every platform without carrying a dead function on Linux.
+#[cfg(any(target_os = "macos", test))]
+fn launchd_plist_content(exe: &str) -> String {
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
@@ -214,7 +223,8 @@ WantedBy=default.target
     <key>ProgramArguments</key>
     <array>
         <string>{}</string>
-        <string>daemon</string>
+        <string>gateway</string>
+        <string>run</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
@@ -223,34 +233,15 @@ WantedBy=default.target
 </dict>
 </plist>
 "#,
-            exe.display()
-        );
-
-        let launch_dir = dirs::home_dir()
-            .unwrap_or_default()
-            .join("Library")
-            .join("LaunchAgents");
-        std::fs::create_dir_all(&launch_dir)?;
-        let plist_file = launch_dir.join("com.operant.agent.plist");
-        std::fs::write(&plist_file, &plist_content)?;
-
-        Ok(format!("Service installed to {}", plist_file.display()))
-    }
-
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    {
-        Ok(
-            "Service installation not supported on this platform. Run `operant daemon` directly."
-                .to_string(),
-        )
-    }
+        exe
+    )
 }
 
 fn start_service() -> Result<String> {
     #[cfg(target_os = "linux")]
     {
         let status = std::process::Command::new("systemctl")
-            .args(["--user", "start", "operant"])
+            .args(["--user", "start", SERVICE_NAME])
             .status()?;
         if status.success() {
             Ok("Service started".to_string())
@@ -274,7 +265,7 @@ fn start_service() -> Result<String> {
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         Err(anyhow::anyhow!(
-            "Service management not supported. Run `operant daemon` directly."
+            "Service management not supported. Run `operant gateway run` directly."
         ))
     }
 }
@@ -283,7 +274,7 @@ fn stop_service() -> Result<String> {
     #[cfg(target_os = "linux")]
     {
         let status = std::process::Command::new("systemctl")
-            .args(["--user", "stop", "operant"])
+            .args(["--user", "stop", SERVICE_NAME])
             .status()?;
         if status.success() {
             Ok("Service stopped".to_string())
@@ -316,7 +307,7 @@ fn check_service_status() -> (String, Option<u32>) {
     #[cfg(target_os = "linux")]
     {
         let output = std::process::Command::new("systemctl")
-            .args(["--user", "status", "operant"])
+            .args(["--user", "status", SERVICE_NAME])
             .output();
         match output {
             Ok(o) => {
@@ -365,14 +356,22 @@ fn uninstall_service() -> Result<String> {
     #[cfg(target_os = "linux")]
     {
         let _ = stop_service();
-        let service_file = dirs::home_dir()
+        let user_unit_dir = dirs::home_dir()
             .unwrap_or_default()
             .join(".config")
             .join("systemd")
-            .join("user")
-            .join("operant.service");
+            .join("user");
+        let service_file = user_unit_dir.join(format!("{SERVICE_NAME}.service"));
         if service_file.exists() {
             std::fs::remove_file(&service_file)?;
+        }
+        // The unit the old installer wrote (`operant.service`, whose
+        // `ExecStart` named a subcommand that does not exist) is removed
+        // too: an operator who ran it is left with a service that restarts
+        // forever (RT-507).
+        let legacy_file = user_unit_dir.join("operant.service");
+        if legacy_file.exists() {
+            std::fs::remove_file(&legacy_file)?;
         }
         let _ = std::process::Command::new("systemctl")
             .args(["--user", "daemon-reload"])
@@ -397,5 +396,58 @@ fn uninstall_service() -> Result<String> {
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         Ok("Service management not supported on this platform.".to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    /// The subcommand the installed unit starts, and the CLI subcommands
+    /// that exist. The old unit named `daemon`, which the CLI has never
+    /// had — the unit could not start (RT-507).
+    fn unit_subcommand(unit: &str) -> String {
+        let exec = unit
+            .lines()
+            .find(|l| l.starts_with("ExecStart="))
+            .expect("the unit has an ExecStart line");
+        let argv: Vec<&str> = exec
+            .trim_start_matches("ExecStart=")
+            .split_whitespace()
+            .collect();
+        argv[1].to_string()
+    }
+
+    #[test]
+    fn the_installed_unit_names_a_subcommand_the_cli_actually_has() {
+        let unit = crate::cmd_gateway::systemd_unit_content("/usr/bin/operant", "");
+        let sub = unit_subcommand(&unit);
+        let names: Vec<String> = crate::Cli::command()
+            .get_subcommands()
+            .map(|s| s.get_name().to_string())
+            .collect();
+        assert!(
+            names.iter().any(|n| n == &sub),
+            "the installed unit starts `{sub}`, which is not a CLI subcommand ({names:?})"
+        );
+    }
+
+    #[test]
+    fn the_launchd_agent_starts_the_gateway_subcommand() {
+        let plist = launchd_plist_content("/usr/local/bin/operant");
+        assert!(
+            plist.contains("<string>gateway</string>"),
+            "the launchd agent must run the gateway subcommand: {plist}"
+        );
+        assert!(
+            !plist.contains("<string>daemon</string>"),
+            "the launchd agent must not name the `daemon` subcommand the CLI never had"
+        );
+    }
+
+    #[test]
+    fn the_service_surface_manages_the_gateway_unit() {
+        assert_eq!(SERVICE_NAME, "operant-gateway");
     }
 }

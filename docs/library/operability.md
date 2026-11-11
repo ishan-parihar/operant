@@ -58,8 +58,19 @@ process swapping its own inode is the deploy protocol's job
 
 ## Service install (`operant service install`)
 
-`cmd_service.rs` — the systemd unit for the gateway daemon, with
-`--start`, `--stop`, `--status`, `--uninstall`.
+`cmd_service.rs` — the subcommands `install`, `start`, `stop`, `restart`,
+`status`, `uninstall` and `logs`.
+
+Operant has ONE daemon: the gateway daemon. This surface manages the unit
+`operant gateway install` writes — `operant-gateway.service`, whose
+`ExecStart` is `<bin> gateway run` — and `install` DELEGATES to that
+installer, so the unit text has one owner. It used to write a second unit
+of its own, `operant.service`, whose `ExecStart` named a `daemon`
+subcommand the CLI has never had: the unit could not start, and under
+`Restart=on-failure` it restarted forever (RT-507, closed iter-2101). The
+macOS launchd agent runs `gateway run` for the same reason.
+`operant gateway install|uninstall|start|stop|restart|status` is the
+gateway's own spelling of the same operations.
 
 ## Backup / import / uninstall
 
