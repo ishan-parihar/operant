@@ -2814,6 +2814,50 @@ mod tests {
         );
     }
 
+    /// The streaming path has the SAME two-overflow contract as the
+    /// non-streaming path: the first provider overflow is retried once after
+    /// compression; the second fails typed even when compression reduced the
+    /// foldable history.
+    #[tokio::test]
+    async fn a_second_streaming_overflow_fails_typed_even_after_compression_reduces_history() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db = Arc::new(
+            Database::init(dir.path().join("stream-overflow-reduced.sqlite")).expect("db"),
+        );
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let agent = OperantAgent::new(
+            AgentConfig {
+                context_window: 200_000,
+                stream: true,
+                ..AgentConfig::default()
+            },
+            Box::new(OverflowingClient {
+                calls: calls.clone(),
+            }),
+            ToolRegistry::new(Duration::from_secs(1)),
+            db,
+        );
+
+        for i in 0..20 {
+            agent
+                .add_message(Message::new(
+                    Role::User,
+                    format!("old {i} {}", "x".repeat(8_000)),
+                ))
+                .await;
+        }
+        let result = agent.run("current turn".to_string()).await;
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "the first streaming overflow is retried once after compression"
+        );
+        assert!(
+            matches!(result, Err(Error::ContextExhausted { .. })),
+            "a second streaming overflow must fail typed even if compression reduced the foldable history"
+        );
+    }
+
     #[tokio::test]
     async fn an_overflow_uses_the_provider_stated_limit() {
         let (agent, _dir) = bust_test_agent(10_000);

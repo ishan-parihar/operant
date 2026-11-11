@@ -4,13 +4,13 @@
            Settings — Operant                           Esc to close
            Type to search settings...
  operant
- operant     ► Max Tokens                              0
+ operant     ► Context window                          128000
  /model        Output Style                            default
  v0.3.0        Reduce motion                           false
  /login        Show current directory                  true
  ● anthr       Show git branch                         true
  ~
-           Maximum tokens per response.
+           Total prompt and response capacity in tokens.
 
 
 › Ask op

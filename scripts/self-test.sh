@@ -32,7 +32,11 @@ unset GOOGLE_API_KEY OPENROUTER_API_KEY GROQ_API_KEY XAI_API_KEY
 # It shells out to `gh`, which resolves through the process's proxy
 # variables, and it runs in the background — so it lands in whatever test
 # is running at the time. (iter-1132)
-export OPERANT_NO_AUTO_UPDATE=1
+#
+# Do NOT export this for the whole script: the production-build contract test
+# deliberately observes the switch's effect and expects the variable absent.
+# The TUI corpus pins it in each child's own environment instead.
+unset OPERANT_NO_AUTO_UPDATE
 
 echo "=== Hermes-RS Self-Test ==="
 echo ""

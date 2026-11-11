@@ -103,6 +103,43 @@ BASELINE = {
         "n/a",
         "already an `#[expect(dead_code, reason = \"schema-only: the stub never reads the prompt\")]`",
     ),
+    # ---- existing #[expect] sites added after the baseline snapshot -------
+    "operant-cli/src/tui/keybindings.rs::dead_code::MoveCursorLeft": (
+        "n/a",
+        "already an `#[expect(dead_code, reason = ...)]` for the unbound cursor action",
+    ),
+    "operant-cli/src/tui/keybindings.rs::dead_code::MoveCursorRight": (
+        "n/a",
+        "already an `#[expect(dead_code, reason = ...)]` for the unbound cursor action",
+    ),
+    "operant-cli/src/tui/operant_app/config_shim.rs::dead_code::cycle": (
+        "n/a",
+        "already an `#[expect(dead_code, reason = ...)]` for the jcode parity path",
+    ),
+    "operant-cli/src/tui/operant_app/perf.rs::dead_code::idle_animation_enabled": (
+        "n/a",
+        "already an `#[expect(dead_code, reason = ...)]` for the retired animation restore path",
+    ),
+    "operant-cli/src/tui/operant_app/tui_state.rs::dead_code::TuiState": (
+        "n/a",
+        "already an `#[expect(dead_code, reason = ...)]` for retired trait accessors",
+    ),
+    "operant-cli/src/tui/operant_ui/mod.rs::dead_code::raw_plain_line_count": (
+        "n/a",
+        "already an `#[expect(dead_code, reason = ...)]` for the pending viewport helper",
+    ),
+    "operant-cli/src/tui/operant_ui/mod.rs::dead_code::const": (
+        "n/a",
+        "already an `#[expect(dead_code, reason = ...)]` for the retired animation restore path",
+    ),
+    "operant-cli/src/tui/operant_ui/mod.rs::dead_code::deep_idle_dormant": (
+        "n/a",
+        "already an `#[expect(dead_code, reason = ...)]` for the retired animation restore path",
+    ),
+    "operant-cli/src/tui/operant_ui/mod.rs::dead_code::has_started_conversation": (
+        "n/a",
+        "already an `#[expect(dead_code, reason = ...)]` for the retired animation restore path",
+    ),
     # ---- conversions landed in iter-1163 -----------------------------------
     "operant-core/src/tools/skills_tool.rs::dead_code::USAGE_TELEMETRY_LOCK": (
         "n/a",

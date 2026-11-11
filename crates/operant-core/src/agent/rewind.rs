@@ -231,7 +231,7 @@ impl OperantAgent {
     /// cross-session rewind that truncates a stranger's history. This
     /// filter keeps only marks whose recorded prompt text still appears
     /// as a user message in the loaded conversation (the same
-    /// relocate-by-text rule [`Self::rewind_cut_point`] applies to stale
+    /// relocate-by-text rule `rewind_cut_point` applies to stale
     /// marks), so the n-th result is always a turn of THIS conversation.
     ///
     /// A shared-agent nuance: two chats that sent the same prompt text

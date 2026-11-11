@@ -4,7 +4,7 @@
                Settings — Operant                                                           Esc to close
                Type to search settings...
 
-                 ► Max Tokens                              0
+                 ► Context window                          128000
                    Output Style                            default
                    Reduce motion                           false
                    Show current directory                  true
@@ -18,7 +18,7 @@
  /login to a
  ● anthropic
  ~
-               Maximum tokens per response.
+               Total prompt and response capacity in tokens.
 
 
 › Ask operan

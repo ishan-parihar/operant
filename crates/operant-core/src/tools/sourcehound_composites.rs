@@ -518,7 +518,7 @@ impl OperantTool for SourcehoundCompositeTool {
 ///
 /// Returns the number registered, so the caller (and a test) can assert the
 /// registration happened instead of trusting a silent loop. Each spec is its
-/// own allocation (see [`spec`]), so no two tools share a contract.
+/// own allocation (see `spec`), so no two tools share a contract.
 pub async fn register_composites(registry: &crate::tools::ToolRegistry) -> usize {
     let mut count = 0;
     for spec in composite_specs() {
