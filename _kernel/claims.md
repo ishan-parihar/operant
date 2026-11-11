@@ -741,3 +741,8 @@ NOT supported (named, with the reason):
 - RT-493 hermetic realtime matrix: the self-test drives HTTP, SSE, a real verification tool turn, and MCP stdio under a throwaway home; the real operator configuration hash is unchanged, and removing the tool/MCP assertions makes the smoke fail.
 
 - The full workspace test suite is green after iter-2081 — [V] — `scripts/build.sh --offline test --workspace --no-fail-fast` exited 0; the full log contains the operant-core, operant-cli, harness, OS, plugins, config, API, and doctest targets — unit 8.
+
+- The strict workspace clippy gate is green — [V] — `scripts/build.sh --offline clippy --workspace --all-targets --all-features -- -D warnings` exited 0 — unit 8.
+- The release artifact was built at pushed commit `64c626d1`, its mtime postdates that commit, and its SHA-256 matches the deployed `~/.local/bin/operant` — [V] — `scripts/build.sh --offline --release`, `sha256sum`, and the deployment copy — unit 8.
+- The deployed gateway is active with `NRestarts=0`, Telegram polling started, and the deployed binary completed a credentialed live provider turn returning `DEPLOYED-LIVE-OK` under a throwaway runtime home — [V] — `systemctl --user show operant-gateway`, journalctl, and the live `operant run` probe — unit 8.
+- `cargo fmt --all -- --check` has three pre-existing upstream failures (`advisor.rs`, `stream_replay_tool_rows.rs`, `tool_failure_logging.rs`); the files are byte-identical to `origin/main` and untouched by this slice — [V] — per-file `rustfmt --check` and `git show origin/main:<path>` — unit 8.

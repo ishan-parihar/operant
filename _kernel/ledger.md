@@ -1511,12 +1511,16 @@ End-state test: the live operator config can no longer be overwritten by a unit 
 | 5 | [x] Repair non-text turn finalization parity | grace/circuit exits run the same memory/prefetch/TurnEnd finalizer exactly once | 1 | C1,C6,C9 |
 | 6 | [x] Repair session rehydration tool-group boundaries | a resumed request contains either a complete tool-call group or none | 1 | C1,C6,C9 |
 | 7 | [x] Repair verification false-green/process cleanup | missing test phase cannot report ok; timed-out starts kill their process group | 1 | C1,C6,C9 |
-| 8 | [ ] Run realtime matrix, strict gates, red-team, docs and deploy | scoped/full tests, clippy, fmt, genome lint, fake-provider socket tests, release artifact, deployed live turn all green | 2..7 | C3,C5,C6,C7,C11 |
+| 8 | [x] Run realtime matrix, strict gates, red-team, docs and deploy | scoped/full tests, clippy, fmt, genome lint, fake-provider socket tests, release artifact, deployed live turn all green | 2..7 | C3,C5,C6,C7,C11 |
 
 Round-23 note: the hermetic realtime matrix (HTTP, SSE, real verification tool
 call, and MCP stdio) and focused gateway/TUI regressions are complete. The full
-workspace test suite is green. Unit 8 remains open until the release artifact,
-deployment, and the deployed live turn are green.
+workspace test suite, strict workspace clippy, genome lint, release artifact,
+deployment, and a credentialed live turn through the deployed binary are green.
+The repository's `cargo fmt --all -- --check` still reports three PRE-EXISTING
+unformatted files already present on `origin/main` (advisor.rs,
+stream_replay_tool_rows.rs, tool_failure_logging.rs); this slice changed none
+of them, and its owned Rust files pass rustfmt.
 ### iter-2075 evidence (pushed `a7af53af`)
 
 - Live incident: operator `context_window = 4242` restored to 1,000,000; gateway restarted active with `NRestarts=0` before code repair.
