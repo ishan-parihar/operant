@@ -1518,6 +1518,7 @@ End-state test: the live operator config can no longer be overwritten by a unit 
 | 12 | [x] Preserve failed-stream usage and attribute the served route | usage survives failure; cost names the served route; regression mutation-proved | 11 | C1,C9,C10 |
 | 13 | [x] Make background review deferred, routed, and scope-safe | one terminal spawn; complete route contract; every skill mutation guarded; task-local reads | 12 | C1,C9,C10 |
 | 14 | [x] Apply configured context caps to ACP and delegated/custom-core agents | installed config seeds core caps; ACP applies caps/compression | 13 | C1,C9,C10 |
+| 15 | [x] Keep one user row across a self-healing retry | recovery hint does not defeat user-message dedup | 14 | C1,C9,C10 |
 
 Round-23 note: the hermetic realtime matrix (HTTP, SSE, real verification tool
 call, and MCP stdio) and focused gateway/TUI regressions are complete. The full

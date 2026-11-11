@@ -750,6 +750,7 @@ NOT supported (named, with the reason):
 
 - RT-498 background-review truth: both lanes defer to one terminal-exit spawn, auxiliary route identity includes model/endpoint/key, all skill mutations are guarded with task-local read marks, and the memory prompt matches AD-020 — [V] — timing, route-contract, and skill-guard regressions are green and mutation-proved — unit 13.
 - RT-499 context-cap truth: installed operator caps apply to ACP, delegated children, and custom-core construction without a separate builder call — [V] — the configured-cap regression is green and mutation-proved — unit 14.
+- RT-500 healing-turn truth: a retry with a system recovery hint persists the user's message exactly once — [V] — the healing persistence regression is green and mutation-proved — unit 15.
 
 - The full workspace test suite is green after iter-2081 — [V] — `scripts/build.sh --offline test --workspace --no-fail-fast` exited 0; the full log contains the operant-core, operant-cli, harness, OS, plugins, config, API, and doctest targets — unit 8.
 

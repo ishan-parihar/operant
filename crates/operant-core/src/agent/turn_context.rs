@@ -149,10 +149,15 @@ pub async fn build_turn_context(agent: &OperantAgent, user_query: &str) -> Resul
     // Skip if the last message is already this exact query (happens
     // when run_with_healing retries run() — without this check, N
     // retries produce N duplicate user messages).
+    // A healing retry appends a SYSTEM recovery hint after the original
+    // user row. The hint must not hide that row from dedup: compare the
+    // most recent USER message, not merely the final message.
     let already_added = {
         let conv = agent.conversation.read().await;
-        conv.last()
-            .is_some_and(|last| last.role == super::Role::User && last.content == effective_query)
+        conv.iter()
+            .rev()
+            .find(|message| message.role == super::Role::User)
+            .is_some_and(|last| last.content == effective_query)
     };
 
     if !already_added {
@@ -423,6 +428,42 @@ mod tests {
                 .expect("reload query");
             let contents: Vec<&str> = reloaded.iter().map(|m| m.content.as_str()).collect();
             assert_eq!(contents, vec!["first turn", "second turn"]);
+        }
+
+        /// A healing retry adds a SYSTEM recovery hint after the original
+        /// user row, then starts another turn with the same query. The
+        /// original user row must remain the one persisted row: the retry
+        /// may add the hint, never a second copy of the user's message.
+        #[tokio::test]
+        async fn a_healing_retry_does_not_persist_the_user_twice() {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let db =
+                Arc::new(Database::init(dir.path().join("healing-dedup.db")).expect("db init"));
+            let agent = agent_with_db(&db);
+
+            let first = build_turn_context(&agent, "same question")
+                .await
+                .expect("first turn");
+            assert!(!first.already_added);
+            agent
+                .add_message(Message::system("previous attempt failed"))
+                .await;
+            let retry = build_turn_context(&agent, "same question")
+                .await
+                .expect("retry turn");
+            assert!(
+                retry.already_added,
+                "the retry must recognize the existing user row across the recovery hint"
+            );
+
+            let reloaded = db
+                .get_session_messages(&first.session_id)
+                .expect("reload query");
+            let user_rows = reloaded
+                .iter()
+                .filter(|message| message.role == "user")
+                .count();
+            assert_eq!(user_rows, 1, "the user message must persist exactly once");
         }
 
         /// The gateway seam: a host that owns session identity assigns its
