@@ -1514,9 +1514,9 @@ End-state test: the live operator config can no longer be overwritten by a unit 
 | 8 | [ ] Run realtime matrix, strict gates, red-team, docs and deploy | scoped/full tests, clippy, fmt, genome lint, fake-provider socket tests, release artifact, deployed live turn all green | 2..7 | C3,C5,C6,C7,C11 |
 
 Round-23 note: the hermetic realtime matrix (HTTP, SSE, real verification tool
-call, and MCP stdio) and focused gateway/TUI regressions are complete. Unit 8
-remains open until full workspace gates, the release artifact, deployment, and
-the deployed live turn are green.
+call, and MCP stdio) and focused gateway/TUI regressions are complete. The full
+workspace test suite is green. Unit 8 remains open until the release artifact,
+deployment, and the deployed live turn are green.
 ### iter-2075 evidence (pushed `a7af53af`)
 
 - Live incident: operator `context_window = 4242` restored to 1,000,000; gateway restarted active with `NRestarts=0` before code repair.

@@ -739,3 +739,5 @@ NOT supported (named, with the reason):
 - RT-492 verification truth: success requires a test phase, and start commands own a process group terminated on readiness or timeout; the false-green and descendant-PID regressions both fail when their old behaviors are restored.
 
 - RT-493 hermetic realtime matrix: the self-test drives HTTP, SSE, a real verification tool turn, and MCP stdio under a throwaway home; the real operator configuration hash is unchanged, and removing the tool/MCP assertions makes the smoke fail.
+
+- The full workspace test suite is green after iter-2081 — [V] — `scripts/build.sh --offline test --workspace --no-fail-fast` exited 0; the full log contains the operant-core, operant-cli, harness, OS, plugins, config, API, and doctest targets — unit 8.
