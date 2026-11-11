@@ -152,8 +152,13 @@ async fn execute_acp_command_inner(
         None,
     );
 
+    let context_window = agent_config.context_window;
     let mut agent =
         operant_core::agent::OperantAgent::new(agent_config, model_client, registry, database)
+            .with_context_caps(operant_core::context_management::ContextCaps::from(
+                &config.agent,
+            ))
+            .with_llm_compressor(crate::llm_compressor_config(&config, context_window))
             .with_memory_manager(memory_manager);
     if let Some(provider) = memory_provider {
         agent = agent.with_memory_provider(provider);

@@ -277,6 +277,46 @@ fn compactions(events: &[AgentEvent]) -> usize {
         .count()
 }
 
+/// The installed operator configuration supplies the caps even when the
+/// host does not make a separate builder call. ACP and delegated children
+/// used to silently fall back to `ContextCaps::default()` here.
+#[tokio::test]
+async fn configured_caps_are_used_without_an_explicit_builder_override() {
+    let mut config = operant_core::config::runtime_config();
+    config.agent.context_window = 8_000;
+    config.agent.context_soft_cap_tokens = 2_000;
+    config.agent.context_soft_cap_percent = 0.0;
+    config.agent.context_hard_cap_tokens = 5_000;
+    config.agent.context_hard_cap_percent = 0.0;
+    operant_core::config::install_runtime_config(config);
+
+    let client = Arc::new(ScriptedClient::new(vec![text_response("answered")]));
+    let temp = tempfile::tempdir().unwrap();
+    let registry = ToolRegistry::new(Duration::from_secs(5));
+    let (event_tx, mut rx) = tokio::sync::mpsc::channel(64);
+    let mut agent_config = test_config("demo-context-caps");
+    agent_config.context_window = 8_000;
+    let agent = OperantAgent::with_events(
+        agent_config,
+        Box::new(ScriptedClientHandle(Arc::clone(&client))),
+        registry,
+        Arc::new(Database::init(temp.path().join("configured_caps.sqlite")).unwrap()),
+        event_tx,
+    );
+    seed_history(&agent, 40, 500).await;
+
+    agent
+        .run("now answer".to_string())
+        .await
+        .expect("the turn must complete");
+    let events = drain_events(&mut rx);
+    assert_eq!(
+        compactions(&events),
+        1,
+        "the installed 2k soft cap must compact the ~5k history without an explicit builder override"
+    );
+}
+
 /// Both axes disabled — the agent behaves exactly as it did before the caps
 /// existed.
 fn caps_off() -> ContextCaps {

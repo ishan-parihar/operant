@@ -170,7 +170,9 @@ impl OperantAgent {
             iteration_budget: Arc::new(IterationBudget::new(max_iter)),
             metrics: Arc::new(crate::runtime_metrics::RuntimeMetrics::new()),
             cache_tracker: crate::agent::clients::cache_monitor::PrefixTracker::new(),
-            context_caps: crate::context_management::ContextCaps::default(),
+            context_caps: crate::context_management::ContextCaps::from(
+                &crate::config::runtime_config().agent,
+            ),
             llm_compressor: None,
             context_engine: None,
             semantic_embedder: None,
@@ -268,7 +270,9 @@ impl OperantAgent {
             iteration_budget: Arc::new(IterationBudget::new(max_iter)),
             metrics: Arc::new(crate::runtime_metrics::RuntimeMetrics::new()),
             cache_tracker: crate::agent::clients::cache_monitor::PrefixTracker::new(),
-            context_caps: crate::context_management::ContextCaps::default(),
+            context_caps: crate::context_management::ContextCaps::from(
+                &crate::config::runtime_config().agent,
+            ),
             llm_compressor: None,
             context_engine: None,
             semantic_embedder: None,

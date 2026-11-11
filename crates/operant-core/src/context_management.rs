@@ -622,6 +622,17 @@ impl Default for ContextCaps {
     }
 }
 
+impl From<&crate::config::BehaviorSettings> for ContextCaps {
+    fn from(settings: &crate::config::BehaviorSettings) -> Self {
+        Self {
+            soft_tokens: settings.context_soft_cap_tokens,
+            soft_percent: settings.context_soft_cap_percent,
+            hard_tokens: settings.context_hard_cap_tokens,
+            hard_percent: settings.context_hard_cap_percent,
+        }
+    }
+}
+
 impl ContextCaps {
     /// Resolve the effective limits for `window` tokens.
     ///
