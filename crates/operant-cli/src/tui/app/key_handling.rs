@@ -1748,7 +1748,16 @@ impl App {
                 self.refresh_prompt_input();
             }
             KeyCode::Char('y') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.prompt_input.yank();
+                // RT-472: an affordance either works or says why not. `yank`
+                // now reports whether it pasted, so an empty kill ring gets the
+                // same treatment the dialog paste path already gives it
+                // ("Clipboard is empty") instead of silence.
+                if !self.prompt_input.yank() {
+                    self.push_notice(
+                        NotificationKind::Warning,
+                        "Nothing to paste — the kill ring is empty.".to_string(),
+                    );
+                }
                 self.refresh_prompt_input();
             }
 

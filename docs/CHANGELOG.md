@@ -421,6 +421,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **iter-1961 — Every chord the Completion context describes must do the thing its description says, and nothing tested that (found 2026-11-11) (RT-506).** **CLOSED iter-1961** — round 75's behavioural sweep covers Completion, but its signal is "the key typed itself": it catches a chord nothing consumed, and cannot distinguish a chord that swallows the key from one that does what it says. Completion is exactly that risk — `Down`, `Up`, `Tab`, `Enter` and `Esc` are advertised as motion and acceptance, and an arrow that consumed the key while doing nothing would round 75 green and the operator stuck. **Fixed as a test**, not a repair.
 
+- **INVENTORY — `make_app()` is not isolated: a process-global left over from an earlier keypress makes the same chord behave differently in a later fresh app, so any cross-app sweep is unsound (found 2026-11-12) (RT-527).** **OPEN — INVENTORY** — a Prompt-context sweep I wrote this round reported `Alt+B`/`Alt+D` as silent no-ops, and both work in isolation. The poison is a process-global written while an earlier binding was being driven, not the app: within one app `Alt+B` moves the cursor correctly across a typed character.
+- **iter-1962 — `Ctrl+Y` ("Paste") consumed the key and did nothing when the kill ring was empty (found 2026-11-12) (RT-528).** **CLOSED iter-1962** — `yank()` returned nothing at all, so with an empty kill ring neither the composer nor a status notice moved: the affordance `/keys` advertised for Prompt context silently did nothing. The dialog paste path already said "Clipboard is empty", so the composer path was the odd one out.
+
 
 ### Fixed
 

@@ -53,6 +53,46 @@ use crossterm::event::{KeyCode, KeyModifiers};
 /// There is no vim-mode or pane state to construct — the popup is opened by
 /// setting the two fields the renderer and the state machine both read, which
 /// is how this audit's last four false positives were avoided.
+/// (iter-1962) `Ctrl+Y` ("Paste") must either paste or say why not.
+///
+/// RT-472's rule for this audit: an affordance a surface offers either works or
+/// says why not. `yank()` used to return nothing at all, so with an empty kill
+/// ring the operator pressed `Ctrl+Y`, the key was consumed, and neither the
+/// composer nor a status notice moved — the affordance was offered by /keys and
+/// silently did nothing. The dialog paste path already did the right thing
+/// ("Clipboard is empty"), so the composer path was the odd one out.
+///
+/// `yank()` now reports whether it pasted and the arm emits the notice. This
+/// pins the behaviour from the operator's side: press the key the catalogue
+/// advertises, in the state where there is genuinely nothing to paste, and
+/// require it to say so.
+#[test]
+fn ctrl_y_never_silently_fails_to_paste() {
+    use crate::tui::operant_app::tui_state::TuiState;
+
+    let mut app = crate::tui::app::tests::make_app();
+    // A fresh app has an empty kill ring, which is exactly the state where the
+    // affordance has nothing to act on.
+    app.prompt_input.text = "fix the parser".to_string();
+    app.prompt_input.cursor = 5;
+
+    app.handle_key_event(crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Char('y'),
+        crossterm::event::KeyModifiers::CONTROL,
+    ));
+
+    assert!(
+        app.status_notice()
+            .as_deref()
+            .is_some_and(|n| n.contains("Nothing to paste")),
+        "Ctrl+Y is advertised as \"Paste\" but with an empty kill ring it \
+         consumed the key and said nothing: {:?}",
+        app.status_notice()
+    );
+    // The composer must be untouched — the notice explains, it does not edit.
+    assert_eq!(app.prompt_input.text, "fix the parser");
+}
+
 #[test]
 fn every_completion_chord_does_what_its_description_says() {
     use crate::tui::prompt_input::TypeaheadSuggestion;

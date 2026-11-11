@@ -76,18 +76,27 @@ impl PromptInputState {
     }
 
     /// Ctrl+Y: Paste from kill ring (most recent).
-    pub fn yank(&mut self) {
+    /// Paste the kill ring's current entry at the cursor.
+    ///
+    /// Returns whether anything was pasted. The caller owns the "why not", per
+    /// RT-472's rule that an affordance either works or says why not: this used
+    /// to return nothing at all, so `Ctrl+Y` with an empty kill ring moved the
+    /// operator no closer to a paste and told them nothing. The dialog paste
+    /// path already does this ("Clipboard is empty"), which is the precedent.
+    pub fn yank(&mut self) -> bool {
         if self.mode == InputMode::Readonly {
-            return;
+            return false;
         }
-        if let Some(text) = self.kill_ring.get_current() {
-            for c in text.chars() {
-                self.text.insert(self.cursor, c);
-                self.cursor += c.len_utf8();
-            }
-            self.update_token_estimate();
-            self.kill_ring.mark_non_kill();
+        let Some(text) = self.kill_ring.get_current() else {
+            return false;
+        };
+        for c in text.chars() {
+            self.text.insert(self.cursor, c);
+            self.cursor += c.len_utf8();
         }
+        self.update_token_estimate();
+        self.kill_ring.mark_non_kill();
+        true
     }
 
     // ---- Named registers ----
