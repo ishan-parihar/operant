@@ -1,0 +1,91 @@
+#!/bin/bash
+
+# omarchy:summary=Launch the default coding agent in a terminal
+# omarchy:args=[--inline] [--pick]
+# omarchy:examples=omarchy agent | omarchy agent --inline
+
+# The packaged script owns the agents Omarchy ships. This user-level wrapper
+# adds the agents registered in ~/.config/omarchy/defaults/extra-agents/ and
+# hands every other agent back to the packaged script untouched.
+#
+# The packaged script lives at /usr/bin/omarchy-agent and is owned by the
+# omarchy package, so it must not be edited. The wrapper lives in
+# ~/.local/bin, which the login shell puts ahead of /usr/bin, and every
+# caller (the keybinding, the `a` alias, the menu action) resolves it
+# through PATH.
+#
+# See omarchy-default-agent for how an extra agent is registered: one file
+# named after the agent in ~/.config/omarchy/defaults/extra-agents/, whose
+# body is the launcher command.
+
+set -uo pipefail
+
+packaged="/usr/bin/omarchy-agent"
+extra_agents_dir="$HOME/.config/omarchy/defaults/extra-agents"
+
+# The packaged script parses the flags itself, so the original arguments are
+# kept for the delegation path.
+original_args=("$@")
+
+inline=false
+pick=false
+prompt=""
+
+# Flags only. A bare prompt would shadow the subcommands under this group, so
+# prompts go through omarchy-agent-prompt, which passes one here as --prompt.
+while (($#)); do
+  case "$1" in
+    --inline)
+      inline=true
+      shift
+      ;;
+    --pick)
+      pick=true
+      shift
+      ;;
+    --prompt)
+      prompt=${2:?--prompt needs a value}
+      shift 2
+      ;;
+    *)
+      echo "Unexpected argument: $1" >&2
+      echo "To pass a prompt: omarchy agent prompt \"$*\"" >&2
+      exit 1
+      ;;
+  esac
+done
+
+agent=$(omarchy-default-agent)
+
+launcher=""
+if [[ -n $agent && -f "$extra_agents_dir/$agent" ]]; then
+  launcher="$(head -n 1 "$extra_agents_dir/$agent" 2>/dev/null || true)"
+  launcher="${launcher#"${launcher%%[![:space:]]*}"}"
+fi
+
+# Not an extra agent: the packaged script's business.
+if [[ -z $launcher ]]; then
+  exec "$packaged" "${original_args[@]}"
+fi
+
+# Agents refuse to remember trust for $HOME, so launches from the keybinding
+# or menu start in the work directory instead of re-asking on every session.
+[[ $PWD == "$HOME" && -d $HOME/Work ]] && cd "$HOME/Work" || true
+
+if ! command -v -- "$launcher" >/dev/null 2>&1; then
+  echo "$agent is not installed ($launcher is not on PATH)." >&2
+  echo "Choose an installed agent with: omarchy default agent <name>" >&2
+  exit 1
+fi
+
+# --pick offers the choice of agent instead of launching one, which is what
+# the keybinding wants: a keypress that opens nothing explains nothing.
+if [[ $pick == "true" ]]; then
+  exec omarchy-menu summon setup.default.agent
+fi
+
+launcher_args=()
+[[ -n $prompt ]] && launcher_args+=(--prompt "$prompt")
+[[ $inline == "true" ]] && launcher_args+=(--inline)
+
+exec "$launcher" "${launcher_args[@]}"

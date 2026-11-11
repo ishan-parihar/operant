@@ -7,6 +7,7 @@ mod dialog_routing;
 mod enums;
 mod event_coalesce;
 pub(crate) mod helpers;
+pub(crate) mod herdr_lifecycle;
 mod import_config;
 mod init;
 mod key_handling;

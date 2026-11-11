@@ -55,6 +55,7 @@ mod gateway_commands;
 mod gateway_platforms;
 mod gateway_runner;
 mod hardening;
+mod integrations;
 mod mcp_serve;
 mod memory_provider_tools;
 #[cfg(feature = "plugins-wasm")]

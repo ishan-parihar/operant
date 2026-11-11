@@ -85,6 +85,7 @@ pub mod gateway;
 pub mod gateway_markdown;
 pub mod gateway_pipeline;
 pub mod harness_slots;
+pub mod herdr;
 pub mod terminal_hints;
 pub use gateway_pipeline::{HookContext, HookEvent, HookRegistry, MessagePipeline, PipelineAction};
 pub mod fs_secrets;

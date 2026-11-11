@@ -1,0 +1,68 @@
+#!/bin/bash
+
+# omarchy:summary=Launch the Operant coding agent TUI
+# omarchy:args=[--inline] [--prompt <text>]
+
+# Operant is not part of the packaged Omarchy agent list, so the user-level
+# wrappers in ~/.local/bin call this instead of a packaged script.
+#
+# Operant's TUI takes its first prompt from the composer and has no flag for
+# it, so a prompted launch puts the text on the clipboard — the same shape
+# the packaged launcher uses for the agents that cannot take a starting
+# prompt (dsh, freebuff). The operator pastes it as the first message.
+#
+# Operant also refuses to remember trust for $HOME, so a launch from the
+# keybinding or menu starts in the work directory instead of re-asking on
+# every session. This mirrors what /usr/bin/omarchy-agent does.
+
+set -uo pipefail
+
+prompt=""
+inline=false
+while (($#)); do
+  case "$1" in
+    --prompt)
+      prompt=${2:?--prompt needs a value}
+      shift 2
+      ;;
+    --inline)
+      inline=true
+      shift
+      ;;
+    *)
+      echo "Unexpected argument: $1" >&2
+      exit 1
+      ;;
+  esac
+done
+
+# Same rule the packaged launcher applies: agents that refuse to remember
+# trust for $HOME get started in ~/Work instead.
+[[ $PWD == "$HOME" && -d $HOME/Work ]] && cd "$HOME/Work" || true
+
+if ! command -v operant >/dev/null 2>&1; then
+  echo "operant is not installed. Choose an installed agent with: omarchy default agent <name>" >&2
+  exit 1
+fi
+
+if [[ -n $prompt ]]; then
+  # The TUI has no prompt option, so the prompt goes to the clipboard to be
+  # pasted as the first message rather than being silently dropped.
+  if command -v wl-copy >/dev/null 2>&1; then
+    printf '%s' "$prompt" | wl-copy
+    if command -v omarchy-notification-send >/dev/null 2>&1; then
+      omarchy-notification-send -g 󰅇 "Operant" "The prompt is on the clipboard — paste it as the first message."
+    fi
+  else
+    echo "wl-copy is not available, so the prompt could not be put on the clipboard." >&2
+    echo "Prompt: $prompt" >&2
+  fi
+fi
+
+# A fixed app-id rather than the default org.omarchy.<binary>, so every agent
+# window shares one class for window rules and themes to single out.
+if [[ $inline == "true" ]]; then
+  exec operant
+else
+  exec omarchy-launch-tui --app-id=org.omarchy.agent operant
+fi

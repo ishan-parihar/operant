@@ -264,6 +264,61 @@ You are Operant, a helpful AI assistant.
         println!("  \u{2713} operant binary: {}", exe_path.display());
     }
 
+    // F. The editor/pane integrations (Herdr, Omarchy).
+    //
+    // These live at the end because they are the only fixes that touch
+    // directories OUTSIDE the operant home: the Herdr plugin tree, the
+    // Omarchy user-level wrappers, and the Omarchy menu extension. Every
+    // other fix above only repairs state this binary owns.
+    fix_editor_integrations(&mut fixed, &mut errors);
+
     println!("Done. {} fixed, {} errors.", fixed, errors);
     Ok(())
+}
+
+/// Install or repair the Herdr and Omarchy integrations.
+///
+/// Each installer is idempotent and reports what it changed. A missing
+/// counterpart program is not an error: Herdr and Omarchy are optional, and
+/// a machine with neither is a supported machine.
+fn fix_editor_integrations(fixed: &mut u32, errors: &mut u32) {
+    use crate::integrations::{herdr_plugin, omarchy_agent};
+
+    println!("\nEditor and pane integrations");
+
+    // -- Herdr ------------------------------------------------------------
+    if !herdr_plugin::herdr_available() {
+        println!("  \u{2192} herdr is not installed — nothing to set up");
+    } else {
+        match herdr_plugin::install() {
+            Ok(done) => {
+                for line in done {
+                    println!("  \u{2713} {}", line);
+                }
+                *fixed += 1;
+            }
+            Err(e) => {
+                eprintln!("  \u{2717} herdr integration: {e}");
+                *errors += 1;
+            }
+        }
+    }
+
+    // -- Omarchy ----------------------------------------------------------
+    if !omarchy_agent::omarchy_available() {
+        println!("  \u{2192} omarchy is not installed — nothing to set up");
+    } else {
+        match omarchy_agent::install() {
+            Ok(done) => {
+                for line in done {
+                    println!("  \u{2713} {}", line);
+                }
+                *fixed += 1;
+            }
+            Err(e) => {
+                eprintln!("  \u{2717} omarchy integration: {e}");
+                *errors += 1;
+            }
+        }
+    }
 }

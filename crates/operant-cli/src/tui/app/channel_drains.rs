@@ -348,6 +348,12 @@ impl App {
             // dialog is dismissed and reply_tx is dropped — the
             // clarify tool receives a RecvError and returns
             // "[user dismissed the question]".
+            // The turn cannot continue until the operator answers, so the pane
+            // is BLOCKED, not working. Herdr shows that as an attention badge
+            // — the difference between "busy, leave it" and "come look".
+            // Reported before the dialog opens because `open` takes the
+            // question by value.
+            self.report_herdr_blocked(&req.question);
             self.ask_user_dialog
                 .open(req.question, req.choices, req.reply_tx);
             true

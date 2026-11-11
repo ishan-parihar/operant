@@ -918,6 +918,29 @@ max_concurrent_runs = 2
 # systemd timer — the clock belongs to the resident runtime
 clock = false
 
+# ── Editor and pane integrations ────────────────────────────────────────────
+# The programs Operant plugs into when it runs inside them. Both are optional:
+# a machine without Herdr, or without Omarchy, is a supported machine.
+[integrations]
+
+# [integrations.herdr] — report this Operant to the Herdr pane that owns it.
+#
+# Herdr is a terminal workspace manager that shows the coding agents running
+# in its panes. It recognises an agent either by reading the agent's screen
+# with a detection manifest, or by the agent reporting its own state. Operant
+# reports its own state: Herdr's documentation is explicit that a detection
+# manifest cannot teach it the name of a brand-new agent, so self-reporting
+# is the only route.
+#
+# What it buys: the pane shows up in `herdr agent list` as an `operant` agent
+# with a real `working` / `idle` / `blocked` state; the sidebar rolls that up
+# to the tab and the workspace; and `herdr agent wait` can block on it.
+#
+# The reporting is a no-op outside a Herdr pane, and `operant doctor` says
+# whether it is live in the current one.
+[integrations.herdr]
+enabled = true
+
 # Outbound HTTP proxy for the PROVIDER clients (the model transport). Applied
 # at startup. Provider traffic never follows the ambient HTTP(S)_PROXY/ALL_PROXY
 # variables (a stale one inherited from another tool rerouted every model

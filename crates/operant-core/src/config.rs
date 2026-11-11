@@ -126,6 +126,10 @@ pub struct AppConfig {
     /// default: invariant 5, the personal agent is byte-identical.
     #[serde(default)]
     pub holon: HolonSettings,
+    /// `[integrations]` — the editor/pane integrations (Herdr, and the
+    /// Omarchy agent menu). Both are optional; both are dark-merged.
+    #[serde(default)]
+    pub integrations: IntegrationsSettings,
 }
 
 impl Default for AppConfig {
@@ -174,6 +178,7 @@ impl Default for AppConfig {
             providers: operant_config::providers::ProvidersConfig::default(),
             command_allowlist: Vec::new(),
             holon: HolonSettings::default(),
+            integrations: IntegrationsSettings::default(),
         }
     }
 }
@@ -326,6 +331,53 @@ impl Default for SocializationSettings {
             turn_budget: 3,
             pairs: Vec::new(),
         }
+    }
+}
+
+/// The editor/pane integrations Operant plugs into (`[integrations]`).
+///
+/// Every integration here is optional and off the critical path: a machine
+/// without the counterpart program is a supported machine, and the section
+/// only decides whether Operant PLUGS IN when it is there.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IntegrationsSettings {
+    /// The Herdr pane integration (`[integrations.herdr]`).
+    #[serde(default)]
+    pub herdr: HerdrSettings,
+}
+
+impl Default for IntegrationsSettings {
+    fn default() -> Self {
+        Self {
+            herdr: HerdrSettings::default(),
+        }
+    }
+}
+
+/// The Herdr integration (`[integrations.herdr]`).
+///
+/// Herdr is a terminal workspace manager that shows the coding agents running
+/// in its panes. It can recognise an agent two ways: by reading the agent's
+/// screen with a detection manifest, or by the agent reporting its own state.
+/// Operant reports its own state — Herdr's documentation is explicit that a
+/// detection manifest cannot teach it the name of a brand-new agent — so this
+/// section only decides whether that reporting happens.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HerdrSettings {
+    /// Report this Operant's lifecycle state (working / idle / blocked) and
+    /// session identity to the Herdr pane that owns it.
+    ///
+    /// On by default: without it a Herdr pane running Operant looks like a
+    /// plain terminal, which is what made Operant invisible in
+    /// `herdr agent list`. Turn it off to keep Operant out of Herdr's
+    /// sidebar entirely.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+impl Default for HerdrSettings {
+    fn default() -> Self {
+        Self { enabled: true }
     }
 }
 

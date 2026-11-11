@@ -7,6 +7,10 @@ impl App {
     /// Handle an AgentEvent from the agent. (iter-114 — replaces
     /// handle_query_event; eliminates the bridge layer.)
     pub fn handle_agent_event(&mut self, event: AgentEvent) {
+        // Tell a Herdr pane what Operant is doing (working / idle). Outside a
+        // Herdr pane this is a no-op, so it needs no feature check.
+        self.report_herdr_event(&event);
+
         // Publish to debug bus (no-op when disabled).
         let event_variant = format!("{:?}", std::mem::discriminant(&event));
         let event_summary: String = format!("{:?}", event).chars().take(80).collect();

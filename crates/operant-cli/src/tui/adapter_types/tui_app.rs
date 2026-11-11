@@ -100,6 +100,13 @@ impl TuiApp {
             tokio::sync::mpsc::channel::<operant_core::agent::AgentEvent>(256);
         self.app.agent_event_rx = Some(agent_rx);
 
+        // Tell a Herdr pane, if this is one, that Operant owns it — an open
+        // TUI waiting for input is an `idle` agent. Outside Herdr this is a
+        // no-op. Only the interactive run announces: the headless simulator
+        // drives the same TUI machinery without a real session, and claiming
+        // the pane for it would be a lie.
+        self.app.announce_herdr_agent();
+
         use crossterm::execute;
         use crossterm::terminal::{
             EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -602,6 +609,10 @@ impl TuiApp {
                 Err(e) => break Err(e),
             }
         };
+
+        // Give the pane back to Herdr before the terminal is restored: the
+        // `operant` badge must not outlive the process that earned it.
+        crate::tui::app::herdr_lifecycle::release_herdr_agent();
 
         disable_raw_mode()?;
         // Mark teardown BEFORE the pop: a suspended-editor resume that

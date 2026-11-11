@@ -1,0 +1,73 @@
+#!/bin/bash
+
+# omarchy:summary=Set and launch the default coding agent
+# omarchy:args=[pi|omp|opencode|claude|codex|grok|hermes|copilot|jcode|operant]
+# omarchy:examples=omarchy default agent | omarchy default agent codex | omarchy default agent operant
+
+# The packaged script owns the agents Omarchy ships. This user-level wrapper
+# adds the agents registered in ~/.config/omarchy/defaults/extra-agents/ and
+# hands every other agent back to the packaged script untouched.
+#
+# The packaged script lives at /usr/bin/omarchy-default-agent and is owned by
+# the omarchy package, so it must not be edited. The wrapper lives in
+# ~/.local/bin, which the login shell puts ahead of /usr/bin, and every
+# caller (the menu action, the keybinding, the `omarchy default agent`
+# route) resolves it through PATH.
+#
+# AN EXTRA AGENT IS ONE FILE
+#
+#   ~/.config/omarchy/defaults/extra-agents/<name>   ->  the launcher command
+#
+# The file's body is the command that starts the agent, e.g. `omarchy-jcode`
+# or `omarchy-operant`. That is the whole registration: the next agent that is
+# not in Omarchy's packaged list becomes one file, not another patch to this
+# script. `operant doctor --fix` writes the registry, this wrapper, and the
+# menu entry together; jcode was registered the same way.
+
+set -uo pipefail
+
+packaged="/usr/bin/omarchy-default-agent"
+extra_agents_dir="$HOME/.config/omarchy/defaults/extra-agents"
+
+installing=false
+if [[ ${1:-} == "--install" ]]; then
+  installing=true
+  shift
+fi
+
+agent="${1:-}"
+
+# Not an extra agent: the packaged script's business, including its own agent
+# list, its usage message, and its installers. This covers the no-argument
+# call too, which asks the packaged script which agent is the default.
+if [[ -z $agent || ! -f "$extra_agents_dir/$agent" ]]; then
+  exec "$packaged" "$@"
+fi
+
+launcher="$(head -n 1 "$extra_agents_dir/$agent" 2>/dev/null || true)"
+launcher="${launcher#"${launcher%%[![:space:]]*}"}"
+
+if [[ -z $launcher ]]; then
+  echo "$agent is registered but its launcher command is empty." >&2
+  echo "Fix: write the launcher command into $extra_agents_dir/$agent" >&2
+  exit 1
+fi
+
+if ! command -v -- "$launcher" >/dev/null 2>&1; then
+  echo "$agent is not installed ($launcher is not on PATH)." >&2
+  echo "Choose an installed agent with: omarchy default agent <name>" >&2
+  exit 1
+fi
+
+agent_file="$HOME/.config/omarchy/defaults/agent"
+mkdir -p "$(dirname "$agent_file")"
+printf '%s\n' "$agent" >"$agent_file"
+
+if [[ $installing == true ]]; then
+  # An extra agent has no packaged installer to run, so there is nothing to
+  # install here. The launcher below is what actually starts the TUI.
+  printf '\033[2J\033[3J\033[H'
+  exec omarchy-agent --inline
+else
+  exec omarchy-agent
+fi

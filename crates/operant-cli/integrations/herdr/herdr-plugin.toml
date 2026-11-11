@@ -1,0 +1,40 @@
+id = "operant.integration"
+name = "Operant"
+version = "0.1.0"
+min_herdr_version = "0.9.2"
+description = "Run Operant inside Herdr, with session identity and live lifecycle state."
+platforms = ["linux", "macos"]
+
+# Operant reports its own state to Herdr (working / idle / blocked) and its
+# session identity, so Herdr shows the pane as a real `operant` agent instead
+# of a plain terminal. The reporting lives in the Operant binary itself —
+# nothing has to be installed into the agent — so this plugin is the
+# human-facing surface: a launcher pane, a setup action, and a doctor.
+#
+# The setup action is also what `operant doctor --fix` runs, so the two paths
+# never drift apart.
+
+[[actions]]
+id = "setup"
+title = "Operant: set up the Herdr integration"
+contexts = ["workspace"]
+command = ["sh", "scripts/setup.sh"]
+
+[[actions]]
+id = "doctor"
+title = "Operant: check the Herdr integration"
+contexts = ["workspace", "pane"]
+command = ["sh", "scripts/doctor.sh"]
+
+[[panes]]
+id = "operant"
+title = "Operant"
+placement = "split"
+command = ["sh", "scripts/launch.sh"]
+
+# Bind the pane entrypoint in your Herdr config:
+#   [[keys.command]]
+#   key = "prefix+o"
+#   type = "plugin_pane"
+#   command = "operant.integration.operant"
+#   description = "Operant: new session"

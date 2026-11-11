@@ -202,9 +202,13 @@ impl App {
             match key.code {
                 KeyCode::Esc => {
                     self.ask_user_dialog.dismiss();
+                    // The question is answered (by dismissal) — the turn
+                    // carries on, so the pane is working again.
+                    self.report_herdr_unblocked();
                 }
                 KeyCode::Enter => {
                     self.ask_user_dialog.confirm();
+                    self.report_herdr_unblocked();
                 }
                 KeyCode::Up | KeyCode::BackTab => {
                     self.ask_user_dialog.select_prev();

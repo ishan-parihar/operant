@@ -8,6 +8,7 @@ pub mod check_result;
 pub mod checks_api;
 pub mod checks_config;
 pub mod checks_fix;
+pub mod checks_integrations;
 pub mod checks_tools;
 
 use anyhow::Result;
@@ -68,6 +69,10 @@ pub async fn handle_doctor_command(config: &AppConfig, fix: bool, json: bool) ->
     checks_config::run_config_checks(config, &mut issues, &mut manual_issues);
     checks_tools::run_tool_checks(config, &mut issues, &mut manual_issues);
     checks_tools::run_integration_checks(&mut issues, &mut manual_issues).await;
+    // The editor/pane integrations (Herdr, Omarchy): the checks that answer
+    // "can herdr see my operant sessions" and "why is operant not in the
+    // omarchy agent menu".
+    checks_integrations::run_integration_checks(&mut issues, &mut manual_issues);
     checks_api::run_api_checks(config, &mut issues).await;
     checks_tools::run_platform_checks(config, &mut issues, &mut manual_issues);
     checks_tools::check_operant_binaries(&mut manual_issues);
