@@ -907,36 +907,21 @@ pub fn run_platform_checks(
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-/// Try to detect the configured memory provider from config or TOML.
+/// The memory backend name the config pins.
+///
+/// `AppConfig` carries `[memory] provider` directly, so this reads the value
+/// the runtime will actually use. It must NOT fall back to
+/// `[auxiliary_models.memory] provider`: that slot names the model that routes
+/// memory WRITES, not the storage engine, so reporting it made a configured
+/// auxiliary slot masquerade as a retired backend pin and told the operator to
+/// delete a live key.
 fn detect_memory_provider(config: &AppConfig) -> Option<String> {
-    // Check if there's a operant.toml we can parse for memory.provider.
-    // The AppConfig doesn't carry a memory.provider field directly,
-    // so we attempt to read the TOML file from config paths.
-    let config_paths = [
-        project_root().join("operant.toml"),
-        operant_home().join("operant.toml"),
-    ];
-
-    for path in &config_paths {
-        if path.exists()
-            && let Ok(raw) = std::fs::read_to_string(path)
-            && let Ok(value) = raw.parse::<toml::Value>()
-            && let Some(provider) = value
-                .get("memory")
-                .and_then(|m| m.get("provider"))
-                .and_then(|p| p.as_str())
-            && !provider.is_empty()
-        {
-            return Some(provider.to_string());
-        }
+    let provider = config.memory.provider.trim();
+    if provider.is_empty() {
+        None
+    } else {
+        Some(provider.to_string())
     }
-
-    // Fallback: check for the auxiliary memory model config
-    if let Some(ref aux) = config.auxiliary_models.memory {
-        return aux.provider.clone();
-    }
-
-    None
 }
 
 /// (plan 11B) Integration versions — installed vs latest through the
@@ -1208,6 +1193,27 @@ mod memory_provider_surface_tests {
     // parent module — the import was dead the moment the last check_* call
     // in here was rewritten as a scan (iter-1385), and the clippy gate
     // flagged it as the workspace's one new warning.
+
+    /// The auxiliary memory slot names the MODEL that routes memory writes.
+    /// It is not a storage engine, so it must never be reported as a retired
+    /// backend pin — that told the operator to delete a live key.
+    #[test]
+    fn an_auxiliary_memory_slot_is_not_a_memory_backend_pin() {
+        let mut config = operant_core::config::AppConfig::default();
+        config.memory.provider = "memory-wire".to_string();
+        config.auxiliary_models.memory = Some(operant_core::config::AuxiliaryModelConfig {
+            provider: Some("anthropic".to_string()),
+            model: Some("claude-sonnet".to_string()),
+            base_url: None,
+            api_key: None,
+        });
+
+        assert_eq!(
+            super::detect_memory_provider(&config).as_deref(),
+            Some("memory-wire"),
+            "the auxiliary slot's provider must not stand in for the backend name"
+        );
+    }
 
     /// A removed provider name must never produce a RED doctor failure: no
     /// such provider exists, so `check_fail` on its API key would tell the
