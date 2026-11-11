@@ -56,18 +56,11 @@ pub struct TurnRetryState {
     /// Whether context compression has been attempted this turn.
     /// Prevents infinite compress→fail→compress loops.
     pub compress_attempted: bool,
-    /// Whether the last context compression actually REDUCED the history.
+    /// Whether context compression has already been attempted this turn.
     ///
-    /// A provider context-overflow can be TRANSIENT — a mis-reported
-    /// limit, a load balancer routing to a differently-configured backend
-    /// — so a single overflow does not prove the retry will fail too, and
-    /// the first overflow must still be retried. But if the SECOND
-    /// overflow arrives and the compression did not shrink the history
-    /// either, the retry is sending the same prompt the provider already
-    /// rejected: that is the point at which the turn fails TYPED
-    /// (`Error::ContextExhausted`) instead of burning more model calls on
-    /// a request that cannot succeed.
-    pub compress_reduced_history: bool,
+    /// The first overflow is always retried once because it may be transient.
+    /// Any second classified overflow fails typed: even a reduced request
+    /// can still exceed the provider's real limit.
     /// Whether credential rotation has been attempted this turn.
     /// Prevents burning through the entire credential pool.
     pub rotate_attempted: bool,
@@ -96,7 +89,6 @@ impl TurnRetryState {
             retry_count: 0,
             max_retries: max_retries.unwrap_or(DEFAULT_MAX_RETRIES),
             compress_attempted: false,
-            compress_reduced_history: false,
             rotate_attempted: false,
             reasoning_param_attempted: false,
             fallback_attempted: false,

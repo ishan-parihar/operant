@@ -126,6 +126,10 @@ Context exhaustion has two different causes and therefore two different recoveri
 
 The protected floor is measured after eviction, from the frozen system prompt and newest live message. Provider-reported overflows carry the same floor through the typed error, so a transient first overflow can still be retried while the terminal failure remains actionable.
 
+The protected floor is measured after eviction, from the frozen system prompt and newest live message. Provider-reported overflows carry the same floor through the typed error, so a transient first overflow can still be retried while the terminal failure remains actionable. Any second classified overflow fails typed even when compression reduced the foldable history, because the reduced request can still exceed the provider's real limit.
+
+An overflow teaches the runtime the provider's usable limit. When the error states the limit explicitly, that value is used. Otherwise the runtime probes the next smaller tier below the rejected request; the learned value never rises when a later request is larger. The rejected request size itself is not a context limit.
+
 ## Guardrail: the tool-result share cap
 
 One tool result may occupy at most `agent.max_tool_result_share` (default

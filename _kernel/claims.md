@@ -742,6 +742,8 @@ NOT supported (named, with the reason):
 
 - RT-494 transport truth: streaming 429 honors `Retry-After`/backoff and retries, and credential rotation no longer disables unrelated mid-stream transport recovery — [V] — local HTTP server + `TurnRetryState` regressions are green and mutation-proved — unit 9.
 
+- RT-495 context-limit truth: explicit provider limits are learned, unknown limits probe strictly below the rejected request, learned limits do not rise, and every second classified overflow fails typed even after compression reduced history — [V] — provider-limit, probe-tier, monotonic-learning, and repeated-overflow regressions are green and mutation-proved — unit 10.
+
 - The full workspace test suite is green after iter-2081 — [V] — `scripts/build.sh --offline test --workspace --no-fail-fast` exited 0; the full log contains the operant-core, operant-cli, harness, OS, plugins, config, API, and doctest targets — unit 8.
 
 - The strict workspace clippy gate is green — [V] — `scripts/build.sh --offline clippy --workspace --all-targets --all-features -- -D warnings` exited 0 — unit 8.

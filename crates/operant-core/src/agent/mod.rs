@@ -2587,7 +2587,14 @@ mod tests {
         );
 
         let overflowed = vec![Message::user("x".repeat(160_000))];
-        agent.learn_context_limit(&overflowed);
+        agent.learn_context_limit(
+            &overflowed,
+            &Error::Provider {
+                status: 400,
+                body: "maximum context length exceeded".to_string(),
+                retry_after: None,
+            },
+        );
         let system = Message::new(Role::System, "s".repeat(148_000));
         let newest = Message::new(Role::User, "n".repeat(148_000));
         for i in 0..10 {
@@ -2654,7 +2661,14 @@ mod tests {
         // not fire first — the request has to actually be SENT for the
         // REACTIVE path to be the thing under test.
         let overflowed = vec![Message::user("x".repeat(160_000))];
-        agent.learn_context_limit(&overflowed);
+        agent.learn_context_limit(
+            &overflowed,
+            &Error::Provider {
+                status: 400,
+                body: "maximum context length exceeded".to_string(),
+                retry_after: None,
+            },
+        );
         let learned = agent.effective_context_window();
         assert!(
             learned < 200_000,
@@ -2729,18 +2743,90 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_overflow_lowers_the_window_and_keeps_the_smallest() {
+    async fn an_overflow_learns_a_limit_below_the_rejected_request() {
         let (agent, _dir) = bust_test_agent(10_000);
         assert_eq!(agent.effective_context_window(), 10_000);
 
         let overflowed = vec![Message::user("x".repeat(24_000))];
         let tokens = crate::context_management::estimate_total_tokens(&overflowed);
-        agent.learn_context_limit(&overflowed);
-        assert_eq!(agent.effective_context_window(), tokens);
+        agent.learn_context_limit(
+            &overflowed,
+            &Error::Provider {
+                status: 400,
+                body: "maximum context length exceeded".to_string(),
+                retry_after: None,
+            },
+        );
+        let learned = agent.effective_context_window();
+        assert!(
+            learned < tokens,
+            "the learned limit must be below the rejected size"
+        );
+        assert_eq!(learned, crate::agent::next_probe_tier(tokens));
 
         // A larger overflow later must not raise the learned limit.
-        agent.learn_context_limit(&[Message::user("x".repeat(40_000))]);
-        assert_eq!(agent.effective_context_window(), tokens);
+        agent.learn_context_limit(
+            &[Message::user("x".repeat(40_000))],
+            &Error::Provider {
+                status: 400,
+                body: "maximum context length exceeded".to_string(),
+                retry_after: None,
+            },
+        );
+        assert_eq!(agent.effective_context_window(), learned);
+    }
+
+    #[tokio::test]
+    async fn a_second_overflow_fails_typed_even_after_compression_reduces_history() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db = Arc::new(Database::init(dir.path().join("overflow-reduced.sqlite")).expect("db"));
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let agent = OperantAgent::new(
+            AgentConfig {
+                context_window: 200_000,
+                stream: false,
+                ..AgentConfig::default()
+            },
+            Box::new(OverflowingClient {
+                calls: calls.clone(),
+            }),
+            ToolRegistry::new(Duration::from_secs(1)),
+            db,
+        );
+
+        for i in 0..20 {
+            agent
+                .add_message(Message::new(
+                    Role::User,
+                    format!("old {i} {}", "x".repeat(8_000)),
+                ))
+                .await;
+        }
+        let result = agent.run("current turn".to_string()).await;
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "the first overflow is retried once after compression"
+        );
+        assert!(
+            matches!(result, Err(Error::ContextExhausted { .. })),
+            "a second overflow must fail typed even if compression reduced the foldable history"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_overflow_uses_the_provider_stated_limit() {
+        let (agent, _dir) = bust_test_agent(10_000);
+        let overflowed = vec![Message::user("x".repeat(24_000))];
+        agent.learn_context_limit(
+            &overflowed,
+            &Error::Provider {
+                status: 400,
+                body: "This model's maximum context length is 8192 tokens".to_string(),
+                retry_after: None,
+            },
+        );
+        assert_eq!(agent.effective_context_window(), 8_192);
     }
 
     #[serial]

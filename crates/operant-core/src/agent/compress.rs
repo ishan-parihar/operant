@@ -70,7 +70,8 @@ impl Default for PreflightConfig {
 // ---------------------------------------------------------------------------
 
 const PROBE_TIERS: &[usize] = &[
-    2_000_000, 1_000_000, 512_000, 200_000, 128_000, 64_000, 32_000,
+    2_000_000, 1_000_000, 512_000, 200_000, 128_000, 64_000, 32_000, 16_000, 8_000, 4_000, 2_000,
+    1_024,
 ];
 
 /// Next smaller guess when an overflow error states no explicit limit.
@@ -79,7 +80,7 @@ pub fn next_probe_tier(current: usize) -> usize {
         .iter()
         .copied()
         .find(|&tier| tier < current)
-        .unwrap_or(32_000)
+        .unwrap_or_else(|| current.saturating_sub(1).max(1))
 }
 
 /// Try to extract the actual context window limit from a provider error
@@ -925,7 +926,10 @@ mod preflight_tests {
         assert_eq!(next_probe_tier(2_000_000), 1_000_000);
         assert_eq!(next_probe_tier(200_000), 128_000);
         assert_eq!(next_probe_tier(64_000), 32_000);
-        assert_eq!(next_probe_tier(32_000), 32_000); // floor
+        assert_eq!(next_probe_tier(32_000), 16_000);
+        assert_eq!(next_probe_tier(2_000), 1_024);
+        assert_eq!(next_probe_tier(1_024), 1_023);
+        assert_eq!(next_probe_tier(1), 1);
     }
 
     // ── tool-pair repair (e) ───────────────────────────────────────────

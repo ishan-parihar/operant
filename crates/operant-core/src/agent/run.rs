@@ -1444,7 +1444,7 @@ impl OperantAgent {
                         if classified.reason
                             == crate::agent::error_classifier::FailoverReason::ContextOverflow
                         {
-                            self.learn_context_limit(&messages);
+                            self.learn_context_limit(&messages, &e);
                         }
                         // ── Reasoning-effort rejection (plan 03) ──────────────
                         // The request was fine except the effort field:
@@ -1478,20 +1478,10 @@ impl OperantAgent {
                             warn!(reason = %classified.reason, "Context overflow detected — compressing and retrying");
                             // Try LLM summarization first (intelligent compression),
                             // fall back to deterministic decay/eviction.
-                            let (compressed, reduced) = self
+                            let (compressed, _) = self
                                 .compress_context_overflow_reporting(messages)
                                 .await;
                             messages = compressed;
-                            // Did the compression REDUCE the history? If it
-                            // did not, the retry is sending the same prompt
-                            // the provider already rejected — but a provider
-                            // overflow can be TRANSIENT (a mis-reported
-                            // limit, a load balancer routing to a
-                            // differently-configured backend), so the FIRST
-                            // overflow is still retried. The verdict is
-                            // recorded, and the SECOND overflow fails typed
-                            // (see the `compress_attempted` arm below).
-                            retry_state.compress_reduced_history = reduced;
                             // Refund the iteration since the original LLM call
                             // was wasted on a context overflow — the retry gets
                             // a fresh consume() on the next loop iteration.
@@ -1514,20 +1504,15 @@ impl OperantAgent {
                             //
                             // The TWO-STRIKE rule: a provider overflow can
                             // be transient, so the first one is always
-                            // retried. But if the RETRY overflows too, and
-                            // the compression did not reduce the history,
-                            // the retry sent the same prompt the provider
-                            // already rejected — re-issuing would send it
-                            // again. That is the point at which the turn
-                            // fails TYPED.
+                            // retried. Any second classified overflow fails
+                            // typed: even a reduced request can still exceed
+                            // the provider's real limit.
                             match self.client.chat_streaming(retry_request).await {
                                 Ok(stream) => stream,
                                 Err(retry_err) => {
                                     let retry_classified =
                                         FallbackModelClient::classify_error(&retry_err);
-                                    if retry_classified.should_compress
-                                        && !retry_state.compress_reduced_history
-                                    {
+                                    if retry_classified.should_compress {
                                         let tokens = crate::context_management::
                                             estimate_total_tokens(&messages);
                                         let required = crate::context_management::
@@ -1780,23 +1765,16 @@ impl OperantAgent {
                         if classified.reason
                             == crate::agent::error_classifier::FailoverReason::ContextOverflow
                         {
-                            self.learn_context_limit(&messages);
+                            self.learn_context_limit(&messages, &e);
                         }
                         if classified.should_compress && !retry_state.compress_attempted {
                             retry_state.compress_attempted = true;
                             warn!(reason = %classified.reason, "Context overflow detected — compressing and retrying");
                             // Try LLM summarization first (intelligent compression),
                             // fall back to deterministic decay/eviction.
-                            let (compressed, reduced) =
+                            let (compressed, _) =
                                 self.compress_context_overflow_reporting(messages).await;
                             messages = compressed;
-                            // Did the compression REDUCE the history? If it
-                            // did not, the retry is sending the same prompt
-                            // the provider already rejected — but a provider
-                            // overflow can be TRANSIENT, so the FIRST
-                            // overflow is still retried. The verdict is
-                            // recorded, and the SECOND overflow fails typed.
-                            retry_state.compress_reduced_history = reduced;
                             // Refund the iteration since the original LLM call
                             // was wasted on a context overflow.
                             self.iteration_budget.refund();
@@ -1829,9 +1807,7 @@ impl OperantAgent {
                                 Err(retry_err) => {
                                     let retry_classified =
                                         FallbackModelClient::classify_error(&retry_err);
-                                    if retry_classified.should_compress
-                                        && !retry_state.compress_reduced_history
-                                    {
+                                    if retry_classified.should_compress {
                                         let tokens =
                                             crate::context_management::estimate_total_tokens(
                                                 &messages,
@@ -1883,9 +1859,7 @@ impl OperantAgent {
                                     Err(retry_err) => {
                                         let retry_classified =
                                             FallbackModelClient::classify_error(&retry_err);
-                                        if retry_classified.should_compress
-                                            && !retry_state.compress_reduced_history
-                                        {
+                                        if retry_classified.should_compress {
                                             let tokens =
                                                 crate::context_management::estimate_total_tokens(
                                                     &messages,
@@ -3246,16 +3220,25 @@ impl OperantAgent {
             })
     }
 
-    /// Records that a request of this size overflowed the provider's window,
-    /// so later builds size against it. Keeps the smallest overflow seen.
-    pub(crate) fn learn_context_limit(&self, messages: &[Message]) {
+    /// Records the provider's context limit after an overflow, so later builds
+    /// size against it. Uses an explicit provider-stated limit when present;
+    /// otherwise it records the next probe tier below the rejected request.
+    pub(crate) fn learn_context_limit(&self, messages: &[Message], provider_error: &Error) {
         let key = learned_limit_key(self.client.provider_name(), &self.model());
-        let tokens = crate::context_management::estimate_total_tokens(messages);
+        let rejected_tokens = crate::context_management::estimate_total_tokens(messages);
+        let explicit_limit = match provider_error {
+            Error::Provider { body, .. } => crate::agent::parse_context_limit_from_error(body),
+            Error::ContextLengthExceeded => None,
+            _ => None,
+        };
+        let candidate =
+            explicit_limit.unwrap_or_else(|| crate::agent::next_probe_tier(rejected_tokens.max(1)));
         let learned = self
             .database
             .get_state_meta(&key)
             .and_then(|v| v.parse::<usize>().ok())
-            .map_or(tokens, |prev| prev.min(tokens));
+            .map_or(candidate, |prev| prev.min(candidate))
+            .min(self.config.context_window);
         if let Err(e) = self.database.set_state_meta(&key, &learned.to_string()) {
             warn!(error = %e, "Failed to persist learned context limit");
         }
