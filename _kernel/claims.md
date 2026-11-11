@@ -748,6 +748,9 @@ NOT supported (named, with the reason):
 
 - RT-497 metering truth: a failed stream preserves known usage, and usage/cost attribution names the route that served the request rather than the startup model — [V] — the failed-stream route regression is green and mutation-proved — unit 12.
 
+- RT-498 background-review truth: both lanes defer to one terminal-exit spawn, auxiliary route identity includes model/endpoint/key, all skill mutations are guarded with task-local read marks, and the memory prompt matches AD-020 — [V] — timing, route-contract, and skill-guard regressions are green and mutation-proved — unit 13.
+- RT-499 context-cap truth: installed operator caps apply to ACP, delegated children, and custom-core construction without a separate builder call — [V] — the configured-cap regression is green and mutation-proved — unit 14.
+
 - The full workspace test suite is green after iter-2081 — [V] — `scripts/build.sh --offline test --workspace --no-fail-fast` exited 0; the full log contains the operant-core, operant-cli, harness, OS, plugins, config, API, and doctest targets — unit 8.
 
 - The strict workspace clippy gate is green — [V] — `scripts/build.sh --offline clippy --workspace --all-targets --all-features -- -D warnings` exited 0 — unit 8.

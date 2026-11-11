@@ -1908,7 +1908,12 @@ impl OperantAgent {
         Ok(results)
     }
 
-    /// Run agent and handle self-healing on tool errors
+    /// Run agent and handle self-healing on tool errors.
+    ///
+    /// Each retry is a DISTINCT turn with the same user query. The normal
+    /// turn prologue already deduplicates the user row when the last
+    /// conversation entry is that exact query, so this method records the
+    /// recovery hint explicitly and never appends the query itself.
     pub async fn run_with_healing(&self, user_query: String) -> Result<Message> {
         let mut iteration = 0;
         let max_healing_attempts = self.config.max_healing_attempts;

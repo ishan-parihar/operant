@@ -15,15 +15,21 @@ Source: `crates/operant-core/src/agent/background_review.rs`,
 
 After every turn, `OperantAgent::run()` may trigger a background review:
 a fork of the agent that evaluates whether any skill or memory should be
-saved or updated from what the turn did. Writes go straight to the memory
-+ skill stores; **the main conversation and prompt cache are never
-touched** — the review runs on its own context, so it costs no cache and
-cannot corrupt the live transcript.
+saved or updated from what the turn did. The skill lane may update the
+skill store under its scope/read-before-modify guard; the memory lane is
+unattended and therefore refuses memory writes, reporting candidates for a
+foreground turn instead. **The main conversation and prompt cache are never
+touched** — the review runs on its own context, so it cannot corrupt the
+live transcript.
 
 ## Model routing
 
-The review agent runs on the MAIN model by default ("auto"); an auxiliary
-route can be configured. A failed review is a log line, not a failed turn.
+The review agent runs on the MAIN model by default; an auxiliary route can
+be configured through `[auxiliary_models.memory]`. Model, `base_url`, and
+`api_key` form one route contract: a model-only slot rides the primary
+client, while a pinned endpoint or credential gets a dedicated client.
+A different model, endpoint, or credential is a cold route and uses digest
+replay. A failed review is a log line, not a failed turn.
 
 ## Why it is gated
 
@@ -36,10 +42,10 @@ through the write-provenance machinery:
   protected/hub skills, no creating skills outside review scope). The
   process-lifetime WRITE_ORIGIN poisoning bug (iter-332/338) is the
   recorded reason this is task-local today.
-- `write_approval.rs` — staged write approval (plan 012): writes from
-  non-interactive contexts (background review, cron, gateway) are STAGED
-  (`GateDecision::Stage { pending_id }`) for the user to approve/discard
-  later; interactive (user) origin bypasses the gate.
+- `write_approval.rs` — the foreground knowledge-write approval seam.
+  Background reviews do not stage durable writes: under AD-020 the memory
+  lane refuses writes, and the skill lane applies its scope and
+  read-before-modify guard directly.
 
 ## What it feeds
 
@@ -56,7 +62,8 @@ through the write-provenance machinery:
 
 Self-improvement has to be post-turn and off the hot path: doing it inside
 the turn would double every bill and risk the live context. The review is
-deliberately a fork with a scoped origin and a staged-approval gate — the
-learning loop writes, but never unattended. The full design history is
+deliberately a fork with a scoped origin and explicit write guards — the
+skill lane may write only what it read and may create only non-protected
+skills; the memory lane cannot write. The full design history is
 in the hermes parity plans (`docs/plans/`, frozen) and
 `docs/CHANGELOG.md`.

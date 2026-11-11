@@ -534,6 +534,82 @@ async fn error_exit_skips_the_armed_review() {
     );
 }
 
+/// A tiny memory provider makes the memory lane active. The unattended
+/// review still refuses memory writes under AD-020, but the cadence must
+/// arm and the deferred review must run.
+struct ActiveMemoryProvider;
+
+#[async_trait]
+impl operant_core::memory_provider::MemoryProvider for ActiveMemoryProvider {
+    fn name(&self) -> &str {
+        "active-test-memory"
+    }
+
+    fn is_available(&self) -> bool {
+        true
+    }
+
+    async fn initialize(&self, _session_id: &str) -> Result<()> {
+        Ok(())
+    }
+
+    async fn prefetch(&self, _query: &str) -> String {
+        String::new()
+    }
+
+    async fn sync_turn(&self, _user: &str, _assistant: &str) -> Result<()> {
+        Ok(())
+    }
+
+    fn queue_prefetch(&self, _query: &str) {}
+}
+
+/// The MEMORY lane is deferred with the skill lane. When only the memory
+/// cadence arms, the review must still spawn once, after the turn's final
+/// answer — never mid-loop while the turn is still racing it.
+#[tokio::test]
+async fn memory_review_is_deferred_to_the_turn_exit() {
+    let _serial = REVIEW_TEST_SERIAL.lock().await;
+    let temp = tempfile::tempdir().unwrap();
+    prime_models_dev_cache(&temp);
+
+    let mut script = varying_calls(WORKER, 2);
+    script.push(ScriptedItem::Model(text_response("final answer")));
+    let client = Arc::new(ScriptedClient::new(script));
+    let registry = ToolRegistry::new(Duration::from_secs(5));
+    registry.register_dyn(Arc::new(WorkerTool)).await.unwrap();
+    registry
+        .register_dyn(Arc::new(MemoryStoreTool))
+        .await
+        .unwrap();
+    registry
+        .register_dyn(Arc::new(MemorySearchTool))
+        .await
+        .unwrap();
+    let mut config = test_config(20, 0);
+    config.memory_review_interval = 1;
+    let agent = OperantAgent::new(
+        config,
+        Box::new(ScriptedClientHandle(Arc::clone(&client))),
+        registry,
+        Arc::new(Database::init(temp.path().join("memory_deferred.sqlite")).unwrap()),
+    )
+    .with_memory_provider(Arc::new(ActiveMemoryProvider));
+
+    agent
+        .run("do some work".to_string())
+        .await
+        .expect("turn completes normally");
+
+    operant_core::daemon_pool::drain_for_label(REVIEW_DAEMON_LABEL, Duration::from_secs(5)).await;
+    let review_indices = client.review_request_indices();
+    assert_eq!(
+        review_indices,
+        vec![3],
+        "the memory review must run once, after the final main-loop request"
+    );
+}
+
 /// The no-op early exit (the `{"count":0}` specimen): a review daemon
 /// whose rounds only READ stops after 2 consecutive no-write rounds —
 /// BEFORE its 5-round iteration cap. Five read rounds are scripted; only

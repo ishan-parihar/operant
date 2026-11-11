@@ -705,6 +705,14 @@ enabled = true
 # key to remove; the fields remain so existing configs keep parsing.
 # The live embeddings knob is `agent.context_lcm_embedding_model`, and image
 # generation reads the FAL_KEY environment variable.
+# Background review route. Model, base_url, and api_key are one contract:
+# model-only rides the primary client; a pinned endpoint/key gets a
+# dedicated client. The unattended memory lane cannot write memory.
+# [auxiliary_models.memory]
+# model = "openai/gpt-4o-mini"
+# base_url = "https://openrouter.ai/api/v1"
+# api_key = "sk-or-..."
+
 # [auxiliary_models.compression]
 # model = "gpt-4o-mini"   # match your route's model name
 # base_url = ""

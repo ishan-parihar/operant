@@ -112,10 +112,10 @@ fn is_skill_dir_skipped(dir_name: &str) -> bool {
 
 // ── Background review write guards ────────────────────────────────────────
 
-/// Tracks which skills have been read via `skill_view` during a background
-/// review session. The review agent must read a skill before modifying it
-/// to prevent uninformed mutations.
-static REVIEW_READ_SKILLS: LazyLock<RwLock<HashSet<String>>> =
+/// Fallback read-mark set for synchronous/non-task-scoped review contexts.
+/// Production reviews use the task-local set in `write_origin.rs`, so
+/// concurrent reviews cannot leak read marks into one another.
+static REVIEW_READ_SKILLS_FALLBACK: LazyLock<RwLock<HashSet<String>>> =
     LazyLock::new(|| RwLock::new(HashSet::new()));
 
 /// Serializes `.usage.json` read-modify-write cycles. The main agent and the
@@ -140,25 +140,39 @@ static USAGE_TELEMETRY_LOCK: LazyLock<std::sync::Mutex<()>> =
 /// Mark a skill as having been read during the current background review.
 /// Called by `skill_view` when the origin is `background_review`.
 pub fn mark_review_skill_read(name: &str) {
-    if is_background_review()
-        && let Ok(mut set) = REVIEW_READ_SKILLS.write()
-    {
+    if !is_background_review() {
+        return;
+    }
+    let marked = crate::write_origin::with_review_read_skills(|set| {
+        if let Ok(mut set) = set.write() {
+            set.insert(name.to_string());
+            true
+        } else {
+            false
+        }
+    })
+    .unwrap_or(false);
+    if !marked && let Ok(mut set) = REVIEW_READ_SKILLS_FALLBACK.write() {
         set.insert(name.to_string());
     }
 }
 
 /// Check whether a skill has been read during the current background review.
 fn review_has_read(name: &str) -> bool {
-    REVIEW_READ_SKILLS
-        .read()
-        .map(|set| set.contains(name))
-        .unwrap_or(false)
+    crate::write_origin::with_review_read_skills(|set| {
+        set.read().map(|set| set.contains(name)).unwrap_or(false)
+    })
+    .unwrap_or(false)
+        || REVIEW_READ_SKILLS_FALLBACK
+            .read()
+            .map(|set| set.contains(name))
+            .unwrap_or(false)
 }
 
 /// Reset the read tracking set. Called at the start of each background review
 /// session so that a stale session doesn't leak read-tracking state.
 pub fn reset_review_read_marks() {
-    if let Ok(mut set) = REVIEW_READ_SKILLS.write() {
+    if let Ok(mut set) = REVIEW_READ_SKILLS_FALLBACK.write() {
         set.clear();
     }
 }
@@ -192,37 +206,63 @@ enum ReviewGuardResult {
 /// 2. Hub-installed skills — NEVER edit.
 /// 3. Pinned skills — CAN be improved (pin only blocks delete/archive).
 /// 4. The review must have READ the skill before modifying it.
+///
+/// Actions that mutate the skill store (as opposed to reading or
+/// generating a derived index).
+const REVIEW_MUTATING_ACTIONS: &[&str] = &[
+    "edit",
+    "patch",
+    "delete",
+    "write_file",
+    "remove_file",
+    "create",
+];
+
 fn review_write_guard(name: &str, skill_dir: &Path, action: &str) -> ReviewGuardResult {
     if !is_background_review() {
         return ReviewGuardResult::Allowed;
     }
 
-    // Block edits/patches/deletes on bundled skills
-    if is_protected_skill(name) && (action == "delete" || action == "edit" || action == "patch") {
-        return ReviewGuardResult::Blocked(format!(
-            "Skill '{}' is a bundled/protected skill and cannot be modified by the background review.",
-            name
-        ));
-    }
+    // Every mutating action is gated — the old `edit | patch | delete`
+    // whitelist let `create`, `write_file`, `remove_file` and
+    // `generate_map` mutate the store with no scope check at all.
+    if REVIEW_MUTATING_ACTIONS.contains(&action) {
+        // Block mutations of bundled/protected skills, INCLUDING creation:
+        // a create that collides with a protected name is rejected before
+        // the write, so the review cannot hijack an infra skill's name.
+        if is_protected_skill(name) {
+            return ReviewGuardResult::Blocked(format!(
+                "Skill '{}' is a bundled/protected skill and cannot be modified by the background review.",
+                name
+            ));
+        }
 
-    // Block edits/patches/deletes on hub-installed skills
-    if is_hub_installed(skill_dir) && (action == "delete" || action == "edit" || action == "patch")
-    {
-        return ReviewGuardResult::Blocked(format!(
-            "Skill '{}' is hub-installed and cannot be modified by the background review.",
-            name
-        ));
-    }
+        // Block mutations of hub-installed skills.
+        if is_hub_installed(skill_dir) {
+            return ReviewGuardResult::Blocked(format!(
+                "Skill '{}' is hub-installed and cannot be modified by the background review.",
+                name
+            ));
+        }
 
-    // For edit/patch: require that the skill was read first
-    if (action == "edit" || action == "patch") && !review_has_read(name) {
-        return ReviewGuardResult::Blocked(format!(
-            "Skill '{}' has not been read via skill_view. Read it first before modifying.",
-            name
-        ));
+        // Any mutation of an EXISTING skill requires that the skill was
+        // read first. A create targets a skill that does not exist yet, so
+        // the read-before-modify rule cannot apply to it.
+        if action != "create" && !review_has_read(name) {
+            return ReviewGuardResult::Blocked(format!(
+                "Skill '{}' has not been read via skill_view. Read it first before modifying.",
+                name
+            ));
+        }
     }
 
     ReviewGuardResult::Allowed
+}
+
+/// Guard `action_generate_map`, the one mutating action whose write happens
+/// after its read validation. Called before `_map.md` is written.
+fn review_generate_map_guard(name: &str, skill_dir: &Path) -> ReviewGuardResult {
+    review_write_guard(name, skill_dir, "write_file")
 }
 
 // ── Frontmatter parsing ──────────────────────────────────────────────────────
@@ -1864,6 +1904,13 @@ impl SkillManageTool {
                 format!("A skill named '{}' already exists", parsed.name),
             );
         }
+        // Background review write guard — a create is a mutation of the
+        // store, so it is checked BEFORE the first filesystem change.
+        if let ReviewGuardResult::Blocked(msg) =
+            review_write_guard(&parsed.name, &skill_dir, "create")
+        {
+            return ToolResult::error("skill_manage", msg);
+        }
         if let Some(msg) = secret_in_skill(content) {
             return ToolResult::error("skill_manage", msg);
         }
@@ -2166,6 +2213,13 @@ impl SkillManageTool {
             Ok(t) => t,
             Err(e) => return ToolResult::error("skill_manage", e),
         };
+        // Background review write guard — BEFORE the parent directory is
+        // created, so a blocked write_file leaves nothing behind.
+        if let ReviewGuardResult::Blocked(msg) =
+            review_write_guard(&parsed.name, &skill_dir, "write_file")
+        {
+            return ToolResult::error("skill_manage", msg);
+        }
         if let Some(parent) = target.parent()
             && let Err(e) = fs::create_dir_all(parent)
         {
@@ -2201,6 +2255,12 @@ impl SkillManageTool {
             Ok(t) => t,
             Err(e) => return ToolResult::error("skill_manage", e),
         };
+        // Background review write guard — BEFORE the file is removed.
+        if let ReviewGuardResult::Blocked(msg) =
+            review_write_guard(&parsed.name, &skill_dir, "remove_file")
+        {
+            return ToolResult::error("skill_manage", msg);
+        }
         if !target.exists() {
             // List what's actually there
             let mut available = Vec::new();
@@ -2340,6 +2400,12 @@ impl SkillManageTool {
         let error_count = errors.len();
         let warning_count = warnings.len();
         let map_path = skill_dir.join("_map.md");
+        // generate_map WRITES `_map.md`, so the background review guard
+        // applies. check_only returns above without reaching this write.
+        if let ReviewGuardResult::Blocked(msg) = review_generate_map_guard(&parsed.name, &skill_dir)
+        {
+            return ToolResult::error("skill_manage", msg);
+        }
         if let Err(e) = fs::write(&map_path, &map) {
             return ToolResult::error("skill_manage", format!("Failed to write _map.md: {}", e));
         }
@@ -2430,6 +2496,152 @@ mod tests {
         let (fm, body) = parse_frontmatter(sample_skill_md());
         assert_eq!(fm.get("name").and_then(|v| v.as_str()), Some("new-skill"));
         assert!(body.contains("Instructions here."));
+    }
+
+    /// Every mutating `skill_manage` action is background-review-guarded
+    /// BEFORE the first filesystem mutation. The old guard covered only
+    /// edit/patch/delete, so create/write_file/remove_file/generate_map
+    /// bypassed the scope + read-before-modify checks.
+    #[tokio::test]
+    async fn background_review_cannot_mutate_a_skill_it_has_not_read() {
+        let reads = std::sync::Arc::new(std::sync::RwLock::new(std::collections::HashSet::new()));
+        crate::write_origin::scope_background_review_with_reads(
+            async {
+                let dir = TempDir::new().unwrap();
+                let skills_dir = dir.path().join("skills");
+                std::fs::create_dir_all(&skills_dir).unwrap();
+                let skill_dir = skills_dir.join("user-skill");
+                std::fs::create_dir_all(skill_dir.join("references")).unwrap();
+                let skill_md = skill_dir.join("SKILL.md");
+                std::fs::write(
+                    &skill_md,
+                    "---\nname: user-skill\ndescription: A user skill for guard tests\n---\n\nBody.\n",
+                )
+                .unwrap();
+                std::fs::write(skill_dir.join("references/orphan.md"), "# Orphan\n").unwrap();
+                let tool = SkillManageTool::new(skills_dir.clone());
+
+                let args = |action: &str| -> Value {
+                    serde_json::json!({
+                        "action": action,
+                        "name": "user-skill",
+                        "content": "---\nname: user-skill\ndescription: A user skill for guard tests\n---\n\nMutated.\n",
+                        "filePath": "references/orphan.md",
+                        "fileContent": "# Orphan\n\nchanged\n",
+                        "old_string": "Body.",
+                        "new_string": "Mutated.",
+                    })
+                };
+                for action in [
+                    "edit",
+                    "patch",
+                    "delete",
+                    "write_file",
+                    "remove_file",
+                    "generate_map",
+                ] {
+                    let result = tool.execute(args(action), ToolContext::default()).await;
+                    assert!(
+                        result.error.is_some(),
+                        "{action}: an unread skill must not be mutated by the review: {result:?}"
+                    );
+                }
+                assert!(skill_md.exists(), "delete must not have removed the skill");
+                assert!(
+                    skill_dir.join("references/orphan.md").exists(),
+                    "remove_file must not have deleted the file"
+                );
+                assert!(
+                    !skill_dir.join("_map.md").exists(),
+                    "generate_map must not have written _map.md"
+                );
+            },
+            reads,
+        )
+        .await;
+    }
+
+    /// A background-review CREATE cannot hijack a protected skill name.
+    #[tokio::test]
+    async fn background_review_cannot_create_a_protected_skill() {
+        let reads = std::sync::Arc::new(std::sync::RwLock::new(std::collections::HashSet::new()));
+        crate::write_origin::scope_background_review_with_reads(
+            async {
+                let dir = TempDir::new().unwrap();
+                let skills_dir = dir.path().join("skills");
+                std::fs::create_dir_all(&skills_dir).unwrap();
+                let tool = SkillManageTool::new(skills_dir.clone());
+                let result = tool
+                    .execute(
+                        serde_json::json!({
+                            "action": "create",
+                            "name": "operant",
+                            "content": sample_skill_md(),
+                        }),
+                        ToolContext::default(),
+                    )
+                    .await;
+                assert!(
+                    result.error.is_some(),
+                    "creating a protected skill must be refused"
+                );
+                assert!(
+                    !skills_dir.join("operant").exists(),
+                    "no dir may be created"
+                );
+            },
+            reads,
+        )
+        .await;
+    }
+
+    /// A background-review mutation IS allowed once the skill was read in
+    /// the SAME task — the task-local read marks work, and are not inherited
+    /// from a concurrent review.
+    #[tokio::test]
+    async fn background_review_can_mutate_a_skill_it_read() {
+        let reads = std::sync::Arc::new(std::sync::RwLock::new(std::collections::HashSet::new()));
+        crate::write_origin::scope_background_review_with_reads(
+            async {
+                let dir = TempDir::new().unwrap();
+                let skills_dir = dir.path().join("skills");
+                std::fs::create_dir_all(skills_dir.join("user-skill")).unwrap();
+                std::fs::write(
+                    skills_dir.join("user-skill").join("SKILL.md"),
+                    "---\nname: user-skill\ndescription: A user skill for guard tests\n---\n\nBody.\n",
+                )
+                .unwrap();
+                mark_review_skill_read("user-skill");
+                assert!(
+                    review_has_read("user-skill"),
+                    "the same task's read mark must count"
+                );
+
+                let tool = SkillManageTool::new(skills_dir.clone());
+                let result = tool
+                    .execute(
+                        serde_json::json!({
+                            "action": "edit",
+                            "name": "user-skill",
+                            "content": "---\nname: user-skill\ndescription: A user skill for guard tests\n---\n\nMutated.\n",
+                        }),
+                        ToolContext::default(),
+                    )
+                    .await;
+                assert!(
+                    result.error.is_none(),
+                    "a read-then-mutated skill is allowed: {result:?}"
+                );
+                assert!(
+                    std::fs::read_to_string(skills_dir.join("user-skill").join("SKILL.md"))
+                        .unwrap()
+                        .contains("Mutated."),
+                    "the edit must land"
+                );
+            },
+            reads,
+        )
+        .await;
     }
 
     #[test]

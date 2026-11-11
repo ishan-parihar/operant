@@ -2,16 +2,17 @@
 //!
 //! After every turn, `OperantAgent::run()` may trigger a background review
 //! that evaluates whether any skill or memory should be saved or updated.
-//! Writes go straight to the memory + skill stores. Main conversation and
-//! prompt cache are never touched.
+//! The skill lane may update a reviewed, non-protected skill. The
+//! unattended memory lane refuses writes under AD-020. Main conversation
+//! and prompt cache are never touched.
 //!
 //! ## Auxiliary Model Routing
 //!
 //! The review agent runs on the MAIN model by default ("auto"), replaying
 //! the full conversation — already warm in the prompt cache, so cheap cache
 //! reads. A user can route the review to a different, cheaper model via
-//! `auxiliary.background_review.{provider,model}`. A different model cannot
-//! reuse the parent's cache (different key), so the fork is cold regardless
+//! `[auxiliary_models.memory]` (model/base_url/api_key). A different route
+//! cannot reuse the parent's cache, so the fork is cold regardless
 //! — replaying the full transcript would just cold-write it. So when (and
 //! only when) routed to a different model, we replay a compact DIGEST to
 //! minimise cold-written tokens. Same model -> full replay; different model
@@ -150,8 +151,12 @@ preferences, or personal details worth remembering?
 2. Has the user expressed expectations about how you should behave, their work \
 style, or ways they want you to operate?
 
-If something stands out, save it using the memory tool. \
-If nothing is worth saving, just say 'Nothing to save.' and stop.";
+This unattended review cannot write memory: the background-review memory tool \
+refuses the write under the user-approval policy. Do not attempt a memory write \
+and do not repeat that refusal as a failure. Instead, report the candidate \
+memory in your final reply as `Memory candidate: <fact>` so a foreground turn \
+can ask the user before saving it. If nothing is worth saving, just say \
+'Nothing to save.' and stop.";
 
 /// Combined review prompt for both memory and skill updates.
 pub const COMBINED_REVIEW_PROMPT: &str = "\
@@ -159,8 +164,11 @@ Review the conversation above and update two things:
 
 **Memory**: who the user is. Did the user reveal persona, \
 desires, preferences, personal details, or expectations about \
-how you should behave? Save facts about the user and durable \
-preferences with the memory tool.
+how you should behave? This unattended review cannot write memory: \
+the memory tool refuses that write under the user-approval policy. \
+Do not attempt the write. Report each candidate instead as \
+`Memory candidate: <fact>` in your final reply so a foreground turn \
+can ask the user before saving it.
 
 **Skills**: how to do this class of task. Be ACTIVE — most \
 sessions produce at least one skill update. A pass that does \
@@ -354,6 +362,64 @@ impl std::str::FromStr for NotificationMode {
 // ---------------------------------------------------------------------------
 // Build review prompt
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Auxiliary review route
+// ---------------------------------------------------------------------------
+
+/// Resolved route for a background review.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ReviewRoute {
+    pub model: String,
+    pub base_url: Option<String>,
+    pub api_key: Option<String>,
+    /// Whether this is a different route from the primary one.
+    pub routed: bool,
+}
+
+/// Resolve the `[auxiliary_models.memory]` review route.
+///
+/// The slot's model, endpoint, and credential are one route contract: a
+/// model-only slot rides the primary client but uses the auxiliary model;
+/// an endpoint/credential override gets a dedicated client. `routed` is
+/// route identity, not model identity, so the same model on another
+/// endpoint or key is correctly treated as cold-cache.
+pub(crate) fn resolve_review_route(
+    slot: Option<&crate::config::AuxiliaryModelConfig>,
+    primary_model: &str,
+    primary_base_url: Option<&str>,
+    primary_api_key: Option<&str>,
+) -> Option<ReviewRoute> {
+    let slot = slot?;
+    let model = slot
+        .model
+        .as_deref()
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+        .unwrap_or(primary_model)
+        .to_string();
+    let base_url = slot
+        .base_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|url| !url.is_empty())
+        .map(str::to_string);
+    let api_key = slot
+        .api_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|key| !key.is_empty())
+        .map(str::to_string);
+    let routed = model != primary_model
+        || base_url.as_deref() != primary_base_url
+        || api_key.as_deref() != primary_api_key;
+    Some(ReviewRoute {
+        model,
+        base_url,
+        api_key,
+        routed,
+    })
+}
 
 /// Build the review prompt based on which triggers fired.
 ///
@@ -940,6 +1006,84 @@ mod tests {
         let prompt = build_review_prompt(false, true);
         assert!(prompt.contains("skill library"));
         assert!(!prompt.contains("**Memory**"));
+    }
+
+    #[test]
+    fn review_route_treats_model_endpoint_and_credential_as_one_contract() {
+        use crate::config::AuxiliaryModelConfig;
+
+        let primary_model = "primary-model";
+        let primary_url = "https://primary.example/v1";
+        let primary_key = "primary-key";
+
+        assert_eq!(
+            resolve_review_route(None, primary_model, Some(primary_url), Some(primary_key)),
+            None
+        );
+
+        let model_only = resolve_review_route(
+            Some(&AuxiliaryModelConfig {
+                model: Some("aux-model".to_string()),
+                ..Default::default()
+            }),
+            primary_model,
+            Some(primary_url),
+            Some(primary_key),
+        )
+        .expect("slot route");
+        assert_eq!(model_only.model, "aux-model");
+        assert!(model_only.routed);
+        assert_eq!(model_only.base_url, None);
+        assert_eq!(model_only.api_key, None);
+
+        let dedicated = resolve_review_route(
+            Some(&AuxiliaryModelConfig {
+                model: Some("aux-model".to_string()),
+                base_url: Some("https://aux.example/v1".to_string()),
+                api_key: Some("aux-key".to_string()),
+                ..Default::default()
+            }),
+            primary_model,
+            Some(primary_url),
+            Some(primary_key),
+        )
+        .expect("slot route");
+        assert_eq!(
+            dedicated.base_url.as_deref(),
+            Some("https://aux.example/v1")
+        );
+        assert_eq!(dedicated.api_key.as_deref(), Some("aux-key"));
+        assert!(dedicated.routed);
+
+        let same = resolve_review_route(
+            Some(&AuxiliaryModelConfig {
+                model: Some(primary_model.to_string()),
+                base_url: Some(primary_url.to_string()),
+                api_key: Some(primary_key.to_string()),
+                ..Default::default()
+            }),
+            primary_model,
+            Some(primary_url),
+            Some(primary_key),
+        )
+        .expect("slot route");
+        assert!(!same.routed, "the same route can reuse the warm cache");
+
+        let same_model_other_key = resolve_review_route(
+            Some(&AuxiliaryModelConfig {
+                model: Some(primary_model.to_string()),
+                api_key: Some("other-key".to_string()),
+                ..Default::default()
+            }),
+            primary_model,
+            Some(primary_url),
+            Some(primary_key),
+        )
+        .expect("slot route");
+        assert!(
+            same_model_other_key.routed,
+            "a different credential is a different route"
+        );
     }
 
     #[test]

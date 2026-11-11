@@ -56,7 +56,10 @@ struct TurnEndContext<'a> {
     session_id: &'a str,
     user_query: &'a str,
     counters: TurnCounters,
-    review_fired: bool,
+    /// S3 deferral — which review lane(s) triggered during the turn and must
+    /// spawn at the terminal exit. One review spawn per turn covers both.
+    review_skills: bool,
+    review_memory: bool,
     timing: TurnTiming,
 }
 
@@ -438,7 +441,8 @@ impl OperantAgent {
         let session_id = end.session_id;
         let iterations = end.counters.iteration;
         let tool_calls = end.counters.tool_calls;
-        let review_fired = end.review_fired;
+        let review_skills = end.review_skills;
+        let review_memory = end.review_memory;
         self.emit(AgentEvent::Done {
             message: result.clone(),
             // S5: the grace path must not report `text_response` —
@@ -495,8 +499,8 @@ impl OperantAgent {
         // S3: deferred skill review — review the complete transcript
         // AFTER the turn's final answer is committed/emitted, so the
         // review never competes with the turn for provider slots.
-        if review_fired {
-            self.spawn_background_review(messages, session_id, true, false)
+        if review_skills || review_memory {
+            self.spawn_background_review(messages, session_id, review_skills, review_memory)
                 .await;
         }
     }
@@ -807,7 +811,8 @@ impl OperantAgent {
         // sees the complete transcript instead of racing the turn for
         // provider slots mid-loop. Interrupt/Error exits skip it — the
         // operator already knows why the turn stopped.
-        let mut review_fired = false;
+        let mut review_skills_pending = false;
+        let mut review_memory_pending = false;
 
         // ── Tool-call guardrail reset (R4) ────────────────────────────
         // Identical-call repeat detection is per-USER-TURN, not per-iteration:
@@ -984,9 +989,11 @@ impl OperantAgent {
                 trigger.should_review_memory
             }
         }; // MutexGuard dropped here — safe to .await
+        // The SPAWN is deferred to the terminal exit like the skill lane's —
+        // a review spawned here races the turn it is supposed to review for
+        // provider slots. The counter still advanced, so the cadence is kept.
         if should_review_memory {
-            self.spawn_background_review(&messages, &session_id, false, true)
-                .await;
+            review_memory_pending = true;
         }
 
         let mut retry_state = turn_retry_state::TurnRetryState::new(Some(self.config.max_retries));
@@ -1107,7 +1114,8 @@ impl OperantAgent {
                                 tool_calls: total_tool_calls,
                                 succeeded: successful_tool_calls,
                             },
-                            review_fired,
+                            review_skills: review_skills_pending,
+                            review_memory: review_memory_pending,
                             timing: TurnTiming {
                                 start: turn_start,
                                 inference: turn_inference,
@@ -1153,7 +1161,8 @@ impl OperantAgent {
                                 tool_calls: total_tool_calls,
                                 succeeded: successful_tool_calls,
                             },
-                            review_fired,
+                            review_skills: review_skills_pending,
+                            review_memory: review_memory_pending,
                             timing: TurnTiming {
                                 start: turn_start,
                                 inference: turn_inference,
@@ -1222,7 +1231,8 @@ impl OperantAgent {
                                 tool_calls: total_tool_calls,
                                 succeeded: successful_tool_calls,
                             },
-                            review_fired,
+                            review_skills: review_skills_pending,
+                            review_memory: review_memory_pending,
                             timing: TurnTiming {
                                 start: turn_start,
                                 inference: turn_inference,
@@ -1317,7 +1327,8 @@ impl OperantAgent {
                                 tool_calls: total_tool_calls,
                                 succeeded: successful_tool_calls,
                             },
-                            review_fired,
+                            review_skills: review_skills_pending,
+                            review_memory: review_memory_pending,
                             timing: TurnTiming {
                                 start: turn_start,
                                 inference: turn_inference,
@@ -2299,9 +2310,14 @@ impl OperantAgent {
 
                         // S3: deferred skill review — fires AFTER the turn's
                         // final answer, reviewing the complete transcript.
-                        if review_fired {
-                            self.spawn_background_review(&messages, &session_id, true, false)
-                                .await
+                        if review_skills_pending || review_memory_pending {
+                            self.spawn_background_review(
+                                &messages,
+                                &session_id,
+                                review_skills_pending,
+                                review_memory_pending,
+                            )
+                            .await
                         }
 
                         // R6 — durable session activity heartbeat (hermes
@@ -2647,9 +2663,14 @@ impl OperantAgent {
                         );
                         // S3: deferred skill review — a breaker exit still
                         // produced a (partial) transcript worth one review.
-                        if review_fired {
-                            self.spawn_background_review(&messages, &session_id, true, false)
-                                .await;
+                        if review_skills_pending || review_memory_pending {
+                            self.spawn_background_review(
+                                &messages,
+                                &session_id,
+                                review_skills_pending,
+                                review_memory_pending,
+                            )
+                            .await;
                         }
                         return Ok(abort_msg);
                     }
@@ -2736,9 +2757,14 @@ impl OperantAgent {
                         );
                         // S3: deferred skill review — a breaker exit still
                         // produced a (partial) transcript worth one review.
-                        if review_fired {
-                            self.spawn_background_review(&messages, &session_id, true, false)
-                                .await;
+                        if review_skills_pending || review_memory_pending {
+                            self.spawn_background_review(
+                                &messages,
+                                &session_id,
+                                review_skills_pending,
+                                review_memory_pending,
+                            )
+                            .await;
                         }
                         return Ok(abort_msg);
                     }
@@ -3151,7 +3177,7 @@ impl OperantAgent {
             // per-iteration (bump + persist unchanged); only the within-turn
             // repetition is capped. The actual `spawn_background_review` is
             // invoked by the TextResponse / GraceCall / CircuitBreaker exits.
-            if should_review_skills && !review_fired {
+            if should_review_skills {
                 // W6/O-22's SEVENTH learner (the live day caught it: the log's
                 // last line before a silent body death was this spawn). A
                 // Holon body never spawns the skill review: its LLM traffic
@@ -3160,16 +3186,14 @@ impl OperantAgent {
                 // catch), and the org's learning rides the result envelope
                 // (learnings/proposals), not a personal skill store.
                 //
-                // The gate must keep review_fired UNLATCHED: the exit-path
-                // spawns (run.rs :245/:1504/:1891/:1962) fire on
-                // `if review_fired` — latching then flipping a local flag
-                // (iter-877's first cut) gated nothing.
+                // The gate latches the pending flag; the terminal exit
+                // performs the one spawn after the answer is committed.
                 if crate::platform::holon_run_dir().is_some() {
                     info!(
                         "skill review skipped — a Holon body's learning rides the result envelope"
                     );
                 } else {
-                    review_fired = true;
+                    review_skills_pending = true;
                 }
             }
 
