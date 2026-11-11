@@ -419,6 +419,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **iter-1960 — The catalogue's single Dialog promise was tested on 5 of the 11 modal surfaces that describe it (found 2026-11-10) (RT-487).** **CLOSED iter-1960** — round 76's pin covered `stats`, `export`, `free_mode`, `key_input` and `custom_provider`, and left `bypass_permissions`, `connect`, `import_config`, `ask_user`, `help` and `history_search` untested. All six also expose the same `visible: bool` the renderer reads and are all gated in `key_handling.rs`, so the gap was the pin's coverage, not the code's.
 
+- **iter-1961 — Every chord the Completion context describes must do the thing its description says, and nothing tested that (found 2026-11-11) (RT-506).** **CLOSED iter-1961** — round 75's behavioural sweep covers Completion, but its signal is "the key typed itself": it catches a chord nothing consumed, and cannot distinguish a chord that swallows the key from one that does what it says. Completion is exactly that risk — `Down`, `Up`, `Tab`, `Enter` and `Esc` are advertised as motion and acceptance, and an arrow that consumed the key while doing nothing would round 75 green and the operator stuck. **Fixed as a test**, not a repair.
+
 
 ### Fixed
 

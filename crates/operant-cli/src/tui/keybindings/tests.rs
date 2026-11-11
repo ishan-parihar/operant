@@ -35,6 +35,94 @@ use crossterm::event::{KeyCode, KeyModifiers};
 /// fourth time this audit's own probe manufactured a defect the code does not
 /// have. Rather than delete the case, the exception is asserted as an
 /// exception, so a future change that makes the overlay modal has to notice.
+/// (iter-1961) Every chord the Completion context describes must do the thing
+/// its description says.
+///
+/// Round 75's behavioural sweep covers Global, Prompt, Dialog and Completion,
+/// but its signal is "the key typed itself" — so it catches a chord nothing
+/// consumed, and it cannot distinguish a chord that swallows the key from one
+/// that does what it says. Completion is exactly that risk: `Down`, `Up`, `Tab`,
+/// `Enter` and `Esc` are all advertised as motion and acceptance, and an arrow
+/// that consumed the key while doing nothing would round 75 green and the
+/// operator stuck.
+///
+/// This drives each chord through the real `handle_key_event` on a fresh app
+/// with the typeahead popup OPEN, and requires the observable effect each
+/// description names: the index moves, the text fills, or the popup closes.
+///
+/// There is no vim-mode or pane state to construct — the popup is opened by
+/// setting the two fields the renderer and the state machine both read, which
+/// is how this audit's last four false positives were avoided.
+#[test]
+fn every_completion_chord_does_what_its_description_says() {
+    use crate::tui::prompt_input::TypeaheadSuggestion;
+    use crossterm::event::{KeyCode, KeyModifiers};
+
+    let open_popup = |app: &mut crate::tui::app::App| {
+        app.prompt_input.suggestions = vec![
+            TypeaheadSuggestion::command("/help".to_string(), "Show help".to_string()),
+            TypeaheadSuggestion::command("/model".to_string(), "Pick a model".to_string()),
+        ];
+        app.prompt_input.suggestion_index = Some(0);
+        app.prompt_input.text = "/h".to_string();
+        app.prompt_input.cursor = 2;
+    };
+    let press = |app: &mut crate::tui::app::App, code: KeyCode| {
+        app.handle_key_event(crossterm::event::KeyEvent::new(code, KeyModifiers::NONE));
+    };
+
+    // "Next completion": the selection must actually move.
+    let mut app = crate::tui::app::tests::make_app();
+    open_popup(&mut app);
+    let before = app.prompt_input.suggestion_index;
+    press(&mut app, KeyCode::Down);
+    assert_ne!(
+        app.prompt_input.suggestion_index, before,
+        "Down is advertised as \"Next completion\" but the selection did not move"
+    );
+
+    // "Previous completion": back where it started.
+    let after_down = app.prompt_input.suggestion_index;
+    press(&mut app, KeyCode::Up);
+    assert_ne!(
+        app.prompt_input.suggestion_index, after_down,
+        "Up is advertised as \"Previous completion\" but the selection did not move"
+    );
+
+    // "Accept completion" via Tab: the composer must hold the suggestion.
+    let mut app = crate::tui::app::tests::make_app();
+    open_popup(&mut app);
+    press(&mut app, KeyCode::Tab);
+    assert_eq!(
+        app.prompt_input.text, "/help",
+        "Tab is advertised as \"Accept completion\" but the composer is {:?}",
+        app.prompt_input.text
+    );
+
+    // "Accept completion" via Enter: same promise, different chord.
+    let mut app = crate::tui::app::tests::make_app();
+    open_popup(&mut app);
+    press(&mut app, KeyCode::Enter);
+    assert_eq!(
+        app.prompt_input.text, "/help",
+        "Enter is advertised as \"Accept completion\" but the composer is {:?}",
+        app.prompt_input.text
+    );
+
+    // "Dismiss completion": the popup must go away.
+    let mut app = crate::tui::app::tests::make_app();
+    open_popup(&mut app);
+    assert!(
+        !app.prompt_input.suggestions.is_empty(),
+        "the popup must open"
+    );
+    press(&mut app, KeyCode::Esc);
+    assert!(
+        app.prompt_input.suggestions.is_empty(),
+        "Esc is advertised as \"Dismiss completion\" but the popup stayed open"
+    );
+}
+
 #[test]
 fn every_modal_dialog_closes_on_the_escape_the_catalogue_promises() {
     use crossterm::event::{KeyCode, KeyModifiers};
