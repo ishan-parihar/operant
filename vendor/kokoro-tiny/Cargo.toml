@@ -118,7 +118,19 @@ version = "0.16.1"
 version = "0.9.1"
 
 [dependencies.ort]
-version = "2.0.0-rc.10"
+# PINNED, and the pin is load-bearing: this vendored source calls the
+# pre-rc.15 ort API (`Session::builder()` with no argument), and ort
+# 2.0.0-rc.15 changed it to `Session::builder(&Environment)`. A caret
+# requirement resolved to rc.15 on 2026-11-12, and the workspace then
+# FAILED TO BUILD from a clean checkout — the repo does not track
+# Cargo.lock (`.gitignore` has `*.lock`), so every fresh resolve picks
+# the newest ort, and this crate no longer compiles against it. The
+# main tree kept building only because its local, ignored lock still
+# pinned rc.12.
+#
+# Lifting the pin means porting this crate to the rc.15 API; until
+# then, an exact requirement is the honest constraint.
+version = "=2.0.0-rc.12"
 features = ["download-binaries"]
 
 [dependencies.reqwest]

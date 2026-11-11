@@ -150,13 +150,26 @@ fn cmd_search(provider: &MemoryWireProvider, query: &str) -> Result<()> {
 }
 
 fn cmd_store(provider: &MemoryWireProvider, text: &str) -> Result<()> {
+    // A store that fell back to memory is NOT durable: a retain into it is
+    // acknowledged and then lost with the process. Refuse rather than lie —
+    // the operator was told "Stored memory <id>" and the fact was gone.
+    if !provider.is_persistent() {
+        anyhow::bail!(
+            "the on-disk memory store could not be opened, so this fact would be lost — \
+             nothing was stored. The cause is in the operant log (the in-memory fallback \
+             warning names the database path)."
+        );
+    }
     match provider.retain_fact(text, &[]) {
         Some(id) => {
             println!("Stored memory {id} in bank {:?}.", provider.bank_id());
             Ok(())
         }
         None => {
-            anyhow::bail!("the memory engine did not accept the retain (see the log above)");
+            anyhow::bail!(
+                "the memory engine did not accept the retain — nothing was stored. \
+                 The engine's own reason is in the operant log (WARN memory_wire call failed)."
+            );
         }
     }
 }

@@ -132,6 +132,15 @@ pub async fn handle_cron_command(
             allow,
             deny,
         } => {
+            // Validated BEFORE the org-mode branch, not inside `cmd_create`.
+            // The org-mode branch never reaches `cmd_create`, which is where
+            // `normalize_schedule` used to live — so in org mode an
+            // unusable schedule ("not-a-schedule", "99 99 99 99 99 99 99")
+            // was accepted and proposed to the Chair verbatim. The proposal
+            // must carry a schedule that can actually fire.
+            operant_core::cronjobs::normalize_schedule(&schedule)
+                .with_context(|| format!("invalid schedule '{schedule}'"))?;
+
             // Phase G (docs/agentic-os/): in org mode recurring work belongs
             // to the organization — `operant cron add` proposes a Holon
             // routine instead of creating a local cron. One command printed,
@@ -146,10 +155,32 @@ pub async fn handle_cron_command(
                 if let Some(n) = repeat {
                     proposal.push_str(&format!(" --recurring {n}"));
                 }
-                println!("[holon] org mode: recurring work is the organization's.");
-                println!("Propose it as a routine (the Chair approves):",);
-                println!("  {proposal}");
-                return Ok(());
+                if json {
+                    // stdout must carry EXACTLY one JSON document — the same
+                    // rule `doctor --json` follows (H10) — so the human
+                    // prose above is suppressed in JSON mode.
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "created": false,
+                            "reason": "org_mode",
+                            "proposal": proposal,
+                        }))?
+                    );
+                } else {
+                    println!("[holon] org mode: recurring work is the organization's.");
+                    println!("Propose it as a routine (the Chair approves):");
+                    println!("  {proposal}");
+                    println!("No local cron job was created.");
+                }
+                // It printed a proposal and returned Ok — so a script that
+                // gated on the exit code believed the job existed, and
+                // `cron list` showed no such row. The command did NOT do
+                // what it was asked, and it must say so.
+                anyhow::bail!(
+                    "org mode: no cron job was created — recurring work is the organization's. \
+                     Propose it as a routine with the command printed above."
+                );
             }
             cmd_create(
                 config, &name, &schedule, &command, repeat, seat_mode, allow, deny,
@@ -176,6 +207,32 @@ pub async fn handle_cron_command(
     }
 }
 
+/// The next run to DISPLAY for a job, from its stored value and schedule.
+///
+/// The stored `next_run_at` is the value the scheduler will use, but it is
+/// only refreshed when the scheduler ticks — so on a host where the gateway
+/// is not running it can name a moment in the PAST. The column then reads
+/// as "this fires in the past", which is worse than useless: the operator
+/// sees a job that looks broken when the truth is that nothing has
+/// refreshed it. A moment that has already gone by is labelled, and a job
+/// that was never scheduled gets the next occurrence its schedule implies.
+fn display_next_run(stored: Option<&str>, schedule: &str) -> String {
+    match stored {
+        Some(stored) => {
+            let overdue = chrono::DateTime::parse_from_rfc3339(stored)
+                .map(|at| at <= chrono::Utc::now())
+                .unwrap_or(false);
+            if overdue {
+                format!("{stored} (overdue)")
+            } else {
+                stored.to_string()
+            }
+        }
+        None => operant_core::cronjobs::schedule::next_run_from_schedule(schedule)
+            .unwrap_or_else(|| "—".to_string()),
+    }
+}
+
 async fn cmd_list(config: &AppConfig, json: bool) -> Result<()> {
     let db = CronDb::init(cron_db_path(config)).context("Failed to open cron database")?;
     let jobs = db.list_jobs(true).context("Failed to list cron jobs")?;
@@ -196,7 +253,7 @@ async fn cmd_list(config: &AppConfig, json: bool) -> Result<()> {
                     "name": j.name,
                     "schedule": j.schedule_display,
                     "status": status,
-                    "next_run": j.next_run_at,
+                    "next_run": display_next_run(j.next_run_at.as_deref(), &j.schedule),
                     "last_status": j.last_status,
                 })
             })
@@ -224,7 +281,7 @@ async fn cmd_list(config: &AppConfig, json: bool) -> Result<()> {
         } else {
             "Disabled"
         };
-        let next_run = job.next_run_at.as_deref().unwrap_or("—");
+        let next_run = display_next_run(job.next_run_at.as_deref(), &job.schedule);
         let last_output = job.last_status.as_deref().unwrap_or("—");
 
         let display_name = if job.name.len() > 26 {
@@ -777,4 +834,88 @@ async fn cmd_history(config: &AppConfig, id: &str, limit: Option<usize>) -> Resu
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A config with Holon org mode ON — the posture in which `cron create`
+    /// proposes a routine instead of creating a local job.
+    fn org_mode_config() -> AppConfig {
+        let mut config = AppConfig::default();
+        config.holon.enabled = true;
+        config
+    }
+
+    fn create(name: &str, schedule: &str) -> CronSubcommand {
+        CronSubcommand::Create {
+            name: name.to_string(),
+            schedule: schedule.to_string(),
+            command: "echo hi".to_string(),
+            repeat: None,
+            seat_mode: None,
+            allow: Vec::new(),
+            deny: Vec::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn org_mode_create_creates_nothing_and_does_not_report_success() {
+        // It used to print a proposal and return Ok — so a script that
+        // gated on the exit code believed the job existed, and `cron list`
+        // showed no such row.
+        let outcome =
+            handle_cron_command(&org_mode_config(), create("probe", "0 * * * *"), false).await;
+        let err = outcome
+            .expect_err("org mode must not report that a job was created")
+            .to_string();
+        assert!(
+            err.contains("no cron job was created"),
+            "the refusal must say what happened: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn org_mode_create_still_validates_the_schedule() {
+        // The org-mode branch never reached `cmd_create`, where the
+        // validation lives — so an unusable schedule was proposed to the
+        // Chair verbatim.
+        let outcome =
+            handle_cron_command(&org_mode_config(), create("probe", "not-a-schedule"), false).await;
+        let err = outcome
+            .expect_err("an unusable schedule must fail here")
+            .to_string();
+        assert!(
+            err.contains("invalid schedule"),
+            "the schedule must be rejected before the proposal: {err}"
+        );
+    }
+
+    #[test]
+    fn a_next_run_in_the_past_is_labelled_overdue() {
+        // The column used to print the stored moment verbatim, so a job
+        // whose scheduler had not ticked read as "fires in the past".
+        let past = "2001-01-01T00:00:00+00:00";
+        let shown = display_next_run(Some(past), "0 * * * *");
+        assert!(
+            shown.starts_with(past) && shown.contains("overdue"),
+            "a moment that has gone by must be labelled: {shown}"
+        );
+    }
+
+    #[test]
+    fn a_next_run_in_the_future_is_shown_as_it_is() {
+        let future = "2099-01-01T00:00:00+00:00";
+        assert_eq!(display_next_run(Some(future), "0 * * * *"), future);
+    }
+
+    #[test]
+    fn a_job_that_was_never_scheduled_shows_the_next_occurrence() {
+        let shown = display_next_run(None, "0 0 * * *");
+        assert!(
+            !shown.is_empty() && shown != "—",
+            "an unscheduled job still has a next occurrence: {shown}"
+        );
+    }
 }

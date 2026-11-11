@@ -64,8 +64,51 @@ pub async fn handle_cookies_command(cmd: CookiesSubcommand) -> Result<()> {
     }
 }
 
+/// The browser names `operant cookies import --browser` accepts.
+///
+/// Mirrors the core's discovery list. It lives here so the CLI can tell a
+/// browser NAME from a FILE PATH without reaching the store — see
+/// [`load_cookies`].
+const BROWSER_NAMES: &[&str] = &[
+    "chrome",
+    "chromium",
+    "brave",
+    "brave-beta",
+    "brave-origin-beta",
+    "edge",
+    "vivaldi",
+    "opera",
+    "firefox",
+    "zen",
+];
+
+/// Decide where a positional import argument goes.
+///
+/// `operant cookies import chrome` was read as a FILE named "chrome":
+/// "Failed to read cookie file chrome". A browser name in the positional
+/// slot is what the operator meant, so it is routed to the browser path
+/// rather than to the file reader. An explicit `--browser` always wins, and
+/// a path that is not a browser name is left exactly as it was.
+fn route_import_target(
+    file: Option<PathBuf>,
+    browser: Option<String>,
+) -> (Option<PathBuf>, Option<String>) {
+    match (file, browser) {
+        (Some(path), None) => {
+            let name = path.to_string_lossy().to_ascii_lowercase();
+            if BROWSER_NAMES.contains(&name.as_str()) {
+                (None, Some(name))
+            } else {
+                (Some(path), None)
+            }
+        }
+        (file, browser) => (file, browser),
+    }
+}
+
 /// Load cookies from a file (auto-detect cookies.txt vs JSON) or browser DB.
 fn load_cookies(file: Option<PathBuf>, browser: Option<String>) -> Result<Vec<Cookie>> {
+    let (file, browser) = route_import_target(file, browser);
     if let Some(browser_name) = browser {
         let found = cookies::find_browser_cookie_source(&browser_name).with_context(|| {
             format!(
@@ -245,5 +288,29 @@ mod tests {
     fn discover_returns_list() {
         // Function must not panic and returns a Vec (may be empty in CI).
         let _ = cookies::discover_browser_cookie_sources();
+    }
+
+    #[test]
+    fn a_browser_name_in_the_positional_slot_routes_to_the_browser_path() {
+        // `operant cookies import chrome` was read as a file named "chrome".
+        let (file, browser) = route_import_target(Some("chrome".into()), None);
+        assert_eq!(file, None);
+        assert_eq!(browser.as_deref(), Some("chrome"));
+    }
+
+    #[test]
+    fn a_real_file_path_is_left_alone() {
+        let path = std::path::PathBuf::from("/tmp/cookies.txt");
+        let (file, browser) = route_import_target(Some(path.clone()), None);
+        assert_eq!(file, Some(path));
+        assert_eq!(browser, None);
+    }
+
+    #[test]
+    fn an_explicit_browser_flag_wins_over_the_position() {
+        let path = std::path::PathBuf::from("/tmp/cookies.txt");
+        let (file, browser) = route_import_target(Some(path.clone()), Some("brave".into()));
+        assert_eq!(file, Some(path));
+        assert_eq!(browser.as_deref(), Some("brave"));
     }
 }

@@ -262,9 +262,29 @@ mod tests {
         assert_eq!(parse_ids(WireFamily::Google, &body), ["gemini-2.5-flash"]);
     }
 
+    /// A mockito server that does NOT come from the shared pool.
+    ///
+    /// mockito's pool is process-global: a server is handed to one test and
+    /// RETURNED to the pool when that test ends, so a later test can be
+    /// given the same server — and, under high parallelism, a server whose
+    /// listener has already closed. The symptom was four unrelated tests
+    /// failing together on ONE shared port: the mcp streamable-HTTP test
+    /// drew a server, failed, and handed the dead one back, and the next
+    /// three drew the same dead one.
+    ///
+    /// A dedicated server per test removes the sharing, and with it the
+    /// cascade: the port belongs to this test alone.
+    async fn dedicated_server() -> mockito::Server {
+        mockito::Server::new_with_opts_async(mockito::ServerOpts {
+            port: 0,
+            ..Default::default()
+        })
+        .await
+    }
+
     #[tokio::test]
     async fn anthropic_sends_the_key_as_x_api_key() {
-        let mut server = mockito::Server::new_async().await;
+        let mut server = dedicated_server().await;
         let mock = server
             .mock("GET", "/v1/models")
             .match_header("x-api-key", "sk-test")
@@ -285,7 +305,7 @@ mod tests {
 
     #[tokio::test]
     async fn google_sends_the_key_in_the_query_and_strips_the_prefix() {
-        let mut server = mockito::Server::new_async().await;
+        let mut server = dedicated_server().await;
         let mock = server
             .mock("GET", "/v1beta/models")
             .match_query(mockito::Matcher::UrlEncoded("key".into(), "k1".into()))
@@ -302,7 +322,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_http_error_names_the_endpoint_and_status() {
-        let mut server = mockito::Server::new_async().await;
+        let mut server = dedicated_server().await;
         let _mock = server
             .mock("GET", "/v1/models")
             .with_status(401)

@@ -189,7 +189,17 @@ mod tests {
 
     #[tokio::test]
     async fn distills_facts_and_persists_memory() {
-        let mut server = Server::new_async().await;
+        // A DEDICATED server, not one from mockito's shared pool: the pool
+        // hands a server to one test and returns it to the pool when that
+        // test ends, so a later test can be given the same server — and, under
+        // high parallelism, a server whose listener has already closed. The
+        // symptom was several unrelated tests failing together on one shared
+        // port.
+        let mut server = Server::new_with_opts_async(mockito::ServerOpts {
+            port: 0,
+            ..Default::default()
+        })
+        .await;
         let _mock = server
             .mock("POST", "/v1/chat/completions")
             .with_status(200)

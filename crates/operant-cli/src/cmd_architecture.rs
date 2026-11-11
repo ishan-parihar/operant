@@ -396,9 +396,57 @@ pub async fn handle_validate_command(file: PathBuf, patches: Vec<PathBuf>) -> Re
     Ok(())
 }
 
+/// The places a relative architecture file is looked for, in order.
+///
+/// The default `--file` is the bare name `architecture.toml`, which means
+/// "this project's" — but the process CWD is not the project. A cron job, a
+/// gateway turn, or an operator in another directory all resolve it
+/// differently, and the old failure was a bare "No such file or directory"
+/// with no hint about where it had looked.
+fn architecture_candidates(file: &Path) -> Vec<PathBuf> {
+    if file.is_absolute() {
+        return vec![file.to_path_buf()];
+    }
+    let mut out = Vec::new();
+    // The working directory, then each of its ancestors — the project root
+    // is usually an ancestor of where the command was run.
+    if let Ok(cwd) = std::env::current_dir() {
+        let mut dir = cwd;
+        loop {
+            out.push(dir.join(file));
+            if !dir.pop() {
+                break;
+            }
+        }
+    }
+    // The operant home — where an operator's own architecture lives.
+    out.push(operant_core::platform::operant_home().join(file));
+    out
+}
+
+/// Resolve the architecture file, or say exactly where it was looked for.
+fn resolve_architecture_file(file: &Path) -> Result<PathBuf> {
+    let candidates = architecture_candidates(file);
+    for candidate in &candidates {
+        if candidate.is_file() {
+            return Ok(candidate.clone());
+        }
+    }
+    anyhow::bail!(
+        "no architecture file named {} — looked in: {}",
+        file.display(),
+        candidates
+            .iter()
+            .map(|c| c.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
+}
+
 fn load_and_resolve(file: &Path, patches: &[PathBuf]) -> Result<Architecture> {
-    let raw =
-        std::fs::read_to_string(file).with_context(|| format!("reading {}", file.display()))?;
+    let resolved = resolve_architecture_file(file)?;
+    let raw = std::fs::read_to_string(&resolved)
+        .with_context(|| format!("reading {}", resolved.display()))?;
     let arch = Architecture::from_toml(&raw).map_err(|e: HarnessError| anyhow!(e.to_string()))?;
     let mut patch_list = Vec::new();
     for p in patches {
@@ -409,4 +457,51 @@ fn load_and_resolve(file: &Path, patches: &[PathBuf]) -> Result<Architecture> {
         patch_list.push(parsed);
     }
     Composition::resolve(arch, &patch_list).map_err(|e| anyhow!(e.to_string()))
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_absolute_path_is_looked_for_nowhere_else() {
+        let candidates = architecture_candidates(Path::new("/etc/architecture.toml"));
+        assert_eq!(candidates, vec![PathBuf::from("/etc/architecture.toml")]);
+    }
+
+    #[test]
+    fn the_operant_home_is_one_of_the_places_a_relative_file_is_looked_for() {
+        // The operator's own architecture lives under the operant home; the
+        // command used to look in the process CWD and nowhere else.
+        let candidates = architecture_candidates(Path::new("architecture.toml"));
+        let home = operant_core::platform::operant_home().join("architecture.toml");
+        assert!(
+            candidates.contains(&home),
+            "the operant home must be reachable: {candidates:?}"
+        );
+    }
+
+    #[test]
+    fn a_missing_architecture_file_says_where_it_looked() {
+        // The old failure was a bare "No such file or directory" with no
+        // hint about where the command had looked.
+        let err = resolve_architecture_file(Path::new("architecture.toml"))
+            .expect_err("a file that does not exist must not resolve")
+            .to_string();
+        assert!(
+            err.contains("looked in"),
+            "the error must name the places it looked: {err}"
+        );
+    }
+
+    #[test]
+    fn an_existing_absolute_file_resolves_to_itself() {
+        let path = std::env::temp_dir().join(format!(
+            "operant-architecture-test-{}.toml",
+            std::process::id()
+        ));
+        std::fs::write(&path, "").expect("write the fixture");
+        let resolved = resolve_architecture_file(&path).expect("the fixture resolves");
+        std::fs::remove_file(&path).ok();
+        assert_eq!(resolved, path);
+    }
 }

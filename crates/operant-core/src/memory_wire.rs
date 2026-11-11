@@ -208,6 +208,154 @@ where
     }
 }
 
+/// The SQLite failures a CONCURRENT process causes, and that clear on their
+/// own once that process finishes.
+///
+/// Two shapes matter here, and this repo has already met both:
+///
+/// * `database is locked` — another process holds the WAL write lock while
+///   its transaction commits. `busy_timeout` does NOT cover the case where a
+///   deferred transaction upgrades reader→writer: that fails instantly with
+///   `SQLITE_BUSY_SNAPSHOT`. `database.rs` already documents this and avoids
+///   it with `BEGIN IMMEDIATE`; the memory-wire store is upstream and cannot,
+///   so the caller retries instead.
+/// * `… already exists` — the schema migration is not idempotent.
+///   memory-wire drops and recreates the FTS triggers on every open, so two
+///   processes opening the same file at the same moment can collide on the
+///   `CREATE TRIGGER`.
+///
+/// A permanent failure (an unknown bank, a bad row) is NOT transient:
+/// retrying it only delays the honest failure.
+///
+/// The classifier reads the MESSAGE rather than the error type on purpose.
+/// memory-wire is a 0.x branch-tracking dependency, so its error enum can
+/// change shape under us; the strings are SQLite's own and do not.
+fn is_transient_store_message(message: &str) -> bool {
+    let msg = message.to_lowercase();
+    msg.contains("database is locked")
+        || msg.contains("database table is locked")
+        || msg.contains("database is busy")
+        || msg.contains("already exists")
+}
+
+/// True when a `memory_wire` failure is one a concurrent process caused.
+fn is_transient_store_error(e: &memory_wire::api::ApiError) -> bool {
+    is_transient_store_message(&e.to_string())
+}
+
+/// The backoff `database.rs::with_retry` already uses for the same SQLite
+/// failure (50/100/200/400/800 ms).
+const RETRY_DELAYS_MS: [u64; 5] = [50, 100, 200, 400, 800];
+
+/// The backoff for the store OPEN, which gets a longer budget than a call.
+///
+/// The collision it retries is another process's MIGRATION, not a write lock:
+/// the loser of the race waits for the winner's DDL to finish. A burst of
+/// concurrent opens can keep colliding for longer than one call's window —
+/// measured: eight simultaneous opens exhausted a five-attempt budget while
+/// the machine was saturated, and the loser fell back to an in-memory store
+/// (the silent data loss this whole path exists to prevent).
+const OPEN_RETRY_DELAYS_MS: [u64; 10] = [50, 100, 200, 400, 400, 800, 800, 800, 800, 800];
+
+/// Run one `memory_wire` call, retrying the TRANSIENT failures a concurrent
+/// process can cause, and degrading a panic or a permanent `Err` to a memory
+/// miss.
+///
+/// Same degradation contract as [`guard`] — a miss, never a dead turn — with
+/// one addition: a failure that will clear on its own is retried before it is
+/// declared a miss. WITHOUT this, a retain that lost a race with another
+/// process's write lock was reported as "not stored" and the fact was lost.
+fn guard_retry<T, F>(op: &'static str, mut f: F) -> Option<T>
+where
+    F: FnMut() -> std::result::Result<T, memory_wire::api::ApiError>,
+{
+    let mut attempt = 0usize;
+    loop {
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(&mut f));
+        match outcome {
+            Ok(Ok(value)) => return Some(value),
+            Ok(Err(e)) => {
+                if attempt < RETRY_DELAYS_MS.len() && is_transient_store_error(&e) {
+                    std::thread::sleep(std::time::Duration::from_millis(RETRY_DELAYS_MS[attempt]));
+                    attempt += 1;
+                    continue;
+                }
+                tracing::warn!(
+                    op,
+                    error = %e,
+                    "memory_wire call failed — degrading to a memory miss"
+                );
+                return None;
+            }
+            Err(_) => {
+                // A panic in a 0.x in-process dependency must never kill a turn.
+                tracing::error!(op, "memory_wire panicked — degrading to a memory miss");
+                return None;
+            }
+        }
+    }
+}
+
+/// Open the on-disk store, retrying the transient failures a CONCURRENT
+/// process can cause while it opens the same file.
+///
+/// memory-wire's schema migration is not idempotent — it drops and recreates
+/// the FTS triggers on every open — so two processes opening the same
+/// database at the same moment can collide on `CREATE TRIGGER … already
+/// exists`. WITHOUT this retry the loser of that race fell back to an
+/// in-memory store, and its retains were acknowledged and then silently
+/// discarded when the process exited: the worst possible shape of a failure,
+/// because the operator was told the memory was stored.
+/// One process never opens its own store twice at the same time.
+///
+/// memory-wire's migration is not idempotent — it drops and recreates the FTS
+/// triggers — so two concurrent opens collide on `CREATE TRIGGER` whether they
+/// come from two PROCESSES or two threads of one. The retry below covers the
+/// cross-process case; this lock removes the self-inflicted part, so a burst of
+/// concurrent opens converges on the first try instead of colliding and
+/// retrying. Measured without it: eight concurrent openers in one process
+/// re-collided on every retry and exhausted the budget while the machine was
+/// loaded.
+static STORE_OPEN_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Open the on-disk store, retrying the transient failures a CONCURRENT
+/// process can cause while it opens the same file.
+///
+/// memory-wire's schema migration is not idempotent — it drops and recreates
+/// the FTS triggers on every open — so two processes opening the same
+/// database at the same moment can collide on `CREATE TRIGGER … already
+/// exists`. WITHOUT this retry the loser of that race fell back to an
+/// in-memory store, and its retains were acknowledged and then silently
+/// discarded when the process exited: the worst possible shape of a failure,
+/// because the operator was told the memory was stored.
+fn open_store_with_retry(
+    db_path: &std::path::Path,
+) -> std::result::Result<SqliteStore, memory_wire::store::StoreError> {
+    // A poisoned lock means a panic unwound while the open was in flight; the
+    // file may be mid-migration, and the next open retries it — carrying the
+    // guard on is what lets that happen instead of failing every later open.
+    let _guard = STORE_OPEN_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut attempt = 0usize;
+    loop {
+        match SqliteStore::open(db_path) {
+            Ok(store) => return Ok(store),
+            Err(e) => {
+                if attempt >= OPEN_RETRY_DELAYS_MS.len()
+                    || !is_transient_store_message(&e.to_string())
+                {
+                    return Err(e);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(
+                    OPEN_RETRY_DELAYS_MS[attempt],
+                ));
+                attempt += 1;
+            }
+        }
+    }
+}
+
 /// In-process memory provider backed by `memory_wire`.
 ///
 /// `S` is the backing [`Store`]. Production uses [`SqliteStore`] (file-backed,
@@ -359,7 +507,7 @@ impl<S: Store> MemoryWireProvider<S> {
         let body = crate::redaction::redact_sensitive_text(body);
         let tags: Vec<String> = tags.iter().map(|t| t.to_string()).collect();
         let svc = &self.service;
-        guard("retain_folded", || {
+        guard_retry("retain_folded", || {
             svc.retain_doc(&bank, &body, None, &tags, document_id, mode)
         });
     }
@@ -485,7 +633,10 @@ impl<S: Store> MemoryWireProvider<S> {
         let svc = &self.service;
         // KB-13: a fact outlives the session, so a secret is redacted before storage.
         let content = crate::redaction::redact_sensitive_text(content);
-        guard("retain_fact", || {
+        // The retry matters HERE: this is the write path, and a write that
+        // lost a race with another process's lock used to be reported as
+        // "not stored" and then dropped on the floor.
+        guard_retry("retain_fact", || {
             svc.retain_tagged(&bank, &content, None, tags)
         })
     }
@@ -554,13 +705,18 @@ impl MemoryWireProvider<SqliteStore> {
             std::fs::create_dir_all(parent)?;
         }
         let mut persistent = true;
-        let store = match SqliteStore::open(&db_path) {
+        // The retry is what keeps the fallback from being reached at all: the
+        // migration race between two processes opening the same file resolves
+        // in milliseconds, and the loser used to land in the in-memory store
+        // below — where its retains were acknowledged and then discarded.
+        let store = match open_store_with_retry(&db_path) {
             Ok(store) => store,
             Err(e) => {
                 tracing::warn!(
                     path = %db_path.display(),
                     error = %e,
-                    "memory_wire on-disk store unavailable — falling back to in-memory store"
+                    "memory_wire on-disk store unavailable — falling back to an in-memory store \
+                     (retains into it are NOT persisted and are lost when the process exits)"
                 );
                 persistent = false;
                 SqliteStore::open_in_memory()
@@ -1517,7 +1673,18 @@ mod tests {
 #[cfg(test)]
 mod persistence_tests {
     use super::MemoryWireProvider;
+    use super::{guard_retry, is_transient_store_message};
     use crate::memory_provider::MemoryProvider;
+    use memory_wire::api::ApiError;
+    use memory_wire::store::StoreError;
+
+    /// The SQLite error a CONCURRENT writer produces.
+    fn busy(message: &str) -> ApiError {
+        ApiError::Store(StoreError::Sqlite(rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_BUSY),
+            Some(message.to_string()),
+        )))
+    }
 
     #[test]
     fn a_store_that_cannot_open_its_file_reports_itself_in_memory() {
@@ -1529,5 +1696,78 @@ mod persistence_tests {
         let provider = MemoryWireProvider::new(dir.path().to_path_buf()).unwrap();
 
         assert!(!provider.is_persistent());
+    }
+
+    #[test]
+    fn a_locked_database_is_transient_and_a_permanent_failure_is_not() {
+        // The two shapes a CONCURRENT process causes …
+        assert!(is_transient_store_message("database is locked"));
+        assert!(is_transient_store_message("database table is locked"));
+        assert!(is_transient_store_message(
+            "trigger memories_ai already exists"
+        ));
+        // … and the two that will never clear on their own.
+        assert!(!is_transient_store_message("unknown bank"));
+        assert!(!is_transient_store_message("invalid content"));
+    }
+
+    #[test]
+    fn guard_retry_retries_a_transient_failure_and_then_succeeds() {
+        let mut attempts = 0;
+        let value = guard_retry("test", || {
+            attempts += 1;
+            if attempts < 3 {
+                Err(busy("database is locked"))
+            } else {
+                Ok("stored")
+            }
+        });
+        assert_eq!(value, Some("stored"));
+        assert_eq!(
+            attempts, 3,
+            "the transient failure must be retried, not swallowed into a miss"
+        );
+    }
+
+    #[test]
+    fn guard_retry_does_not_retry_a_permanent_failure() {
+        let mut attempts = 0;
+        let value = guard_retry("test", || {
+            attempts += 1;
+            Err::<(), _>(ApiError::InvalidContent)
+        });
+        assert_eq!(value, None);
+        assert_eq!(attempts, 1, "a permanent failure must fail at once");
+    }
+
+    #[test]
+    fn two_providers_open_the_same_database_at_the_same_time() {
+        // memory-wire's migration is not idempotent — it drops and recreates
+        // the FTS triggers on every open — so two openers can collide on
+        // `CREATE TRIGGER … already exists`. WITHOUT the retry the loser fell
+        // back to an in-memory store, and its retains were acknowledged and
+        // then discarded when the process exited: the operator was told the
+        // memory was stored and it was gone.
+        let dir = tempfile::tempdir().unwrap();
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
+        let mut handles = Vec::new();
+        for _ in 0..8 {
+            let path = dir.path().to_path_buf();
+            let barrier = barrier.clone();
+            handles.push(std::thread::spawn(move || {
+                barrier.wait();
+                MemoryWireProvider::new(path)
+            }));
+        }
+        for handle in handles {
+            let provider = handle
+                .join()
+                .expect("the opening thread must not panic")
+                .expect("the on-disk store opened");
+            assert!(
+                provider.is_persistent(),
+                "every opener must get the on-disk store — the in-memory fallback loses writes"
+            );
+        }
     }
 }

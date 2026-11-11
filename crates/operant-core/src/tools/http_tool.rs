@@ -367,6 +367,15 @@ mod r48_tests {
         let addr = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
             let (mut sock, _) = listener.accept().await.unwrap();
+            // Drain the request head FIRST. A socket closed (or dropped)
+            // while unread peer data is still in flight sends RST, and the
+            // reset destroys the response the client is reading — its
+            // sibling test above records the same failure. hyper 1.12 makes
+            // the window wide enough to hit it: the client surfaced the
+            // reset as `hyper::Error(Canceled, UnexpectedMessage)`.
+            use tokio::io::AsyncReadExt;
+            let mut req = [0u8; 1024];
+            let _ = sock.read(&mut req).await;
             use tokio::io::AsyncWriteExt;
             sock.write_all(
                 b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello",

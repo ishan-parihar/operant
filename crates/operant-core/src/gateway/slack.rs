@@ -560,7 +560,13 @@ mod tests {
     /// test that asserted on the chunking HELPER would pass against the
     /// pre-fix code — the helper was called, just not by the path that
     /// mattered.
-    #[tokio::test(flavor = "multi_thread")]
+    // TWO workers, not one per CPU: a multi-thread runtime defaults to
+    // `num_cpus` workers, so on a 24-core box every concurrent test
+    // starts 24 of them and the box drowns in runnable threads — the
+    // accept task that answers the request can be starved for seconds,
+    // and the request fails with "error sending request". One request
+    // needs one worker.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn the_slack_streaming_send_chunks_an_over_limit_body() {
         let (base, count) = counting_slack_server().await;
 
@@ -586,7 +592,13 @@ mod tests {
     }
 
     /// A SHORT body is one message — the chunking must not split it.
-    #[tokio::test(flavor = "multi_thread")]
+    // TWO workers, not one per CPU: a multi-thread runtime defaults to
+    // `num_cpus` workers, so on a 24-core box every concurrent test
+    // starts 24 of them and the box drowns in runnable threads — the
+    // accept task that answers the request can be starved for seconds,
+    // and the request fails with "error sending request". One request
+    // needs one worker.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_short_slack_body_is_one_message() {
         let (base, count) = counting_slack_server().await;
 

@@ -2773,6 +2773,14 @@ mod tests {
             }
             // Second connection: serve a valid SSE response.
             if let Ok((mut sock, _)) = listener.accept().await {
+                // Drain the request head FIRST. A socket closed while unread
+                // peer data is still in flight sends RST, and the reset
+                // destroys the response the client is reading — hyper 1.12
+                // makes the window wide enough to hit it, and the retry then
+                // fails on every attempt because the connection is gone
+                // before the response arrives.
+                let mut req = [0u8; 4096];
+                let _ = sock.read(&mut req).await;
                 let body = "data: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"demo\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hello\"},\"finish_reason\":null}]}\n\ndata: [DONE]\n";
                 let response = format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",

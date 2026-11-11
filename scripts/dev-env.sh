@@ -115,6 +115,13 @@ export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-$LOCAL_DIR/lib:$ORT_DIR/lib}"
 # that directory goes away. The runtime copy is what install.sh provisions into
 # the user's library directory, which outlives any checkout.
 RUNTIME_LIB_DIR="${RUNTIME_LIB_DIR:-$HOME/.local/lib/operant}"
+# The same directory, under the name the build script reads: the RUNPATH is
+# emitted from crates/operant-cli/build.rs so EVERY build of the binary
+# carries it (a plain `cargo build`, and the one `scripts/install.sh` runs,
+# used to produce an artifact that exited 127 without this file sourced).
+# The dev-env's RUSTFLAGS rpath stays too — a build through this file is the
+# sanctioned path and must keep working if the build script is ever bypassed.
+export OPERANT_RUNTIME_LIB_DIR="$RUNTIME_LIB_DIR"
 if [ -d "$RUNTIME_LIB_DIR" ] && [ -d "$ORT_DIR/lib" ]; then
   # BOTH names, deliberately. CARGO_TARGET_<triple>_RUSTFLAGS is only read by
   # cargo when it is cross-compiling to that triple, so on a native build the
