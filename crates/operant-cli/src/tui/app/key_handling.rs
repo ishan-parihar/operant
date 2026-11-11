@@ -1202,6 +1202,26 @@ impl App {
             self.prompt_input.selection_clear();
         }
 
+        // ---- Ctrl+V — vim Visual Block (vim's \x16) -----------------------
+        // vim_command.rs already implements the handler: it matches `key == "\x16"`
+        // in Normal mode with nothing pending and enters VisualBlock. What was
+        // missing was this arm — no `if` anywhere in the crate produced the
+        // `"\x16"` string, so the chord the catalogue advertises as "Enter Visual
+        // Block mode" was unreachable and the clipboard arm's comment below
+        // ("already consumed by the vim handler above") claimed a delivery that
+        // never happened. The text-entry arm cannot carry it either: it excludes
+        // CONTROL-modified letters by design, exactly so a chord does not
+        // silently degrade into its bare letter.
+        if key.code == KeyCode::Char('v')
+            && key.modifiers.contains(KeyModifiers::CONTROL)
+            && self.prompt_input.vim_enabled
+            && self.prompt_input.vim_mode == crate::prompt_input::VimMode::Normal
+            && self.prompt_input.vim_pending == crate::prompt_input::VimPendingState::None
+        {
+            self.prompt_input.vim_command("\x16");
+            self.refresh_prompt_input();
+        }
+
         // ---- Ctrl+V / Cmd+V — clipboard paste (image first, then text fallback) ----
         // Only fires when NOT in vim Normal/Visual/VisualBlock mode (where \x16 is
         // already consumed by the vim handler above to enter VisualBlock mode).

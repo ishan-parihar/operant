@@ -66,6 +66,113 @@ use crossterm::event::{KeyCode, KeyModifiers};
 /// pins the behaviour from the operator's side: press the key the catalogue
 /// advertises, in the state where there is genuinely nothing to paste, and
 /// require it to say so.
+/// (iter-1963) Every chord the VimNormal context describes must either WORK or
+/// SAY WHY NOT.
+///
+/// Rounds 75/76/78 closed this for Global, Prompt, Dialog and Completion; the
+/// vim contexts were deliberately parked because the source-level sweep
+/// (`every_string_dispatched_vim_binding_is_reachable`) already covers them and
+/// a cross-app behavioural sweep is unsound — a process-global crosses the
+/// `make_app()` boundary (RT-527), so a fresh app does not buy fresh behaviour.
+///
+/// This one is driven INSIDE a single app: for each catalogue row the app's own
+/// fields are reset (text, cursor, mode, registers), which is the app state and
+/// nothing else. That keeps the oracle sound while still driving the real
+/// handler, so a handler that consumes the key and does nothing is visible —
+/// which the source-level sweep cannot see.
+///
+/// The rule is RT-472's: an affordance either works or says why not. So the
+/// assertion is that SOME observable changed; a chord that changes nothing and
+/// says nothing is the silent no-op.
+#[test]
+fn every_vimnormal_chord_either_works_or_says_why_not() {
+    use crate::tui::keybindings::{BindingContext, DEFAULT_KEYBINDINGS};
+    use crate::tui::operant_app::tui_state::TuiState;
+
+    // One app for the whole test — that is the point (see RT-527).
+    let mut app = crate::tui::app::tests::make_app();
+
+    let reset = |app: &mut crate::tui::app::App| {
+        app.prompt_input.text = "the quick brown fox".to_string();
+        app.prompt_input.cursor = 4;
+        app.prompt_input.vim_enabled = true;
+        app.prompt_input.vim_mode = crate::tui::prompt_input::VimMode::Normal;
+        app.prompt_input.vim_pending = crate::tui::prompt_input::VimPendingState::None;
+        app.prompt_input.vim_registers = std::collections::HashMap::new();
+        app.prompt_input.vim_marks.clear();
+    };
+    let observable = |app: &crate::tui::app::App| {
+        (
+            app.prompt_input.text.clone(),
+            app.prompt_input.cursor,
+            app.prompt_input.vim_mode,
+            format!("{:?}", app.prompt_input.vim_pending),
+            app.prompt_input.vim_marks.len(),
+            app.prompt_input.vim_registers.len(),
+            app.prompt_input.yank_buf.clone(),
+            app.status_notice(),
+        )
+    };
+
+    let mut silent: Vec<String> = Vec::new();
+    for binding in DEFAULT_KEYBINDINGS.get_bindings(BindingContext::VimNormal) {
+        reset(&mut app);
+        let before = observable(&app);
+
+        app.handle_key_event(crossterm::event::KeyEvent::new(
+            binding.key,
+            binding.modifiers,
+        ));
+
+        if observable(&app) == before {
+            // RT-472's exception, pinned rather than omitted: `Esc` in VimNormal
+            // is "Enter Normal mode" and we ARE in Normal mode, so the honest
+            // outcome is that nothing changes. That is the chord doing its job in
+            // the state that already satisfies it, not a silent no-op — the same
+            // reasoning round 76 pinned for the non-modal usage overlay.
+            let desc = binding.description.clone().unwrap_or_default();
+            // "Enter X mode" is already satisfied ONLY when X names the mode we
+            // are in. Comparing the NAMED TARGET is the whole distinction:
+            // `Esc` ("Enter Normal mode") is already in Normal, while
+            // `Ctrl+V` ("Enter Visual Block mode") is not — an exception that
+            // matched the description's prefix instead swallowed the one real
+            // defect this sweep exists to find.
+            let target = desc
+                .strip_prefix("Enter ")
+                .and_then(|r| r.strip_suffix(" mode"))
+                .map(|m| m.chars().filter(|c| !c.is_whitespace()).collect::<String>())
+                .map(|m| m.to_lowercase());
+            let current = format!("{:?}", app.prompt_input.vim_mode).to_lowercase();
+            let already_satisfied = target.as_deref() == Some(current.as_str());
+            // Chords that REPLAY a previous action have nothing to replay on a
+            // first press — that is vim's own semantics, not a silent no-op:
+            // `.` with no prior change, `;`/`,` with no prior find, `n`/`N`
+            // with no active search. Round 76 pinned the non-modal usage
+            // overlay as an exception rather than omitting it; this is the same
+            // treatment for a different, equally legitimate, reason.
+            let replays_a_previous_action = desc.starts_with("Repeat ")
+                || desc.starts_with("Reverse find")
+                || desc.starts_with("Next match")
+                || desc.starts_with("Previous match");
+            // `j` in a ONE-line composer has nowhere to go. The composer is a
+            // single line, so the honest outcome of "Move down" is no movement.
+            let single_line_no_target = desc == "Move down" || desc == "Move up";
+            if !already_satisfied && !replays_a_previous_action && !single_line_no_target {
+                silent.push(format!(
+                    "{:?} + {:?} registered as {:?} changed no vim state and set no notice",
+                    binding.modifiers, binding.key, desc
+                ));
+            }
+        }
+    }
+    assert!(
+        silent.is_empty(),
+        "these VimNormal chords consume the key and do nothing, and say nothing: \
+         either wire the handler or drop the catalogue entry:\n  {}",
+        silent.join("\n  ")
+    );
+}
+
 #[test]
 fn ctrl_y_never_silently_fails_to_paste() {
     use crate::tui::operant_app::tui_state::TuiState;

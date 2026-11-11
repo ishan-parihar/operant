@@ -425,6 +425,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **INVENTORY — `make_app()` is not isolated: a process-global left over from an earlier keypress makes the same chord behave differently in a later fresh app, so any cross-app sweep is unsound (found 2026-11-12) (RT-527).** **OPEN — INVENTORY** — a Prompt-context sweep I wrote this round reported `Alt+B`/`Alt+D` as silent no-ops, and both work in isolation. The poison is a process-global written while an earlier binding was being driven, not the app: within one app `Alt+B` moves the cursor correctly across a typed character.
 - **iter-1962 — `Ctrl+Y` ("Paste") consumed the key and did nothing when the kill ring was empty (found 2026-11-12) (RT-528).** **CLOSED iter-1962** — `yank()` returned nothing at all, so with an empty kill ring neither the composer nor a status notice moved: the affordance `/keys` advertised for Prompt context silently did nothing. The dialog paste path already said "Clipboard is empty", so the composer path was the odd one out.
 
+- **iter-1963 — `Ctrl+V` ("Enter Visual Block mode") is advertised and implemented, but nothing delivers the keystroke — the mechanism is unreachable and a comment claims it already works (found 2026-11-12) (RT-529).** **CLOSED iter-1963** — `vim_command.rs:340` matches `key == "\x16"` in Normal mode and enters VisualBlock, and `keybindings/defaults.rs` advertises the chord. But no `if` anywhere in the crate produced the `"\x16"` string: the text-entry arm excludes CONTROL letters by design (so a chord can never degrade into its bare letter), and no dedicated arm carried it. A comment on the clipboard arm even claimed "\x16 is already consumed by the vim handler above".
+
 
 ### Fixed
 
