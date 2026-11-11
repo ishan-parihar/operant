@@ -170,6 +170,7 @@ fn map_sse_stream(
                         usage: event.usage,
                         finish_reason,
                         dropped_events: None,
+                        model: Some(event.model.clone()),
                     })
                 }
                 Err(e) => Err(e),
@@ -201,6 +202,7 @@ fn map_sse_stream(
             usage: None,
             finish_reason: incomplete.then(|| "incomplete".to_string()),
             dropped_events: (n > 0).then_some(n),
+            model: None,
         })
     });
     Box::pin(mapped.chain(fin))

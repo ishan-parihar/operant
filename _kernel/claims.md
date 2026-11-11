@@ -746,6 +746,8 @@ NOT supported (named, with the reason):
 
 - RT-496 provider-fallback truth: the provider stage walks every configured alternate route and the selected route does not leak into the next request — [V] — three-provider depth and sequential-request locality regressions are green and mutation-proved — unit 11.
 
+- RT-497 metering truth: a failed stream preserves known usage, and usage/cost attribution names the route that served the request rather than the startup model — [V] — the failed-stream route regression is green and mutation-proved — unit 12.
+
 - The full workspace test suite is green after iter-2081 — [V] — `scripts/build.sh --offline test --workspace --no-fail-fast` exited 0; the full log contains the operant-core, operant-cli, harness, OS, plugins, config, API, and doctest targets — unit 8.
 
 - The strict workspace clippy gate is green — [V] — `scripts/build.sh --offline clippy --workspace --all-targets --all-features -- -D warnings` exited 0 — unit 8.

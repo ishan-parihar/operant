@@ -139,6 +139,7 @@ impl OperantAgent {
         Option<serde_json::Value>,
         Option<String>,
         u64,
+        Option<String>,
     )> {
         let mut accumulated_extra: Option<serde_json::Value> = None;
         let mut parser = ToolCallStreamParser::new().on_tool_call(|tc| {
@@ -157,6 +158,7 @@ impl OperantAgent {
         // halves have arrived and only treat usage as complete once both
         // are known.
         let mut usage_prompt_tokens: Option<u32> = None;
+        let mut served_model: Option<String> = None;
         let mut usage_completion_tokens: Option<u32> = None;
         // Capture the original stream error so we can surface it (instead of
         // the generic "Stream processing failed" string) and decide whether
@@ -208,6 +210,11 @@ impl OperantAgent {
                 Ok(chunk) => {
                     if let Some(n) = chunk.dropped_events {
                         dropped_events = dropped_events.saturating_add(n);
+                    }
+                    if let Some(model) = chunk.model.as_ref()
+                        && !model.is_empty()
+                    {
+                        served_model = Some(model.clone());
                     }
                     if let Some(u) = chunk.usage {
                         if u.prompt_tokens > 0 {
@@ -494,6 +501,19 @@ impl OperantAgent {
                 self.emit(AgentEvent::StreamCorrupted { dropped_events })
                     .await;
             }
+            if let Some(prompt_tokens) = usage_prompt_tokens {
+                let completion_tokens = usage_completion_tokens.unwrap_or(0);
+                let usage = Usage {
+                    prompt_tokens,
+                    completion_tokens,
+                    total_tokens: prompt_tokens + completion_tokens,
+                };
+                self.emit_usage_and_cost(
+                    &usage,
+                    served_model.as_deref().unwrap_or(&self.effective_model()),
+                )
+                .await;
+            }
             return Err(err);
         }
 
@@ -514,7 +534,11 @@ impl OperantAgent {
                 completion_tokens,
                 total_tokens: prompt_tokens + completion_tokens,
             };
-            self.emit_usage_and_cost(&usage).await;
+            self.emit_usage_and_cost(
+                &usage,
+                served_model.as_deref().unwrap_or(&self.effective_model()),
+            )
+            .await;
         }
 
         if dropped_events > 0 {
@@ -529,6 +553,7 @@ impl OperantAgent {
             accumulated_extra,
             finish_reason,
             usage_tokens,
+            served_model,
         ))
     }
 
@@ -572,7 +597,8 @@ impl OperantAgent {
             .await;
         }
 
-        self.emit_usage_and_cost(&response.usage).await;
+        self.emit_usage_and_cost(&response.usage, &response.model)
+            .await;
 
         let usage_tokens = u64::from(response.usage.total_tokens);
         Ok((content, reasoning, tool_calls, finish_reason, usage_tokens))
@@ -2055,6 +2081,98 @@ mod rt466_tests {
         }
     }
 
+    /// A failed stream that already reported an input-token half must not
+    /// discard that metered usage, and must attribute it to the route that
+    /// served it rather than the configured startup model.
+    #[tokio::test]
+    async fn a_failed_stream_still_emits_its_known_usage() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db =
+            crate::database::Database::init(temp_dir.path().join("failed_usage.sqlite")).unwrap();
+        let (tx, mut rx) = mpsc::channel(64);
+
+        struct UnusedClient;
+
+        #[async_trait::async_trait]
+        impl crate::agent::model_client::ModelClient for UnusedClient {
+            async fn chat(&self, _request: ChatRequest) -> Result<crate::client::ChatResponse> {
+                Err(crate::error::Error::Agent("unused".into()))
+            }
+
+            async fn chat_streaming(
+                &self,
+                _request: ChatRequest,
+            ) -> Result<BoxStream<'static, Result<StreamChunk>>> {
+                Err(crate::error::Error::Agent("unused".into()))
+            }
+
+            fn provider_name(&self) -> &str {
+                "unused"
+            }
+        }
+
+        let agent = OperantAgent::with_events(
+            AgentConfig {
+                model: "startup-route".to_string(),
+                ..AgentConfig::default()
+            },
+            Box::new(UnusedClient),
+            ToolRegistry::new(Duration::from_secs(1)),
+            Arc::new(db),
+            tx,
+        );
+
+        let usage_chunk = StreamChunk {
+            content: None,
+            reasoning: None,
+            tool_calls: None,
+            extra_content: None,
+            usage: Some(crate::client::Usage {
+                prompt_tokens: 11,
+                completion_tokens: 0,
+                total_tokens: 11,
+            }),
+            finish_reason: None,
+            dropped_events: None,
+            model: Some("served-route".to_string()),
+        };
+        let chunks: Vec<Result<StreamChunk>> = vec![
+            Ok(usage_chunk),
+            Err(Error::Network(
+                reqwest::Client::new()
+                    .get("http://127.0.0.1:9/")
+                    .send()
+                    .await
+                    .expect_err("connection refused")
+                    .into(),
+            )),
+        ];
+        let result = agent
+            .process_stream(Box::pin(futures::stream::iter(chunks)))
+            .await;
+        assert!(result.is_err(), "the stream failure must still surface");
+
+        let mut saw_usage = false;
+        let mut saw_cost_model = None;
+        while let Ok(event) = rx.try_recv() {
+            match event {
+                AgentEvent::Usage {
+                    input_tokens,
+                    output_tokens,
+                    ..
+                } if input_tokens == 11 && output_tokens == 0 => saw_usage = true,
+                AgentEvent::Cost { model, .. } => saw_cost_model = Some(model),
+                _ => {}
+            }
+        }
+        assert!(saw_usage, "the known usage must survive the stream failure");
+        assert_eq!(
+            saw_cost_model.as_deref(),
+            Some("served-route"),
+            "cost must be attributed to the route that served the stream"
+        );
+    }
+
     /// RT-466: after merging a native tool call, the lookup found the FIRST
     /// call with a non-empty name — not the one just merged — so an SSE
     /// event carrying two native tool calls announced only the first, and
@@ -2111,6 +2229,7 @@ mod rt466_tests {
             usage: None,
             finish_reason: Some("tool_calls".to_string()),
             dropped_events: None,
+            model: None,
         };
         let stream: BoxStream<'static, Result<StreamChunk>> =
             Box::pin(futures::stream::once(async move { Ok(chunk) }));

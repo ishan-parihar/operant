@@ -102,6 +102,9 @@ pub struct StreamChunk {
     /// message_delta events). Callers merge across chunks — see
     /// `process_stream` in `agent/mod.rs`.
     pub usage: Option<Usage>,
+    /// Provider-reported model that served the stream, when the provider
+    /// includes it on a chunk.
+    pub model: Option<String>,
     /// Provider-reported finish reason, present on the terminal chunk(s) of
     /// the stream (`"stop"`, `"length"`, `"tool_calls"`, ...). Surfaced to
     /// the loop so it can detect truncated responses (`"length"`) and
@@ -129,6 +132,7 @@ impl StreamChunk {
             usage: None,
             finish_reason: None,
             dropped_events: None,
+            model: None,
         }
     }
 }

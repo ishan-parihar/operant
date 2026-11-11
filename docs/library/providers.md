@@ -74,6 +74,11 @@ Streaming requests use the same 429 contract: the provider's
 exponential backoff is used before the request is retried within the
 configured retry budget.
 
+Usage and cost events name the route that served the request, not the
+model configured at startup. When a provider has already reported usage
+and the stream then fails, that known usage is still emitted before the
+failure is surfaced.
+
 `Retry-After` + exponential backoff. This is the *proactive* half; the
 *reactive* half is the error classifier's RateLimit/UpstreamRateLimit
 classes (see [agent-loop.md](agent-loop.md)).

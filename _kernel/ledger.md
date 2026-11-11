@@ -1515,6 +1515,7 @@ End-state test: the live operator config can no longer be overwritten by a unit 
 | 9 | [x] Repair transport recovery truth | streaming 429 honors Retry-After/backoff; credential rotation does not disable unrelated stream retries; both mutation-proved | 8 | C1,C9,C10 |
 | 10 | [x] Make context-limit learning and repeated overflow truthful | explicit/probed limits are learned monotonically; every second overflow is typed; regressions mutation-proved | 9 | C1,C9,C10 |
 | 11 | [x] Make provider fallback deep and request-local | every alternate route is tried; route choice does not leak; regressions mutation-proved | 10 | C1,C9,C10 |
+| 12 | [x] Preserve failed-stream usage and attribute the served route | usage survives failure; cost names the served route; regression mutation-proved | 11 | C1,C9,C10 |
 
 Round-23 note: the hermetic realtime matrix (HTTP, SSE, real verification tool
 call, and MCP stdio) and focused gateway/TUI regressions are complete. The full

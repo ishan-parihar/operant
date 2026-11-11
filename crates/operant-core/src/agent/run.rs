@@ -269,7 +269,7 @@ impl OperantAgent {
             let attempt: Result<(String, String, Option<String>)> = async {
                 if self.config.stream {
                     let stream = self.client.chat_streaming(grace_request).await?;
-                    let (text, reasoning, _tcs, _extra, reason, _usage) =
+                    let (text, reasoning, _tcs, _extra, reason, _usage, _served_model) =
                         self.process_stream(stream).await?;
                     Ok((text, reasoning, reason))
                 } else {
@@ -1742,9 +1742,17 @@ impl OperantAgent {
                         }
                     }
                 };
-                let (text, reasoning, tcs, extra, finish_reason, usage_tokens) = processed;
+                let (text, reasoning, tcs, extra, finish_reason, usage_tokens, served_model) =
+                    processed;
                 stream_extra_content = extra;
-                Ok((text, reasoning, tcs, finish_reason, usage_tokens))
+                Ok((
+                    text,
+                    reasoning,
+                    tcs,
+                    finish_reason,
+                    usage_tokens,
+                    served_model,
+                ))
             } else {
                 let response = match self.call_with_loop_timeout(self.client.chat(request)).await {
                     Ok(r) => r,
@@ -1886,7 +1894,9 @@ impl OperantAgent {
                         }
                     }
                 };
-                self.process_response(response).await
+                self.process_response(response)
+                    .await
+                    .map(|parts| (parts.0, parts.1, parts.2, parts.3, parts.4, None))
             };
 
             // Emit LlmResponse observer event with timing
@@ -1914,7 +1924,14 @@ impl OperantAgent {
             let mut tool_names: Vec<String> = Vec::new();
 
             match response {
-                Ok((response_text, reasoning_text, tool_calls, finish_reason, usage_tokens)) => {
+                Ok((
+                    response_text,
+                    reasoning_text,
+                    tool_calls,
+                    finish_reason,
+                    usage_tokens,
+                    _served_model,
+                )) => {
                     // iter-633: fold this call's tokens into the turn total
                     // for the mid-flight seat-budget boundary check above.
                     turn_spend_tokens += usage_tokens;

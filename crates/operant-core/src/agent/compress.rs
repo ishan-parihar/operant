@@ -761,7 +761,7 @@ impl OperantAgent {
     /// and accumulate the session-level cost total. Shared by
     /// `process_response` (non-streaming) and `process_stream` (streaming,
     /// iter-247) now that both paths can produce a `Usage`.
-    pub(crate) async fn emit_usage_and_cost(&self, usage: &Usage) {
+    pub(crate) async fn emit_usage_and_cost(&self, usage: &Usage, served_model: &str) {
         self.last_prompt_tokens.store(
             usage.prompt_tokens.try_into().unwrap_or(0),
             std::sync::atomic::Ordering::Relaxed,
@@ -818,9 +818,9 @@ impl OperantAgent {
         // We split the model name on '/' (provider/model format) to get
         // the provider and model parts. If there's no '/', we use the
         // whole string as the model and "" as the provider.
-        let (provider, model_name) = match self.config.model.split_once('/') {
+        let (provider, model_name) = match served_model.split_once('/') {
             Some((p, m)) => (p.to_string(), m.to_string()),
-            None => (String::new(), self.config.model.clone()),
+            None => (String::new(), served_model.to_string()),
         };
         let cost_usd = crate::models_dev::get_model_capabilities(&provider, &model_name)
             .await
@@ -837,7 +837,7 @@ impl OperantAgent {
             cost_usd,
             input_tokens: usage.prompt_tokens,
             output_tokens: usage.completion_tokens,
-            model: self.config.model.clone(),
+            model: served_model.to_string(),
         })
         .await;
 

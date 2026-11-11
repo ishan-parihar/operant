@@ -572,6 +572,7 @@ fn parse_sse_event(
                 }),
                 finish_reason: None,
                 dropped_events: None,
+                model: json["message"]["model"].as_str().map(str::to_string),
             })
         }
         "message_delta" => {
@@ -601,6 +602,7 @@ fn parse_sse_event(
                 }),
                 finish_reason: stop_reason,
                 dropped_events: None,
+                model: None,
             })
         }
         _ => None,

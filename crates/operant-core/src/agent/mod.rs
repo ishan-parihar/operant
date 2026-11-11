@@ -4672,12 +4672,13 @@ mod tests {
                 usage: None,
                 finish_reason: Some("length".to_string()),
                 dropped_events: None,
+                model: None,
             }),
         ];
         let stream: BoxStream<'static, Result<StreamChunk>> =
             Box::pin(futures::stream::iter(chunks));
 
-        let (text, _reasoning, tcs, _extra, finish_reason, _usage) =
+        let (text, _reasoning, tcs, _extra, finish_reason, _usage, _served_model) =
             agent.process_stream(stream).await.unwrap();
         assert_eq!(text, "partial answer cut off");
         assert!(tcs.is_empty());
@@ -4693,7 +4694,8 @@ mod tests {
             vec![Ok(StreamChunk::new(Some("hello".to_string()), None, None))];
         let stream: BoxStream<'static, Result<StreamChunk>> =
             Box::pin(futures::stream::iter(chunks));
-        let (_t, _r, _tcs, _e, finish_reason, _usage) = agent.process_stream(stream).await.unwrap();
+        let (_t, _r, _tcs, _e, finish_reason, _usage, _served_model) =
+            agent.process_stream(stream).await.unwrap();
         assert!(finish_reason.is_none());
     }
 
