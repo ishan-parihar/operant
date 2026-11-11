@@ -289,7 +289,7 @@ impl Gateway {
         session_key: &str,
     ) -> Result<OutgoingMessage> {
         // Turn lease — one in-flight turn per session key.
-        let Some(_guard) = self.turn_lease.try_acquire(session_key).await else {
+        let Some(_guard) = self.turn_lease.try_acquire(session_key) else {
             debug!(
                 session = %session_key,
                 "Turn lease busy; polite refusal instead of concurrent agent run"
@@ -1438,13 +1438,13 @@ mod tests {
         // Wait for turn 1 to acquire the lease and enter handle().
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         while std::time::Instant::now() < deadline {
-            if gw.turn_lease().is_busy("telegram:u1:c1").await {
+            if gw.turn_lease().is_busy("telegram:u1:c1") {
                 break;
             }
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
         assert!(
-            gw.turn_lease().is_busy("telegram:u1:c1").await,
+            gw.turn_lease().is_busy("telegram:u1:c1"),
             "turn 1 must hold the lease"
         );
         assert_eq!(gw.stall_tracker().active_count().await, 1);
@@ -1463,7 +1463,7 @@ mod tests {
         gate.notify_one();
         let first = t1.await.expect("task panicked").expect("response");
         assert_eq!(first.content, "echo:first");
-        assert!(!gw.turn_lease().is_busy("telegram:u1:c1").await);
+        assert!(!gw.turn_lease().is_busy("telegram:u1:c1"));
         assert_eq!(gw.stall_tracker().active_count().await, 0);
     }
 

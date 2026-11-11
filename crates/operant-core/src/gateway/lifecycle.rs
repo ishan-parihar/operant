@@ -25,7 +25,7 @@
 //!   kill-over-auth precedence are correct and useful; wiring it INTO that
 //!   path (or deleting it) is a product decision, named rather than implied.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -125,9 +125,35 @@ pub fn classify_turn_error(error: &str) -> TurnExitReason {
 /// `handler.handle` agent run). A second message for the same session
 /// cannot acquire the lease and is answered with a polite busy reply
 /// instead of launching a concurrent agent run.
+///
+/// The key set is a `std::sync::Mutex`, NOT a tokio `Mutex`. The
+/// critical sections are pure-CPU (a set insert, a lookup, a remove)
+/// and never await; and the release path is `Drop`, a SYNCHRONOUS
+/// function that cannot await, so it must never need an async lock.
+/// With a tokio `Mutex` the release had to `try_lock` (RT-512): when the
+/// map was already held the removal was SKIPPED, the key stayed, and
+/// `try_acquire` then refused that chat's every future message with
+/// "still working on your previous message" — the comment claimed "a
+/// stale lease self-heals on the next turn" and nothing implemented a
+/// sweep. A synchronous lock makes the release unconditional.
 #[derive(Debug, Clone, Default)]
 pub struct TurnLease {
-    inner: Arc<Mutex<HashMap<String, ()>>>,
+    inner: Arc<std::sync::Mutex<HashSet<String>>>,
+}
+
+/// Lock the lease's key set, recovering a poisoned lock.
+///
+/// A poison means some OTHER holder panicked while inside the critical
+/// section — and the critical section is a set insert, so the data is
+/// still coherent. Recovering it keeps the release path from ever
+/// failing: a lease that cannot be released is the defect RT-512 was.
+fn lease_keys(
+    mutex: &std::sync::Mutex<HashSet<String>>,
+) -> std::sync::MutexGuard<'_, HashSet<String>> {
+    match mutex.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
 }
 
 impl TurnLease {
@@ -137,12 +163,11 @@ impl TurnLease {
 
     /// Try to acquire the lease for `key` non-blocking. `None` means the
     /// session is already busy with another turn.
-    pub async fn try_acquire(&self, key: &str) -> Option<TurnLeaseGuard> {
-        let mut map = self.inner.lock().await;
-        if map.contains_key(key) {
+    pub fn try_acquire(&self, key: &str) -> Option<TurnLeaseGuard> {
+        let mut keys = lease_keys(&self.inner);
+        if !keys.insert(key.to_string()) {
             return None;
         }
-        map.insert(key.to_string(), ());
         Some(TurnLeaseGuard {
             inner: Arc::clone(&self.inner),
             key: key.to_string(),
@@ -150,13 +175,13 @@ impl TurnLease {
     }
 
     /// Whether a turn is currently in flight for `key`.
-    pub async fn is_busy(&self, key: &str) -> bool {
-        self.inner.lock().await.contains_key(key)
+    pub fn is_busy(&self, key: &str) -> bool {
+        lease_keys(&self.inner).contains(key)
     }
 
     /// Number of currently held leases (in-flight turns).
-    pub async fn in_flight(&self) -> usize {
-        self.inner.lock().await.len()
+    pub fn in_flight(&self) -> usize {
+        lease_keys(&self.inner).len()
     }
 }
 
@@ -164,18 +189,18 @@ impl TurnLease {
 /// abort / error paths), so a lease can never leak and wedge a session.
 #[derive(Debug)]
 pub struct TurnLeaseGuard {
-    inner: Arc<Mutex<HashMap<String, ()>>>,
+    inner: Arc<std::sync::Mutex<HashSet<String>>>,
     key: String,
 }
 
 impl Drop for TurnLeaseGuard {
     fn drop(&mut self) {
-        // Best-effort, non-blocking removal. `try_lock` succeeds unless the
-        // map is simultaneously held — in that case the sweep/next message
-        // retries naturally (a stale lease self-heals on the next turn).
-        if let Ok(mut map) = self.inner.try_lock() {
-            map.remove(&self.key);
-        }
+        // Unconditional: the key set is never held across an await, so
+        // the lock is free whenever a caller can observe it, and a
+        // poisoned lock still holds the real key set. The old
+        // `try_lock`-and-skip release left the key behind whenever the
+        // map happened to be held, and that key was never swept (RT-512).
+        lease_keys(&self.inner).remove(&self.key);
     }
 }
 
@@ -437,18 +462,17 @@ mod tests {
         let lease = TurnLease::new();
         let guard = lease
             .try_acquire("telegram:u1:c1")
-            .await
             .expect("first acquire");
-        assert!(lease.is_busy("telegram:u1:c1").await);
+        assert!(lease.is_busy("telegram:u1:c1"));
         assert!(
-            lease.try_acquire("telegram:u1:c1").await.is_none(),
+            lease.try_acquire("telegram:u1:c1").is_none(),
             "second turn for the same session must be refused"
         );
         // A different session is unaffected.
-        assert!(lease.try_acquire("telegram:u2:c2").await.is_some());
+        assert!(lease.try_acquire("telegram:u2:c2").is_some());
         drop(guard);
         assert!(
-            lease.try_acquire("telegram:u1:c1").await.is_some(),
+            lease.try_acquire("telegram:u1:c1").is_some(),
             "lease must be releasable after the turn ends"
         );
     }
@@ -456,13 +480,53 @@ mod tests {
     #[tokio::test]
     async fn turn_lease_in_flight_counts() {
         let lease = TurnLease::new();
-        assert_eq!(lease.in_flight().await, 0);
-        let g1 = lease.try_acquire("a").await.unwrap();
-        let g2 = lease.try_acquire("b").await.unwrap();
-        assert_eq!(lease.in_flight().await, 2);
+        assert_eq!(lease.in_flight(), 0);
+        let g1 = lease.try_acquire("a").unwrap();
+        let g2 = lease.try_acquire("b").unwrap();
+        assert_eq!(lease.in_flight(), 2);
         drop(g1);
         drop(g2);
-        assert_eq!(lease.in_flight().await, 0);
+        assert_eq!(lease.in_flight(), 0);
+    }
+
+    /// RT-512: the release used to be `try_lock`-and-SKIP, so a drop
+    /// that raced the map's lock left the key behind — and nothing ever
+    /// swept it, so that chat was refused every later message with
+    /// "still working on your previous message", forever.
+    ///
+    /// The release must be unconditional. Here the key set is held by
+    /// ANOTHER thread at the instant the guard is dropped, which is the
+    /// contention the old implementation lost.
+    #[test]
+    fn a_dropped_lease_is_released_even_while_the_key_set_is_held() {
+        let lease = TurnLease::new();
+        let guard = lease.try_acquire("telegram:u1:c1").expect("first acquire");
+
+        // Hold the key set from another thread, as a concurrent
+        // acquire/release does. The channel makes the contention
+        // CERTAIN: the drop below happens only AFTER the holder has the
+        // lock, not merely while it might take it.
+        let (held_tx, held_rx) = std::sync::mpsc::channel();
+        let holder = {
+            let lease = lease.clone();
+            std::thread::spawn(move || {
+                let _keys = lease_keys(&lease.inner);
+                held_tx.send(()).ok();
+                std::thread::sleep(std::time::Duration::from_millis(200));
+            })
+        };
+        held_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("the holder takes the key set");
+
+        drop(guard);
+        holder.join().expect("the holder thread joins");
+
+        assert!(
+            lease.try_acquire("telegram:u1:c1").is_some(),
+            "a lease released while the key set was held must still be re-acquirable"
+        );
+        assert!(!lease.is_busy("telegram:u1:c1"));
     }
 
     /// RT-331: the tracker presents `stalled()` as live machinery while

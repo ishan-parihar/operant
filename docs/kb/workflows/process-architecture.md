@@ -9,7 +9,7 @@
 | process-architecture-003 | in-progress | RT-509 (M): no server drains — a restart aborts in-flight turns; no with_graceful_shutdown anywhere | claimed-by `agent-omarchy-wt2096` since 2026-11-12T01:33 | — |
 | process-architecture-004 | in-progress | RT-510 (M): no durable record of an in-flight turn; a mid-flight kill leaves tool calls the transcript denies | claimed-by `agent-omarchy-wt2096` since 2026-11-12T01:33 | — |
 | process-architecture-005 | in-progress | RT-511 (M): the interrupted marker is written only by the TUI teardown — SIGKILL/SIGTERM/panic/gateway exit write nothing | claimed-by `agent-omarchy-wt2096` since 2026-11-12T01:33 | — |
-| process-architecture-006 | in-progress | RT-512 (M): a dropped turn lease (try_lock on Drop) wedges a chat forever | claimed-by `agent-omarchy-wt2096` since 2026-11-12T01:33 | — |
+| process-architecture-006 | done | RT-512 (M): a dropped turn lease (try_lock on Drop) wedges a chat forever | claimed-by `agent-omarchy-wt2096` since 2026-11-12T01:33 | [2026-11-12] docs/audit/2026-11-12-process-architecture-audit-gateway-server-session-management.md |
 | process-architecture-007 | in-progress | RT-513 (M): every CLI session is a whole operant process; no server to attach to | claimed-by `agent-omarchy-wt2096` since 2026-11-12T01:33 | — |
 | process-architecture-008 | in-progress | RT-514 (M): ACP rebuilds an agent + tokio runtime + child fleet per prompt | claimed-by `agent-omarchy-wt2096` since 2026-11-12T01:33 | — |
 | process-architecture-009 | in-progress | RT-515 (M): the 30s registry timeout cancels a non-cancel-safe MCP read_line — permanent desync, no recovery | claimed-by `agent-omarchy-wt2096` since 2026-11-12T01:33 | — |
