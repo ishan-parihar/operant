@@ -111,6 +111,17 @@ impl TurnRetryState {
         self.retry_count >= self.max_retries
     }
 
+    /// Whether a classified mid-stream failure may be retried.
+    ///
+    /// Credential rotation and stream recovery are independent: a prior
+    /// credential rotation must not disable an unrelated transport drop.
+    /// Rotate-classified stream failures also use this path because the
+    /// pooled client has already benched the failed key and the re-issued
+    /// request selects the next one.
+    pub fn may_retry_stream_failure(&self, classified_retryable: bool) -> bool {
+        classified_retryable
+    }
+
     /// Returns true if any restart signal is set.
     pub fn has_restart_signal(&self) -> bool {
         self.restart_with_compressed
@@ -295,6 +306,16 @@ mod tests {
         assert!(state.rotate_attempted);
         // Restart signals ARE reset
         assert!(!state.restart_with_compressed);
+    }
+
+    #[test]
+    fn credential_rotation_does_not_disable_an_unrelated_stream_retry() {
+        let mut state = TurnRetryState::new(Some(3));
+        state.rotate_attempted = true;
+        assert!(
+            state.may_retry_stream_failure(true),
+            "a transport failure remains retryable after credential rotation"
+        );
     }
 
     #[test]

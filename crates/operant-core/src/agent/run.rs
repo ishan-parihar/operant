@@ -1624,10 +1624,9 @@ impl OperantAgent {
                             // deterministic provider rejection must not be poked.
                             poke.record_error(&e.to_string());
                             let classified = FallbackModelClient::classify_error(&e);
-                            let retryable = classified.retryable
-                                && !classified.should_compress
-                                && (classified.should_rotate_credential
-                                    || !retry_state.rotate_attempted);
+                            let retryable = retry_state.may_retry_stream_failure(
+                                classified.retryable && !classified.should_compress,
+                            );
                             // Guard on the CUMULATIVE count for this turn, not
                             // only `retry_state.consume_retry()` (which is
                             // refilled by any successful parse). Without this a

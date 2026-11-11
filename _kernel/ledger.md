@@ -1512,6 +1512,7 @@ End-state test: the live operator config can no longer be overwritten by a unit 
 | 6 | [x] Repair session rehydration tool-group boundaries | a resumed request contains either a complete tool-call group or none | 1 | C1,C6,C9 |
 | 7 | [x] Repair verification false-green/process cleanup | missing test phase cannot report ok; timed-out starts kill their process group | 1 | C1,C6,C9 |
 | 8 | [x] Run realtime matrix, strict gates, red-team, docs and deploy | scoped/full tests, clippy, fmt, genome lint, fake-provider socket tests, release artifact, deployed live turn all green | 2..7 | C3,C5,C6,C7,C11 |
+| 9 | [x] Repair transport recovery truth | streaming 429 honors Retry-After/backoff; credential rotation does not disable unrelated stream retries; both mutation-proved | 8 | C1,C9,C10 |
 
 Round-23 note: the hermetic realtime matrix (HTTP, SSE, real verification tool
 call, and MCP stdio) and focused gateway/TUI regressions are complete. The full

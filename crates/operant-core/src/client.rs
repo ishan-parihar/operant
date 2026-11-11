@@ -680,6 +680,7 @@ impl OpenAIClient {
                 let stream = response.bytes_stream();
                 return Ok(ChatStreamResponse::new(stream).with_idle_timeout(idle));
             }
+            let retry_after_hdr = parse_retry_after_header(response.headers());
 
             let body = match read_bounded_error_body(response).await {
                 Ok(text) => text,
@@ -698,6 +699,21 @@ impl OpenAIClient {
                 self.rate_limiter
                     .drain_bucket(&self.limiter_key(model))
                     .await;
+                if attempt < max_attempts {
+                    let retry_after = retry_after_hdr.unwrap_or_else(|| {
+                        Duration::from_secs(exponential_backoff_secs(
+                            attempt, base_delay, max_delay,
+                        ))
+                    });
+                    warn!(
+                        model = %model,
+                        attempt,
+                        retry_after_ms = retry_after.as_millis(),
+                        "Streaming HTTP 429, retrying after backoff",
+                    );
+                    tokio::time::sleep(retry_after).await;
+                    continue;
+                }
             }
 
             // Retry on 5xx if attempts remain.
@@ -2802,6 +2818,79 @@ mod tests {
             "SSE content should be consumed after the retry"
         );
         server.abort();
+    }
+
+    /// A streaming 429 must honor the provider's Retry-After and retry the
+    /// request. Before the fix, streaming returned the 429 immediately even
+    /// when the retry budget and Retry-After header were present.
+    #[tokio::test]
+    async fn chat_streaming_retries_429_after_retry_after() {
+        use futures::StreamExt;
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let hits = Arc::new(AtomicUsize::new(0));
+        let hits_for_server = hits.clone();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            for attempt in 0..2 {
+                let Ok((mut sock, _)) = listener.accept().await else {
+                    break;
+                };
+                hits_for_server.fetch_add(1, Ordering::SeqCst);
+                let mut buf = [0u8; 4096];
+                let _ = sock.read(&mut buf).await;
+                if attempt == 0 {
+                    let body = r#"{"error":{"message":"slow down"}}"#;
+                    let response = format!(
+                        "HTTP/1.1 429 Too Many Requests\r\nContent-Type: application/json\r\nContent-Length: {}\r\nRetry-After: 0\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                    let _ = sock.write_all(response.as_bytes()).await;
+                } else {
+                    let body = "data: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"demo\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"RETRY-OK\"},\"finish_reason\":null}]}\n\ndata: [DONE]\n";
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                    let _ = sock.write_all(response.as_bytes()).await;
+                }
+                let _ = sock.shutdown().await;
+            }
+        });
+
+        let client = OpenAIClient::new(ClientConfig {
+            base_url: format!("http://{addr}/v1"),
+            api_key: Some("k".into()),
+            rate_limit: crate::config::RateLimitSettings {
+                max_retries: 1,
+                base_delay_secs: 0,
+                max_delay_secs: 1,
+                bucket_capacity: 100,
+                bucket_refill_rate: 100.0,
+            },
+            ..ClientConfig::default()
+        });
+        let mut stream = client
+            .chat_streaming("demo", &[Message::user("hi")], None, None, None)
+            .await
+            .expect("streaming 429 should retry");
+        let mut got = String::new();
+        while let Some(chunk) = stream.next().await {
+            if let Ok(event) = chunk
+                && let Some(content) = event.choices.first().and_then(|c| c.delta.content.clone())
+            {
+                got.push_str(&content);
+            }
+        }
+        server.abort();
+        assert_eq!(hits.load(Ordering::SeqCst), 2);
+        assert_eq!(got, "RETRY-OK");
     }
 
     #[tokio::test(flavor = "multi_thread")]

@@ -69,6 +69,11 @@ Two layers:
 
 Token bucket per model/provider, consumed on each request, refilled at a
 fixed rate. On a 429 the bucket is drained and the caller waits
+Streaming requests use the same 429 contract: the provider's
+`Retry-After` header is honored when present, otherwise the configured
+exponential backoff is used before the request is retried within the
+configured retry budget.
+
 `Retry-After` + exponential backoff. This is the *proactive* half; the
 *reactive* half is the error classifier's RateLimit/UpstreamRateLimit
 classes (see [agent-loop.md](agent-loop.md)).
