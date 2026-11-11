@@ -321,6 +321,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_build_only_run_reports_not_ok_but_records_its_phase() {
+        let tool = VerifyTaskTool::new(test_db());
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join("Makefile"), "build:\n\ttrue\n").unwrap();
+        let result = tool
+            .execute(
+                json!({"action": "run", "cwd": dir.path().to_string_lossy(), "phases": ["build"]}),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(result.success, "the tool call itself completed");
+        let parsed: Value = serde_json::from_str(&result.content).unwrap();
+        assert_eq!(parsed["overall_ok"], false);
+        assert_eq!(parsed["phases"][0]["name"], "build");
+        assert_eq!(parsed["phases"][0]["ok"], true);
+    }
+
+    #[tokio::test]
     async fn test_execute_missing_action() {
         let tool = VerifyTaskTool::new(test_db());
         let result = tool.execute(json!({}), ToolContext::default()).await;

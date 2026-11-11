@@ -217,8 +217,12 @@ run_test "CLI run help" "$BIN run --help 2>&1"
 # 9. CLI dashboard help
 run_test "CLI dashboard help" "$BIN dashboard --help 2>&1"
 
-# 10. Quick run test
-run_test "Quick run test" "$BIN run --query 'Hello' --max-iterations 1 2>&1"
+# 10. Realtime run against a credential-free local provider. The old quick
+# run inherited the operator's real config and credentials, so a self-test
+# could contact a live provider and mutate ~/.operant. The local fake keeps
+# this gate deterministic, offline, and hermetic; the script also asserts the
+# real ~/.operant tree is byte-for-byte unchanged.
+run_test "Realtime local-provider run" "OPERANT_BIN='$BIN' bash scripts/tests/fake_provider_test.sh 2>&1"
 
 # Summary
 echo ""

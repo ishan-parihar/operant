@@ -737,3 +737,5 @@ NOT supported (named, with the reason):
 - RT-491 session rehydration: the bounded newest window now selects complete assistant tool-call groups; a partial-group regression fails when the raw row cut is restored, while a complete tail group remains intact.
 
 - RT-492 verification truth: success requires a test phase, and start commands own a process group terminated on readiness or timeout; the false-green and descendant-PID regressions both fail when their old behaviors are restored.
+
+- RT-493 hermetic realtime matrix: the self-test drives HTTP, SSE, a real verification tool turn, and MCP stdio under a throwaway home; the real operator configuration hash is unchanged, and removing the tool/MCP assertions makes the smoke fail.

@@ -108,6 +108,12 @@ only: every retained result has its request, and every retained request has
 all of its results. A cut through a group removes that partial group instead
 of sending unmatched tool messages to the provider.
 
+The runtime surfaces the two exhaustion classes differently. Foldable-history
+exhaustion is recoverable by compaction and the gateway compacts and retries
+once. Protected-prefix exhaustion (the frozen prompt plus current turn) cannot
+be compacted; the TUI error card names `agent.context_window` and the required
+minimum instead of giving ineffective `/compact` advice.
+
 ## Self-healing summary
 
 | Failure | Mechanism | Where |

@@ -33,6 +33,12 @@ runs in its own process group; readiness timeout and successful readiness
 both tear down the whole group, so background descendants cannot survive the
 verification run.
 
+The self-test exercises the complete agent loop without credentials or a live
+provider: a local OpenAI-compatible server answers HTTP and SSE, drives one
+`verify_task` tool call, and a local MCP stdio server advertises a tool. The
+fixture uses a throwaway `HOME`/`HERMES_HOME`; hashes of the operator's real
+configuration files prove the run did not mutate them.
+
 ## The agent tool
 
 `verify_task` (`tools/verification_tool.rs`) exposes the harness to the
