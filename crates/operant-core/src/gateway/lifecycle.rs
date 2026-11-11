@@ -460,9 +460,7 @@ mod tests {
     #[tokio::test]
     async fn turn_lease_serializes_a_session_and_releases_on_drop() {
         let lease = TurnLease::new();
-        let guard = lease
-            .try_acquire("telegram:u1:c1")
-            .expect("first acquire");
+        let guard = lease.try_acquire("telegram:u1:c1").expect("first acquire");
         assert!(lease.is_busy("telegram:u1:c1"));
         assert!(
             lease.try_acquire("telegram:u1:c1").is_none(),

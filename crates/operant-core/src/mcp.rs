@@ -65,6 +65,27 @@ const MCP_BUFFERED_RESPONSE_CAP: usize = 64;
 /// response and short enough that a mismatched server fails BOUNDEDLY.
 const MCP_DRAIN_READ_TIMEOUT_SECS: u64 = 5;
 
+/// The first read of a request: a slow server may legitimately take a
+/// minute to produce its response.
+///
+/// (RT-515) This budget is the SECOND half of the desync fix. The tool
+/// registry cancels a tool future when ITS timeout expires (default 30
+/// s), and a cancelled read used to lose the bytes already consumed —
+/// so the registry always cancelled first and permanently broke the
+/// stream. MCP tools therefore get a registry timeout ABOVE this value
+/// (`MCP_TOOL_TIMEOUT_SECS`), which makes this client's own timeout the
+/// FIRST one to fire: the call then returns a clean "did not respond"
+/// error, the stream stays intact, and the registry never cancels a
+/// read at all. A slow server keeps its full minute — the registry's
+/// default 30 s no longer truncates it.
+const MCP_STDIO_FIRST_READ_SECS: u64 = 60;
+
+/// The registry's per-tool timeout for a namespaced MCP tool
+/// (`mcp_<server>/<tool>`). Must sit ABOVE
+/// [`MCP_STDIO_FIRST_READ_SECS`] so the client's own read budget is
+/// always the first to expire (see RT-515).
+const MCP_TOOL_TIMEOUT_SECS: u64 = 90;
+
 /// Check whether a server-returned `protocolVersion` is one we accept.
 /// Returns the (possibly normalized) version to use, or None if the
 /// server's version is incompatible with all of ours.
@@ -766,6 +787,16 @@ impl McpClient {
 struct StdioIo {
     stdin: ChildStdin,
     stdout: BufReader<ChildStdout>,
+    /// Bytes of a JSON-RPC line already read from `stdout` but not yet
+    /// terminated by a newline.
+    ///
+    /// The buffer lives HERE, not in a local of the read call, because
+    /// tokio's `read_line` is NOT cancel-safe: a cancelled read loses the
+    /// bytes it had already consumed, and the stream is then one response
+    /// behind for the rest of the session (RT-515). `read_until` appends
+    /// to the caller's buffer, so a cancelled read RESUMES on the next
+    /// call instead of losing the partial line.
+    pending_line: Vec<u8>,
 }
 
 /// Internal classification of a stdio request failure so the auto-restart
@@ -824,6 +855,15 @@ pub struct McpStdioClient {
     /// dead server can never trigger a reconnect → connect → send_request →
     /// reconnect loop.
     reconnecting: Arc<AtomicBool>,
+    /// (RT-515) True once a response failed to parse, which means the
+    /// stdout stream is no longer where the next response is expected:
+    /// either a partial line was lost (the old, non-cancel-safe
+    /// `read_line`) or the server emitted something that is not its
+    /// response. The call that hit the parse failure is NOT re-issued —
+    /// the server may already have executed the tool — but the NEXT
+    /// request reconnects first, so one bad stream cannot disable the
+    /// whole MCP surface for the rest of the session.
+    desynced: Arc<AtomicBool>,
     /// (iter-1822) Responses that arrived out of order and belong to a
     /// request that has not been answered yet, keyed by their JSON-RPC id.
     ///
@@ -857,6 +897,7 @@ impl McpStdioClient {
             banner_lines: Arc::new(AtomicU64::new(0)),
             had_session: Arc::new(AtomicBool::new(false)),
             reconnecting: Arc::new(AtomicBool::new(false)),
+            desynced: Arc::new(AtomicBool::new(false)),
             buffered: Arc::new(tokio::sync::Mutex::new(Vec::new())),
         }
     }
@@ -983,6 +1024,7 @@ impl McpStdioClient {
         *self.io.lock().await = Some(StdioIo {
             stdin,
             stdout: BufReader::new(stdout),
+            pending_line: Vec::new(),
         });
 
         // Send initialize request
@@ -1133,20 +1175,43 @@ impl McpStdioClient {
     ///
     /// (iter-1822) Extracted so the drain loop can call it repeatedly
     /// instead of duplicating the skip logic in two inline blocks.
+    ///
+    /// (RT-515) The read is `read_until(b'\n', …)` into the buffer that
+    /// LIVES IN THE CLIENT (`StdioIo::pending_line`), not `read_line` into
+    /// a local. Tokio documents `read_line` as NOT cancel-safe ("some data
+    /// may have been partially read, and this data is lost"), and the
+    /// tool registry's timeout DROPS the tool future mid-read — so the
+    /// bytes already consumed were lost and the stream stayed one
+    /// response behind. Every later call then failed to parse, the parse
+    /// failure is a PROTOCOL error (which is deliberately not re-issued,
+    /// because the server may have executed the tool), and the watchdog
+    /// only restarts a child whose process exited — so ONE slow server
+    /// disabled every MCP tool for the rest of the session.
+    ///
+    /// `read_until` appends to the caller's buffer, so a cancelled read
+    /// keeps the partial line and the NEXT read resumes it. The buffer is
+    /// taken (emptied) only once a COMPLETE line has been read.
     async fn read_response_line(
         &self,
         io: &mut StdioIo,
         timeout_secs: u64,
     ) -> std::result::Result<String, ReqError> {
-        let mut line = String::new();
         loop {
-            line.clear();
+            // `pending_line` may hold a PARTIAL line from a cancelled
+            // read; `read_until` appends to it, so the line is completed
+            // rather than restarted.
             let read_result = tokio::time::timeout(
                 std::time::Duration::from_secs(timeout_secs),
-                io.stdout.read_line(&mut line),
+                io.stdout.read_until(b'\n', &mut io.pending_line),
             )
             .await;
             match read_result {
+                Ok(Ok(0)) => {
+                    // EOF — the child closed stdout.
+                    return Err(ReqError::Transport(crate::error::Error::Agent(
+                        "MCP stdout closed before a response arrived".to_string(),
+                    )));
+                }
                 Ok(Ok(_)) => {}
                 Ok(Err(e)) => {
                     // EOF / read error — the child died mid-call.
@@ -1165,6 +1230,24 @@ impl McpStdioClient {
                     ))));
                 }
             }
+            // A complete line (the delimiter is included in the count).
+            let bytes = std::mem::take(&mut io.pending_line);
+            let line = match String::from_utf8(bytes) {
+                Ok(line) => line,
+                Err(_) => {
+                    // Not valid UTF-8, so not a JSON-RPC line: skip it
+                    // like the banner lines below.
+                    let skipped = self.banner_lines.fetch_add(1, Ordering::SeqCst) + 1;
+                    if skipped >= MCP_BANNER_SKIP_LIMIT {
+                        self.banner_lines.store(0, Ordering::SeqCst);
+                        return Err(ReqError::Protocol(crate::error::Error::Agent(
+                            "MCP stdio server produced 256 non-JSON lines without a JSON-RPC response"
+                                .to_string(),
+                        )));
+                    }
+                    continue;
+                }
+            };
             if line.trim_start().starts_with('{') {
                 return Ok(line.trim().to_string());
             }
@@ -1214,6 +1297,29 @@ impl McpStdioClient {
     ///    BEFORE the next call so the wedged child is cleared without ever
     ///    re-issuing an ambiguous call.
     async fn send_request(&self, method: &str, params: Option<Value>) -> Result<Value> {
+        // (RT-515) Desync recovery: a previous response failed to parse,
+        // so the stdout stream is no longer where the next response is
+        // expected. Reconnect BEFORE this request, exactly as the
+        // hung-server path below does. The call that hit the parse
+        // failure is not re-issued (the server may have executed it);
+        // this one goes to a fresh child.
+        if self.desynced.load(Ordering::SeqCst)
+            && self.had_session.load(Ordering::SeqCst)
+            && !self.reconnecting.load(Ordering::SeqCst)
+        {
+            warn!(
+                command = self.command.as_str(),
+                "MCP stdio response failed to parse — reconnecting before the next call"
+            );
+            if let Err(e) = self.reconnect().await {
+                return Err(crate::error::Error::Agent(format!(
+                    "MCP stdio stream desynchronized; auto-reconnect failed: {}",
+                    e
+                )));
+            }
+            self.desynced.store(false, Ordering::SeqCst);
+        }
+
         // Hung-server detection: if the previous call timed out (>=2
         // consecutive), proactively kill + respawn the wedged child before
         // sending. The timed-out call itself is never re-issued; the fresh
@@ -1393,7 +1499,7 @@ impl McpStdioClient {
             // coming (a server that answers with the wrong id), so it uses the
             // short drain timeout instead of hanging a full minute per line.
             let read_timeout = if drained == 0 {
-                60
+                MCP_STDIO_FIRST_READ_SECS
             } else {
                 MCP_DRAIN_READ_TIMEOUT_SECS
             };
@@ -1412,6 +1518,13 @@ impl McpStdioClient {
             };
 
             let parsed: Value = serde_json::from_str(&line).map_err(|e| {
+                // (RT-515) A response that does not parse means the
+                // stream is no longer where the next response is
+                // expected. The call is NOT re-issued (the server may
+                // have executed the tool), but the NEXT request
+                // reconnects first, so one bad stream cannot disable the
+                // whole MCP surface for the rest of the session.
+                self.desynced.store(true, Ordering::SeqCst);
                 ReqError::Protocol(crate::error::Error::ParseResponse(format!(
                     "Failed to parse MCP stdio response: {}",
                     e
@@ -2606,6 +2719,14 @@ impl McpManager {
                     .await
                     .is_ok()
                 {
+                    // (RT-515) An MCP tool must not be cancelled by the
+                    // registry's DEFAULT timeout while the client is
+                    // still reading: a cancelled read loses the bytes
+                    // already consumed and desynchronises the stream for
+                    // the rest of the session. The override sits above
+                    // the client's own read budget, so the CLIENT times
+                    // out first — cleanly, with the stream intact.
+                    registry.set_tool_timeout(&name, Duration::from_secs(MCP_TOOL_TIMEOUT_SECS));
                     prev_names.push(name);
                     registered += 1;
                 }
@@ -3528,7 +3649,16 @@ while True:
         std::fs::create_dir_all(&dir).expect("create temp dir");
         let script = dir.join("endless_banner.py");
         // Answer NOTHING — just an endless stream of non-JSON lines.
-        std::fs::write(&script, "import sys, time\nwhile True:\n    sys.stdout.write('banner line\n')\n    sys.stdout.flush()\n    time.sleep(0.001)\n")
+        //
+        // (RT-515) The `\\n` inside the python string literal is
+        // ESCAPED here on purpose. The unescaped version wrote a real
+        // newline INTO the python string literal, so the script was a
+        // SYNTAX ERROR: python3 exited at once, the client saw EOF, and
+        // the old EOF handling spun 256 times on the empty stream — the
+        // test passed for the WRONG reason (it never measured the
+        // banner bound at all). EOF is now reported honestly, so this
+        // test can only pass if the server really prints banners.
+        std::fs::write(&script, "import sys, time\nwhile True:\n    sys.stdout.write('banner line\\n')\n    sys.stdout.flush()\n    time.sleep(0.001)\n")
             .expect("write the banner-only server");
         let client = McpStdioClient::new(
             "python3",
@@ -3548,6 +3678,251 @@ while True:
                 );
             }
         }
+    }
+
+    /// A fake MCP server that answers the FIRST `tools/call` in TWO
+    /// chunks, with a gap long enough for a caller-side timeout to land
+    /// in the middle of the line.
+    const SPLIT_RESPONSE_MCP_SERVER: &str = r#"import sys, json, time
+first_call = True
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        req = json.loads(line)
+    except Exception:
+        continue
+    rid = req.get('id')
+    if rid is None:
+        continue
+    mid = req.get('method')
+    if mid == 'initialize':
+        result = {'protocolVersion': '2025-06-18', 'capabilities': {'tools': {}}, 'serverInfo': {'name': 'fake', 'version': '1.0'}}
+    elif mid == 'tools/list':
+        result = {'tools': [{'name': 'slow.echo', 'description': 'a slow tool', 'inputSchema': {'type': 'object'}}]}
+    else:
+        result = {'ok': True}
+    payload = json.dumps({'jsonrpc': '2.0', 'id': rid, 'result': result})
+    if mid == 'tools/call' and first_call:
+        first_call = False
+        half = len(payload) // 2
+        sys.stdout.write(payload[:half])
+        sys.stdout.flush()
+        time.sleep(3)
+        sys.stdout.write(payload[half:] + chr(10))
+        sys.stdout.flush()
+    else:
+        sys.stdout.write(payload + chr(10))
+        sys.stdout.flush()
+"#;
+
+    /// RT-515: a CANCELLED read must not desynchronise the stdio stream.
+    ///
+    /// The tool registry wraps every tool in `tokio::time::timeout` and
+    /// DROPS the future when the timeout expires — and the MCP client
+    /// used to read with tokio's `read_line`, which is documented as NOT
+    /// cancel-safe ("some data may have been partially read, and this
+    /// data is lost"). The registry's default timeout (30 s) was
+    /// SHORTER than the client's own read budget (60 s), so the registry
+    /// ALWAYS cancelled first: the partial line was lost, the stdout
+    /// stream stayed one response behind, and every later call failed to
+    /// parse. A parse failure is a PROTOCOL error — deliberately not
+    /// re-issued, because the server may have executed the tool — and
+    /// the watchdog only restarts a child whose PROCESS exited, so one
+    /// slow server disabled every MCP tool for the rest of the session.
+    ///
+    /// The read is now cancel-safe: the partial line lives in the client
+    /// (`StdioIo::pending_line`), so the NEXT call completes it.
+    #[tokio::test]
+    async fn a_cancelled_read_keeps_its_partial_line_and_the_stream_stays_usable() {
+        let dir = std::env::temp_dir().join(format!(
+            "operant_mcp_split_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        let script = dir.join("split_server.py");
+        std::fs::write(&script, SPLIT_RESPONSE_MCP_SERVER)
+            .expect("write the split-response server");
+        let client = McpStdioClient::new(
+            "python3",
+            vec![script.to_string_lossy().to_string()],
+            HashMap::new(),
+        );
+        client.connect().await.expect("the handshake completes");
+
+        // The first call is cancelled mid-line — exactly what the tool
+        // registry does when its timeout expires (it drops the future).
+        let cancelled = tokio::time::timeout(
+            std::time::Duration::from_millis(500),
+            client.call_tool("slow.echo", serde_json::json!({})),
+        )
+        .await;
+        assert!(
+            cancelled.is_err(),
+            "the first call must be cancelled while the server is still writing"
+        );
+
+        // The bytes already read are NOT lost: they live inside the
+        // client, so the next read resumes the line instead of starting
+        // one response behind. This is the assertion the old
+        // `read_line`-into-a-local implementation fails.
+        {
+            let io = client.io.lock().await;
+            let io = io
+                .as_ref()
+                .expect("the stdio pair is live across a cancelled read");
+            assert!(
+                !io.pending_line.is_empty(),
+                "a cancelled read must keep its partial line inside the client (RT-515) — losing it desynchronises the stream for the rest of the session"
+            );
+        }
+
+        // The stream must still be usable: the cancelled read's partial
+        // line is resumed, the stale response is drained, and the second
+        // call is answered normally.
+        let second = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            client.call_tool("slow.echo", serde_json::json!({})),
+        )
+        .await
+        .expect("the second call must not hang")
+        .expect("the second call must succeed after a cancelled read");
+        assert!(
+            second.get("ok").is_some(),
+            "the second call must carry the server's result: {second:?}"
+        );
+    }
+
+    /// RT-515: EOF is REPORTED, not spun on.
+    ///
+    /// The old read path treated EOF as an empty line, so a server that
+    /// had already exited made the client skip 256 "banner" lines before
+    /// it gave up — and it gave up with the banner-bound message, which
+    /// named a bound the client never actually reached.
+    #[tokio::test]
+    async fn a_dead_server_reports_eof_instead_of_spinning_on_the_banner_bound() {
+        let dir = std::env::temp_dir().join(format!(
+            "operant_mcp_dead_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        let script = dir.join("dead_server.py");
+        // A VALID python script that exits at once.
+        std::fs::write(&script, "import sys\nsys.exit(0)\n").expect("write the dead server");
+        let client = McpStdioClient::new(
+            "python3",
+            vec![script.to_string_lossy().to_string()],
+            HashMap::new(),
+        );
+        let err = client
+            .connect()
+            .await
+            .expect_err("a server that exits at once cannot complete a handshake");
+        let text = err.to_string();
+        assert!(
+            text.contains("stdout closed"),
+            "the failure must name the closed stream, not a banner bound it never reached: {text}"
+        );
+    }
+
+    /// RT-515 (second half): the registry must not cancel an MCP read
+    /// before the client's own budget. The registry's DEFAULT tool
+    /// timeout is 30 s while the MCP client's first-read budget is 60 s,
+    /// so without a per-tool override the registry ALWAYS cancels first
+    /// — and a cancelled read is exactly what desynchronised the stream.
+    /// The namespaced MCP tools therefore get a registry timeout ABOVE
+    /// the client's read budget.
+    ///
+    /// This is the behavioural half: a registry whose default is 1 s must
+    /// still serve a tool whose server answers in 2 s.
+    #[tokio::test]
+    async fn an_mcp_tool_is_not_cancelled_by_the_registrys_default_timeout() {
+        const SLOW_MCP_SERVER: &str = r#"import sys, json, time
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        req = json.loads(line)
+    except Exception:
+        continue
+    rid = req.get('id')
+    if rid is None:
+        continue
+    mid = req.get('method')
+    if mid == 'initialize':
+        result = {'protocolVersion': '2025-06-18', 'capabilities': {'tools': {}}, 'serverInfo': {'name': 'slow', 'version': '1.0'}}
+    elif mid == 'tools/list':
+        result = {'tools': [{'name': 'slow.echo', 'description': 'a slow tool', 'inputSchema': {'type': 'object'}}]}
+    else:
+        # The answer takes longer than the registry's 1 s default.
+        time.sleep(2)
+        result = {'ok': True}
+    sys.stdout.write(json.dumps({'jsonrpc': '2.0', 'id': rid, 'result': result}) + chr(10))
+    sys.stdout.flush()
+"#;
+        let dir = std::env::temp_dir().join(format!(
+            "operant_mcp_slow_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        let script = dir.join("slow_server.py");
+        std::fs::write(&script, SLOW_MCP_SERVER).expect("write the slow server");
+
+        let manager = McpManager::new();
+        manager
+            .add_stdio_server(
+                "slowsrv",
+                "python3".to_string(),
+                vec![script.to_string_lossy().to_string()],
+                HashMap::new(),
+            )
+            .await
+            .expect("the slow server connects");
+
+        let registry = ToolRegistry::new(std::time::Duration::from_secs(1));
+        let synced = manager.sync_tools_to_registry(&registry).await;
+        assert_eq!(
+            synced, 1,
+            "the server's tool must be synced into the registry"
+        );
+
+        let name = qualified_tool_name("slowsrv", "slow.echo");
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(20),
+            registry.execute(
+                &name,
+                "call-1",
+                serde_json::json!({}),
+                ToolContext::default(),
+            ),
+        )
+        .await
+        .expect("the tool call must not hang")
+        .expect("the tool call returns");
+
+        assert!(
+            result.success,
+            "the MCP tool must not be cancelled by the registry's default timeout — its per-tool timeout sits above the client's own read budget: {}",
+            result.error.as_deref().unwrap_or("<no error>")
+        );
+        assert!(
+            !result.timed_out,
+            "the result must not be a registry timeout"
+        );
     }
 
     #[tokio::test]
