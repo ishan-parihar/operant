@@ -439,6 +439,10 @@ pub enum AgentEvent {
     },
 }
 
+/// Prefix of the system hint that marks a self-healing retry.
+pub(crate) const HEALING_RETRY_HINT_PREFIX: &str =
+    "Note: The previous attempt encountered an error:";
+
 /// Operant Agent for tool orchestration
 /// Rewind target recorded for each real user prompt (2026-10-14 batch,
 /// plan 05).
@@ -2467,6 +2471,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_protected_prompt_too_large_for_the_window_names_the_floor() {
+        let (agent, _dir) = bust_test_agent(128_000);
+        agent
+            .add_message(Message::new(Role::User, "x".repeat(600_000)))
+            .await;
+
+        let Err(err) = agent.build_messages("protected-floor").await else {
+            panic!("a protected turn larger than the window must fail typed");
+        };
+        match err {
+            crate::error::Error::ContextExhausted {
+                window, required, ..
+            } => {
+                assert_eq!(window, 128_000);
+                assert!(
+                    required > window,
+                    "the protected floor is named: {required}"
+                );
+            }
+            other => panic!("expected ContextExhausted, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
     async fn a_tail_that_cannot_fit_fails_typed_instead_of_being_sent() {
         let (agent, _dir) = bust_test_agent(10_000);
         agent
@@ -2545,6 +2573,59 @@ mod tests {
     /// A provider context overflow must fail TYPED, and must not re-issue
     /// the request.
     ///
+    #[tokio::test]
+    async fn a_provider_overflow_that_cannot_be_compressed_names_the_protected_floor() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db = Arc::new(Database::init(dir.path().join("overflow-floor.sqlite")).expect("db"));
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let agent = OperantAgent::new(
+            AgentConfig {
+                context_window: 200_000,
+                ..AgentConfig::default()
+            },
+            Box::new(OverflowingClient {
+                calls: calls.clone(),
+            }),
+            ToolRegistry::new(Duration::from_secs(1)),
+            db,
+        );
+
+        let overflowed = vec![Message::user("x".repeat(160_000))];
+        agent.learn_context_limit(
+            &overflowed,
+            &Error::Provider {
+                status: 400,
+                body: "maximum context length exceeded".to_string(),
+                retry_after: None,
+            },
+        );
+        let system = Message::new(Role::System, "s".repeat(148_000));
+        let newest = Message::new(Role::User, "n".repeat(148_000));
+        for i in 0..10 {
+            agent
+                .add_message(Message::new(Role::User, format!("old {i}")))
+                .await;
+        }
+        agent.add_message(system).await;
+        agent.add_message(newest).await;
+
+        let Err(err) = agent.run("go".to_string()).await else {
+            panic!("an uncompressible overflow must fail typed");
+        };
+        match err {
+            Error::ContextExhausted {
+                required, window, ..
+            } => {
+                assert!(required > 0, "the protected floor is named: {required}");
+                assert!(
+                    required + 4_096 > window,
+                    "the protected floor exceeds the usable window: {required} + 4096 > {window}"
+                );
+            }
+            other => panic!("expected ContextExhausted, got {other:?}"),
+        }
+    }
+
     /// The reactive overflow path compresses the conversation and retries.
     /// When the compression CANNOT fit the budget — because the PROTECTED
     /// messages (the system prompt and the newest turn) are larger than
@@ -2584,7 +2665,14 @@ mod tests {
         // not fire first — the request has to actually be SENT for the
         // REACTIVE path to be the thing under test.
         let overflowed = vec![Message::user("x".repeat(160_000))];
-        agent.learn_context_limit(&overflowed);
+        agent.learn_context_limit(
+            &overflowed,
+            &Error::Provider {
+                status: 400,
+                body: "maximum context length exceeded".to_string(),
+                retry_after: None,
+            },
+        );
         let learned = agent.effective_context_window();
         assert!(
             learned < 200_000,
@@ -2659,18 +2747,134 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_overflow_lowers_the_window_and_keeps_the_smallest() {
+    async fn an_overflow_learns_a_limit_below_the_rejected_request() {
         let (agent, _dir) = bust_test_agent(10_000);
         assert_eq!(agent.effective_context_window(), 10_000);
 
         let overflowed = vec![Message::user("x".repeat(24_000))];
         let tokens = crate::context_management::estimate_total_tokens(&overflowed);
-        agent.learn_context_limit(&overflowed);
-        assert_eq!(agent.effective_context_window(), tokens);
+        agent.learn_context_limit(
+            &overflowed,
+            &Error::Provider {
+                status: 400,
+                body: "maximum context length exceeded".to_string(),
+                retry_after: None,
+            },
+        );
+        let learned = agent.effective_context_window();
+        assert!(
+            learned < tokens,
+            "the learned limit must be below the rejected size"
+        );
+        assert_eq!(learned, crate::agent::next_probe_tier(tokens));
 
         // A larger overflow later must not raise the learned limit.
-        agent.learn_context_limit(&[Message::user("x".repeat(40_000))]);
-        assert_eq!(agent.effective_context_window(), tokens);
+        agent.learn_context_limit(
+            &[Message::user("x".repeat(40_000))],
+            &Error::Provider {
+                status: 400,
+                body: "maximum context length exceeded".to_string(),
+                retry_after: None,
+            },
+        );
+        assert_eq!(agent.effective_context_window(), learned);
+    }
+
+    #[tokio::test]
+    async fn a_second_overflow_fails_typed_even_after_compression_reduces_history() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db = Arc::new(Database::init(dir.path().join("overflow-reduced.sqlite")).expect("db"));
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let agent = OperantAgent::new(
+            AgentConfig {
+                context_window: 200_000,
+                stream: false,
+                ..AgentConfig::default()
+            },
+            Box::new(OverflowingClient {
+                calls: calls.clone(),
+            }),
+            ToolRegistry::new(Duration::from_secs(1)),
+            db,
+        );
+
+        for i in 0..20 {
+            agent
+                .add_message(Message::new(
+                    Role::User,
+                    format!("old {i} {}", "x".repeat(8_000)),
+                ))
+                .await;
+        }
+        let result = agent.run("current turn".to_string()).await;
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "the first overflow is retried once after compression"
+        );
+        assert!(
+            matches!(result, Err(Error::ContextExhausted { .. })),
+            "a second overflow must fail typed even if compression reduced the foldable history"
+        );
+    }
+
+    /// The streaming path has the SAME two-overflow contract as the
+    /// non-streaming path: the first provider overflow is retried once after
+    /// compression; the second fails typed even when compression reduced the
+    /// foldable history.
+    #[tokio::test]
+    async fn a_second_streaming_overflow_fails_typed_even_after_compression_reduces_history() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db = Arc::new(
+            Database::init(dir.path().join("stream-overflow-reduced.sqlite")).expect("db"),
+        );
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let agent = OperantAgent::new(
+            AgentConfig {
+                context_window: 200_000,
+                stream: true,
+                ..AgentConfig::default()
+            },
+            Box::new(OverflowingClient {
+                calls: calls.clone(),
+            }),
+            ToolRegistry::new(Duration::from_secs(1)),
+            db,
+        );
+
+        for i in 0..20 {
+            agent
+                .add_message(Message::new(
+                    Role::User,
+                    format!("old {i} {}", "x".repeat(8_000)),
+                ))
+                .await;
+        }
+        let result = agent.run("current turn".to_string()).await;
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "the first streaming overflow is retried once after compression"
+        );
+        assert!(
+            matches!(result, Err(Error::ContextExhausted { .. })),
+            "a second streaming overflow must fail typed even if compression reduced the foldable history"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_overflow_uses_the_provider_stated_limit() {
+        let (agent, _dir) = bust_test_agent(10_000);
+        let overflowed = vec![Message::user("x".repeat(24_000))];
+        agent.learn_context_limit(
+            &overflowed,
+            &Error::Provider {
+                status: 400,
+                body: "This model's maximum context length is 8192 tokens".to_string(),
+                retry_after: None,
+            },
+        );
+        assert_eq!(agent.effective_context_window(), 8_192);
     }
 
     #[serial]
@@ -4516,12 +4720,13 @@ mod tests {
                 usage: None,
                 finish_reason: Some("length".to_string()),
                 dropped_events: None,
+                model: None,
             }),
         ];
         let stream: BoxStream<'static, Result<StreamChunk>> =
             Box::pin(futures::stream::iter(chunks));
 
-        let (text, _reasoning, tcs, _extra, finish_reason, _usage) =
+        let (text, _reasoning, tcs, _extra, finish_reason, _usage, _served_model) =
             agent.process_stream(stream).await.unwrap();
         assert_eq!(text, "partial answer cut off");
         assert!(tcs.is_empty());
@@ -4537,7 +4742,8 @@ mod tests {
             vec![Ok(StreamChunk::new(Some("hello".to_string()), None, None))];
         let stream: BoxStream<'static, Result<StreamChunk>> =
             Box::pin(futures::stream::iter(chunks));
-        let (_t, _r, _tcs, _e, finish_reason, _usage) = agent.process_stream(stream).await.unwrap();
+        let (_t, _r, _tcs, _e, finish_reason, _usage, _served_model) =
+            agent.process_stream(stream).await.unwrap();
         assert!(finish_reason.is_none());
     }
 

@@ -546,7 +546,7 @@ impl OperantAgent {
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(new_model);
     }
 
-    /// Swap the attached [`SkillManager`](crate::skills::SkillManager) at
+    /// Swap the attached [`SkillManager`] at
     /// runtime (RT-175 — the gateway's `/reload-skills`). Rescans the
     /// configured skills directory and installs the result; the frozen
     /// prefix reads the field on every build (no memoization), so the new
@@ -863,7 +863,7 @@ impl OperantAgent {
 
     /// The STANDING session goal, if one is set.
     ///
-    /// The TUI's `/goal` sets it; [`Self::build_messages`] carries it in the
+    /// The TUI's `/goal` sets it; `build_messages` carries it in the
     /// `<turn_context>` tail of every turn. `None` = no goal, and the tail is
     /// byte-identical to the no-goal request (prompt-cache stability).
     pub fn standing_goal(&self) -> Option<String> {

@@ -622,6 +622,17 @@ impl Default for ContextCaps {
     }
 }
 
+impl From<&crate::config::BehaviorSettings> for ContextCaps {
+    fn from(settings: &crate::config::BehaviorSettings) -> Self {
+        Self {
+            soft_tokens: settings.context_soft_cap_tokens,
+            soft_percent: settings.context_soft_cap_percent,
+            hard_tokens: settings.context_hard_cap_tokens,
+            hard_percent: settings.context_hard_cap_percent,
+        }
+    }
+}
+
 impl ContextCaps {
     /// Resolve the effective limits for `window` tokens.
     ///
@@ -946,6 +957,24 @@ pub fn prompt_cache_guard(prefix: &[Message], after: &[Message]) -> bool {
 /// This is a port of magic-context's tiered target-headroom eviction,
 /// simplified to a single pass (magic-context uses idempotence latches
 /// + multi-pass; we don't need that for a first implementation).
+///
+/// Tokens that eviction cannot reclaim: the frozen system prompt and the
+/// newest message (the live turn being answered).
+pub fn protected_floor_tokens(messages: &[Message]) -> usize {
+    if messages.is_empty() {
+        return 0;
+    }
+    messages
+        .iter()
+        .enumerate()
+        .filter(|(index, message)| {
+            (*index == 0 && message.role == crate::client::Role::System)
+                || *index + 1 == messages.len()
+        })
+        .map(|(_, message)| estimate_message_tokens(message))
+        .sum()
+}
+
 pub fn evict_to_budget(messages: Vec<Message>, budget_tokens: usize) -> Vec<Message> {
     evict_to_budget_reporting(messages, budget_tokens).0
 }
@@ -965,6 +994,9 @@ pub struct EvictionOutcome {
     /// eviction can meet the budget in that case, and the caller has to
     /// know rather than send an over-budget request.
     pub within_budget: bool,
+    /// Tokens in the protected prompt and live tail. When this exceeds the
+    /// budget, no amount of folding can make the request fit.
+    pub protected_tokens: usize,
 }
 
 /// Evict to the budget, and REPORT whether the budget was met.
@@ -988,12 +1020,14 @@ pub fn evict_to_budget_reporting(
     let total = estimate_total_tokens(&messages);
     if total <= budget_tokens {
         let kept = messages.len();
+        let protected_tokens = protected_floor_tokens(&messages);
         return (
             messages,
             EvictionOutcome {
                 kept,
                 tokens: total,
                 within_budget: true,
+                protected_tokens,
             },
         );
     }
@@ -1175,6 +1209,7 @@ pub fn evict_to_budget_reporting(
         kept: kept_messages.len(),
         tokens,
         within_budget: tokens <= budget_tokens,
+        protected_tokens: protected_floor_tokens(&kept_messages),
     };
     if !outcome.within_budget {
         // The caller has to know: the protected messages alone exceed the

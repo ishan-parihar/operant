@@ -1497,3 +1497,46 @@ carried by this round and the earlier ones:
    RT-452 residual (an incomplete report as a separate field rather than `error`); the
    command-fence's shell-wrap semantics; and the RT-481 lesson that a half-applied fix looks
    complete until the strict gate sees it.
+
+## Round 22 (2026-11-10) — the live context-window incident and confirmed agentic-core gaps
+
+End-state test: the live operator config can no longer be overwritten by a unit test; a protected prompt larger than the configured window fails typed with an actionable message and no useless gateway retry; the runtime model override survives fallback; focused core/CLI regressions, strict clippy, fmt, genome lint, workspace tests, release build, deployment and a credentialed live turn all pass.
+
+| # | unit | done when | depends on | premises |
+|---|---|---|---|---|
+| 1 | [x] Prove the live outage cause and map the architecture surface | exact 4242 fixture + concurrent global-path race + live logs/config are recorded with evidence | — | A1,A2,C1,C2 |
+| 2 | [x] Make settings persistence hermetic and stop read helpers from changing the writer identity | no settings test can write outside a temp config; a read helper leaves `loaded_config_path` unchanged; mutation-proved | 1 | A1,C7,C8,C9 |
+| 3 | [x] Repair context-window semantics, validation and recovery | row says Context window; invalid windows are rejected; protected-floor failure names required/configured tokens and gateway does not retry when compaction cannot help | 2 | C2,C3,C9,C10 |
+| 4 | [x] Repair runtime model fallback override | request model is the per-request primary under fallback; mutation-proved | 1 | C1,C9 |
+| 5 | [x] Repair non-text turn finalization parity | grace/circuit exits run the same memory/prefetch/TurnEnd finalizer exactly once | 1 | C1,C6,C9 |
+| 6 | [x] Repair session rehydration tool-group boundaries | a resumed request contains either a complete tool-call group or none | 1 | C1,C6,C9 |
+| 7 | [x] Repair verification false-green/process cleanup | missing test phase cannot report ok; timed-out starts kill their process group | 1 | C1,C6,C9 |
+| 8 | [x] Run realtime matrix, strict gates, red-team, docs and deploy | scoped/full tests, clippy, fmt, genome lint, fake-provider socket tests, release artifact, deployed live turn all green | 2..7 | C3,C5,C6,C7,C11 |
+| 9 | [x] Repair transport recovery truth | streaming 429 honors Retry-After/backoff; credential rotation does not disable unrelated stream retries; both mutation-proved | 8 | C1,C9,C10 |
+| 10 | [x] Make context-limit learning and repeated overflow truthful | explicit/probed limits are learned monotonically; every second overflow is typed; regressions mutation-proved | 9 | C1,C9,C10 |
+| 11 | [x] Make provider fallback deep and request-local | every alternate route is tried; route choice does not leak; regressions mutation-proved | 10 | C1,C9,C10 |
+| 12 | [x] Preserve failed-stream usage and attribute the served route | usage survives failure; cost names the served route; regression mutation-proved | 11 | C1,C9,C10 |
+| 13 | [x] Make background review deferred, routed, and scope-safe | one terminal spawn; complete route contract; every skill mutation guarded; task-local reads | 12 | C1,C9,C10 |
+| 14 | [x] Apply configured context caps to ACP and delegated/custom-core agents | installed config seeds core caps; ACP applies caps/compression | 13 | C1,C9,C10 |
+| 15 | [x] Keep one user row across a self-healing retry | recovery hint does not defeat user-message dedup | 14 | C1,C9,C10 |
+| 16 | [x] Make the self-test hermetic | fixed dependency/store/credentials; no corpus network; no stale binary; opt-in advisory fetch | 15 | C1,C9,C10 |
+| 17 | [x] Make the release gates agree with the tree | audit details; baselines; rustdoc; settings golden | 16 | C1,C9,C10 |
+| 18 | [x] Close fresh-review boundary findings | credential isolation; task-local reads; precise healing dedup | 17 | C1,C9,C10 |
+| 19 | [x] Make the hermetic self-test fresh-machine safe | locked crates fetched once; Cargo steps then offline | 18 | C1,C9,C10 |
+| 20 | [x] Make the strict CLI rustdoc gate clean | unresolved links became plain code spans | 19 | C1,C9,C10 |
+
+Round-23 note: the hermetic realtime matrix (HTTP, SSE, real verification tool
+call, and MCP stdio) and focused gateway/TUI regressions are complete. The full
+workspace test suite, strict workspace clippy, genome lint, release artifact,
+deployment, and a credentialed live turn through the deployed binary are green.
+The repository's `cargo fmt --all -- --check` still reports three PRE-EXISTING
+unformatted files already present on `origin/main` (advisor.rs,
+stream_replay_tool_rows.rs, tool_failure_logging.rs); this slice changed none
+of them, and its owned Rust files pass rustfmt.
+### iter-2075 evidence (pushed `a7af53af`)
+
+- Live incident: operator `context_window = 4242` restored to 1,000,000; gateway restarted active with `NRestarts=0` before code repair.
+- Writer isolation: explicit-path persistence and read-only config loads do not move `loaded_config_path`; skill preprocessing reads only installed runtime config; TUI persists `agent.context_window` only to `config.config_path`.
+- Context truth: `ContextExhausted.required` carries the protected floor; protected overflow names the required/configured tokens and `agent.context_window`, never `/compact`; only foldable exhaustion (`required == 0`) triggers gateway compact-and-retry.
+- Gates: full `operant-core` lib+integration suite green (3,011 tests), focused CLI settings 15/15, strict core and CLI clippy green, fmt clean, genome lint 0 errors (5 existing warnings).
+- Upstream peer commits `ae436c4b`/`3a34f649` were integrated first; peer audit ids RT-486/RT-487 were preserved and this fix uses RT-488.

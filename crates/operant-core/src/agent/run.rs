@@ -42,6 +42,28 @@ fn learned_limit_key(provider: &str, model: &str) -> String {
 /// One struct because they travel together (the log line, the poke's gate)
 /// and a seven-arg function is a function nobody can read at the call site.
 #[derive(Clone, Copy)]
+struct TurnTiming {
+    /// When this turn began.
+    start: std::time::Instant,
+    /// Cumulative model-call time in this turn.
+    inference: Duration,
+    /// Whether at least one model call happened.
+    saw_inference: bool,
+}
+
+#[derive(Clone)]
+struct TurnEndContext<'a> {
+    session_id: &'a str,
+    user_query: &'a str,
+    counters: TurnCounters,
+    /// S3 deferral — which review lane(s) triggered during the turn and must
+    /// spawn at the terminal exit. One review spawn per turn covers both.
+    review_skills: bool,
+    review_memory: bool,
+    timing: TurnTiming,
+}
+
+#[derive(Clone, Copy)]
 struct TurnCounters {
     /// The loop's iteration counter.
     iteration: usize,
@@ -222,15 +244,15 @@ impl OperantAgent {
     /// during the turn, the spawn was deferred to turn exit; the grace path
     /// is one of those exits, so it fires the one review after emitting
     /// `Done` (Interrupt/Error paths pass `false`).
-    pub(crate) async fn attempt_grace_call(
+    async fn attempt_grace_call(
         &self,
         messages: &[Message],
-        session_id: &str,
-        iterations: usize,
-        tool_calls: usize,
         final_response: Option<&Message>,
-        review_fired: bool,
+        end: &TurnEndContext<'_>,
     ) -> Result<GraceOutcome> {
+        let session_id = end.session_id;
+        let iterations = end.counters.iteration;
+        let tool_calls = end.counters.tool_calls;
         // The wrap-up is the LAST call of a budget-exhausted turn, so a
         // summary that runs out of room is CONTINUED (bounded) instead of
         // being returned half-written — the generic recovery jcode uses for
@@ -250,7 +272,7 @@ impl OperantAgent {
             let attempt: Result<(String, String, Option<String>)> = async {
                 if self.config.stream {
                     let stream = self.client.chat_streaming(grace_request).await?;
-                    let (text, reasoning, _tcs, _extra, reason, _usage) =
+                    let (text, reasoning, _tcs, _extra, reason, _usage, _served_model) =
                         self.process_stream(stream).await?;
                     Ok((text, reasoning, reason))
                 } else {
@@ -343,15 +365,7 @@ impl OperantAgent {
                         );
                     }
                 }
-                self.announce_grace_end(
-                    session_id,
-                    messages,
-                    &result,
-                    iterations,
-                    tool_calls,
-                    review_fired,
-                )
-                .await;
+                self.announce_grace_end(messages, &result, end).await;
                 Ok(GraceOutcome::Answer(result))
             }
             Err(e) => {
@@ -420,13 +434,15 @@ impl OperantAgent {
     /// operator the turn was over before the poke gave it one more pass.
     async fn announce_grace_end(
         &self,
-        session_id: &str,
         messages: &[Message],
         result: &Message,
-        iterations: usize,
-        tool_calls: usize,
-        review_fired: bool,
+        end: &TurnEndContext<'_>,
     ) {
+        let session_id = end.session_id;
+        let iterations = end.counters.iteration;
+        let tool_calls = end.counters.tool_calls;
+        let review_skills = end.review_skills;
+        let review_memory = end.review_memory;
         self.emit(AgentEvent::Done {
             message: result.clone(),
             // S5: the grace path must not report `text_response` —
@@ -471,12 +487,86 @@ impl OperantAgent {
                 )
                 .await;
         }
+        self.finalize_terminal_reply(
+            session_id,
+            end.user_query,
+            result,
+            iterations,
+            tool_calls,
+            end.timing,
+        )
+        .await;
         // S3: deferred skill review — review the complete transcript
         // AFTER the turn's final answer is committed/emitted, so the
         // review never competes with the turn for provider slots.
-        if review_fired {
-            self.spawn_background_review(messages, session_id, true, false)
+        if review_skills || review_memory {
+            self.spawn_background_review(messages, session_id, review_skills, review_memory)
                 .await;
+        }
+    }
+
+    /// Run the shared post-turn finalization for a terminal reply.
+    ///
+    /// Normal text, grace, and circuit-breaker exits all complete a turn.
+    /// They differ in why they stopped, not in the post-turn obligations:
+    /// memory sync, next-turn prefetch, the lifecycle hook, and the
+    /// `TurnEnd` bus must each happen exactly once for every terminal reply.
+    async fn finalize_terminal_reply(
+        &self,
+        session_id: &str,
+        user_query: &str,
+        result: &Message,
+        iteration: usize,
+        total_tool_calls: usize,
+        timing: TurnTiming,
+    ) {
+        if let Some(ref hooks) = self.hook_registry {
+            let ctx = crate::gateway_pipeline::HookContext::new()
+                .with_session(session_id)
+                .with_metadata("iterations", iteration.to_string())
+                .with_metadata("tool_calls", total_tool_calls.to_string());
+            hooks
+                .emit(crate::gateway_pipeline::HookEvent::TurnEnd, ctx)
+                .await;
+        }
+
+        let write_bank = self.memory_provider.as_ref().and_then(|p| p.write_bank());
+        if turn_retains()
+            && let Ok(exec_guard) = self.memory_sync_executor.try_lock()
+        {
+            if let Some(executor) = exec_guard.as_ref() {
+                executor.submit_sync_turn(user_query, &result.content, write_bank);
+            } else if let Some(provider) = &self.memory_provider {
+                let user_text = user_query.to_string();
+                let assistant_text = result.content.clone();
+                let provider_clone = provider.clone();
+                crate::daemon_pool::spawn("memory-sync", async move {
+                    if let Err(e) = provider_clone
+                        .sync_turn_in_bank(write_bank.as_deref(), &user_text, &assistant_text)
+                        .await
+                    {
+                        tracing::warn!(error = %e, "Memory provider sync_turn hook failed");
+                    }
+                });
+            }
+        }
+        if let Some(provider) = &self.memory_provider {
+            provider.queue_prefetch(user_query);
+        }
+
+        if let Some(ref bus) = self.turn_end_bus {
+            let attribution =
+                self.turn_attribution(timing.start, timing.inference, timing.saw_inference);
+            if let Some(ref attribution) = attribution {
+                crate::turn_end::TurnEndBus::log_attribution(attribution);
+            }
+            bus.emit(
+                session_id,
+                iteration,
+                total_tool_calls,
+                &result.content,
+                attribution,
+            );
         }
     }
 
@@ -502,22 +592,13 @@ impl OperantAgent {
     async fn wrap_up_or_poke(
         &self,
         messages: &mut Vec<Message>,
-        session_id: &str,
-        counters: TurnCounters,
-        review_fired: bool,
         poke: &mut crate::agent::auto_poke::PokeState,
         allow_poke: bool,
+        end: &TurnEndContext<'_>,
     ) -> Result<Option<Message>> {
-        let outcome = self
-            .attempt_grace_call(
-                messages,
-                session_id,
-                counters.iteration,
-                counters.tool_calls,
-                None,
-                review_fired,
-            )
-            .await?;
+        let session_id = end.session_id;
+        let counters = end.counters;
+        let outcome = self.attempt_grace_call(messages, None, end).await?;
         match outcome {
             GraceOutcome::Answer(message) => return Ok(Some(message)),
             GraceOutcome::Empty => {}
@@ -600,15 +681,7 @@ impl OperantAgent {
         // No poke: announce the empty end now (the same announcement the
         // wrap-up used to make inline) and hand the empty answer back.
         let empty = Message::assistant(String::new());
-        self.announce_grace_end(
-            session_id,
-            messages,
-            &empty,
-            counters.iteration,
-            counters.tool_calls,
-            review_fired,
-        )
-        .await;
+        self.announce_grace_end(messages, &empty, end).await;
         Ok(Some(empty))
     }
 
@@ -738,7 +811,8 @@ impl OperantAgent {
         // sees the complete transcript instead of racing the turn for
         // provider slots mid-loop. Interrupt/Error exits skip it — the
         // operator already knows why the turn stopped.
-        let mut review_fired = false;
+        let mut review_skills_pending = false;
+        let mut review_memory_pending = false;
 
         // ── Tool-call guardrail reset (R4) ────────────────────────────
         // Identical-call repeat detection is per-USER-TURN, not per-iteration:
@@ -915,9 +989,11 @@ impl OperantAgent {
                 trigger.should_review_memory
             }
         }; // MutexGuard dropped here — safe to .await
+        // The SPAWN is deferred to the terminal exit like the skill lane's —
+        // a review spawned here races the turn it is supposed to review for
+        // provider slots. The counter still advanced, so the cadence is kept.
         if should_review_memory {
-            self.spawn_background_review(&messages, &session_id, false, true)
-                .await;
+            review_memory_pending = true;
         }
 
         let mut retry_state = turn_retry_state::TurnRetryState::new(Some(self.config.max_retries));
@@ -1028,15 +1104,24 @@ impl OperantAgent {
                 match self
                     .wrap_up_or_poke(
                         &mut messages,
-                        &session_id,
-                        TurnCounters {
-                            iteration,
-                            tool_calls: total_tool_calls,
-                            succeeded: successful_tool_calls,
-                        },
-                        review_fired,
                         &mut poke,
                         true,
+                        &TurnEndContext {
+                            session_id: &session_id,
+                            user_query: &user_query,
+                            counters: TurnCounters {
+                                iteration,
+                                tool_calls: total_tool_calls,
+                                succeeded: successful_tool_calls,
+                            },
+                            review_skills: review_skills_pending,
+                            review_memory: review_memory_pending,
+                            timing: TurnTiming {
+                                start: turn_start,
+                                inference: turn_inference,
+                                saw_inference,
+                            },
+                        },
                     )
                     .await?
                 {
@@ -1066,15 +1151,24 @@ impl OperantAgent {
                 match self
                     .wrap_up_or_poke(
                         &mut messages,
-                        &session_id,
-                        TurnCounters {
-                            iteration,
-                            tool_calls: total_tool_calls,
-                            succeeded: successful_tool_calls,
-                        },
-                        review_fired,
                         &mut poke,
                         true,
+                        &TurnEndContext {
+                            session_id: &session_id,
+                            user_query: &user_query,
+                            counters: TurnCounters {
+                                iteration,
+                                tool_calls: total_tool_calls,
+                                succeeded: successful_tool_calls,
+                            },
+                            review_skills: review_skills_pending,
+                            review_memory: review_memory_pending,
+                            timing: TurnTiming {
+                                start: turn_start,
+                                inference: turn_inference,
+                                saw_inference,
+                            },
+                        },
                     )
                     .await?
                 {
@@ -1127,15 +1221,24 @@ impl OperantAgent {
                 match self
                     .wrap_up_or_poke(
                         &mut messages,
-                        &session_id,
-                        TurnCounters {
-                            iteration,
-                            tool_calls: total_tool_calls,
-                            succeeded: successful_tool_calls,
-                        },
-                        review_fired,
                         &mut poke,
                         false,
+                        &TurnEndContext {
+                            session_id: &session_id,
+                            user_query: &user_query,
+                            counters: TurnCounters {
+                                iteration,
+                                tool_calls: total_tool_calls,
+                                succeeded: successful_tool_calls,
+                            },
+                            review_skills: review_skills_pending,
+                            review_memory: review_memory_pending,
+                            timing: TurnTiming {
+                                start: turn_start,
+                                inference: turn_inference,
+                                saw_inference,
+                            },
+                        },
                     )
                     .await?
                 {
@@ -1214,15 +1317,24 @@ impl OperantAgent {
                 match self
                     .wrap_up_or_poke(
                         &mut messages,
-                        &session_id,
-                        TurnCounters {
-                            iteration,
-                            tool_calls: total_tool_calls,
-                            succeeded: successful_tool_calls,
-                        },
-                        review_fired,
                         &mut poke,
                         true,
+                        &TurnEndContext {
+                            session_id: &session_id,
+                            user_query: &user_query,
+                            counters: TurnCounters {
+                                iteration,
+                                tool_calls: total_tool_calls,
+                                succeeded: successful_tool_calls,
+                            },
+                            review_skills: review_skills_pending,
+                            review_memory: review_memory_pending,
+                            timing: TurnTiming {
+                                start: turn_start,
+                                inference: turn_inference,
+                                saw_inference,
+                            },
+                        },
                     )
                     .await?
                 {
@@ -1343,7 +1455,7 @@ impl OperantAgent {
                         if classified.reason
                             == crate::agent::error_classifier::FailoverReason::ContextOverflow
                         {
-                            self.learn_context_limit(&messages);
+                            self.learn_context_limit(&messages, &e);
                         }
                         // ── Reasoning-effort rejection (plan 03) ──────────────
                         // The request was fine except the effort field:
@@ -1377,20 +1489,10 @@ impl OperantAgent {
                             warn!(reason = %classified.reason, "Context overflow detected — compressing and retrying");
                             // Try LLM summarization first (intelligent compression),
                             // fall back to deterministic decay/eviction.
-                            let (compressed, reduced) = self
+                            let (compressed, _) = self
                                 .compress_context_overflow_reporting(messages)
                                 .await;
                             messages = compressed;
-                            // Did the compression REDUCE the history? If it
-                            // did not, the retry is sending the same prompt
-                            // the provider already rejected — but a provider
-                            // overflow can be TRANSIENT (a mis-reported
-                            // limit, a load balancer routing to a
-                            // differently-configured backend), so the FIRST
-                            // overflow is still retried. The verdict is
-                            // recorded, and the SECOND overflow fails typed
-                            // (see the `compress_attempted` arm below).
-                            retry_state.compress_reduced_history = reduced;
                             // Refund the iteration since the original LLM call
                             // was wasted on a context overflow — the retry gets
                             // a fresh consume() on the next loop iteration.
@@ -1413,22 +1515,19 @@ impl OperantAgent {
                             //
                             // The TWO-STRIKE rule: a provider overflow can
                             // be transient, so the first one is always
-                            // retried. But if the RETRY overflows too, and
-                            // the compression did not reduce the history,
-                            // the retry sent the same prompt the provider
-                            // already rejected — re-issuing would send it
-                            // again. That is the point at which the turn
-                            // fails TYPED.
+                            // retried. Any second classified overflow fails
+                            // typed: even a reduced request can still exceed
+                            // the provider's real limit.
                             match self.client.chat_streaming(retry_request).await {
                                 Ok(stream) => stream,
                                 Err(retry_err) => {
                                     let retry_classified =
                                         FallbackModelClient::classify_error(&retry_err);
-                                    if retry_classified.should_compress
-                                        && !retry_state.compress_reduced_history
-                                    {
+                                    if retry_classified.should_compress {
                                         let tokens = crate::context_management::
                                             estimate_total_tokens(&messages);
+                                        let required = crate::context_management::
+                                            protected_floor_tokens(&messages);
                                         return Err(Error::ContextExhausted {
                                             tokens,
                                             // The window the check compared
@@ -1436,6 +1535,7 @@ impl OperantAgent {
                                             // in the error describe the
                                             // same comparison.
                                             window: self.effective_context_window(),
+                                            required,
                                         });
                                     }
                                     return Err(retry_err);
@@ -1520,10 +1620,9 @@ impl OperantAgent {
                             // deterministic provider rejection must not be poked.
                             poke.record_error(&e.to_string());
                             let classified = FallbackModelClient::classify_error(&e);
-                            let retryable = classified.retryable
-                                && !classified.should_compress
-                                && (classified.should_rotate_credential
-                                    || !retry_state.rotate_attempted);
+                            let retryable = retry_state.may_retry_stream_failure(
+                                classified.retryable && !classified.should_compress,
+                            );
                             // Guard on the CUMULATIVE count for this turn, not
                             // only `retry_state.consume_retry()` (which is
                             // refilled by any successful parse). Without this a
@@ -1654,9 +1753,17 @@ impl OperantAgent {
                         }
                     }
                 };
-                let (text, reasoning, tcs, extra, finish_reason, usage_tokens) = processed;
+                let (text, reasoning, tcs, extra, finish_reason, usage_tokens, served_model) =
+                    processed;
                 stream_extra_content = extra;
-                Ok((text, reasoning, tcs, finish_reason, usage_tokens))
+                Ok((
+                    text,
+                    reasoning,
+                    tcs,
+                    finish_reason,
+                    usage_tokens,
+                    served_model,
+                ))
             } else {
                 let response = match self.call_with_loop_timeout(self.client.chat(request)).await {
                     Ok(r) => r,
@@ -1677,23 +1784,16 @@ impl OperantAgent {
                         if classified.reason
                             == crate::agent::error_classifier::FailoverReason::ContextOverflow
                         {
-                            self.learn_context_limit(&messages);
+                            self.learn_context_limit(&messages, &e);
                         }
                         if classified.should_compress && !retry_state.compress_attempted {
                             retry_state.compress_attempted = true;
                             warn!(reason = %classified.reason, "Context overflow detected — compressing and retrying");
                             // Try LLM summarization first (intelligent compression),
                             // fall back to deterministic decay/eviction.
-                            let (compressed, reduced) =
+                            let (compressed, _) =
                                 self.compress_context_overflow_reporting(messages).await;
                             messages = compressed;
-                            // Did the compression REDUCE the history? If it
-                            // did not, the retry is sending the same prompt
-                            // the provider already rejected — but a provider
-                            // overflow can be TRANSIENT, so the FIRST
-                            // overflow is still retried. The verdict is
-                            // recorded, and the SECOND overflow fails typed.
-                            retry_state.compress_reduced_history = reduced;
                             // Refund the iteration since the original LLM call
                             // was wasted on a context overflow.
                             self.iteration_budget.refund();
@@ -1726,16 +1826,19 @@ impl OperantAgent {
                                 Err(retry_err) => {
                                     let retry_classified =
                                         FallbackModelClient::classify_error(&retry_err);
-                                    if retry_classified.should_compress
-                                        && !retry_state.compress_reduced_history
-                                    {
+                                    if retry_classified.should_compress {
                                         let tokens =
                                             crate::context_management::estimate_total_tokens(
+                                                &messages,
+                                            );
+                                        let required =
+                                            crate::context_management::protected_floor_tokens(
                                                 &messages,
                                             );
                                         return Err(Error::ContextExhausted {
                                             tokens,
                                             window: self.effective_context_window(),
+                                            required,
                                         });
                                     }
                                     return Err(retry_err);
@@ -1775,16 +1878,19 @@ impl OperantAgent {
                                     Err(retry_err) => {
                                         let retry_classified =
                                             FallbackModelClient::classify_error(&retry_err);
-                                        if retry_classified.should_compress
-                                            && !retry_state.compress_reduced_history
-                                        {
+                                        if retry_classified.should_compress {
                                             let tokens =
                                                 crate::context_management::estimate_total_tokens(
+                                                    &messages,
+                                                );
+                                            let required =
+                                                crate::context_management::protected_floor_tokens(
                                                     &messages,
                                                 );
                                             return Err(Error::ContextExhausted {
                                                 tokens,
                                                 window: self.effective_context_window(),
+                                                required,
                                             });
                                         }
                                         return Err(retry_err);
@@ -1799,7 +1905,9 @@ impl OperantAgent {
                         }
                     }
                 };
-                self.process_response(response).await
+                self.process_response(response)
+                    .await
+                    .map(|parts| (parts.0, parts.1, parts.2, parts.3, parts.4, None))
             };
 
             // Emit LlmResponse observer event with timing
@@ -1827,7 +1935,14 @@ impl OperantAgent {
             let mut tool_names: Vec<String> = Vec::new();
 
             match response {
-                Ok((response_text, reasoning_text, tool_calls, finish_reason, usage_tokens)) => {
+                Ok((
+                    response_text,
+                    reasoning_text,
+                    tool_calls,
+                    finish_reason,
+                    usage_tokens,
+                    _served_model,
+                )) => {
                     // iter-633: fold this call's tokens into the turn total
                     // for the mid-flight seat-budget boundary check above.
                     turn_spend_tokens += usage_tokens;
@@ -2173,29 +2288,36 @@ impl OperantAgent {
                             info!("{}", diag.log_message());
                         }
 
-                        // ── TurnEnd lifecycle hook ───────────────────────────────
-                        // Emit TurnEnd with iteration and tool call counts.
-                        if let Some(ref hooks) = self.hook_registry {
-                            let ctx = crate::gateway_pipeline::HookContext::new()
-                                .with_session(&session_id)
-                                .with_metadata("iterations", iteration.to_string())
-                                .with_metadata("tool_calls", total_tool_calls.to_string());
-                            hooks
-                                .emit(crate::gateway_pipeline::HookEvent::TurnEnd, ctx)
-                                .await;
-                        }
-
                         self.emit(AgentEvent::Done {
-                            message: assistant_msg,
+                            message: assistant_msg.clone(),
                             reason: TurnExitReason::TextResponse,
                         })
                         .await;
 
+                        self.finalize_terminal_reply(
+                            &session_id,
+                            &user_query,
+                            &assistant_msg,
+                            iteration,
+                            total_tool_calls,
+                            TurnTiming {
+                                start: turn_start,
+                                inference: turn_inference,
+                                saw_inference,
+                            },
+                        )
+                        .await;
+
                         // S3: deferred skill review — fires AFTER the turn's
                         // final answer, reviewing the complete transcript.
-                        if review_fired {
-                            self.spawn_background_review(&messages, &session_id, true, false)
-                                .await
+                        if review_skills_pending || review_memory_pending {
+                            self.spawn_background_review(
+                                &messages,
+                                &session_id,
+                                review_skills_pending,
+                                review_memory_pending,
+                            )
+                            .await
                         }
 
                         // R6 — durable session activity heartbeat (hermes
@@ -2204,85 +2326,6 @@ impl OperantAgent {
                         // even when the session never sends a message.
                         self.touch_session_activity(&session_id, "turn complete")
                             .await;
-
-                        // Memory provider: sync_turn + queue_prefetch hooks.
-                        // sync_turn persists the completed turn to graph memory
-                        // (entity extraction + auto-wiring). queue_prefetch
-                        // queues background recall for the next turn.
-                        // This is the native equivalent of the hermes-agent
-                        // MemoryManager.sync_all() + queue_prefetch_all() pattern.
-                        //
-                        // Uses the MemorySyncExecutor for ordered, non-blocking
-                        // background writes. Falls back to direct spawn when the
-                        // executor isn't available (e.g. no memory provider).
-                        // KB-7: read the bank now, at enqueue, not when the worker runs.
-                        let write_bank = self.memory_provider.as_ref().and_then(|p| p.write_bank());
-                        if turn_retains()
-                            && let Ok(exec_guard) = self.memory_sync_executor.try_lock()
-                        {
-                            if let Some(executor) = exec_guard.as_ref() {
-                                executor.submit_sync_turn(&user_query, &result.content, write_bank);
-                            } else if let Some(provider) = &self.memory_provider {
-                                let user_text = user_query.clone();
-                                let assistant_text = result.content.clone();
-                                let provider_clone = provider.clone();
-                                crate::daemon_pool::spawn("memory-sync", async move {
-                                    if let Err(e) = provider_clone
-                                        .sync_turn_in_bank(
-                                            write_bank.as_deref(),
-                                            &user_text,
-                                            &assistant_text,
-                                        )
-                                        .await
-                                    {
-                                        tracing::warn!(error = %e, "Memory provider sync_turn hook failed");
-                                    }
-                                });
-                            }
-                        }
-                        // Memory provider: queue background recall for the
-                        // NEXT turn (hermes `queue_prefetch_all` call-site
-                        // parity). The authoritative search runs in prefetch()
-                        // at the top of the next turn; queue_prefetch is a
-                        // non-blocking hook the provider can use to warm its
-                        // backend — a slow provider can never block the
-                        // turn-completion path.
-                        if let Some(provider) = &self.memory_provider {
-                            provider.queue_prefetch(&user_query);
-                        }
-
-                        // ── TurnEnd post-turn seam ──────────────────────────
-                        // One `TurnEnd` per completed turn, emitted after the
-                        // memory hooks above so subscribers observe the same
-                        // ordering the sync_turn path does. This is the seam
-                        // reflection / advisor / dreaming attach to.
-                        //
-                        // Zero-subscriber cost: `turn_end_bus` is `None`
-                        // unless a feature attached one, so the check below
-                        // constructs nothing, awaits nothing, and never
-                        // touches `messages` — the pre-seam lines above stay
-                        // byte-identical. `emit` is synchronous by contract:
-                        // a slow subscriber can never block the turn.
-                        if let Some(ref bus) = self.turn_end_bus {
-                            let attribution =
-                                self.turn_attribution(turn_start, turn_inference, saw_inference);
-                            // The consumer RT-209 deferred: without this, the
-                            // four spans are computed, classified, emitted, and
-                            // read by nothing. Guarded rather than unguarded
-                            // because the log line must cost nothing when the
-                            // operator turned attribution off (`None`), which is
-                            // the common case.
-                            if let Some(ref attribution) = attribution {
-                                crate::turn_end::TurnEndBus::log_attribution(attribution);
-                            }
-                            bus.emit(
-                                &session_id,
-                                iteration,
-                                total_tool_calls,
-                                &result.content,
-                                attribution,
-                            );
-                        }
 
                         // Emit AgentEnd hook
                         if let Some(ref hooks) = self.hook_registry {
@@ -2589,6 +2632,19 @@ impl OperantAgent {
                             reason: TurnExitReason::CircuitBreaker,
                         })
                         .await;
+                        self.finalize_terminal_reply(
+                            &session_id,
+                            &user_query,
+                            &abort_msg,
+                            iteration,
+                            total_tool_calls,
+                            TurnTiming {
+                                start: turn_start,
+                                inference: turn_inference,
+                                saw_inference,
+                            },
+                        )
+                        .await;
                         // ── Turn diagnostics (circuit-breaker abort) ──────
                         warn!(
                             "{}",
@@ -2607,9 +2663,14 @@ impl OperantAgent {
                         );
                         // S3: deferred skill review — a breaker exit still
                         // produced a (partial) transcript worth one review.
-                        if review_fired {
-                            self.spawn_background_review(&messages, &session_id, true, false)
-                                .await;
+                        if review_skills_pending || review_memory_pending {
+                            self.spawn_background_review(
+                                &messages,
+                                &session_id,
+                                review_skills_pending,
+                                review_memory_pending,
+                            )
+                            .await;
                         }
                         return Ok(abort_msg);
                     }
@@ -2665,6 +2726,19 @@ impl OperantAgent {
                             reason: TurnExitReason::CircuitBreaker,
                         })
                         .await;
+                        self.finalize_terminal_reply(
+                            &session_id,
+                            &user_query,
+                            &abort_msg,
+                            iteration,
+                            total_tool_calls,
+                            TurnTiming {
+                                start: turn_start,
+                                inference: turn_inference,
+                                saw_inference,
+                            },
+                        )
+                        .await;
                         // ── Turn diagnostics (circuit-breaker abort) ──────
                         warn!(
                             "{}",
@@ -2683,9 +2757,14 @@ impl OperantAgent {
                         );
                         // S3: deferred skill review — a breaker exit still
                         // produced a (partial) transcript worth one review.
-                        if review_fired {
-                            self.spawn_background_review(&messages, &session_id, true, false)
-                                .await;
+                        if review_skills_pending || review_memory_pending {
+                            self.spawn_background_review(
+                                &messages,
+                                &session_id,
+                                review_skills_pending,
+                                review_memory_pending,
+                            )
+                            .await;
                         }
                         return Ok(abort_msg);
                     }
@@ -2973,6 +3052,19 @@ impl OperantAgent {
                             reason: TurnExitReason::CircuitBreaker,
                         })
                         .await;
+                        self.finalize_terminal_reply(
+                            &session_id,
+                            &user_query,
+                            &reply,
+                            iteration,
+                            total_tool_calls,
+                            TurnTiming {
+                                start: turn_start,
+                                inference: turn_inference,
+                                saw_inference,
+                            },
+                        )
+                        .await;
                         return Ok(reply);
                     }
                 }
@@ -3085,7 +3177,7 @@ impl OperantAgent {
             // per-iteration (bump + persist unchanged); only the within-turn
             // repetition is capped. The actual `spawn_background_review` is
             // invoked by the TextResponse / GraceCall / CircuitBreaker exits.
-            if should_review_skills && !review_fired {
+            if should_review_skills {
                 // W6/O-22's SEVENTH learner (the live day caught it: the log's
                 // last line before a silent body death was this spawn). A
                 // Holon body never spawns the skill review: its LLM traffic
@@ -3094,16 +3186,14 @@ impl OperantAgent {
                 // catch), and the org's learning rides the result envelope
                 // (learnings/proposals), not a personal skill store.
                 //
-                // The gate must keep review_fired UNLATCHED: the exit-path
-                // spawns (run.rs :245/:1504/:1891/:1962) fire on
-                // `if review_fired` — latching then flipping a local flag
-                // (iter-877's first cut) gated nothing.
+                // The gate latches the pending flag; the terminal exit
+                // performs the one spawn after the answer is committed.
                 if crate::platform::holon_run_dir().is_some() {
                     info!(
                         "skill review skipped — a Holon body's learning rides the result envelope"
                     );
                 } else {
-                    review_fired = true;
+                    review_skills_pending = true;
                 }
             }
 
@@ -3171,16 +3261,25 @@ impl OperantAgent {
             })
     }
 
-    /// Records that a request of this size overflowed the provider's window,
-    /// so later builds size against it. Keeps the smallest overflow seen.
-    pub(crate) fn learn_context_limit(&self, messages: &[Message]) {
+    /// Records the provider's context limit after an overflow, so later builds
+    /// size against it. Uses an explicit provider-stated limit when present;
+    /// otherwise it records the next probe tier below the rejected request.
+    pub(crate) fn learn_context_limit(&self, messages: &[Message], provider_error: &Error) {
         let key = learned_limit_key(self.client.provider_name(), &self.model());
-        let tokens = crate::context_management::estimate_total_tokens(messages);
+        let rejected_tokens = crate::context_management::estimate_total_tokens(messages);
+        let explicit_limit = match provider_error {
+            Error::Provider { body, .. } => crate::agent::parse_context_limit_from_error(body),
+            Error::ContextLengthExceeded => None,
+            _ => None,
+        };
+        let candidate =
+            explicit_limit.unwrap_or_else(|| crate::agent::next_probe_tier(rejected_tokens.max(1)));
         let learned = self
             .database
             .get_state_meta(&key)
             .and_then(|v| v.parse::<usize>().ok())
-            .map_or(tokens, |prev| prev.min(tokens));
+            .map_or(candidate, |prev| prev.min(candidate))
+            .min(self.config.context_window);
         if let Err(e) = self.database.set_state_meta(&key, &learned.to_string()) {
             warn!(error = %e, "Failed to persist learned context limit");
         }
@@ -3667,7 +3766,8 @@ impl OperantAgent {
             // The turn context rides the tail and is not part of `messages`
             // yet, so it is charged against the cap here.
             let hard_budget = limits.hard.saturating_sub(turn_context_tokens);
-            let (compacted, within_budget) = self.compact_to_hard_cap(messages, hard_budget);
+            let (compacted, within_budget, protected_tokens) =
+                self.compact_to_hard_cap(messages, hard_budget);
             messages = compacted;
             final_tokens =
                 crate::context_management::estimate_total_tokens(&messages) + turn_context_tokens;
@@ -3687,13 +3787,16 @@ impl OperantAgent {
                 return Err(Error::ContextExhausted {
                     tokens: final_tokens,
                     window,
+                    required: protected_tokens,
                 });
             }
         }
         if limits.over_hard(final_tokens) {
+            let required = crate::context_management::protected_floor_tokens(&messages);
             return Err(Error::ContextExhausted {
                 tokens: final_tokens,
                 window,
+                required,
             });
         }
 

@@ -88,6 +88,73 @@ fn seed_turn(db: &Database, session_id: &str, timestamp: &str, ids: &[&str]) {
     }
 }
 
+/// Seed an assistant tool request followed by one result per call.
+fn seed_group(
+    db: &Database,
+    session_id: &str,
+    timestamp: &str,
+    ids: &[&str],
+    result_ids: &[Option<&str>],
+) {
+    db.save_session(session_id, None, "test", timestamp, timestamp)
+        .expect("save session");
+    db.save_message_full(&operant_core::database::MessageData {
+        id: 0,
+        session_id: session_id.to_string(),
+        role: "assistant".to_string(),
+        content: Some(String::new()),
+        tool_call_id: None,
+        tool_calls: Some(tool_calls_json(ids)),
+        tool_name: None,
+        timestamp: timestamp.to_string(),
+        token_count: None,
+        finish_reason: Some("tool_calls".to_string()),
+        reasoning: None,
+        reasoning_content: None,
+        reasoning_details: None,
+        codex_reasoning_items: None,
+        codex_message_items: None,
+        platform_message_id: None,
+        observed: None,
+        active: 1,
+    })
+    .expect("save assistant");
+    for (index, id) in result_ids.iter().enumerate() {
+        db.save_message_full(&operant_core::database::MessageData {
+            id: 0,
+            session_id: session_id.to_string(),
+            role: "tool".to_string(),
+            content: Some(format!("result {index}")),
+            tool_call_id: id.map(str::to_string),
+            tool_name: Some("read_file".to_string()),
+            tool_calls: None,
+            timestamp: timestamp.to_string(),
+            token_count: None,
+            finish_reason: None,
+            reasoning: None,
+            reasoning_content: None,
+            reasoning_details: None,
+            codex_reasoning_items: None,
+            codex_message_items: None,
+            platform_message_id: None,
+            observed: None,
+            active: 1,
+        })
+        .expect("save tool result");
+    }
+}
+
+fn store_with_tail(db: &Arc<Database>, tail: usize) -> SessionStore {
+    SessionStore::with_config(
+        Arc::clone(db),
+        SessionStoreConfig {
+            warm_capacity: 4,
+            rehydrate_tail: tail,
+            rehydrate_bytes: 1024 * 1024,
+        },
+    )
+}
+
 fn store(db: &Arc<Database>) -> SessionStore {
     SessionStore::with_config(
         Arc::clone(db),
@@ -193,5 +260,82 @@ fn a_mixed_turn_keeps_the_ids_it_has_and_pairs_the_rest_by_order() {
         vec![Some("call_a".to_string()), Some("call_b".to_string())],
         "the row that already had its id keeps it, and the id-less row takes \
          the call nobody claimed"
+    );
+}
+
+/// A count-bound cut that begins in the middle of a tool group must not
+/// rehydrate an unmatched result. The resumed request either carries the
+/// whole assistant/request + results group or none of it.
+#[test]
+fn a_truncated_rehydration_keeps_complete_tool_groups_only() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = Arc::new(Database::init(temp.path().join("group-boundary.sqlite")).unwrap());
+    let session_id = "group-boundary";
+    seed_group(&db, session_id, "t1", &["call_a", "call_b"], &[None, None]);
+    seed_group(&db, session_id, "t2", &["call_c", "call_d"], &[None, None]);
+
+    let store = store_with_tail(&db, 2);
+    store.acquire(&SessionKey::new(session_id));
+    let messages = store.peek(&SessionKey::new(session_id));
+
+    let requested: std::collections::HashSet<_> = messages
+        .iter()
+        .filter(|message| message.role == operant_core::client::Role::Assistant)
+        .filter_map(|message| message.tool_calls.as_ref())
+        .flatten()
+        .map(|call| call.id.clone())
+        .collect();
+    for message in messages
+        .iter()
+        .filter(|message| message.role == operant_core::client::Role::Tool)
+    {
+        assert!(
+            message
+                .tool_call_id
+                .as_ref()
+                .is_some_and(|id| requested.contains(id)),
+            "a result without its request must not be rehydrated: {message:#?}"
+        );
+    }
+    for message in messages
+        .iter()
+        .filter(|message| message.role == operant_core::client::Role::Assistant)
+    {
+        let Some(calls) = message.tool_calls.as_ref() else {
+            continue;
+        };
+        for call in calls {
+            assert!(
+                messages.iter().any(|candidate| {
+                    candidate.role == operant_core::client::Role::Tool
+                        && candidate.tool_call_id.as_deref() == Some(call.id.as_str())
+                }),
+                "an assistant request without all of its results must not be rehydrated"
+            );
+        }
+    }
+}
+
+/// A complete group at the tail stays intact even when the count bound also
+/// includes an older partial group.
+#[test]
+fn a_truncated_rehydration_keeps_a_complete_tail_group() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = Arc::new(Database::init(temp.path().join("complete-tail.sqlite")).unwrap());
+    let session_id = "complete-tail";
+    seed_group(&db, session_id, "t1", &["call_a", "call_b"], &[None, None]);
+    seed_group(&db, session_id, "t2", &["call_c", "call_d"], &[None, None]);
+
+    let store = store_with_tail(&db, 4);
+    store.acquire(&SessionKey::new(session_id));
+    let messages = store.peek(&SessionKey::new(session_id));
+
+    assert_eq!(
+        messages
+            .iter()
+            .filter(|message| message.role == operant_core::client::Role::Tool)
+            .count(),
+        2,
+        "the complete tail group must survive: {messages:#?}"
     );
 }

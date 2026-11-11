@@ -326,6 +326,18 @@ impl ProviderRegistry {
         Some(self.fallback_chain[0].clone())
     }
 
+    /// Ordered fallback candidates after `start_index`, excluding routes in
+    /// cooldown. This is request-local: it does not mutate `active_index`.
+    pub fn fallback_candidates_after(&self, start_index: usize) -> Vec<ProviderEntry> {
+        self.fallback_chain
+            .iter()
+            .enumerate()
+            .skip(start_index.saturating_add(1))
+            .filter(|(_, entry)| !self.is_in_cooldown(&entry.name))
+            .map(|(_, entry)| entry.clone())
+            .collect()
+    }
+
     pub fn has_providers(&self) -> bool {
         !self.fallback_chain.is_empty()
     }

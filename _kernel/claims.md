@@ -710,3 +710,56 @@ NOT supported (named, with the reason):
 - A CORRECTION MUST PARAPHRASE THE CLAIM IT CORRECTS — [V] — the RT-482 correction quotes no
   phrase of the old claim, so the contract's needle cannot match the correction (RT-482) —
   unit 1
+
+## Round 22 (2026-11-10) — live context-window incident and operationality audit
+
+- The live `~/.operant/operant.toml` contains `context_window = 4242` — [V] — read 2026-11-10; the exact value is also the settings-test fixture — unit 1
+- The settings test applied 4242 without a sandbox/config-path guard — [V] — `crates/operant-cli/src/tui/settings_screen/tests.rs:477-486` — unit 1
+- A concurrent gateway skill test caused `load_app_config(None)` to record the live file as the process-global persistence target — [V] — `skill_preprocessing.rs:46-48`, `config.rs:2694-2696`, `gateway_runner/tests.rs:1695-1762` — unit 1
+- The live gateway rejected the request locally after decay/summarize/eviction because the protected 9,711-token prefix exceeded the 4,242-token window — [V] — `~/.operant/logs/gateway.log:636337-636401` — unit 1
+- The intended pre-incident live context window was 1,000,000 — [V] — `_kernel/ledger.md:474-476` and prior gateway preflight logs — unit 1
+- Runtime model overrides are discarded when fallback is enabled — [V] — `agent/run.rs:1302` builds the effective-model request; `agent/fallback.rs:349-385` replaces its model with the startup primary — unit 4
+- Grace and circuit-breaker exits bypass the normal memory/prefetch/TurnEnd finalization — [V] — `agent/run.rs:2574-2690` versus the text path at `2208-2286` — unit 5
+- Session rehydration selects raw DB rows without protecting tool-call groups — [V] — `session/mod.rs:449-476`; orphan repair later drops the unmatched half — unit 6
+- Verification can report success with no test phase — [V] — `verification.rs:166-190` and `310-337` — unit 7
+
+
+## Round 22 — implementation evidence
+
+- RT-488 writer isolation: explicit-path persistence and read-only config loads leave `loaded_config_path` unchanged; config validation uses the non-recording parse seam (core regressions green).
+- RT-488 context truth: the TUI row is `Context window`, writes only to the loaded config's explicit source, and rejects total windows that leave no input beside the 4,096-token response reserve; the protected-prefix floor is measured and the typed message names required/configured tokens without advising compaction.
+- RT-488 gateway recovery: only foldable exhaustion (`required == 0`) triggers compact-and-retry; protected overflow is surfaced immediately.
+
+- RT-489 runtime fallback: `FallbackModelClient` now starts each request with `request.model`, not the startup primary; restoring the old primary makes the behavioral regression fail with `startup-primary` instead of `runtime-override`.
+
+- RT-490 terminal finalization: normal text, grace, and both circuit-breaker exits share one finalizer for the TurnEnd hook, memory sync, prefetch, and TurnEnd bus; behavioral tests observe each exactly once on grace/breaker replies, and removing the breaker finalizer makes the regression fail with no memory write.
+
+- RT-491 session rehydration: the bounded newest window now selects complete assistant tool-call groups; a partial-group regression fails when the raw row cut is restored, while a complete tail group remains intact.
+
+- RT-492 verification truth: success requires a test phase, and start commands own a process group terminated on readiness or timeout; the false-green and descendant-PID regressions both fail when their old behaviors are restored.
+
+- RT-493 hermetic realtime matrix: the self-test drives HTTP, SSE, a real verification tool turn, and MCP stdio under a throwaway home; the real operator configuration hash is unchanged, and removing the tool/MCP assertions makes the smoke fail.
+
+- RT-494 transport truth: streaming 429 honors `Retry-After`/backoff and retries, and credential rotation no longer disables unrelated mid-stream transport recovery — [V] — local HTTP server + `TurnRetryState` regressions are green and mutation-proved — unit 9.
+
+- RT-495 context-limit truth: explicit provider limits are learned, unknown limits probe strictly below the rejected request, learned limits do not rise, and every second classified overflow fails typed even after compression reduced history — [V] — provider-limit, probe-tier, monotonic-learning, and repeated-overflow regressions are green and mutation-proved — unit 10.
+
+- RT-496 provider-fallback truth: the provider stage walks every configured alternate route and the selected route does not leak into the next request — [V] — three-provider depth and sequential-request locality regressions are green and mutation-proved — unit 11.
+
+- RT-497 metering truth: a failed stream preserves known usage, and usage/cost attribution names the route that served the request rather than the startup model — [V] — the failed-stream route regression is green and mutation-proved — unit 12.
+
+- RT-498 background-review truth: both lanes defer to one terminal-exit spawn, auxiliary route identity includes model/endpoint/key, all skill mutations are guarded with task-local read marks, and the memory prompt matches AD-020 — [V] — timing, route-contract, and skill-guard regressions are green and mutation-proved — unit 13.
+- RT-499 context-cap truth: installed operator caps apply to ACP, delegated children, and custom-core construction without a separate builder call — [V] — the configured-cap regression is green and mutation-proved — unit 14.
+- RT-500 healing-turn truth: a retry with a system recovery hint persists the user's message exactly once — [V] — the healing persistence regression is green and mutation-proved — unit 15.
+- RT-501 self-test truth: the gate pins dependencies, store/config, and credentials; its TUI corpus avoids network helpers; stale binaries cannot pass; and advisory fetching is opt-in — [V] — shell/Python syntax and the supply-chain no-fetch contract are green — unit 16.
+- RT-502 release-gate truth: audit rows have details, known config/lint surfaces are accounted for, rustdoc links resolve, and the settings golden matches the corrected row — [V] — the focused gates are green — unit 17.
+- RT-503 review-boundary truth: auxiliary credentials stay with their endpoint, review skill reads stay inside their task, and healing dedup does not suppress intentional repeated turns — [V] — three mutation-proved regressions are green — unit 18.
+- RT-504 self-test cache truth: the hermetic gate fetches the locked registry crates once and then runs every Cargo step offline — [V] — the full self-test rerun is green — unit 19.
+- RT-505 rustdoc truth: every strict CLI documentation link resolves — [V] — `scripts/build.sh --offline doc` exited 0 — unit 20.
+
+- The full workspace test suite is green after iter-2081 — [V] — `scripts/build.sh --offline test --workspace --no-fail-fast` exited 0; the full log contains the operant-core, operant-cli, harness, OS, plugins, config, API, and doctest targets — unit 8.
+
+- The strict workspace clippy gate is green — [V] — `scripts/build.sh --offline clippy --workspace --all-targets --all-features -- -D warnings` exited 0 — unit 8.
+- The release artifact was built at pushed commit `64c626d1`, its mtime postdates that commit, and its SHA-256 matches the deployed `~/.local/bin/operant` — [V] — `scripts/build.sh --offline --release`, `sha256sum`, and the deployment copy — unit 8.
+- The deployed gateway is active with `NRestarts=0`, Telegram polling started, and the deployed binary completed a credentialed live provider turn returning `DEPLOYED-LIVE-OK` under a throwaway runtime home — [V] — `systemctl --user show operant-gateway`, journalctl, and the live `operant run` probe — unit 8.
+- `cargo fmt --all -- --check` has three pre-existing upstream failures (`advisor.rs`, `stream_replay_tool_rows.rs`, `tool_failure_logging.rs`); the files are byte-identical to `origin/main` and untouched by this slice — [V] — per-file `rustfmt --check` and `git show origin/main:<path>` — unit 8.

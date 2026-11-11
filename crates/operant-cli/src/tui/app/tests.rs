@@ -7812,6 +7812,34 @@ fn resolve_composer_after_failure_has_nothing_to_give_back() {
     );
 }
 
+/// A protected-prefix context failure is actionable in the TUI: it names the
+/// configuration to increase and does not tell the operator to compact.
+#[test]
+fn a_protected_context_failure_is_surfaced_without_compaction_advice() {
+    let mut app = make_app();
+    let message = operant_core::error::Error::ContextExhausted {
+        tokens: 9711,
+        window: 4242,
+        required: 9711,
+    }
+    .user_message();
+
+    app.handle_agent_event(AgentEvent::Error {
+        error: message.clone(),
+    });
+
+    assert!(
+        app.system_annotations
+            .iter()
+            .any(|entry| entry.text.contains("agent.context_window")),
+        "the error card must name the setting to increase: {message}"
+    );
+    assert!(
+        !message.to_lowercase().contains("/compact"),
+        "protected-prefix exhaustion cannot be repaired by compaction: {message}"
+    );
+}
+
 /// Bounded by nothing. The composer has no length cap of its own, so a long
 /// paste is handed back at full length rather than silently shortened into a
 /// prompt the user never wrote.

@@ -59,6 +59,34 @@ where
     TASK_ORIGIN.scope("background_review".to_string(), fut)
 }
 
+/// Read or mutate the current task's background-review skill read marks.
+pub fn with_review_read_skills<T>(
+    f: impl FnOnce(&std::sync::Arc<std::sync::RwLock<std::collections::HashSet<String>>>) -> T,
+) -> Option<T> {
+    REVIEW_READ_SKILLS.try_with(f).ok()
+}
+
+/// Run `fut` with the background-review origin AND a task-local set of
+/// skills read by that review. The set is deliberately task-local: a
+/// concurrent review must not inherit another review's read marks.
+pub fn scope_background_review_with_reads<F>(
+    fut: F,
+    reads: std::sync::Arc<std::sync::RwLock<std::collections::HashSet<String>>>,
+) -> impl Future<Output = F::Output>
+where
+    F: Future + Send,
+{
+    TASK_ORIGIN.scope(
+        "background_review".to_string(),
+        REVIEW_READ_SKILLS.scope(reads, fut),
+    )
+}
+
+tokio::task_local! {
+    /// Skills read by the current background review task.
+    static REVIEW_READ_SKILLS: std::sync::Arc<std::sync::RwLock<std::collections::HashSet<String>>>;
+}
+
 /// Token returned by [`set_write_origin`] for scoped reset.
 #[derive(Debug, Clone)]
 pub struct WriteOriginToken {

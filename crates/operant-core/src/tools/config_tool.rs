@@ -192,9 +192,10 @@ fn set_config_value(key: &str, value: &str) -> Result<()> {
 
     crate::config::set_nested_json(&mut root, &segments, value)?;
 
-    let updated = serde_json::from_value(root).map_err(|e| {
+    let updated: crate::config::AppConfig = serde_json::from_value(root).map_err(|e| {
         crate::error::Error::Agent(format!("invalid config value for '{key}': {e}"))
     })?;
+    crate::config::validate_context_window(updated.agent.context_window)?;
 
     install_runtime_config(updated);
     Ok(())
@@ -246,6 +247,15 @@ fn config_file_path() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn an_impossible_context_window_is_rejected_by_the_runtime_config_tool() {
+        let error = set_config_value("agent.context_window", "4096")
+            .expect_err("the config tool must reject an impossible window");
+        assert!(
+            error.to_string().contains("agent.context_window"),
+            "{error}"
+        );
+    }
 
     /// RT-305: the config dump must mask the SMTP password.
     ///

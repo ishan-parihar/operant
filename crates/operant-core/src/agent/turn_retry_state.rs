@@ -56,18 +56,11 @@ pub struct TurnRetryState {
     /// Whether context compression has been attempted this turn.
     /// Prevents infinite compress→fail→compress loops.
     pub compress_attempted: bool,
-    /// Whether the last context compression actually REDUCED the history.
+    /// Whether context compression has already been attempted this turn.
     ///
-    /// A provider context-overflow can be TRANSIENT — a mis-reported
-    /// limit, a load balancer routing to a differently-configured backend
-    /// — so a single overflow does not prove the retry will fail too, and
-    /// the first overflow must still be retried. But if the SECOND
-    /// overflow arrives and the compression did not shrink the history
-    /// either, the retry is sending the same prompt the provider already
-    /// rejected: that is the point at which the turn fails TYPED
-    /// (`Error::ContextExhausted`) instead of burning more model calls on
-    /// a request that cannot succeed.
-    pub compress_reduced_history: bool,
+    /// The first overflow is always retried once because it may be transient.
+    /// Any second classified overflow fails typed: even a reduced request
+    /// can still exceed the provider's real limit.
     /// Whether credential rotation has been attempted this turn.
     /// Prevents burning through the entire credential pool.
     pub rotate_attempted: bool,
@@ -96,7 +89,6 @@ impl TurnRetryState {
             retry_count: 0,
             max_retries: max_retries.unwrap_or(DEFAULT_MAX_RETRIES),
             compress_attempted: false,
-            compress_reduced_history: false,
             rotate_attempted: false,
             reasoning_param_attempted: false,
             fallback_attempted: false,
@@ -109,6 +101,17 @@ impl TurnRetryState {
     /// Returns true if the retry budget is exhausted.
     pub fn is_exhausted(&self) -> bool {
         self.retry_count >= self.max_retries
+    }
+
+    /// Whether a classified mid-stream failure may be retried.
+    ///
+    /// Credential rotation and stream recovery are independent: a prior
+    /// credential rotation must not disable an unrelated transport drop.
+    /// Rotate-classified stream failures also use this path because the
+    /// pooled client has already benched the failed key and the re-issued
+    /// request selects the next one.
+    pub fn may_retry_stream_failure(&self, classified_retryable: bool) -> bool {
+        classified_retryable
     }
 
     /// Returns true if any restart signal is set.
@@ -295,6 +298,16 @@ mod tests {
         assert!(state.rotate_attempted);
         // Restart signals ARE reset
         assert!(!state.restart_with_compressed);
+    }
+
+    #[test]
+    fn credential_rotation_does_not_disable_an_unrelated_stream_retry() {
+        let mut state = TurnRetryState::new(Some(3));
+        state.rotate_attempted = true;
+        assert!(
+            state.may_retry_stream_failure(true),
+            "a transport failure remains retryable after credential rotation"
+        );
     }
 
     #[test]

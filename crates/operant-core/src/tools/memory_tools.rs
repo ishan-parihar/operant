@@ -233,7 +233,7 @@ struct MemorySearchArgs {
     /// Natural-language query for semantic search. Omit when `key` is given
     /// (exact-key recall); exactly one of query/key is required.
     query: Option<String>,
-    /// Optional exact key: recalls the row stored under key:<id> at rank 0.
+    /// Optional exact key: recalls the row stored under `key:<id>` at rank 0.
     /// Absent = plain semantic search over `query`.
     key: Option<String>,
     /// Max results to return (default 10).

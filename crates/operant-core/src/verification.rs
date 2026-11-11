@@ -210,6 +210,50 @@ fn detect_python_recipe(root: &Path) -> VerificationRecipe {
     }
 }
 
+/// Kill a verification child's whole process group.
+///
+/// A start command commonly launches descendants in the background. Killing
+/// only the shell leaves those descendants alive after a timeout, so the
+/// command is spawned in its own process group and the group is terminated.
+#[cfg(unix)]
+async fn kill_process_group(pid: u32) {
+    let group_term_ok = std::process::Command::new("kill")
+        .arg("-TERM")
+        .arg(format!("-{pid}"))
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false);
+    if !group_term_ok {
+        let _ = std::process::Command::new("kill")
+            .arg("-TERM")
+            .arg(pid.to_string())
+            .output();
+    }
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let group_kill_ok = std::process::Command::new("kill")
+        .arg("-KILL")
+        .arg(format!("-{pid}"))
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false);
+    if !group_kill_ok {
+        let _ = std::process::Command::new("kill")
+            .arg("-KILL")
+            .arg(pid.to_string())
+            .output();
+    }
+}
+
+#[cfg(windows)]
+async fn kill_process_group(pid: u32) {
+    let _ = std::process::Command::new("taskkill")
+        .arg("/PID")
+        .arg(pid.to_string())
+        .arg("/T")
+        .arg("/F")
+        .output();
+}
+
 /// Run a single shell command in `cwd`, capturing a tail of stdout+stderr.
 pub async fn run_phase(name: &str, command: &str, cwd: &Path, timeout: Duration) -> PhaseResult {
     let started = std::time::Instant::now();
@@ -329,7 +373,12 @@ pub async fn run_verify(
         phases.push(run_start(spec, root).await);
     }
 
-    let ok = phases.iter().all(|p| p.ok);
+    // Verification without a test phase is not evidence: a build-only or
+    // start-only run can look green while never exercising the behavior it
+    // claims to verify. The tool may still request a build-only subset, but
+    // the overall result must say that no test phase ran.
+    let ran_test_phase = phases.iter().any(|phase| phase.name == "test");
+    let ok = ran_test_phase && phases.iter().all(|phase| phase.ok);
     VerifyResult {
         recipe: Some(recipe.clone()),
         phases,
@@ -340,17 +389,27 @@ pub async fn run_verify(
 /// Boot a command, poll the readiness URL until it answers HTTP 200, then
 /// kill the process group.
 async fn run_start(spec: &StartSpec, cwd: &Path) -> PhaseResult {
+    run_start_with_timeout(spec, cwd, START_READY_TIMEOUT).await
+}
+
+async fn run_start_with_timeout(
+    spec: &StartSpec,
+    cwd: &Path,
+    ready_timeout: Duration,
+) -> PhaseResult {
     let started = std::time::Instant::now();
     let command = spec.command.join(" ");
-    let mut child = match tokio::process::Command::new("sh")
+    let mut command_builder = tokio::process::Command::new("sh");
+    command_builder
         .arg("-c")
         .arg(&command)
         .current_dir(cwd)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-    {
+        .kill_on_drop(true);
+    #[cfg(unix)]
+    command_builder.process_group(0);
+    let mut child = match command_builder.spawn() {
         Ok(c) => c,
         Err(e) => {
             return PhaseResult {
@@ -362,10 +421,11 @@ async fn run_start(spec: &StartSpec, cwd: &Path) -> PhaseResult {
             };
         }
     };
+    let pid = child.id();
 
     let url = format!("http://localhost:{}{}", spec.port, spec.path);
     let client = reqwest::Client::new();
-    let deadline = tokio::time::Instant::now() + START_READY_TIMEOUT;
+    let deadline = tokio::time::Instant::now() + ready_timeout;
     let mut last_err = String::from("not yet polled");
     loop {
         if tokio::time::Instant::now() >= deadline {
@@ -373,7 +433,9 @@ async fn run_start(spec: &StartSpec, cwd: &Path) -> PhaseResult {
         }
         match client.get(&url).send().await {
             Ok(resp) if resp.status().is_success() => {
-                let _ = child.kill().await;
+                if let Some(pid) = pid {
+                    kill_process_group(pid).await;
+                }
                 let status = child.wait().await.ok();
                 return PhaseResult {
                     name: "start".to_string(),
@@ -396,7 +458,9 @@ async fn run_start(spec: &StartSpec, cwd: &Path) -> PhaseResult {
         tokio::time::sleep(READY_POLL_INTERVAL).await;
     }
 
-    let _ = child.kill().await;
+    if let Some(pid) = pid {
+        kill_process_group(pid).await;
+    }
     let _ = child.wait().await;
     PhaseResult {
         name: "start".to_string(),
@@ -404,7 +468,7 @@ async fn run_start(spec: &StartSpec, cwd: &Path) -> PhaseResult {
         exit_code: None,
         output_tail: format!(
             "app did not become ready at {url} within {:?} (last: {last_err})",
-            START_READY_TIMEOUT
+            ready_timeout
         ),
         duration_ms: started.elapsed().as_millis() as u64,
     }
@@ -601,5 +665,64 @@ mod tests {
         assert!(result.phases[0].ok);
         assert!(!result.phases[1].ok);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+    #[tokio::test]
+    async fn run_verify_without_a_test_phase_is_not_ok() {
+        let dir = temp_project("build_only");
+        let recipe = VerificationRecipe {
+            name: "demo".to_string(),
+            language: "shell".to_string(),
+            bootstrap: vec![],
+            build: vec!["true".to_string()],
+            test: vec![],
+        };
+        let result = run_verify(&recipe, &dir, false, None).await;
+        assert!(
+            !result.ok,
+            "a build-only run must not report verification success"
+        );
+        assert!(result.phases.iter().all(|phase| phase.ok));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_timed_out_start_kills_its_process_group() {
+        let dir = temp_project("start_group");
+        let pid_file = dir.join("child.pid");
+        let script = format!("sh -c 'echo $$ > {}; sleep 30' & wait", pid_file.display());
+        let spec = StartSpec {
+            command: vec![script],
+            port: 1,
+            path: "/".to_string(),
+        };
+        let started = std::time::Instant::now();
+        let result = tokio::time::timeout(
+            Duration::from_secs(3),
+            run_start_with_timeout(&spec, &dir, Duration::from_millis(300)),
+        )
+        .await
+        .expect("the bounded start helper must return");
+        assert!(!result.ok);
+        let child_pid = std::fs::read_to_string(&pid_file)
+            .expect("the descendant pid must be recorded")
+            .trim()
+            .parse::<u32>()
+            .expect("the descendant pid must be numeric");
+        assert!(
+            !process_exists(child_pid),
+            "the descendant must not survive the timed-out start (pid {child_pid})"
+        );
+        assert!(started.elapsed() < Duration::from_secs(3));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    fn process_exists(pid: u32) -> bool {
+        std::process::Command::new("kill")
+            .arg("-0")
+            .arg(pid.to_string())
+            .output()
+            .map(|output| output.status.success())
+            .unwrap_or(false)
     }
 }

@@ -160,7 +160,7 @@ impl GuardScanner {
 
     /// Scan a single file for threat patterns and invisible unicode characters.
     ///
-    /// Skips files whose extension is not in [`SCANNABLE_EXTENSIONS`] (binary
+    /// Skips files whose extension is not in `SCANNABLE_EXTENSIONS` (binary
     /// files, images, and every unlisted text format — RT-399) unless the file
     /// is named `SKILL.md`.
     ///

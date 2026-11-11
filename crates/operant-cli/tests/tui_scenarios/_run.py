@@ -42,6 +42,7 @@ import pathlib
 import shutil
 import subprocess
 import sys
+import time
 import tempfile
 
 ROOT = pathlib.Path(__file__).parent
@@ -115,6 +116,10 @@ REPO = ROOT.parents[3]
 #                        which is the same on every machine.
 PINNED_ENV = {
     "OPERANT_COLOR_DEPTH": "truecolor",
+    # The binary updater shells out to `gh` unless this is set. The corpus
+    # replaces the whole environment, so the parent self-test's pin does not
+    # reach it.
+    "OPERANT_NO_AUTO_UPDATE": "1",
     "TERM": "xterm-256color",
     "TZ": "UTC",
     "LANG": "C.UTF-8",
@@ -142,6 +147,9 @@ base_url = "http://127.0.0.1:9/v1"
 
 [agent]
 model = "offline-capture"
+
+[tools]
+aft_enabled = false
 """
 
 
@@ -178,11 +186,29 @@ class Fixture:
         if extra_config:
             text = text + "\n" + extra_config.strip() + "\n"
         self.config.write_text(text)
+        # Seed the models.dev disk cache with a fresh EMPTY catalog. Without
+        # it, every render performs a real HTTPS fetch (or waits for its
+        # timeout) before the corpus can compare pixels. An empty fresh
+        # cache is a truthful local answer: no catalog data, no network.
+        cache = self.home / ".operant" / "models_dev_cache.json"
+        cache.write_text(json.dumps({
+            "models": [],
+            "providers": [],
+            "cached_at": time.time(),
+        }))
 
     def env(self, extra=None):
         env = dict(PINNED_ENV)
         env["HOME"] = str(self.home)
         env["HERMES_HOME"] = str(self.home / ".operant")
+        # The corpus replaces the whole environment, so the build's linker
+        # path does not reach the child. Point it at the repo-local runtime
+        # libraries; a fresh clone can start without a developer-specific
+        # ~/.local/lib/operant install.
+        env["LD_LIBRARY_PATH"] = os.pathsep.join([
+            str(REPO / "local" / "lib"),
+            str(REPO / "local" / "onnxruntime-linux-x64-1.24.4" / "lib"),
+        ])
         env.pop("NO_COLOR", None)
         if extra:
             env.update({k: str(v) for k, v in extra.items()})

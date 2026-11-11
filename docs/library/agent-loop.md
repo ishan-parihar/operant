@@ -82,6 +82,9 @@ the context? `ContextOverflow` triggers auto-compression via
 `FallbackModelClient` wraps the primary model with a fallback chain: on a
 retryable error (5xx, 429, network) the next model in the chain is tried.
 Fallback is **per-request** — every call starts again at the primary.
+A provider-stage failure walks every configured alternate route until one
+succeeds; no alternate route is retained as the active route for a later
+request.
 Two config sources: `agent.fallback_models` (same-client, same-provider)
 and cross-provider chains via `[providers]`. Reasoning-model quirks are
 classed per provider (`ThinkingSignature`, `ReasoningParamRejected`,
@@ -95,6 +98,24 @@ Exactly one `TurnEnd` event is emitted per completed turn, after memory
 instead of wrapping the agent loop — the attachment point for reflection,
 the advisor, recap, and dreaming. See
 [context-injection.md](context-injection.md) for what subscribes.
+
+Normal text, grace-summary, and circuit-breaker replies all pass through the
+same terminal finalizer: the `TurnEnd` lifecycle hook, memory `sync_turn`,
+next-turn prefetch, and the `TurnEndBus` event each run exactly once. The
+exit reason changes why the turn stopped; it does not change its
+post-turn obligations.
+
+Session rehydration applies the same pairing rule at its boundary. The
+count/byte-bounded newest window contains complete assistant tool-call groups
+only: every retained result has its request, and every retained request has
+all of its results. A cut through a group removes that partial group instead
+of sending unmatched tool messages to the provider.
+
+The runtime surfaces the two exhaustion classes differently. Foldable-history
+exhaustion is recoverable by compaction and the gateway compacts and retries
+once. Protected-prefix exhaustion (the frozen prompt plus current turn) cannot
+be compacted; the TUI error card names `agent.context_window` and the required
+minimum instead of giving ineffective `/compact` advice.
 
 ## Self-healing summary
 

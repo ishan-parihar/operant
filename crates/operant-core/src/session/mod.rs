@@ -470,10 +470,11 @@ impl SessionStore {
         // A byte budget that loses to a count bound makes no sense — the point
         // of the byte walk is to cut a session the count bound would wave
         // through (14 MB of cron turns under a 2000-message count).
-        let kept = count_bound.min(self.count_that_fits_byte_budget(&rows, byte_bound));
+        let eligible = count_bound.min(self.count_that_fits_byte_budget(&rows, byte_bound));
         let total = rows.len();
-        let start = total.saturating_sub(kept);
-        let mut window: Vec<MessageData> = rows.into_iter().skip(start).collect();
+        let (start, end) = complete_tool_group_window(&rows, eligible);
+        let kept = end.saturating_sub(start);
+        let mut window: Vec<MessageData> = rows[start..end].to_vec();
         // Tool rows persisted WITHOUT their call id are repaired here, before
         // the mapping — see `recover_tool_call_ids` for why the id is the
         // difference between a resumed session and an emptied one.
@@ -490,7 +491,7 @@ impl SessionStore {
         // single load, claiming a mid-session start for sessions that had
         // none (measured: "rows_total: 643, rows_kept: 643, rows_dropped:
         // 643").
-        let dropped = start;
+        let dropped = total.saturating_sub(kept);
         let unconvertible = kept.saturating_sub(messages.len());
         if dropped > 0 || unconvertible > 0 {
             tracing::warn!(
@@ -537,6 +538,64 @@ impl SessionStore {
         }
         taken
     }
+}
+
+/// Align the newest rehydration window to complete tool-call groups.
+///
+/// A tool-call group is one assistant request followed by one tool result per
+/// requested call. Rehydration may not begin with only the results, and it
+/// may not end with only the request: providers reject unmatched tool
+/// messages, and the later orphan repair would drop the results and strip the
+/// matching calls.
+///
+/// Ordinary text turns are unchanged. Only a partial tool-call group at either
+/// edge of the bounded window is removed.
+fn complete_tool_group_window(rows: &[MessageData], requested: usize) -> (usize, usize) {
+    if requested == 0 || rows.is_empty() {
+        return (0, 0);
+    }
+    let mut start = rows.len().saturating_sub(requested);
+    let mut end = rows.len();
+
+    // A leading tool result belongs to an assistant request outside the
+    // window. Drop that partial group rather than rehydrating an unmatched
+    // result.
+    while start < end && rows[start].role == "tool" {
+        start += 1;
+    }
+
+    // An assistant request with fewer results than calls is an incomplete
+    // group. Remove it and its partial results from the tail. Later rows are
+    // not safe to keep after an unmatched request because the provider will
+    // reject the sequence.
+    let mut incomplete = None;
+    for index in start..end {
+        let row = &rows[index];
+        if row.role != "assistant" {
+            continue;
+        }
+        let calls = row
+            .tool_calls
+            .as_deref()
+            .and_then(|raw| serde_json::from_str::<Vec<serde_json::Value>>(raw).ok())
+            .map(|calls| calls.len())
+            .unwrap_or(0);
+        if calls == 0 {
+            continue;
+        }
+        let mut results = 0usize;
+        while index + results + 1 < end && rows[index + results + 1].role == "tool" {
+            results += 1;
+        }
+        if results < calls {
+            incomplete = Some(index);
+        }
+    }
+    if let Some(index) = incomplete {
+        end = index;
+    }
+
+    (start, end)
 }
 
 /// Recover the `tool_call_id` of tool rows that were persisted without one.

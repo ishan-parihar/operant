@@ -70,7 +70,8 @@ impl Default for PreflightConfig {
 // ---------------------------------------------------------------------------
 
 const PROBE_TIERS: &[usize] = &[
-    2_000_000, 1_000_000, 512_000, 200_000, 128_000, 64_000, 32_000,
+    2_000_000, 1_000_000, 512_000, 200_000, 128_000, 64_000, 32_000, 16_000, 8_000, 4_000, 2_000,
+    1_024,
 ];
 
 /// Next smaller guess when an overflow error states no explicit limit.
@@ -79,7 +80,7 @@ pub fn next_probe_tier(current: usize) -> usize {
         .iter()
         .copied()
         .find(|&tier| tier < current)
-        .unwrap_or(32_000)
+        .unwrap_or_else(|| current.saturating_sub(1).max(1))
 }
 
 /// Try to extract the actual context window limit from a provider error
@@ -484,7 +485,7 @@ impl OperantAgent {
         &self,
         messages: Vec<Message>,
         budget_tokens: usize,
-    ) -> (Vec<Message>, bool) {
+    ) -> (Vec<Message>, bool, usize) {
         let (mut compacted, outcome) =
             crate::context_management::manage_context_reporting(messages, budget_tokens, 0);
         let orphans = crate::agent::message_safety::drop_orphaned_tool_messages(&mut compacted);
@@ -501,7 +502,7 @@ impl OperantAgent {
                 "Repaired message sequence violations after hard-cap compaction"
             );
         }
-        (compacted, outcome.within_budget)
+        (compacted, outcome.within_budget, outcome.protected_tokens)
     }
 
     /// Enforce the hard context cap mid-turn.
@@ -535,7 +536,8 @@ impl OperantAgent {
         })
         .await;
         let taken = std::mem::take(messages);
-        let (compacted, within_budget) = self.compact_to_hard_cap(taken, limits.hard);
+        let (compacted, within_budget, protected_tokens) =
+            self.compact_to_hard_cap(taken, limits.hard);
         *messages = compacted;
         let tokens_after = crate::context_management::estimate_total_tokens(messages);
         self.emit(AgentEvent::CompactionCompleted {
@@ -554,6 +556,7 @@ impl OperantAgent {
             return Err(crate::error::Error::ContextExhausted {
                 tokens: tokens_after,
                 window: limits.window,
+                required: protected_tokens,
             });
         }
         info!(
@@ -758,7 +761,7 @@ impl OperantAgent {
     /// and accumulate the session-level cost total. Shared by
     /// `process_response` (non-streaming) and `process_stream` (streaming,
     /// iter-247) now that both paths can produce a `Usage`.
-    pub(crate) async fn emit_usage_and_cost(&self, usage: &Usage) {
+    pub(crate) async fn emit_usage_and_cost(&self, usage: &Usage, served_model: &str) {
         self.last_prompt_tokens.store(
             usage.prompt_tokens.try_into().unwrap_or(0),
             std::sync::atomic::Ordering::Relaxed,
@@ -815,9 +818,9 @@ impl OperantAgent {
         // We split the model name on '/' (provider/model format) to get
         // the provider and model parts. If there's no '/', we use the
         // whole string as the model and "" as the provider.
-        let (provider, model_name) = match self.config.model.split_once('/') {
+        let (provider, model_name) = match served_model.split_once('/') {
             Some((p, m)) => (p.to_string(), m.to_string()),
-            None => (String::new(), self.config.model.clone()),
+            None => (String::new(), served_model.to_string()),
         };
         let cost_usd = crate::models_dev::get_model_capabilities(&provider, &model_name)
             .await
@@ -834,7 +837,7 @@ impl OperantAgent {
             cost_usd,
             input_tokens: usage.prompt_tokens,
             output_tokens: usage.completion_tokens,
-            model: self.config.model.clone(),
+            model: served_model.to_string(),
         })
         .await;
 
@@ -923,7 +926,10 @@ mod preflight_tests {
         assert_eq!(next_probe_tier(2_000_000), 1_000_000);
         assert_eq!(next_probe_tier(200_000), 128_000);
         assert_eq!(next_probe_tier(64_000), 32_000);
-        assert_eq!(next_probe_tier(32_000), 32_000); // floor
+        assert_eq!(next_probe_tier(32_000), 16_000);
+        assert_eq!(next_probe_tier(2_000), 1_024);
+        assert_eq!(next_probe_tier(1_024), 1_023);
+        assert_eq!(next_probe_tier(1), 1);
     }
 
     // ── tool-pair repair (e) ───────────────────────────────────────────

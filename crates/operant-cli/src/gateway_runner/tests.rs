@@ -368,6 +368,108 @@ fn slow_echo_handler(dir: &tempfile::TempDir, delay_ms: u64) -> Arc<GatewayMessa
     })
 }
 
+/// A client whose first turn exhausts foldable context and whose second turn
+/// succeeds. The gateway must compact and retry only that typed case.
+struct ExhaustThenSucceedClient {
+    calls: std::sync::atomic::AtomicUsize,
+}
+
+#[async_trait::async_trait]
+impl operant_core::agent::ModelClient for ExhaustThenSucceedClient {
+    fn provider_name(&self) -> &str {
+        "scripted"
+    }
+
+    async fn chat(
+        &self,
+        _request: operant_core::agent::ChatRequest,
+    ) -> operant_core::error::Result<operant_core::client::ChatResponse> {
+        let call = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if call == 0 {
+            return Err(operant_core::error::Error::ContextExhausted {
+                tokens: 9000,
+                window: 8000,
+                required: 0,
+            });
+        }
+        Ok(echo_chat_response("recovered after compaction"))
+    }
+
+    async fn chat_streaming(
+        &self,
+        _request: operant_core::agent::ChatRequest,
+    ) -> operant_core::error::Result<
+        futures::stream::BoxStream<
+            'static,
+            operant_core::error::Result<operant_core::agent::StreamChunk>,
+        >,
+    > {
+        Err(operant_core::error::Error::Agent(
+            "streaming not used".into(),
+        ))
+    }
+}
+
+fn context_exhaustion_handler(dir: &tempfile::TempDir) -> Arc<GatewayMessageHandler> {
+    let db = Arc::new(
+        operant_core::database::Database::init(dir.path().join("agent.sqlite")).expect("db"),
+    );
+    let agent = Arc::new(operant_core::agent::OperantAgent::new(
+        operant_core::agent::AgentConfig {
+            stream: false,
+            ..operant_core::agent::AgentConfig::default()
+        },
+        Box::new(ExhaustThenSucceedClient {
+            calls: std::sync::atomic::AtomicUsize::new(0),
+        }),
+        operant_core::tools::ToolRegistry::new(Duration::from_secs(5)),
+        db,
+    ));
+    Arc::new(GatewayMessageHandler {
+        admins: vec![],
+        agent,
+        current_session_id: tokio::sync::Mutex::new(None),
+        gateway: tokio::sync::Mutex::new(None),
+        session_pins: Arc::new(SessionPins::default()),
+        exit_reasons: ExitReasonMap::default(),
+        turn_usage: TurnUsageMap::default(),
+        summary_ttl_minutes: 30,
+        default_budget: operant_core::config::BudgetSettings::default(),
+        context_injection: None,
+        turn_lock: tokio::sync::Mutex::new(()),
+        running_session: std::sync::Mutex::new(None),
+        cancelled_queued: Default::default(),
+        mcp_manager: operant_core::mcp::McpManager::new(),
+        mcp_server_configs: Vec::new(),
+        skills_root_dir: dir.path().join("skills-absent"),
+        #[cfg(feature = "plugins-wasm")]
+        wasm_plugin_skill_roots: Vec::new(),
+        queue_waits: tokio::sync::Mutex::new(Default::default()),
+    })
+}
+
+#[tokio::test]
+async fn foldable_context_exhaustion_compacts_and_retries_the_gateway_turn() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let handler = context_exhaustion_handler(&dir);
+    let reply = handler
+        .handle(IncomingMessage::new(
+            "telegram",
+            "u1",
+            "User",
+            "c1",
+            "a foldable turn",
+        ))
+        .await
+        .expect("gateway turn completes");
+
+    assert!(
+        reply.content.contains("recovered after compaction"),
+        "the gateway must compact and retry foldable exhaustion: {:?}",
+        reply.content
+    );
+}
+
 /// Two chats, one shared agent, both turns in flight at once. The
 /// model sleeps inside each turn, so pre-06A chat B's `set_session_id`
 /// landed mid-A: A's answer persisted under B's session id and A's

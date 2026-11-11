@@ -240,7 +240,13 @@ pub enum Error {
     /// rung that may fold ran: the protected head and tail alone do not fit.
     /// Failing here beats sending a request the provider rejects with a 400.
     #[error("Context exhausted: {tokens} of {window} tokens and nothing left to fold")]
-    ContextExhausted { tokens: usize, window: usize },
+    ContextExhausted {
+        tokens: usize,
+        window: usize,
+        /// The protected prompt/turn content alone needs this many tokens.
+        /// When present, compaction cannot recover the request.
+        required: usize,
+    },
 
     // ========== Configuration Errors ==========
     #[error("Configuration error: {0}")]
@@ -321,10 +327,25 @@ impl Error {
             Error::ContextLengthExceeded => {
                 "The conversation has exceeded the maximum context length.".to_string()
             }
-            Error::ContextExhausted { .. } => {
-                "The conversation no longer fits the context window and nothing can be folded. \
-                 Run /compact, then send the message again."
-                    .to_string()
+            Error::ContextExhausted {
+                tokens,
+                window,
+                required,
+            } => {
+                if *required > 0 {
+                    format!(
+                        "The protected prompt and current turn need about {required} tokens, \
+                         but agent.context_window is only {window}. Increase \
+                         agent.context_window to at least {} tokens; compaction cannot \
+                         shrink protected content.",
+                        required.saturating_add(4096)
+                    )
+                } else {
+                    format!(
+                        "The conversation needs about {tokens} tokens but the context window is \
+                         {window}. Run /compact, then send the message again."
+                    )
+                }
             }
             _ => self.to_string(),
         }
@@ -334,6 +355,46 @@ impl Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn protected_context_exhaustion_never_advises_compaction() {
+        let error = Error::ContextExhausted {
+            tokens: 9_800,
+            window: 4_242,
+            required: 9_711,
+        };
+        let message = error.user_message();
+        assert!(
+            message.contains("9711"),
+            "message names required tokens: {message}"
+        );
+        assert!(
+            message.contains("4242"),
+            "message names configured window: {message}"
+        );
+        assert!(
+            message.contains("agent.context_window"),
+            "message names the setting: {message}"
+        );
+        assert!(
+            !message.contains("/compact"),
+            "protected content cannot be compacted: {message}"
+        );
+    }
+
+    #[test]
+    fn foldable_context_exhaustion_advises_compaction() {
+        let error = Error::ContextExhausted {
+            tokens: 200_000,
+            window: 128_000,
+            required: 0,
+        };
+        let message = error.user_message();
+        assert!(
+            message.contains("/compact"),
+            "foldable history remains actionable: {message}"
+        );
+    }
 
     #[test]
     fn test_error_classification() {

@@ -39,7 +39,7 @@
 //! the classifier saw was `bash` — and rates `Unbounded` now.
 //!
 //! The unwrap **fails closed rather than open**: an interpreter whose script
-//! cannot be extracted becomes the sentinel [`UNRESOLVED_INTERPRETER`], rated
+//! cannot be extracted becomes the sentinel `UNRESOLVED_INTERPRETER`, rated
 //! `Scoped`, so it is always visible to the operator. `Scoped` and not
 //! `Unbounded` because an unresolvable shape is suspicious rather than proven
 //! destructive, and gating every oddly-shaped `sh -c` on a justification would
@@ -896,7 +896,7 @@ fn tokens(seg: &str) -> Vec<String> {
 /// 2. appends the inner script's own segments when the interpreter verb's
 ///    script argument can be extracted, and
 /// 3. when the interpreter was found but its script CANNOT be extracted,
-///    appends a sentinel [`UNRESOLVED`] segment that rates `Scoped`.
+///    appends a sentinel `UNRESOLVED` segment that rates `Scoped`.
 ///
 /// `Scoped` and not `Unbounded` on purpose: an unresolvable interpreter is
 /// suspicious but not proven destructive, and forcing an `Unbounded` rating
@@ -939,7 +939,7 @@ const MAX_INTERPRETER_INPUT: usize = 8 * 1024;
 /// 2. appends the inner script's own segments when the interpreter verb's
 ///    script argument can be extracted, and
 /// 3. when the interpreter was found but its script CANNOT be extracted,
-///    appends a sentinel [`UNRESOLVED`] segment that rates `Scoped`.
+///    appends a sentinel `UNRESOLVED` segment that rates `Scoped`.
 ///
 /// `Scoped` and not `Unbounded` on purpose: an unresolvable interpreter is
 /// suspicious but not proven destructive, and forcing an `Unbounded` rating

@@ -101,8 +101,11 @@ echo "[supply-gate] auditing the lockfile..."
 audit_ok=0
 "${AUDIT_BIN}" audit --json --no-fetch > "${tmp_json}" 2>/dev/null || true
 if ! json_is_readable "${tmp_json}"; then
-    # --no-fetch fails when there is no cached DB. Retry with the fetch.
-    "${AUDIT_BIN}" audit --json > "${tmp_json}" 2>/dev/null || true
+    # A hermetic self-test must not turn a missing advisory DB into a
+    # network fetch. Fetching is opt-in for an operator-run gate.
+    if [[ "${OPERANT_SUPPLY_CHAIN_FETCH:-0}" = "1" ]]; then
+        "${AUDIT_BIN}" audit --json > "${tmp_json}" 2>/dev/null || true
+    fi
     if json_is_readable "${tmp_json}"; then
         audit_ok=1
     fi
