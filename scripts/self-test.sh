@@ -6,6 +6,27 @@ set -e
 # The repo root, derived from this script's own location — the corpus step
 # below `cd`s into a subdirectory, and a relative path would break there.
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$REPO_ROOT"
+
+# The self-test must compile the SAME dependency revision it inspected. The
+# normal check path advances the git dependency to upstream HEAD; that makes
+# the gate both network-dependent and non-reproducible. The local Cargo.lock
+# is the reviewed input, so keep it fixed for the whole run.
+export MEMORY_WIRE_NO_SYNC=1
+export CARGO_NET_OFFLINE=true
+
+# Workspace tests must not read or write the operator's live Operant tree.
+# HOME stays unchanged because Cargo needs ~/.cargo; HERMES_HOME redirects
+# Operant's store, and OPERANT_CONFIG_DIR redirects config discovery.
+SELFTEST_HOME="$(mktemp -d)"
+trap 'rm -rf "$SELFTEST_HOME"' EXIT
+export HERMES_HOME="$SELFTEST_HOME/.operant"
+export OPERANT_CONFIG_DIR="$SELFTEST_HOME/config"
+mkdir -p "$HERMES_HOME" "$OPERANT_CONFIG_DIR"
+
+# Provider credentials must not leak into a gate that may build an agent.
+unset OPENAI_API_KEY ANTHROPIC_API_KEY DEEPSEEK_API_KEY GEMINI_API_KEY
+unset GOOGLE_API_KEY OPENROUTER_API_KEY GROQ_API_KEY XAI_API_KEY
 
 # The background auto-update check must not reach GitHub from a test run.
 # It shells out to `gh`, which resolves through the process's proxy
@@ -72,6 +93,14 @@ run_clippy() {
 
 # 1. Build
 run_test "Build release binary" "./scripts/check.sh build --release 2>&1"
+
+# Binary-dependent gates must never pass against a stale artifact. The
+# build step above records whether it succeeded; fail the binary gates
+# explicitly when it did not.
+BUILD_OK=1
+if [ "$TESTS_FAILED" -ne 0 ]; then
+    BUILD_OK=0
+fi
 
 # 2. Tests
 run_test "Test targets compile (scripts/test-compile-gate.sh — the 2026-10-16 plan-02 guard)" "bash scripts/test-compile-gate.sh 2>&1"
@@ -186,8 +215,13 @@ fi
 # NEVER run `prove` at the same time as this: `prove` rewrites the
 # goldens it proves, and a concurrent verify reads them mid-rewrite and
 # reports dozens of phantom drifts.
-run_test "TUI visual corpus (crates/operant-cli/tests/tui_scenarios/_run.py verify)" \
-    "(cd '$REPO_ROOT/crates/operant-cli/tests/tui_scenarios' && env -u OPENAI_BASE_URL -u OPENAI_API_KEY OPERANT_BIN='$REPO_ROOT/target/release/operant' python3 -u _run.py verify 2>&1)"
+if [ "$BUILD_OK" -eq 1 ]; then
+    run_test "TUI visual corpus (crates/operant-cli/tests/tui_scenarios/_run.py verify)" \
+        "(cd '$REPO_ROOT/crates/operant-cli/tests/tui_scenarios' && env -u OPENAI_BASE_URL -u OPENAI_API_KEY OPERANT_BIN='$REPO_ROOT/target/release/operant' python3 -u _run.py verify 2>&1)"
+else
+    run_test "TUI visual corpus (crates/operant-cli/tests/tui_scenarios/_run.py verify)" \
+        "echo 'skipped: release build failed; refusing to test a stale binary' && false"
+fi
 
 # The corpus step above `cd`s into a subdirectory. It runs in a SUBSHELL, so
 # the script's working directory stays at the repository root — otherwise
@@ -198,30 +232,32 @@ run_test "TUI visual corpus (crates/operant-cli/tests/tui_scenarios/_run.py veri
 BIN="$REPO_ROOT/target/release/operant"
 
 # 5. CLI version
-run_test "CLI version" "$BIN --version 2>&1"
+if [ "$BUILD_OK" -eq 1 ]; then
+    run_test "CLI version" "$BIN --version 2>&1"
+else
+    run_test "CLI version" "echo 'skipped: release build failed' && false"
+fi
 
 # 5b. The shipped architecture example must stay valid (r16 audit C5:
 # without this, a malformed example can ship unnoticed — the CI half was
 # dropped with harness.yml, so self-test.sh is the only automated gate).
-run_test "Validate architecture example" "$BIN architecture validate --file architecture.toml.example 2>&1"
-
-# 6. CLI help
-run_test "CLI help" "$BIN --help 2>&1"
-
-# 7. CLI chat help
-run_test "CLI chat help" "$BIN chat --help 2>&1"
-
-# 8. CLI run help
-run_test "CLI run help" "$BIN run --help 2>&1"
-
-# 9. CLI dashboard help
-run_test "CLI dashboard help" "$BIN dashboard --help 2>&1"
+if [ "$BUILD_OK" -eq 1 ]; then
+    run_test "Validate architecture example" "$BIN architecture validate --file architecture.toml.example 2>&1"
+    run_test "CLI help" "$BIN --help 2>&1"
+    run_test "CLI chat help" "$BIN chat --help 2>&1"
+    run_test "CLI run help" "$BIN run --help 2>&1"
+    run_test "CLI dashboard help" "$BIN dashboard --help 2>&1"
+else
+    for gate in         "Validate architecture example"         "CLI help"         "CLI chat help"         "CLI run help"         "CLI dashboard help"; do
+        run_test "$gate" "echo 'skipped: release build failed' && false"
+    done
+fi
 
 # 10. Realtime run against a credential-free local provider. The old quick
 # run inherited the operator's real config and credentials, so a self-test
 # could contact a live provider and mutate ~/.operant. The local fake keeps
 # this gate deterministic, offline, and hermetic; the script also asserts the
-# real ~/.operant tree is byte-for-byte unchanged.
+# operator configuration files are unchanged.
 run_test "Realtime local-provider run" "OPERANT_BIN='$BIN' bash scripts/tests/fake_provider_test.sh 2>&1"
 
 # Summary

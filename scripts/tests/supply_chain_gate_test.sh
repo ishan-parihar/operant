@@ -86,6 +86,20 @@ echo "$out" | grep -q "RUSTSEC-2026-9999" || fail "2b. a vulnerability was not r
 echo "$out" | grep -q "vulnerability|" || fail "2b. the vulnerability was not classified: $out"
 echo "$out" | grep -q "could not be read" && fail "2b. a real finding was misreported as an unreadable DB: $out"
 
+# ── 2c. an unreadable local DB never fetches unless explicitly requested ──
+cat > "$TMP/bin/cargo-audit-empty" <<'EOF'
+#!/usr/bin/env bash
+printf '{}'
+exit 1
+EOF
+chmod +x "$TMP/bin/cargo-audit-empty"
+cp "$TMP/bin/cargo-audit" "$TMP/bin/cargo-audit-real"
+cp "$TMP/bin/cargo-audit-empty" "$TMP/bin/cargo-audit"
+out="$(PATH="$TMP/bin:$PATH" bash "$SCRIPTS_DIR/supply-chain-gate.sh" --allowlist "$TMP/empty.txt" 2>&1 || true)"
+echo "$out" | grep -q "could not be read" || fail "2c. an unreadable DB did not fail the gate: $out"
+echo "$out" | grep -q "could not be read" && ! echo "$out" | grep -q "database was fetched" || fail "2c. the gate fetched without explicit consent: $out"
+cp "$TMP/bin/cargo-audit-real" "$TMP/bin/cargo-audit"
+
 # ── 3. an allowlist entry with no finding is reported as stale ─────────────
 printf 'unmaintained|RUSTSEC-2025-0141|bincode@1.3.3\nunmaintained|RUSTSEC-2000-0000|gone@1.0.0\n' > "$TMP/stale.txt"
 out="$(run_gate "$KNOWN" '[]' "$TMP/stale.txt" 2>&1 || true)"
