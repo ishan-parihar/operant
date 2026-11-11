@@ -1,5 +1,5 @@
-<!-- genome:zone records sha=e84656ac7595 -->
-**Decisions** (43)
+<!-- genome:zone records sha=574f1492ac69 -->
+**Decisions** (44)
 
 | ID | Title | Status | Description |
 |---|---|---|---|
@@ -46,6 +46,7 @@
 | AD-041 | The PDF decompression bound covers the load path and the whole document, so AD-039's claim is now true | Active | AD-039 published 'the decompression bomb is now bounded', but only the extraction path was bounded: Document::load_mem uses LoadOptions::default(), whose max_decompressed_size is None, so the object a |
 | AD-042 | The webhook subscription family is INBOUND (R1): the subscription claims a route, the agent answers, and the answer is delivered to the target | Active | The webhook subscription family is INBOUND (R1): the subscription claims a route, the agent answers, and the answer is delivered to the target |
 | AD-043 | A defect recorded without its visibility to the caller carries the wrong severity, and the fix that ships is the fix for the severity that was written | Active | A defect recorded without its visibility to the caller carries the wrong severity, and the fix that ships is the fix for the severity that was written |
+| AD-044 | one runtime daemon per machine owns the registry, the child processes and the session writes; every CLI session attaches to it | Active | one runtime daemon per machine owns the registry, the child processes and the session writes; every CLI session attaches to it |
 
 **Regressions** (18)
 
