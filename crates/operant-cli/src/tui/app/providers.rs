@@ -487,7 +487,7 @@ impl App {
 /// The row's LABEL is the slot's name (`default`, `smol`, `slow`, …) and its
 /// detail is the model that slot currently holds, so the operator reads the
 /// role vocabulary and its assignments in one list. Enter routes through
-/// [`PickerAction::ModelSlot`], which sets that slot — the same
+/// `PickerAction::ModelSlot`, which sets that slot — the same
 /// `operant_core::model_roles` seam the gateway's `/model` resolves.
 ///
 /// A slot with no assignment is omitted, and so is `Conversation`: it is

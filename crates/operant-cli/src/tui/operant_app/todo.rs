@@ -287,7 +287,7 @@ pub struct TodoItem {
     /// under a single header. Use one group per coherent goal; when work is
     /// steered into a new area, start a new group instead of renaming.
     ///
-    /// [`port-adaptation`] upstream jcode names the wire field `lane` and the
+    /// `port-adaptation` upstream jcode names the wire field `lane` and the
     /// card field `group`; both spellings are accepted here so a list written
     /// by either name renders the same.
     #[serde(default, alias = "lane", skip_serializing_if = "Option::is_none")]
@@ -297,7 +297,7 @@ pub struct TodoItem {
     /// it forms the lane a todo travels: stages run in sequence, the groups
     /// inside one stage run in parallel.
     ///
-    /// [`port-adaptation`] the todo tool models this as `phase` and records it
+    /// `port-adaptation` the todo tool models this as `phase` and records it
     /// under that name; the `stage` spelling is also accepted so a list
     /// written by either name renders the same.
     #[serde(default, alias = "stage", skip_serializing_if = "Option::is_none")]

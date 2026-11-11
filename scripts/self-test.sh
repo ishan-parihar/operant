@@ -13,6 +13,12 @@ cd "$REPO_ROOT"
 # the gate both network-dependent and non-reproducible. The local Cargo.lock
 # is the reviewed input, so keep it fixed for the whole run.
 export MEMORY_WIRE_NO_SYNC=1
+
+# Populate Cargo's local registry cache before turning the network off.
+# The dependency REVISION is already fixed by MEMORY_WIRE_NO_SYNC; this fetch
+# only makes the locked crates available locally, so the gate itself never
+# changes what it compiles and never reaches the network while testing.
+cargo fetch
 export CARGO_NET_OFFLINE=true
 
 # Workspace tests must not read or write the operator's live Operant tree.

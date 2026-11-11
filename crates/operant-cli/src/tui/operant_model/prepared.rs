@@ -16,7 +16,7 @@ use std::sync::Arc;
 /// One tool call's rows in the prepared body, in wrapped-line coordinates.
 ///
 /// RT-146: click-to-expand. A tool row is rendered from a `role = "tool"`
-/// [`DisplayMessage`] carrying `tool_data: Some(ToolCall)`, and the click
+/// `DisplayMessage` carrying `tool_data: Some(ToolCall)`, and the click
 /// handler needs to map a screen row back to that call's id — the key into
 /// `App::tool_full_outputs` and `App::expanded_tool_id`.
 ///

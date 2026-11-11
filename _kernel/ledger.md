@@ -1522,6 +1522,8 @@ End-state test: the live operator config can no longer be overwritten by a unit 
 | 16 | [x] Make the self-test hermetic | fixed dependency/store/credentials; no corpus network; no stale binary; opt-in advisory fetch | 15 | C1,C9,C10 |
 | 17 | [x] Make the release gates agree with the tree | audit details; baselines; rustdoc; settings golden | 16 | C1,C9,C10 |
 | 18 | [x] Close fresh-review boundary findings | credential isolation; task-local reads; precise healing dedup | 17 | C1,C9,C10 |
+| 19 | [x] Make the hermetic self-test fresh-machine safe | locked crates fetched once; Cargo steps then offline | 18 | C1,C9,C10 |
+| 20 | [x] Make the strict CLI rustdoc gate clean | unresolved links became plain code spans | 19 | C1,C9,C10 |
 
 Round-23 note: the hermetic realtime matrix (HTTP, SSE, real verification tool
 call, and MCP stdio) and focused gateway/TUI regressions are complete. The full

@@ -133,7 +133,7 @@ impl Model {
     /// sorted BASE segment plus an appended OVERFLOW segment (OMP's
     /// structure): interns append to the overflow so ids never shift
     /// mid-prompt, and [`Model::compact`] folds the overflow back into the
-    /// sorted base once it grows past [`COMPACT_THRESHOLD`].
+    /// sorted base once it grows past `COMPACT_THRESHOLD`.
     pub fn prefix_ids(&self, prefix: &str) -> Vec<u32> {
         let mut out = Vec::new();
         // The base segment is sorted (binary search); the overflow is
