@@ -76,6 +76,35 @@ fn prune_old_trajectories(dir: &std::path::Path, keep: usize) {
     }
 }
 
+/// Build the dedicated client for an auxiliary background-review route.
+///
+/// An endpoint override never inherits the primary credential: a secret is
+/// issued for one host and must not cross to another.
+fn review_route_client(
+    route: &self::background_review::ReviewRoute,
+    cfg: &crate::config::AppConfig,
+    primary_base_url: Option<&str>,
+    primary_api_key: Option<&str>,
+) -> Arc<dyn crate::agent::ModelClient> {
+    let mut base = crate::client::ClientConfig::from(&cfg.client);
+    if let Some(url) = primary_base_url {
+        base.base_url = url.to_string();
+    }
+    if let Some(key) = primary_api_key {
+        base.api_key = Some(key.to_string());
+    }
+    if route.base_url.is_some() && route.api_key.is_none() {
+        base.api_key = None;
+    }
+    let mut slot = cfg.auxiliary_models.memory.clone().unwrap_or_default();
+    slot.model = Some(route.model.clone());
+    slot.base_url = route.base_url.clone();
+    slot.api_key = route.api_key.clone();
+    Arc::new(crate::agent::clients::openai::OpenAIModelClient::new(
+        crate::moa::slot_client(&base, &slot),
+    ))
+}
+
 impl OperantAgent {
     pub(crate) fn load_context_file_prompt(&self) -> String {
         // R-07 (AUDIT-2026-10-16-capability-layer): in a Holon run the kernel's
@@ -409,20 +438,12 @@ impl OperantAgent {
         let (review_model, is_routed, client) = if let Some(route) = route {
             let client: Arc<dyn crate::agent::ModelClient> =
                 if route.base_url.is_some() || route.api_key.is_some() {
-                    let mut base = crate::client::ClientConfig::from(&cfg.client);
-                    if let Some(url) = self.client.base_url() {
-                        base.base_url = url;
-                    }
-                    if let Some(key) = self.client.current_api_key() {
-                        base.api_key = Some(key);
-                    }
-                    let mut slot = cfg.auxiliary_models.memory.clone().unwrap_or_default();
-                    slot.model = Some(route.model.clone());
-                    slot.base_url = route.base_url.clone();
-                    slot.api_key = route.api_key.clone();
-                    Arc::new(crate::agent::clients::openai::OpenAIModelClient::new(
-                        crate::moa::slot_client(&base, &slot),
-                    ))
+                    review_route_client(
+                        &route,
+                        &cfg,
+                        self.client.base_url().as_deref(),
+                        self.client.current_api_key().as_deref(),
+                    )
                 } else {
                     Arc::clone(&self.client)
                 };
@@ -871,6 +892,70 @@ If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::background_review::resolve_review_route;
+    use crate::config::{AppConfig, AuxiliaryModelConfig};
+
+    /// Changing the endpoint without supplying a credential must NOT send
+    /// the primary secret to the auxiliary host.
+    #[test]
+    fn an_auxiliary_endpoint_never_inherits_the_primary_credential() {
+        let mut cfg = AppConfig::default();
+        cfg.auxiliary_models.memory = Some(AuxiliaryModelConfig {
+            provider: None,
+            model: Some("aux-model".to_string()),
+            base_url: Some("http://127.0.0.1:9/v1".to_string()),
+            api_key: None,
+        });
+        let route = resolve_review_route(
+            cfg.auxiliary_models.memory.as_ref(),
+            "primary-model",
+            Some("https://primary.example/v1"),
+            Some("primary-secret"),
+        )
+        .expect("route");
+        let client = review_route_client(
+            &route,
+            &cfg,
+            Some("https://primary.example/v1"),
+            Some("primary-secret"),
+        );
+        assert_eq!(
+            client.base_url().as_deref(),
+            Some("http://127.0.0.1:9/v1"),
+            "the auxiliary endpoint must win"
+        );
+        assert_eq!(
+            client.current_api_key(),
+            None,
+            "the primary credential must not cross to the auxiliary host"
+        );
+    }
+
+    /// The auxiliary slot's own credential reaches its own endpoint.
+    #[test]
+    fn an_auxiliary_credential_reaches_the_auxiliary_endpoint() {
+        let mut cfg = AppConfig::default();
+        cfg.auxiliary_models.memory = Some(AuxiliaryModelConfig {
+            provider: None,
+            model: Some("aux-model".to_string()),
+            base_url: Some("http://127.0.0.1:9/v1".to_string()),
+            api_key: Some("aux-secret".to_string()),
+        });
+        let route = resolve_review_route(
+            cfg.auxiliary_models.memory.as_ref(),
+            "primary-model",
+            Some("https://primary.example/v1"),
+            Some("primary-secret"),
+        )
+        .expect("route");
+        let client = review_route_client(
+            &route,
+            &cfg,
+            Some("https://primary.example/v1"),
+            Some("primary-secret"),
+        );
+        assert_eq!(client.current_api_key().as_deref(), Some("aux-secret"));
+    }
 
     /// The trajectory directory must not grow without bound.
     ///

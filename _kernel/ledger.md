@@ -1520,6 +1520,8 @@ End-state test: the live operator config can no longer be overwritten by a unit 
 | 14 | [x] Apply configured context caps to ACP and delegated/custom-core agents | installed config seeds core caps; ACP applies caps/compression | 13 | C1,C9,C10 |
 | 15 | [x] Keep one user row across a self-healing retry | recovery hint does not defeat user-message dedup | 14 | C1,C9,C10 |
 | 16 | [x] Make the self-test hermetic | fixed dependency/store/credentials; no corpus network; no stale binary; opt-in advisory fetch | 15 | C1,C9,C10 |
+| 17 | [x] Make the release gates agree with the tree | audit details; baselines; rustdoc; settings golden | 16 | C1,C9,C10 |
+| 18 | [x] Close fresh-review boundary findings | credential isolation; task-local reads; precise healing dedup | 17 | C1,C9,C10 |
 
 Round-23 note: the hermetic realtime matrix (HTTP, SSE, real verification tool
 call, and MCP stdio) and focused gateway/TUI regressions are complete. The full

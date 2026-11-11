@@ -752,6 +752,8 @@ NOT supported (named, with the reason):
 - RT-499 context-cap truth: installed operator caps apply to ACP, delegated children, and custom-core construction without a separate builder call — [V] — the configured-cap regression is green and mutation-proved — unit 14.
 - RT-500 healing-turn truth: a retry with a system recovery hint persists the user's message exactly once — [V] — the healing persistence regression is green and mutation-proved — unit 15.
 - RT-501 self-test truth: the gate pins dependencies, store/config, and credentials; its TUI corpus avoids network helpers; stale binaries cannot pass; and advisory fetching is opt-in — [V] — shell/Python syntax and the supply-chain no-fetch contract are green — unit 16.
+- RT-502 release-gate truth: audit rows have details, known config/lint surfaces are accounted for, rustdoc links resolve, and the settings golden matches the corrected row — [V] — the focused gates are green — unit 17.
+- RT-503 review-boundary truth: auxiliary credentials stay with their endpoint, review skill reads stay inside their task, and healing dedup does not suppress intentional repeated turns — [V] — three mutation-proved regressions are green — unit 18.
 
 - The full workspace test suite is green after iter-2081 — [V] — `scripts/build.sh --offline test --workspace --no-fail-fast` exited 0; the full log contains the operant-core, operant-cli, harness, OS, plugins, config, API, and doctest targets — unit 8.
 

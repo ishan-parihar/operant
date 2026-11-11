@@ -18,7 +18,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use std::collections::HashSet;
-use std::sync::{LazyLock, RwLock};
+use std::sync::LazyLock;
 
 use crate::schema::ToolSchema;
 use crate::skill_usage::SkillUsageTracker;
@@ -112,12 +112,6 @@ fn is_skill_dir_skipped(dir_name: &str) -> bool {
 
 // ── Background review write guards ────────────────────────────────────────
 
-/// Fallback read-mark set for synchronous/non-task-scoped review contexts.
-/// Production reviews use the task-local set in `write_origin.rs`, so
-/// concurrent reviews cannot leak read marks into one another.
-static REVIEW_READ_SKILLS_FALLBACK: LazyLock<RwLock<HashSet<String>>> =
-    LazyLock::new(|| RwLock::new(HashSet::new()));
-
 /// Serializes `.usage.json` read-modify-write cycles. The main agent and the
 /// `USAGE_TELEMETRY_LOCK` was the in-process lock around the legacy
 /// `.usage.json` writer. Plan 007 removed the legacy writer; the
@@ -143,18 +137,11 @@ pub fn mark_review_skill_read(name: &str) {
     if !is_background_review() {
         return;
     }
-    let marked = crate::write_origin::with_review_read_skills(|set| {
+    crate::write_origin::with_review_read_skills(|set| {
         if let Ok(mut set) = set.write() {
             set.insert(name.to_string());
-            true
-        } else {
-            false
         }
-    })
-    .unwrap_or(false);
-    if !marked && let Ok(mut set) = REVIEW_READ_SKILLS_FALLBACK.write() {
-        set.insert(name.to_string());
-    }
+    });
 }
 
 /// Check whether a skill has been read during the current background review.
@@ -163,18 +150,6 @@ fn review_has_read(name: &str) -> bool {
         set.read().map(|set| set.contains(name)).unwrap_or(false)
     })
     .unwrap_or(false)
-        || REVIEW_READ_SKILLS_FALLBACK
-            .read()
-            .map(|set| set.contains(name))
-            .unwrap_or(false)
-}
-
-/// Reset the read tracking set. Called at the start of each background review
-/// session so that a stale session doesn't leak read-tracking state.
-pub fn reset_review_read_marks() {
-    if let Ok(mut set) = REVIEW_READ_SKILLS_FALLBACK.write() {
-        set.clear();
-    }
 }
 
 /// Check if a skill name matches a protected prefix (bundled/hub-installed).
@@ -2591,6 +2566,40 @@ mod tests {
                 );
             },
             reads,
+        )
+        .await;
+    }
+
+    /// Read marks belong to ONE review task. A prior task's read must not
+    /// authorize a mutation in a different review.
+    #[tokio::test]
+    async fn a_review_cannot_inherit_another_reviews_read_mark() {
+        let first_reads =
+            std::sync::Arc::new(std::sync::RwLock::new(std::collections::HashSet::new()));
+        crate::write_origin::scope_background_review_with_reads(
+            async {
+                mark_review_skill_read("user-skill");
+                assert!(review_has_read("user-skill"));
+            },
+            first_reads.clone(),
+        )
+        .await;
+        // A legacy process-global context may also record the read. The
+        // second scoped review must ignore it.
+        if let Ok(mut set) = first_reads.write() {
+            set.insert("user-skill".to_string());
+        }
+
+        let second_reads =
+            std::sync::Arc::new(std::sync::RwLock::new(std::collections::HashSet::new()));
+        crate::write_origin::scope_background_review_with_reads(
+            async {
+                assert!(
+                    !review_has_read("user-skill"),
+                    "a different review must not inherit the first review's read mark"
+                );
+            },
+            second_reads,
         )
         .await;
     }

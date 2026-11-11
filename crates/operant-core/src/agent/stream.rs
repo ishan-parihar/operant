@@ -1928,8 +1928,8 @@ impl OperantAgent {
 
                     // Add error context as a system message
                     let error_msg = format!(
-                        "Note: The previous attempt encountered an error: {}. \
-                        Please correct your approach and try again.",
+                        "{} {}. Please correct your approach and try again.",
+                        super::HEALING_RETRY_HINT_PREFIX,
                         e.user_message()
                     );
 

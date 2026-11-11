@@ -439,6 +439,10 @@ pub enum AgentEvent {
     },
 }
 
+/// Prefix of the system hint that marks a self-healing retry.
+pub(crate) const HEALING_RETRY_HINT_PREFIX: &str =
+    "Note: The previous attempt encountered an error:";
+
 /// Operant Agent for tool orchestration
 /// Rewind target recorded for each real user prompt (2026-10-14 batch,
 /// plan 05).
