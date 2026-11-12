@@ -493,7 +493,7 @@ These are the user's intentional design choices. Do not replace, remove, or
   `web_extract`, `web_crawl` + sourcehound browser provider (`tools/sourcehound.rs`
   + `browser_provider.rs`), driven over the `sourcehound` binary's MCP server
   (stdio). No API keys required
-- **ponytail (content integration — iters 1306/1307/1311/1314)**: the fourth
+- **ponytail (content integration — iters 1306/1307/1311/1314/2116)**: the fourth
   self-updating integration and the first CONTENT one — upstream
   `DietrichGebert/ponytail` ships SKILL.md prompt packs whose releases carry
   NO assets, so the shared binary_updater's `InstallKind::Content` fetches
@@ -503,7 +503,12 @@ These are the user's intentional design choices. Do not replace, remove, or
   NEVER in the operator's `~/.operant/skills/`. Installed skills ride
   SkillManager extra roots: invocable (`/skill ponytail-review`), listed
   with an `[integration]` marker, operator pool wins name collisions, delete
-  refused. `[agent.ponytail]` config defaults ALL OFF (`enabled=false`,
+  refused. The in-loop tools read the same roots — `skills_list` reports a
+  vendor skill with `origin: "integration"`, `skill_view` loads it — while
+  `skill_manage` stays pool-only, so a vendor skill can never be created or
+  written in place (a Holon run skips the root). Refresh the content alone
+  with `operant update integrations --only ponytail`. `[agent.ponytail]`
+  config defaults ALL OFF (`enabled=false`,
   `default_level="full"`, `inject="on_invoke"`); `inject="always_on"`
   rides the frozen prefix as a `<ponytail>` block (level suffix for
   lite/ultra), NEVER on Holon runs. `/ponytail [lite|full|ultra|off]` is a

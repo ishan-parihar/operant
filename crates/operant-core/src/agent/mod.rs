@@ -1638,6 +1638,69 @@ mod tests {
         assert_eq!(agent.build_frozen_prefix(), plain);
     }
 
+    /// Ponytail phase 4 (iter-2116): the always-on posture must reach the
+    /// PROMPT, not merely the config. With `[agent.ponytail] enabled = true`
+    /// and `inject = "always_on"`, the frozen prefix carries the INSTALLED
+    /// ruleset inside a `<ponytail>` block — the model is told it every turn.
+    /// Off by default, so the default prefix stays byte-identical.
+    #[test]
+    fn the_ponytail_posture_rides_the_frozen_prefix_when_enabled() {
+        let _env_lock = crate::platform::test_env_lock_blocking();
+        let home = std::env::temp_dir().join(format!(
+            "operant-ponytail-prefix-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&home);
+        let skill_dir = home
+            .join("integrations")
+            .join("ponytail-v9.9.9")
+            .join("skills")
+            .join("ponytail");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: ponytail\ndescription: Lazy senior dev\n---\n\nLAZY SENIOR DEV RULESET\n",
+        )
+        .unwrap();
+        let previous = std::env::var("HERMES_HOME").ok();
+        // SAFETY: serialised by the crate's environment lock.
+        unsafe { std::env::set_var("HERMES_HOME", &home) };
+
+        let mut config = AgentConfig::default();
+        config.ponytail.enabled = true;
+        config.ponytail.inject = crate::config::PonytailInject::AlwaysOn;
+        let db = Database::init(
+            std::env::temp_dir()
+                .join(format!("test_ponytail_prefix_{}.sqlite", std::process::id())),
+        )
+        .unwrap();
+        let agent = OperantAgent::new(
+            config,
+            Box::new(OpenAIModelClient::new(OpenAIClient::new(
+                crate::client::ClientConfig::default(),
+            ))),
+            ToolRegistry::new(Duration::from_secs(1)),
+            Arc::new(db),
+        );
+        let prefix = agent.build_frozen_prefix();
+
+        // SAFETY: serialised by the crate's environment lock.
+        unsafe {
+            match previous {
+                Some(v) => std::env::set_var("HERMES_HOME", v),
+                None => std::env::remove_var("HERMES_HOME"),
+            }
+        }
+        let _ = std::fs::remove_dir_all(&home);
+
+        assert!(prefix.contains("<ponytail>"), "prefix: {prefix}");
+        assert!(
+            prefix.contains("LAZY SENIOR DEV RULESET"),
+            "prefix: {prefix}"
+        );
+        assert!(prefix.contains("</ponytail>"), "prefix: {prefix}");
+    }
+
     #[serial]
     #[test]
     fn a_holon_run_gets_no_workspace_or_global_context_r07() {

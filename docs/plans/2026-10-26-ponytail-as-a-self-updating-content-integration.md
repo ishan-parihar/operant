@@ -85,7 +85,7 @@ GitHub release tarball is the cleaner fetch (no node, no npm runtime).
    download AND on every background re-download (upstream prompt text is
    third-party content; a Dangerous verdict refuses the update and keeps
    the previous version).
-4. **Behavior surface (the actual point)**: a `[behavior] ponytail` config
+4. **Behavior surface (the actual point)**: an `[agent] ponytail` config
    section (`config.rs` BehaviorSettings-adjacent, `operant.example.toml`
    in the same change):
    - `enabled` (default **false** — opt-in; the operator's design
@@ -148,7 +148,7 @@ GitHub release tarball is the cleaner fetch (no node, no npm runtime).
   --integrations" hint when absent.
 - **First-install kick**: where sourcehound's `kick_update_check` fires
   (first use per session), ponytail's kick fires at CLI startup when
-  `[behavior].ponytail.enabled = true` — because content, unlike binaries,
+  `[agent.ponytail] enabled = true` — because content, unlike binaries,
   has no natural "first tool call" moment; startup is the natural gate.
   Throttle/once-guard/`OPERANT_NO_AUTO_UPDATE` all inherited.
 - Acceptance: fresh box → `operant doctor` shows ponytail "not installed";
@@ -180,7 +180,7 @@ GitHub release tarball is the cleaner fetch (no node, no npm runtime).
   `crates/operant-core/src/integrations/ponytail.rs`,
   `crates/operant-cli/src/main.rs`, `crates/operant-cli/src/gateway_runner.rs`.
 
-### Phase 4 — behavior surface: `[behavior] ponytail` config + frozen-prefix injection
+### Phase 4 — behavior surface: `[agent.ponytail]` config + frozen-prefix injection
 
 - `config.rs`: `PonytailSettings { enabled: bool (default false),
   default_level: PonytailLevel (default Full), inject: PonytailInject
