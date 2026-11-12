@@ -1020,7 +1020,9 @@ mod tests {
              return a stopReason while the agent's text never reaches the client"
         );
         assert!(
-            source.contains("write_notification(notification)"),
+            // (RT-513) The writer is now a parameter: the loop serves a
+            // socket as well as stdio, so the call names the writer.
+            source.contains("write_notification(&mut writer, notification)"),
             "server.rs no longer calls `write_notification` — notifications are produced \
              and then dropped"
         );
@@ -1028,10 +1030,10 @@ mod tests {
         // And the ordering: a streaming client expects the text before the turn
         // is reported finished, not after.
         let notify_at = source
-            .find("write_notification(notification)")
+            .find("write_notification(&mut writer, notification)")
             .expect("call site pinned above");
         let respond_at = source
-            .find("write_response(response)")
+            .find("write_response(&mut writer, response)")
             .expect("the response call site is what this ordering is relative to");
         assert!(
             notify_at < respond_at,

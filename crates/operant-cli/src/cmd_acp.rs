@@ -13,35 +13,114 @@ pub enum AcpSubcommand {
         /// Accept incoming hooks
         #[arg(long, action = clap::ArgAction::SetTrue)]
         accept_hooks: bool,
+        /// Serve over this UNIX socket instead of stdio (RT-513).
+        ///
+        /// The socket is how MANY clients share ONE process: one registry,
+        /// one database, one MCP child set, one agent — instead of one
+        /// whole operant per client.
+        #[arg(long, value_name = "PATH")]
+        socket: Option<std::path::PathBuf>,
+    },
+    /// Send one command to a running ACP daemon (RT-513).
+    ///
+    /// The client is thin: it opens the socket, sends the command and
+    /// prints the answer. It builds NO runtime of its own — no registry,
+    /// no database, no MCP children.
+    Attach {
+        /// The daemon's socket.
+        #[arg(long, value_name = "PATH")]
+        socket: std::path::PathBuf,
+        /// The command to run.
+        #[arg(long, value_name = "TEXT")]
+        command: String,
     },
 }
 
 pub async fn handle_acp_command(config: &AppConfig, cmd: AcpSubcommand) -> Result<()> {
     match cmd {
-        AcpSubcommand::Server { accept_hooks } => {
+        AcpSubcommand::Server {
+            accept_hooks,
+            socket,
+        } => {
             if accept_hooks {
                 anyhow::bail!(
                     "--accept-hooks is not supported: the operant ACP server does not implement ACP hooks (accepting hook requests requires the full ACP session/permission machinery). Remove the flag."
                 );
             }
-            cmd_server(config).await
+            cmd_server(config, socket).await
         }
+        AcpSubcommand::Attach { socket, command } => cmd_attach(&socket, &command).await,
     }
 }
 
-async fn cmd_server(config: &AppConfig) -> Result<()> {
-    println!("Starting ACP server over stdio...");
-    println!("Listening for JSON-RPC requests on stdin...");
-    println!("Supported methods: ping, status, command, stop");
-
+async fn cmd_server(config: &AppConfig, socket: Option<std::path::PathBuf>) -> Result<()> {
     // (RT-514) The runtime is built ONCE for the life of the server: one
     // database, one MCP child set, one registry, one agent.
     let runtime = AcpRuntime::start(config.clone())?;
     let handler = Arc::new(AcpCliHandler::new(runtime));
 
-    operant_core::acp::server::run_stdio_server(handler).await?;
+    match socket {
+        Some(path) => {
+            println!("Starting ACP server on {}...", path.display());
+            println!(
+                "Clients attach with: operant acp attach --socket {} --command '...'",
+                path.display()
+            );
+            operant_core::acp::server::run_socket_server(handler, &path).await?;
+        }
+        None => {
+            println!("Starting ACP server over stdio...");
+            println!("Listening for JSON-RPC requests on stdin...");
+            println!("Supported methods: ping, status, command, stop");
+            operant_core::acp::server::run_stdio_server(handler).await?;
+            println!("ACP server shut down gracefully.");
+        }
+    }
+    Ok(())
+}
 
-    println!("ACP server shut down gracefully.");
+/// Send one command to a running ACP daemon (RT-513).
+///
+/// The client is THIN: it opens the socket, sends one JSON-RPC request
+/// and prints the answer. It builds no runtime of its own — no registry,
+/// no database, no MCP children — which is the whole point of the daemon:
+/// many clients, one process, one child set.
+async fn cmd_attach(socket: &std::path::Path, command: &str) -> Result<()> {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+    let mut stream = tokio::net::UnixStream::connect(socket).await.map_err(|e| {
+        anyhow::anyhow!(
+            "Failed to connect to the ACP daemon at {}: {e}. Is it running?",
+            socket.display()
+        )
+    })?;
+    let request = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "command",
+        "params": { "command": command },
+    });
+    stream.write_all(format!("{request}\n").as_bytes()).await?;
+    stream.flush().await?;
+
+    let mut reader = BufReader::new(stream);
+    let mut line = String::new();
+    reader.read_line(&mut line).await?;
+    let response: serde_json::Value = serde_json::from_str(line.trim()).map_err(|e| {
+        anyhow::anyhow!(
+            "The ACP daemon sent a malformed response ({e}): {}",
+            line.trim()
+        )
+    })?;
+    if let Some(error) = response.get("error") {
+        anyhow::bail!("The ACP daemon returned an error: {error}");
+    }
+    let output = response
+        .get("result")
+        .and_then(|r| r.get("output"))
+        .and_then(|o| o.as_str())
+        .unwrap_or("");
+    println!("{output}");
     Ok(())
 }
 
@@ -441,6 +520,121 @@ for line in sys.stdin:
             runtime.builds(),
             1,
             "two prompts must not rebuild the agent"
+        );
+
+        match previous_home {
+            Some(v) => unsafe { std::env::set_var("HERMES_HOME", v) },
+            None => unsafe { std::env::remove_var("HERMES_HOME") },
+        }
+    }
+    /// RT-513: one daemon, two attached clients, ONE shared MCP child set.
+    ///
+    /// The client is the point: `operant chat` / `operant run` used to be
+    /// whole operant processes — each with its own tool registry, its own
+    /// database handles, its own AFT bridge, its own kernel sidecar and its
+    /// own MCP children. The daemon owns those ONCE and the clients attach.
+    #[tokio::test]
+    #[expect(
+        clippy::await_holding_lock,
+        reason = "test-only: the crate's std env lock serialises process-env mutation across the whole test"
+    )]
+    async fn one_daemon_two_clients_one_shared_child_set() {
+        let _env = crate::config::test_env_lock();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let previous_home = std::env::var("HERMES_HOME").ok();
+        unsafe { std::env::set_var("HERMES_HOME", dir.path()) };
+
+        let count_log = dir.path().join("connections.log");
+        let script = dir.path().join("counting_mcp_server.py");
+        std::fs::write(&script, counting_mcp_server(&count_log)).expect("write the fake server");
+
+        let mut config = counting_config(dir.path());
+        config.mcp.servers[0].command = Some("python3".to_string());
+        config.mcp.servers[0].args = vec![script.to_string_lossy().to_string()];
+        let endpoint = refusing_endpoint().await;
+        config.client.base_url = format!("http://{endpoint}/v1");
+        config.client.api_key = None;
+
+        // The daemon: ONE runtime, one agent, one MCP child set.
+        let runtime = AcpRuntime::start(config).expect("the ACP runtime starts");
+        let socket_path = dir.path().join("acp.sock");
+        let handler = Arc::new(AcpCliHandler::new(runtime.clone()));
+        let server_socket = socket_path.clone();
+        tokio::spawn(async move {
+            let _ = operant_core::acp::server::run_socket_server(handler, &server_socket).await;
+        });
+        // Wait for the socket to exist.
+        for _ in 0..200 {
+            if socket_path.exists() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert!(socket_path.exists(), "the daemon must bind its socket");
+
+        // Client 1: a command (the turn fails at the refusing endpoint).
+        let mut first = tokio::net::UnixStream::connect(&socket_path)
+            .await
+            .expect("client 1 connects");
+        use tokio::io::AsyncWriteExt;
+        first
+            .write_all(
+                br#"{"jsonrpc":"2.0","id":1,"method":"command","params":{"command":"hello"}}"#,
+            )
+            .await
+            .expect("client 1 writes");
+        first
+            .write_all(b"\n")
+            .await
+            .expect("client 1 writes the newline");
+        first.flush().await.expect("client 1 flushes");
+
+        // Client 2: a ping, WHILE client 1's turn is running.
+        let mut second = tokio::net::UnixStream::connect(&socket_path)
+            .await
+            .expect("client 2 connects");
+        second
+            .write_all(br#"{"jsonrpc":"2.0","id":2,"method":"ping","params":{}}"#)
+            .await
+            .expect("client 2 writes");
+        second
+            .write_all(b"\n")
+            .await
+            .expect("client 2 writes the newline");
+        second.flush().await.expect("client 2 flushes");
+
+        use tokio::io::AsyncBufReadExt;
+        let mut reader = tokio::io::BufReader::new(second);
+        let mut line = String::new();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            reader.read_line(&mut line),
+        )
+        .await
+        .expect("client 2 is answered while client 1's turn runs")
+        .expect("client 2 reads");
+        assert!(
+            line.contains("pong"),
+            "client 2 must be served by the SAME daemon while client 1's turn is in \
+             flight, got: {}",
+            line.trim()
+        );
+
+        // ONE child set for both clients.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while runtime.builds() == 0 && std::time::Instant::now() < deadline {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert_eq!(
+            runtime.builds(),
+            1,
+            "the daemon must build its agent exactly ONCE for both clients"
+        );
+        let connects = std::fs::read_to_string(&count_log).unwrap_or_default();
+        let lines = connects.lines().filter(|l| !l.trim().is_empty()).count();
+        assert_eq!(
+            lines, 1,
+            "both clients share ONE MCP child set — got {lines} connections"
         );
 
         match previous_home {
