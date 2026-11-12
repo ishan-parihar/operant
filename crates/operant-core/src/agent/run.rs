@@ -859,6 +859,24 @@ impl OperantAgent {
         let mut error = first_error;
         loop {
             let classified = FallbackModelClient::classify_error(&error);
+            // The turn's wall clock, checked INSIDE the ladder and BEFORE the
+            // bookkeeping: a re-issue loop that runs past it is how a
+            // degraded upstream holds a gateway channel open indefinitely
+            // (the mid-stream ladder has the same bound —
+            // `stream_retry::decide_stream_retry` takes the elapsed time —
+            // and the turn-level check at the iteration boundary never fires
+            // while this loop is running). Before the bookkeeping, because a
+            // retry that is announced and then not taken is a lie the
+            // operator can see on the retry pill.
+            if turn_start.elapsed().as_secs() >= wall_clock_secs {
+                warn!(
+                    elapsed_secs = turn_start.elapsed().as_secs(),
+                    limit_secs = wall_clock_secs,
+                    reason = %classified.reason,
+                    "Turn wall-clock limit reached inside the re-issue ladder — no more re-issues"
+                );
+                return Err(error);
+            }
             let Some(request) = self
                 .prepare_retry_request(
                     messages,
@@ -871,21 +889,6 @@ impl OperantAgent {
             else {
                 return Err(error);
             };
-            // The turn's wall clock, checked INSIDE the ladder: a re-issue
-            // loop that runs past it is how a degraded upstream holds a
-            // gateway channel open indefinitely (the mid-stream ladder has
-            // the same bound — `stream_retry::decide_stream_retry` takes the
-            // elapsed time — and the turn-level check at the iteration
-            // boundary never fires while this loop is running).
-            if turn_start.elapsed().as_secs() >= wall_clock_secs {
-                warn!(
-                    elapsed_secs = turn_start.elapsed().as_secs(),
-                    limit_secs = wall_clock_secs,
-                    reason = %classified.reason,
-                    "Turn wall-clock limit reached inside the re-issue ladder — no more re-issues"
-                );
-                return Err(error);
-            }
             match self.call_with_loop_timeout(call(request)).await {
                 Ok(ok) => return Ok(ok),
                 Err(next) => {
