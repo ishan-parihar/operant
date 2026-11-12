@@ -450,6 +450,10 @@ impl OperantAgent {
             reason: TurnExitReason::GraceCall,
         })
         .await;
+        // (RT-511) The grace path ANSWERED (a summary), so the session
+        // is no longer interrupted: take back the records the turn start
+        // wrote.
+        turn_context::clear_interrupted_records(self, session_id).await;
         // ── Turn diagnostics (grace exit) ─────────────────────────
         // S5: honesty — the log must say `grace_call` here, never
         // `budget_exhausted` (pre-call diagnostic, kept) or
@@ -2293,6 +2297,13 @@ impl OperantAgent {
                             reason: TurnExitReason::TextResponse,
                         })
                         .await;
+
+                        // (RT-511) The turn was ANSWERED, so the session is
+                        // no longer interrupted: take back the records the
+                        // turn start wrote. A turn that was broken off
+                        // (circuit breaker, interrupt, error, budget) keeps
+                        // them — that session WAS cut off.
+                        turn_context::clear_interrupted_records(self, &session_id).await;
 
                         self.finalize_terminal_reply(
                             &session_id,

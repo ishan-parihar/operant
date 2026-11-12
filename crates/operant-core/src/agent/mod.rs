@@ -617,6 +617,17 @@ pub struct OperantAgent {
     /// between turns via [`Self::set_session_id`] without rebuilding
     /// it, exactly like [`Self::set_model`] retargets the model.
     session_id: Arc<std::sync::RwLock<Option<String>>>,
+    /// Whether a HOST (not the turn prologue) assigned `session_id`.
+    ///
+    /// (RT-511) The interrupted-session FILE marker — the one-generation
+    /// resume offer a boot path consumes — is written for host-assigned
+    /// sessions only: only a host that owns the id has a boot path that
+    /// can offer it back. A one-shot run that minted its own id gets the
+    /// DB flag (what `operant sessions list --interrupted` reads) and no
+    /// file. The turn prologue's own mint goes through
+    /// [`Self::set_session_id`], so the flag is read BEFORE the mint and
+    /// reset after it.
+    host_assigned_session: Arc<std::sync::atomic::AtomicBool>,
     /// Wave 2 (ORGANISM-ARCHITECTURE §2): the cast employee this agent
     /// executes as — THE seat the bylaws consults. `None` = no gateway
     /// employee binding (cron runs derive their employee id as the session

@@ -155,6 +155,24 @@ pub fn clear_marker() -> bool {
     clear_at(&marker_path())
 }
 
+/// Delete the live marker ONLY when it names `session_id`.
+///
+/// The marker file is a single slot shared by every session in the
+/// home, so a session that finished cleanly must not delete another
+/// session's resume offer (RT-511). Reports whether a marker was
+/// removed.
+pub fn clear_marker_for(session_id: &str) -> bool {
+    clear_for_at(&marker_path(), session_id)
+}
+
+/// Delete the marker at `path` only when it names `session_id`.
+fn clear_for_at(path: &Path, session_id: &str) -> bool {
+    match read_at(path) {
+        Some(marker) if marker.session_id == session_id => clear_at(path),
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -234,6 +252,30 @@ mod tests {
             write_at(&SessionInterrupted::new("s9", ""), &path).expect("write");
             assert!(clear_at(&path), "a written marker must report cleared");
             assert!(!clear_at(&path), "second clear is a no-op");
+        });
+    }
+
+    /// RT-511: the marker file is a SINGLE slot shared by every session in
+    /// the home, so a session that finished cleanly must not delete
+    /// another session's resume offer.
+    #[test]
+    fn clearing_one_session_leaves_another_sessions_offer_alone() {
+        with_marker_dir(|dir| {
+            let path = SessionInterrupted::path_in(dir);
+            write_at(&SessionInterrupted::new("other-session", ""), &path).expect("write");
+            assert!(
+                !clear_for_at(&path, "my-session"),
+                "a marker naming another session must not be cleared"
+            );
+            assert!(
+                path.exists(),
+                "another session's resume offer must survive a clean turn elsewhere"
+            );
+            assert!(
+                clear_for_at(&path, "other-session"),
+                "the marker's own session must be able to clear it"
+            );
+            assert!(!path.exists());
         });
     }
 

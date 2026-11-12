@@ -951,6 +951,32 @@ impl OperantAgent {
             .session_id
             .write()
             .expect("session_id RwLock poisoned — programmer error") = Some(new_id);
+        // (RT-511) A host assigned this id, so the session has a boot path
+        // that can offer a resume back — the interrupted-session file
+        // marker is written for those sessions.
+        self.host_assigned_session
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Whether a HOST assigned this agent's session id.
+    ///
+    /// (RT-511) False for a session the turn prologue minted for itself:
+    /// there is no boot path that could offer such a session back.
+    pub fn host_assigned_session(&self) -> bool {
+        self.host_assigned_session
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Mark (or unmark) this agent's session id as host-assigned.
+    ///
+    /// (RT-511) The turn prologue mints an id through
+    /// [`Self::set_session_id`], which marks it host-assigned — so the
+    /// prologue clears the mark again for its own mint. A one-shot run's
+    /// session has no boot path that could offer a resume back, so it must
+    /// not leave a resume offer behind.
+    pub(crate) fn set_host_assigned_session(&self, host_assigned: bool) {
+        self.host_assigned_session
+            .store(host_assigned, std::sync::atomic::Ordering::SeqCst);
     }
 
     /// A non-blocking snapshot of the conversation the agent currently holds
