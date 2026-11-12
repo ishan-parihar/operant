@@ -112,7 +112,6 @@ pub mod oauth_refresh;
 pub mod observer;
 pub mod org;
 pub mod parser;
-pub mod persistence_seam;
 pub mod platform;
 pub mod plugins;
 pub mod ponytail;
