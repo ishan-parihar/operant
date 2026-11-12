@@ -220,6 +220,31 @@ default_level = "full"
 # only posture for a bound body.
 inject = "on_invoke"
 
+# [compression] — the evidence layer: a tool result is shaped by what it IS
+# (a file read, shell output, a JSON body) rather than merely by how big it
+# is, and a method that drops bytes records where the full text went so the
+# model can get it back.
+#
+# DEFAULT IS OFF: while `enabled = false` the layer is a NO-OP at the
+# tool-result chokepoint, so a tool result is byte-identical to what it was
+# before this section existed. It runs AFTER secret redaction and BEFORE the
+# per-result spend guard, so the guard measures what shaping could not shrink.
+# [compression]
+# enabled = false
+# Results smaller than this (bytes) are left alone. Default 512.
+# min_size = 512
+# How shell output is compressed: "aft" (the default — AFT already compresses
+# it, so the layer leaves it alone), "native" (the layer compresses it), or
+# "rtk" (the `rtk` binary does).
+# shell = "aft"
+# Per-family overrides, keyed by subject — "read", "write", "edit", "shell",
+# "search", "web", "subagent", "mcp" or "tool_result". `enabled` turns one
+# family off; `chain` names the chain to use instead of the one the payload's
+# shape selects.
+# [compression.families.read]
+# enabled = true
+# chain = "code"
+
 # [advisor] — always-on transcript watchdog (omp advisor/ parity).
 # Distinct from [moa]: MoA fans out per turn; the advisor reviews the
 # incremental transcript delta after each completed turn and surfaces short

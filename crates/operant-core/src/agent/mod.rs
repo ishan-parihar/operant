@@ -8,6 +8,7 @@
 pub(crate) mod background_review;
 pub mod chat_provider;
 pub mod error_classifier;
+pub mod evidence;
 pub mod insights;
 pub mod iteration_budget;
 pub mod learn_prompt;

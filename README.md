@@ -209,6 +209,36 @@ the window (measured on the live endpoint: 18 kB of `reasoning_content` cost
 15 prompt tokens). Counting it made the agent compact requests that were
 nowhere near the cap.
 
+### Tool-result compression
+
+A tool result can be enormous — a 2,000-line file read, a 40,000-match grep, a
+fetched page, a test suite's stdout — and one result can quietly eat a tenth of
+the window. The **evidence layer** describes a result by *what produced it*
+(`Subject`) and *what shape it is* (`ContentFormat`); that pair selects a chain
+of compressors built for that shape.
+
+```toml
+[compression]
+enabled = false           # OFF by default — opt in
+min_size = 512            # below this many bytes, a result is left alone
+shell = "aft"             # "aft" | "native" | "rtk"
+```
+
+Three guarantees hold for every compression: **never worse** (a result is never
+handed to the model larger than it was), **fail-open** (a compressor that cannot
+help — or that panics — leaves the result untouched), and **recoverable** (a
+compressor that drops information may only run when the full text is retained,
+and the compressed result names the key that retrieves it: `[compressed: cap,
+term — 12 431 → 3 204 tokens. Full output: evidence_recall "…"]`).
+
+The layer runs **after** secret redaction and **before** the spend guard, so
+nothing it writes has ever seen an unredacted byte, and the existing
+`agent.max_tool_result_share` guard now measures the *residual* cost of a
+result that shaping could not shrink — which is what it was always for. Shell
+results are AFT's by default: `aft_bash` already compresses them in-process
+with purpose-built parsers, so `shell = "aft"` leaves them alone rather than
+compressing twice.
+
 ### When a turn runs out of room
 
 A turn that hits its iteration budget, the wall clock or the seat cap ends

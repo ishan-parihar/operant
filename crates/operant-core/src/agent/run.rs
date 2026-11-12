@@ -6,6 +6,7 @@ use self::turn_finalizer::{
     TurnExitReason, file_mutation_verifier_footer,
 };
 use self::turn_rules::{AssistantTurn, EmptyResponseCounter, is_degenerate_final_text};
+use crate::agent::evidence::recall::RecallStore;
 use crate::client::{Message, Role};
 use crate::context_management::{
     BustFingerprint, BustPermission, bust_permission, natural_bust_reason,
@@ -163,6 +164,65 @@ fn last_user_turn(messages: &[Message]) -> String {
         .find(|m| matches!(m.role, Role::User))
         .map(|m| m.content.clone())
         .unwrap_or_default()
+}
+
+/// Compress one tool result with the evidence layer.
+///
+/// This is the tool-result chokepoint and its position is LOAD-BEARING:
+///
+/// * AFTER secret redaction — no transformation and no recall record may
+///   ever hold an unredacted byte;
+/// * BEFORE the spend guard — the guard then measures the RESIDUAL cost of a
+///   result that shaping could not shrink, which is what its own doc comment
+///   says it is for.
+///
+/// The layer is a NO-OP while `[compression].enabled` is false (the
+/// default); `compress` also leaves a result alone when it is below
+/// `min_size`, when the tool is unknown, or when compressing would not make
+/// it smaller.
+///
+/// A lossy method's output rides with the provenance marker, and the marker
+/// is printed ONLY when the full text is in the recall store: a marker
+/// pointing at a key that was never written is worse than no marker, so a
+/// store that refuses the record keeps the ORIGINAL text rather than hand
+/// the model text it cannot recover.
+fn compress_tool_result(
+    tool_name: &str,
+    body: &str,
+    tool_call_id: &str,
+    session_id: &str,
+) -> String {
+    let cfg = crate::config::compression_config();
+    if !cfg.enabled || body.len() < cfg.min_size {
+        return body.to_string();
+    }
+    let compressed = crate::agent::evidence::compress(tool_name, body, &cfg);
+    if !compressed.changed() {
+        return body.to_string();
+    }
+    if !compressed.lossy {
+        return compressed.text;
+    }
+    // Full text FIRST, marker SECOND: a lossy method may only leave the model
+    // with text whose original it can get back.
+    let key = crate::agent::evidence::recall::key_for(Some(session_id), tool_call_id);
+    let store = crate::agent::evidence::recall::shared();
+    match store.store(&key, body) {
+        Some(key) => {
+            let marker = crate::agent::evidence::recall::marker(
+                &key,
+                compressed.tokens_before,
+                compressed.tokens_after,
+                &compressed.applied,
+            );
+            let mut text = compressed.text;
+            text.push_str(&marker);
+            text
+        }
+        // The store refused the record, so the lossy text must not reach the
+        // model unrecoverable: the ORIGINAL body is kept.
+        None => body.to_string(),
+    }
 }
 
 impl OperantAgent {
@@ -2843,6 +2903,24 @@ impl OperantAgent {
                             _ => body,
                         };
                         let body = crate::redaction::redact_sensitive_text_if_enabled(&body);
+                        // ── The evidence layer (tool-result compression) ────
+                        // The ORDER is load-bearing (see `compress_tool_result`):
+                        // AFTER redaction, so no transformation and no recall
+                        // record may ever hold an unredacted byte; BEFORE the
+                        // spend guard, so the guard measures the RESIDUAL
+                        // cost of a result that shaping could not shrink.
+                        // Only SUCCESSFUL results are compressed: errors are
+                        // short and the model needs them verbatim.
+                        let body = if result.success {
+                            compress_tool_result(
+                                &result.name,
+                                &body,
+                                &result.tool_call_id,
+                                &session_id,
+                            )
+                        } else {
+                            body
+                        };
                         let body = self
                             .guard_tool_output_spend(&result.tool_call_id, &result.name, body)
                             .await;

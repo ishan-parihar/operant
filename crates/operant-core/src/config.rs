@@ -130,6 +130,15 @@ pub struct AppConfig {
     /// Omarchy agent menu). Both are optional; both are dark-merged.
     #[serde(default)]
     pub integrations: IntegrationsSettings,
+    /// `[compression]` — the evidence layer's tool-result compression.
+    ///
+    /// Off by default: the layer is a NO-OP at the tool-result chokepoint
+    /// while `enabled` is false, so the section is behaviour-neutral until
+    /// an operator opts in. `min_size` is the smallest result worth shaping
+    /// (bytes), `shell` selects how shell output is compressed, and
+    /// `families` overrides the chain per subject family.
+    #[serde(default)]
+    pub compression: crate::agent::evidence::EvidenceConfig,
 }
 
 impl Default for AppConfig {
@@ -179,6 +188,7 @@ impl Default for AppConfig {
             command_allowlist: Vec::new(),
             holon: HolonSettings::default(),
             integrations: IntegrationsSettings::default(),
+            compression: crate::agent::evidence::EvidenceConfig::default(),
         }
     }
 }
@@ -2615,6 +2625,20 @@ pub fn runtime_config() -> AppConfig {
         .unwrap_or_else(|_| AppConfig::default())
 }
 
+/// The evidence layer's configuration (`[compression]`) from the
+/// process-global runtime config.
+///
+/// Reads only the section: the tool-result chokepoint asks for it once per
+/// result, and a whole-config clone per result would copy every other
+/// section to answer for four fields.
+pub fn compression_config() -> crate::agent::evidence::EvidenceConfig {
+    let store = RUNTIME_CONFIG.get_or_init(|| RwLock::new(AppConfig::default()));
+    store
+        .read()
+        .map(|config| config.compression.clone())
+        .unwrap_or_default()
+}
+
 /// Files that sit beside the live config and are never read.
 ///
 /// `operant-config`'s schema layer loads `config.toml`, but the binary's
@@ -4384,6 +4408,66 @@ wonderful_unknown_key = 42
             Path::new("memory://ponytail-scope-bad"),
         );
         assert!(wrong_scope.is_err(), "top-level [ponytail] must not bind");
+    }
+
+    /// The `[compression]` section is the evidence layer's operator surface.
+    /// The defaults are pinned because a knob that silently changed one
+    /// would change every operator's tool results without their asking —
+    /// and because `enabled = false` must be the DEFAULT so the section is
+    /// behaviour-neutral until an operator opts in.
+    #[test]
+    fn the_compression_section_round_trips_with_its_documented_defaults() {
+        let defaults: AppConfig = toml::from_str("").expect("an empty config loads");
+        assert!(
+            !defaults.compression.enabled,
+            "the layer must be OFF by default"
+        );
+        assert_eq!(defaults.compression.min_size, 512);
+        assert_eq!(
+            defaults.compression.shell,
+            crate::agent::evidence::ShellMode::Aft
+        );
+        assert!(defaults.compression.families.is_empty());
+
+        // The documented defaults survive a serde round-trip: a section that
+        // could not be re-serialized is a section the config writer cannot
+        // persist through.
+        let raw = toml::to_string(&defaults.compression).expect("the section serializes");
+        let back: crate::agent::evidence::EvidenceConfig =
+            toml::from_str(&raw).expect("the section parses back");
+        assert!(!back.enabled);
+        assert_eq!(back.min_size, 512);
+        assert_eq!(back.shell, crate::agent::evidence::ShellMode::Aft);
+        assert!(back.families.is_empty());
+
+        // The four knobs bind, including a per-family override.
+        let parsed = parse_config_str(
+            r#"
+[compression]
+enabled = true
+min_size = 1024
+shell = "native"
+
+[compression.families.read]
+enabled = false
+chain = "code"
+"#,
+            Path::new("memory://compression-probe"),
+        )
+        .unwrap();
+        assert!(parsed.compression.enabled);
+        assert_eq!(parsed.compression.min_size, 1024);
+        assert_eq!(
+            parsed.compression.shell,
+            crate::agent::evidence::ShellMode::Native
+        );
+        let read = parsed
+            .compression
+            .families
+            .get("read")
+            .expect("the read family override parses");
+        assert_eq!(read.enabled, Some(false));
+        assert_eq!(read.chain.as_deref(), Some("code"));
     }
 
     /// The `[bylaws]` block (wave-2 slice F2) maps onto the real fields —

@@ -496,6 +496,47 @@ pub fn run_tool_checks(
     } else {
         check_warn("Node.js not found", "(optional, needed for browser tools)");
     }
+
+    // =====================================================================
+    // Tool-result compression (the evidence layer)
+    // =====================================================================
+    // The layer is OFF by default, so its state is a fact the operator wants
+    // to SEE rather than a problem to fix: "is this on, and how is it
+    // configured?" is the question that matters when a tool result looks
+    // shorter than it should.
+    section_header("Tool-result compression");
+    let compression = &config.compression;
+    if compression.enabled {
+        check_ok(
+            "evidence layer",
+            &format!(
+                "enabled (min_size {} bytes, shell {})",
+                compression.min_size,
+                match compression.shell {
+                    operant_core::agent::evidence::ShellMode::Aft => "aft",
+                    operant_core::agent::evidence::ShellMode::Native => "native",
+                    operant_core::agent::evidence::ShellMode::Rtk => "rtk",
+                }
+            ),
+        );
+    } else {
+        check_ok(
+            "evidence layer",
+            "disabled (results are passed through unchanged)",
+        );
+    }
+    if !compression.families.is_empty() {
+        let families: Vec<String> = compression
+            .families
+            .iter()
+            .map(|(name, family)| match (&family.enabled, &family.chain) {
+                (Some(false), _) => format!("{name}=off"),
+                (_, Some(chain)) => format!("{name}={chain}"),
+                _ => format!("{name}=default"),
+            })
+            .collect();
+        check_ok("family overrides", &families.join(", "));
+    }
 }
 
 /// Run platform-specific checks that have no external tool dependencies.
