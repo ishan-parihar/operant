@@ -120,9 +120,9 @@ CREATE INDEX IF NOT EXISTS idx_compression_locks_expires ON compression_locks(ex
 ";
 
 /// Plan 004 — append-only migrations. v1 freezes the current
-    /// DESIRED_SCHEMA_SQL + DEFERRED_INDEX_SQL verbatim; future
-    /// schema changes append a new entry. Never edit a past entry.
-    /// Append-only migrations. v1 and v2 are FROZEN (see the strip above); a new
+/// DESIRED_SCHEMA_SQL + DEFERRED_INDEX_SQL verbatim; future
+/// schema changes append a new entry. Never edit a past entry.
+/// Append-only migrations. v1 and v2 are FROZEN (see the strip above); a new
 /// entry is a new SQL block, never an edit of an existing one, or an
 /// installation already past that version would never see the change.
 /// MEASURED: adding a table to `DESIRED_SCHEMA_SQL` instead produces
@@ -160,11 +160,11 @@ pub struct Database {
 }
 
 impl Database {
-const DATABASE_MIGRATIONS: &[&str] = &[
-    DESIRED_SCHEMA_SQL,
-    DEFERRED_INDEX_SQL,
-    CONTEXT_LEDGER_MIGRATION,
-];
+    const DATABASE_MIGRATIONS: &[&str] = &[
+        DESIRED_SCHEMA_SQL,
+        DEFERRED_INDEX_SQL,
+        CONTEXT_LEDGER_MIGRATION,
+    ];
 
     /// Initialize a new database at the specified path.
     /// Creates parent directories and runs migrations automatically.
@@ -1255,6 +1255,46 @@ const DATABASE_MIGRATIONS: &[&str] = &[
         for row in rows {
             messages.push(row.map_err(|e| Error::Agent(format!("Row error: {}", e)))?);
         }
+        Ok(messages)
+    }
+
+    /// The NEWEST `cap` messages of a session, oldest first (RT-519).
+    ///
+    /// The cap is pushed into SQL: the API used to select the WHOLE
+    /// transcript and truncate it in Rust, so a 50,000-message session
+    /// materialised 50,000 structs per request and returned the FIRST 100
+    /// — the opposite of what "cap" means, and a denial of service on the
+    /// daemon's own write lock.
+    ///
+    /// The rows are selected newest-first with a LIMIT and then reversed, so
+    /// the result is the newest `cap` rows in the same order the
+    /// transcript reads.
+    pub fn get_session_messages_capped(
+        &self,
+        session_id: &str,
+        cap: usize,
+    ) -> Result<Vec<Message>> {
+        let conn = self.lock_conn()?;
+        let mut stmt = conn
+            .prepare("SELECT role, content, timestamp FROM messages WHERE session_id = ?1 ORDER BY timestamp DESC, id DESC LIMIT ?2")
+            .map_err(|e| Error::Agent(format!("Failed to prepare statement: {}", e)))?;
+
+        let rows = stmt
+            .query_map(params![session_id, cap as i64], |row| {
+                Ok(Message {
+                    role: row.get(0)?,
+                    content: row.get(1)?,
+                    timestamp: row.get(2)?,
+                })
+            })
+            .map_err(|e| Error::Agent(format!("Query error: {}", e)))?;
+
+        let mut messages = Vec::new();
+        for row in rows {
+            messages.push(row.map_err(|e| Error::Agent(format!("Row error: {}", e)))?);
+        }
+        // Back to transcript order: oldest first.
+        messages.reverse();
         Ok(messages)
     }
 
@@ -4601,6 +4641,53 @@ mod tests {
     /// RT-510: an in-flight tool row is REPLACED by its result, and it
     /// says the outcome is UNKNOWN while the call has not returned.
     ///
+    /// RT-519: a capped transcript returns the NEWEST rows.
+    ///
+    /// The API's `?cap=N` used to select the WHOLE transcript and truncate
+    /// it in Rust — so a 50,000-message session materialised 50,000 structs
+    /// per request and returned the FIRST 100, which is the opposite of
+    /// what "cap" means. The cap is pushed into SQL now, and the newest
+    /// rows come back in transcript order.
+    #[test]
+    fn a_capped_transcript_returns_the_newest_rows() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db = Database::init(dir.path().join("cap.sqlite")).expect("db");
+        db.save_session(
+            "s1",
+            None,
+            "agent",
+            "2026-11-12T10:00:00+00:00",
+            "2026-11-12T10:00:00+00:00",
+        )
+        .expect("session row");
+        for index in 0..10 {
+            db.save_message(
+                "s1",
+                "user",
+                &format!("m{index}"),
+                &format!("2026-11-12T10:{:02}:00+00:00", index),
+            )
+            .expect("message row");
+        }
+
+        let capped = db
+            .get_session_messages_capped("s1", 3)
+            .expect("the capped rows");
+        assert_eq!(capped.len(), 3, "the cap is the row count, not a slice");
+        assert_eq!(
+            capped
+                .iter()
+                .map(|m| m.content.as_str())
+                .collect::<Vec<_>>(),
+            vec!["m7", "m8", "m9"],
+            "the newest three rows, oldest first"
+        );
+
+        // A cap larger than the transcript returns everything.
+        let all = db.get_session_messages_capped("s1", 100).expect("all rows");
+        assert_eq!(all.len(), 10);
+    }
+
     /// A kill between the call and its result used to leave an assistant
     /// message with `tool_calls` and no result — the orphan repair
     /// stripped the call and deleted the whole message when it had no

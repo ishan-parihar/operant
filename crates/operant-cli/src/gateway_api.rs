@@ -24,7 +24,6 @@ use axum::routing::get;
 use serde::Deserialize;
 use std::sync::Arc;
 
-use operant_core::database::Database;
 use operant_core::tools::async_delegation;
 
 /// Shared, immutable state for the route group: the DB handle the routes read
@@ -32,16 +31,26 @@ use operant_core::tools::async_delegation;
 /// the startup token.
 #[derive(Clone)]
 pub struct GatewayApiState {
-    db_path: Arc<std::path::PathBuf>,
+    /// The ONE database handle the API serves from (RT-519).
+    ///
+    /// Every request used to call `Database::init`, which opens the
+    /// connection, sets pragmas, tightens permissions, reconciles
+    /// columns, runs the migration runner and creates the tables — so a
+    /// client polling `/api/sessions` every second took the SQLite WRITE
+    /// lock against the daemon's own turn writes and could get back
+    /// `500 {"error":"database is locked"}`.
+    db: Arc<operant_core::database::Database>,
     token: Arc<String>,
 }
 
 impl GatewayApiState {
-    pub fn new(db_path: std::path::PathBuf, token: String) -> Self {
-        Self {
-            db_path: Arc::new(db_path),
+    pub fn new(db_path: std::path::PathBuf, token: String) -> std::io::Result<Self> {
+        let db = operant_core::database::Database::init(db_path.clone())
+            .map_err(|e| std::io::Error::other(e.to_string()))?;
+        Ok(Self {
+            db: Arc::new(db),
             token: Arc::new(token),
-        }
+        })
     }
 }
 
@@ -120,15 +129,12 @@ async fn list_sessions(
         return auth_denied();
     }
     // The rows the TUI hub loads (500 there); one number, one shape.
-    match tokio::task::spawn_blocking(move || Database::init(state.db_path.as_ref().clone())).await
-    {
-        Ok(Ok(db)) => match db.list_sessions_rich(500) {
-            Ok(rows) => {
-                let rows: Vec<_> = rows.iter().map(row_to_json).collect();
-                ok_json(rows)
-            }
-            Err(e) => err_json(e),
-        },
+    let db = state.db.clone();
+    match tokio::task::spawn_blocking(move || db.list_sessions_rich(500)).await {
+        Ok(Ok(rows)) => {
+            let rows: Vec<_> = rows.iter().map(row_to_json).collect();
+            ok_json(rows)
+        }
         Ok(Err(e)) => err_json(e),
         Err(e) => err_json(e),
     }
@@ -179,14 +185,18 @@ async fn session_messages(
     }
     // Cap the transcript a single GET can pull (the plan's `?cap=N`; 100
     // default, 1000 ceiling) so a curl cannot stream the whole history.
+    //
+    // (RT-519) The cap is pushed into SQL: the old path selected the WHOLE
+    // transcript and truncated it in Rust, so a 50,000-message session
+    // materialised 50,000 structs per request and returned the FIRST 100
+    // — the opposite of what "cap" means. The query now selects the NEWEST
+    // `cap` rows (newest-first with a LIMIT, then reversed back into
+    // transcript order).
     let cap = q.cap.unwrap_or(100).min(1000);
-    match tokio::task::spawn_blocking(move || Database::init(state.db_path.as_ref().clone())).await
-    {
-        Ok(Ok(db)) => match db.get_session_messages(&id) {
-            Ok(mut messages) => {
-                if messages.len() > cap {
-                    messages.truncate(cap);
-                }
+    let db = state.db.clone();
+    match tokio::task::spawn_blocking(move || db.get_session_messages_capped(&id, cap)).await {
+        Ok(Ok(messages)) => {
+            {
                 // The legacy Message shape: role/content/timestamp, as-is.
                 let rows: Vec<_> = messages
                     .iter()
@@ -200,8 +210,7 @@ async fn session_messages(
                     .collect();
                 ok_json(rows)
             }
-            Err(e) => err_json(e),
-        },
+        }
         Ok(Err(e)) => err_json(e),
         Err(e) => err_json(e),
     }
@@ -256,7 +265,14 @@ pub async fn spawn_if_enabled(
         }
     };
     println!("Gateway session API on http://{bind} — Authorization: Bearer {token}");
-    let state = GatewayApiState::new(db_path.to_path_buf(), token);
+    let state = match GatewayApiState::new(db_path.to_path_buf(), token) {
+        Ok(state) => state,
+        Err(e) => {
+            tracing::error!(error = %e, "the gateway session API could not open its database");
+            println!("Gateway session API NOT started — could not open the database: {e}");
+            return ApiStartOutcome::NotStarted(format!("could not open the database: {e}"));
+        }
+    };
     tokio::spawn(async move {
         tracing::info!(bind = %bind, "gateway session API listening");
         let app = build_router(state);
@@ -280,6 +296,8 @@ pub enum ApiStartOutcome {
 
 #[cfg(test)]
 mod tests {
+    use operant_core::database::Database;
+
     /// RT-523: a failed bind starts NOTHING and says so.
     ///
     /// The old order printed the bearer token and THEN bound, logging a
@@ -308,6 +326,35 @@ mod tests {
         assert!(
             tokio::net::TcpListener::bind(&addr).await.is_err(),
             "the API must not have bound the port"
+        );
+    }
+
+    /// RT-519: the API must NOT re-open the database per request.
+    ///
+    /// Every request used to call `Database::init`, which opens the
+    /// connection, sets pragmas, tightens permissions, reconciles columns,
+    /// runs the migration runner and creates the tables — so a client
+    /// polling `/api/sessions` every second took the SQLite WRITE lock
+    /// against the daemon's own turn writes and could get back
+    /// `500 {"error":"database is locked"}`.
+    ///
+    /// A SOURCE contract over the seam: the open is a side effect on the
+    /// database, and the handle is private to the state.
+    #[test]
+    fn the_api_does_not_reopen_the_database_per_request() {
+        let source = include_str!("gateway_api.rs");
+        // The PRODUCTION part of the file: the test module opens its own
+        // database on purpose.
+        let production = source.split("#[cfg(test)]").next().unwrap_or(source);
+        // Assembled from two literals so this test's own source cannot
+        // satisfy the needle: the CALL, with its parenthesis, so a doc
+        // comment that names the function is not an open.
+        let opens = ["Database::init", "("].concat();
+        let count = production.matches(opens.as_str()).count();
+        assert_eq!(
+            count, 1,
+            "the API must open the database ONCE — per request it re-ran the \
+             migrations and took the daemon's write lock"
         );
     }
 
@@ -362,7 +409,8 @@ mod tests {
             if let Ok(db) = Database::init(db_path.clone()) {
                 let _ = db.list_sessions_rich(10);
             }
-            let state = GatewayApiState::new(db_path, "test-token".to_string());
+            let state = GatewayApiState::new(db_path, "test-token".to_string())
+                .expect("the API opens its database");
             let app = build_router(state);
             tokio::spawn(async move {
                 let _ = axum::serve(listener, app).await;
