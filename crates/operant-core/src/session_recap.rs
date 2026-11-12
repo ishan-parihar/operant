@@ -283,6 +283,7 @@ mod tests {
             session_id: "s1".to_string(),
             role: role.to_string(),
             content: content.map(|s| s.to_string()),
+            full_content: None,
             tool_call_id: None,
             tool_calls: tool_calls.map(|s| s.to_string()),
             tool_name: tool_name.map(|s| s.to_string()),

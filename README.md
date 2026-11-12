@@ -209,6 +209,32 @@ the window (measured on the live endpoint: 18 kB of `reasoning_content` cost
 15 prompt tokens). Counting it made the agent compact requests that were
 nowhere near the cap.
 
+### Tool-result compression (opt-in)
+
+`[compression]` turns on the **evidence layer**: a tool result is compressed
+by its SHAPE, not by its size. A grep result is grouped by file, a JSON API
+body becomes a table, a source file has its comments stripped, a fetch has
+its HTML boilerplate removed — instead of every one of them receiving the
+same head/tail cut.
+
+- It runs **after secret redaction** (no compression ever holds an
+  unredacted byte) and **before the spend guard** (so the guard measures the
+  cost that shaping could not remove).
+- Only `successful` results are compressed: an error reaches the model
+  verbatim, because the detail is the point.
+- Three guarantees: **never worse** (a result never grows),
+  **fail-open** (a method that panics is caught, the payload untouched), and
+  **recoverable** (a lossy method only runs when the full text is stored, and
+  the compressed result names the key — resolved by the `evidence_recall`
+  tool).
+- `shell = "aft"` is the default: AFT already compresses bash output, and the
+  layer must not compress what AFT already compressed.
+
+It is **off by default** and behaviour-neutral until you set
+`enabled = true`. Measure before you tune:
+`operant doctor --tools-tokens` ranks your tool families by model-visible
+tokens. See `operant.example.toml` for the full commented schema.
+
 ### When a turn runs out of room
 
 A turn that hits its iteration budget, the wall clock or the seat cap ends

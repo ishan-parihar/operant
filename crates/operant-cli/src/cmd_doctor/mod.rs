@@ -53,7 +53,12 @@ fn doctor_exit_code(issues: &[String], _manual_issues: &[String]) -> i32 {
 }
 
 /// Dispatch handle — called from `main.rs` for `operant doctor [--fix] [--json]`.
-pub async fn handle_doctor_command(config: &AppConfig, fix: bool, json: bool) -> Result<()> {
+pub async fn handle_doctor_command(
+    config: &AppConfig,
+    fix: bool,
+    json: bool,
+    tools_tokens: bool,
+) -> Result<()> {
     // H10: enter json mode BEFORE any check runs — every display helper
     // suppresses its prints, so `doctor --json`'s stdout is exactly one
     // JSON document (a smoke check parses it whole).
@@ -79,6 +84,15 @@ pub async fn handle_doctor_command(config: &AppConfig, fix: bool, json: bool) ->
     checks_api::run_api_checks(config, &mut issues).await;
     checks_tools::run_platform_checks(config, &mut issues, &mut manual_issues);
     checks_tools::check_operant_binaries(&mut manual_issues);
+    // The evidence layer's state — always: an operator whose compression is
+    // silently off needs to know before they look for a saving that is not
+    // happening.
+    checks_tools::check_tool_compression(config, &mut manual_issues);
+    // The fleet baseline — on request: it is a query over every tool result
+    // the database holds, which an operator asks for deliberately.
+    if tools_tokens {
+        checks_tools::check_tool_tokens(config);
+    }
 
     // Unified engine (docs/ORGANISM-ARCHITECTURE.md §6 F2): the SAME check
     // list the gateway serializes at GET /api/doctor. Engine errors are

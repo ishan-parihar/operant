@@ -165,6 +165,52 @@ fn last_user_turn(messages: &[Message]) -> String {
         .unwrap_or_default()
 }
 
+/// Compress one tool result with the evidence layer.
+///
+/// The position is LOAD-BEARING:
+///
+/// * AFTER secret redaction — no transformation may ever see an unredacted byte;
+/// * BEFORE the spend guard — the guard then measures the RESIDUAL cost of a
+///   result that shaping could not shrink, which is what its own doc comment
+///   says it is for.
+///
+/// The layer is a NO-OP while `[compression] enabled` is false (the default);
+/// `compress` also leaves a result alone when it is below `min_size`, when the
+/// tool is unknown, or when compressing would not make it smaller.
+///
+/// A LOSSY method's output rides with a provenance marker naming the key that
+/// retrieves the full text. The full text is in the SESSION STORE, which the
+/// caller writes — the caller keeps the original and gives the model the
+/// shaped copy, so the marker is a promise the store keeps.
+fn compress_tool_result(
+    tool_name: &str,
+    body: &str,
+    tool_call_id: &str,
+    session_id: &str,
+) -> String {
+    let cfg = crate::config::compression_config();
+    if !cfg.enabled || body.len() < cfg.min_size {
+        return body.to_string();
+    }
+    let compressed = crate::agent::evidence::compress(tool_name, body, &cfg);
+    if !compressed.changed() {
+        return body.to_string();
+    }
+    if !compressed.lossy {
+        return compressed.text;
+    }
+    let key = crate::agent::evidence::recall::key_for(Some(session_id), tool_call_id);
+    let marker = crate::agent::evidence::recall::marker(
+        &key,
+        compressed.tokens_before,
+        compressed.tokens_after,
+        &compressed.applied,
+    );
+    let mut text = compressed.text;
+    text.push_str(&marker);
+    text
+}
+
 impl OperantAgent {
     /// Assemble the model-visible tool list for one LLM request.
     ///
@@ -3104,6 +3150,33 @@ impl OperantAgent {
                             _ => body,
                         };
                         let body = crate::redaction::redact_sensitive_text_if_enabled(&body);
+                        // ── The evidence layer (tool-result compression) ────
+                        // The order is load-bearing (see `compress_tool_result`):
+                        // AFTER redaction, so no transformation and no recall
+                        // record may ever hold an unredacted byte; BEFORE the
+                        // spend guard, so the guard measures the RESIDUAL cost
+                        // of a result that shaping could not shrink.
+                        //
+                        // The session store keeps the FULL text (`full_body`)
+                        // and the model reads the shaped copy (`body`). That
+                        // split is what makes every "the full output is
+                        // retrievable" marker TRUE — this layer's marker, and
+                        // the aggregate trim's, which both point at the store.
+                        // It is also why the 4096-cap and the trim at request
+                        // time can promise the full output: the row carries it.
+                        // Only SUCCESSFUL results are compressed: errors are
+                        // short and the model needs them verbatim.
+                        let full_body = body;
+                        let body = if result.success {
+                            compress_tool_result(
+                                &result.name,
+                                &full_body,
+                                &result.tool_call_id,
+                                &session_id,
+                            )
+                        } else {
+                            full_body.clone()
+                        };
                         let body = self
                             .guard_tool_output_spend(&result.tool_call_id, &result.name, body)
                             .await;
@@ -3176,7 +3249,20 @@ impl OperantAgent {
                             id: 0,
                             session_id: session_id.clone(),
                             role: "tool".to_string(),
+                            // What the MODEL was shown: the shaped copy, after
+                            // the evidence layer, the spend guard and the
+                            // 4096-cap. A resumed session replays this, so the
+                            // compression survives a restart.
                             content: Some(content.clone()),
+                            // What the TOOL actually returned, before any of
+                            // that. This is the full output every "the full
+                            // output is retrievable" marker points at — this
+                            // layer's own marker, and the aggregate trim's.
+                            // Before this column existed, the row held the
+                            // CAPPED text, so the trim's promise ("the full
+                            // output is still in the session store") was
+                            // false for every result over 4096 characters.
+                            full_content: (full_body != content).then(|| full_body.clone()),
                             tool_call_id: Some(result.tool_call_id.clone()),
                             tool_calls: None,
                             tool_name: Some(result.name.clone()),
@@ -3213,6 +3299,7 @@ impl OperantAgent {
                                 &session_id,
                                 &result.tool_call_id,
                                 &content,
+                                &full_body,
                                 &result.name,
                                 &msg_data.timestamp,
                             )

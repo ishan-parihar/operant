@@ -75,6 +75,7 @@ CREATE TABLE IF NOT EXISTS messages (
     session_id TEXT NOT NULL,
     role TEXT NOT NULL,
     content TEXT,
+    full_content TEXT,
     tool_call_id TEXT,
     tool_calls TEXT,
     tool_name TEXT,
@@ -1135,6 +1136,7 @@ impl Database {
         session_id: &str,
         tool_call_id: &str,
         content: &str,
+        full_content: &str,
         tool_name: &str,
         timestamp: &str,
     ) -> Result<bool> {
@@ -1144,9 +1146,25 @@ impl Database {
             .map_err(|e| Error::Agent(format!("Failed to start transaction: {}", e)))?;
         let updated = tx
             .execute(
-                "UPDATE messages SET content = ?3, tool_name = ?4, timestamp = ?5
+                // `token_count` is written HERE, inside the writer, so no
+                // caller can omit it: the column had stayed NULL for every
+                // tool row on the live path (measured: 40 237 of 40 237 on the
+                // operator's database), which made a per-family token
+                // ranking return NULL per family. The count is of the
+                // MODEL-VISIBLE copy plus the same 4-token envelope overhead
+                // `save_message` charges — the full text in `full_content` is
+                // the archive copy, not what the model paid.
+                "UPDATE messages SET content = ?3, full_content = ?4, tool_name = ?5, timestamp = ?6, token_count = ?7
                  WHERE session_id = ?1 AND role = 'tool' AND tool_call_id = ?2",
-                params![session_id, tool_call_id, content, tool_name, timestamp],
+                params![
+                    session_id,
+                    tool_call_id,
+                    content,
+                    full_content,
+                    tool_name,
+                    timestamp,
+                    crate::context_management::estimate_tokens(content) + 4
+                ],
             )
             .map_err(|e| Error::Agent(format!("Failed to complete the tool row: {}", e)))?;
         tx.commit()
@@ -1163,17 +1181,18 @@ impl Database {
             .map_err(|e| Error::Agent(format!("Failed to start transaction: {}", e)))?;
         tx.execute(
             "INSERT INTO messages (
-                session_id, role, content, tool_call_id, tool_calls, tool_name,
+                session_id, role, content, full_content, tool_call_id, tool_calls, tool_name,
                 timestamp, token_count, finish_reason, reasoning, reasoning_content,
                 reasoning_details, codex_reasoning_items, codex_message_items,
                 platform_message_id, observed, active
             ) VALUES (
-                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17
+                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18
             )",
             params![
                 message.session_id,
                 message.role,
                 message.content,
+                message.full_content,
                 message.tool_call_id,
                 message.tool_calls,
                 message.tool_name,
@@ -1258,6 +1277,111 @@ impl Database {
         Ok(messages)
     }
 
+    /// Get ONE tool result by its session and the tool call it answers.
+    ///
+    /// This is the retrieval path for the evidence layer's provenance marker:
+    /// the session store owns every full tool output, so a compressed result
+    /// names the key that resolves here.
+    ///
+    /// The newest row wins: a tool call id is unique in practice, but a
+    /// retried call writes a second row for the same id, and the LATEST is
+    /// the one the model is looking at.
+    pub fn get_tool_result(
+        &self,
+        session_id: &str,
+        tool_call_id: &str,
+    ) -> Result<Option<(String, String)>> {
+        let conn = self.lock_conn()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT COALESCE(full_content, content), tool_name FROM messages
+                 WHERE session_id = ?1 AND tool_call_id = ?2 AND role = 'tool'
+                 ORDER BY id DESC LIMIT 1",
+            )
+            .map_err(|e| Error::Agent(format!("Failed to prepare statement: {}", e)))?;
+        let mut rows = stmt
+            .query_map(params![session_id, tool_call_id], |row| {
+                Ok((
+                    row.get::<_, Option<String>>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                ))
+            })
+            .map_err(|e| Error::Agent(format!("Query error: {}", e)))?;
+        match rows.next() {
+            Some(row) => {
+                let (content, tool_name) =
+                    row.map_err(|e| Error::Agent(format!("Row error: {}", e)))?;
+                Ok(Some((
+                    content.unwrap_or_default(),
+                    tool_name.unwrap_or_default(),
+                )))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Rank the tool families by the tokens the model was charged for.
+    ///
+    /// This is the FLEET baseline the evidence layer's savings have to be
+    /// measured against: a saving percentage is only meaningful against a
+    /// measured distribution, and the distribution is per tool family.
+    ///
+    /// The count is of the MODEL-VISIBLE copy (`content`), never of
+    /// `full_content` — the full text is the archive copy, and charging the
+    /// model for bytes it never saw is the one mistake this report must not
+    /// make.
+    ///
+    /// Rows with no `tool_name` are NOT counted here: the name was only
+    /// recorded from 2026-11-05 onward, so the older rows are unattributable.
+    /// [`Self::unattributed_tool_tokens`] reports them separately rather than
+    /// dropping them silently.
+    pub fn tool_token_ranking(&self) -> Result<Vec<ToolTokenRank>> {
+        let conn = self.lock_conn()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT tool_name, COUNT(*), SUM(token_count) FROM messages
+                 WHERE role = 'tool' AND token_count IS NOT NULL AND tool_name IS NOT NULL
+                 GROUP BY tool_name ORDER BY SUM(token_count) DESC",
+            )
+            .map_err(|e| Error::Agent(format!("Failed to prepare statement: {}", e)))?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(ToolTokenRank {
+                    tool_name: row.get::<_, Option<String>>(0)?.unwrap_or_default(),
+                    results: row.get::<_, i64>(1)?,
+                    tokens: row.get::<_, Option<i64>>(2)?.unwrap_or_default(),
+                })
+            })
+            .map_err(|e| Error::Agent(format!("Query error: {}", e)))?;
+        let mut ranking = Vec::new();
+        for row in rows {
+            ranking.push(row.map_err(|e| Error::Agent(format!("Row error: {}", e)))?);
+        }
+        Ok(ranking)
+    }
+
+    /// The tool results whose family is unknown: how many, and how many
+    /// tokens.
+    ///
+    /// A separate number on purpose. These rows are real tool output that
+    /// the model paid for, and folding them into one family would invent an
+    /// attribution the data does not support.
+    pub fn unattributed_tool_tokens(&self) -> Result<(i64, i64)> {
+        let conn = self.lock_conn()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT COUNT(*), COALESCE(SUM(token_count), 0) FROM messages
+                 WHERE role = 'tool' AND token_count IS NOT NULL AND tool_name IS NULL",
+            )
+            .map_err(|e| Error::Agent(format!("Failed to prepare statement: {}", e)))?;
+        let mut rows = stmt
+            .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))
+            .map_err(|e| Error::Agent(format!("Query error: {}", e)))?;
+        match rows.next() {
+            Some(row) => row.map_err(|e| Error::Agent(format!("Row error: {}", e))),
+            None => Ok((0, 0)),
+        }
+    }
     /// The NEWEST `cap` messages of a session, oldest first (RT-519).
     ///
     /// The cap is pushed into SQL: the API used to select the WHOLE
@@ -1305,7 +1429,7 @@ impl Database {
         let conn = self.lock_conn()?;
         let mut stmt = conn
             .prepare(
-                "SELECT id, session_id, role, content, tool_call_id, tool_calls, tool_name,
+                "SELECT id, session_id, role, content, full_content, tool_call_id, tool_calls, tool_name,
                         timestamp, token_count, finish_reason, reasoning, reasoning_content,
                         reasoning_details, codex_reasoning_items, codex_message_items,
                         platform_message_id, observed, active
@@ -1320,20 +1444,21 @@ impl Database {
                     session_id: row.get(1)?,
                     role: row.get(2)?,
                     content: row.get(3)?,
-                    tool_call_id: row.get(4)?,
-                    tool_calls: row.get(5)?,
-                    tool_name: row.get(6)?,
-                    timestamp: row.get(7)?,
-                    token_count: row.get(8)?,
-                    finish_reason: row.get(9)?,
-                    reasoning: row.get(10)?,
-                    reasoning_content: row.get(11)?,
-                    reasoning_details: row.get(12)?,
-                    codex_reasoning_items: row.get(13)?,
-                    codex_message_items: row.get(14)?,
-                    platform_message_id: row.get(15)?,
-                    observed: row.get(16)?,
-                    active: row.get(17)?,
+                    full_content: row.get(4)?,
+                    tool_call_id: row.get(5)?,
+                    tool_calls: row.get(6)?,
+                    tool_name: row.get(7)?,
+                    timestamp: row.get(8)?,
+                    token_count: row.get(9)?,
+                    finish_reason: row.get(10)?,
+                    reasoning: row.get(11)?,
+                    reasoning_content: row.get(12)?,
+                    reasoning_details: row.get(13)?,
+                    codex_reasoning_items: row.get(14)?,
+                    codex_message_items: row.get(15)?,
+                    platform_message_id: row.get(16)?,
+                    observed: row.get(17)?,
+                    active: row.get(18)?,
                 })
             })
             .map_err(|e| Error::Agent(format!("Query error: {}", e)))?;
@@ -1598,7 +1723,8 @@ impl Database {
     ) -> Result<Vec<MessageData>> {
         let conn = self.lock_conn()?;
         let window = window.clamp(1, 200) as i64;
-        let cols = "id, session_id, role, content, tool_call_id, tool_calls, tool_name,
+        let cols =
+            "id, session_id, role, content, full_content, tool_call_id, tool_calls, tool_name,
                     timestamp, token_count, finish_reason, reasoning, reasoning_content,
                     reasoning_details, codex_reasoning_items, codex_message_items,
                     platform_message_id, observed, active";
@@ -1625,20 +1751,21 @@ impl Database {
                         session_id: row.get(1)?,
                         role: row.get(2)?,
                         content: row.get(3)?,
-                        tool_call_id: row.get(4)?,
-                        tool_calls: row.get(5)?,
-                        tool_name: row.get(6)?,
-                        timestamp: row.get(7)?,
-                        token_count: row.get(8)?,
-                        finish_reason: row.get(9)?,
-                        reasoning: row.get(10)?,
-                        reasoning_content: row.get(11)?,
-                        reasoning_details: row.get(12)?,
-                        codex_reasoning_items: row.get(13)?,
-                        codex_message_items: row.get(14)?,
-                        platform_message_id: row.get(15)?,
-                        observed: row.get(16)?,
-                        active: row.get(17)?,
+                        full_content: row.get(4)?,
+                        tool_call_id: row.get(5)?,
+                        tool_calls: row.get(6)?,
+                        tool_name: row.get(7)?,
+                        timestamp: row.get(8)?,
+                        token_count: row.get(9)?,
+                        finish_reason: row.get(10)?,
+                        reasoning: row.get(11)?,
+                        reasoning_content: row.get(12)?,
+                        reasoning_details: row.get(13)?,
+                        codex_reasoning_items: row.get(14)?,
+                        codex_message_items: row.get(15)?,
+                        platform_message_id: row.get(16)?,
+                        observed: row.get(17)?,
+                        active: row.get(18)?,
                     })
                 })
                 .map_err(|e| Error::Agent(format!("Window query error: {}", e)))?;
@@ -2854,6 +2981,14 @@ pub struct MessageData {
     pub session_id: String,
     pub role: String,
     pub content: Option<String>,
+    /// The FULL text of a tool result, when `content` holds a shaped copy of it.
+    ///
+    /// `content` is what the model was shown and what a resumed session
+    /// replays; `full_content` is what the tool actually returned. Keeping
+    /// both in the SAME row is what lets one marker promise "the full output
+    /// is retrievable" and be right: there is one owner, and it is the row
+    /// that already exists. NULL when the two are the same.
+    pub full_content: Option<String>,
     pub tool_call_id: Option<String>,
     pub tool_calls: Option<String>,
     pub tool_name: Option<String>,
@@ -2868,6 +3003,20 @@ pub struct MessageData {
     pub platform_message_id: Option<String>,
     pub observed: Option<i64>,
     pub active: i64,
+}
+
+/// One tool family's share of the model-visible tokens.
+///
+/// The fleet baseline's row: a family, how many results it produced, and
+/// what the model was charged for them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolTokenRank {
+    /// The tool name, as recorded on the result row.
+    pub tool_name: String,
+    /// How many results the family produced.
+    pub results: i64,
+    /// The tokens the model was charged for those results.
+    pub tokens: i64,
 }
 
 /// A session from the database (for listing).
@@ -3594,6 +3743,7 @@ mod tests {
             id: 0,
             session_id: session_id.to_string(),
             role: "assistant".to_string(),
+            full_content: None,
             content: Some("Here is the result.".to_string()),
             tool_call_id: Some("call_abc123".to_string()),
             tool_calls: Some("[{\"name\": \"bash\", \"args\": {\"command\": \"ls\"}}]".to_string()),
@@ -4252,6 +4402,7 @@ mod tests {
             id: 0,
             session_id: "test-session".to_string(),
             role: "assistant".to_string(),
+            full_content: None,
             content: Some("RT message content".to_string()),
             tool_call_id: Some("call_rt123".to_string()),
             tool_calls: Some("[]".to_string()),
@@ -4729,6 +4880,7 @@ mod tests {
                 "s1",
                 "tc1",
                 "wrote 3 lines",
+                "wrote 3 lines",
                 "write_file",
                 "2026-01-01T00:00:02+00:00",
             )
@@ -4749,6 +4901,7 @@ mod tests {
             !db.complete_tool_call_in_flight(
                 "s1",
                 "tc-never-minted",
+                "no such call",
                 "no such call",
                 "x",
                 "2026-01-01T00:00:03+00:00"
@@ -5072,5 +5225,134 @@ mod tests {
         let b = rows.iter().find(|r| r.id == "emp-b").expect("b");
         assert_eq!(a.employee_id.as_deref(), Some("analyst"));
         assert_eq!(b.employee_id, None, "the stamp must not leak to other rows");
+    }
+    /// A tool-result row: the model-visible copy plus, when they differ, the
+    /// tool's own output.
+    fn tool_row(
+        session_id: &str,
+        tool_call_id: &str,
+        tool_name: Option<&str>,
+        content: &str,
+        full_content: Option<&str>,
+        token_count: i64,
+    ) -> crate::database::MessageData {
+        crate::database::MessageData {
+            id: 0,
+            session_id: session_id.to_string(),
+            role: "tool".to_string(),
+            content: Some(content.to_string()),
+            full_content: full_content.map(str::to_string),
+            tool_call_id: Some(tool_call_id.to_string()),
+            tool_calls: None,
+            tool_name: tool_name.map(str::to_string),
+            timestamp: "2024-01-01T00:00:00Z".to_string(),
+            token_count: Some(token_count),
+            finish_reason: None,
+            reasoning: None,
+            reasoning_content: None,
+            reasoning_details: None,
+            codex_reasoning_items: None,
+            codex_message_items: None,
+            platform_message_id: None,
+            observed: None,
+            active: 1,
+        }
+    }
+
+    #[test]
+    fn the_tool_family_ranking_counts_the_model_visible_copy() {
+        let db = test_db();
+        db.save_message_full(&tool_row(
+            "test-session",
+            "c1",
+            Some("terminal"),
+            &"a".repeat(400),
+            None,
+            104,
+        ))
+        .expect("row a");
+        // This one carries an ARCHIVED full copy far larger than what the
+        // model was shown: the ranking must not charge the model for bytes it
+        // never saw.
+        db.save_message_full(&tool_row(
+            "test-session",
+            "c2",
+            Some("terminal"),
+            &"b".repeat(40),
+            Some(&"c".repeat(40_000)),
+            14,
+        ))
+        .expect("row b");
+        db.save_message_full(&tool_row(
+            "test-session",
+            "c3",
+            Some("file_read"),
+            &"d".repeat(200),
+            None,
+            54,
+        ))
+        .expect("row c");
+        // An unattributed row: no tool name.
+        db.save_message_full(&tool_row(
+            "test-session",
+            "c4",
+            None,
+            &"e".repeat(120),
+            None,
+            34,
+        ))
+        .expect("row d");
+
+        let ranking = db.tool_token_ranking().expect("the ranking runs");
+        assert_eq!(ranking.len(), 2, "only the NAMED families rank");
+        assert_eq!(ranking[0].tool_name, "terminal");
+        assert_eq!(ranking[0].results, 2);
+        // 104 + 14. The archived 40 000 bytes are NOT counted.
+        assert_eq!(ranking[0].tokens, 118);
+        assert_eq!(ranking[1].tool_name, "file_read");
+        assert_eq!(ranking[1].tokens, 54);
+
+        let (rows, tokens) = db.unattributed_tool_tokens().expect("the count runs");
+        assert_eq!(rows, 1);
+        assert_eq!(tokens, 34);
+    }
+
+    #[test]
+    fn the_in_flight_tool_row_carries_the_full_text_and_its_own_count() {
+        // The chokepoint marks the call in flight, then completes the row. The
+        // completed row must carry BOTH copies, and it must carry a token
+        // count — the column used to be left NULL by the live path, which
+        // made a per-family ranking return NULL per family.
+        let db = test_db();
+        db.save_tool_call_in_flight("test-session", "call-1", "terminal", "2024-01-01T00:00:00Z")
+            .expect("the placeholder");
+        let model_visible = "the first 40 of 40000 bytes; the rest is withheld";
+        let full = "the first 40 of 40000 bytes; the rest is withheld plus 40000 more";
+        let replaced = db
+            .complete_tool_call_in_flight(
+                "test-session",
+                "call-1",
+                model_visible,
+                full,
+                "terminal",
+                "2024-01-01T00:00:01Z",
+            )
+            .expect("the update");
+        assert!(
+            replaced,
+            "the placeholder row must be replaced, not appended"
+        );
+        let rows = db
+            .get_session_messages_full("test-session")
+            .expect("the rows");
+        let tool_rows: Vec<_> = rows.iter().filter(|r| r.role == "tool").collect();
+        assert_eq!(tool_rows.len(), 1, "one row for one call, not two");
+        assert_eq!(tool_rows[0].content.as_deref(), Some(model_visible));
+        assert_eq!(tool_rows[0].full_content.as_deref(), Some(full));
+        assert_eq!(
+            tool_rows[0].token_count,
+            Some((crate::context_management::estimate_tokens(model_visible) + 4) as i64),
+            "the token count must be of the MODEL-VISIBLE copy"
+        );
     }
 }

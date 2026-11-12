@@ -963,3 +963,40 @@ enabled = true
 # services = []               # e.g. ["provider.*"] when scope = "services"
 
 # [keybindings] is accepted and ignored until the TUI dispatch reads it (AD-024).
+
+# [compression] — the evidence layer.
+#
+# A tool result is described by what produced it (Subject) and what shape it
+# is (ContentFormat); that pair selects a chain of compressors built for that
+# shape. It runs at the tool-result chokepoint, AFTER secret redaction and
+# BEFORE the spend guard, so the guard measures the residual cost of a result
+# shaping could not shrink. Only SUCCESSFUL results are compressed: errors
+# reach the model verbatim.
+#
+# Three guarantees hold:
+#   NEVER WORSE — a result is never larger after compression than before.
+#   FAIL-OPEN — a compressor that panics is caught; the payload is untouched.
+#   RECOVERABLE — a lossy method may only run when the full text was written
+#      to the session store, and the compressed result names the key that
+#      retrieves it (the `evidence_recall` tool resolves that key).
+#
+# The layer is OFF by default: with `enabled = false` it is a no-op, so this
+# section is behaviour-neutral until you opt in. Ask for the numbers first:
+# `operant doctor --tools-tokens` ranks your tool families by model-visible
+# tokens, which is the baseline a saving percentage is only meaningful against.
+#
+# [compression]
+# enabled = false
+# min_size = 512              # bytes; below this, compression is a no-op
+# shell = "aft"               # "aft" (AFT owns shell output; the layer skips it)
+#                             # | "native" (the layer compresses the payload)
+#                             # | "rtk" (the rtk binary owns it; the layer skips it)
+#
+# Per-family overrides, keyed by subject name. A listed family's `enabled`
+# WINS over the master switch, so you can turn ONE family on without turning
+# on everything — or one family off without a rebuild. `chain` names one of:
+# json, web, matches, lockfile, term, code, code-aggressive, plain, lossless.
+#
+# [compression.families.read]
+# enabled = true
+# chain = "code-aggressive"   # signatures stay, function bodies go

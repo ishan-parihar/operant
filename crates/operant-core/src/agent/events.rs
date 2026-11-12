@@ -248,6 +248,9 @@ impl OperantAgent {
             session_id: session_id.to_string(),
             role: "assistant".to_string(),
             content: Some(message.content.clone()),
+            // An assistant message has no archived twin: `full_content` is
+            // for a TOOL result whose model-facing copy was shaped.
+            full_content: None,
             tool_call_id: None,
             tool_calls: message
                 .tool_calls

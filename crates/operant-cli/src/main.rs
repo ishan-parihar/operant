@@ -380,6 +380,11 @@ enum Commands {
         /// Output as JSON (for scripting/CI)
         #[arg(long)]
         json: bool,
+        /// Print the fleet's tool-token ranking: which tool families are
+        /// charged the most model-visible tokens. The baseline the evidence
+        /// layer's savings are measured against.
+        #[arg(long)]
+        tools_tokens: bool,
     },
     /// Show system status overview
     Status {
@@ -3561,8 +3566,12 @@ async fn run(
         Some(Commands::Version { detailed }) => {
             cmd_version::handle_version_command(&loaded.config, *detailed).await?;
         }
-        Some(Commands::Doctor { fix, json }) => {
-            cmd_doctor::handle_doctor_command(&loaded.config, *fix, *json).await?;
+        Some(Commands::Doctor {
+            fix,
+            json,
+            tools_tokens,
+        }) => {
+            cmd_doctor::handle_doctor_command(&loaded.config, *fix, *json, *tools_tokens).await?;
         }
         Some(Commands::Status { deep, json }) => {
             cmd_status::handle_status_command(&loaded.config, *deep, *json).await?;

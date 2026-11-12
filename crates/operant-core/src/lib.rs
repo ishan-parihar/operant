@@ -124,6 +124,7 @@ pub mod reasoning_timeouts;
 pub mod recap;
 pub mod redaction;
 pub mod runtime_adapter;
+pub mod rtk_bridge;
 pub mod runtime_metrics;
 pub mod schema;
 pub mod security;

@@ -130,6 +130,15 @@ pub struct AppConfig {
     /// Omarchy agent menu). Both are optional; both are dark-merged.
     #[serde(default)]
     pub integrations: IntegrationsSettings,
+    /// `[compression]` — the evidence layer's tool-result compression.
+    ///
+    /// Off by default: the layer is a NO-OP at the tool-result chokepoint
+    /// while `enabled` is false, so the section is behaviour-neutral until
+    /// an operator opts in. `min_size` is the smallest result worth shaping
+    /// (bytes), `shell` selects how shell results are handled, and
+    /// `families` overrides the chain per subject family.
+    #[serde(default)]
+    pub compression: crate::agent::evidence::EvidenceConfig,
 }
 
 impl Default for AppConfig {
@@ -179,6 +188,7 @@ impl Default for AppConfig {
             command_allowlist: Vec::new(),
             holon: HolonSettings::default(),
             integrations: IntegrationsSettings::default(),
+            compression: crate::agent::evidence::EvidenceConfig::default(),
         }
     }
 }
@@ -2649,6 +2659,20 @@ pub fn runtime_config() -> AppConfig {
         .read()
         .map(|config| config.clone())
         .unwrap_or_else(|_| AppConfig::default())
+}
+
+/// The evidence layer's configuration (`[compression]`) from the
+/// process-global runtime config.
+///
+/// Reads only the section: the tool-result chokepoint asks for it once per
+/// result, and a whole-config clone per result would copy every other
+/// section to answer for four fields.
+pub fn compression_config() -> crate::agent::evidence::EvidenceConfig {
+    let store = RUNTIME_CONFIG.get_or_init(|| RwLock::new(AppConfig::default()));
+    store
+        .read()
+        .map(|config| config.compression.clone())
+        .unwrap_or_default()
 }
 
 /// Files that sit beside the live config and are never read.

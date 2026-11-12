@@ -28,6 +28,53 @@ struct TerminalArgs {
     use_shell: Option<bool>,
 }
 
+/// What the rtk path decided about one command.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RtkOutcome {
+    /// rtk has a compressed equivalent; this is the command to run.
+    Rewrite(String),
+    /// rtk has no equivalent, or the bridge could not ask it.
+    NoRewrite,
+    /// rtk's own policy denies this command; it must not run.
+    Denied(String),
+}
+
+/// Ask rtk how it would run this command.
+///
+/// The answer is a MAPPING, never a permission: `rtk rewrite` answers "how
+/// would I run this", and operant's own fence decides whether the answer may
+/// run at all.
+///
+/// Two guards keep the substitution honest:
+///
+/// * A rewrite that introduces shell syntax is only used when the command
+///   was already going through a shell. Without this, `ls | grep foo`
+///   rewritten to `ls | rtk grep foo` would be handed to a direct exec, which
+///   would run `ls` with the rest as arguments — a silent change of meaning.
+/// * A rewrite is never used when rtk is not installed or not answering: the
+///   original command runs unchanged.
+fn rtk_rewritten_command(command: &str, use_shell: bool) -> RtkOutcome {
+    use crate::rtk_bridge::{RewriteVerdict, find_rtk, rewrite_command};
+
+    let Some(rtk) = find_rtk() else {
+        return RtkOutcome::NoRewrite;
+    };
+    match rewrite_command(&rtk, command) {
+        RewriteVerdict::Rewritten { command: rewritten } => {
+            if !use_shell && rewritten.contains(['|', '>', '<', '&', ';', '`', '$']) {
+                // The rewrite needs a shell and the command was going to run
+                // directly. Running it as-is would change what it does.
+                return RtkOutcome::NoRewrite;
+            }
+            RtkOutcome::Rewrite(rewritten)
+        }
+        RewriteVerdict::NoRule => RtkOutcome::NoRewrite,
+        RewriteVerdict::Refused { reason } => RtkOutcome::Denied(reason),
+        // rtk could not be asked. That is not a refusal: the original runs.
+        RewriteVerdict::Failed { .. } => RtkOutcome::NoRewrite,
+    }
+}
+
 #[async_trait]
 impl OperantTool for TerminalTool {
     fn name(&self) -> &str {
@@ -80,9 +127,68 @@ impl OperantTool for TerminalTool {
             Err(e) => return ToolResult::error("terminal", format!("{}", e)),
         };
 
+        // The rtk path: a BACKEND SUBSTITUTION, not a second filter.
+        //
+        // `[compression] shell = "rtk"` makes the `rtk` binary the executor
+        // for terminal commands — the one defensible place to run RTK, because
+        // operant then does NOT compress the result a second time (the
+        // evidence layer skips shell results in this mode; see
+        // `agent/evidence/mod.rs`).
+        //
+        // Two rules, both load-bearing:
+        //
+        // 1. THE REWRITE IS A MAPPING, NOT A GATE. `rtk rewrite` answers how
+        //    rtk would run the command; its exit code is a permission verdict
+        //    (exit 3 = "here is the rewrite, you decide", exit 0 = a host
+        //    granted it). It must never BYPASS operant's own fence: the fence
+        //    below runs on the command that will ACTUALLY execute.
+        // 2. A DENY IS THE OPERATOR'S OWN POLICY. rtk's deny rules live in the
+        //    operator's `~/.config/rtk/filters.toml`, so a command rtk denies
+        //    is one the operator blocked. Running it anyway would make that
+        //    deny rule a lie, so the command does not run.
+        //
+        // Outside rtk mode this is a single config read and no process at all.
+        let rtk_mode = runtime_config().compression.shell == crate::agent::evidence::ShellMode::Rtk;
+        let (effective_command, rtk_note): (String, Option<String>) = if rtk_mode {
+            match rtk_rewritten_command(&args.command, use_shell) {
+                RtkOutcome::Rewrite(command) => {
+                    (command, Some("rtk rewrote this command".to_string()))
+                }
+                RtkOutcome::Denied(reason) => {
+                    return ToolResult::error(
+                        "terminal",
+                        format!("rtk denied this command and it was not run: {reason}"),
+                    );
+                }
+                RtkOutcome::NoRewrite => (args.command.clone(), None),
+            }
+        } else {
+            (args.command.clone(), None)
+        };
+
+        // The fence sees the command that WILL run — the rewrite, not the
+        // original. Without this, a rewrite could smuggle a command past the
+        // Holon policy allowlist under a name the fence never judged.
+        //
+        // And when the REWRITE is what the fence refuses, the ORIGINAL runs
+        // instead: the rewrite is an optimisation, and an optimisation that is
+        // not allowed must not become a refusal of the command the model
+        // actually asked for (the original already passed the fence above).
+        let effective_command = if effective_command == args.command
+            || crate::tools::file_tools::holon_command_fence_with_shell(
+                &effective_command,
+                use_shell,
+            )
+            .is_ok()
+        {
+            effective_command
+        } else {
+            args.command.clone()
+        };
+
         let output: CommandOutput = match backend
             .execute_command(
-                &args.command,
+                &effective_command,
                 cwd,
                 &env_vars,
                 use_shell,
@@ -95,6 +201,11 @@ impl OperantTool for TerminalTool {
             Err(e) => return ToolResult::error("terminal", format!("{}", e)),
         };
 
+        let runtime_label = match rtk_note {
+            Some(note) => format!("{} ({note})", backend.name()),
+            None => backend.name().to_string(),
+        };
+
         if output.success {
             ToolResult::success(
                 "terminal",
@@ -102,21 +213,21 @@ impl OperantTool for TerminalTool {
                     "exit_code": output.exit_code,
                     "stdout": output.stdout,
                     "stderr": output.stderr,
-                    "runtime": backend.name(),
+                    "runtime": runtime_label,
                 }),
             )
         } else {
             // Plan 010: append an actionable hint when the failure matches
             // one of the terminal_hints heuristics. The hint becomes part
             // of the model-visible error content so it can self-correct.
-            let hint = annotate_failure(&args.command, output.exit_code, &output.stderr);
+            let hint = annotate_failure(&effective_command, output.exit_code, &output.stderr);
             ToolResult::error(
                 "terminal",
                 serde_json::json!({
                     "exit_code": output.exit_code,
                     "stdout": output.stdout,
                     "stderr": output.stderr,
-                    "runtime": backend.name(),
+                    "runtime": runtime_label,
                     "hint": hint,
                 })
                 .to_string(),

@@ -30,6 +30,7 @@ pub mod datetime_tool;
 pub mod debug_helpers;
 pub mod delegation_output_schema;
 pub mod env_probe_tool;
+pub mod evidence_recall;
 pub mod file_state;
 pub mod file_tools;
 pub mod harness_tools;

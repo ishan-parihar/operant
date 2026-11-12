@@ -1084,6 +1084,130 @@ fn check_skills_hub() -> Option<String> {
     None
 }
 
+// ---------------------------------------------------------------------------
+// The evidence layer and the fleet's tool-token baseline
+// ---------------------------------------------------------------------------
+
+/// The evidence layer's state: on or off, and what an operator would have to
+/// change to move it.
+///
+/// The layer is a NO-OP at the tool-result chokepoint while `[compression]
+/// enabled` is false, so its state is a fact the operator wants to SEE, not a
+/// problem to fix — which is why a disabled layer prints as info, never as a
+/// warning.
+pub fn check_tool_compression(config: &AppConfig, manual_issues: &mut Vec<String>) {
+    section_header("Tool-result compression");
+    let compression = &config.compression;
+    if compression.enabled {
+        check_ok(
+            "evidence layer enabled",
+            &format!(
+                "minimum result {} bytes, shell mode {}, {} family override(s)",
+                compression.min_size,
+                shell_mode_label(compression.shell),
+                compression.families.len()
+            ),
+        );
+    } else {
+        check_info("evidence layer disabled — results are passed to the model unchanged");
+    }
+    if !compression.families.is_empty() {
+        let overrides = compression
+            .families
+            .iter()
+            .map(|(family, f)| {
+                let enabled = match f.enabled {
+                    Some(true) => "on",
+                    Some(false) => "off",
+                    None => "inherit",
+                };
+                match f.chain.as_deref() {
+                    Some(chain) => format!("{family} {enabled} chain {chain}"),
+                    None => format!("{family} {enabled}"),
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        check_info(&format!("family overrides: {overrides}"));
+    }
+    let _ = manual_issues;
+}
+
+fn shell_mode_label(mode: operant_core::agent::evidence::ShellMode) -> &'static str {
+    use operant_core::agent::evidence::ShellMode;
+    match mode {
+        ShellMode::Aft => "aft",
+        ShellMode::Native => "native",
+        ShellMode::Rtk => "rtk",
+    }
+}
+
+/// The fleet baseline: which tool families are charged the most model-visible
+/// tokens.
+///
+/// This is the number the evidence layer's savings have to be measured
+/// against. Without it, a compression percentage is a claim; with it, it is a
+/// ratio between two measurements.
+///
+/// The sum is over the MODEL-VISIBLE copy of each result (`content`), never
+/// over the archived full text (`full_content`) — charging the model for
+/// bytes it never saw is the one mistake this report must not make.
+pub fn check_tool_tokens(config: &AppConfig) {
+    section_header("Tool-result tokens");
+    let db = match operant_core::database::Database::init(config.database_path.clone()) {
+        Ok(db) => db,
+        Err(e) => {
+            check_warn(
+                "Session store unreadable",
+                &format!("{e} — the token ranking cannot be computed"),
+            );
+            return;
+        }
+    };
+    let ranking = match db.tool_token_ranking() {
+        Ok(ranking) => ranking,
+        Err(e) => {
+            check_warn(
+                "Token ranking failed",
+                &format!("{e} — the token ranking cannot be computed"),
+            );
+            return;
+        }
+    };
+    let (unattributed_results, unattributed_tokens) =
+        db.unattributed_tool_tokens().unwrap_or((0, 0));
+    let attributed: i64 = ranking.iter().map(|r| r.tokens).sum();
+    let attributed_results: i64 = ranking.iter().map(|r| r.results).sum();
+    check_ok(
+        "model-visible tool tokens",
+        &format!(
+            "{attributed_results} attributed result(s) carry {attributed} token(s);              {unattributed_results} further result(s) carry {unattributed_tokens} token(s)              with no tool name recorded"
+        ),
+    );
+    for rank in ranking.iter().take(12) {
+        check_info(&format!(
+            "{} — {} result(s), {} token(s)",
+            rank.tool_name, rank.results, rank.tokens
+        ));
+    }
+    if ranking.len() > 12 {
+        check_info(&format!(
+            "… {} further family/families below the top twelve",
+            ranking.len() - 12
+        ));
+    }
+    if unattributed_results > 0 {
+        // Not an error: the tool name was only recorded from a certain date
+        // onward, so the earlier rows cannot be attributed after the fact.
+        check_warn(
+            "unattributed tool output",
+            &format!(
+                "{unattributed_results} result(s), {unattributed_tokens} token(s) — written before the tool name was recorded, so they cannot be ranked by family"
+            ),
+        );
+    }
+}
+
 #[cfg(test)]
 mod operant_binary_tests {
     use super::*;
