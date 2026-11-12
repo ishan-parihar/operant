@@ -4320,12 +4320,22 @@ impl OperantAgent {
             // the messages; neither is part of `messages` yet, so both are
             // charged against the cap here.
             // The hard cap is a share of the window, so it already leaves
-            // room for the reply; on a SMALL window the reserve is the
-            // binding figure, and the smaller of the two is the budget the
+            // room for the reply; on a window where the reserve is the
+            // binding figure, the smaller of the two is the budget the
             // messages may occupy.
-            let hard_budget = limits
-                .hard
-                .min(window.saturating_sub(crate::context_management::RESPONSE_RESERVE_TOKENS))
+            //
+            // A window BELOW the reserve has no room for the reply at all:
+            // the cap is then the only figure that means anything, and
+            // taking the reserve out of it would leave the messages nothing
+            // and fail every turn typed.
+            let reserve_cap =
+                window.saturating_sub(crate::context_management::RESPONSE_RESERVE_TOKENS);
+            let prompt_cap = if reserve_cap > 0 {
+                limits.hard.min(reserve_cap)
+            } else {
+                limits.hard
+            };
+            let hard_budget = prompt_cap
                 .saturating_sub(turn_context_tokens)
                 .saturating_sub(schema_tokens);
             let (compacted, within_budget, protected_tokens) =

@@ -545,13 +545,21 @@ impl OperantAgent {
         })
         .await;
         let taken = std::mem::take(messages);
-        let (compacted, within_budget, protected_tokens) = self.compact_to_hard_cap(
-            taken,
-            limits
-                .hard
-                .min(limits.window.saturating_sub(RESPONSE_RESERVE_TOKENS))
-                .saturating_sub(schema_tokens),
-        );
+        // The hard cap IS the prompt's budget: it is a share of the window
+        // (95% by default), so it already leaves room for the reply.
+        // The hard cap is a share of the window, so it already leaves room
+        // for the reply; on a window where the reserve is the binding figure,
+        // the smaller of the two is the budget the messages may occupy. A
+        // window BELOW the reserve has no reply room at all: the cap is then
+        // the only figure that means anything.
+        let reserve_cap = limits.window.saturating_sub(RESPONSE_RESERVE_TOKENS);
+        let prompt_cap = if reserve_cap > 0 {
+            limits.hard.min(reserve_cap)
+        } else {
+            limits.hard
+        };
+        let (compacted, within_budget, protected_tokens) =
+            self.compact_to_hard_cap(taken, prompt_cap.saturating_sub(schema_tokens));
         *messages = compacted;
         let tokens_after =
             crate::context_management::estimate_total_tokens(messages) + schema_tokens;

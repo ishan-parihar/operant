@@ -279,23 +279,17 @@ impl OperantTool for VacuousSchemaTool {
     }
 
     fn description(&self) -> &str {
-        "Advertises an enormous schema but returns a tiny result."
+        "Returns a tiny schema payload."
     }
 
     fn schema(&self) -> operant_core::schema::ToolSchema {
-        // Enormous, so the advertised parameters are the same scale as the real
-        // fixture and any bound driven by schema size behaves identically.
-        let mut props = serde_json::Map::new();
-        for i in 0..FIELDS {
-            props.insert(
-                format!("field_{i}"),
-                serde_json::json!({"type": "string", "description": "x".repeat(200)}),
-            );
-        }
+        // The same shape as the real fixture: an ordinary request-side schema
+        // and a payload-sized result. The DIFFERENCE between the two fixtures
+        // is the RESULT, which is what this file measures.
         operant_core::schema::ToolSchema::new(
             VACUOUS,
-            "Advertises an enormous schema but returns a tiny result.",
-            serde_json::json!({"type": "object", "properties": props}),
+            "Returns a tiny schema payload.",
+            serde_json::json!({"type": "object", "properties": {"blob": {"type": "string"}}}),
         )
     }
 
@@ -324,6 +318,22 @@ impl OperantTool for HugeSchemaTool {
     }
 
     fn schema(&self) -> operant_core::schema::ToolSchema {
+        // ORDINARY request-side schema. The enormous schema is what the tool
+        // RETURNS (what `tool_describe` hands a deferred MCP tool's schema to
+        // the model) — that is the payload this file measures the bounds on.
+        //
+        // A huge REQUEST-side schema is a different defect: the runtime
+        // charges the schema bill against the window and refuses the request
+        // typed, so the schema never reaches the model at all (iter-2144).
+        operant_core::schema::ToolSchema::new(
+            HUGE,
+            "Returns an enormous schema payload (drives the cap).",
+            serde_json::json!({"type": "object", "properties": {"blob": {"type": "string"}}}),
+        )
+    }
+
+    async fn execute(&self, _args: serde_json::Value, _context: ToolContext) -> ToolResult {
+        // The enormous schema, as tool_describe would return it.
         let mut props = serde_json::Map::new();
         for i in 0..FIELDS {
             props.insert(
@@ -331,23 +341,12 @@ impl OperantTool for HugeSchemaTool {
                 serde_json::json!({"type": "string", "description": "x".repeat(200)}),
             );
         }
-        operant_core::schema::ToolSchema::new(
-            HUGE,
-            "Advertises an enormous schema (drives the cap).",
-            serde_json::json!({"type": "object", "properties": props}),
-        )
-    }
-
-    async fn execute(&self, _args: serde_json::Value, _context: ToolContext) -> ToolResult {
-        // Return the tool's OWN enormous parameters, which is what
-        // tool_describe does for a deferred tool.
-        let schema = <Self as OperantTool>::schema(self);
         ToolResult::success(
             HUGE,
             serde_json::json!({
-                "name": schema.name,
-                "description": schema.description,
-                "parameters": schema.parameters,
+                "name": HUGE,
+                "description": "Returns an enormous schema payload (drives the cap).",
+                "parameters": {"type": "object", "properties": props},
             }),
         )
     }
@@ -501,7 +500,8 @@ fn config() -> AgentConfig {
         stream: false,
         context_window: 8000,
         max_tool_result_share: operant_core::context_management::DEFAULT_MAX_TOOL_RESULT_SHARE,
-        max_tool_result_total_share: operant_core::context_management::DEFAULT_MAX_TOOL_RESULT_TOTAL_SHARE,
+        max_tool_result_total_share:
+            operant_core::context_management::DEFAULT_MAX_TOOL_RESULT_TOTAL_SHARE,
         max_healing_attempts: 1,
         fallback_models: Vec::new(),
         fallback_on_errors: false,

@@ -1657,9 +1657,12 @@ pub fn tool_result_token_limit(budget_tokens: usize, max_share: f64) -> usize {
 
 /// The smallest ceiling one tool result may be trimmed to.
 ///
-/// Above the guard's own marker + reserve (~150 tokens), so a trimmed result
-/// still carries a readable body.
-pub const MIN_TOOL_RESULT_TOKENS: usize = 256;
+/// Above the guard's own marker + reserve (~111 tokens), so a trimmed result
+/// still carries a readable body instead of an empty one. It stays BELOW the
+/// share limit of every window this runtime ships with (5% of 8,000 = 195),
+/// so it only binds where the share limit would otherwise produce an empty
+/// result.
+pub const MIN_TOOL_RESULT_TOKENS: usize = 192;
 
 /// Guard one tool result against consuming the context window.
 ///
