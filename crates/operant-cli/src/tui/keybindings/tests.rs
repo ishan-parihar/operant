@@ -84,6 +84,182 @@ use crossterm::event::{KeyCode, KeyModifiers};
 /// The rule is RT-472's: an affordance either works or says why not. So the
 /// assertion is that SOME observable changed; a chord that changes nothing and
 /// says nothing is the silent no-op.
+/// (iter-1964) Every chord the remaining vim contexts describe must either WORK
+/// or SAY WHY NOT.
+///
+/// Round 81 covered `VimNormal`. This covers the rest — `VimVisual`,
+/// `VimVisualLine`, `VimVisualBlock`, `VimCommand`, `VimSearch` — with the same
+/// oracle (RT-472: work, or say why not) and the same soundness constraints:
+/// ONE app for the whole sweep, because a process-global crosses the `make_app()`
+/// boundary (RT-527), and `vim_enabled = true`, because without it the chords
+/// fall through to plain text insertion and trivially "change state" (round 81's
+/// first fixture error).
+///
+/// **Each mode is entered with the code's own transition, never by construction.**
+/// `v`, `V`, `Ctrl+V`, `:` and `/` are pressed on a fresh app so the mode and its
+/// anchor are whatever the handler makes them. Constructing `vim_mode` and
+/// `visual_anchor` by hand is how round 76 manufactured a false positive — the
+/// fixture invented a state the code would never have produced.
+///
+/// **The per-chord mode assertion is the guard, and it is scoped to the mode.**
+/// Round 82's first draft asserted that the whole observable was byte-identical
+/// across every chord of a context, which was over-strict: a sweep whose subject
+/// is state evolution cannot demand that the state never evolves. What the sweep
+/// actually needs to know is that each chord is driven in the mode its context
+/// names — so that is exactly what is asserted, per chord, before the chord runs.
+#[test]
+fn every_remaining_vim_context_chord_either_works_or_says_why_not() {
+    use crate::tui::keybindings::{BindingContext, DEFAULT_KEYBINDINGS};
+    use crate::tui::operant_app::tui_state::TuiState;
+    use crossterm::event::{KeyCode, KeyModifiers};
+
+    let mut app = crate::tui::app::tests::make_app();
+
+    let reset = |app: &mut crate::tui::app::App| {
+        app.prompt_input.text = "line one\nline two\nline three".to_string();
+        app.prompt_input.cursor = 9;
+        app.prompt_input.vim_enabled = true;
+        app.prompt_input.vim_mode = crate::tui::prompt_input::VimMode::Normal;
+        app.prompt_input.vim_pending = crate::tui::prompt_input::VimPendingState::None;
+        app.prompt_input.vim_registers = std::collections::HashMap::new();
+        app.prompt_input.vim_marks.clear();
+        // Cleared too: a reset that leaves one of these behind makes the
+        // baseline depend on the previous chord, which is how round 81's
+        // `yank_buf` omission made this sweep non-deterministic.
+        app.prompt_input.yank_buf.clear();
+        app.prompt_input.vim_search_buf.clear();
+        app.prompt_input.vim_search_last = None;
+        app.prompt_input.last_find = None;
+        app.prompt_input.vim_dot_action = None;
+        // The composer's RENDERED geometry, which the renderer sets on every
+        // frame and a headless app never has. Without it the visual motions
+        // get `width == 0` and return false — so `Shift+Up` ("Extend selection
+        // up") looked inert when the code was fine. That is the seventh
+        // fixture artifact this audit has produced, and the same shape as the
+        // rest: the fixture invented a state the code would never have.
+        app.last_input_area
+            .set(ratatui::layout::Rect::new(0, 0, 80, 20));
+        // The double-Esc rewind clock and the selector it opens are APP state,
+        // not composer state, and the sweep presses Esc in every context's
+        // first row — so two of them land inside the 500 ms window and the
+        // SECOND one opens the rewind selector, which swallows composer keys
+        // and made the NEXT context's entry chord look broken. That was the
+        // eighth fixture artifact in this audit, and the most misleading one:
+        // it made a WORKING entry chord look inert, in a mutation run, which
+        // is exactly the shape that would have sent me chasing a fix that was
+        // already correct.
+        app.last_esc_at = None;
+        app.rewind_selector.close();
+    };
+
+    // The observables: mode, selection, pending operator, the text and cursor
+    // the selection acts on, the yank/register state a yank writes, the search
+    // buffer a search fills, and the notice a refusal would set.
+    let observable = |app: &crate::tui::app::App| {
+        (
+            app.prompt_input.text.clone(),
+            app.prompt_input.cursor,
+            format!("{:?}", app.prompt_input.vim_mode),
+            app.prompt_input.visual_anchor,
+            format!("{:?}", app.prompt_input.vim_pending),
+            app.prompt_input.vim_marks.len(),
+            app.prompt_input.vim_registers.len(),
+            app.prompt_input.yank_buf.clone(),
+            app.prompt_input.vim_search_buf.clone(),
+            app.status_notice(),
+        )
+    };
+
+    // The chord that enters each mode, and the mode it must land in. These are
+    // the code's own transitions, pressed rather than constructed.
+    let entries: &[(
+        BindingContext,
+        KeyCode,
+        KeyModifiers,
+        crate::tui::prompt_input::VimMode,
+    )] = &[
+        (
+            BindingContext::VimVisual,
+            KeyCode::Char('v'),
+            KeyModifiers::NONE,
+            crate::tui::prompt_input::VimMode::Visual,
+        ),
+        (
+            BindingContext::VimVisualLine,
+            KeyCode::Char('V'),
+            KeyModifiers::SHIFT,
+            crate::tui::prompt_input::VimMode::VisualLine,
+        ),
+        (
+            BindingContext::VimVisualBlock,
+            KeyCode::Char('v'),
+            KeyModifiers::CONTROL,
+            crate::tui::prompt_input::VimMode::VisualBlock,
+        ),
+        (
+            BindingContext::VimCommand,
+            KeyCode::Char(':'),
+            KeyModifiers::SHIFT,
+            crate::tui::prompt_input::VimMode::Command,
+        ),
+        (
+            BindingContext::VimSearch,
+            KeyCode::Char('/'),
+            KeyModifiers::NONE,
+            crate::tui::prompt_input::VimMode::Search,
+        ),
+    ];
+
+    let mut silent: Vec<String> = Vec::new();
+    for (context, entry_code, entry_mods, expected_mode) in entries {
+        for binding in DEFAULT_KEYBINDINGS.get_bindings(*context) {
+            reset(&mut app);
+            app.handle_key_event(crossterm::event::KeyEvent::new(*entry_code, *entry_mods));
+            // The Command and Search contexts promise to EXECUTE and to FIND —
+            // so the fixture gives them something to execute and something to
+            // find. An empty buffer is not a refusal, it is an empty prompt,
+            // and testing the promise against it would report a chord as inert
+            // when the code was fine (the same shape as the `yank_buf` and
+            // `last_input_area` fixture errors before it).
+            if *context == BindingContext::VimCommand {
+                app.prompt_input.vim_command_buf.push_str("noh");
+            }
+            if *context == BindingContext::VimSearch {
+                app.prompt_input.vim_search_buf.push_str("two");
+            }
+            assert_eq!(
+                app.prompt_input.vim_mode, *expected_mode,
+                "the entry chord {:?} must put the composer in {:?} before the \
+                 {:?} chord runs, or this sweep is not testing {:?}",
+                entry_code, expected_mode, binding.key, context
+            );
+            let before = observable(&app);
+
+            app.handle_key_event(crossterm::event::KeyEvent::new(
+                binding.key,
+                binding.modifiers,
+            ));
+
+            if observable(&app) == before {
+                silent.push(format!(
+                    "{:?} + {:?} in {:?} registered as {:?} changed no vim state and \
+                     set no notice",
+                    binding.modifiers,
+                    binding.key,
+                    context,
+                    binding.description.clone().unwrap_or_default()
+                ));
+            }
+        }
+    }
+    assert!(
+        silent.is_empty(),
+        "these vim chords consume the key and do nothing, and say nothing: either \
+         wire the handler or drop the catalogue entry:\n  {}",
+        silent.join("\n  ")
+    );
+}
+
 #[test]
 fn every_vimnormal_chord_either_works_or_says_why_not() {
     use crate::tui::keybindings::{BindingContext, DEFAULT_KEYBINDINGS};

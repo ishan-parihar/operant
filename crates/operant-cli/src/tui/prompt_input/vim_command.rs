@@ -461,6 +461,35 @@ impl PromptInputState {
         if self.vim_mode == VimMode::Visual
             && let Some(anchor) = self.visual_anchor
         {
+            // The catalogue's VimVisual rows: `v` exits the selection back to
+            // Normal, `V` switches to Visual Line, and Ctrl+V switches to
+            // Visual Block. The handlers that implement those three
+            // transitions are all gated to `VimMode::Normal`, so from Visual
+            // mode they never ran and the advertised chords were inert — the
+            // operator pressed `V` in Visual mode and nothing happened. Vim's
+            // own semantics are exactly these.
+            match key {
+                "v" => {
+                    self.vim_mode = VimMode::Normal;
+                    self.visual_anchor = None;
+                    return;
+                }
+                "V" => {
+                    self.vim_mode = VimMode::VisualLine;
+                    let ls = self.text[..self.cursor]
+                        .rfind('\n')
+                        .map(|p| p + 1)
+                        .unwrap_or(0);
+                    self.visual_anchor = Some(ls);
+                    return;
+                }
+                "\x16" => {
+                    self.vim_mode = VimMode::VisualBlock;
+                    self.visual_anchor = Some(self.cursor);
+                    return;
+                }
+                _ => {}
+            }
             let from = anchor.min(self.cursor);
             let to_excl = anchor.max(self.cursor);
             let to = self.text[to_excl..]

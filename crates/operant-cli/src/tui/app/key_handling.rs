@@ -1215,7 +1215,10 @@ impl App {
         if key.code == KeyCode::Char('v')
             && key.modifiers.contains(KeyModifiers::CONTROL)
             && self.prompt_input.vim_enabled
-            && self.prompt_input.vim_mode == crate::prompt_input::VimMode::Normal
+            && matches!(
+                self.prompt_input.vim_mode,
+                crate::prompt_input::VimMode::Normal | crate::prompt_input::VimMode::Visual
+            )
             && self.prompt_input.vim_pending == crate::prompt_input::VimPendingState::None
         {
             self.prompt_input.vim_command("\x16");
@@ -1307,6 +1310,35 @@ impl App {
         }
 
         match key.code {
+            // ---- ESC: leave the vim visual/command/search modes ----
+            // The catalogue's VimVisual, VimVisualLine, VimVisualBlock,
+            // VimCommand and VimSearch rows ALL say "Exit to Normal mode", and
+            // Ctrl+C already does exactly that (the arm below: in a vim mode
+            // other than Insert/Normal it calls `vim_command("Escape")` and
+            // returns). Plain Esc never reached the vim handler at all — the
+            // composer's Esc arm only dismisses the completion popup and arms
+            // the double-Esc rewind clock — so in those five contexts the
+            // advertised chord was INERT while its sibling Ctrl+C did the job.
+            // Probed: Esc in VisualLine left `vim_mode == VisualLine`.
+            //
+            // Placed here, BEFORE both composer Esc arms, so the mode is left
+            // whether or not a turn is streaming (Ctrl+C's guard is the same).
+            // The `suggestions.is_empty()` guard keeps the documented OMP
+            // contract that Esc dismisses the completion popup FIRST: with a
+            // popup open, that Esc belongs to the popup, not to the mode.
+            KeyCode::Esc
+                if key.modifiers == KeyModifiers::NONE
+                    && self.prompt_input.suggestions.is_empty()
+                    && !matches!(
+                        self.prompt_input.vim_mode,
+                        VimMode::Insert | VimMode::Normal
+                    ) =>
+            {
+                self.prompt_input.vim_command("Escape");
+                self.refresh_prompt_input();
+                return false;
+            }
+
             // ---- ESC: cancel streaming (status bar advertises "esc interrupt") ----
             // MODIFIER GUARD (2026-10-28, with prompt-jump): under the kitty
             // protocol operant pushes at boot, Ctrl+[ is reported by its
@@ -2098,6 +2130,29 @@ impl App {
             // the QUEUE key (jcode parity — `handle_alternate_enter`:
             // while a turn runs, Ctrl+Enter queues the draft for the next
             // turn instead of submitting into the void).
+            // In vim Command or Search mode, Enter EXECUTES the command line or
+            // performs the search — the catalogue's VimCommand and VimSearch
+            // rows. `vim_command` implements both (`execute_vim_cmdline`,
+            // `vim_search_forward`) and nothing else in the crate sends it
+            // "Enter": the only callers were the text-entry arm and its own
+            // internal retry. So Enter fell through to the submit arm below and
+            // sent the operator's prompt as a message, losing the command line
+            // they had just typed. The popup guard mirrors the Esc contract:
+            // with the completion popup open, that Enter still belongs to it.
+            KeyCode::Enter
+                if key.modifiers == KeyModifiers::NONE
+                    && self.prompt_input.suggestions.is_empty()
+                    && matches!(
+                        self.prompt_input.vim_mode,
+                        crate::prompt_input::VimMode::Command
+                            | crate::prompt_input::VimMode::Search
+                    ) =>
+            {
+                self.prompt_input.vim_command("Enter");
+                self.refresh_prompt_input();
+                return false;
+            }
+
             KeyCode::Enter
                 if key.modifiers.contains(KeyModifiers::SHIFT)
                     || key.modifiers.contains(KeyModifiers::ALT) =>
