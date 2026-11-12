@@ -149,6 +149,12 @@ impl KanbanDb {
     pub fn init(path: PathBuf) -> Result<Self, Error> {
         let conn = Connection::open(path)
             .map_err(|e| Error::Agent(format!("Failed to open kanban database: {}", e)))?;
+        // (RT-518) The dashboard reads this database while the gateway (or
+        // the operator's own command) writes it. Without a busy timeout a
+        // concurrent writer fails INSTANTLY with "database is locked" — the
+        // dashboard then dropped that board from the response.
+        conn.busy_timeout(std::time::Duration::from_millis(500))
+            .map_err(|e| Error::Agent(format!("Failed to set the kanban busy timeout: {}", e)))?;
 
         let db = Self {
             conn: Arc::new(Mutex::new(conn)),

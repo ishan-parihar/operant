@@ -179,7 +179,10 @@ pub enum GatewayRuntime {
 /// The PID file wins when both are present: it is the process that wrote
 /// it, and a systemd unit that is "active" while a foreground gateway runs
 /// is the foreground one the operator is talking to.
-fn classify_runtime(pid_file_pid: Option<u32>, systemd_pid: Option<u32>) -> GatewayRuntime {
+pub(crate) fn classify_runtime(
+    pid_file_pid: Option<u32>,
+    systemd_pid: Option<u32>,
+) -> GatewayRuntime {
     if let Some(pid) = pid_file_pid {
         return GatewayRuntime::Running {
             pid,
@@ -196,12 +199,18 @@ fn classify_runtime(pid_file_pid: Option<u32>, systemd_pid: Option<u32>) -> Gate
 }
 
 /// The pid in the PID file, when that process is still alive.
-fn alive_pid_from_file(pid_path: &std::path::Path) -> Option<u32> {
+pub(crate) fn alive_pid_from_file(pid_path: &std::path::Path) -> Option<u32> {
     let pid: u32 = std::fs::read_to_string(pid_path)
         .ok()?
         .trim()
         .parse()
         .ok()?;
+    // pid 0 addresses the CALLER'S PROCESS GROUP, so `kill -0 0` always
+    // succeeds: a PID file holding a 0 would read as "alive" forever.
+    // (RT-518 — the dashboard's cross-process check reads this.)
+    if pid == 0 {
+        return None;
+    }
     let alive = std::process::Command::new("kill")
         .arg("-0")
         .arg(pid.to_string())
@@ -212,7 +221,7 @@ fn alive_pid_from_file(pid_path: &std::path::Path) -> Option<u32> {
 }
 
 /// The main pid of the gateway systemd unit, when the unit is active.
-fn systemd_gateway_pid() -> Option<u32> {
+pub(crate) fn systemd_gateway_pid() -> Option<u32> {
     let active = std::process::Command::new("systemctl")
         .args(["--user", "is-active", "operant-gateway"])
         .output()

@@ -346,7 +346,10 @@ fn cookie_token(headers: &HeaderMap) -> Option<String> {
     let cookies = headers.get(header::COOKIE).and_then(|v| v.to_str().ok())?;
     cookies.split(';').find_map(|c| {
         let (name, value) = c.trim().split_once('=')?;
-        (name == TOKEN_COOKIE).then(|| value.to_string())
+        // (RT-518) BOTH cookie names are accepted: the dashboard minted one
+        // and the gateway API accepts the other, each with its own token —
+        // so a browser carrying one was refused by the other.
+        (name == TOKEN_COOKIE || name == TOKEN_COOKIE_ALT).then(|| value.to_string())
     })
 }
 
@@ -658,7 +661,7 @@ async fn handle_status(State(state): State<DashboardState>, headers: HeaderMap) 
         status: "running".to_string(),
         version,
         uptime_seconds: state.start_time.elapsed().as_secs(),
-        gateway_running: crate::gateway_runner::is_running().await,
+        gateway_running: gateway_running_cross_process(),
         agent_model: state.app_config.agent.model.clone(),
         kanban_tasks: kanban_task_count,
         database_path: state.app_config.database_path.display().to_string(),
@@ -686,6 +689,28 @@ struct TaskCounts {
     archived: usize,
 }
 
+/// Whether the gateway daemon is running — ACROSS PROCESSES (RT-518).
+///
+/// The dashboard used to read the DASHBOARD's own in-process runner static,
+/// so the page always showed "gateway: stopped" even with the daemon live:
+/// the dashboard is a separate process from the daemon, and the static is
+/// empty in it. The cross-process check is the PID file AND the systemd unit
+/// — the same one `operant gateway status` uses (cmd_gateway.rs).
+fn gateway_running_cross_process() -> bool {
+    gateway_running_cross_process_at(&operant_core::platform::operant_home().join("gateway.pid"))
+}
+
+/// The same check, with the PID file's path given (RT-518) — the seam a
+/// test uses, so the test does not need the process's operant home.
+fn gateway_running_cross_process_at(pid_path: &std::path::Path) -> bool {
+    let pid_file_pid = crate::cmd_gateway::alive_pid_from_file(pid_path);
+    let systemd_pid = crate::cmd_gateway::systemd_gateway_pid();
+    matches!(
+        crate::cmd_gateway::classify_runtime(pid_file_pid, systemd_pid),
+        crate::cmd_gateway::GatewayRuntime::Running { .. }
+    )
+}
+
 async fn handle_boards(State(state): State<DashboardState>, headers: HeaderMap) -> Response {
     if let Err(e) = check_auth(&state, &headers) {
         return *e;
@@ -700,27 +725,45 @@ async fn handle_boards(State(state): State<DashboardState>, headers: HeaderMap) 
         return Json(Vec::<BoardResponse>::new()).into_response();
     }
 
-    let mgr = KanbanManager::new(kanban_dir);
-    let boards = match mgr.list_boards() {
-        Ok(b) => b,
-        Err(_) => return Json(Vec::<BoardResponse>::new()).into_response(),
-    };
-
-    let mut result: Vec<BoardResponse> = Vec::new();
-    for b in &boards {
-        let counts = match build_board_counts(&mgr, &b.slug) {
-            Ok(c) => c,
-            Err(_) => continue,
-        };
-        result.push(BoardResponse {
-            slug: b.slug.clone(),
-            name: format!("{} Board", b.slug),
-            task_counts: counts,
-            total: b.task_count,
-        });
+    // (RT-518) The board listing and the counts are FILE and SQLite work:
+    // they run on the blocking pool, not on the async runtime, so a slow
+    // disk cannot stall the dashboard's other requests.
+    match tokio::task::spawn_blocking(move || {
+        let mgr = KanbanManager::new(kanban_dir);
+        let boards = mgr.list_boards()?;
+        let mut result: Vec<BoardResponse> = Vec::new();
+        for b in &boards {
+            // A board whose counts cannot be read is REPORTED, not dropped:
+            // the old code skipped it, so the board vanished from the page
+            // with no error anywhere.
+            let counts = match build_board_counts(&mgr, &b.slug) {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::warn!(board = %b.slug, error = %e, "the board's counts could not be read");
+                    TaskCounts::default()
+                }
+            };
+            result.push(BoardResponse {
+                slug: b.slug.clone(),
+                name: format!("{} Board", b.slug),
+                task_counts: counts,
+                total: b.task_count,
+            });
+        }
+        Ok::<Vec<BoardResponse>, anyhow::Error>(result)
+    })
+    .await
+    {
+        Ok(Ok(result)) => Json(result).into_response(),
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "the boards could not be listed");
+            Json(Vec::<BoardResponse>::new()).into_response()
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "the board listing task failed");
+            Json(Vec::<BoardResponse>::new()).into_response()
+        }
     }
-
-    Json(result).into_response()
 }
 
 #[derive(Serialize)]
@@ -785,7 +828,7 @@ async fn handle_config(State(state): State<DashboardState>, headers: HeaderMap) 
         platforms_enabled: platforms,
         skills_dir: cfg.skills.root_dir.display().to_string(),
         database_path: cfg.database_path.display().to_string(),
-        gateway_running: crate::gateway_runner::is_running().await,
+        gateway_running: gateway_running_cross_process(),
     })
     .into_response()
 }
@@ -799,6 +842,13 @@ struct IndexQuery {
 
 /// The cookie the dashboard hands the operator's browser.
 const TOKEN_COOKIE: &str = "operant_dashboard_token";
+/// The gateway API's own cookie name (RT-518).
+///
+/// The dashboard minted `operant_dashboard_token` and the gateway API
+/// accepted only `operant_dashboard_session`, each with an independently
+/// minted token — so a browser carrying the API's cookie was refused by the
+/// dashboard and vice versa. Both names are accepted now.
+const TOKEN_COOKIE_ALT: &str = "operant_dashboard_session";
 
 /// Serve the dashboard page.
 ///
@@ -919,6 +969,53 @@ fn build_board_counts(mgr: &KanbanManager, slug: &str) -> Result<TaskCounts> {
 
 #[cfg(test)]
 mod tests {
+    /// RT-518: the dashboard's `gateway_running` reads the DAEMON across
+    /// processes.
+    ///
+    /// It used to read the DASHBOARD's own in-process runner static — the
+    /// dashboard is a separate process from the daemon, so the static is
+    /// empty in it and the page always showed "gateway: stopped" even with
+    /// the daemon live. The cross-process check is the PID file AND the
+    /// systemd unit, the same one `operant gateway status` uses.
+    #[test]
+    fn the_dashboard_reports_the_daemon_across_processes() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pid_path = dir.path().join("gateway.pid");
+
+        // No PID file and no daemon: not running.
+        assert!(
+            !super::gateway_running_cross_process_at(&pid_path),
+            "no daemon means not running"
+        );
+
+        // A PID file naming a LIVE process means the daemon is running.
+        std::fs::write(&pid_path, std::process::id().to_string()).expect("the pid file");
+        assert!(
+            super::gateway_running_cross_process_at(&pid_path),
+            "a live daemon must be reported as running"
+        );
+
+        // A PID file naming a DEAD process does not.
+        std::fs::write(&pid_path, "0").expect("the pid file");
+        assert!(
+            !super::gateway_running_cross_process_at(&pid_path),
+            "a dead pid must not be reported as running"
+        );
+    }
+
+    /// RT-518: the dashboard must not read its OWN process-global runner
+    /// static for the daemon's state.
+    #[test]
+    fn the_dashboard_does_not_read_its_own_runner_static() {
+        let source = include_str!("dashboard_server.rs");
+        let own_static = ["gateway_runner::is_running", "()"].concat();
+        assert!(
+            !source.contains(own_static.as_str()),
+            "the dashboard must read the daemon ACROSS processes — its own \
+             in-process static is empty in a separate process"
+        );
+    }
+
     use super::*;
     use std::io::{BufRead, BufReader, Read, Write};
     use std::net::TcpStream;
@@ -1411,6 +1508,34 @@ mod tests {
     /// fetch — that is what lets the UI work without the token being
     /// readable by JavaScript.
     #[test]
+    /// RT-518: the dashboard accepts the gateway API's cookie name too.
+    ///
+    /// The dashboard minted `operant_dashboard_token` and the gateway API
+    /// accepted only `operant_dashboard_session`, each with an independently
+    /// minted token — so a browser carrying one was refused by the other.
+    #[test]
+    fn the_api_accepts_the_gateway_api_cookie_name() {
+        let state = DashboardState {
+            start_time: Instant::now(),
+            app_config: Arc::new(AppConfig::default()),
+            kanban_dir: None,
+            session_token: Some("secret-token-value".to_string()),
+            allowed_hosts: allowed_hosts("127.0.0.1", 3000),
+        };
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::COOKIE,
+            "operant_dashboard_session=secret-token-value"
+                .parse()
+                .expect("a valid header value"),
+        );
+        assert!(
+            check_auth(&state, &headers).is_ok(),
+            "the gateway API's cookie name must open the dashboard's API too"
+        );
+    }
+
     fn the_api_accepts_the_dashboard_cookie() {
         let state = DashboardState {
             start_time: Instant::now(),
