@@ -1105,6 +1105,14 @@ impl McpStdioClient {
         *self.connected.write().await = false;
         self.tools.write().await.clear();
 
+        // (RT-516) Forget that this client ever had a session, so the
+        // call-time auto-reconnect can never RESPAWN the child of a
+        // server the operator intentionally removed. The reconnect path
+        // is what a stray stale call would otherwise take: it sees
+        // `had_session == true` and treats "io is None" as a crash to
+        // recover from rather than a removal to respect.
+        self.had_session.store(false, Ordering::SeqCst);
+
         // Drop IO handles to close stdin (signals EOF to child)
         *self.io.lock().await = None;
 
@@ -2434,13 +2442,47 @@ impl OperantTool for McpNamespacedTool {
     }
 }
 
+/// A registry handle the MCP manager can unregister its tools from.
+///
+/// The manager derives `Debug`, and `ToolRegistry` does not implement it
+/// (its tool map holds trait objects), so the handle carries its own
+/// `Debug` that names the registry without printing it.
+#[derive(Clone)]
+struct RegistryHandle(ToolRegistry);
+
+impl std::fmt::Debug for RegistryHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("RegistryHandle(<tool registry>)")
+    }
+}
+
+/// `(server_name, qualified_tool_name)` pairs: the MCP tools a
+/// [`McpManager`] synced into a registry, tagged with the server they
+/// came from so one server can be torn out without the others.
+type RegistryEntries = Vec<(String, String)>;
+
 /// MCP server connection manager
 #[derive(Debug, Clone)]
 pub struct McpManager {
     /// Connected servers (HTTP and stdio)
     servers: Arc<RwLock<HashMap<String, McpTransport>>>,
-    /// Tracks tool names registered in ToolRegistry for incremental sync
-    registered_tool_names: Arc<RwLock<Vec<String>>>,
+    /// The tools this manager synced into a ToolRegistry, as
+    /// `(server_name, qualified_tool_name)` pairs.
+    ///
+    /// The server name is kept because a removal has to take out ONE
+    /// server's tools: the registry is shared, so the manager cannot
+    /// simply drop every name (that would take the other servers' live
+    /// tools with it).
+    registered_tool_names: Arc<RwLock<RegistryEntries>>,
+    /// The registry the MCP tools were synced into.
+    ///
+    /// (RT-516) Without it a removed server's tools stayed REGISTERED:
+    /// the registry still held `mcp_<server>/<tool>`, and calling one
+    /// reached the (disconnected) client, whose "io None mid-session" is
+    /// a TRANSPORT failure — so the call-time auto-reconnect RESPAWNED
+    /// the child the operator had just removed. The registry handle is
+    /// what lets a removal take the tools out.
+    registry: Arc<RwLock<Option<RegistryHandle>>>,
     /// The last connect failure per server name.
     ///
     /// A server that fails to connect is NOT inserted into `servers`, so
@@ -2460,6 +2502,7 @@ impl Default for McpManager {
         Self {
             servers: Arc::new(RwLock::new(HashMap::new())),
             registered_tool_names: Arc::new(RwLock::new(Vec::new())),
+            registry: Arc::new(RwLock::new(None)),
             connect_failures: Arc::new(RwLock::new(HashMap::new())),
         }
     }
@@ -2654,6 +2697,26 @@ impl McpManager {
         // The server is gone, so its last failure is no longer about
         // anything the user can act on.
         self.connect_failures.write().await.remove(name);
+
+        // (RT-516) Take THIS server's tools out of the registry. Left
+        // registered, they were still callable: the call reached the
+        // disconnected client, whose "io None mid-session" is a
+        // TRANSPORT failure, so the call-time auto-reconnect RESPAWNED
+        // the child the operator had just removed — a removal that
+        // brought the server back. The other servers' tools stay.
+        let registry = self.registry.read().await.clone();
+        if let Some(RegistryHandle(registry)) = registry {
+            let removed_names: Vec<String> = {
+                let mut prev = self.registered_tool_names.write().await;
+                let (mine, rest): (RegistryEntries, RegistryEntries) =
+                    prev.drain(..).partition(|(server, _)| server == name);
+                *prev = rest;
+                mine.into_iter().map(|(_server, tool)| tool).collect()
+            };
+            for tool_name in removed_names {
+                registry.unregister(&tool_name).await;
+            }
+        }
         Ok(())
     }
 
@@ -2697,9 +2760,13 @@ impl McpManager {
     /// tools registered, so callers (e.g. the TUI /mcp reconnect task) can
     /// surface a precise "N tools synced" completion message.
     pub async fn sync_tools_to_registry(&self, registry: &ToolRegistry) -> usize {
+        // Remember the registry, so a later `remove_server` can take this
+        // server's tools OUT of it (RT-516).
+        *self.registry.write().await = Some(RegistryHandle(registry.clone()));
+
         // Unregister all previously synced tools
         let mut prev_names = self.registered_tool_names.write().await;
-        for name in prev_names.iter() {
+        for (_server, name) in prev_names.iter() {
             registry.unregister(name).await;
         }
         prev_names.clear();
@@ -2727,7 +2794,7 @@ impl McpManager {
                     // the client's own read budget, so the CLIENT times
                     // out first — cleanly, with the stream intact.
                     registry.set_tool_timeout(&name, Duration::from_secs(MCP_TOOL_TIMEOUT_SECS));
-                    prev_names.push(name);
+                    prev_names.push((server_name.clone(), name));
                     registered += 1;
                 }
             }
@@ -3798,6 +3865,97 @@ for line in sys.stdin:
         );
     }
 
+    /// RT-516: removing a server must take ITS tools out of the registry.
+    ///
+    /// Left registered, the `mcp_<server>/<tool>` entry still reached the
+    /// disconnected client, whose "io None mid-session" is a TRANSPORT
+    /// failure — so the call-time auto-reconnect RESPAWNED the child the
+    /// operator had just removed. A removal that brings the server back.
+    ///
+    /// The companion invariant matters as much: the registry is SHARED,
+    /// so taking one server's tools out must not take another's.
+    #[tokio::test]
+    async fn removing_a_server_takes_its_tools_out_of_the_registry() {
+        let dir = std::env::temp_dir().join(format!(
+            "operant_mcp_remove_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        let script = dir.join("one_tool_server.py");
+        std::fs::write(&script, SLOW_MCP_SERVER).expect("write the server");
+
+        let manager = McpManager::new();
+        for server in ["keep", "drop"] {
+            manager
+                .add_stdio_server(
+                    server,
+                    "python3".to_string(),
+                    vec![script.to_string_lossy().to_string()],
+                    HashMap::new(),
+                )
+                .await
+                .expect("the server connects");
+        }
+
+        let registry = ToolRegistry::new(std::time::Duration::from_secs(30));
+        assert_eq!(
+            manager.sync_tools_to_registry(&registry).await,
+            2,
+            "both servers' tools must be synced"
+        );
+        let kept = qualified_tool_name("keep", "slow.echo");
+        let dropped = qualified_tool_name("drop", "slow.echo");
+        assert!(
+            registry.get(&kept).await.is_some(),
+            "the kept tool is registered"
+        );
+        assert!(
+            registry.get(&dropped).await.is_some(),
+            "the dropped tool is registered"
+        );
+
+        // The child of the server being removed must die with it.
+        let pid = match manager.get("drop").await {
+            Some(McpTransport::Stdio(client)) => {
+                let guard = client.child.read().await;
+                guard
+                    .as_ref()
+                    .and_then(|c| c.id())
+                    .expect("the child has a pid")
+            }
+            _ => panic!("the stdio transport must be reachable"),
+        };
+
+        manager
+            .remove_server("drop")
+            .await
+            .expect("the server is removed");
+
+        assert!(
+            registry.get(&dropped).await.is_none(),
+            "a removed server's tool must not stay in the registry — calling it would respawn the child the operator just removed (RT-516)"
+        );
+        assert!(
+            registry.get(&kept).await.is_some(),
+            "removing one server must not take another server's live tool with it"
+        );
+
+        for _ in 0..50 {
+            if !std::path::Path::new(&format!("/proc/{pid}")).exists() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert!(
+            !std::path::Path::new(&format!("/proc/{pid}")).exists(),
+            "the removed server's child process must be dead"
+        );
+    }
+
     /// RT-515: EOF is REPORTED, not spun on.
     ///
     /// The old read path treated EOF as an empty line, so a server that
@@ -3834,19 +3992,10 @@ for line in sys.stdin:
         );
     }
 
-    /// RT-515 (second half): the registry must not cancel an MCP read
-    /// before the client's own budget. The registry's DEFAULT tool
-    /// timeout is 30 s while the MCP client's first-read budget is 60 s,
-    /// so without a per-tool override the registry ALWAYS cancels first
-    /// — and a cancelled read is exactly what desynchronised the stream.
-    /// The namespaced MCP tools therefore get a registry timeout ABOVE
-    /// the client's read budget.
-    ///
-    /// This is the behavioural half: a registry whose default is 1 s must
-    /// still serve a tool whose server answers in 2 s.
-    #[tokio::test]
-    async fn an_mcp_tool_is_not_cancelled_by_the_registrys_default_timeout() {
-        const SLOW_MCP_SERVER: &str = r#"import sys, json, time
+    /// A fake MCP server offering ONE tool (`slow.echo`) whose
+    /// `tools/call` takes 2 s — longer than the 1 s registry timeout the
+    /// RT-515 second-half test configures.
+    const SLOW_MCP_SERVER: &str = r#"import sys, json, time
 for line in sys.stdin:
     line = line.strip()
     if not line:
@@ -3870,6 +4019,19 @@ for line in sys.stdin:
     sys.stdout.write(json.dumps({'jsonrpc': '2.0', 'id': rid, 'result': result}) + chr(10))
     sys.stdout.flush()
 "#;
+
+    /// RT-515 (second half): the registry must not cancel an MCP read
+    /// before the client's own budget. The registry's DEFAULT tool
+    /// timeout is 30 s while the MCP client's first-read budget is 60 s,
+    /// so without a per-tool override the registry ALWAYS cancels first
+    /// — and a cancelled read is exactly what desynchronised the stream.
+    /// The namespaced MCP tools therefore get a registry timeout ABOVE
+    /// the client's read budget.
+    ///
+    /// This is the behavioural half: a registry whose default is 1 s must
+    /// still serve a tool whose server answers in 2 s.
+    #[tokio::test]
+    async fn an_mcp_tool_is_not_cancelled_by_the_registrys_default_timeout() {
         let dir = std::env::temp_dir().join(format!(
             "operant_mcp_slow_{}_{}",
             std::process::id(),
