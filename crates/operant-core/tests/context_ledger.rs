@@ -19,6 +19,56 @@ use operant_core::client::{Message, Role};
 use operant_core::context_management::context_composition;
 use operant_core::database::{ContextRequestRecord, Database};
 
+/// The migrations are APPEND-ONLY: v1 (`DESIRED_SCHEMA_SQL`) and v2
+/// (`DEFERRED_INDEX_SQL`) are frozen, and a new entry is a new SQL block.
+/// The iter-2123 meter was nearly shipped by adding its table to v1 —
+/// which MEASURED as "no such table: context_ledger" on every database
+/// that already existed. This test is the fixture that reproduces an
+/// existing installation and pins the append-only rule.
+#[test]
+fn a_v2_database_gains_the_context_ledger_when_it_is_opened() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("legacy.sqlite");
+    {
+        // A database at version 2 of the sessions family: the shape an
+        // existing install has before this change.
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE schema_version (version INTEGER NOT NULL); \
+             CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT, source TEXT, \
+             started_at TEXT, ended_at TEXT); \
+             CREATE TABLE messages (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT, \
+             role TEXT, content TEXT, timestamp TEXT);",
+        )
+        .unwrap();
+        conn.execute_batch("PRAGMA user_version = 2;").unwrap();
+        let has: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name = 'context_ledger'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(has, 0, "the legacy database does not have the table");
+    }
+
+    // Opening it applies the new entry.
+    let _db = Database::init(path.clone()).expect("open the legacy database");
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    let has: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE name = 'context_ledger'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let version: i64 = conn
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(has, 1, "the context ledger now exists");
+    assert_eq!(version, 3, "the family advanced by exactly one entry");
+}
+
 fn db() -> (tempfile::TempDir, Database) {
     let temp = tempfile::tempdir().unwrap();
     let db = Database::init(temp.path().join("ledger.sqlite")).expect("init the database");

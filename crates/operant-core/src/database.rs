@@ -104,6 +104,31 @@ CREATE TABLE IF NOT EXISTS compression_locks (
     expires_at TEXT NOT NULL
 );
 
+";
+
+/// Indexes created AFTER reconcile_columns() to avoid referencing columns
+/// that may not exist yet on legacy databases.
+const DEFERRED_INDEX_SQL: &str = "
+CREATE INDEX IF NOT EXISTS idx_sessions_source ON sessions(source);
+CREATE INDEX IF NOT EXISTS idx_sessions_source_id ON sessions(source, id);
+CREATE INDEX IF NOT EXISTS idx_sessions_parent ON sessions(parent_session_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_started ON sessions(started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, timestamp);
+CREATE INDEX IF NOT EXISTS idx_messages_session_active
+    ON messages(session_id, active, timestamp);
+CREATE INDEX IF NOT EXISTS idx_compression_locks_expires ON compression_locks(expires_at);
+";
+
+/// Plan 004 — append-only migrations. v1 freezes the current
+    /// DESIRED_SCHEMA_SQL + DEFERRED_INDEX_SQL verbatim; future
+    /// schema changes append a new entry. Never edit a past entry.
+    /// Append-only migrations. v1 and v2 are FROZEN (see the strip above); a new
+/// entry is a new SQL block, never an edit of an existing one, or an
+/// installation already past that version would never see the change.
+/// MEASURED: adding a table to `DESIRED_SCHEMA_SQL` instead produces
+/// "no such table: context_ledger" on every existing database, which is
+/// exactly how the iter-2123 meter was nearly shipped.
+const CONTEXT_LEDGER_MIGRATION: &str = "
 CREATE TABLE IF NOT EXISTS context_ledger (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id TEXT NOT NULL,
@@ -123,21 +148,8 @@ CREATE TABLE IF NOT EXISTS context_ledger (
     ladder_fired INTEGER NOT NULL DEFAULT 0,
     note TEXT
 );
-
-";
-
-/// Indexes created AFTER reconcile_columns() to avoid referencing columns
-/// that may not exist yet on legacy databases.
-const DEFERRED_INDEX_SQL: &str = "
-CREATE INDEX IF NOT EXISTS idx_sessions_source ON sessions(source);
-CREATE INDEX IF NOT EXISTS idx_sessions_source_id ON sessions(source, id);
-CREATE INDEX IF NOT EXISTS idx_sessions_parent ON sessions(parent_session_id);
-CREATE INDEX IF NOT EXISTS idx_sessions_started ON sessions(started_at DESC);
-CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, timestamp);
-CREATE INDEX IF NOT EXISTS idx_messages_session_active
-    ON messages(session_id, active, timestamp);
-CREATE INDEX IF NOT EXISTS idx_compression_locks_expires ON compression_locks(expires_at);
-CREATE INDEX IF NOT EXISTS idx_context_ledger_session ON context_ledger(session_id, request_seq);
+CREATE INDEX IF NOT EXISTS idx_context_ledger_session
+    ON context_ledger(session_id, request_seq);
 ";
 
 /// Database manager for persistent storage.
@@ -148,10 +160,11 @@ pub struct Database {
 }
 
 impl Database {
-    /// Plan 004 — append-only migrations. v1 freezes the current
-    /// DESIRED_SCHEMA_SQL + DEFERRED_INDEX_SQL verbatim; future
-    /// schema changes append a new entry. Never edit a past entry.
-    const DATABASE_MIGRATIONS: &[&str] = &[DESIRED_SCHEMA_SQL, DEFERRED_INDEX_SQL];
+const DATABASE_MIGRATIONS: &[&str] = &[
+    DESIRED_SCHEMA_SQL,
+    DEFERRED_INDEX_SQL,
+    CONTEXT_LEDGER_MIGRATION,
+];
 
     /// Initialize a new database at the specified path.
     /// Creates parent directories and runs migrations automatically.
