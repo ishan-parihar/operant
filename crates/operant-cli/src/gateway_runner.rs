@@ -2406,7 +2406,20 @@ impl GatewayMessageHandler {
             queue_wait_worst_ms,
             agent_slots: self.slots.iter().count(),
         };
-        let path = operant_core::gateway::status::status_file_path();
+        // The state file sits NEXT TO THE DATABASE it describes. That is
+        // the operant home in production (`<home>/database.db`), and it is
+        // the test's temp directory in a test — so a test that runs a turn
+        // never writes the operator's live state file (RT-536).
+        let path = self
+            .slots
+            .slots
+            .first()
+            .and_then(|slot| slot.agent.db().path())
+            .and_then(|db| {
+                db.parent()
+                    .map(|dir| dir.join(operant_core::gateway::status::STATUS_FILE_NAME))
+            })
+            .unwrap_or_else(operant_core::gateway::status::status_file_path);
         if let Err(e) = operant_core::gateway::status::write_status_file(&path, &status) {
             tracing::warn!(
                 error = %e,

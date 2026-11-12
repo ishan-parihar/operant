@@ -101,6 +101,11 @@ pub struct Gateway {
     /// without one behaves exactly as before every send (the hook is a
     /// no-op), so tests and kernel-only builds stay untouched.
     dispatch_breaker: Option<Arc<DispatchBreaker>>,
+    /// Where the daemon's state file goes (RT-536). `None` = the operant
+    /// home. A caller whose home is elsewhere (a test, a profile) points
+    /// it at its own directory — the state file must never land in the
+    /// operator's live home because a test ran a turn.
+    status_path: std::sync::Mutex<Option<std::path::PathBuf>>,
 }
 
 /// What a drain did (RT-509).
@@ -171,6 +176,7 @@ impl Gateway {
             delivery_ledger: DeliveryLedger::default(),
             mirror_rules: Vec::new(),
             dispatch_breaker: None,
+            status_path: std::sync::Mutex::new(None),
         }
     }
 
@@ -403,6 +409,26 @@ impl Gateway {
     /// Called BEFORE the adapters stop: the turn must be interrupted and
     /// given time to end while the runtime is still alive, so its
     /// transcript is complete and the next start can offer the resume.
+    /// Where this gateway's state file goes (RT-536).
+    fn status_file_path(&self) -> std::path::PathBuf {
+        let configured = self.status_path.lock().ok().and_then(|guard| guard.clone());
+        match configured {
+            Some(path) => path,
+            None => status::status_file_path(),
+        }
+    }
+
+    /// Point the state file somewhere else (RT-536).
+    ///
+    /// The daemon's own home is the default; a caller with its own home
+    /// (a test, a profile) sets it, so the state file never lands in
+    /// somebody else's tree.
+    pub fn set_status_path(&self, path: std::path::PathBuf) {
+        if let Ok(mut guard) = self.status_path.lock() {
+            *guard = Some(path);
+        }
+    }
+
     /// The delivery counts (RT-523): how many outbound sends were
     /// delivered and how many failed.
     pub async fn delivery_counts(&self) -> (usize, usize) {
@@ -447,7 +473,7 @@ impl Gateway {
         // process, so "how many replies failed?" has an answer after a
         // restart. Best-effort — a status file that cannot be written must
         // never take the shutdown down.
-        let path = status::status_file_path();
+        let path = self.status_file_path();
         let state = status::GatewayStatus {
             updated_at: chrono::Utc::now().to_rfc3339(),
             deliveries: delivered as u64,

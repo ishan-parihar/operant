@@ -745,6 +745,45 @@ fn the_gateway_sets_the_cron_origin_on_the_slots_agent() {
     );
 }
 
+/// (RT-536) The daemon's state file sits next to THE DATABASE it
+/// describes — never in the operator's live home.
+///
+/// RT-523 writes the state file at every turn end. The gateway's own tests
+/// run turns, and the first version wrote `<operant home>/gateway.status.json`
+/// — the operator's live file, with the operator's delivery counts
+/// overwritten by test numbers. Measured: the file's mtime moved during the
+/// test run.
+#[tokio::test]
+async fn a_turn_writes_the_state_file_next_to_its_database() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let handler = slow_echo_handler(&dir, 0);
+    let message = IncomingMessage::new("telegram", "u-a", "A", "c-a", "from-A");
+    let reply = handler.handle(message).await.expect("the turn completes");
+    assert!(
+        reply.content.contains("answer-from-A"),
+        "{:?}",
+        reply.content
+    );
+
+    // The state file is in the TEST's directory, beside its database.
+    let status_path = dir
+        .path()
+        .join(operant_core::gateway::status::STATUS_FILE_NAME);
+    assert!(
+        status_path.exists(),
+        "the state file must be written beside the agent's own database"
+    );
+    let status =
+        operant_core::gateway::status::read_status_file(&status_path).expect("a valid state file");
+    assert_eq!(status.agent_slots, 1, "the state names its slot count");
+    // And it is the DAEMON's file, not the operator's home.
+    assert_ne!(
+        status_path,
+        operant_core::gateway::status::status_file_path(),
+        "a test must not write the operator's live state file"
+    );
+}
+
 /// (RT-535) Every turn resets the slot's PER-SESSION fields before the
 /// session's own overrides are read.
 ///
