@@ -850,6 +850,27 @@ impl OperantAgent {
     /// Assign the employee this agent executes as (the bylaws seat). Set by
     /// the gateway turn from the session's employee binding; mirrors
     /// [`Self::set_session_id`] through `Arc<OperantAgent>`.
+    /// The turn's cron origin (RT-534): where a cron job this agent creates
+    /// is delivered to. It rides the agent, not a process global.
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
+    pub fn cron_origin(&self) -> Option<crate::tools::cron_tool::CronOrigin> {
+        self.cron_origin
+            .read()
+            .expect("cron_origin RwLock poisoned — programmer error")
+            .clone()
+    }
+
+    /// Set the turn's cron origin. Called by the gateway at the start of
+    /// every turn, so a job a chat creates is delivered back to that chat.
+    pub fn set_cron_origin(&self, origin: Option<crate::tools::cron_tool::CronOrigin>) {
+        if let Ok(mut guard) = self.cron_origin.write() {
+            *guard = origin;
+        }
+    }
+
     pub fn set_seat_id(&self, seat_id: impl Into<String>) {
         let new_id = seat_id.into();
         tracing::debug!(seat_id = %new_id, "Agent bylaws seat set at runtime");

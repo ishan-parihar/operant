@@ -722,7 +722,29 @@ async fn two_slot_providers_keep_separate_scopes() {
     }
 }
 
-/// The SAME defect at the CALL SITE (RT-508 red-team, finding 1).
+/// (RT-534) The gateway sets the cron origin on the SLOT's agent, not in a
+/// process global.
+///
+/// The origin used to live in a process-global cell, which the slots now
+/// share across concurrent turns — one chat's turn could overwrite another
+/// chat's delivery target between the turn's start and its tool call.
+#[test]
+fn the_gateway_sets_the_cron_origin_on_the_slots_agent() {
+    let source = include_str!("../gateway_runner.rs");
+    let global_setter = ["cron_tool::", "set_cron_origin"].concat();
+    assert!(
+        !source.contains(global_setter.as_str()),
+        "the cron origin must ride the turn, not a process global — a slot \
+         in another chat's turn would overwrite it"
+    );
+    let agent_setter = ["agent.set_cron", "_origin(Some("].concat();
+    assert!(
+        source.contains(agent_setter.as_str()),
+        "the gateway must set the origin on the slot's agent at the turn's start"
+    );
+}
+
+/// The SAME defect at the CALL SITE (RT-508 red-team, finding 1)./// The SAME defect at the CALL SITE (RT-508 red-team, finding 1).
 ///
 /// The behaviour test above proves two providers keep separate scopes; this
 /// proves the gateway's slot loop actually USES one per slot. A shared pair

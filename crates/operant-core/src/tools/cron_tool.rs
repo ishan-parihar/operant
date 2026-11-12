@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::Arc;
 
 use crate::cronjobs::db::CronDb;
 use crate::error::{Error, Result};
@@ -23,25 +23,16 @@ use crate::tools::{OperantTool, ToolContext, ToolResult};
 /// to the requesting chat. The gateway sets this before routing a turn and
 /// clears it after; prompts only ever see PII-redacted channel ids, so the
 /// model itself CANNOT supply a usable delivery target (R39).
-pub static CRON_ORIGIN: OnceLock<Mutex<Option<CronOrigin>>> = OnceLock::new();
-
+/// Where a cron job was created from (RT-534).
+///
+/// It rides the turn: the agent carries it and hands it to the tool through
+/// the [`crate::tools::ToolContext`], so a concurrent turn in another agent
+/// slot cannot overwrite it between the turn's start and the tool call.
 #[derive(Debug, Clone)]
 pub struct CronOrigin {
     pub platform: String,
     pub chat_id: String,
     pub thread_id: Option<String>,
-}
-
-pub fn set_cron_origin(origin: Option<CronOrigin>) {
-    let cell = CRON_ORIGIN.get_or_init(|| Mutex::new(None));
-    if let Ok(mut guard) = cell.lock() {
-        *guard = origin;
-    }
-}
-
-fn current_cron_origin() -> Option<CronOrigin> {
-    let cell = CRON_ORIGIN.get_or_init(|| Mutex::new(None));
-    cell.lock().ok().and_then(|g| g.clone())
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -81,7 +72,7 @@ impl CronTool {
         Self { db }
     }
 
-    fn handle_create(&self, args: &CronToolArgs) -> Result<ToolResult> {
+    fn handle_create(&self, args: &CronToolArgs, origin: Option<CronOrigin>) -> Result<ToolResult> {
         // Phase G (docs/agentic-os/): inside a Holon run recurring work is
         // the organization's — the agent proposes a routine (the kernel's
         // classifier + the Chair approve), never a local cron. The gate is
@@ -129,10 +120,11 @@ impl CronTool {
             details: "Missing 'prompt' for job creation".to_string(),
         })?;
 
-        // Capture where this job was created from so the scheduler can
-        // deliver its result back to the requesting chat (R39). Prompts only
-        // carry redacted channel ids, so `args.deliver` alone is unusable.
-        let origin = current_cron_origin();
+        // Where this job was created from, so the scheduler can deliver its
+        // result back to the requesting chat (R39). Prompts only carry
+        // redacted channel ids, so `args.deliver` alone is unusable — and
+        // the origin comes from the TURN (RT-534), so a concurrent chat's
+        // turn cannot move it.
         let id = self.db.create_job(crate::cronjobs::db::CreateJobParams {
             name: name.clone(),
             prompt: prompt.clone(),
@@ -296,14 +288,14 @@ impl OperantTool for CronTool {
         )
     }
 
-    async fn execute(&self, args: Value, _context: ToolContext) -> ToolResult {
+    async fn execute(&self, args: Value, context: ToolContext) -> ToolResult {
         let args: CronToolArgs = match serde_json::from_value(args) {
             Ok(a) => a,
             Err(e) => return ToolResult::error("cron", format!("Invalid arguments: {}", e)),
         };
 
         match args.action {
-            CronAction::Create => match self.handle_create(&args) {
+            CronAction::Create => match self.handle_create(&args, context.cron_origin.clone()) {
                 Ok(res) => res,
                 Err(e) => ToolResult::error("cron_create", e.to_string()),
             },
@@ -419,6 +411,106 @@ mod tests {
         assert_eq!(
             job.schedule_display, "0 9 * * *",
             "the display is derived from the schedule"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// RT-534: the cron job's delivery origin comes from the TURN, not a
+    /// process global.
+    ///
+    /// The origin used to live in a process-global cell that the gateway set
+    /// at the start of every turn. The gateway runs agent slots
+    /// concurrently now, so a concurrent chat's turn could overwrite the
+    /// origin before this chat's `cron` tool call ran — and the job would
+    /// be delivered to the wrong chat. It rides the ToolContext.
+    #[tokio::test]
+    async fn a_cron_job_is_delivered_to_the_chat_that_created_it() {
+        let dir = std::env::temp_dir().join(format!(
+            "operant_cron_origin_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let db = std::sync::Arc::new(
+            crate::cronjobs::db::CronDb::init(dir.join("cron.db")).expect("cron db"),
+        );
+        let tool = CronTool::new(db.clone());
+
+        // Chat A creates a job inside a turn whose context carries A.
+        let context_a = crate::tools::ToolContext {
+            cron_origin: Some(CronOrigin {
+                platform: "telegram".to_string(),
+                chat_id: "chat-a".to_string(),
+                thread_id: None,
+            }),
+            ..Default::default()
+        };
+        let result = tool
+            .execute(
+                json!({
+                    "action": "create",
+                    "name": "morning-a",
+                    "schedule": "0 9 * * *",
+                    "prompt": "say good morning"
+                }),
+                context_a,
+            )
+            .await;
+        assert!(
+            result.success,
+            "the create must succeed: {}",
+            result.content
+        );
+        let payload: serde_json::Value = serde_json::from_str(&result.content).expect("json");
+        let job = db
+            .get_job(payload["job_id"].as_str().expect("the job id"))
+            .expect("read")
+            .expect("the job");
+        assert_eq!(job.origin_chat_id.as_deref(), Some("chat-a"));
+
+        // A SECOND slot's turn (chat B) must not move chat A's job.
+        let context_b = crate::tools::ToolContext {
+            cron_origin: Some(CronOrigin {
+                platform: "telegram".to_string(),
+                chat_id: "chat-b".to_string(),
+                thread_id: None,
+            }),
+            ..Default::default()
+        };
+        let result = tool
+            .execute(
+                json!({
+                    "action": "create",
+                    "name": "morning-b",
+                    "schedule": "0 9 * * *",
+                    "prompt": "say good morning"
+                }),
+                context_b,
+            )
+            .await;
+        let payload: serde_json::Value = serde_json::from_str(&result.content).expect("json");
+        let job_b = db
+            .get_job(payload["job_id"].as_str().expect("the job id"))
+            .expect("read")
+            .expect("the job");
+        assert_eq!(
+            job_b.origin_chat_id.as_deref(),
+            Some("chat-b"),
+            "chat B's job must be delivered to chat B"
+        );
+        let still_a = db
+            .list_jobs(false)
+            .expect("list")
+            .into_iter()
+            .find(|j| j.name == "morning-a")
+            .expect("chat A's job");
+        assert_eq!(
+            still_a.origin_chat_id.as_deref(),
+            Some("chat-a"),
+            "chat A's job must keep A's origin after B's turn ran"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

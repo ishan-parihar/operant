@@ -25,3 +25,4 @@
 | process-architecture-019 | in-progress | RT-525 (N): ~1,350 lines of implemented, tested, unwired machinery (autocompact, persistence_seam, stall tracker, turn-exit classifier) | claimed-by `agent-omarchy-wt2096` since 2026-11-12T01:33 | — |
 | process-architecture-020 | in-progress | RT-526 (N): the daemon lock file is unlinked on drop (two-daemon race); docs describe a gateway that does not exist | claimed-by `agent-omarchy-wt2096` since 2026-11-12T01:33 | — |
 | process-architecture-021 | done | RT-533 (M): two concurrent slots swap each other's memory bank (the scope cell is per provider) | — | [2026-11-12] docs/audit/2026-11-12-process-architecture-red-team-execution.md |
+| process-architecture-022 | done | RT-534 (M): two concurrent slots steal each other's cron delivery target (the origin rides the turn) | — | [2026-11-12] docs/audit/2026-11-12-process-architecture-red-team-execution.md |

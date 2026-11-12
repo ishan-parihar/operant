@@ -2820,13 +2820,14 @@ impl MessageHandler for GatewayMessageHandler {
         // Process-global per-turn state moves inside the lock for the same
         // reason (it used to be set in the dispatch closure, where two
         // overlapping chats could interleave their origins).
-        operant_core::tools::cron_tool::set_cron_origin(Some(
-            operant_core::tools::cron_tool::CronOrigin {
-                platform: message.platform.clone(),
-                chat_id: message.channel_id.clone(),
-                thread_id: message.thread_id.map(|t| t.to_string()),
-            },
-        ));
+        // (RT-534) The cron origin rides the TURN, on the slot's agent — a
+        // process global would let a concurrent chat's turn overwrite this
+        // chat's delivery target between the turn's start and its tool call.
+        agent.set_cron_origin(Some(operant_core::tools::cron_tool::CronOrigin {
+            platform: message.platform.clone(),
+            chat_id: message.channel_id.clone(),
+            thread_id: message.thread_id.map(|t| t.to_string()),
+        }));
 
         // Point the agent at THIS session before it runs. Without it the agent
         // minted a fresh `sess_<uuid>` per turn, so the tool trajectory was

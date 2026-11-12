@@ -354,6 +354,14 @@ pub struct ToolContext {
     /// downstream user. Default `None` keeps every existing tool
     /// build green.
     pub session_id: Option<String>,
+    /// The turn's cron origin (RT-534).
+    ///
+    /// Where a cron job was created from, so the scheduler can deliver its
+    /// result back to the requesting chat (R39). It rides the TURN, not a
+    /// process global: the gateway runs agent slots concurrently now, and a
+    /// global would let one chat's turn overwrite another chat's delivery
+    /// target between the turn's start and its tool call.
+    pub cron_origin: Option<crate::tools::cron_tool::CronOrigin>,
 }
 
 impl ToolContext {

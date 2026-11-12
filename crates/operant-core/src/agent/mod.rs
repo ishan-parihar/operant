@@ -681,6 +681,11 @@ pub struct OperantAgent {
     /// employee binding (cron runs derive their employee id as the session
     /// id already; local runs stay session-keyed, byte-identical).
     seat_id: Arc<std::sync::RwLock<Option<String>>>,
+    /// The turn's cron origin (RT-534): where a cron job this agent creates
+    /// is delivered. It rides the AGENT, not a process global, because the
+    /// gateway runs agents concurrently and a global would let one turn
+    /// overwrite another's delivery target.
+    cron_origin: Arc<std::sync::RwLock<Option<crate::tools::cron_tool::CronOrigin>>>,
     /// The bound employee's charter (org-layer system prompt), appended to
     /// the frozen prefix by [`Self::build_frozen_prefix`]. Set together with
     /// `seat_id` by the gateway turn so prompt-cache stability holds: the

@@ -144,6 +144,7 @@ impl OperantAgent {
             // prologue's own mint must not claim one.
             host_assigned_session: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             seat_id: Arc::new(std::sync::RwLock::new(None)),
+            cron_origin: Arc::new(std::sync::RwLock::new(None)),
             charter: Arc::new(std::sync::RwLock::new(None)),
             standing_goal: Arc::new(std::sync::RwLock::new(None)),
             interrupt_flag: crate::interrupt::InterruptFlag::new(),
@@ -251,6 +252,7 @@ impl OperantAgent {
             // prologue's own mint must not claim one.
             host_assigned_session: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             seat_id: Arc::new(std::sync::RwLock::new(None)),
+            cron_origin: Arc::new(std::sync::RwLock::new(None)),
             charter: Arc::new(std::sync::RwLock::new(None)),
             standing_goal: Arc::new(std::sync::RwLock::new(None)),
             interrupt_flag: crate::interrupt::InterruptFlag::new(),
