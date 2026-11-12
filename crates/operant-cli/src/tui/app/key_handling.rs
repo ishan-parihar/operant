@@ -3276,34 +3276,27 @@ impl App {
                 self.config.agent.fallback_models = vec![model.to_string()];
             }
             operant_core::model_roles::ModelSlot::Recap => {
-                self.config.recap.model = AuxiliaryModelConfig {
-                    model: Some(model.to_string()),
-                    ..Default::default()
-                };
+                let existing = self.config.recap.model.clone();
+                self.config.recap.model = slot_with_model(Some(&existing), model);
             }
             operant_core::model_roles::ModelSlot::Vision => {
-                self.config.auxiliary_models.vision = Some(AuxiliaryModelConfig {
-                    model: Some(model.to_string()),
-                    ..Default::default()
-                });
+                let existing = self.config.auxiliary_models.vision.clone();
+                self.config.auxiliary_models.vision =
+                    Some(slot_with_model(existing.as_ref(), model));
             }
             operant_core::model_roles::ModelSlot::Compression => {
-                self.config.auxiliary_models.compression = Some(AuxiliaryModelConfig {
-                    model: Some(model.to_string()),
-                    ..Default::default()
-                });
+                let existing = self.config.auxiliary_models.compression.clone();
+                self.config.auxiliary_models.compression =
+                    Some(slot_with_model(existing.as_ref(), model));
             }
             operant_core::model_roles::ModelSlot::Memory => {
-                self.config.auxiliary_models.memory = Some(AuxiliaryModelConfig {
-                    model: Some(model.to_string()),
-                    ..Default::default()
-                });
+                let existing = self.config.auxiliary_models.memory.clone();
+                self.config.auxiliary_models.memory =
+                    Some(slot_with_model(existing.as_ref(), model));
             }
             operant_core::model_roles::ModelSlot::MoaAggregator => {
-                self.config.moa.aggregator = Some(AuxiliaryModelConfig {
-                    model: Some(model.to_string()),
-                    ..Default::default()
-                });
+                let existing = self.config.moa.aggregator.clone();
+                self.config.moa.aggregator = Some(slot_with_model(existing.as_ref(), model));
             }
             operant_core::model_roles::ModelSlot::MoaReference => {
                 self.config.moa.references.push(AuxiliaryModelConfig {
@@ -3312,5 +3305,105 @@ impl App {
                 });
             }
         }
+    }
+}
+
+/// Set a slot's model, KEEPING the route the operator configured.
+///
+/// The picker assigns a MODEL. The slot's endpoint and credential are a
+/// different thing — the ROUTE — and the durable copy keeps them:
+/// `persist_config_key` writes the model leaf only. Replacing the whole slot
+/// with a default dropped them from the LIVE config, so the live copy
+/// disagreed with the file about where that slot's calls go.
+fn slot_with_model(
+    existing: Option<&operant_core::config::AuxiliaryModelConfig>,
+    model: &str,
+) -> operant_core::config::AuxiliaryModelConfig {
+    let mut slot = existing.cloned().unwrap_or_default();
+    slot.model = Some(model.to_string());
+    slot
+}
+
+#[cfg(test)]
+mod tests {
+    /// Assigning a slot's MODEL must not discard the slot's ROUTE.
+    ///
+    /// The durable copy keeps the endpoint and the credential
+    /// (`persist_config_key` writes the model leaf only), so replacing the
+    /// whole slot with a default left the LIVE config disagreeing with the
+    /// file about where that slot's calls go — and the compression slot's
+    /// route is what the summarizer actually calls.
+    #[test]
+    fn assigning_a_slot_model_keeps_its_route() {
+        fn route() -> operant_core::config::AuxiliaryModelConfig {
+            operant_core::config::AuxiliaryModelConfig {
+                provider: Some("openrouter".to_string()),
+                model: Some("old-model".to_string()),
+                base_url: Some("https://openrouter.ai/api/v1".to_string()),
+                api_key: Some("slot-secret".to_string()),
+            }
+        }
+
+        fn assert_route_kept(slot: &operant_core::config::AuxiliaryModelConfig) {
+            assert_eq!(slot.model.as_deref(), Some("new-model"));
+            assert_eq!(slot.provider.as_deref(), Some("openrouter"));
+            assert_eq!(
+                slot.base_url.as_deref(),
+                Some("https://openrouter.ai/api/v1")
+            );
+            assert_eq!(slot.api_key.as_deref(), Some("slot-secret"));
+        }
+
+        let mut app = crate::tui::app::tests::make_app();
+
+        app.config.auxiliary_models.compression = Some(route());
+        app.apply_slot_to_config(
+            operant_core::model_roles::ModelSlot::Compression,
+            "new-model",
+        );
+        assert_route_kept(
+            app.config
+                .auxiliary_models
+                .compression
+                .as_ref()
+                .expect("the compression slot"),
+        );
+
+        app.config.auxiliary_models.vision = Some(route());
+        app.apply_slot_to_config(operant_core::model_roles::ModelSlot::Vision, "new-model");
+        assert_route_kept(
+            app.config
+                .auxiliary_models
+                .vision
+                .as_ref()
+                .expect("the vision slot"),
+        );
+
+        app.config.auxiliary_models.memory = Some(route());
+        app.apply_slot_to_config(operant_core::model_roles::ModelSlot::Memory, "new-model");
+        assert_route_kept(
+            app.config
+                .auxiliary_models
+                .memory
+                .as_ref()
+                .expect("the memory slot"),
+        );
+
+        app.config.recap.model = route();
+        app.apply_slot_to_config(operant_core::model_roles::ModelSlot::Recap, "new-model");
+        assert_route_kept(&app.config.recap.model);
+
+        app.config.moa.aggregator = Some(route());
+        app.apply_slot_to_config(
+            operant_core::model_roles::ModelSlot::MoaAggregator,
+            "new-model",
+        );
+        assert_route_kept(
+            app.config
+                .moa
+                .aggregator
+                .as_ref()
+                .expect("the MoA aggregator slot"),
+        );
     }
 }

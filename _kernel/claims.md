@@ -757,6 +757,7 @@ NOT supported (named, with the reason):
 - RT-504 self-test cache truth: the hermetic gate fetches the locked registry crates once and then runs every Cargo step offline — [V] — the full self-test rerun is green — unit 19.
 - RT-505 rustdoc truth: every strict CLI documentation link resolves — [V] — `scripts/build.sh --offline doc` exited 0 — unit 20.
 - RT-531 compression-route truth: the compression slot's model, endpoint, and credential are one route contract — a model-only slot rides the primary client, a pinned endpoint or credential gets a dedicated client, and an endpoint override never inherits the primary credential — [V] — four core regressions (one an end-to-end wire test against a local compression host) and one CLI regression are green, with both mutations proved — unit 21.
+- RT-532 slot-assignment truth: assigning a slot's model in the TUI keeps that slot's route — the live config and the durable TOML agree about where the slot's calls go — [V] — the five-slot regression is green and mutation-proved — unit 22.
 
 - The full workspace test suite is green after iter-2081 — [V] — `scripts/build.sh --offline test --workspace --no-fail-fast` exited 0; the full log contains the operant-core, operant-cli, harness, OS, plugins, config, API, and doctest targets — unit 8.
 
