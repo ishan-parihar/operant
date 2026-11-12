@@ -2657,7 +2657,8 @@ fn attach_credential_pool(
     agent.with_credential_pool(pool)
 }
 
-async fn load_repo_memory_manager() -> Result<(MemoryManager, Option<Arc<dyn MemoryProvider>>)> {
+pub(crate) async fn load_repo_memory_manager()
+-> Result<(MemoryManager, Option<Arc<dyn MemoryProvider>>)> {
     let storage_dir = operant_core::platform::operant_home();
     load_memory_manager(storage_dir).await
 }

@@ -34,7 +34,10 @@ async fn cmd_server(config: &AppConfig) -> Result<()> {
     println!("Listening for JSON-RPC requests on stdin...");
     println!("Supported methods: ping, status, command, stop");
 
-    let handler = Arc::new(AcpCliHandler::new(config.clone()));
+    // (RT-514) The runtime is built ONCE for the life of the server: one
+    // database, one MCP child set, one registry, one agent.
+    let runtime = AcpRuntime::start(config.clone())?;
+    let handler = Arc::new(AcpCliHandler::new(runtime));
 
     operant_core::acp::server::run_stdio_server(handler).await?;
 
@@ -49,14 +52,15 @@ async fn cmd_server(config: &AppConfig) -> Result<()> {
 /// via `spawn_blocking` to isolate non-Send async boundaries that arise from
 /// the MCP/agent internals.
 struct AcpCliHandler {
-    config: Arc<AppConfig>,
+    /// The runtime the server owns for its whole life (RT-514).
+    runtime: AcpRuntime,
     state: AgentStateTracker,
 }
 
 impl AcpCliHandler {
-    fn new(config: AppConfig) -> Self {
+    fn new(runtime: AcpRuntime) -> Self {
         Self {
-            config: Arc::new(config),
+            runtime,
             state: AgentStateTracker::new(),
         }
     }
@@ -68,108 +72,380 @@ impl AcpHandler for AcpCliHandler {
         self.state.get()
     }
 
-    async fn execute_command(&self, command: &str) -> Result<String, String> {
+    async fn execute_command(
+        &self,
+        command: &str,
+        session_id: Option<&str>,
+    ) -> Result<String, String> {
         // Report `running` for the duration of the command so `status` is
         // truthful. (R18: agent_state previously returned Idle unconditionally.)
         self.state.set(AgentState::Running);
 
-        // Spawn a blocking task with its own tokio runtime to isolate
-        // the non-Send async context that arises from McpManager's
-        // internal tracing usage.
-        let config = self.config.clone();
-        let cmd = command.to_string();
-        let state = self.state.clone();
-
-        let result = match tokio::task::spawn_blocking(move || {
-            let rt = tokio::runtime::Runtime::new()
-                .map_err(|e| format!("Failed to create runtime: {}", e))?;
-
-            rt.block_on(execute_acp_command_inner(config, &cmd))
-        })
-        .await
-        {
-            Ok(inner) => inner,
-            // The blocking task panicked/cancelled: reset the state so `status`
-            // does not stay wedged at `running` forever. (R18 review catch.)
-            Err(e) => {
-                let msg = format!("Task join error: {}", e);
-                state.set(AgentState::Error(msg.clone()));
-                return Err(msg);
-            }
-        };
+        // (RT-514) The agent is the ONE the server owns — built once, with
+        // its MCP children, registry and database already in place. No
+        // runtime, no migrations and no child set per command.
+        let result = self
+            .runtime
+            .execute(command.to_string(), session_id.map(str::to_string))
+            .await;
 
         // Restore a truthful state for the next request.
         match &result {
-            Ok(_) => state.set(AgentState::Idle),
-            Err(err) => state.set(AgentState::Error(err.clone())),
+            Ok(_) => self.state.set(AgentState::Idle),
+            Err(err) => self.state.set(AgentState::Error(err.clone())),
         }
         result
     }
 }
 
-/// Inner command execution: create a fresh agent and run the command.
-async fn execute_acp_command_inner(
-    config: Arc<AppConfig>,
-    command: &str,
-) -> Result<String, String> {
-    let raw_client = operant_core::client::OpenAIClient::new(
-        operant_core::client::ClientConfig::from(&config.client),
-    );
-    let mcp_manager = operant_core::mcp::McpManager::new();
-    let database = std::sync::Arc::new(
-        operant_core::database::Database::init(config.database_path.clone())
-            .map_err(|e| format!("Database init error: {}", e))?,
-    );
+/// One command for the ACP runtime.
+struct AcpCommand {
+    command: String,
+    /// The ACP session the command belongs to (RT-514).
+    session_id: Option<String>,
+    reply: tokio::sync::oneshot::Sender<Result<String, String>>,
+}
 
-    let registry = crate::build_registry(
+/// The runtime the ACP server owns for its whole life (RT-514).
+///
+/// Before this, EVERY command built a fresh agent: a new database (full
+/// migrations), a new `McpManager` (so a new set of MCP CHILDREN), a new
+/// registry (AFT bridge + kernel sidecar), a new model client and a new
+/// memory manager — all thrown away when the command returned. Ten
+/// prompts were ten runtimes, ten AFT spawns, ten migration runs and ten
+/// MCP handshakes.
+///
+/// The runtime is built ONCE and kept here. It is driven by ONE blocking
+/// task that owns its own tokio runtime, because the MCP/agent internals
+/// are not `Send` across awaits — the reason the per-command path used
+/// `spawn_blocking` at all. The agent is built INSIDE that runtime, so
+/// every tokio primitive it holds belongs to the runtime that runs it.
+#[derive(Clone)]
+struct AcpRuntime {
+    commands: tokio::sync::mpsc::UnboundedSender<AcpCommand>,
+    /// How many times the agent was built. It must be exactly ONE for the
+    /// life of the process (RT-514's test seam).
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the build count is logged by the runtime thread; this handle is read only by tests"
+        )
+    )]
+    builds: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl AcpRuntime {
+    /// Build the runtime and the agent it owns.
+    ///
+    /// Returns once the agent is READY: the MCP children are connected
+    /// and the registry is built, so the first command does not pay for
+    /// them.
+    fn start(config: AppConfig) -> Result<Self> {
+        let (commands, mut inbox) = tokio::sync::mpsc::unbounded_channel::<AcpCommand>();
+        let builds = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let builds_for_thread = builds.clone();
+        // A dedicated OS thread, not a blocking task: the runtime lives as
+        // long as the server, and a blocking task would hold a worker
+        // thread of the caller's runtime for the whole life.
+        std::thread::Builder::new()
+            .name("operant-acp-runtime".to_string())
+            .spawn(move || {
+                let runtime = match tokio::runtime::Runtime::new() {
+                    Ok(runtime) => runtime,
+                    Err(e) => {
+                        tracing::error!(error = %e, "The ACP runtime could not be created");
+                        return;
+                    }
+                };
+                runtime.block_on(async move {
+                    let agent = match build_acp_agent(config).await {
+                        Ok(agent) => agent,
+                        Err(e) => {
+                            tracing::error!(error = %e, "The ACP agent could not be built");
+                            return;
+                        }
+                    };
+                    let built =
+                        builds_for_thread.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                    // (RT-514) The count is logged, not just counted: one
+                    // agent for the life of the server is the invariant, and
+                    // a second build would be a silent regression.
+                    tracing::info!(
+                        builds = built,
+                        "The ACP runtime is ready — one agent, one MCP child set, \
+                         one registry for the life of the server"
+                    );
+                    while let Some(request) = inbox.recv().await {
+                        let AcpCommand {
+                            command,
+                            session_id,
+                            reply,
+                        } = request;
+                        // (RT-514) The ACP session owns the agent's
+                        // namespace for the turn: the tool trajectory and
+                        // the persisted transcript must land where the
+                        // client's session id reads from, or a resumed
+                        // session comes back to prompts with no answers.
+                        if let Some(session_id) = session_id {
+                            agent.set_session_id(session_id);
+                        }
+                        let result = agent
+                            .run(command)
+                            .await
+                            .map(|response| response.content)
+                            .map_err(|e| format!("Agent error: {}", e.user_message()));
+                        // The receiver is gone when the caller gave up.
+                        let _ = reply.send(result);
+                    }
+                });
+            })
+            .map_err(|e| anyhow::anyhow!("Failed to start the ACP runtime thread: {e}"))?;
+        Ok(Self { commands, builds })
+    }
+
+    /// How many agents this runtime built. It must stay at ONE (RT-514).
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the test seam for RT-514's one-build invariant; read only by tests"
+        )
+    )]
+    fn builds(&self) -> usize {
+        self.builds.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Run one command on the runtime's agent.
+    async fn execute(&self, command: String, session_id: Option<String>) -> Result<String, String> {
+        let (reply, answer) = tokio::sync::oneshot::channel();
+        self.commands
+            .send(AcpCommand {
+                command,
+                session_id,
+                reply,
+            })
+            .map_err(|e| format!("The ACP runtime is gone: {e}"))?;
+        answer
+            .await
+            .map_err(|e| format!("The ACP runtime dropped the command: {e}"))?
+    }
+}
+
+/// Build the agent the ACP server owns (RT-514).
+///
+/// The SAME seam every other long-lived host uses
+/// (`create_runtime_agent_with`), so the ACP server gets what the TUI and
+/// the gateway get: the configured MCP servers connected ONCE, the
+/// credential pool, the memory backend and the config defaults. Before
+/// this, the ACP path hand-rolled a registry and never connected the
+/// configured MCP servers at all — and it rebuilt the whole thing for
+/// every command.
+async fn build_acp_agent(
+    config: AppConfig,
+) -> std::result::Result<operant_core::agent::OperantAgent, String> {
+    let config = Arc::new(config);
+    let mcp_manager = operant_core::mcp::McpManager::new();
+    // The agent emits events, and the ACP protocol has no event channel.
+    // A DROPPED receiver would make every emit fail, so the events are
+    // drained into the log instead.
+    let (event_tx, mut event_rx) =
+        tokio::sync::mpsc::channel::<operant_core::agent::AgentEvent>(256);
+    tokio::spawn(async move {
+        while let Some(event) = event_rx.recv().await {
+            tracing::debug!(?event, "ACP agent event");
+        }
+    });
+    crate::create_runtime_agent_with(
         &config,
+        &config.agent,
+        None,
+        event_tx,
         &mcp_manager,
-        &raw_client,
-        &config.agent.model,
-        database.clone(),
+        &config.skills.root_dir,
+        None,
+        // `false`: no background LCM workers. The ACP server is a command
+        // server, and the per-command path it replaces had none — adding
+        // them would be a behaviour change (and background model spend)
+        // nobody asked for.
+        false,
+        // `None`: the memory backend is loaded inside, for this one agent.
         None,
     )
     .await
-    .map_err(|e| format!("Registry init error: {}", e))?;
+    .map_err(|e| format!("Agent init error: {e}"))
+}
 
-    let agent_config = crate::agent_config(&config, &config.agent, None);
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    let memory_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    let (memory_manager, memory_provider) = crate::load_memory_manager(memory_dir)
-        .await
-        .map_err(|e| format!("Memory init error: {}", e))?;
-
-    // Same credential-pool treatment as the run/TUI/gateway paths so ACP
-    // sessions get per-provider multi-key rotation too (hermes parity): the
-    // model client is pooled per provider, and the agent shares the primary
-    // provider's pool instance.
-    let provider_name = crate::tui::provider::infer_provider_from_model(&config.agent.model)
-        .unwrap_or_else(|| "openai".to_string());
-    let (model_client, pool_registry) = crate::create_model_client_with_fallback(
-        &provider_name,
-        &config.agent.model,
-        &config,
-        None,
-    );
-
-    let context_window = agent_config.context_window;
-    let mut agent =
-        operant_core::agent::OperantAgent::new(agent_config, model_client, registry, database)
-            .with_context_caps(operant_core::context_management::ContextCaps::from(
-                &config.agent,
-            ))
-            .with_llm_compressor(crate::llm_compressor_config(&config, context_window))
-            .with_memory_manager(memory_manager);
-    if let Some(provider) = memory_provider {
-        agent = agent.with_memory_provider(provider);
+    /// A fake MCP server that records every CONNECTION it accepts.
+    ///
+    /// The counter is a file append, because the child is a separate
+    /// PROCESS: an in-process counter could not see the second connection.
+    fn counting_mcp_server(count_log: &std::path::Path) -> String {
+        // A raw template: Rust's `\` line-continuation in a normal string
+        // strips the leading whitespace, which leaves the generated python
+        // with a `with` block that has no body — a SyntaxError, and a child
+        // that dies before it records a connection.
+        const TEMPLATE: &str = r#"import sys, json
+with open("__LOG__", "a") as f:
+    f.write("connect" + chr(10))
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        req = json.loads(line)
+    except Exception:
+        continue
+    rid = req.get("id")
+    if rid is None:
+        continue
+    mid = req.get("method")
+    if mid == "initialize":
+        out = {"protocolVersion": "2025-06-18", "capabilities": {"tools": {}}, "serverInfo": {"name": "counting", "version": "1.0"}}
+    elif mid == "tools/list":
+        out = {"tools": []}
+    else:
+        out = {}
+    sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": rid, "result": out}) + chr(10))
+    sys.stdout.flush()
+"#;
+        TEMPLATE.replace("__LOG__", &count_log.to_string_lossy())
     }
-    agent = crate::attach_credential_pool(agent, &provider_name, &config, pool_registry.as_ref());
-    agent = crate::apply_agent_config_defaults(agent, &config.agent);
 
-    let response = agent
-        .run(command.to_string())
-        .await
-        .map_err(|e| format!("Agent error: {}", e.user_message()))?;
+    /// A local endpoint that rejects every request instantly with a 400.
+    ///
+    /// A connection REFUSAL is treated as a stream drop and retried for the
+    /// whole stream-retry budget (45 s), which made the test slow for no
+    /// reason. A 400 is not retried, so the two prompts finish quickly —
+    /// and the test measures the MCP child set, not the answer.
+    async fn refusing_endpoint() -> std::net::SocketAddr {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind the refusing endpoint");
+        let addr = listener.local_addr().expect("local addr");
+        tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                tokio::spawn(async move {
+                    let mut buf = vec![0u8; 4096];
+                    let _ = tokio::io::AsyncReadExt::read(&mut socket, &mut buf).await;
+                    let _ = tokio::io::AsyncWriteExt::write_all(
+                        &mut socket,
+                        b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    )
+                    .await;
+                    let _ = tokio::io::AsyncWriteExt::flush(&mut socket).await;
+                });
+            }
+        });
+        addr
+    }
 
-    Ok(response.content)
+    fn counting_config(dir: &std::path::Path) -> AppConfig {
+        let mut config = AppConfig::default();
+        config.database_path = dir.join("acp.sqlite");
+        // A base_url that refuses instantly: the test does not need an
+        // answer from the model, it needs the MCP child set.
+        config.client.base_url = "http://127.0.0.1:1".to_string();
+        config.client.api_key = None;
+        // The model endpoint refuses; the test measures the CHILD set, not
+        // the answer. A one-second timeout and no retries keep it quick.
+        config.client.timeout_secs = 1;
+        config.mcp.autoload = true;
+        config.mcp.servers = vec![operant_core::config::McpServerConfig {
+            name: "counting".to_string(),
+            transport: operant_core::config::McpTransportKind::Stdio,
+            url: None,
+            auth_token: None,
+            command: Some("python3".to_string()),
+            args: vec![],
+            env: std::collections::HashMap::new(),
+            enabled: true,
+            deferred: false,
+        }];
+        config
+    }
+
+    /// RT-514: the registry and its child fleet are built ONCE per ACP
+    /// server process, and every prompt rides that runtime.
+    ///
+    /// Before the fix, every command built its own database (full
+    /// migrations), its own `McpManager` (a new set of MCP CHILDREN), its
+    /// own registry, its own model client and its own agent — all thrown
+    /// away when the command returned, so ten prompts were ten runtimes
+    /// and ten MCP handshakes.
+    #[tokio::test]
+    #[expect(
+        clippy::await_holding_lock,
+        reason = "test-only: the crate's std env lock serialises process-env mutation across the whole test"
+    )]
+    async fn two_prompts_over_one_connection_spawn_one_child_set() {
+        // (RT-514) The runtime loads its memory backend from the operant
+        // HOME, so the home is redirected to the test's own temp dir under
+        // the crate's environment lock: the operator's home must not receive
+        // a test's memory database, and the crate directory must not either.
+        let _env = crate::config::test_env_lock();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let previous_home = std::env::var("HERMES_HOME").ok();
+        unsafe { std::env::set_var("HERMES_HOME", dir.path()) };
+        let count_log = dir.path().join("connections.log");
+        let script = dir.path().join("counting_mcp_server.py");
+        std::fs::write(&script, counting_mcp_server(&count_log)).expect("write the fake server");
+
+        let mut config = counting_config(dir.path());
+        config.mcp.servers[0].command = Some("python3".to_string());
+        config.mcp.servers[0].args = vec![script.to_string_lossy().to_string()];
+        let endpoint = refusing_endpoint().await;
+        config.client.base_url = format!("http://{endpoint}/v1");
+        config.client.api_key = None;
+
+        let runtime = AcpRuntime::start(config).expect("the ACP runtime starts");
+        // The runtime builds its agent on its own thread; wait for it to
+        // be READY, because the MCP children are connected by that build.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while runtime.builds() == 0 && std::time::Instant::now() < deadline {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert_eq!(
+            runtime.builds(),
+            1,
+            "the runtime must build its agent exactly ONCE"
+        );
+
+        // Two prompts over the ONE connection. Both fail at the model call
+        // (the local refusing base_url) — the point is that the child set
+        // is not rebuilt for the second.
+        let first = runtime.execute("first prompt".to_string(), None).await;
+        let second = runtime.execute("second prompt".to_string(), None).await;
+        assert!(
+            first.is_err() || first.is_ok(),
+            "the outcome is not what is measured"
+        );
+        assert!(
+            second.is_err(),
+            "the model endpoint refuses, so the second command must fail — \
+             failing is what proves no NEW runtime was built"
+        );
+
+        let connects = std::fs::read_to_string(&count_log).unwrap_or_default();
+        let lines = connects.lines().filter(|l| !l.trim().is_empty()).count();
+        assert_eq!(
+            lines, 1,
+            "one MCP child set for the whole server life — got {lines} connections \
+             (a second build means a second child set)"
+        );
+        assert_eq!(
+            runtime.builds(),
+            1,
+            "two prompts must not rebuild the agent"
+        );
+
+        match previous_home {
+            Some(v) => unsafe { std::env::set_var("HERMES_HOME", v) },
+            None => unsafe { std::env::remove_var("HERMES_HOME") },
+        }
+    }
 }

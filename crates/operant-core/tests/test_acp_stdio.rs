@@ -16,7 +16,11 @@ impl AcpHandler for TestAcpHandler {
         AgentState::Running
     }
 
-    async fn execute_command(&self, command: &str) -> Result<String, String> {
+    async fn execute_command(
+        &self,
+        command: &str,
+        _session_id: Option<&str>,
+    ) -> Result<String, String> {
         Ok(format!("handled: {}", command))
     }
 }

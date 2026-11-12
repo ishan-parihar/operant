@@ -386,7 +386,16 @@ pub trait AcpHandler: Send + Sync {
     async fn agent_state(&self) -> AgentState;
 
     /// Execute a command string in the agent's context and return the result.
-    async fn execute_command(&self, command: &str) -> Result<String, String>;
+    ///
+    /// `session_id` is the ACP session the command belongs to, when the
+    /// request carried one (RT-514). A single-session server ignores it;
+    /// a server that serves MANY sessions (the daemon) routes on it, so
+    /// the command lands in the right session's agent.
+    async fn execute_command(
+        &self,
+        command: &str,
+        session_id: Option<&str>,
+    ) -> Result<String, String>;
 
     /// Optional: return server metadata (name, version, uptime).
     fn server_info(&self) -> Value {
@@ -584,7 +593,10 @@ async fn handle_session_prompt(
         );
     }
 
-    match handler.execute_command(&prompt_text).await {
+    match handler
+        .execute_command(&prompt_text, Some(session_id.as_str()))
+        .await
+    {
         Ok(text) => {
             let notification = RpcNotification::agent_message_chunk(&session_id, &text);
             (
@@ -641,7 +653,14 @@ async fn handle_command(request: &RpcRequest, handler: &dyn AcpHandler) -> RpcRe
         );
     }
 
-    match handler.execute_command(command).await {
+    // The operant `command` extension carries no session id of its own,
+    // but a client MAY pass one — and a multi-session server needs it to
+    // route the command (RT-514).
+    let session_id = session_id_param(request);
+    match handler
+        .execute_command(command, session_id.as_deref())
+        .await
+    {
         Ok(output) => RpcResponse::success(
             request.response_id(),
             serde_json::json!({
@@ -692,7 +711,11 @@ mod tests {
             AgentState::Idle
         }
 
-        async fn execute_command(&self, command: &str) -> Result<String, String> {
+        async fn execute_command(
+            &self,
+            command: &str,
+            _session_id: Option<&str>,
+        ) -> Result<String, String> {
             Ok(format!("executed: {}", command))
         }
     }
