@@ -6,13 +6,13 @@ Dated-frozen: published `2026-11-12`. Scope: a design plan.
 
 | Part | State | Commit |
 |---|---|---|
-| P0 — instrument the tool-result chokepoint | **LANDED** — per-tool token accounting is part of the layer's own `Compressed` report (`tokens_before`/`tokens_after`/`applied`) | `feat(iter-2111)` |
-| P1 — the evidence layer (types, chain runner, classifier, router, recall contract) | **LANDED** — `crates/operant-core/src/agent/evidence/` | `feat(iter-2111)` |
-| P2 — the method set and the per-format chains | **LANDED** — 9 lossless + 6 lossy methods, plus the code filter | `feat(iter-2111)` |
-| P3 — lossless recovery | **LANDED** — the `RecallStore` contract, the provenance marker, and a bounded ring + disk spill | `feat(iter-2111)` |
-| P4 — tool-family coverage | **LANDED** — the classifier covers every registered tool; the coverage test fails when a new tool has no entry | `feat(iter-2111)` |
-| P5 — the shell path | **LANDED** — `compression.shell = "aft" \| "native" \| "rtk"`, defaulting to `aft` (AFT already compresses bash in-process) | `feat(iter-2111)` |
-| P6 — observability | **LANDED** — the `Compressed` report carries the per-result saving, the methods applied, and the subject/format | `feat(iter-2111)` |
+| P0 — instrument the tool-result chokepoint | **LANDED** — per-tool token accounting is part of the layer's own `Compressed` report (`tokens_before`/`tokens_after`/`applied`) | `feat(iter-2120)` |
+| P1 — the evidence layer (types, chain runner, classifier, router, recall contract) | **LANDED** — `crates/operant-core/src/agent/evidence/` | `feat(iter-2120)` |
+| P2 — the method set and the per-format chains | **LANDED** — 9 lossless + 6 lossy methods, plus the code filter | `feat(iter-2120)` |
+| P3 — LOSSY recovery | **LANDED** — the `RecallStore` contract, the provenance marker, and a bounded ring + disk spill | `feat(iter-2120)` |
+| P4 — tool-family coverage | **LANDED** — the classifier covers every registered tool; the coverage test fails when a new tool has no entry | `feat(iter-2120)` |
+| P5 — the shell path | **LANDED** — `compression.shell = "aft" \| "native" \| "rtk"`, defaulting to `aft` (AFT already compresses bash in-process) | `feat(iter-2120)` |
+| P6 — observability | **LANDED** — the `Compressed` report carries the per-result saving, the methods applied, and the subject/format; `operant doctor` gained a *Tool-result compression* section naming the switch, the minimum size, the shell mode and any family overrides | `feat(iter-2120)` |
 | P0 — a *fleet-wide* baseline of operant's own token distribution | **NOT LANDED** — the layer reports per-result savings, but no fleet-wide ranking has been measured | — |
 | The `rtk` binary as a live backend | **NOT LANDED** — the mode exists in config; the binary is not wired (see §10 for why) | — |
 
@@ -501,7 +501,7 @@ Chains exactly as RTK defines them (§4 table). Priorities:
 - Exit: golden fixtures per (Subject, ContentFormat) pair, plus the invariant that `json` payloads stay
   parseable after a chain runs.
 
-### P3 — Lossless recovery (the safety net that makes lossy legal)
+### P3 — Lossy recovery (the safety net that makes lossy legal)
 
 RTK's `Recovery::Recall` contract demands a lossy method declare how the full text comes back
 (`engine/src/method.rs:33-39`) [V].
