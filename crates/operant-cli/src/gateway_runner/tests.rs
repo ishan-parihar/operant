@@ -667,6 +667,79 @@ async fn two_slots_turn_concurrently_and_keep_disjoint_transcripts() {
     }
 }
 
+/// (RT-508 red-team, finding 1) Two slots' memory providers keep SEPARATE
+/// scopes.
+///
+/// The provider holds the scope cell — the bank the turn reads from and
+/// writes to. One shared provider meant one shared cell: with the slots
+/// running turns at the same time, one slot could set the scope while
+/// another slot's turn was between its recall and its retain, and a seat's
+/// turn would recall from another seat's bank.
+#[tokio::test]
+#[expect(
+    clippy::await_holding_lock,
+    reason = "test-only: the std mutex serialises process-env mutation across the whole test"
+)]
+async fn two_slot_providers_keep_separate_scopes() {
+    let _env_lock = crate::config::test_env_lock();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let previous_home = std::env::var("HERMES_HOME").ok();
+    // SAFETY: serialised by the crate's environment lock.
+    unsafe { std::env::set_var("HERMES_HOME", tmp.path()) };
+    assert_eq!(
+        operant_core::platform::operant_home(),
+        tmp.path(),
+        "the operant home must be the test's temp directory"
+    );
+
+    let first = super::slot_memory_provider().expect("the first slot's provider");
+    let second = super::slot_memory_provider().expect("the second slot's provider");
+    assert!(
+        !std::sync::Arc::ptr_eq(&first, &second),
+        "each slot must have its OWN memory provider — a shared one shares the \
+         scope cell"
+    );
+
+    use operant_core::memory_wire::MemoryScope;
+    first.set_scope(&MemoryScope::Seat {
+        identity: "seat-a".to_string(),
+    });
+    let first_bank = first.bank_id();
+    second.set_scope(&MemoryScope::Seat {
+        identity: "seat-b".to_string(),
+    });
+    assert_eq!(
+        first.bank_id(),
+        first_bank,
+        "setting the SECOND slot's scope must not move the FIRST slot's bank — \
+         a seat's turn would recall from another seat's bank"
+    );
+
+    // SAFETY: serialised by the crate's environment lock.
+    match previous_home {
+        Some(v) => unsafe { std::env::set_var("HERMES_HOME", v) },
+        None => unsafe { std::env::remove_var("HERMES_HOME") },
+    }
+}
+
+/// The SAME defect at the CALL SITE (RT-508 red-team, finding 1).
+///
+/// The behaviour test above proves two providers keep separate scopes; this
+/// proves the gateway's slot loop actually USES one per slot. A shared pair
+/// in the loop is the shape the old code had, and it is one line.
+#[test]
+fn the_slot_loop_builds_a_memory_provider_per_slot() {
+    let source = include_str!("../gateway_runner.rs");
+    // Assembled from two literals so this test's own source cannot satisfy
+    // the needle.
+    let shared_pair = ["let slot_memory = Some(", "memory.clone())"].concat();
+    assert!(
+        !source.contains(shared_pair.as_str()),
+        "the slot loop must not pass the SHARED memory pair — the scope cell \
+         belongs to the provider, so a shared provider shares the bank"
+    );
+}
+
 /// `/stop` may only attach the shared interrupt flag for the session
 /// whose turn actually holds the lock. Pre-06A every entry in
 /// `turn_inflight` got the flag, so a `/stop` naming a queued chat

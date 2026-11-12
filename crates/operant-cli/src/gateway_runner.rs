@@ -2202,6 +2202,24 @@ type ServerConfigTuple = (
     bool,
 );
 
+/// The memory provider for ONE agent slot (RT-508 red-team, finding 1).
+///
+/// The provider holds the memory SCOPE — the bank the turn reads from and
+/// writes to — and the scope is set per turn. One shared provider would
+/// mean one shared scope cell: with the slots running turns at the same
+/// time, one slot could set the scope while another slot's turn was
+/// between its recall and its retain, and a seat's turn would recall from
+/// another seat's bank. That is exactly the leak the old one-turn-at-a-time
+/// lock prevented.
+///
+/// The providers share the STORE (the same memory-wire file ✓ — one memory,
+/// not four) and differ only in the scope cell.
+fn slot_memory_provider() -> Option<Arc<operant_core::memory_wire::MemoryWireProvider>> {
+    operant_core::memory_wire::MemoryWireProvider::new(operant_core::platform::operant_home())
+        .ok()
+        .map(Arc::new)
+}
+
 /// How many agent slots the gateway runs (RT-508).
 ///
 /// One slot per concurrent conversation: a slot is a full agent with its
@@ -4112,6 +4130,18 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
     // the MCP CHILDREN are shared) and the permission channel.
     let mut slots: Vec<AgentSlot> = Vec::with_capacity(AGENT_SLOT_COUNT);
     for _ in 0..AGENT_SLOT_COUNT {
+        // (RT-508 red-team, finding 1) The slot's OWN memory provider: the
+        // scope cell is per provider, so two slots cannot swap each other's
+        // bank mid-turn.
+        let slot_memory = match &memory.1 {
+            Some(_) => Some((
+                memory.0.clone(),
+                slot_memory_provider().map(|provider| {
+                    provider as Arc<dyn operant_core::memory_provider::MemoryProvider>
+                }),
+            )),
+            None => None,
+        };
         let mut agent = crate::create_runtime_agent_with(
             app_config,
             &app_config.agent,
@@ -4123,8 +4153,9 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
             // `true`: these are the process's long-lived agents, so their
             // LCM maintenance workers must spawn (cron passes `false`).
             true,
-            // BUGS.md D-5 — the hoisted pair; see the comment above.
-            Some(memory.clone()),
+            // BUGS.md D-5 — the hoisted pair; see the comment above. The
+            // slot's provider is its OWN (the scope is per provider).
+            slot_memory,
         )
         .await?;
         let idle = app_config.agent.recap_idle_seconds;
