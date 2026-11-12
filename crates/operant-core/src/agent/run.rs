@@ -2464,6 +2464,16 @@ impl OperantAgent {
                         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                     }
 
+                    // (RT-510) Record every call as IN FLIGHT before it
+                    // runs. The row carries the `tool_call_id`, so a
+                    // transcript reloaded after a kill still pairs the
+                    // assistant's request with a result — and the result's
+                    // content says the side effects are UNKNOWN. Without
+                    // it the request was stripped at load (the orphan
+                    // repair) and the model was told the tool never ran,
+                    // so it re-issued a write that had already happened.
+                    self.mark_tool_calls_in_flight(&session_id, &tool_calls);
+
                     // Execute tools and add results
                     let tool_results = self.execute_tools(tool_calls).await?;
 
@@ -2921,7 +2931,25 @@ impl OperantAgent {
                             observed: None,
                             active: 1,
                         };
-                        if let Err(e) = self.database.save_message_full(&msg_data) {
+                        // (RT-510) The call's IN-FLIGHT row already exists
+                        // (written before the tool ran) — replace it with the
+                        // result instead of appending a second row for the
+                        // same id: two rows for one call is a transcript no
+                        // provider accepts, and the placeholder would read as
+                        // the answer. A call with no placeholder (a session
+                        // resumed from a transcript written before this row
+                        // existed) falls back to the append.
+                        let replaced = self
+                            .database
+                            .complete_tool_call_in_flight(
+                                &session_id,
+                                &result.tool_call_id,
+                                &content,
+                                &result.name,
+                                &msg_data.timestamp,
+                            )
+                            .unwrap_or(false);
+                        if !replaced && let Err(e) = self.database.save_message_full(&msg_data) {
                             tracing::warn!(
                                 error = %e,
                                 tool_call_id = %result.tool_call_id,
@@ -3993,6 +4021,28 @@ mod rt475_tests {
                 arguments: args.to_string(),
             },
         }
+    }
+
+    /// RT-510: the in-flight row must be written BEFORE the tools run.
+    ///
+    /// SOURCE contract over the seam (the RT-481 shape): the ORDER is the
+    /// invariant, and the order is what the file shows. The needle is
+    /// assembled from two literals so this test's own source cannot
+    /// satisfy it.
+    #[test]
+    fn the_in_flight_row_is_written_before_the_tools_run() {
+        let src = include_str!("run.rs");
+        let write = "mark_tool_calls_in";
+        let execute = "execute_tools(tool_calls)";
+        let write_at = src
+            .find(&format!("{write}_flight"))
+            .expect("the in-flight write must exist");
+        let execute_at = src.find(execute).expect("the tool execution must exist");
+        assert!(
+            write_at < execute_at,
+            "the in-flight row must be written BEFORE the tools run — otherwise a kill \
+             between the two leaves no trace that the call ever started (RT-510)"
+        );
     }
 
     /// RT-481: RT-475's fix shipped the HELPER but the production call

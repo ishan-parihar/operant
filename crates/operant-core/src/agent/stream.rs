@@ -801,6 +801,32 @@ impl OperantAgent {
         }
     }
 
+    /// (RT-510) Write the IN-FLIGHT row for every call in the batch.
+    ///
+    /// The row is what a reloaded transcript shows when the session died
+    /// between the call and its result: the request keeps its pair, and
+    /// the content says the side effects are UNKNOWN. Best-effort per
+    /// call — a row that cannot be written costs one honest answer, not
+    /// the turn.
+    pub(crate) fn mark_tool_calls_in_flight(&self, session_id: &str, tool_calls: &[ToolCall]) {
+        let now = chrono::Utc::now().to_rfc3339();
+        for call in tool_calls {
+            if let Err(e) = self.database.save_tool_call_in_flight(
+                session_id,
+                &call.id,
+                &call.function.name,
+                &now,
+            ) {
+                tracing::warn!(
+                    error = %e,
+                    tool_call_id = %call.id,
+                    tool = %call.function.name,
+                    "failed to record the in-flight tool call"
+                );
+            }
+        }
+    }
+
     #[expect(
         clippy::expect_used,
         reason = "masked_tools is held only for short non-panicking sections; poisoning is treated as a bug"

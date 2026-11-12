@@ -1194,6 +1194,53 @@ mod tests {
         assert_no_orphans(&messages);
     }
 
+    /// RT-510: an in-flight row KEEPS the assistant's call at load.
+    ///
+    /// The repair strips a request whose result is missing, and deletes
+    /// the whole assistant message when it has no prose — so a session
+    /// killed between a call and its result told the model the tool never
+    /// ran, and it re-issued a write that had already happened. The
+    /// in-flight row is the pair that stops that: the call is kept, and
+    /// its content says the outcome is UNKNOWN.
+    #[test]
+    fn an_in_flight_row_keeps_the_assistants_call_at_load() {
+        let mut messages = vec![
+            Message::user("go"),
+            assistant_with_calls(&["tc1"]),
+            Message {
+                role: Role::Tool,
+                content: crate::database::Database::TOOL_CALL_IN_FLIGHT_CONTENT.to_string(),
+                tool_call_id: Some("tc1".to_string()),
+                ..Default::default()
+            },
+        ];
+        let repairs = drop_orphaned_tool_messages(&mut messages);
+        assert_eq!(
+            repairs, 0,
+            "an in-flight row is a REAL result: the request must not be repaired away"
+        );
+        let calls = messages
+            .iter()
+            .filter_map(|m| m.tool_calls.as_deref())
+            .flatten()
+            .collect::<Vec<_>>();
+        assert_eq!(
+            calls.len(),
+            1,
+            "the call must survive, so the model can see its call may have RUN"
+        );
+        let row = messages
+            .iter()
+            .find(|m| m.role == Role::Tool)
+            .expect("the in-flight row survives");
+        assert!(
+            row.content.contains("UNKNOWN"),
+            "the model must be told the outcome is unknown, not absent: {}",
+            row.content
+        );
+        assert_no_orphans(&messages);
+    }
+
     #[test]
     fn orphan_repair_should_keep_an_assistant_message_that_still_has_prose() {
         let mut messages = vec![

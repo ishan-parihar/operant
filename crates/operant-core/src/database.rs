@@ -814,6 +814,101 @@ impl Database {
         Ok(())
     }
 
+    /// (RT-510) The content of a tool row written BEFORE its call runs.
+    ///
+    /// It is what the model reads when a session is reloaded after the
+    /// call never returned: the side effects are UNKNOWN, not absent.
+    /// Telling the model the tool "never ran" made it re-issue a write
+    /// that had already happened.
+    pub const TOOL_CALL_IN_FLIGHT_CONTENT: &str = "[in flight when the session ended — this tool call was STARTED and its result was \
+         never recorded, so its side effects are UNKNOWN. Check the target before \
+         repeating it]";
+
+    /// (RT-510) Record a tool call as IN FLIGHT, before it runs.
+    ///
+    /// The row carries the `tool_call_id`, so a transcript reloaded after
+    /// a kill still pairs the assistant's request with a result — and
+    /// `drop_orphaned_tool_messages` no longer strips the request out of
+    /// the message the model is shown. Called on the tool's own
+    /// `tool_call_id`; a re-run of the same call refreshes the row.
+    pub fn save_tool_call_in_flight(
+        &self,
+        session_id: &str,
+        tool_call_id: &str,
+        tool_name: &str,
+        timestamp: &str,
+    ) -> Result<()> {
+        let mut conn = self.lock_conn()?;
+        // BEGIN IMMEDIATE — see save_message for the BUSY_SNAPSHOT rationale.
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|e| Error::Agent(format!("Failed to start transaction: {}", e)))?;
+        // Refresh rather than append: a command that retries the same
+        // call must not leave two rows for one id.
+        let replaced = tx
+            .execute(
+                "UPDATE messages SET content = ?3, tool_name = ?4, timestamp = ?5, active = 1
+                 WHERE session_id = ?1 AND role = 'tool' AND tool_call_id = ?2",
+                params![
+                    session_id,
+                    tool_call_id,
+                    Self::TOOL_CALL_IN_FLIGHT_CONTENT,
+                    tool_name,
+                    timestamp
+                ],
+            )
+            .map_err(|e| {
+                Error::Agent(format!("Failed to refresh the in-flight tool row: {}", e))
+            })?;
+        if replaced == 0 {
+            tx.execute(
+                "INSERT INTO messages (session_id, role, content, tool_call_id, tool_name, timestamp, active)
+                 VALUES (?1, 'tool', ?2, ?3, ?4, ?5, 1)",
+                params![session_id, Self::TOOL_CALL_IN_FLIGHT_CONTENT, tool_call_id, tool_name, timestamp],
+            )
+            .map_err(|e| Error::Agent(format!("Failed to save the in-flight tool row: {}", e)))?;
+            tx.execute(
+                "UPDATE sessions SET message_count = message_count + 1 WHERE id = ?1",
+                params![session_id],
+            )
+            .map_err(|e| Error::Agent(format!("Failed to update session message_count: {}", e)))?;
+        }
+        tx.commit()
+            .map_err(|e| Error::Agent(format!("Failed to commit the in-flight tool row: {}", e)))?;
+        Ok(())
+    }
+
+    /// (RT-510) Replace an in-flight tool row with its RESULT.
+    ///
+    /// Returns whether a row was replaced. A false means there was no
+    /// in-flight row — the caller inserts a result row instead, so a
+    /// call that never had a placeholder (a session resumed from a
+    /// transcript written before this row existed) still records its
+    /// outcome.
+    pub fn complete_tool_call_in_flight(
+        &self,
+        session_id: &str,
+        tool_call_id: &str,
+        content: &str,
+        tool_name: &str,
+        timestamp: &str,
+    ) -> Result<bool> {
+        let mut conn = self.lock_conn()?;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|e| Error::Agent(format!("Failed to start transaction: {}", e)))?;
+        let updated = tx
+            .execute(
+                "UPDATE messages SET content = ?3, tool_name = ?4, timestamp = ?5
+                 WHERE session_id = ?1 AND role = 'tool' AND tool_call_id = ?2",
+                params![session_id, tool_call_id, content, tool_name, timestamp],
+            )
+            .map_err(|e| Error::Agent(format!("Failed to complete the tool row: {}", e)))?;
+        tx.commit()
+            .map_err(|e| Error::Agent(format!("Failed to commit the tool row: {}", e)))?;
+        Ok(updated > 0)
+    }
+
     /// Save a message with full Python-compatible fields.
     pub fn save_message_full(&self, message: &MessageData) -> Result<()> {
         let mut conn = self.lock_conn()?;
@@ -4211,6 +4306,79 @@ mod tests {
         let sessions = db.list_sessions(10).unwrap();
         let s = sessions.iter().find(|s| s.id == "auto-title-2").unwrap();
         assert_eq!(s.title.as_deref(), Some("Manual Title"));
+    }
+
+    /// RT-510: an in-flight tool row is REPLACED by its result, and it
+    /// says the outcome is UNKNOWN while the call has not returned.
+    ///
+    /// A kill between the call and its result used to leave an assistant
+    /// message with `tool_calls` and no result — the orphan repair
+    /// stripped the call and deleted the whole message when it had no
+    /// prose — so the model was told the tool never ran and re-issued a
+    /// write that had already happened.
+    #[test]
+    fn an_in_flight_tool_row_is_replaced_by_its_result_and_names_the_unknown() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db = Database::init(dir.path().join("in_flight.sqlite")).expect("db");
+        db.save_session(
+            "s1",
+            None,
+            "agent",
+            "2026-01-01T00:00:00+00:00",
+            "2026-01-01T00:00:00+00:00",
+        )
+        .expect("session row");
+
+        db.save_tool_call_in_flight("s1", "tc1", "write_file", "2026-01-01T00:00:00+00:00")
+            .expect("the in-flight row");
+        let in_flight = db
+            .get_session_messages_full("s1")
+            .expect("the in-flight transcript");
+        assert_eq!(in_flight.len(), 1, "one call, one row");
+        assert_eq!(in_flight[0].role, "tool");
+        assert_eq!(in_flight[0].tool_call_id.as_deref(), Some("tc1"));
+        assert_eq!(in_flight[0].tool_name.as_deref(), Some("write_file"));
+        assert!(
+            in_flight[0]
+                .content
+                .as_deref()
+                .is_some_and(|c| c.contains("UNKNOWN")),
+            "the in-flight row must say the outcome is unknown, got: {:?}",
+            in_flight[0].content
+        );
+
+        let replaced = db
+            .complete_tool_call_in_flight(
+                "s1",
+                "tc1",
+                "wrote 3 lines",
+                "write_file",
+                "2026-01-01T00:00:02+00:00",
+            )
+            .expect("the completion");
+        assert!(replaced, "the result must replace the in-flight row");
+        let completed = db
+            .get_session_messages_full("s1")
+            .expect("the completed transcript");
+        assert_eq!(
+            completed.len(),
+            1,
+            "the result must REPLACE the placeholder, not join it — a transcript with \
+             two rows for one call is one no provider accepts"
+        );
+        assert_eq!(completed[0].content.as_deref(), Some("wrote 3 lines"));
+
+        assert!(
+            !db.complete_tool_call_in_flight(
+                "s1",
+                "tc-never-minted",
+                "no such call",
+                "x",
+                "2026-01-01T00:00:03+00:00"
+            )
+            .expect("the query"),
+            "a call with no in-flight row must report that it replaced nothing"
+        );
     }
 
     #[test]
