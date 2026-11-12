@@ -53,11 +53,10 @@ on every message, so a busy session can never be evicted by a newcomer;
 when the cap is reached, new sessions are refused while existing
 holders keep their slots.
 
-## Scheduled autocompact (`session/autocompact.rs`)
+## Scheduled autocompact — removed
 
-The third compaction mechanism — see
-[context-management.md](context-management.md) §3 for the mechanism and
-why it is a third one and not a second.
+The scheduled-run compactor was deleted in iter-2144 (it had no production
+caller). See [context-management.md](context-management.md) §3.
 
 ## Session search (`session_search_tool.rs`)
 

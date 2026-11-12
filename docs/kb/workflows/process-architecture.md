@@ -31,3 +31,4 @@
 | process-architecture-025 | done | RT-526 (N): the daemon lock file is unlinked on drop; the docs describe a gateway that does not exist | — | [2026-11-12] docs/audit/2026-11-12-process-architecture-red-team-execution.md |
 | process-architecture-026 | done | RT-518 (S): the dashboard is a disconnected process (wrong gate, blocking I/O, no busy timeout, the wrong cookie) | — | [2026-11-12] docs/audit/2026-11-12-process-architecture-red-team-execution.md |
 | process-architecture-027 | done | RT-521 (S): unbounded growth under load (the ingress channel, the per-session queue, the cap's default, the registry's Drop) | — | [2026-11-12] docs/audit/2026-11-12-process-architecture-red-team-execution.md |
+| process-architecture-028 | done | RT-522 (S): the presence registry is never claimed and a claim overwrites a live owner | — | [2026-11-13] docs/audit/2026-11-12-process-architecture-red-team-execution.md |

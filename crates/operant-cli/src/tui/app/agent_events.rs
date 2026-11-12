@@ -798,7 +798,15 @@ impl App {
             // (plan 05) a real user prompt started — nothing to render; the
             // turn id is for the rewind selector's row attachment, which
             // reads marks from the agent on open.
-            AgentEvent::TurnStarted { .. } => {}
+            //
+            // (RT-522) ...and this is where the session is CLAIMED. The
+            // claim used to happen only at boot — guarded on a session id
+            // that did not exist yet, because the id is minted on the first
+            // turn — so in practice NO process ever claimed a session and
+            // the liveness guard was inert. Claiming at every turn start
+            // covers the first turn, `/new` and every hub switch, and the
+            // id always exists here.
+            AgentEvent::TurnStarted { .. } => self.claim_current_session(),
         }
     }
 }

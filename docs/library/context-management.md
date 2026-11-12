@@ -9,7 +9,6 @@ the memory store ([memory.md](memory.md)).
 Source: `crates/operant-core/src/context_management.rs`,
 `crates/operant-core/src/context/` (mod, lcm, rollup, adaptive, embedder),
 `crates/operant-core/src/agent/llm_compressor.rs`,
-`crates/operant-core/src/session/autocompact.rs`,
 `crates/operant-core/src/tools/lcm_tools.rs`.
 
 ## Why this exists
@@ -18,7 +17,7 @@ Source: `crates/operant-core/src/context_management.rs`,
 the full history every iteration — any long-running session eventually
 exceeds the window. Operant ports the techniques of
 `cortexkit/magic-context` into native Rust, then extends them with a
-lossless engine (hermes-lcm parity) and a scheduled autocompact.
+lossless engine (hermes-lcm parity).
 
 ## The three mechanisms (and why there are three)
 
@@ -26,13 +25,13 @@ lossless engine (hermes-lcm parity) and a scheduled autocompact.
 |---|---|---|---|
 | 1 | Tiered eviction + decay (`context_management.rs`) | during a request, when the assembled prompt approaches the window | yes |
 | 2 | LCM DAG engine (`context/lcm.rs`) | per-call assembly, opt-in via `agent.context_engine = "lcm"` | **no** (append-only DAG) |
-| 3 | Scheduled autocompact (`session/autocompact.rs`) | after a turn completes, on schedule | yes, with a floor |
+| 3 | Scheduled autocompact — **REMOVED** in iter-2144 (the scheduled-run compactor had no production caller; the real `/compact` is `compact_history_now`) | — | — |
 
-They are deliberately three: the reactive path (1) runs mid-request where
-latency matters, the LCM path (2) replaces lossy eviction wholesale, and
-the scheduled path (3) compacts between turns where a compaction floor
-protects recent context. `session/autocompact.rs`'s module doc spells out
-why a third mechanism was not folded into the second.
+They are deliberately distinct: the reactive path (1) runs mid-request where
+latency matters, and the LCM path (2) replaces lossy eviction wholesale.
+The third row is history: the scheduled-run compactor was deleted in
+iter-2144 because it had no production caller — the live `/compact` is
+`compact_history_now`.
 
 ## 1. Tiered eviction + decay curve
 
@@ -91,12 +90,13 @@ distinct evidence is gathered. `context/embedder.rs` collapses the
 embedding-provider contract to one `embed` call (`"local:hash"` for tests
 and zero-dependency setups).
 
-## 3. Scheduled autocompact (`session/autocompact.rs`)
+## 3. Scheduled autocompact — removed
 
-After a turn completes, a scheduled compaction runs with a **compaction
-floor** (§4.5): recent context is protected by a floor the compaction
-cannot cut past. The operator CLI surface is `operant context status /
-recall / sessions` (`crates/operant-cli/src/cmd_context.rs`).
+The scheduled-run compactor was deleted in iter-2144: it had no production
+caller, and the live compaction is `compact_history_now`
+(`crates/operant-core/src/agent/events.rs`), which the `/compact` command
+rides. The operator CLI surface is `operant context status / recall /
+sessions` (`crates/operant-cli/src/cmd_context.rs`).
 
 ## Prompt-cache stability (the constraint everything respects)
 

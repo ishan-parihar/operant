@@ -317,9 +317,21 @@ impl TuiApp {
             .core_session_switch
             .as_ref()
             .and_then(|s| s.session_id())
-            && let Err(e) = operant_core::active_sessions::claim_session_here(&session_id)
         {
-            tracing::debug!(error = %e, "Failed to claim the session for this process");
+            // (RT-522) The claim can be REFUSED: another live process owns
+            // the session. That used to be invisible — the caller ignored
+            // everything but an error, so two processes could both believe
+            // they owned one session.
+            match operant_core::active_sessions::claim_session_here(&session_id) {
+                Ok(true) => {}
+                Ok(false) => tracing::warn!(
+                    session_id = %session_id,
+                    "another live process owns this session — the claim was refused"
+                ),
+                Err(e) => {
+                    tracing::debug!(error = %e, "Failed to claim the session for this process")
+                }
+            }
         }
 
         // Create the user-question channel and register the sender with
@@ -1015,9 +1027,21 @@ impl TuiApp {
             .core_session_switch
             .as_ref()
             .and_then(|s| s.session_id())
-            && let Err(e) = operant_core::active_sessions::claim_session_here(&session_id)
         {
-            tracing::debug!(error = %e, "Failed to claim the session for this process");
+            // (RT-522) The claim can be REFUSED: another live process owns
+            // the session. That used to be invisible — the caller ignored
+            // everything but an error, so two processes could both believe
+            // they owned one session.
+            match operant_core::active_sessions::claim_session_here(&session_id) {
+                Ok(true) => {}
+                Ok(false) => tracing::warn!(
+                    session_id = %session_id,
+                    "another live process owns this session — the claim was refused"
+                ),
+                Err(e) => {
+                    tracing::debug!(error = %e, "Failed to claim the session for this process")
+                }
+            }
         }
 
         // Skip the network models.dev fetch on the deterministic mock path.

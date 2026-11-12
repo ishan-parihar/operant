@@ -139,16 +139,25 @@ impl ActiveSessionTracker {
     }
 }
 
+/// The lock file's name for a session id (RT-522).
+///
+/// The old name was a lossy sanitization: every non-alphanumeric character
+/// became `_`, so two DIFFERENT ids that differed only in `:` versus `_`
+/// (`telegram:c:u` and `telegram_c_u`) shared ONE lock file — and so did
+/// their presence records. The name is now a hash of the id, which keeps
+/// distinct ids distinct and keeps the name short.
 fn sanitize(id: &str) -> String {
-    id.chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect()
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(id.as_bytes());
+    let hex: String = digest.iter().take(16).map(|b| format!("{b:02x}")).collect();
+    // A readable prefix keeps the directory browsable; the hash keeps it
+    // unique.
+    let readable: String = id
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
+        .take(24)
+        .collect();
+    format!("{readable}-{hex}")
 }
 
 fn now_millis() -> u64 {
@@ -197,19 +206,10 @@ pub struct SessionPresence {
 }
 
 fn presence_path(session_id: &str) -> PathBuf {
-    // Deliberately reused sanitize semantics rather than a raw join: a session
-    // id containing a path separator would escape the directory.
-    let safe = session_id
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect::<String>();
-    presence_dir().join(format!("{safe}.json"))
+    // The same HASHED name the lock file uses (RT-522): a raw join would let
+    // a session id containing a path separator escape the directory, and the
+    // old lossy sanitization let two distinct ids share one file.
+    presence_dir().join(format!("{}.json", sanitize(session_id)))
 }
 
 /// Whether a process with this pid is running right now.
@@ -300,6 +300,15 @@ pub fn claim_session_here(session_id: &str) -> Result<bool, String> {
             pruned,
             "Pruned dead presence records before claiming a session"
         );
+    }
+    // (RT-522) A claim REFUSES when the session's current owner is ALIVE:
+    // the old code overwrote the record unconditionally, so two processes
+    // could both claim one session and the liveness guard meant nothing.
+    if let Some(owner) = session_presence(session_id)
+        && owner.pid != std::process::id()
+        && process_is_running(owner.pid)
+    {
+        return Ok(false);
     }
     register_presence(session_id, std::process::id())?;
     Ok(true)
@@ -434,7 +443,67 @@ mod tests {
         assert_eq!(tracker.count().unwrap(), 20);
     }
 
+    /// RT-522: two claims for one session — the second is REFUSED while the
+    /// first is alive.
+    ///
+    /// The claim used to overwrite the record unconditionally, so two
+    /// processes could both claim one session and the liveness guard meant
+    /// nothing.
     #[test]
+    fn a_second_claim_for_one_session_is_refused_while_the_first_is_alive() {
+        let _env_lock = crate::platform::test_env_lock_blocking();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let previous_home = std::env::var("HERMES_HOME").ok();
+        // SAFETY: serialised by the crate's environment lock.
+        unsafe { std::env::set_var("HERMES_HOME", tmp.path()) };
+
+        // This process claims a session ✓.
+        assert!(
+            claim_session_here("s1").expect("the claim succeeds"),
+            "the first claim takes the session"
+        );
+        // Re-claiming the SAME session from the SAME process is fine (the
+        // TUI claims on every switch).
+        assert!(
+            claim_session_here("s1").expect("the claim succeeds"),
+            "the same process may re-claim its own session"
+        );
+
+        // Another LIVE process owns the session ✗ → the claim is refused ✓.
+        // pid 1 is init: it is always alive.
+        register_presence("s2", 1).expect("the owner registers");
+        assert!(
+            !claim_session_here("s2").expect("the claim is checked"),
+            "a live owner must REFUSE the claim — two processes claiming one \
+             session is what the registry exists to prevent"
+        );
+
+        // SAFETY: serialised by the crate's environment lock.
+        match previous_home {
+            Some(v) => unsafe { std::env::set_var("HERMES_HOME", v) },
+            None => unsafe { std::env::remove_var("HERMES_HOME") },
+        }
+    }
+
+    /// RT-522: distinct session ids get distinct lock files.
+    ///
+    /// The name used to be a lossy sanitization — every non-alphanumeric
+    /// character became `_` — so `telegram:c:u` and `telegram_c_u` shared
+    /// ONE lock file.
+    #[test]
+    fn distinct_session_ids_get_distinct_lock_files() {
+        let a = sanitize("telegram:c:u");
+        let b = sanitize("telegram_c_u");
+        assert_ne!(
+            a, b,
+            "two different session ids must not share one lock file"
+        );
+        assert!(
+            !a.contains('/') && !a.contains(':'),
+            "the name must stay a plain file name"
+        );
+    }
+
     fn sanitizes_session_keys_for_filenames() {
         let root = temp_root("sanitize");
         let tracker = ActiveSessionTracker::new(root.clone(), None);

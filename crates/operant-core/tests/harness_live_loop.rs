@@ -515,7 +515,7 @@ async fn channel_adapter_seam_routes_to_host() {
         }
         async fn start_with_channel(
             &self,
-            _tx: tokio::sync::mpsc::UnboundedSender<operant_core::IncomingMessage>,
+            _tx: tokio::sync::mpsc::Sender<operant_core::IncomingMessage>,
         ) -> operant_core::error::Result<()> {
             Ok(())
         }

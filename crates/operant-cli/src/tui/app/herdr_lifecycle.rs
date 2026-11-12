@@ -63,6 +63,34 @@ impl App {
             .and_then(|source| source.session_id())
     }
 
+    /// Claim the CURRENT session for this process (RT-522).
+    ///
+    /// The presence registry answers "is this session live in another
+    /// process", and the claim is what makes "live" mean anything. It used
+    /// to happen only at boot — guarded on a session id that did not exist
+    /// yet, because the id is minted on the first turn — so no process ever
+    /// claimed a session and the guard was inert. It happens at every turn
+    /// start now (see `agent_events`), which covers the first turn, `/new`
+    /// and every hub switch.
+    ///
+    /// A REFUSED claim is reported: two processes owning one session is
+    /// exactly what the registry exists to surface.
+    pub(super) fn claim_current_session(&self) {
+        let Some(session_id) = self.herdr_session_id() else {
+            return;
+        };
+        match operant_core::active_sessions::claim_session_here(&session_id) {
+            Ok(true) => {}
+            Ok(false) => tracing::warn!(
+                session_id = %session_id,
+                "another live process owns this session — the claim was refused"
+            ),
+            Err(e) => {
+                tracing::debug!(error = %e, "failed to claim the session for this process")
+            }
+        }
+    }
+
     /// Tell Herdr which session this pane is running, when that changed.
     fn sync_herdr_session(&self) {
         let Some(reporter) = self.herdr_reporter() else {
