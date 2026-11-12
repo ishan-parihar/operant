@@ -315,7 +315,7 @@ pub async fn run_setup_wizard(
         Some("terminal") => {
             step_terminal(&mut updated, true).await?;
             step_tools(&mut updated, true).await?;
-            step_integrations(&mut updated).await?;
+            step_integrations(&mut updated, true).await?;
         }
         Some("tts") => {
             step_tts(&mut updated, true).await?;
@@ -376,10 +376,6 @@ pub async fn run_setup_wizard(
                 // Step 5b: Browser & Skills setup
                 step_browser_and_skills(&mut updated).await?;
 
-                // Step 5c: Editor & pane integrations (Herdr, the Omarchy
-                // agent menu). These are what make Operant visible in the
-                // surrounding infrastructure on a fresh machine.
-                step_integrations(&mut updated).await?;
 
                 // Step 6: Agent behaviour settings
                 step_agent_settings(&mut updated, false).await?;
@@ -393,6 +389,18 @@ pub async fn run_setup_wizard(
         Some(other) => {
             anyhow::bail!("Unknown setup section: {other}");
         }
+    }
+
+    // The pane and menu integrations, wired once for the whole wizard.
+    //
+    // This is OUTSIDE the quick/full branch on purpose: a fresh machine that
+    // runs the quick wizard — the default — would otherwise end up with an
+    // Operant that Herdr cannot see and the Omarchy menu does not offer. The
+    // full wizard asks first; the quick wizard wires without asking, because
+    // the installs are idempotent and touch only the programs that are
+    // actually present.
+    if section.is_none() {
+        step_integrations(&mut updated, !quick).await?;
     }
 
     // Apply changes
@@ -1102,7 +1110,7 @@ async fn download_file_to(
 /// Omarchy is a supported machine — so this step reports what it finds and
 /// only writes when there is something to wire. It is the interactive
 /// counterpart of `operant doctor --fix`, and both call the same installer.
-async fn step_integrations(_config: &mut AppConfig) -> Result<()> {
+async fn step_integrations(_config: &mut AppConfig, ask: bool) -> Result<()> {
     print_page_header("Editor & Pane Integrations");
 
     let herdr = crate::integrations::herdr_plugin::status();
@@ -1136,6 +1144,26 @@ async fn step_integrations(_config: &mut AppConfig) -> Result<()> {
         && !(omarchy.wrappers_current && omarchy.registered && omarchy.menu_row);
 
     if !herdr_needs_work && !omarchy_needs_work {
+        return Ok(());
+    }
+
+    if !ask {
+        // Quick mode has no dialogue at all, and the installs are idempotent
+        // and confined to the two programs that are actually present, so they
+        // are wired rather than merely offered. A first-time run of the
+        // wizard would otherwise leave the agent invisible in the pane
+        // manager and out of the agent menu, which is what this step exists
+        // to stop.
+        let report = crate::integrations::fix_all();
+        for line in &report.fixed {
+            if line.contains("nothing to set up") {
+                continue;
+            }
+            print_success(line);
+        }
+        for line in &report.errors {
+            print_warning(line);
+        }
         return Ok(());
     }
 
