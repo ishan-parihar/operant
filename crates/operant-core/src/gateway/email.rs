@@ -353,10 +353,7 @@ impl PlatformAdapter for EmailAdapter {
         })
     }
 
-    async fn start_with_channel(
-        &self,
-        _message_tx: mpsc::UnboundedSender<IncomingMessage>,
-    ) -> Result<()> {
+    async fn start_with_channel(&self, _message_tx: mpsc::Sender<IncomingMessage>) -> Result<()> {
         self.start().await
     }
 

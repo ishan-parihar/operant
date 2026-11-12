@@ -492,7 +492,7 @@ impl Gateway {
     /// task and forward incoming messages through the sender.
     pub async fn start_with_channel(
         &self,
-        message_tx: mpsc::UnboundedSender<IncomingMessage>,
+        message_tx: mpsc::Sender<IncomingMessage>,
     ) -> Result<()> {
         // Mark the gateway running here too: callers that boot exclusively
         // through the channel path (gateway_runner) never invoked `start`, so
@@ -565,7 +565,7 @@ impl Gateway {
         running: Arc<RwLock<bool>>,
         name: String,
         adapter: Arc<dyn PlatformAdapter>,
-        message_tx: Option<mpsc::UnboundedSender<IncomingMessage>>,
+        message_tx: Option<mpsc::Sender<IncomingMessage>>,
     ) {
         tokio::spawn(async move {
             let mut delay_secs: u64 = 5;
@@ -779,7 +779,25 @@ impl Gateway {
                 crate::active_sessions::ActiveSessionTracker::default_dir(),
                 Some(max),
             );
-            if !tracker.acquire(&session_key)? {
+            // (RT-521) A cap whose tracker CANNOT run (a read-only
+            // operant home, a full disk) must not break message delivery:
+            // the message is handled WITHOUT the cap, loudly. A cap is a
+            // protection, and the protection failing silently is one bug;
+            // the protection failing loudly and stopping every chat is a
+            // worse one.
+            let capped = match tracker.acquire(&session_key) {
+                Ok(capped) => capped,
+                Err(e) => {
+                    warn!(
+                        session = %session_key,
+                        error = %e,
+                        "the gateway session cap could not be enforced — the message \
+                         is handled without the cap"
+                    );
+                    true
+                }
+            };
+            if !capped {
                 warn!(
                     session = %session_key,
                     max,
@@ -1054,7 +1072,7 @@ mod tests {
         let adapter =
             std::sync::Arc::new(crate::gateway::WebhookAdapter::new(true).with_addr(addr.clone()));
         let gw = Gateway::new(GatewayConfig::default()).with_adapter(adapter);
-        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let (tx, _rx) = tokio::sync::mpsc::channel(8);
         let error = gw
             .start_with_channel(tx)
             .await
@@ -2493,7 +2511,7 @@ mod tests {
         // TOCTOU race: another test's ephemeral bind can take the port in
         // between, and the adapter then fails with `AddrInUse`. So try a
         // few ports — the retry is on the HARNESS side only.
-        let (tx, mut rx) = mpsc::unbounded_channel::<IncomingMessage>();
+        let (tx, mut rx) = mpsc::channel::<IncomingMessage>(8);
         let mut addr = None;
         let mut last_error = None;
         for _ in 0..5 {
@@ -2795,7 +2813,7 @@ mod tests {
         }
         async fn start_with_channel(
             &self,
-            _message_tx: tokio::sync::mpsc::UnboundedSender<IncomingMessage>,
+            _message_tx: tokio::sync::mpsc::Sender<IncomingMessage>,
         ) -> Result<()> {
             Ok(())
         }
@@ -2927,7 +2945,7 @@ mod tests {
         }
         async fn start_with_channel(
             &self,
-            _message_tx: tokio::sync::mpsc::UnboundedSender<IncomingMessage>,
+            _message_tx: tokio::sync::mpsc::Sender<IncomingMessage>,
         ) -> Result<()> {
             Ok(())
         }
@@ -2962,7 +2980,7 @@ mod tests {
         }
         async fn start_with_channel(
             &self,
-            _message_tx: tokio::sync::mpsc::UnboundedSender<IncomingMessage>,
+            _message_tx: tokio::sync::mpsc::Sender<IncomingMessage>,
         ) -> Result<()> {
             Ok(())
         }

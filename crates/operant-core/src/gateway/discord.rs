@@ -358,10 +358,7 @@ impl PlatformAdapter for DiscordAdapter {
         })
     }
 
-    async fn start_with_channel(
-        &self,
-        message_tx: mpsc::UnboundedSender<IncomingMessage>,
-    ) -> Result<()> {
+    async fn start_with_channel(&self, message_tx: mpsc::Sender<IncomingMessage>) -> Result<()> {
         // Discord gateway WebSocket — receives MESSAGE_CREATE events.
         // Without this, the Discord adapter could only send outbound
         // messages; users could never talk TO the bot. (iter-129 —
@@ -434,7 +431,7 @@ pub(crate) async fn connect_discord_gateway(
     url: &str,
     token: &str,
     api_url: &str,
-    message_tx: &mpsc::UnboundedSender<IncomingMessage>,
+    message_tx: &mpsc::Sender<IncomingMessage>,
 ) -> Result<()> {
     use futures_util::{SinkExt, StreamExt};
     use tokio_tungstenite::tungstenite::Message;
@@ -592,7 +589,7 @@ pub(crate) async fn connect_discord_gateway(
                         } else if event_type == "MESSAGE_CREATE" {
                             // Forward to the gateway runner.
                             if let Some(incoming) = parse_discord_message(&json, api_url)
-                                && message_tx.send(incoming).is_err() {
+                                && message_tx.try_send(incoming).is_err() {
                                     info!("Discord WS: message channel closed, exiting");
                                     return Ok(());
                                 }

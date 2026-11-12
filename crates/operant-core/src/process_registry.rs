@@ -111,6 +111,55 @@ pub struct ProcessRegistry {
     finished: Arc<RwLock<HashMap<String, ProcessSession>>>,
 }
 
+impl Drop for ProcessRegistry {
+    fn drop(&mut self) {
+        // (RT-521) The running children must NOT outlive the agent. The
+        // registry had no `Drop`, so a background command kept running
+        // after the agent that started it was gone — the child held the
+        // stdout pipe, kept its resources, and nothing could kill it but
+        // an explicit `kill`.
+        //
+        // Each child was spawned into its OWN process group (`process_group(0)`
+        // at spawn), so a TERM to the NEGATIVE pid reaps the whole tree.
+        // This runs in `Drop`, so it cannot await: the kill is a plain
+        // `kill` command, and a failure is logged, never fatal.
+        let Ok(running) = self.running.try_write() else {
+            return;
+        };
+        for (session_id, tracked) in running.iter() {
+            let Some(pid) = tracked.session.pid else {
+                continue;
+            };
+            #[cfg(unix)]
+            {
+                let group_ok = std::process::Command::new("kill")
+                    .arg("-TERM")
+                    .arg(format!("-{pid}"))
+                    .output()
+                    .map(|o| o.status.success())
+                    .unwrap_or(false);
+                if !group_ok {
+                    let _ = std::process::Command::new("kill")
+                        .arg("-TERM")
+                        .arg(pid.to_string())
+                        .output();
+                }
+            }
+            #[cfg(windows)]
+            {
+                let _ = std::process::Command::new("taskkill")
+                    .args(["/F", "/T", "/PID", &pid.to_string()])
+                    .output();
+            }
+            warn!(
+                session = %session_id,
+                pid,
+                "the agent is gone — its background process was killed"
+            );
+        }
+    }
+}
+
 /// Keep only the last `MAX_OUTPUT_BYTES` bytes of an accumulated output
 /// buffer, cutting on a CHAR boundary.
 ///
@@ -475,6 +524,43 @@ mod tests {
         s.status = ProcessStatus::Exited;
         s.exit_code = Some(0);
         s
+    }
+
+    /// RT-521: a dropped registry kills its running children.
+    ///
+    /// The registry had no `Drop`, so a background command kept running
+    /// after the agent that started it was gone — nothing could kill it
+    /// but an explicit `kill`.
+    #[tokio::test]
+    async fn a_dropped_registry_kills_its_running_children() {
+        let registry = ProcessRegistry::new();
+        let session = registry
+            .spawn("sleep 60".to_string(), None)
+            .await
+            .expect("the child starts");
+        let pid = session.pid.expect("the child's pid");
+        assert!(
+            std::path::Path::new(&format!("/proc/{pid}")).exists(),
+            "the child is running"
+        );
+
+        drop(registry);
+
+        // The child must be REAPED, not merely TERMed: a killed child is
+        // still a ZOMBIE until the reader task waits on it, and a zombie
+        // still answers `kill -0`. Poll for its /proc entry to disappear.
+        let mut reaped = false;
+        for _ in 0..50 {
+            if !std::path::Path::new(&format!("/proc/{pid}")).exists() {
+                reaped = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        assert!(
+            reaped,
+            "the background child must not outlive the agent that started it"
+        );
     }
 
     #[test]

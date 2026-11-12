@@ -1966,6 +1966,20 @@ fn acquire_gateway_daemon_lock_at(path: std::path::PathBuf) -> Result<Option<Gat
         }))
     }
 }
+/// Whether another message may be queued for this chat (RT-521).
+///
+/// The queue is per session: a chat that floods while its turn is busy must
+/// not grow the queue without limit.
+fn queue_has_room(queue: &VecDeque<(String, IncomingMessage)>, session_key: &str) -> bool {
+    queue.iter().filter(|(key, _)| key == session_key).count() < MAX_QUEUED_MESSAGES_PER_SESSION
+}
+
+/// How many messages one chat may have QUEUED behind its own in-flight turn
+/// (RT-521). The queue was unbounded, so a chat that kept talking while its
+/// turn was busy grew the queue until the process died. The drop is logged:
+/// a dropped chat message is a real loss.
+const MAX_QUEUED_MESSAGES_PER_SESSION: usize = 32;
+
 /// How often (in queued turns) the gateway logs the aggregate queue-wait
 /// summary. 50 keeps the summary visible without flooding the log on a
 /// busy multi-chat deployment — the per-turn line still records every
@@ -4478,7 +4492,12 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
         }
     }
 
-    let (message_tx, mut message_rx) = mpsc::unbounded_channel::<IncomingMessage>();
+    // (RT-521) The ingress channel is BOUNDED. It was unbounded, so a
+    // burst (a webhook loop, a flood, a reconnect storm) grew the queue
+    // until the process died. The capacity is generous enough for a burst
+    // and small enough to fail loudly.
+    const INGRESS_CAPACITY: usize = 1024;
+    let (message_tx, mut message_rx) = mpsc::channel::<IncomingMessage>(INGRESS_CAPACITY);
     // Clone kept by the dispatch loop so a queued message can be re-injected
     // into the channel once its session's in-flight turn completes (the
     // message arm re-runs interception and spawns the turn).
@@ -5921,6 +5940,20 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                                 session = %session_key,
                                 "Queuing message behind in-flight turn"
                             );
+                            // (RT-521) The per-session queue is BOUNDED: a
+                            // chat that floods while its turn is busy used
+                            // to grow the queue without limit. The drop is
+                            // visible — a dropped chat message is a real
+                            // loss, so it is logged, not silent.
+                            if !queue_has_room(&turn_queue, &session_key) {
+                                tracing::warn!(
+                                    session = %session_key,
+                                    limit = MAX_QUEUED_MESSAGES_PER_SESSION,
+                                    "the session's message queue is FULL — the message \
+                                     is dropped"
+                                );
+                                continue;
+                            }
                             turn_queue.push_back((session_key, msg));
                             continue;
                         }
@@ -6365,7 +6398,16 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                         if let Some(pos) = turn_queue.iter().position(|(k, _)| *k == done_key)
                             && let Some((_, msg)) = turn_queue.remove(pos)
                         {
-                            let _ = message_tx_for_reinject.send(msg);
+                            // (RT-521) The reinject WAITS for room: a queued
+                            // chat message must not be dropped because the
+                            // ingress queue was momentarily full.
+                            if let Err(e) = message_tx_for_reinject.send(msg).await {
+                                tracing::warn!(
+                                    error = %e,
+                                    "a queued message could not be re-injected into the \
+                                     ingress queue — it is dropped"
+                                );
+                            }
                         }
                     }
                 }

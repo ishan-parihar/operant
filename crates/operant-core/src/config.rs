@@ -1700,7 +1700,12 @@ impl Default for GatewaySettings {
             telegram_proxy: None,
             telegram_bot_username: None,
             telegram_dm_topics_enabled: false,
-            max_concurrent_sessions: None,
+            // (RT-521) A REAL default cap: the cap used to default to
+            // `None` (unlimited), so the gateway's active-session tracker
+            // was never even created. 32 is generous for a single operator
+            // (the slots run four turns at a time; the rest queue) and
+            // still bounds the active set.
+            max_concurrent_sessions: Some(32),
             session_retention_days: 90,
             api_enabled: true,
             api_bind: "127.0.0.1:8731".to_string(),

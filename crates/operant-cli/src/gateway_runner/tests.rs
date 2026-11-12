@@ -52,6 +52,7 @@ fn endpoint_edit_is_reported_once_after_the_baseline() {
 
 use super::*;
 use operant_core::config::GatewaySettings;
+use std::collections::VecDeque;
 
 /// The gateway must actually SWEEP the session store.
 ///
@@ -782,6 +783,52 @@ fn a_second_daemon_is_refused_while_the_first_holds_the_lock() {
         "the next starter must take the lock once the holder is gone"
     );
     drop(third);
+}
+
+/// (RT-521) 1,000 queued messages for one chat stay bounded.
+///
+/// The per-session queue was an unbounded `VecDeque`, so a chat that kept
+/// talking while its turn was busy grew the queue until the process died.
+#[test]
+fn a_flooding_chats_queue_stays_bounded() {
+    let mut queue: VecDeque<(String, IncomingMessage)> = VecDeque::new();
+    let key = "telegram:c-a:u-a".to_string();
+    for index in 0..1000 {
+        let message = IncomingMessage::new("telegram", "u-a", "A", "c-a", &format!("m{index}"));
+        if super::queue_has_room(&queue, &key) {
+            queue.push_back((key.clone(), message));
+        } else {
+            // The drop is the point: the queue stops growing.
+            break;
+        }
+    }
+    assert_eq!(
+        queue.len(),
+        super::MAX_QUEUED_MESSAGES_PER_SESSION,
+        "the queue must stop at the cap, not grow with the flood"
+    );
+    // Another chat has its own room.
+    assert!(
+        super::queue_has_room(&queue, "telegram:c-b:u-b"),
+        "the cap is per session, not global"
+    );
+}
+
+/// (RT-521) The ingress channel is BOUNDED.
+#[test]
+fn the_ingress_channel_is_bounded() {
+    let source = include_str!("../gateway_runner.rs");
+    let unbounded = ["mpsc::unbounded_channel::<IncomingMessage>", "()"].concat();
+    assert!(
+        !source.contains(unbounded.as_str()),
+        "the ingress channel must be bounded — an unbounded one grows until the \
+         process dies"
+    );
+    let bounded = ["mpsc::channel::<IncomingMessage>", "(INGRESS_CAPACITY)"].concat();
+    assert!(
+        source.contains(bounded.as_str()),
+        "the ingress channel must have a real capacity"
+    );
 }
 
 /// (RT-536) The daemon's state file sits next to THE DATABASE it

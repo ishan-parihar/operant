@@ -331,10 +331,7 @@ impl PlatformAdapter for WebhookAdapter {
         clippy::expect_used,
         reason = "NOTION_SEMAPHORE is a static that is never closed, so acquire cannot fail"
     )]
-    async fn start_with_channel(
-        &self,
-        message_tx: mpsc::UnboundedSender<IncomingMessage>,
-    ) -> Result<()> {
+    async fn start_with_channel(&self, message_tx: mpsc::Sender<IncomingMessage>) -> Result<()> {
         use axum::Router;
         use axum::extract::{Path, State};
         use axum::http::HeaderMap;
@@ -397,7 +394,7 @@ impl PlatformAdapter for WebhookAdapter {
                 get(
                     move |Path(_route): Path<String>,
                           State((_, secret, _)): State<(
-                        mpsc::UnboundedSender<IncomingMessage>,
+                        mpsc::Sender<IncomingMessage>,
                         Option<String>,
                         Option<HolonHook>,
                     )>,
@@ -434,7 +431,7 @@ impl PlatformAdapter for WebhookAdapter {
                     move |Path(route): Path<String>,
                           headers: HeaderMap,
                           State((tx, secret, holon)): State<(
-                        mpsc::UnboundedSender<IncomingMessage>,
+                        mpsc::Sender<IncomingMessage>,
                         Option<String>,
                         Option<HolonHook>,
                     )>,
@@ -683,7 +680,7 @@ impl PlatformAdapter for WebhookAdapter {
                                                 // so Slack retries instead of
                                                 // trusting an "ok" that lost
                                                 // the event.
-                                                if tx.send(slack_msg).is_err() {
+                                                if tx.try_send(slack_msg).is_err() {
                                                     return (
                                                         axum::http::StatusCode::INTERNAL_SERVER_ERROR,
                                                         "Channel closed",
@@ -728,7 +725,7 @@ impl PlatformAdapter for WebhookAdapter {
                                                 // arm above: a closed channel
                                                 // must NOT be acked, or Meta
                                                 // drops the event on a 200.
-                                                if tx.send(wa_msg).is_err() {
+                                                if tx.try_send(wa_msg).is_err() {
                                                     return (
                                                         axum::http::StatusCode::INTERNAL_SERVER_ERROR,
                                                         "Channel closed",
@@ -811,12 +808,30 @@ impl PlatformAdapter for WebhookAdapter {
                             raw: serde_json::from_slice(&body).unwrap_or(serde_json::json!({"route": route})),
                         };
 
-                        if tx.send(msg).is_err() {
-                            return (
-                                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                                "Channel closed",
-                            )
-                                .into_response();
+                        // (RT-521) The ingress channel is BOUNDED: a full
+                        // channel is a refusal, and the refusal is visible —
+                        // the request is answered 503, not acked as
+                        // delivered.
+                        match tx.try_send(msg) {
+                            Ok(()) => {}
+                            Err(mpsc::error::TrySendError::Full(_)) => {
+                                tracing::warn!(
+                                    "the gateway ingress channel is FULL — the inbound \
+                                     webhook was refused"
+                                );
+                                return (
+                                    axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                                    "Gateway ingress queue is full",
+                                )
+                                    .into_response();
+                            }
+                            Err(mpsc::error::TrySendError::Closed(_)) => {
+                                return (
+                                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                                    "Channel closed",
+                                )
+                                    .into_response();
+                            }
                         }
 
                         (axum::http::StatusCode::OK, "accepted").into_response()
@@ -910,7 +925,7 @@ mod tests {
             panic!("a bound listener has a local address");
         };
         let adapter = WebhookAdapter::new(true).with_addr(addr.to_string());
-        let (tx, _rx) = mpsc::unbounded_channel();
+        let (tx, _rx) = mpsc::channel(8);
         assert!(adapter.start_with_channel(tx).await.is_err());
     }
 
@@ -932,9 +947,7 @@ mod tests {
     ///
     /// So: try a few ports. The retry is on the HARNESS side only — the
     /// adapter's behaviour is not changed.
-    async fn start_on_ephemeral(
-        secret: Option<&str>,
-    ) -> (u16, mpsc::UnboundedReceiver<IncomingMessage>) {
+    async fn start_on_ephemeral(secret: Option<&str>) -> (u16, mpsc::Receiver<IncomingMessage>) {
         let mut last_error = None;
         for _ in 0..5 {
             let probe = std::net::TcpListener::bind("127.0.0.1:0").expect("an ephemeral port");
@@ -942,7 +955,7 @@ mod tests {
             drop(probe);
             let mut adapter = WebhookAdapter::new(true).with_addr(format!("127.0.0.1:{port}"));
             adapter = adapter.with_secret(secret.map(str::to_string));
-            let (tx, rx) = mpsc::unbounded_channel();
+            let (tx, rx) = mpsc::channel(8);
             match adapter.start_with_channel(tx).await {
                 Ok(()) => return (port, rx),
                 Err(e) => {

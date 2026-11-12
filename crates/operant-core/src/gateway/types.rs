@@ -801,10 +801,7 @@ pub trait PlatformAdapter: Send + Sync {
     }
 
     /// Start the adapter with a message channel for incoming messages.
-    async fn start_with_channel(
-        &self,
-        message_tx: mpsc::UnboundedSender<IncomingMessage>,
-    ) -> Result<()>;
+    async fn start_with_channel(&self, message_tx: mpsc::Sender<IncomingMessage>) -> Result<()>;
 
     /// Send a message to a specific channel, returning the message ID.
     async fn send_message_to_channel(

@@ -425,7 +425,7 @@ mod tests {
         }
         async fn start_with_channel(
             &self,
-            _message_tx: tokio::sync::mpsc::UnboundedSender<crate::gateway::IncomingMessage>,
+            _message_tx: tokio::sync::mpsc::Sender<crate::gateway::IncomingMessage>,
         ) -> crate::error::Result<()> {
             Ok(())
         }

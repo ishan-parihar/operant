@@ -844,10 +844,7 @@ impl PlatformAdapter for TelegramAdapter {
         })
     }
 
-    async fn start_with_channel(
-        &self,
-        message_tx: mpsc::UnboundedSender<IncomingMessage>,
-    ) -> Result<()> {
+    async fn start_with_channel(&self, message_tx: mpsc::Sender<IncomingMessage>) -> Result<()> {
         if !self.is_enabled() {
             return Ok(());
         }
@@ -1115,7 +1112,7 @@ impl PlatformAdapter for TelegramAdapter {
                                                         msg.content.len(),
                                                         msg.media_urls.len()
                                                     );
-                                                    if let Err(e) = message_tx.send(msg) {
+                                                    if let Err(e) = message_tx.try_send(msg) {
                                                         tracing::error!(
                                                             "Failed to send message to gateway handler: {}",
                                                             e
