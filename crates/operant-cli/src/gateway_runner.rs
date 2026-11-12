@@ -1996,6 +1996,11 @@ impl QueueWaitStats {
         *self.per_session.entry(session_key.to_string()).or_insert(0) += 1;
     }
 
+    /// The numbers for the daemon's state file (RT-523).
+    fn snapshot(&self) -> (u64, u64, u64) {
+        (self.events, self.total_ms, self.worst_ms)
+    }
+
     /// One human-readable line for the logs and `gateway status --deep`.
     fn line(&self) -> String {
         if self.events == 0 {
@@ -2355,6 +2360,39 @@ struct GatewayMessageHandler {
 }
 
 impl GatewayMessageHandler {
+    /// Write the daemon's state file (RT-523).
+    ///
+    /// Best-effort: a status file that cannot be written must never fail a
+    /// turn.
+    async fn write_status_file(&self) {
+        let (deliveries, failed_deliveries) = {
+            let gw = self.gateway.lock().await;
+            match gw.as_ref() {
+                Some(gw) => gw.delivery_counts().await,
+                None => (0, 0),
+            }
+        };
+        let (queue_waits, queue_wait_total_ms, queue_wait_worst_ms) =
+            self.queue_waits.lock().await.snapshot();
+        let status = operant_core::gateway::status::GatewayStatus {
+            updated_at: chrono::Utc::now().to_rfc3339(),
+            deliveries: deliveries as u64,
+            failed_deliveries: failed_deliveries as u64,
+            queue_waits,
+            queue_wait_total_ms,
+            queue_wait_worst_ms,
+            agent_slots: self.slots.iter().count(),
+        };
+        let path = operant_core::gateway::status::status_file_path();
+        if let Err(e) = operant_core::gateway::status::write_status_file(&path, &status) {
+            tracing::warn!(
+                error = %e,
+                path = %path.display(),
+                "the gateway status file could not be written"
+            );
+        }
+    }
+
     /// RT-175 — execute a session-mutating runtime command against THIS
     /// chat's own conversation, safely on the shared agent.
     ///
@@ -3446,6 +3484,12 @@ impl MessageHandler for GatewayMessageHandler {
                     "Gateway turn end: answered"
                 );
 
+                // (RT-523) The daemon's state file, written on every turn
+                // end: the delivery counts and the queue-wait numbers are
+                // RAM-only, so after a restart nobody could say how many
+                // replies had failed or how many turns had waited.
+                self.write_status_file().await;
+
                 Ok(OutgoingMessage::new(message.channel_id, content)
                     .with_thread_id(message.thread_id))
             }
@@ -3889,7 +3933,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
     // same flock, one axum route group for the OTHER surfaces. The lock is
     // held HERE, so spawning after it means the API shares the daemon's
     // single-instance discipline.
-    crate::gateway_api::spawn_if_enabled(&app_config.gateway, &app_config.database_path);
+    crate::gateway_api::spawn_if_enabled(&app_config.gateway, &app_config.database_path).await;
 
     let mut guard = runner().lock().await;
 

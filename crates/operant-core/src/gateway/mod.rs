@@ -5,6 +5,7 @@
 
 pub mod dispatch_breaker;
 pub mod lifecycle;
+pub mod status;
 
 /// The platforms whose inbound messages actually reach the agent.
 ///
@@ -402,6 +403,15 @@ impl Gateway {
     /// Called BEFORE the adapters stop: the turn must be interrupted and
     /// given time to end while the runtime is still alive, so its
     /// transcript is complete and the next start can offer the resume.
+    /// The delivery counts (RT-523): how many outbound sends were
+    /// delivered and how many failed.
+    pub async fn delivery_counts(&self) -> (usize, usize) {
+        (
+            self.delivery_ledger.delivered_count().await,
+            self.delivery_ledger.failed_count().await,
+        )
+    }
+
     pub async fn drain(&self, timeout: std::time::Duration) -> DrainOutcome {
         match &self.message_handler {
             Some(handler) => handler.drain(timeout).await,
@@ -431,6 +441,21 @@ impl Gateway {
         let failed = self.delivery_ledger.failed_count().await;
         if delivered > 0 || failed > 0 {
             info!(delivered, failed, "gateway delivery summary");
+        }
+
+        // (RT-523) The final state file: the delivery counts survive the
+        // process, so "how many replies failed?" has an answer after a
+        // restart. Best-effort — a status file that cannot be written must
+        // never take the shutdown down.
+        let path = status::status_file_path();
+        let state = status::GatewayStatus {
+            updated_at: chrono::Utc::now().to_rfc3339(),
+            deliveries: delivered as u64,
+            failed_deliveries: failed as u64,
+            ..Default::default()
+        };
+        if let Err(e) = status::write_status_file(&path, &state) {
+            warn!(error = %e, path = %path.display(), "the gateway status file could not be written");
         }
 
         Ok(())

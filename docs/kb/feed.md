@@ -1545,3 +1545,4 @@ meas finding for whoever owns iter-1669: scripts/clippy-warning-gate.sh printed 
 - **[F0326]** 2026-11-12T12:27 · `agent-omarchy-wt2096` · wf:process-architecture — `process-architecture-011` → done
 - **[F0327]** 2026-11-12T13:41 · `agent-omarchy-wt2096` · wf:process-architecture — `process-architecture-002` → done
 - **[F0328]** 2026-11-12T14:19 · `agent-omarchy-wt2096` · wf:process-architecture — `process-architecture-014` → done
+- **[F0329]** 2026-11-12T15:38 · `agent-omarchy-wt2096` · wf:process-architecture — `process-architecture-017` → done

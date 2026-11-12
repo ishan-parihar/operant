@@ -230,12 +230,12 @@ pub fn build_router(state: GatewayApiState) -> Router {
 /// detached (dies with the daemon); a bind failure logs and the gateway runs
 /// without the API rather than refusing to start — the messaging surface is
 /// the product, the API is a read-only convenience.
-pub fn spawn_if_enabled(
+pub async fn spawn_if_enabled(
     gateway: &operant_core::config::GatewaySettings,
     db_path: &std::path::Path,
-) {
+) -> ApiStartOutcome {
     if !gateway.api_enabled {
-        return;
+        return ApiStartOutcome::Disabled;
     }
     let bind = gateway.api_bind.clone();
     // The dashboard's token generator (/dev/urandom-backed) — same
@@ -243,26 +243,96 @@ pub fn spawn_if_enabled(
     // (journal under systemd): a token the operator cannot read is a
     // feature nobody can use, and the dashboard sets the precedent.
     let token = crate::dashboard_server::new_session_token();
+    // (RT-523) BIND FIRST, print the token second. The old order printed
+    // the token and THEN bound, and a bind failure was only a WARN — so a
+    // port conflict printed a token line followed by nothing useful, and
+    // the operator believed the API was up.
+    let listener = match tokio::net::TcpListener::bind(&bind).await {
+        Ok(listener) => listener,
+        Err(e) => {
+            tracing::error!(error = %e, bind = %bind, "gateway session API NOT started");
+            println!("Gateway session API NOT started — could not bind {bind}: {e}");
+            return ApiStartOutcome::NotStarted(format!("could not bind {bind}: {e}"));
+        }
+    };
     println!("Gateway session API on http://{bind} — Authorization: Bearer {token}");
     let state = GatewayApiState::new(db_path.to_path_buf(), token);
     tokio::spawn(async move {
-        let listener = match tokio::net::TcpListener::bind(&bind).await {
-            Ok(l) => l,
-            Err(e) => {
-                tracing::warn!(error = %e, bind = %bind, "gateway API listener not started");
-                return;
-            }
-        };
         tracing::info!(bind = %bind, "gateway session API listening");
         let app = build_router(state);
         if let Err(e) = axum::serve(listener, app).await {
             tracing::warn!(error = %e, "gateway session API stopped");
         }
     });
+    ApiStartOutcome::Started
+}
+
+/// What the API spawn did (RT-523).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ApiStartOutcome {
+    /// The API is disabled in the config — nothing was attempted.
+    Disabled,
+    /// The listener is bound and the token was printed.
+    Started,
+    /// The bind failed: NOTHING is listening and no token was printed.
+    NotStarted(String),
 }
 
 #[cfg(test)]
 mod tests {
+    /// RT-523: a failed bind starts NOTHING and says so.
+    ///
+    /// The old order printed the bearer token and THEN bound, logging a
+    /// bind failure as a warning — so a port conflict printed a token line
+    /// followed by nothing useful, and the operator believed the API was up.
+    #[tokio::test]
+    async fn a_failed_bind_starts_nothing() {
+        let holder = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("hold a port");
+        let addr = holder.local_addr().expect("addr").to_string();
+        let mut settings = operant_core::config::GatewaySettings::default();
+        settings.api_enabled = true;
+        settings.api_bind = addr.clone();
+
+        let outcome = super::spawn_if_enabled(
+            &settings,
+            std::path::Path::new("/tmp/operant-acp-bind-test.sqlite"),
+        )
+        .await;
+        assert!(
+            matches!(outcome, super::ApiStartOutcome::NotStarted(_)),
+            "a bind conflict must report NOT started, got {outcome:?}"
+        );
+        // The port is still the holder's: the API took nothing.
+        assert!(
+            tokio::net::TcpListener::bind(&addr).await.is_err(),
+            "the API must not have bound the port"
+        );
+    }
+
+    /// RT-523: the token is printed only AFTER the bind succeeds.
+    ///
+    /// The old order printed the bearer token and THEN bound, so a port
+    /// conflict left a token line and nothing else — the operator
+    /// believed the API was up.
+    ///
+    /// A SOURCE contract over the seam: the print is a side effect on
+    /// stdout, which a test cannot capture portably, but the ORDER is the
+    /// invariant.
+    #[test]
+    fn the_token_is_printed_after_the_bind() {
+        let source = include_str!("gateway_api.rs");
+        let bind_at = source.find("TcpListener::bind").expect("the bind call");
+        let print_at = source
+            .find("Gateway session API on http://")
+            .expect("the token print");
+        assert!(
+            bind_at < print_at,
+            "the token must be printed only after the bind succeeds"
+        );
+    }
+
     use super::*;
     use std::io::{BufRead, BufReader, Read, Write};
     use std::net::TcpStream;
