@@ -1230,7 +1230,7 @@ pub(crate) async fn build_registry(
         memory_dir,
         client,
         model,
-        database,
+        database.clone(),
         cron_db,
         kanban_db,
         Some(mcp_manager.clone()),
@@ -1357,6 +1357,20 @@ pub(crate) async fn build_registry(
         if let Err(e) = plugin_tools::register_plugin_tools(&registry, config).await {
             tracing::warn!(error = %e, "plugin tool registration failed (non-fatal)");
         }
+    }
+
+    // Agent-facing context tools (READ-ONLY): `ctx_status` reports what the
+    // agent's window currently holds — the provider's own token count for the
+    // last request, the engine's estimate, the split between tool output and
+    // conversation — and `ctx_search` recalls the agent's OWN session context
+    // under a token budget.
+    //
+    // Registered for EVERY engine: they read the session store and the
+    // context ledger, which exist under all of them. An agent that cannot see
+    // its own context cannot manage it, and the management tools (the write
+    // half: mark/restore/pin/sweep) need this view to be useful.
+    if let Err(e) = operant_core::tools::register_ctx_tools(&registry, database.clone()).await {
+        tracing::warn!(error = %e, "context tool registration failed (non-fatal)");
     }
 
     // LCM context-engine tools: when agent.context_engine = "lcm" the

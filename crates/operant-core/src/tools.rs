@@ -25,6 +25,7 @@ pub mod cli_roster;
 pub mod code_execution;
 pub mod config_tool;
 pub mod cron_tool;
+pub mod ctx_tools;
 pub mod datetime_tool;
 pub mod debug_helpers;
 pub mod delegation_output_schema;
@@ -106,6 +107,7 @@ pub use delegation_output_schema::{
 pub use discord_tool::{DiscordAdminTool, DiscordTool};
 pub use home_assistant_tool::HomeAssistantTool;
 pub use kanban_tool::KanbanTool;
+pub use ctx_tools::register_ctx_tools;
 pub use lcm_tools::register_lcm_tools;
 pub use mcp_tool::McpManagementTool;
 pub use osv_check::OsvCheckTool;
