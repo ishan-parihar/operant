@@ -2248,6 +2248,10 @@ struct AgentSlot {
     /// cancelled by activity. It belongs to the AGENT, so it belongs to
     /// the slot. `None` = the agent has no recap engine.
     recap_activity: Option<operant_core::recap::RecapActivity>,
+    /// The reasoning effort the GATEWAY starts from (RT-535): the
+    /// per-session reset restores it, so a chat without an effort of its
+    /// own does not inherit the previous chat's.
+    default_effort: Option<String>,
     /// ONE turn at a time IN THIS SLOT.
     lock: tokio::sync::Mutex<()>,
 }
@@ -3020,6 +3024,14 @@ impl MessageHandler for GatewayMessageHandler {
         // GW-3: every turn starts unseated; the binding below sets the seat
         // again only when this chat has an employee.
         agent.clear_seat_id();
+        // (RT-535) The slot's agent carries the PREVIOUS session's
+        // per-session fields. A slot serves several sessions now, so a chat
+        // with no override of its own must not inherit the previous chat's
+        // model, reasoning effort or charter. The reset happens BEFORE this
+        // session's own overrides are read below.
+        agent.clear_model_override();
+        agent.set_reasoning_effort(slot.default_effort.clone());
+        agent.set_charter(None);
         // KB-8: every turn starts in its unbound scope, so a sender with no
         // session row never inherits the previous turn's scope. A bound seat
         // overrides it below.
@@ -4174,6 +4186,8 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                     .with_seat_authority(Some(Arc::clone(&seat_authority))),
             ),
             recap_activity: Some(gateway_recap_activity),
+            default_effort: (!app_config.agent.reasoning_effort.is_empty())
+                .then(|| app_config.agent.reasoning_effort.clone()),
             lock: tokio::sync::Mutex::new(()),
         });
     }

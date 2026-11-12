@@ -344,6 +344,7 @@ fn slot_pool_of(agents: Vec<Arc<OperantAgent>>) -> AgentSlots {
             .map(|agent| AgentSlot {
                 agent,
                 recap_activity: None,
+                default_effort: None,
                 lock: tokio::sync::Mutex::new(()),
             })
             .collect(),
@@ -744,7 +745,44 @@ fn the_gateway_sets_the_cron_origin_on_the_slots_agent() {
     );
 }
 
-/// The SAME defect at the CALL SITE (RT-508 red-team, finding 1)./// The SAME defect at the CALL SITE (RT-508 red-team, finding 1).
+/// (RT-535) Every turn resets the slot's PER-SESSION fields before the
+/// session's own overrides are read.
+///
+/// The model override, the reasoning effort and the charter live on the
+/// agent — and the agent belongs to a SLOT now, so a chat with no override
+/// of its own would inherit the previous chat's model. With one agent and
+/// one turn at a time an agent field was effectively "this session's" field.
+///
+/// A source contract: the fields are private to the agent, and the turn's
+/// start is the only place the reset can live.
+#[test]
+fn every_turn_resets_the_slots_per_session_fields() {
+    let source = include_str!("../gateway_runner.rs");
+    let seat = source
+        .find("agent.clear_seat_id();")
+        .expect("the seat's clear");
+    let model = source
+        .find("agent.clear_model_override();")
+        .expect("the model override's reset");
+    let effort = source
+        .find("agent.set_reasoning_effort(slot.default_effort.clone());")
+        .expect("the reasoning effort's reset");
+    let charter = source
+        .find("agent.set_charter(None);")
+        .expect("the charter's reset");
+    for (name, at) in [
+        ("model override", model),
+        ("reasoning effort", effort),
+        ("charter", charter),
+    ] {
+        assert!(
+            seat < at,
+            "the {name}'s reset must sit at the turn's START, with the seat's clear"
+        );
+    }
+}
+
+/// The SAME defect at the CALL SITE (RT-508 red-team, finding 1)./// The SAME defect at the CALL SITE (RT-508 red-team, finding 1)./// The SAME defect at the CALL SITE (RT-508 red-team, finding 1).
 ///
 /// The behaviour test above proves two providers keep separate scopes; this
 /// proves the gateway's slot loop actually USES one per slot. A shared pair

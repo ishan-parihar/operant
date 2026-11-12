@@ -576,6 +576,19 @@ impl OperantAgent {
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(new_model);
     }
 
+    /// Clear the runtime model override, so the agent falls back to its
+    /// configured model (RT-535).
+    ///
+    /// The override lives on the AGENT, and the gateway's agent now belongs
+    /// to a SLOT that serves several sessions — so a chat with no model of
+    /// its own would inherit the previous chat's.
+    pub fn clear_model_override(&self) {
+        *self
+            .model_override
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+    }
+
     /// Swap the attached [`SkillManager`] at
     /// runtime (RT-175 — the gateway's `/reload-skills`). Rescans the
     /// configured skills directory and installs the result; the frozen
