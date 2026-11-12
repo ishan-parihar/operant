@@ -168,7 +168,6 @@ async fn record_feed_routes_channel_posts_through_the_seat_map() {
     let handler = GatewayMessageHandler {
         admins: vec![],
         slots: slot_pool(agent),
-        current_session_id: tokio::sync::Mutex::new(None),
         gateway: tokio::sync::Mutex::new(None),
         session_pins: Arc::new(SessionPins::default()),
         exit_reasons: Arc::new(Mutex::new(std::collections::HashMap::new())),
@@ -347,6 +346,7 @@ fn slot_pool_of(agents: Vec<Arc<OperantAgent>>) -> AgentSlots {
                 recap_activity: None,
                 default_effort: None,
                 lock: tokio::sync::Mutex::new(()),
+                loaded_session: tokio::sync::Mutex::new(None),
             })
             .collect(),
     }
@@ -383,7 +383,6 @@ fn slow_echo_handler_with_slots(
     Arc::new(GatewayMessageHandler {
         admins: vec![],
         slots: slot_pool_of(slot_agents),
-        current_session_id: tokio::sync::Mutex::new(None),
         gateway: tokio::sync::Mutex::new(None),
         session_pins: Arc::new(SessionPins::default()),
         exit_reasons: ExitReasonMap::default(),
@@ -467,7 +466,6 @@ fn context_exhaustion_handler(dir: &tempfile::TempDir) -> Arc<GatewayMessageHand
     Arc::new(GatewayMessageHandler {
         admins: vec![],
         slots: slot_pool(agent),
-        current_session_id: tokio::sync::Mutex::new(None),
         gateway: tokio::sync::Mutex::new(None),
         session_pins: Arc::new(SessionPins::default()),
         exit_reasons: ExitReasonMap::default(),
@@ -783,6 +781,43 @@ fn a_second_daemon_is_refused_while_the_first_holds_the_lock() {
         "the next starter must take the lock once the holder is gone"
     );
     drop(third);
+}
+
+/// (the red-team's finding 7) The conversation-reload decision belongs to
+/// the SLOT.
+///
+/// The handler kept ONE `current_session_id` for all the slots, so a slot
+/// could see the OTHER slot's session id and decide to reload a
+/// conversation it already had — a redundant rehydrate per turn.
+#[test]
+fn the_reload_decision_belongs_to_the_slot() {
+    let source = include_str!("../gateway_runner.rs");
+    let shared = ["current_session_id: tokio::sync::Mutex", ""].concat();
+    assert!(
+        !source.contains(shared.as_str()),
+        "the handler must not keep ONE shared session cell — the decision \
+         belongs to the slot, which has one agent and one conversation"
+    );
+    let per_slot = ["loaded_session: tokio::sync::Mutex<Option<String>>", ""].concat();
+    assert!(
+        source.contains(per_slot.as_str()),
+        "each slot must own its loaded-session cell"
+    );
+    // The decision must read THIS session's slot, not a fixed one.
+    // The needle is one line's worth, so the formatter cannot split it.
+    let this_slot = ["slot_for(&session_key)", ""].concat();
+    // BOTH the read and the write of the cell must name this session's slot.
+    // The count is over the DECISION'S OWN BLOCK: the needle appears
+    // elsewhere in the file (other slot lookups), so a whole-file count
+    // would pass no matter what the decision read.
+    let start = source
+        .find("let needs_reload =")
+        .expect("the reload decision exists");
+    let block = &source[start..(start + 1200).min(source.len())];
+    assert!(
+        block.matches(this_slot.as_str()).count() >= 2,
+        "the reload decision must read and write the slot of THIS session"
+    );
 }
 
 /// (RT-521) 1,000 queued messages for one chat stay bounded.
@@ -1860,7 +1895,6 @@ async fn gateway_effort_settles_into_the_agents_live_cell() {
     let handler = GatewayMessageHandler {
         admins: vec![],
         slots: slot_pool(Arc::clone(&agent)),
-        current_session_id: tokio::sync::Mutex::new(None),
         gateway: tokio::sync::Mutex::new(None),
         session_pins: Arc::new(SessionPins::default()),
         exit_reasons: ExitReasonMap::default(),
@@ -1993,7 +2027,6 @@ async fn gateway_export_writes_this_sessions_transcript_as_markdown() {
     let handler = GatewayMessageHandler {
         admins: vec![],
         slots: slot_pool(Arc::clone(&agent)),
-        current_session_id: tokio::sync::Mutex::new(None),
         gateway: tokio::sync::Mutex::new(None),
         session_pins: Arc::new(SessionPins::default()),
         exit_reasons: ExitReasonMap::default(),
@@ -2124,7 +2157,6 @@ async fn gateway_memory_reports_the_live_provider_and_recalls_through_it() {
     let handler = GatewayMessageHandler {
         admins: vec![],
         slots: slot_pool(Arc::clone(&agent)),
-        current_session_id: tokio::sync::Mutex::new(None),
         gateway: tokio::sync::Mutex::new(None),
         session_pins: Arc::new(SessionPins::default()),
         exit_reasons: ExitReasonMap::default(),
@@ -2221,7 +2253,6 @@ async fn gateway_skill_expands_a_real_installed_skill() {
     let handler = GatewayMessageHandler {
         admins: vec![],
         slots: slot_pool(Arc::clone(&agent)),
-        current_session_id: tokio::sync::Mutex::new(None),
         gateway: tokio::sync::Mutex::new(None),
         session_pins: Arc::new(SessionPins::default()),
         exit_reasons: ExitReasonMap::default(),
@@ -2315,7 +2346,6 @@ async fn gateway_search_drives_the_session_search_tool_over_the_real_store() {
     let handler = GatewayMessageHandler {
         admins: vec![],
         slots: slot_pool(Arc::clone(&agent)),
-        current_session_id: tokio::sync::Mutex::new(None),
         gateway: tokio::sync::Mutex::new(None),
         session_pins: Arc::new(SessionPins::default()),
         exit_reasons: ExitReasonMap::default(),

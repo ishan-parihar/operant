@@ -89,7 +89,7 @@ was load-tested, and no number in this report was invented.
 
 ## Should fix
 
-### 5. The checkpoint list is shared by every chat
+### 5. The checkpoint list is shared by every chat — **OPEN (ledger RT-537)**
 (`crates/operant-core/src/tools/checkpoint_tool.rs:30`)
 
 - **What this is:** checkpoints live in one process-global manager, keyed by
@@ -100,7 +100,7 @@ was load-tested, and no number in this report was invented.
 - **Fix:** key the checkpoints by session as well as working directory.
 - **If we skip it:** a seat can read another seat's checkpoints.
 
-### 6. The file-state snapshots are shared by every chat
+### 6. The file-state snapshots are shared by every chat — **OPEN (ledger RT-538)**
 (`crates/operant-core/src/tools/file_state.rs:23`)
 
 - **What this is:** one process-global map of file snapshots (the file-edit
@@ -109,7 +109,7 @@ was load-tested, and no number in this report was invented.
 - **Fix:** key the map by session and path.
 - **If we skip it:** a chat's file undo can restore another chat's snapshot.
 
-### 7. The conversation-reload decision races between slots
+### 7. The conversation-reload decision races between slots — **CLOSED (iter-2153)**
 (`crates/operant-cli/src/gateway_runner.rs:2843`)
 
 - **What this is:** the handler keeps ONE `current_session_id` to decide
@@ -120,13 +120,22 @@ was load-tested, and no number in this report was invented.
 - **Fix:** the decision belongs to the slot (each slot has one agent and one
   conversation), so the cell belongs to the slot.
 - **If we skip it:** a redundant rehydrate per turn — slower, not wrong.
+- **Closed in iter-2153:** the handler's shared `current_session_id` is gone;
+  each slot owns a `loaded_session` cell, and the decision reads and writes
+  the slot of THIS session. Pinned by
+  `gateway_runner::tests::the_reload_decision_belongs_to_the_slot`
+  (mutation-proved).
 
-### 8. The audit's own ledger rows that are still open
-RT-518 (the dashboard is a disconnected process), RT-521 (unbounded growth
-under load), RT-522 (the presence registry is never claimed), RT-524 (one
-persistence rule applied four ways), RT-525 (about 1,350 lines of implemented,
-tested, unwired machinery), RT-526 (the daemon lock file is unlinked on drop).
-Each carries its own fix and test in the ledger.
+### 8. The audit's own ledger rows — **ALL CLOSED**
+RT-518 (the dashboard is a disconnected process, closed iter-2143), RT-521
+(unbounded growth under load, closed iter-2148), RT-522 (the presence registry
+is never claimed, closed iter-2150), RT-524 (one persistence rule applied four
+ways, closed iter-2151), RT-525 (about 1,350 lines of implemented, tested,
+unwired machinery, closed iter-2152) and RT-526 (the daemon lock file is
+unlinked on drop, closed iter-2142). Each carries its own fix and test in the
+ledger. The two findings this report raised that are still open are tracked
+as ledger rows RT-537 (the shared checkpoint list) and RT-538 (the shared
+file-state snapshots).
 
 ---
 

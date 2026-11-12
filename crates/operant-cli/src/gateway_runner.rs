@@ -2275,6 +2275,14 @@ struct AgentSlot {
     default_effort: Option<String>,
     /// ONE turn at a time IN THIS SLOT.
     lock: tokio::sync::Mutex<()>,
+    /// The session this slot currently holds (the red-team's finding 7).
+    ///
+    /// The reload decision belongs to the SLOT: each slot has ONE agent and
+    /// ONE conversation, and a session key maps to one slot (a fixed hash),
+    /// so the cell belongs with the agent. One shared cell let a slot see
+    /// the OTHER slot's session id and decide to reload a conversation it
+    /// already had — a redundant rehydrate per turn.
+    loaded_session: tokio::sync::Mutex<Option<String>>,
 }
 
 /// The gateway's agent slots (RT-508).
@@ -2322,11 +2330,6 @@ struct GatewayMessageHandler {
     /// `gateway.admins`. A turn from a sender outside this list is not retained
     /// as memory (KB-6).
     admins: Vec<String>,
-    /// Tracks the currently-active session ID so we only reload
-    /// conversation history when switching sessions (not on every
-    /// message within the same session). This preserves prompt prefix
-    /// caching — previously clear_history() was called every message.
-    current_session_id: tokio::sync::Mutex<Option<String>>,
     /// Reference to the gateway so the handler can read session metadata
     /// (model_override, yolo_mode, etc.) before each agent.run() call.
     /// (Bug #3 from iter-98 audit — 15 slash commands wrote to metadata
@@ -2897,12 +2900,26 @@ impl MessageHandler for GatewayMessageHandler {
         // `clear_history()` here would now be actively wrong: it discards the
         // addressed session from the store, destroying the transcript
         // `set_session_id` just rehydrated.
+        // (the red-team's finding 7) The cell is the SLOT's: each slot has
+        // one agent and one conversation, and a session key maps to one
+        // slot. One shared cell let a slot see the other slot's session id
+        // and decide to reload a conversation it already had.
         let needs_reload = {
-            let current = self.current_session_id.lock().await;
+            let current = self
+                .slots
+                .slot_for(&session_key)
+                .loaded_session
+                .lock()
+                .await;
             *current != Some(session_id.clone())
         };
         if needs_reload {
-            let mut current = self.current_session_id.lock().await;
+            let mut current = self
+                .slots
+                .slot_for(&session_key)
+                .loaded_session
+                .lock()
+                .await;
             *current = Some(session_id.clone());
         }
 
@@ -4223,6 +4240,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
             default_effort: (!app_config.agent.reasoning_effort.is_empty())
                 .then(|| app_config.agent.reasoning_effort.clone()),
             lock: tokio::sync::Mutex::new(()),
+            loaded_session: tokio::sync::Mutex::new(None),
         });
     }
     let agent_count = slots.len();
@@ -4381,7 +4399,6 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
     let handler = Arc::new(GatewayMessageHandler {
         slots: AgentSlots { slots },
         admins: app_config.gateway.admins.clone(),
-        current_session_id: tokio::sync::Mutex::new(None),
         gateway: tokio::sync::Mutex::new(None),
         session_pins: Arc::new(SessionPins::default()),
         exit_reasons: exit_reasons.clone(),
