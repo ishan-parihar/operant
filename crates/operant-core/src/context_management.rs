@@ -112,11 +112,22 @@ impl ToolTrimReport {
 /// system prompt and the user's own words are never touched — only
 /// `Role::Tool` messages are candidates.
 ///
-/// ## Reversibility
+/// ## Reversibility, and what it costs
 ///
 /// This trims the BUILT list, not the stored conversation: the store keeps the
 /// verbatim result (the DAG when the lossless engine is on, the message row
 /// otherwise), so a trimmed result is recoverable rather than lost.
+///
+/// Rewriting the built list changes bytes the provider has cached, so the
+/// FIRST trim of a given result busts the cached prefix. The trim is
+/// IDEMPOTENT — an already-trimmed result is skipped, so the second pass
+/// produces the same bytes and the cache survives every turn after that.
+///
+/// The budget it divides by is the EFFECTIVE window, which the provider-error
+/// path can LOWER (`learn_context_limit`). That is the right coupling, not a
+/// bug: after a context-overflow error the provider's real limit is smaller,
+/// so the share tightens and the trim fires harder exactly when the context
+/// is already failing.
 pub fn trim_tool_results_to_share(
     messages: &mut [Message],
     budget_tokens: usize,

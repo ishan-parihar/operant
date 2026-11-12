@@ -179,10 +179,12 @@ pub fn optimize(budget: &ContextBudget) -> Vec<Optimization> {
         } else if surface.id.starts_with("mcp:") {
             format!("disable or defer the server {}", surface.id)
         } else if let Some(tool) = surface.id.strip_prefix("tool:") {
-            // Name the tool, and the command that disables it: an
-            // optimization loop that says "prune or disable items" without
-            // naming the item is not actionable.
-            format!("operant tools disable {tool}")
+            // DEFER, not disable. A deferred tool stays registered, stays
+            // callable, and the `tool_search` bridge still reaches it
+            // (search → describe → call): only its schema stops riding every
+            // request. Disabling removes it from the agent's toolset for
+            // EVERY task, which is a far worse trade for the same tokens.
+            format!("operant tools defer {tool}")
         } else {
             format!("prune or disable items in {}", surface.id)
         };
@@ -192,7 +194,8 @@ pub fn optimize(budget: &ContextBudget) -> Vec<Optimization> {
         } else if surface.id.starts_with("mcp:") {
             "the server's tools become unreachable until re-enabled".to_string()
         } else if surface.id.starts_with("tool:") {
-            "the tool disappears from the agent's toolset for every task, not just expensive ones"
+            "the tool stays callable through `tool_search` (search -> describe -> \
+             call); a call it would have made directly now costs one search first"
                 .to_string()
         } else {
             "the tool disappears from the agent's toolset".to_string()
@@ -283,6 +286,32 @@ mod tests {
     /// A budget with no target never proposes changes: the report is
     /// informational, and silently trimming a surface the operator never
     /// asked to optimize is worse than doing nothing.
+    #[test]
+    fn a_builtin_tool_is_proposed_for_deferral_not_disabling() {
+        // A deferred tool stays reachable through the `tool_search` bridge;
+        // a disabled one is gone for every task. The proposal names the
+        // SAFER lever, says what it costs, and `--apply` can perform it
+        // without a future phase's mechanism.
+        // A bill over the target: the proposal saves the marginal amount
+        // needed, not the whole surface (the overshoot rule).
+        let mut b = ContextBudget::new(500);
+        b.push(surface("tool:todo", "tool-schema", 1, 774));
+        let proposals = optimize(&b);
+        assert_eq!(proposals.len(), 1);
+        assert_eq!(proposals[0].surface, "tool:todo");
+        assert_eq!(
+            proposals[0].action, "operant tools defer todo",
+            "the lever is deferral, not removal"
+        );
+        assert!(
+            proposals[0].risk.contains("callable"),
+            "the cost is stated honestly: reachable through search, at one \
+             extra hop. got: {}",
+            proposals[0].risk
+        );
+        assert_eq!(proposals[0].saves_per_request, 274, "the marginal saving, capped at the overshoot");
+    }
+
     #[test]
     fn no_target_means_no_proposals() {
         let mut b = ContextBudget::new(0);

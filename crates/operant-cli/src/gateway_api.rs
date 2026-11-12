@@ -309,9 +309,11 @@ mod tests {
             .await
             .expect("hold a port");
         let addr = holder.local_addr().expect("addr").to_string();
-        let mut settings = operant_core::config::GatewaySettings::default();
-        settings.api_enabled = true;
-        settings.api_bind = addr.clone();
+        let settings = operant_core::config::GatewaySettings {
+            api_enabled: true,
+            api_bind: addr.clone(),
+            ..Default::default()
+        };
 
         let outcome = super::spawn_if_enabled(
             &settings,

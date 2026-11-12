@@ -107,6 +107,32 @@ fn the_trim_is_a_no_op_when_the_share_is_already_met() {
 }
 
 #[test]
+fn a_second_pass_over_the_same_context_changes_nothing() {
+    // The trim rewrites the BUILT list, so every byte it changes busts the
+    // provider's cached prefix. The property that keeps that cost to ONE
+    // event is IDEMPOTENCE: the second pass produces the same bytes, so the
+    // cache survives every turn after the first.
+    //
+    // Without this test, a future change that re-trims an already-trimmed
+    // result would bust the cache on EVERY request — a cost that shows up as
+    // "the provider is slower" and nowhere else.
+    let (assistant, result) = exchange("call_a", "{}", 20_000);
+    let mut messages = vec![assistant, result];
+    let first = trim_tool_results_to_share(&mut messages, 10_000, 0.10, 0, 400);
+    assert_eq!(first.trimmed, 1);
+    let after_first: Vec<String> = messages.iter().map(|m| m.content.clone()).collect();
+
+    let second = trim_tool_results_to_share(&mut messages, 10_000, 0.10, 0, 400);
+    assert_eq!(second.trimmed, 0, "a trimmed result is not trimmed again");
+    assert_eq!(second.saved(), 0);
+    let after_second: Vec<String> = messages.iter().map(|m| m.content.clone()).collect();
+    assert_eq!(
+        after_first, after_second,
+        "the built list is byte-identical, so the provider's cache survives"
+    );
+}
+
+#[test]
 fn the_trim_never_touches_the_users_own_words() {
     let (assistant, result) = exchange("call_a", "{}", 20_000);
     let user = Message::new(Role::User, "the exact wording that matters");

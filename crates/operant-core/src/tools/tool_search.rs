@@ -1409,10 +1409,20 @@ mod tests {
     #[tokio::test]
     async fn the_registry_stamps_exposure_onto_the_schema_it_mints() {
         let src = include_str!("../tools.rs");
+        // The stamp is now the EFFECTIVE exposure — the operator's deferral
+        // set over the type's own declaration — so the literal moved from
+        // `t.exposure()` to a computed `exposure`. The CONTRACT is unchanged:
+        // all three schema-minting sites stamp an exposure, and the stamped
+        // one is the one the assembler reads.
         assert_eq!(
-            src.matches(".with_exposure(t.exposure())").count(),
+            src.matches(".with_exposure(exposure)").count(),
             3,
             "all three schema-minting sites must stamp the tool's exposure"
+        );
+        assert!(
+            src.contains("deferred_names.contains(t.name())"),
+            "the stamped exposure must honour the operator's deferral set, not \
+             only the type's declaration"
         );
         let src2 = include_str!("tool_search.rs");
         assert!(

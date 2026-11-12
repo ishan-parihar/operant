@@ -39,6 +39,18 @@ pub enum ToolsSubcommand {
         /// Tool name(s) to disable
         names: Vec<String>,
     },
+    /// Defer one or more tools behind the `tool_search` bridge: their schemas
+    /// stop riding every request, and the tool stays reachable through
+    /// search → describe → call.
+    Defer {
+        /// Tool name(s) to defer
+        names: Vec<String>,
+    },
+    /// Return one or more deferred tools to the per-request toolset.
+    Eager {
+        /// Tool name(s) to make eager again
+        names: Vec<String>,
+    },
 }
 
 /// Dispatch and execute a tools subcommand.
@@ -47,6 +59,8 @@ pub async fn handle_tools_command(config: &AppConfig, cmd: ToolsSubcommand) -> R
         ToolsSubcommand::List { platform } => handle_list(config, platform).await,
         ToolsSubcommand::Enable { names } => handle_enable(config, names),
         ToolsSubcommand::Disable { names } => handle_disable(config, names),
+        ToolsSubcommand::Defer { names } => handle_defer(config, names),
+        ToolsSubcommand::Eager { names } => handle_eager(config, names),
     }
 }
 
@@ -99,9 +113,12 @@ async fn handle_list(config: &AppConfig, _platform: Option<String>) -> Result<()
     println!("Tools ({} registered, {} enabled):", tools.len(), enabled);
     println!();
 
+    let deferred = operant_core::tools::tool_state::load_deferred_tools(config);
     for tool in &tools {
         let status = if disabled.contains(&tool.name) {
             " [disabled]"
+        } else if deferred.contains(&tool.name) {
+            " [deferred: reachable via tool_search]"
         } else {
             ""
         };
@@ -141,6 +158,82 @@ fn handle_enable(config: &AppConfig, names: Vec<String>) -> Result<()> {
 
     operant_core::tools::tool_state::save_disabled_tools(config, &disabled)
         .map_err(anyhow::Error::msg)?;
+    Ok(())
+}
+
+/// Defer tools behind the `tool_search` bridge.
+///
+/// A deferred tool is NOT disabled: it stays registered, stays callable, and
+/// the bridge still reaches it — search for it, describe it, call it. What
+/// stops is its schema riding every request, which is where the per-request
+/// bill comes from (MEASURED 2026-11-12: 96 tools, 18 732 tokens per
+/// request).
+///
+/// The offending state is refused loudly rather than silently ignored: a
+/// DISABLED tool cannot be deferred (there is nothing to reach), and a tool
+/// that is already deferred is reported as a no-op rather than written
+/// twice.
+fn handle_defer(config: &AppConfig, names: Vec<String>) -> Result<()> {
+    if names.is_empty() {
+        println!("No tool names provided. Usage: operant tools defer <name> [<name>...]");
+        return Ok(());
+    }
+
+    let disabled = operant_core::tools::tool_state::load_disabled_tools(config);
+    let mut deferred = operant_core::tools::tool_state::load_deferred_tools(config);
+    for name in &names {
+        if disabled.contains(name) {
+            println!(
+                "Tool '{}' is disabled — deferring a disabled tool would make it unreachable. \
+                 Enable it first: operant tools enable {}",
+                name, name
+            );
+            continue;
+        }
+        if deferred.contains(name) {
+            println!("Tool '{}' was already deferred.", name);
+            continue;
+        }
+        deferred.insert(name.clone());
+        println!("Tool '{}' deferred — its schema no longer rides every request.", name);
+    }
+
+    operant_core::tools::tool_state::save_deferred_tools(config, &deferred)
+        .map_err(anyhow::Error::msg)?;
+    println!("Run `operant context budget` to measure the saving.");
+    // WHEN it takes effect, stated here: a long-running host (the gateway)
+    // builds its registry at start-up, so ITS toolset does not change until
+    // it restarts. A lever whose effect is invisible at the place it was
+    // applied looks like a lever that does not work — the same failure shape
+    // as the CLI's disable that was a no-op before iter-1124.
+    println!(
+        "Takes effect for processes that START after this — a running gateway keeps its \
+         toolset until it restarts (`operant service restart operant-gateway`)."
+    );
+    Ok(())
+}
+
+/// Return deferred tools to the per-request toolset.
+fn handle_eager(config: &AppConfig, names: Vec<String>) -> Result<()> {
+    if names.is_empty() {
+        println!("No tool names provided. Usage: operant tools eager <name> [<name>...]");
+        return Ok(());
+    }
+
+    let mut deferred = operant_core::tools::tool_state::load_deferred_tools(config);
+    let mut changed = false;
+    for name in &names {
+        if deferred.remove(name) {
+            changed = true;
+            println!("Tool '{}' is eager again — its schema rides every request.", name);
+        } else {
+            println!("Tool '{}' was not deferred.", name);
+        }
+    }
+    if changed {
+        operant_core::tools::tool_state::save_deferred_tools(config, &deferred)
+            .map_err(anyhow::Error::msg)?;
+    }
     Ok(())
 }
 

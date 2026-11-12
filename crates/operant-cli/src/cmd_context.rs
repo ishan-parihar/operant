@@ -443,6 +443,18 @@ async fn budget_command(config: &AppConfig, only: Option<&str>, json: bool) -> R
         out.push_str(
             "  until a target exists: operant config set agent.context_budget_tokens 4000\n",
         );
+        // The recommendation is stated, because a number with no comparison
+        // is not a number anyone acts on: the live bill is 18 732 tok/request
+        // across 96 surfaces, and "informational" is what keeps it that way.
+        let suggested = 12_000;
+        if budget.total() > suggested {
+            out.push_str(&format!(
+                "  this bill is {} tok/request over {suggested} surfaces — a target of \
+                 {suggested} would flag it, and `context optimize` would propose \
+                 deferring the heaviest tools (they stay reachable via tool_search)\n",
+                budget.total() - suggested
+            ));
+        }
     }
     out.push_str("\n  Estimator: chars/4 (`estimate_tokens`) — a consistent yardstick,\n");
     out.push_str("  not provider-accurate tokenization.\n");
@@ -556,12 +568,21 @@ fn apply_one(
     opt: &operant_core::context_budget::Optimization,
 ) -> Result<bool> {
     if let Some(tool) = opt.surface.strip_prefix("tool:") {
-        let mut disabled = operant_core::tools::tool_state::load_disabled_tools(config);
-        if !disabled.insert(tool.to_string()) {
-            // Already disabled before this run — nothing to claim.
+        // The proposal is a DEFERRAL (see `context_budget::optimize`): the
+        // tool's schema stops riding every request and the tool stays
+        // reachable through the bridge. Disabling a tool for every task was
+        // the old behaviour and a worse trade for the same tokens.
+        let disabled = operant_core::tools::tool_state::load_disabled_tools(config);
+        if disabled.contains(tool) {
+            // A disabled tool is not in the bill to begin with.
             return Ok(false);
         }
-        operant_core::tools::tool_state::save_disabled_tools(config, &disabled)
+        let mut deferred = operant_core::tools::tool_state::load_deferred_tools(config);
+        if !deferred.insert(tool.to_string()) {
+            // Already deferred before this run — nothing to claim.
+            return Ok(false);
+        }
+        operant_core::tools::tool_state::save_deferred_tools(config, &deferred)
             .map_err(|e| anyhow::anyhow!("failed to persist tool state: {e}"))?;
         return Ok(true);
     }
@@ -617,7 +638,7 @@ async fn measure_surfaces(config: &AppConfig) -> Result<ContextBudget> {
     // There is deliberately NO builtin roll-up alongside these: a roll-up
     // plus its own components double-counts, and the total would overstate
     // the bill the agent actually pays.
-    for tool in per_tool_schemas(&registry).await {
+    for tool in per_tool_schemas(&registry, config.agent.context_window).await {
         budget.push(SurfaceCost::new(
             format!("tool:{}", tool.name),
             "tool-schema",
@@ -686,8 +707,14 @@ struct ToolSchema {
 /// and then still measured `tool:todo` at 769 tok/request after the disable.
 /// Proven by round-trip, not by reading: disabling two tools moved the
 /// measured total by exactly zero.
-async fn per_tool_schemas(registry: &ToolRegistry) -> Vec<ToolSchema> {
-    let schemas = registry.get_schemas().await;
+async fn per_tool_schemas(registry: &ToolRegistry, context_window: usize) -> Vec<ToolSchema> {
+    // The REQUEST set, not the registered set: a deferred tool's schema does
+    // not ride the request, so counting it would overstate the bill the agent
+    // actually pays.
+    let settings = operant_core::config::ToolSearchSettings::default();
+    let schemas = registry
+        .get_schemas_for_request(&settings, context_window)
+        .await;
     schemas
         .into_iter()
         .map(|s| {
@@ -1549,7 +1576,7 @@ mod tests {
             .unwrap();
 
         // Nothing disabled: both are measured.
-        let before = per_tool_schemas(&registry).await;
+        let before = per_tool_schemas(&registry, 200_000).await;
         assert_eq!(
             before.len(),
             2,
@@ -1565,7 +1592,7 @@ mod tests {
             ))
             .await;
 
-        let after = per_tool_schemas(&registry).await;
+        let after = per_tool_schemas(&registry, 200_000).await;
         assert!(
             !after.iter().any(|t| t.name == "file_write"),
             "a disabled tool must NOT be measured — the agent does not receive its schema, \

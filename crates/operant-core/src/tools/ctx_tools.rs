@@ -106,10 +106,26 @@ fn resolve_session(
     if let Some(sid) = context.get("session_id").map(str::trim).filter(|s| !s.is_empty()) {
         return Ok((sid.to_string(), "tool context"));
     }
-    match db.newest_session_id() {
-        Ok(Some(sid)) => Ok((sid, "newest session (no session id was wired)")),
-        Ok(None) => Err("no sessions in the database yet".to_string()),
-        Err(e) => Err(format!("could not read the session list: {e}")),
+    // The fallback is allowed ONLY when it is unambiguous — exactly one
+    // session in the database. The gateway runs agent SLOTS (many sessions
+    // sharing one process), and there "the newest session" is somebody
+    // else's conversation: reporting another seat's context to an agent that
+    // asked for its own is the one failure this tool must not have.
+    let sessions = db
+        .list_sessions(2)
+        .map_err(|e| format!("could not read the session list: {e}"))?;
+    match sessions.len() {
+        0 => Err("no sessions in the database yet".to_string()),
+        1 => Ok((
+            sessions[0].id.clone(),
+            "the only session (no session id was wired)",
+        )),
+        _ => Err(
+            "no session id was wired and the database holds more than one session — pass \
+             one explicitly (`session`), because guessing would report another \
+             conversation's context"
+                .to_string(),
+        ),
     }
 }
 
@@ -180,6 +196,10 @@ impl OperantTool for CtxStatusTool {
         let gap = last
             .map(|r| r.prompt_tokens - r.estimated_context_tokens)
             .unwrap_or(0);
+        // The two halves of the gap, named once, for the drift flag and the note.
+        let (r_prompt, r_estimate) = last
+            .map(|r| (r.prompt_tokens, r.estimated_context_tokens))
+            .unwrap_or((0, 0));
         ToolResult::success(
             "ctx_status",
             json!({
@@ -210,6 +230,7 @@ impl OperantTool for CtxStatusTool {
                          context. The gap is the part of the bill the estimate does not model \
                          (the system prompt and the tool schemas). tool_result_share_percent is \
                          how much of the context is tool output.",
+                "estimate_drifts": gap > 0 && r_prompt > 0 && r_prompt > r_estimate * 2,
             }),
         )
     }
@@ -428,6 +449,45 @@ mod tests {
         assert_eq!(v["last_request"]["provider_prompt_tokens"], 0);
         assert_eq!(v["last_request"]["tool_result_share_percent"], 0,
                    "no request means no share, and no divide-by-zero");
+    }
+
+    #[tokio::test]
+    async fn ctx_status_refuses_to_guess_when_several_sessions_exist() {
+        // RT-C01: the gateway runs agent SLOTS, so "the newest session" is
+        // another seat's conversation. With no session id wired and more than
+        // one session present, the tool must REFUSE rather than report
+        // somebody else's context.
+        let (_tmp, db) = temp_db();
+        seed(&db, "s-one");
+        seed(&db, "s-two");
+        let tool = CtxStatusTool::new(Arc::new(db));
+        let result = tool.execute(json!({}), ToolContext::default()).await;
+        assert!(!result.success, "the tool must not guess");
+        // `ToolResult::error` carries the message in the error field.
+        let message = result.error.as_deref().unwrap_or_default();
+        assert!(
+            message.contains("more than one session"),
+            "the refusal says why: {message}"
+        );
+    }
+
+    #[tokio::test]
+    async fn ctx_status_flags_the_estimator_drift() {
+        // RT-C05: the provider charged 29 067 for a context the engine
+        // estimated at 10 162 — the estimate does not model the frozen prefix
+        // or the tool schemas. A ratio above two is the signal, and it is
+        // reported rather than left in a column.
+        let (_tmp, db) = temp_db();
+        seed(&db, "s-ctx");
+        let tool = CtxStatusTool::new(Arc::new(db));
+        let result = tool
+            .execute(json!({"session": "s-ctx"}), ToolContext::default())
+            .await;
+        let v: serde_json::Value = serde_json::from_str(&result.content).expect("json");
+        assert_eq!(
+            v["estimate_drifts"], true,
+            "a 3x gap between the provider's count and the estimate is drift"
+        );
     }
 
     #[tokio::test]

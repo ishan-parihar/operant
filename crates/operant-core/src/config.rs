@@ -1945,6 +1945,19 @@ pub struct ToolSettings {
     pub stt: SttSettings,
     pub disabled_tools: Vec<String>,
     pub disabled_toolsets: Vec<String>,
+    /// Tools deferred behind the `tool_search` bridge: registered, callable,
+    /// and reachable through search — their schemas simply stop riding every
+    /// request.
+    ///
+    /// The lever for the per-request bill. MEASURED 2026-11-12: the live
+    /// surface is 96 tools / 18 732 tokens per request, and until this there
+    /// was no way to shrink it without DISABLING a tool (which removes it
+    /// from the agent's toolset for every task). A deferred tool stays
+    /// available; a `tool_search` call finds it.
+    ///
+    /// `operant tools defer <name>` / `operant tools eager <name>` write the
+    /// CLI state file; this list is the TOML-side declaration.
+    pub deferred_tools: Vec<String>,
     /// Whether to enable AFT (Agent File Tools) IDE-grade coding tools.
     /// When true, operant registers 18 aft_* tools that communicate with
     /// an aft subprocess (auto-downloaded from GitHub releases when not
@@ -2064,6 +2077,7 @@ impl Default for ToolSettings {
             stt: SttSettings::default(),
             disabled_tools: Vec::new(),
             disabled_toolsets: Vec::new(),
+            deferred_tools: Vec::new(),
             aft_enabled: true,
             tool_search: ToolSearchSettings::default(),
         }

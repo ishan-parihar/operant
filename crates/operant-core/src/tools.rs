@@ -547,6 +547,11 @@ pub struct ToolRegistry {
     tools: Arc<RwLock<HashMap<String, Arc<dyn OperantTool>>>>,
     disabled_names: Arc<RwLock<HashSet<String>>>,
     disabled_toolsets: Arc<RwLock<HashSet<String>>>,
+    /// Tool names deferred behind the `tool_search` bridge: their schemas do
+    /// not ride every request, but the bridge still reaches them. The TYPE's
+    /// own `exposure()` says what a tool PREFERS; this set is what the
+    /// operator decided, and it wins.
+    deferred_names: Arc<RwLock<HashSet<String>>>,
     /// (plan 2026-10-26 phase 2, RT-192) Retired tool names → surviving
     /// names. Resolved in `get`/`execute`/`is_available`, never in the
     /// schema paths: an alias is callable by a model that learned the
@@ -607,6 +612,7 @@ impl Clone for ToolRegistry {
             tools: Arc::clone(&self.tools),
             disabled_names: Arc::clone(&self.disabled_names),
             disabled_toolsets: Arc::clone(&self.disabled_toolsets),
+            deferred_names: Arc::clone(&self.deferred_names),
             aliases: Arc::clone(&self.aliases),
             executor: ToolExecutor {
                 timeout: self.executor.timeout,
@@ -625,6 +631,7 @@ impl ToolRegistry {
             tools: Arc::new(RwLock::new(HashMap::new())),
             disabled_names: Arc::new(RwLock::new(HashSet::new())),
             disabled_toolsets: Arc::new(RwLock::new(HashSet::new())),
+            deferred_names: Arc::new(RwLock::new(HashSet::new())),
             aliases: Arc::new(std::sync::RwLock::new(builtin_tool_aliases())),
             executor: ToolExecutor::new(timeout),
             interceptors: Arc::new(RwLock::new(Vec::new())),
@@ -750,6 +757,21 @@ impl ToolRegistry {
         *disabled = names;
     }
 
+    /// Defer tools behind the `tool_search` bridge.
+    ///
+    /// REPLACES the set, like `set_disabled_tools`. A tool named here is not
+    /// disabled: it stays registered, still callable, and still reachable
+    /// through the bridge — only its schema stops riding every request.
+    pub async fn set_deferred_tools(&self, names: HashSet<String>) {
+        let mut deferred = self.deferred_names.write().await;
+        *deferred = names;
+    }
+
+    /// The deferred set, for the operator listing (`operant tools list`).
+    pub async fn deferred_tools(&self) -> HashSet<String> {
+        self.deferred_names.read().await.clone()
+    }
+
     pub async fn set_disabled_toolsets(&self, toolsets: HashSet<String>) {
         let mut disabled = self.disabled_toolsets.write().await;
         *disabled = toolsets;
@@ -766,10 +788,23 @@ impl ToolRegistry {
     /// neither native tools nor MCP proxies opt in by hand.
     pub async fn get_schemas_all(&self) -> Vec<ToolSchema> {
         let tools = self.tools.read().await;
+        let deferred_names = self.deferred_names.read().await;
         tools
             .values()
             .filter(|t| t.is_available())
-            .map(|t| t.schema().with_intent().with_exposure(t.exposure()))
+            .map(|t| {
+                // The operator's deferral set wins over the type's own
+                // declaration: a Direct tool the operator deferred is stamped
+                // Deferred, so the bridge reaches it instead of the array.
+                let exposure = if deferred_names.contains(t.name())
+                    && t.exposure() == ToolExposure::Direct
+                {
+                    ToolExposure::Deferred
+                } else {
+                    t.exposure()
+                };
+                t.schema().with_intent().with_exposure(exposure)
+            })
             .collect()
     }
 
@@ -780,6 +815,7 @@ impl ToolRegistry {
         let tools = self.tools.read().await;
         let disabled_names = self.disabled_names.read().await;
         let disabled_toolsets = self.disabled_toolsets.read().await;
+        let deferred_names = self.deferred_names.read().await;
         tools
             .values()
             .filter(|t| {
@@ -789,7 +825,19 @@ impl ToolRegistry {
                     false
                 }
             })
-            .map(|t| t.schema().with_intent().with_exposure(t.exposure()))
+            .map(|t| {
+                // The operator's deferral set wins over the type's own
+                // declaration: a Direct tool the operator deferred is stamped
+                // Deferred, so the bridge reaches it instead of the array.
+                let exposure = if deferred_names.contains(t.name())
+                    && t.exposure() == ToolExposure::Direct
+                {
+                    ToolExposure::Deferred
+                } else {
+                    t.exposure()
+                };
+                t.schema().with_intent().with_exposure(exposure)
+            })
             .collect()
     }
 
@@ -811,6 +859,7 @@ impl ToolRegistry {
         let tools = self.tools.read().await;
         let disabled_names = self.disabled_names.read().await;
         let disabled_toolsets = self.disabled_toolsets.read().await;
+        let deferred_names = self.deferred_names.read().await;
         tools
             .values()
             .filter(|t| {
@@ -828,7 +877,19 @@ impl ToolRegistry {
                 }
                 true
             })
-            .map(|t| t.schema().with_intent().with_exposure(t.exposure()))
+            .map(|t| {
+                // The operator's deferral set wins over the type's own
+                // declaration: a Direct tool the operator deferred is stamped
+                // Deferred, so the bridge reaches it instead of the array.
+                let exposure = if deferred_names.contains(t.name())
+                    && t.exposure() == ToolExposure::Direct
+                {
+                    ToolExposure::Deferred
+                } else {
+                    t.exposure()
+                };
+                t.schema().with_intent().with_exposure(exposure)
+            })
             .collect()
     }
 
@@ -1093,6 +1154,7 @@ impl ToolRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::ToolSearchSettings;
     use schemars::JsonSchema;
     use serde_json::json;
 
@@ -1102,6 +1164,66 @@ mod tests {
     struct TestArgs {
         query: String,
         limit: Option<i32>,
+    }
+
+    // ── Deferral: the operator's lever on the per-request bill ──────────
+    //
+    // A deferred tool leaves the model-visible tools array but stays
+    // reachable through the `tool_search` bridge. MEASURED on the live
+    // surface (2026-11-12): 96 tools, 18 732 tokens per request, with no
+    // lever to shrink it that was not DISABLING a tool for every task.
+
+    /// The exposure the registry stamps: the operator's set wins over the
+    /// type's own declaration.
+    #[tokio::test]
+    async fn the_operators_deferral_set_overrides_the_types_own_exposure() {
+        let registry = ToolRegistry::new(Duration::from_secs(5));
+        registry.register(TestTool).await.unwrap();
+        let before = registry.get_schemas().await;
+        assert_eq!(before[0].exposure, ToolExposure::Direct);
+
+        registry
+            .set_deferred_tools(HashSet::from(["test_tool".to_string()]))
+            .await;
+        let after = registry.get_schemas().await;
+        assert_eq!(
+            after[0].exposure,
+            ToolExposure::Deferred,
+            "a Direct tool the operator deferred is stamped Deferred"
+        );
+        // And it is still registered — deferring is not disabling.
+        assert!(registry.contains("test_tool").await);
+    }
+
+    #[tokio::test]
+    async fn a_deferred_tool_leaves_the_request_array_and_stays_reachable() {
+        let registry = ToolRegistry::new(Duration::from_secs(5));
+        registry.register(TestTool).await.unwrap();
+        registry
+            .set_deferred_tools(HashSet::from(["test_tool".to_string()]))
+            .await;
+
+        // The request array no longer carries it.
+        let request = registry
+            .get_schemas_for_request(&ToolSearchSettings::default(), 200_000)
+            .await;
+        assert!(
+            !request.iter().any(|s| s.name == "test_tool"),
+            "the deferred tool's schema does not ride the request"
+        );
+
+        // But the bridge's deferred half does — that is what keeps it
+        // reachable: search finds it, describe describes it, call invokes it.
+        let all = registry.get_schemas().await;
+        let assembled = tool_search::assemble_tools(all, &ToolSearchSettings::default(), 200_000);
+        assert!(
+            assembled.deferred.iter().any(|s| s.name == "test_tool"),
+            "the tool is reachable through the bridge, not lost"
+        );
+        assert!(
+            assembled.visible.iter().any(|s| s.name == "tool_search"),
+            "the bridge itself is visible (it activates because deferred tools exist)"
+        );
     }
 
     struct TestTool;
