@@ -1186,6 +1186,20 @@ pub(crate) fn agent_config(
     agent
 }
 
+/// The ONE AFT bridge pool per process (RT-517).
+///
+/// The pool holds the bridges per project root and is what dedupes the
+/// detached warmup, so a second pool means a second warmup of the same
+/// root — and a second copy of the bridge's state. A process-global is
+/// the right shape here: the pool is a process resource, like the kernel
+/// runtime beside it.
+fn shared_aft_pool() -> std::sync::Arc<operant_core::aft_bridge::AftBridgePool> {
+    static POOL: std::sync::OnceLock<std::sync::Arc<operant_core::aft_bridge::AftBridgePool>> =
+        std::sync::OnceLock::new();
+    POOL.get_or_init(|| std::sync::Arc::new(operant_core::aft_bridge::AftBridgePool::new()))
+        .clone()
+}
+
 pub(crate) async fn build_registry(
     config: &AppConfig,
     mcp_manager: &McpManager,
@@ -1265,7 +1279,12 @@ pub(crate) async fn build_registry(
     // silently re-enabling them (found while verifying the fallback path).
     let mut aft_replaced_tools: Vec<String> = Vec::new();
     if config.tools.aft_enabled {
-        let pool = std::sync::Arc::new(operant_core::aft_bridge::AftBridgePool::new());
+        // (RT-517) ONE AFT pool per process. Every registry build used to
+        // create its own pool, and each pool fires a DETACHED warmup per
+        // project root — so two registry builds in one process warmed the
+        // same root twice, and the pool is exactly the thing that dedupes
+        // the warmup. One pool, one warmup.
+        let pool = shared_aft_pool();
         match operant_core::tools::register_aft_tools(&registry, pool.clone()).await {
             Ok(()) => {
                 tracing::info!("AFT tools registered (18 IDE-grade coding tools)");
@@ -1509,10 +1528,11 @@ pub(crate) async fn build_registry(
                 .iter()
                 .any(|s| s.enabled && !s.deferred && s.transport == McpTransportKind::Stdio)
         {
-            mcp_manager.spawn_watchdog(
-                registry.clone(),
-                Duration::from_secs(config.mcp.watchdog_interval_secs),
-            );
+            // (RT-517) ONE watchdog per manager, not per registry build:
+            // two builds over one manager used to start two watchdogs over
+            // the same server map. The watchdog re-syncs into every
+            // registry this manager serves.
+            mcp_manager.spawn_watchdog(Duration::from_secs(config.mcp.watchdog_interval_secs));
         }
     }
 
@@ -3659,6 +3679,44 @@ async fn run(
 
 #[cfg(test)]
 mod tests {
+    /// RT-517: the AFT bridge pool is ONE per process.
+    ///
+    /// Every registry build used to create its own pool, and each pool
+    /// fires a DETACHED warmup per project root — so two registry builds
+    /// in one process warmed the same root twice. The pool is exactly the
+    /// thing that dedupes the warmup, so there must be one pool.
+    /// RT-517: `build_registry` must use the SHARED pool.
+    ///
+    /// A SOURCE contract over the seam (the repo's shape for "the call
+    /// site must use the helper"): the pool is private to the registry
+    /// build, so the only observable is the call itself. The needle is
+    /// assembled from two literals so this test's own source cannot
+    /// satisfy it.
+    #[test]
+    fn the_registry_build_uses_the_shared_aft_pool() {
+        let source = include_str!("main.rs");
+        // The CALL SITE, not the helper's definition: the definition would
+        // satisfy a needle that names the helper alone.
+        let shared = "let pool = shared_aft";
+        let pool = "_pool();";
+        assert!(
+            source.contains(&format!("{shared}{pool}")),
+            "build_registry must use the process-wide AFT pool — a pool per build \
+             warms every project root again (RT-517)"
+        );
+    }
+
+    #[test]
+    fn the_aft_pool_is_one_per_process() {
+        let first = shared_aft_pool();
+        let second = shared_aft_pool();
+        assert!(
+            std::sync::Arc::ptr_eq(&first, &second),
+            "two registry builds must share ONE AFT pool — each pool warms every \
+             project root on its own"
+        );
+    }
+
     use super::*;
     use std::io::Cursor;
 
