@@ -2574,7 +2574,10 @@ impl OperantAgent {
                              thinking. Produce your final answer as plain text now.]",
                         );
                         messages.push(nudge.clone());
-                        self.add_message(nudge).await;
+                        // (RT-524) The nudge is persisted: it was only in the
+                        // live conversation, so the DB transcript and the
+                        // live conversation were two different histories.
+                        self.add_and_persist_message(nudge).await;
                         self.iteration_budget.refund();
                         continue;
                     }
@@ -2926,7 +2929,8 @@ impl OperantAgent {
                                     r.name
                                 ));
                                 messages.push(nudge.clone());
-                                self.add_message(nudge).await;
+                                // (RT-524) The nudge is persisted.
+                                self.add_and_persist_message(nudge).await;
                             } else if let Some(count) = tripped.filter(|s| *s >= 3) {
                                 let newly_masked = self
                                     .masked_tools
@@ -3100,7 +3104,8 @@ impl OperantAgent {
                              plain text now.]",
                         );
                         messages.push(nudge.clone());
-                        self.add_message(nudge).await;
+                        // (RT-524) The nudge is persisted.
+                        self.add_and_persist_message(nudge).await;
                     }
                     if consecutive_failed_iters == 3 {
                         warn!(
@@ -3693,7 +3698,9 @@ impl OperantAgent {
                             steer_text
                         ));
                         messages.push(steer_msg.clone());
-                        self.add_message(steer_msg).await;
+                        // (RT-524) The steer is persisted: the operator's
+                        // mid-turn guidance has to survive a restart.
+                        self.add_and_persist_message(steer_msg).await;
                     }
                     // Same machinery Ctrl-C drives: the flag makes every
                     // boundary check + `call_with_loop_timeout` bail next.

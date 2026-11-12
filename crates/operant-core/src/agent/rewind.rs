@@ -183,17 +183,16 @@ impl OperantAgent {
         // then works from, and the old code dropped the write error — so a
         // failed write produced a silently incomplete fork (RT-283).
         for msg in &prefix {
+            // (RT-524) The SAME writer the live turn uses. The short writer
+            // dropped the tool call ids, the tool calls and the tool name, so
+            // a rewound branch had NO tool history — and the operator's
+            // "what did you change?" had no answer.
             self.database
-                .save_message(
-                    &new_session,
-                    msg.role.as_str(),
-                    &msg.content,
-                    &chrono::Utc::now().to_rfc3339(),
-                )
+                .save_model_message(&new_session, msg, &chrono::Utc::now().to_rfc3339(), None)
                 .map_err(|e| {
                     tracing::error!(
                         ?e,
-                        "rewind_to_turn: save_message failed for the fork's transcript"
+                        "rewind_to_turn: save_model_message failed for the fork's transcript"
                     );
                     RewindError::SaveFailed(e.to_string())
                 })?;
@@ -324,6 +323,103 @@ mod tests {
         assert!(
             src.contains("RewindError::SaveFailed"),
             "a failed transcript write must surface as a rewind failure"
+        );
+    }
+
+    /// RT-524: an injected row (a steer or a nudge) is PERSISTED.
+    ///
+    /// The mid-turn steers and the reasoning-only nudges were added to the
+    /// live conversation only, so the DB transcript and the live
+    /// conversation were two DIFFERENT histories — and a resumed session
+    /// came back without the operator's guidance.
+    #[tokio::test]
+    async fn an_injected_row_is_persisted() {
+        let (agent, db) = agent();
+        let session = format!("sess_steer_{}", uuid::Uuid::new_v4());
+        let now = chrono::Utc::now().to_rfc3339();
+        db.save_session(&session, None, "agent", &now, &now)
+            .expect("the session row");
+        agent.set_session_id(session.clone());
+
+        agent
+            .add_and_persist_message(Message::user("[STEER] adjust the approach"))
+            .await;
+
+        let rows = db
+            .get_session_messages_full(&session)
+            .expect("the transcript");
+        assert!(
+            rows.iter().any(|row| row
+                .content
+                .as_deref()
+                .unwrap_or_default()
+                .contains("[STEER]")),
+            "the operator's mid-turn guidance must be in the transcript — it was \
+             only in the live conversation, so a restart lost it"
+        );
+    }
+
+    /// RT-524: a rewound branch KEEPS ITS TOOL HISTORY.
+    ///
+    /// The fork wrote its transcript through the SHORT writer, which drops
+    /// the tool call ids, the tool calls and the tool name — so a rewound
+    /// branch had NO tool history, and the operator's "what did you
+    /// change?" had no answer.
+    #[tokio::test]
+    async fn a_rewind_branch_keeps_its_tool_history() {
+        let (agent, db) = agent();
+        let old_session = format!("sess_old_{}", uuid::Uuid::new_v4());
+        let now = chrono::Utc::now().to_rfc3339();
+        agent
+            .database
+            .save_session(&old_session, None, "agent", &now, &now)
+            .expect("parent session row");
+        agent.set_session_id(old_session.clone());
+
+        // One user turn, then an assistant turn that CALLS a tool.
+        let idx = agent.conversation.read().await.len();
+        agent.add_message(Message::user("do the thing")).await;
+        agent.record_user_turn("do the thing".to_string(), idx);
+        let mut assistant = crate::client::Message::assistant("calling the tool");
+        assistant.tool_calls = Some(vec![crate::client::ToolCall {
+            id: "call-1".to_string(),
+            function: crate::client::ToolCallFunction {
+                name: "write_file".to_string(),
+                arguments: r#"{"path":"x"}"#.to_string(),
+            },
+        }]);
+        agent.add_message(assistant.clone()).await;
+        agent
+            .database
+            .save_model_message(&old_session, &assistant, &now, None)
+            .expect("the live path persists the tool call");
+        // A SECOND user turn, so the fork at that turn keeps the FIRST turn's
+        // assistant message — with its tool call — in its prefix.
+        let idx2 = agent.conversation.read().await.len();
+        agent.add_message(Message::user("and then this")).await;
+        let turn_id2 = agent.record_user_turn("and then this".to_string(), idx2);
+
+        let outcome = agent.rewind_to_turn(turn_id2).await.expect("fork succeeds");
+
+        let fork_rows = db
+            .get_session_messages_full(&outcome.new_session_id)
+            .expect("the fork's transcript");
+        let with_tool_calls: Vec<_> = fork_rows
+            .iter()
+            .filter(|row| row.tool_calls.is_some())
+            .collect();
+        assert!(
+            !with_tool_calls.is_empty(),
+            "the rewound branch must keep its tool history — the fork's writer \
+             dropped the tool calls"
+        );
+        assert!(
+            with_tool_calls[0]
+                .tool_calls
+                .as_deref()
+                .unwrap_or_default()
+                .contains("call-1"),
+            "the kept tool call must be the real one"
         );
     }
 

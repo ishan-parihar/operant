@@ -1901,6 +1901,53 @@ impl Database {
         Ok(())
     }
 
+    /// Persist a model message with EVERY field intact (RT-524).
+    ///
+    /// The short writer (`save_message`) drops the tool call ids, the tool
+    /// calls, the tool name and the reasoning, so a transcript written
+    /// through it has NO tool history. That is what a rewound branch and an
+    /// interrupted tail used to get: the live path had the tools, the other
+    /// paths did not, and the operator's "what did you change?" had no
+    /// answer.
+    ///
+    /// ONE writer for every transcript path: the live turn, the rewound
+    /// fork and the interrupted tail all go through here.
+    pub fn save_model_message(
+        &self,
+        session_id: &str,
+        message: &crate::client::Message,
+        timestamp: &str,
+        finish_reason: Option<String>,
+    ) -> Result<()> {
+        let data = crate::database::MessageData {
+            id: 0,
+            session_id: session_id.to_string(),
+            role: message.role.as_str().to_string(),
+            content: Some(message.content.clone()),
+            // `full_content` is for a TOOL result whose model-facing copy was
+            // shaped; a model message has no archived twin.
+            full_content: None,
+            tool_call_id: message.tool_call_id.clone(),
+            tool_calls: message
+                .tool_calls
+                .as_ref()
+                .and_then(|calls| serde_json::to_string(calls).ok()),
+            tool_name: message.name.clone(),
+            timestamp: timestamp.to_string(),
+            token_count: Some(crate::context_management::estimate_message_tokens(message) as i64),
+            finish_reason,
+            reasoning: message.reasoning.clone(),
+            reasoning_content: None,
+            reasoning_details: None,
+            codex_reasoning_items: None,
+            codex_message_items: None,
+            platform_message_id: None,
+            observed: None,
+            active: 1,
+        };
+        self.save_message_full(&data)
+    }
+
     /// Get database file path (for testing/verification).
     pub fn path(&self) -> Option<PathBuf> {
         self.conn

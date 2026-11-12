@@ -232,6 +232,33 @@ impl OperantAgent {
         conv.push(message);
     }
 
+    /// Add a message to the conversation AND persist it (RT-524).
+    ///
+    /// The mid-turn steers and the reasoning-only nudges were added to the
+    /// live conversation only, so the DB transcript and the live
+    /// conversation were two DIFFERENT histories — and a resumed session
+    /// came back without the guidance the operator gave.
+    pub(crate) async fn add_and_persist_message(&self, message: Message) {
+        let session_id = self.session_id();
+        self.add_message(message.clone()).await;
+        let Some(session_id) = session_id else {
+            return;
+        };
+        if let Err(e) = self.database.save_model_message(
+            &session_id,
+            &message,
+            &chrono::Utc::now().to_rfc3339(),
+            None,
+        ) {
+            tracing::warn!(
+                error = %e,
+                session_id = %session_id,
+                "the injected row could not be persisted — the transcript is \
+                 missing the operator's guidance"
+            );
+        }
+    }
+
     /// Persist an assistant message with every model-visible field intact.
     ///
     /// Tool calls, reasoning, and the provider finish reason are part of the
@@ -243,33 +270,15 @@ impl OperantAgent {
         message: &Message,
         finish_reason: Option<String>,
     ) {
-        let data = crate::database::MessageData {
-            id: 0,
-            session_id: session_id.to_string(),
-            role: "assistant".to_string(),
-            content: Some(message.content.clone()),
-            // An assistant message has no archived twin: `full_content` is
-            // for a TOOL result whose model-facing copy was shaped.
-            full_content: None,
-            tool_call_id: None,
-            tool_calls: message
-                .tool_calls
-                .as_ref()
-                .and_then(|calls| serde_json::to_string(calls).ok()),
-            tool_name: None,
-            timestamp: chrono::Utc::now().to_rfc3339(),
-            token_count: Some(crate::context_management::estimate_message_tokens(message) as i64),
+        // (RT-524) ONE writer for every transcript path: the live turn, the
+        // rewound fork and the interrupted tail all go through
+        // `save_model_message`, so no path can drop the tool history.
+        if let Err(e) = self.database.save_model_message(
+            session_id,
+            message,
+            &chrono::Utc::now().to_rfc3339(),
             finish_reason,
-            reasoning: message.reasoning.clone(),
-            reasoning_content: None,
-            reasoning_details: None,
-            codex_reasoning_items: None,
-            codex_message_items: None,
-            platform_message_id: None,
-            observed: None,
-            active: 1,
-        };
-        if let Err(e) = self.database.save_message_full(&data) {
+        ) {
             tracing::warn!(error = %e, session_id = %session_id, "failed to persist assistant message");
         }
     }
@@ -343,9 +352,12 @@ impl OperantAgent {
         // logged — the old `let _ =` made a transcript that silently lost
         // the cancelled tool rows indistinguishable from a clean one.
         for msg in to_persist {
-            if let Err(e) =
-                self.database
-                    .save_message(&session_id, msg.role.as_str(), &msg.content, &timestamp)
+            // (RT-524) The SAME writer the live turn uses: the short writer
+            // dropped the tool call ids and the tool calls, so an interrupted
+            // tail had no tool history either.
+            if let Err(e) = self
+                .database
+                .save_model_message(&session_id, &msg, &timestamp, None)
             {
                 tracing::warn!(
                     session_id = %session_id,
