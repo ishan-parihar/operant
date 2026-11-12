@@ -161,8 +161,138 @@ pub async fn fetch_live(
     base_url: &str,
     api_key: Option<&str>,
 ) -> Result<Vec<String>, String> {
+    let body = fetch_listing_body(family, base_url, api_key, Duration::from_secs(10)).await?;
+    let ids = parse_ids(family, &body);
+    if ids.is_empty() {
+        return Err(format!(
+            "GET {} returned no models",
+            listing_request(family, base_url, api_key)?.url
+        ));
+    }
+    Ok(ids)
+}
+
+/// One model as the provider's own listing describes it.
+///
+/// The listing already carried `context_length` and an output ceiling; the
+/// old parser threw both away and kept only the id, which is why the runtime
+/// budgeted every model against one hardcoded 128k window.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LiveModel {
+    pub id: String,
+    /// The model's input window, when the endpoint states one.
+    pub context_length: Option<usize>,
+    /// The model's output ceiling, when the endpoint states one.
+    pub max_output: Option<usize>,
+}
+
+/// Parse a models listing into ids AND the limits each row states.
+fn parse_models(family: WireFamily, body: &Value) -> Vec<LiveModel> {
+    fn number_at(row: &Value, pointer: &str) -> Option<usize> {
+        let value = row.pointer(pointer)?;
+        value
+            .as_u64()
+            .or_else(|| value.as_str().and_then(|s| s.trim().parse::<u64>().ok()))
+            .and_then(|n| usize::try_from(n).ok())
+            .filter(|n| *n > 0)
+    }
+    fn limits(row: &Value) -> (Option<usize>, Option<usize>) {
+        // OpenAI-compatible routes disagree on the field name; OpenRouter
+        // nests the output ceiling under `top_provider`, llama.cpp reports
+        // the window as `meta.n_ctx`.
+        let context = [
+            "/context_length",
+            "/context_window",
+            "/max_context_length",
+            "/meta/n_ctx",
+            "/inputTokenLimit",
+        ]
+        .iter()
+        .find_map(|pointer| number_at(row, pointer));
+        let output = [
+            "/max_output_tokens",
+            "/max_completion_tokens",
+            "/top_provider/max_completion_tokens",
+            "/outputTokenLimit",
+        ]
+        .iter()
+        .find_map(|pointer| number_at(row, pointer));
+        (context, output)
+    }
+
+    let rows: &[Value] = match family {
+        WireFamily::OpenAiCompat | WireFamily::Anthropic => body
+            .get("data")
+            .and_then(Value::as_array)
+            .map(Vec::as_slice)
+            .unwrap_or_default(),
+        WireFamily::Google => body
+            .get("models")
+            .and_then(Value::as_array)
+            .map(Vec::as_slice)
+            .unwrap_or_default(),
+    };
+    rows.iter()
+        .filter_map(|row| {
+            let id = match family {
+                WireFamily::OpenAiCompat | WireFamily::Anthropic => {
+                    row.get("id").and_then(Value::as_str)
+                }
+                // Google names models `models/gemini-…`; the id is the leaf.
+                WireFamily::Google => row
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .map(|name| name.strip_prefix("models/").unwrap_or(name)),
+            }?;
+            let (context_length, max_output) = limits(row);
+            Some(LiveModel {
+                id: id.to_string(),
+                context_length,
+                max_output,
+            })
+        })
+        .collect()
+}
+
+fn parse_ids(family: WireFamily, body: &Value) -> Vec<String> {
+    parse_models(family, body)
+        .into_iter()
+        .map(|model| model.id)
+        .collect()
+}
+
+/// Fetch the provider's model listing WITH each row's stated limits.
+///
+/// Same request as [`fetch_live`] (one code path, one error surface); the
+/// difference is only what the caller keeps. `context_window::discover`
+/// uses this to resolve the real window per model.
+pub async fn fetch_live_details(
+    family: WireFamily,
+    base_url: &str,
+    api_key: Option<&str>,
+) -> Result<Vec<LiveModel>, String> {
+    // Bounded tighter than the interactive picker's 10s: this runs from a
+    // turn's context build, where an unreachable endpoint must cost a short
+    // stall once (then a cached negative), not ten seconds.
+    let body = fetch_listing_body(family, base_url, api_key, Duration::from_secs(4)).await?;
+    let models = parse_models(family, &body);
+    if models.is_empty() {
+        return Err(format!(
+            "GET {} returned no models",
+            listing_request(family, base_url, api_key)?.url
+        ));
+    }
+    Ok(models)
+}
+
+async fn fetch_listing_body(
+    family: WireFamily,
+    base_url: &str,
+    api_key: Option<&str>,
+    timeout: Duration,
+) -> Result<Value, String> {
     let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(10))
+        .timeout(timeout)
         .build()
         .map_err(|e| e.to_string())?;
     let listing = listing_request(family, base_url, api_key)?;
@@ -182,40 +312,9 @@ pub async fn fetch_live(
     if !resp.status().is_success() {
         return Err(format!("GET {shown} returned {}", resp.status()));
     }
-    let body: Value = resp
-        .json()
+    resp.json()
         .await
-        .map_err(|e| format!("GET {shown} did not return JSON: {e}"))?;
-
-    let ids = parse_ids(family, &body);
-    if ids.is_empty() {
-        return Err(format!("GET {shown} returned no models"));
-    }
-    Ok(ids)
-}
-
-fn parse_ids(family: WireFamily, body: &Value) -> Vec<String> {
-    match family {
-        WireFamily::OpenAiCompat | WireFamily::Anthropic => body
-            .get("data")
-            .and_then(Value::as_array)
-            .map(|rows| {
-                rows.iter()
-                    .filter_map(|m| m.get("id").and_then(Value::as_str).map(str::to_string))
-                    .collect()
-            })
-            .unwrap_or_default(),
-        WireFamily::Google => body
-            .get("models")
-            .and_then(Value::as_array)
-            .map(|rows| {
-                rows.iter()
-                    .filter_map(|m| m.get("name").and_then(Value::as_str))
-                    .map(|name| name.strip_prefix("models/").unwrap_or(name).to_string())
-                    .collect()
-            })
-            .unwrap_or_default(),
-    }
+        .map_err(|e| format!("GET {shown} did not return JSON: {e}"))
 }
 
 /// `scheme://host[:port]` of a base URL, dropping any path (`/v1`, `/v1beta/openai`).

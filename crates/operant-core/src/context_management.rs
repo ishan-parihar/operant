@@ -347,14 +347,25 @@ const PROMPT_ESTIMATE_MARGIN_DIVISOR: u32 = 10;
 ///   provider's own usage report (skip the 10% margin); false when it is a
 ///   local estimate (apply it).
 ///
+/// * `max_output` — the model's own output ceiling, when a source knew it
+///   (`context_window::ResolvedWindow::max_output`). Without it the room on
+///   a large window is the WHOLE window: on 1,048,576 tokens the fitter asked
+///   for ~1,008,000 as `max_tokens`, which no provider accepts — every
+///   request would have been a 400 before generation. When no ceiling is
+///   known `UNKNOWN_MODEL_OUTPUT_CEILING` (8,192) applies instead — a value
+///   every widely-used route accepts.
+///
+///
 /// Returns the fitted cap, or `None` when no fitting is possible/needed
-/// (no window known, prompt unknown, or the requested cap already fits).
-/// Callers apply the result as `max_tokens = fitted` on the request.
+/// (no window known, prompt unknown, or the requested cap already fits the
+/// room AND the model's ceiling). Callers apply the result as
+/// `max_tokens = fitted` on the request.
 pub fn fit_output_tokens(
     requested: Option<u32>,
     window: usize,
     prompt_tokens: usize,
     prompt_is_reported: bool,
+    max_output: Option<usize>,
 ) -> Option<u32> {
     if window == 0 || prompt_tokens == 0 {
         return None;
@@ -364,9 +375,15 @@ pub fn fit_output_tokens(
     } else {
         prompt_tokens + prompt_tokens / PROMPT_ESTIMATE_MARGIN_DIVISOR as usize
     };
+    // Two independent ceilings: what the window has left, and what the model
+    // can emit. The request must satisfy both.
+    let ceiling = max_output
+        .unwrap_or(crate::context_window::UNKNOWN_MODEL_OUTPUT_CEILING)
+        .max(MIN_FITTED_OUTPUT_TOKENS as usize);
     let room = window
         .saturating_sub(padded)
-        .saturating_sub(OUTPUT_FIT_HEADWAY_TOKENS as usize);
+        .saturating_sub(OUTPUT_FIT_HEADWAY_TOKENS as usize)
+        .min(ceiling);
     let room_u32 = u32::try_from(room).ok()?;
     match requested {
         // No cap requested: providers default to their own (often huge)
@@ -1788,7 +1805,7 @@ mod tests {
     #[test]
     fn fit_output_tokens_shrinks_an_oversized_cap() {
         // window 128k, prompt 120k reported: 8k room minus 64 headway.
-        let fitted = fit_output_tokens(Some(32_768), 128_000, 120_000, true);
+        let fitted = fit_output_tokens(Some(32_768), 128_000, 120_000, true, None);
         assert_eq!(fitted, Some(128_000 - 120_000 - 64));
     }
 
@@ -1796,9 +1813,17 @@ mod tests {
     /// a guard, not a reducer; small prompts keep their caller preference.
     #[test]
     fn fit_output_tokens_leaves_a_fitting_cap_alone() {
-        assert_eq!(fit_output_tokens(Some(4096), 128_000, 1_000, true), None);
-        // None-requested on a small prompt: the whole room is the cap.
-        assert_eq!(fit_output_tokens(None, 128_000, 1_000, true), Some(126_936));
+        assert_eq!(
+            fit_output_tokens(Some(4096), 128_000, 1_000, true, None),
+            None
+        );
+        // None-requested on a small prompt: the room is the cap, bounded by
+        // the absolute output guard (a provider never accepts the whole
+        // 127k room as `max_tokens`).
+        assert_eq!(
+            fit_output_tokens(None, 128_000, 1_000, true, None),
+            Some(crate::context_window::UNKNOWN_MODEL_OUTPUT_CEILING as u32)
+        );
     }
 
     /// No cap requested: fit the largest useful cap so the provider's own
@@ -1807,8 +1832,15 @@ mod tests {
     fn fit_output_tokens_fits_a_cap_when_none_requested() {
         // 100k reported, window 128k → 27,936 room → floor 1024 applies? No:
         // 27,936 > 1024, so the fitted cap is the full room.
-        let fitted = fit_output_tokens(None, 128_000, 100_000, true);
+        let fitted = fit_output_tokens(None, 128_000, 100_000, true, Some(65_536));
         assert_eq!(fitted, Some(128_000 - 100_000 - 64));
+        // When the room is larger than the unknown-model guard, the guard
+        // binds — a request above a model's ceiling is a 400.
+        let roomy = fit_output_tokens(None, 128_000, 1_000, true, None);
+        assert_eq!(
+            roomy,
+            Some(crate::context_window::UNKNOWN_MODEL_OUTPUT_CEILING as u32)
+        );
     }
 
     /// The floor: when the room shrinks below 1024 the fitter still requests
@@ -1817,10 +1849,10 @@ mod tests {
     /// the next one.
     #[test]
     fn fit_output_tokens_requests_the_room_when_it_shrinks() {
-        let fitted = fit_output_tokens(Some(8192), 128_000, 127_500, true);
+        let fitted = fit_output_tokens(Some(8192), 128_000, 127_500, true, None);
         assert_eq!(fitted, Some(436)); // 128000-127500-64 = 436 < 1024
         // exactly at the floor boundary:
-        let fitted = fit_output_tokens(Some(8192), 128_000, 126_912, true);
+        let fitted = fit_output_tokens(Some(8192), 128_000, 126_912, true, None);
         assert_eq!(fitted, Some(1024));
         assert_eq!(MIN_FITTED_OUTPUT_TOKENS, 1024);
     }
@@ -1830,10 +1862,11 @@ mod tests {
     #[test]
     fn fit_output_tokens_pads_local_estimates_only() {
         // 100k local → padded 110k → room 17,936.
-        let local = fit_output_tokens(Some(32_768), 128_000, 100_000, false);
+        // A known ceiling keeps the guard out of the arithmetic being tested.
+        let local = fit_output_tokens(Some(32_768), 128_000, 100_000, false, Some(65_536));
         assert_eq!(local, Some(128_000 - 110_000 - 64));
         // 100k reported → room 27,936.
-        let reported = fit_output_tokens(Some(32_768), 128_000, 100_000, true);
+        let reported = fit_output_tokens(Some(32_768), 128_000, 100_000, true, Some(65_536));
         assert_eq!(reported, Some(128_000 - 100_000 - 64));
         assert!(local.unwrap() < reported.unwrap());
     }
@@ -1842,8 +1875,34 @@ mod tests {
     /// fitter must never invent a cap when it cannot see the room.
     #[test]
     fn fit_output_tokens_no_op_without_window_or_prompt() {
-        assert_eq!(fit_output_tokens(Some(4096), 0, 100, true), None);
-        assert_eq!(fit_output_tokens(Some(4096), 128_000, 0, true), None);
+        assert_eq!(fit_output_tokens(Some(4096), 0, 100, true, None), None);
+        assert_eq!(fit_output_tokens(Some(4096), 128_000, 0, true, None), None);
+    }
+
+    /// The ceiling that makes a 1M-token window usable.
+    ///
+    /// MEASURED failure this pins: with the window resolved to 1,048,576 and
+    /// a 40k prompt, the room is ~1,008,512 and the fitter asked for exactly
+    /// that as `max_tokens`. Anthropic's ceiling is 64k, OpenAI's 16k–100k —
+    /// the request is a 400 before generation. The model's own ceiling bounds
+    /// the cap; when no source knows it, the absolute guard does.
+    #[test]
+    fn fit_output_tokens_never_exceeds_the_model_output_ceiling() {
+        // 1M window, small prompt, no cap requested, model emits 32k.
+        let fitted = fit_output_tokens(None, 1_048_576, 40_000, true, Some(32_768));
+        assert_eq!(fitted, Some(32_768));
+        // An explicitly requested cap above the ceiling is reduced to it.
+        let fitted = fit_output_tokens(Some(200_000), 1_048_576, 40_000, true, Some(32_768));
+        assert_eq!(fitted, Some(32_768));
+        // Unknown ceiling: the guard for an unknown model, not the window.
+        let fitted = fit_output_tokens(None, 1_048_576, 40_000, true, None);
+        assert_eq!(
+            fitted,
+            Some(crate::context_window::UNKNOWN_MODEL_OUTPUT_CEILING as u32)
+        );
+        // A ceiling below the floor is raised to the floor, never to zero.
+        let fitted = fit_output_tokens(None, 128_000, 40_000, true, Some(1));
+        assert_eq!(fitted, Some(1_024));
     }
 
     fn make_msg(role: Role, content: impl Into<String>) -> Message {

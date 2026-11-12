@@ -215,7 +215,13 @@ async fn handle_check(config: &AppConfig) -> Result<()> {
                 floor.required, floor.schema_tokens, floor.skills_tokens, floor.minimum_hard_cap,
             ));
         }
-        Ok(floor) if floor.minimum_window > config.agent.context_window => {
+        // `0` is AUTOMATIC: the resolver picks the model's real window, so a
+        // configured-vs-floor comparison says nothing (the old guard would
+        // have reported every automatic window as 0 and always failed).
+        Ok(floor)
+            if config.agent.context_window > 0
+                && floor.minimum_window > config.agent.context_window =>
+        {
             issues.push(format!(
                 "agent.context_window is {} but the protected content needs about {} tokens \
                  (tool schemas ~{}, advertised skills ~{}). Raise it to at least {} — every \

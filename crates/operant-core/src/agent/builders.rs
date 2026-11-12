@@ -105,6 +105,8 @@ impl OperantAgent {
         // (plan 03) read before `config` moves into Self.
         let initial_effort =
             (!config.reasoning_effort.is_empty()).then(|| config.reasoning_effort.clone());
+        let initial_window =
+            crate::context_window::ResolvedWindow::from_config(config.context_window);
         Self {
             config,
             model_override: Arc::new(std::sync::RwLock::new(None::<String>)),
@@ -188,6 +190,7 @@ impl OperantAgent {
             background_review_callback: None,
             last_prompt_tokens: std::sync::atomic::AtomicUsize::new(0),
             last_context_stats: Arc::new(std::sync::Mutex::new(None)),
+            resolved_window: Arc::new(std::sync::RwLock::new(initial_window)),
             usage_prompt_tokens: std::sync::atomic::AtomicU64::new(0),
             usage_completion_tokens: std::sync::atomic::AtomicU64::new(0),
             usage_api_calls: std::sync::atomic::AtomicU64::new(0),
@@ -215,6 +218,8 @@ impl OperantAgent {
         // (plan 03) read before `config` moves into Self.
         let initial_effort =
             (!config.reasoning_effort.is_empty()).then(|| config.reasoning_effort.clone());
+        let initial_window =
+            crate::context_window::ResolvedWindow::from_config(config.context_window);
         Self {
             config,
             model_override: Arc::new(std::sync::RwLock::new(None::<String>)),
@@ -296,6 +301,7 @@ impl OperantAgent {
             background_review_callback: None,
             last_prompt_tokens: std::sync::atomic::AtomicUsize::new(0),
             last_context_stats: Arc::new(std::sync::Mutex::new(None)),
+            resolved_window: Arc::new(std::sync::RwLock::new(initial_window)),
             usage_prompt_tokens: std::sync::atomic::AtomicU64::new(0),
             usage_completion_tokens: std::sync::atomic::AtomicU64::new(0),
             usage_api_calls: std::sync::atomic::AtomicU64::new(0),

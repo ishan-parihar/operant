@@ -374,13 +374,36 @@ impl App {
 
     /// Update the context window size for the current model.
     ///
-    /// The configured `[agent] context_window` is authoritative because it is
-    /// also the value the core agent budgets against. Resolving a display-only
-    /// value from models.dev created two denominators: a custom model such as
-    /// `large-stack` showed 200k here while the agent correctly used the
-    /// configured 1M.
+    /// An EXPLICIT `[agent] context_window` is authoritative because it is also
+    /// the value the core agent budgets against. `0` means AUTOMATIC
+    /// (2026-11-13 audit): the agent resolves the model's real window, so the
+    /// display must not show the sentinel — the old `.max(1)` rendered a
+    /// 1-token window. The same models.dev cache the agent prefers answers
+    /// here when it knows the model; the historical 128k stands in otherwise.
     pub fn refresh_context_window_size(&mut self) {
-        self.context_window_size = self.config.agent.context_window.max(1) as u64;
+        let configured = self.config.agent.context_window;
+        let size = if configured > 0 {
+            configured as u64
+        } else {
+            let provider = self
+                .active_provider
+                .clone()
+                .or_else(|| {
+                    crate::tui::provider::infer_provider_from_model(&self.config.agent.model)
+                })
+                .unwrap_or_else(|| "openai".to_string());
+            let model = self
+                .config
+                .agent
+                .model
+                .rsplit('/')
+                .next()
+                .unwrap_or(&self.config.agent.model);
+            operant_core::models_dev::cached_capabilities(&provider, model)
+                .and_then(|caps| caps.context_window)
+                .unwrap_or(operant_core::context_window::DEFAULT_CONTEXT_WINDOW as u64)
+        };
+        self.context_window_size = size;
     }
 
     /// Resolve a stale `provider/default` model name to the best actual model

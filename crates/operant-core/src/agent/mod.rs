@@ -839,6 +839,15 @@ pub struct OperantAgent {
     /// at different points of the same request, and the second one needs what
     /// the first one measured.
     last_context_stats: Arc<std::sync::Mutex<Option<ContextAssemblyStats>>>,
+    /// The context window (and output ceiling) this agent budgets against,
+    /// resolved per (provider, model) by [`crate::context_window`].
+    ///
+    /// `effective_context_window` reads this cell; before it, every read
+    /// took the database lock and clamped a hardcoded 128k, so a 1M-token
+    /// route was budgeted at an eighth of its window. `set_model` /
+    /// `refresh_context_window` replace the cell when the model changes, so
+    /// a runtime switch cannot keep the previous model's denominator.
+    resolved_window: Arc<std::sync::RwLock<crate::context_window::ResolvedWindow>>,
     /// Provider-metered prompt tokens accumulated for the current turn.
     ///
     /// The meter is per turn and is banked into the session row by the request
@@ -2182,7 +2191,15 @@ mod tests {
         let db =
             Database::init(std::env::temp_dir().join("test_context_budget_tail.sqlite")).unwrap();
         let agent = OperantAgent::new(
-            AgentConfig::default(),
+            AgentConfig {
+                // An EXPLICIT window: with `0` (automatic) the resolver finds
+                // gpt-4's real 8,192-token window, the ladder compacts, and the
+                // test's "last user message carries the block" assumption meets
+                // the wrap-up notice instead. The disclosure's arithmetic is
+                // what this test pins; the window is fixture state.
+                context_window: 128_000,
+                ..AgentConfig::default()
+            },
             Box::new(OpenAIModelClient::new(OpenAIClient::new(
                 crate::client::ClientConfig::default(),
             ))),
@@ -2230,7 +2247,7 @@ mod tests {
             let block = content
                 .split("<context_budget>")
                 .nth(1)
-                .expect("budget block present");
+                .unwrap_or_else(|| panic!("budget block present: {content:?}"));
             block
                 .split(';')
                 .nth(1)
@@ -2527,6 +2544,91 @@ mod tests {
             current_prompt + max_tokens as usize <= window,
             "the fitted request must fit the window: prompt {current_prompt} + \
              max_tokens {max_tokens} > window {window}"
+        );
+    }
+
+    /// A non-overflow error must never teach a context limit.
+    ///
+    /// The old body fell through to `next_probe_tier` for EVERY provider
+    /// error, so one transient 500 could halve a model's window for good.
+    /// `learn_context_limit` now refuses anything that is not a provider
+    /// response or a typed `ContextLengthExceeded`.
+    #[tokio::test]
+    async fn a_non_overflow_error_teaches_no_context_limit() {
+        let (agent, _dir) = bust_test_agent(128_000);
+        let key =
+            crate::context_window::learned_limit_key(agent.client.provider_name(), &agent.model());
+        let messages = vec![Message::new(Role::User, "x".repeat(400_000))];
+        agent.learn_context_limit(&messages, &crate::error::Error::Agent("boom".into()));
+        assert_eq!(
+            agent.database.get_state_meta(&key),
+            None,
+            "an agent-side error taught a context limit; only an overflow may"
+        );
+    }
+
+    /// A typed overflow with no stated number teaches the probe tier below
+    /// the rejected request — and never below the usable floor.
+    #[tokio::test]
+    async fn a_typed_overflow_teaches_a_usable_limit() {
+        let (agent, _dir) = bust_test_agent(1_000_000);
+        let key =
+            crate::context_window::learned_limit_key(agent.client.provider_name(), &agent.model());
+        let messages = vec![Message::new(Role::User, "x".repeat(400_000))];
+        agent.learn_context_limit(&messages, &crate::error::Error::ContextLengthExceeded);
+        let learned = crate::context_window::learned_from_meta(agent.database.get_state_meta(&key))
+            .expect("a typed overflow must teach a limit");
+        assert!(
+            learned >= crate::context_window::MIN_CONTEXT_WINDOW,
+            "learned {learned} is below the usable floor"
+        );
+        assert!(learned <= 1_000_000, "learned above the configured window");
+    }
+
+    /// A request LARGER than the learned ceiling that succeeds disproves it:
+    /// the key is dropped and the window returns to the resolved default.
+    ///
+    /// Without this the ratchet was permanent — one 400 followed every later
+    /// turn at the reduced window (`operant context window --reset` was the
+    /// only cure, and it did not exist).
+    #[tokio::test]
+    async fn a_success_above_the_learned_limit_clears_it() {
+        let (agent, _dir) = bust_test_agent(128_000);
+        let key =
+            crate::context_window::learned_limit_key(agent.client.provider_name(), &agent.model());
+        agent
+            .database
+            .set_state_meta(&key, "32000")
+            .expect("seed a learned limit");
+        *agent
+            .resolved_window
+            .write()
+            .unwrap_or_else(|e| e.into_inner()) = crate::context_window::ResolvedWindow {
+            window: 32_000,
+            source: crate::context_window::WindowSource::Learned,
+            max_output: None,
+        };
+
+        // A success BELOW the ceiling is not evidence of anything.
+        agent.note_request_succeeded(30_000);
+        assert_eq!(
+            agent.database.get_state_meta(&key).as_deref(),
+            Some("32000"),
+            "a request under the learned limit must not clear it"
+        );
+
+        // A success ABOVE it disproves the ceiling.
+        agent.note_request_succeeded(40_000);
+        assert_eq!(
+            agent.database.get_state_meta(&key),
+            None,
+            "a successful larger request must clear the learned limit"
+        );
+        let resolved = agent.resolved_window();
+        assert_eq!(resolved.window, 128_000);
+        assert_eq!(
+            resolved.source,
+            crate::context_window::WindowSource::Configured
         );
     }
 
@@ -3956,7 +4058,8 @@ mod tests {
             stream: true,
             context_window: 8000,
             max_tool_result_share: crate::context_management::DEFAULT_MAX_TOOL_RESULT_SHARE,
-            max_tool_result_total_share: crate::context_management::DEFAULT_MAX_TOOL_RESULT_TOTAL_SHARE,
+            max_tool_result_total_share:
+                crate::context_management::DEFAULT_MAX_TOOL_RESULT_TOTAL_SHARE,
             max_healing_attempts: 1,
             fallback_models: Vec::new(),
             fallback_on_errors: false,
@@ -4012,7 +4115,8 @@ mod tests {
             stream: true,
             context_window: 8000,
             max_tool_result_share: crate::context_management::DEFAULT_MAX_TOOL_RESULT_SHARE,
-            max_tool_result_total_share: crate::context_management::DEFAULT_MAX_TOOL_RESULT_TOTAL_SHARE,
+            max_tool_result_total_share:
+                crate::context_management::DEFAULT_MAX_TOOL_RESULT_TOTAL_SHARE,
             max_healing_attempts: 1,
             fallback_models: Vec::new(),
             fallback_on_errors: false,
@@ -4134,7 +4238,8 @@ mod tests {
             stream: true,
             context_window: 8000,
             max_tool_result_share: crate::context_management::DEFAULT_MAX_TOOL_RESULT_SHARE,
-            max_tool_result_total_share: crate::context_management::DEFAULT_MAX_TOOL_RESULT_TOTAL_SHARE,
+            max_tool_result_total_share:
+                crate::context_management::DEFAULT_MAX_TOOL_RESULT_TOTAL_SHARE,
             max_healing_attempts: 1,
             fallback_models: Vec::new(),
             fallback_on_errors: false,

@@ -721,6 +721,18 @@ pub struct BehaviorSettings {
     pub context_budget_tokens: usize,
     pub system_prompt: Option<String>,
     pub stream: bool,
+    /// Tokens the agent budgets every request against.
+    ///
+    /// `0` (the default) means AUTOMATIC: resolve the window from the
+    /// provider's own `/models` listing, then the models.dev catalog, then
+    /// the historical 128k fallback
+    /// (`crate::context_window::resolve`). Before this, the field defaulted
+    /// to 128,000 and nothing ever derived a window from the model — a route
+    /// serving 1,048,576 tokens was budgeted at an eighth of it.
+    ///
+    /// A value > 0 is an explicit operator decision and wins over every
+    /// discovered source; it is the only lever that covers a local alias no
+    /// catalog knows.
     pub context_window: usize,
     pub max_healing_attempts: usize,
     pub show_reasoning: bool,
@@ -1041,7 +1053,7 @@ impl Default for BehaviorSettings {
             context_budget_tokens: 0,
             system_prompt: None,
             stream: true,
-            context_window: 128_000,
+            context_window: crate::context_window::AUTOMATIC,
             max_healing_attempts: 3,
             show_reasoning: true,
             max_trajectories: 0,
@@ -2990,15 +3002,23 @@ pub fn persist_config_key(dotted: &str, raw_value: &str) -> Result<PathBuf> {
 
 /// Validate a configured context window before it reaches the agent.
 ///
-/// The runtime reserves 4,096 tokens for a response. A smaller total window
-/// is therefore structurally unusable. The runtime still checks the exact
+/// `0` is AUTOMATIC and always legal: it resolves from the provider's
+/// `/models` listing, then models.dev, then the 128k fallback
+/// (`crate::context_window`). Any other value is an explicit operator
+/// decision, and the runtime reserves 4,096 tokens for a response — a
+/// smaller total window is structurally unusable, so it is rejected here
+/// with the field named. The runtime still checks the exact
 /// deployment-specific protected-prefix floor after that prefix is known.
 pub fn validate_context_window(tokens: usize) -> Result<()> {
-    const MIN_CONTEXT_WINDOW_TOKENS: usize = 4_097;
-    if tokens < MIN_CONTEXT_WINDOW_TOKENS {
+    use crate::context_window::{AUTOMATIC, MIN_CONTEXT_WINDOW};
+    if tokens == AUTOMATIC {
+        return Ok(());
+    }
+    if tokens < MIN_CONTEXT_WINDOW {
         return Err(Error::Config(format!(
-            "agent.context_window must be at least {MIN_CONTEXT_WINDOW_TOKENS} tokens; \
-             {tokens} leaves no room for input beside the 4096-token response reserve"
+            "agent.context_window must be 0 (automatic) or at least \
+             {MIN_CONTEXT_WINDOW} tokens; {tokens} leaves no room for input beside the \
+             4096-token response reserve"
         )));
     }
     Ok(())

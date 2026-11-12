@@ -2866,6 +2866,19 @@ impl Database {
         Ok(())
     }
 
+    /// Remove a state_meta key. Returns whether a row was removed.
+    ///
+    /// Used to drop evidence that has been disproven — a learned context
+    /// limit a successful larger request contradicted (`Agent::
+    /// note_request_succeeded`) — and by `operant context window --reset`.
+    pub fn delete_state_meta(&self, key: &str) -> Result<bool> {
+        let conn = self.lock_conn()?;
+        let removed = conn
+            .execute("DELETE FROM state_meta WHERE key = ?1", params![key])
+            .map_err(|e| Error::Agent(format!("Failed to delete state_meta: {}", e)))?;
+        Ok(removed > 0)
+    }
+
     /// Get a state_meta value by key.
     pub fn get_state_meta(&self, key: &str) -> Option<String> {
         let conn = self.conn.lock().ok()?;

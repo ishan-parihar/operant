@@ -1173,6 +1173,23 @@ pub(crate) fn llm_compressor_config(
     }
 }
 
+/// A non-zero window for surfaces built BEFORE the agent resolves one
+/// (the LLM compressor's threshold base).
+///
+/// `agent.context_window = 0` means AUTOMATIC and the agent replaces it with
+/// the model's real window on its first request build; a surface constructed
+/// earlier must not treat the sentinel as a 0-token budget (a compressor
+/// threshold of 0 compresses every turn). Configured values pass through
+/// untouched.
+pub(crate) fn configured_or_default_window(config: &AppConfig) -> usize {
+    match config.agent.context_window {
+        operant_core::context_window::AUTOMATIC => {
+            operant_core::context_window::DEFAULT_CONTEXT_WINDOW
+        }
+        configured => configured,
+    }
+}
+
 pub(crate) fn agent_config(
     config: &AppConfig,
     behavior: &BehaviorSettings,
@@ -2224,7 +2241,7 @@ pub(crate) async fn create_runtime_agent_with(
         Some(event_tx.clone()),
     );
 
-    let context_window = core.agent_config.context_window;
+    let context_window = configured_or_default_window(config);
     Ok({
         let flag = operant_core::interrupt::InterruptFlag::new();
         // Spawn a Ctrl-C handler that triggers the flag. The agent loop
@@ -2347,7 +2364,7 @@ pub(crate) async fn create_agent_without_events(
     let (model_client, pool_registry) =
         create_model_client_with_fallback(&provider, &model_name, config, None);
 
-    let context_window = core.agent_config.context_window;
+    let context_window = configured_or_default_window(config);
     Ok({
         let flag = operant_core::interrupt::InterruptFlag::new();
         let handler_flag = flag.clone();

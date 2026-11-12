@@ -95,6 +95,26 @@ pub enum ContextSubcommand {
         lookback_days: u32,
     },
 
+    /// Show the context window the agent budgets against, and where the
+    /// number came from (config / learned / endpoint / catalog / default).
+    ///
+    /// The one place to answer "why is the agent compacting so early": with
+    /// `agent.context_window = 0` the window is resolved per model, and this
+    /// prints every candidate the resolver saw.
+    Window {
+        /// Bypass the cached discovery and ask the provider again
+        #[arg(long)]
+        refresh: bool,
+
+        /// Clear the limit learned from an overflow for this (provider, model)
+        #[arg(long)]
+        reset: bool,
+
+        /// Emit JSON instead of the rendered view
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Show what every tool SURFACE costs per request (builtin schemas, each
     /// enabled MCP server, each granted CLI), against the configured target.
     ///
@@ -374,6 +394,13 @@ pub async fn handle_context_command(config: &AppConfig, cmd: ContextSubcommand) 
             println!("  skipped empty    : {}", report.skipped_empty);
             println!("  errors           : {}", report.errors);
         }
+        ContextSubcommand::Window {
+            refresh,
+            reset,
+            json,
+        } => {
+            window_command(config, refresh, reset, json).await?;
+        }
         ContextSubcommand::Budget { surface, json } => {
             budget_command(config, surface.as_deref(), json).await?;
         }
@@ -383,6 +410,101 @@ pub async fn handle_context_command(config: &AppConfig, cmd: ContextSubcommand) 
         ContextSubcommand::Cli { cmd } => {
             cli_command(config, &cmd)?;
         }
+    }
+    Ok(())
+}
+
+/// Report and manage the context window the agent budgets against.
+async fn window_command(config: &AppConfig, refresh: bool, reset: bool, json: bool) -> Result<()> {
+    use operant_core::context_window::{
+        clear_discovery_cache, discover, learned_from_meta, learned_limit_key, resolve,
+    };
+
+    if refresh {
+        clear_discovery_cache();
+    }
+    let configured = config.agent.context_window;
+    let model = config.agent.model.trim().to_string();
+    let provider = crate::tui::provider::infer_provider_from_model(&model)
+        .unwrap_or_else(|| "openai".to_string());
+    let key = learned_limit_key(&provider, &model);
+    let db = Database::init(config.database_path.clone()).context("Failed to open database")?;
+
+    if reset {
+        let removed = db.delete_state_meta(&key)?;
+        if json {
+            println!("{}", serde_json::json!({"reset": key, "removed": removed}));
+        } else if removed {
+            println!("Cleared the learned context limit for {provider}/{model} ({key}).");
+        } else {
+            println!("No learned context limit stored for {provider}/{model} ({key}).");
+        }
+        return Ok(());
+    }
+
+    let learned = learned_from_meta(db.get_state_meta(&key));
+    let discovered = discover(
+        &provider,
+        &config.client.base_url,
+        config.client.api_key.as_deref(),
+        &model,
+    )
+    .await;
+    let resolved = resolve(configured, learned, discovered);
+
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "provider": provider,
+                "model": model,
+                "configured": configured,
+                "learned": learned,
+                "learned_key": key,
+                "endpoint_window": discovered.context_window,
+                "discovered_source": discovered.window_source.map(|source| source.as_str()),
+                "resolved": resolved.window,
+                "source": resolved.source.as_str(),
+                "max_output": resolved.max_output,
+            }))?
+        );
+        return Ok(());
+    }
+
+    let configured_label = if configured == operant_core::context_window::AUTOMATIC {
+        "automatic (0)".to_string()
+    } else {
+        configured.to_string()
+    };
+    println!("Context window — {provider}/{model}\n");
+    println!("  configured   : {configured_label}");
+    println!(
+        "  learned      : {}",
+        learned.map_or_else(|| "none".to_string(), |tokens| tokens.to_string())
+    );
+    println!(
+        "  endpoint     : {}",
+        discovered
+            .context_window
+            .map_or_else(|| "not reported".to_string(), |tokens| tokens.to_string())
+    );
+    println!(
+        "  resolved     : {} ({})",
+        resolved.window,
+        resolved.source.as_str()
+    );
+    println!(
+        "  max output   : {}",
+        resolved.max_output.map_or_else(
+            || "unknown (absolute guard applies)".to_string(),
+            |tokens| tokens.to_string()
+        )
+    );
+    if resolved.source == operant_core::context_window::WindowSource::Learned {
+        println!(
+            "\n  A rejected request taught the learned limit. `operant context window --reset` \
+             clears it; a single successful request above it clears it automatically."
+        );
     }
     Ok(())
 }

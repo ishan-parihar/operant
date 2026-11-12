@@ -738,11 +738,16 @@ impl OperantAgent {
         // forced shapes had no production caller at all. The shape travels
         // with the request now.
         let request = request.with_reasoning_shape(shape);
+        // The window bounds what the PROMPT may leave; the model's own
+        // ceiling bounds what the reply may ask for. Both are needed: a 1M
+        // window with only the window term requests `max_tokens` ~= the whole
+        // window, which every provider rejects before generation.
         match crate::context_management::fit_output_tokens(
             request.max_tokens,
             self.effective_context_window(),
             prompt,
             reported,
+            self.resolved_window().max_output,
         ) {
             Some(fitted) => ChatRequest {
                 max_tokens: Some(fitted),
@@ -815,10 +820,12 @@ impl OperantAgent {
     /// `process_response` (non-streaming) and `process_stream` (streaming,
     /// iter-247) now that both paths can produce a `Usage`.
     pub(crate) async fn emit_usage_and_cost(&self, usage: &Usage, served_model: &str) {
-        self.last_prompt_tokens.store(
-            usage.prompt_tokens.try_into().unwrap_or(0),
-            std::sync::atomic::Ordering::Relaxed,
-        );
+        let prompt_tokens = usage.prompt_tokens.try_into().unwrap_or(0);
+        self.last_prompt_tokens
+            .store(prompt_tokens, std::sync::atomic::Ordering::Relaxed);
+        // A served request is evidence: if it exceeded a LEARNED ceiling, the
+        // ceiling was wrong and must be dropped (see the method's doc).
+        self.note_request_succeeded(prompt_tokens);
 
         // O-19 (W3): a Holon run's token budget is enforced here — the
         // provider reports what each call actually spent (input tokens

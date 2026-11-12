@@ -32,10 +32,11 @@ fn truncated_without_a_completion_signal(finish_reason: Option<&str>, response_t
         && !turn_end_heuristics::has_natural_response_ending(response_text)
 }
 
-/// Prompt-meta key for the context limit learned from an overflow (plan 06 P1).
-fn learned_limit_key(provider: &str, model: &str) -> String {
-    format!("context_limit:{provider}:{model}")
-}
+// Prompt-meta key for the context limit learned from an overflow (plan 06 P1).
+// The key format lives in ONE place (`crate::context_window`) so the agent
+// that writes it and `operant context window --reset` that clears it can
+// never drift apart.
+use crate::context_window::learned_limit_key;
 
 /// The turn's counters the wrap-up and the poke both read.
 ///
@@ -3736,40 +3737,174 @@ impl OperantAgent {
         self.context_caps.resolve(self.effective_context_window())
     }
 
-    /// The window this agent builds against: the configured one, lowered to
-    /// the limit a prior overflow taught us for this provider and model.
+    /// The window this agent builds against, and where it came from.
+    pub fn resolved_window(&self) -> crate::context_window::ResolvedWindow {
+        *self
+            .resolved_window
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// The window this agent builds against: resolved per (provider, model)
+    /// and lowered by a limit a prior overflow taught us.
+    ///
+    /// Reads the resolved cell, not the database: this is called dozens of
+    /// times per request (schema sizing, tool-output guards, budget ladder),
+    /// and the old version took the SQLite lock on every one of them.
     pub(crate) fn effective_context_window(&self) -> usize {
+        self.resolved_window().window
+    }
+
+    /// Re-resolve the window for the CURRENT model and (provider, endpoint).
+    ///
+    /// Called before a request is built, so a runtime model switch cannot
+    /// keep the previous model's denominator, and the first request of a run
+    /// learns the window the model actually has instead of a hardcoded 128k.
+    /// Every source is cached (`context_window::discover`, 10 min TTL), so a
+    /// repeated call is a hash lookup and one `state_meta` read.
+    pub(crate) async fn refresh_context_window(&self) {
+        let configured = self.config.context_window;
         let key = learned_limit_key(self.client.provider_name(), &self.model());
-        self.database
-            .get_state_meta(&key)
-            .and_then(|v| v.parse::<usize>().ok())
-            .map_or(self.config.context_window, |learned| {
-                learned.min(self.config.context_window)
-            })
+        let learned = crate::context_window::learned_from_meta(self.database.get_state_meta(&key));
+        // An EXPLICIT window is the operator's decision, so the only thing
+        // still worth asking for is the model's output ceiling — and the
+        // models.dev disk cache answers that without a network round-trip.
+        // AUTOMATIC needs the full probe (endpoint, then catalog).
+        let discovered = if configured > crate::context_window::AUTOMATIC {
+            let current_model = self.model();
+            let leaf = current_model.rsplit('/').next().unwrap_or(&current_model);
+            let max_output =
+                crate::models_dev::cached_capabilities(self.client.provider_name(), leaf)
+                    .and_then(|caps| caps.max_output)
+                    .and_then(|tokens| usize::try_from(tokens).ok());
+            crate::context_window::Discovered {
+                max_output,
+                ..crate::context_window::Discovered::default()
+            }
+        } else {
+            let base_url = self
+                .client
+                .base_url()
+                .unwrap_or_else(|| crate::config::runtime_config().client.base_url.clone());
+            let api_key = crate::config::runtime_config().client.api_key.clone();
+            crate::context_window::discover(
+                self.client.provider_name(),
+                &base_url,
+                api_key.as_deref(),
+                &self.model(),
+            )
+            .await
+        };
+        let resolved = crate::context_window::resolve(configured, learned, discovered);
+        let previous = self.resolved_window();
+        *self
+            .resolved_window
+            .write()
+            .unwrap_or_else(|e| e.into_inner()) = resolved;
+        if previous.window != resolved.window || previous.source != resolved.source {
+            info!(
+                model = %self.model(),
+                provider = %self.client.provider_name(),
+                window = resolved.window,
+                source = resolved.source.as_str(),
+                previous_window = previous.window,
+                previous_source = previous.source.as_str(),
+                max_output = ?resolved.max_output,
+                "Context window resolved"
+            );
+        }
+        if configured > 0 && resolved.window < configured {
+            warn!(
+                configured = configured,
+                effective = resolved.window,
+                "A learned or discovered limit is below the configured context window; \
+                 the smaller one is enforced (clear it with `operant context window --reset`)"
+            );
+        }
     }
 
     /// Records the provider's context limit after an overflow, so later builds
     /// size against it. Uses an explicit provider-stated limit when present;
     /// otherwise it records the next probe tier below the rejected request.
+    ///
+    /// Only a genuine context overflow teaches a limit: the caller gates on
+    /// the classifier's `ContextOverflow` reason, and ANY error that is not a
+    /// provider response or a typed `ContextLengthExceeded` is refused here
+    /// (a local `ContextExhausted` is our own budget, not the model's). A
+    /// provider overflow whose body states no number still teaches the probe
+    /// tier below the rejected request — that is the only evidence there is.
     pub(crate) fn learn_context_limit(&self, messages: &[Message], provider_error: &Error) {
-        let key = learned_limit_key(self.client.provider_name(), &self.model());
-        let rejected_tokens = crate::context_management::estimate_total_tokens(messages);
         let explicit_limit = match provider_error {
             Error::Provider { body, .. } => crate::agent::parse_context_limit_from_error(body),
             Error::ContextLengthExceeded => None,
-            _ => None,
+            _ => return,
         };
+        let key = learned_limit_key(self.client.provider_name(), &self.model());
+        let rejected_tokens = crate::context_management::estimate_total_tokens(messages);
         let candidate =
             explicit_limit.unwrap_or_else(|| crate::agent::next_probe_tier(rejected_tokens.max(1)));
-        let learned = self
-            .database
-            .get_state_meta(&key)
-            .and_then(|v| v.parse::<usize>().ok())
-            .map_or(candidate, |prev| prev.min(candidate))
-            .min(self.config.context_window);
+        // An EXPLICIT provider limit is authoritative: it may RAISE a value a
+        // bad probe taught (the provider stated the real number). A probe
+        // tier is an upper bound and only ever ratchets down.
+        let learned = match explicit_limit {
+            Some(limit) => match self.config.context_window {
+                crate::context_window::AUTOMATIC => limit,
+                configured => limit.min(configured),
+            },
+            None => self
+                .database
+                .get_state_meta(&key)
+                .and_then(|v| v.parse::<usize>().ok())
+                .map_or(candidate, |prev| prev.min(candidate)),
+        };
         if let Err(e) = self.database.set_state_meta(&key, &learned.to_string()) {
             warn!(error = %e, "Failed to persist learned context limit");
+            return;
         }
+        // Take effect IMMEDIATELY, not on the next refresh: the retry that
+        // follows this overflow, the compression rung, and the typed error's
+        // `window` all read the effective window in this same turn.
+        let mut cell = self
+            .resolved_window
+            .write()
+            .unwrap_or_else(|e| e.into_inner());
+        if learned < cell.window {
+            cell.window = learned;
+            cell.source = crate::context_window::WindowSource::Learned;
+        }
+    }
+
+    /// The provider served a request that EXCEEDED the learned ceiling.
+    ///
+    /// That is disproof: a rejected request is evidence the window is at
+    /// most N, but a request of size > N that SUCCEEDED proves the ceiling
+    /// was wrong (another model answered the 400, the route raised its
+    /// limit, or the probe tier was too conservative). Without this the old
+    /// ratchet was permanent: a single overflow followed every later turn at
+    /// the reduced window, and the only cure was hand-editing SQLite.
+    pub(crate) fn note_request_succeeded(&self, prompt_tokens: usize) {
+        let resolved = self.resolved_window();
+        if resolved.source != crate::context_window::WindowSource::Learned
+            || prompt_tokens < resolved.window
+        {
+            return;
+        }
+        let key = learned_limit_key(self.client.provider_name(), &self.model());
+        if let Err(e) = self.database.delete_state_meta(&key) {
+            warn!(error = %e, "Failed to clear a disproven learned context limit");
+            return;
+        }
+        info!(
+            prompt_tokens,
+            learned = resolved.window,
+            model = %self.model(),
+            "A successful request exceeded the learned context limit — limit cleared"
+        );
+        *self
+            .resolved_window
+            .write()
+            .unwrap_or_else(|e| e.into_inner()) =
+            crate::context_window::ResolvedWindow::from_config(self.config.context_window);
     }
 
     /// Plan 06 P1: the permission for the request about to be built. Computed
@@ -3814,6 +3949,12 @@ impl OperantAgent {
     /// Ported from hermes-agent's `turn_context.py` preflight compression
     /// pattern: estimate → check threshold → compress → fit within budget.
     pub(crate) async fn build_messages(&self, session_id: &str) -> Result<Vec<Message>> {
+        // Resolve the window for the model about to serve this request BEFORE
+        // any budget arithmetic. One call per build: it re-reads the learned
+        // limit (so an overflow in another process is adopted) and re-resolves
+        // the model's own window, which is what makes a runtime model switch
+        // take effect instead of inheriting the previous denominator.
+        self.refresh_context_window().await;
         let mut messages = Vec::new();
 
         // ── Prompt-cache stability (iter-39, plan 06 P0) ─────────────────
@@ -4460,14 +4601,22 @@ impl OperantAgent {
         // would break the prompt cache on every request. Nothing above the
         // latest user message is touched.
         {
+            // `used` ALREADY contains the tool schemas and the turn tail
+            // (`estimate_request_tokens` adds the schemas; the tail is added
+            // here), and `effective_budget` has already had both subtracted
+            // along with the response reserve. Subtracting one from the other
+            // therefore counted schemas and the tail TWICE and quoted a
+            // budget, not the window, as "context window" — the figure the
+            // model read understated the request by ~25k on the operator's
+            // deployment. Quote the real window and subtract once.
             let mut used =
                 self.estimate_request_tokens(&messages, schema_tokens) + turn_context_tokens;
             let build = |used: usize| -> String {
-                let remaining = effective_budget.saturating_sub(used);
+                let remaining = window.saturating_sub(used);
                 let mut block = String::from("<context_budget>");
                 block.push_str(&format!(
-                    "context window: {effective_budget} tokens; this request: ~{used} \
-                     used, ~{remaining} remaining"
+                    "context window: {window} tokens; this request: ~{used} \
+                     used, ~{remaining} remaining (the reply reserve is part of that room)"
                 ));
                 if ladder_fired {
                     block.push_str(&format!(

@@ -119,6 +119,18 @@ config (`"5m"` default, `"1h"` available).
 
 `agent.context_window` is the total prompt + response capacity, not an output-token limit. The runtime reserves 4,096 tokens for the response; a configured total below 4,097 is rejected before the agent starts.
 
+**`0` means AUTOMATIC**, and that is the shipped default (2026-11-13). The window is resolved per (provider, model) by the ONE resolver in `crates/operant-core/src/context_window.rs`, in this order:
+
+1. **Configured** — `agent.context_window > 0`. An explicit number always wins; it is the only lever that covers a local alias no catalog knows.
+2. **Learned** — a limit a provider's own overflow error stated for this route (`context_limit:<provider>:<model>` in `state_meta`).
+3. **Endpoint** — the provider's `/models` listing (`context_length`, `context_window`, `max_context_length`, or llama.cpp's `meta.n_ctx`).
+4. **Catalog** — models.dev `limit.context`.
+5. **Default** — the historical 128,000, now a last resort.
+
+Discovery is cached for 10 minutes per `(provider, base_url, model)` and re-resolved before every request build, so a runtime model switch (steer `/model`, picker, fallback) picks up the new model's denominator instead of inheriting the previous one. `operant context window` prints every candidate and the resolved source; `--reset` clears a learned limit and `--refresh` bypasses the cache.
+
+The same resolution carries the model's OUTPUT ceiling (`limit.output` / `/models` `max_output_*`). The output fitter (`context_management::fit_output_tokens`) bounds `max_tokens` by BOTH the room left in the window and that ceiling (65,536 when no source knows one) — without it a 1M-token window asked for ~1,008,000 output tokens, which every provider rejects before generation.
+
 Context exhaustion has two different causes and therefore two different recoveries:
 
 - **Foldable history** still exceeds the usable budget after compaction. The error says how many tokens the conversation needs and asks for `/compact`; the gateway compacts the stored history and retries once.
@@ -128,7 +140,9 @@ The protected floor is measured after eviction, from the frozen system prompt an
 
 The protected floor is measured after eviction, from the frozen system prompt and newest live message. Provider-reported overflows carry the same floor through the typed error, so a transient first overflow can still be retried while the terminal failure remains actionable. Any second classified overflow fails typed even when compression reduced the foldable history, because the reduced request can still exceed the provider's real limit.
 
-An overflow teaches the runtime the provider's usable limit. When the error states the limit explicitly, that value is used. Otherwise the runtime probes the next smaller tier below the rejected request; the learned value never rises when a later request is larger. The rejected request size itself is not a context limit.
+An overflow teaches the runtime the provider's usable limit, and ONLY an overflow does: the caller gates on the classifier's `ContextOverflow` reason and `learn_context_limit` refuses every other error, because a transient 500 used to fall through to the probe tier and permanently shrink the window. When the error states the limit explicitly, that value is used AND may raise a value a bad probe taught (the provider stated the real number). Otherwise the runtime probes the next smaller tier below the rejected request; that tier only ratchets down. The rejected request size itself is not a context limit.
+
+A learned limit is revisable evidence, not a verdict. A request larger than the learned ceiling that SUCCEEDS disproves it (`Agent::note_request_succeeded` drops the key), and `operant context window --reset` clears it by hand — the old ratchet was permanent, so one 400 followed every later turn at the reduced window.
 
 ## Guardrail: the tool-result share cap
 

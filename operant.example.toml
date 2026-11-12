@@ -38,7 +38,10 @@ timeout_secs = 60
 # cannot match) the time it needs.
 #   model_request_timeouts = { "large-stack" = 600, "provider/slow-model" = 900 }
 model_request_timeouts = {}
-max_context_length = 128000
+# Retained for compatibility; the agent budgets from `[agent] context_window`
+# (which resolves per model). Leave at 0: a pinned value here is a second,
+# unused denominator that drifts from the real one.
+max_context_length = 0
 # TTL for provider prompt-cache breakpoints: "5m" (default) or "1h".
 # Applies to OpenRouter-compatible endpoints and the Anthropic adapter.
 # prompt_cache_ttl = "5m"
@@ -61,9 +64,17 @@ max_iterations = 20
 tool_timeout_secs = 30
 request_timeout_secs = 120
 stream = true
-# Total prompt + response capacity (tokens). Values below 4097 are rejected:
-# the runtime reserves 4096 tokens for the response.
-context_window = 128000
+# Total prompt + response capacity (tokens).
+#
+# 0 = AUTOMATIC (recommended): the window is resolved per model from the
+# provider's own /models listing, then the models.dev catalog, then the
+# historical 128k fallback — see `operant context window` for the resolved
+# value and its source.
+#
+# A value > 0 is an explicit operator decision and wins over every discovered
+# source. Values 1..=4096 are rejected: the runtime reserves 4096 tokens for
+# the response.
+context_window = 0
 # Context caps — BOTH axes bind, and the SMALLER one wins.
 #
 # The soft cap is the turn-boundary compaction trigger: crossing it compacts
