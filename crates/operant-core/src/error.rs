@@ -63,6 +63,23 @@ fn extract_provider_message(body: &str) -> String {
     }
 }
 
+/// The tail of the `ContextExhausted` display line.
+///
+/// `required > 0` means the PROTECTED prompt and current turn alone exceed
+/// the window: there is nothing left to fold because folding was never the
+/// remedy. The old line said "and nothing left to fold" for BOTH cases, so
+/// every surface that renders `Display` — the CLI's `run`/`chat`, ACP, the
+/// autonomous runner — told the operator to compact a request that
+/// compaction cannot shrink. The remedy there is a bigger
+/// `agent.context_window`, and the line has to say so.
+fn fold_note(required: &usize) -> &'static str {
+    if *required > 0 {
+        " and the protected prompt and current turn do not fit"
+    } else {
+        " and nothing left to fold"
+    }
+}
+
 /// Wrapper around `reqwest::Error` whose `Display`/`Debug` scrub secrets.
 ///
 /// `reqwest` error strings embed the full request URL — and provider URLs
@@ -239,7 +256,7 @@ pub enum Error {
     /// Still at or above `CONTEXT_EXHAUSTED_PERCENT` of the window after every
     /// rung that may fold ran: the protected head and tail alone do not fit.
     /// Failing here beats sending a request the provider rejects with a 400.
-    #[error("Context exhausted: {tokens} of {window} tokens and nothing left to fold")]
+    #[error("Context exhausted: {tokens} of {window} tokens{}", fold_note(.required))]
     ContextExhausted {
         tokens: usize,
         window: usize,
@@ -393,6 +410,45 @@ mod tests {
         assert!(
             message.contains("/compact"),
             "foldable history remains actionable: {message}"
+        );
+    }
+
+    /// THE `Display` LINE MUST NOT CLAIM "NOTHING LEFT TO FOLD" WHEN THE
+    /// PROTECTED PREFIX IS THE PROBLEM.
+    ///
+    /// `required > 0` means the protected prompt and current turn alone
+    /// exceed the window, so folding was never the remedy — yet `Display`
+    /// said "and nothing left to fold" for every case. Every surface that
+    /// renders `Display` rather than `user_message()` (the CLI's one-shot
+    /// `run`, `chat`, ACP, the autonomous runner) then told the operator to
+    /// compact a request compaction cannot shrink, which is the exact
+    /// "false no-folding" report this error was rewritten for.
+    #[test]
+    fn the_display_line_distinguishes_a_protected_overflow() {
+        let protected = Error::ContextExhausted {
+            tokens: 9_800,
+            window: 4_242,
+            required: 9_711,
+        };
+        let line = protected.to_string();
+        assert!(
+            !line.contains("nothing left to fold"),
+            "protected content has no foldable history left to blame: {line}"
+        );
+        assert!(
+            line.contains("protected"),
+            "the line must name the protected content: {line}"
+        );
+
+        let foldable = Error::ContextExhausted {
+            tokens: 200_000,
+            window: 128_000,
+            required: 0,
+        };
+        let line = foldable.to_string();
+        assert!(
+            line.contains("nothing left to fold"),
+            "a genuine foldable overflow still says so: {line}"
         );
     }
 

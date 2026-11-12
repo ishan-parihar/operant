@@ -242,7 +242,13 @@ impl AutonomousAgentExecutor for RealAutonomousAgentExecutor {
             &self.config.skills.root_dir,
         )
         .await?;
-        agent.run(query).await?;
+        agent.run(query).await.map_err(|e| {
+            // `user_message()`, not `Display`: the actionable remedy for a
+            // context failure names the setting to change, and `Display`
+            // alone does not. The original error stays as the cause.
+            let message = e.user_message();
+            anyhow::Error::new(e).context(message)
+        })?;
         Ok(())
     }
 }

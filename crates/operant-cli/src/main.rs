@@ -2844,7 +2844,14 @@ async fn run_non_tui(
         std::sync::Arc::new(TurnSummaryObserver::new());
     let agent = agent.with_observer(summary_observer.clone());
 
-    let response = agent.run(query.to_string()).await?;
+    let response = agent.run(query.to_string()).await.map_err(|e| {
+        // `user_message()`, not `Display`: the actionable remedy for a
+        // context failure names the setting to change, and `Display` alone
+        // does not. The original error is kept as the cause so the chain
+        // still reaches the log.
+        let message = e.user_message();
+        anyhow::Error::new(e).context(message)
+    })?;
     // Drain pending memory hooks (sync_turn → /observe, session/end) before
     // the process exits. The MemorySyncExecutor is a background tokio task —
     // without a drain the runtime is torn down mid-write and the observation
@@ -3066,7 +3073,7 @@ async fn chat_non_tui(config: &AppConfig, system_prompt: Option<&str>) -> Result
 
         match agent.run(input.to_string()).await {
             Ok(response) => println!("Assistant: {}\n", response.content),
-            Err(error) => eprintln!("Error: {}\n", error),
+            Err(error) => eprintln!("Error: {}\n", error.user_message()),
         }
     }
 
@@ -3666,6 +3673,46 @@ mod tests {
         assert_eq!(
             config.agent.context_window,
             AppConfig::default().agent.context_window
+        );
+    }
+
+    /// EVERY OPERATOR-FACING SURFACE MUST RENDER THE ACTIONABLE MESSAGE.
+    ///
+    /// `Error::user_message()` is the actionable rendering: for a context
+    /// failure it names `agent.context_window` and the tokens involved.
+    /// `Display` is the short internal line, and for the protected-prefix
+    /// case it cannot say what to do.
+    ///
+    /// The CLI's one-shot `run`, the non-TUI `chat` loop, ACP and the
+    /// autonomous runner each render an agent failure to the operator, so
+    /// each one has to go through `user_message()`. This is a source
+    /// contract because the failure is a property of the CALL SITE: a
+    /// regression here re-opens the exact "the send failed and compaction
+    /// cannot help, but the operator was told to compact" report.
+    #[test]
+    fn every_operator_facing_agent_failure_renders_the_actionable_message() {
+        let main_source = include_str!("main.rs");
+        let acp_source = include_str!("cmd_acp.rs");
+        let autonomous_source = include_str!("autonomous.rs");
+
+        // The one-shot `run` path and the non-TUI `chat` loop.
+        assert!(
+            main_source.contains("error.user_message()"),
+            "the CLI must render an agent failure through `user_message()`"
+        );
+        assert!(
+            !main_source.contains("eprintln!(\"Error: {}\\n\", error)"),
+            "the chat loop must not render the raw `Display` of an agent failure"
+        );
+        // ACP.
+        assert!(
+            acp_source.contains("e.user_message()"),
+            "ACP must render an agent failure through `user_message()`"
+        );
+        // The autonomous runner.
+        assert!(
+            autonomous_source.contains("e.user_message()"),
+            "the autonomous runner must render an agent failure through `user_message()`"
         );
     }
 

@@ -169,7 +169,7 @@ async fn execute_acp_command_inner(
     let response = agent
         .run(command.to_string())
         .await
-        .map_err(|e| format!("Agent error: {}", e))?;
+        .map_err(|e| format!("Agent error: {}", e.user_message()))?;
 
     Ok(response.content)
 }
