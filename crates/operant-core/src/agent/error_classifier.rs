@@ -150,6 +150,27 @@ impl ClassifiedError {
             FailoverReason::Auth | FailoverReason::AuthPermanent
         )
     }
+
+    /// Whether this failure earns a RECOVERY: a re-issue of the same request,
+    /// and — once the turn's re-issue budget is spent — the bounded poke.
+    ///
+    /// The ONE place the recovery policy lives, because the re-issue arm and
+    /// the poke gate must never disagree. All three conditions are
+    /// load-bearing:
+    ///
+    /// - `retryable` — the classifier says a second identical request can
+    ///   succeed;
+    /// - NOT `Unknown` — the classifier's catch-all marks EVERY unclassified
+    ///   error retryable, and a retry on a coin flip turns a deterministic
+    ///   failure into a slow one (upstream's contract: "an error ends the
+    ///   turn", pinned by `review_discipline::error_exit_skips_the_armed_review`);
+    /// - NOT `should_compress` — a context overflow is handled by the compress
+    ///   arm ONCE, and the policy there is compress-then-stop: re-issuing the
+    ///   same too-big prompt can only be rejected again, and a synthetic
+    ///   continuation cannot shrink it either.
+    pub fn earns_recovery(&self) -> bool {
+        self.retryable && self.reason != FailoverReason::Unknown && !self.should_compress
+    }
 }
 
 // ── Pattern-matching constants ──────────────────────────────────────────
@@ -1262,6 +1283,33 @@ mod tests {
     ///
     /// SOURCE contract: a doc that lists an enumeration is checked against
     /// the code it enumerates (the RT-435 pattern).
+    /// The ONE recovery predicate: the re-issue arm and the poke gate must
+    /// never disagree about which failures are worth another attempt.
+    #[test]
+    fn earns_recovery_is_the_single_recovery_predicate() {
+        let base =
+            |reason: FailoverReason, retryable: bool, should_compress: bool| ClassifiedError {
+                reason,
+                status_code: Some(503),
+                message: String::new(),
+                retryable,
+                should_fallback: false,
+                should_compress,
+                should_rotate_credential: false,
+            };
+        // A classified transient failure earns a re-issue.
+        assert!(base(FailoverReason::ServerError, true, false).earns_recovery());
+        // The classifier's catch-all marks EVERY unclassified error retryable;
+        // a recovery on a coin flip is how a deterministic failure turns into
+        // a slow one (upstream's "an error ends the turn" contract).
+        assert!(!base(FailoverReason::Unknown, true, false).earns_recovery());
+        // A context overflow is compress-then-stop: re-issuing the same
+        // too-big prompt can only be rejected again.
+        assert!(!base(FailoverReason::ContextOverflow, true, true).earns_recovery());
+        // A billing rejection is not retryable at all.
+        assert!(!base(FailoverReason::Billing, false, false).earns_recovery());
+    }
+
     #[test]
     fn the_classifier_doc_lists_exactly_the_steps_the_code_has() {
         let src = include_str!("error_classifier.rs");

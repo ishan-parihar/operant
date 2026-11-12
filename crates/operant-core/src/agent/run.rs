@@ -838,12 +838,18 @@ impl OperantAgent {
     /// Returns the successful response, or the LAST error when the budget is
     /// spent: the caller then decides between the bounded poke and the end of
     /// the turn.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the re-issue ladder needs the turn's retry state AND its clock; a config struct would only rename the arguments"
+    )]
     async fn reissue_with_budget<T, F, Fut>(
         &self,
         messages: &[Message],
         first_error: crate::error::Error,
         retry_state: &mut turn_retry_state::TurnRetryState,
         turn_retry_failures: &mut usize,
+        turn_start: std::time::Instant,
+        wall_clock_secs: u64,
         mut call: F,
     ) -> Result<T>
     where
@@ -865,9 +871,36 @@ impl OperantAgent {
             else {
                 return Err(error);
             };
+            // The turn's wall clock, checked INSIDE the ladder: a re-issue
+            // loop that runs past it is how a degraded upstream holds a
+            // gateway channel open indefinitely (the mid-stream ladder has
+            // the same bound — `stream_retry::decide_stream_retry` takes the
+            // elapsed time — and the turn-level check at the iteration
+            // boundary never fires while this loop is running).
+            if turn_start.elapsed().as_secs() >= wall_clock_secs {
+                warn!(
+                    elapsed_secs = turn_start.elapsed().as_secs(),
+                    limit_secs = wall_clock_secs,
+                    reason = %classified.reason,
+                    "Turn wall-clock limit reached inside the re-issue ladder — no more re-issues"
+                );
+                return Err(error);
+            }
             match self.call_with_loop_timeout(call(request)).await {
                 Ok(ok) => return Ok(ok),
-                Err(next) => error = next,
+                Err(next) => {
+                    // A re-issue the user interrupted is an INTERRUPT, not a
+                    // provider failure: commit the tail and surface the typed
+                    // error, exactly as the establishment arm does for its own
+                    // first call. Without this the turn would end as a generic
+                    // agent error and the operator would get an error card
+                    // instead of "Turn stopped."
+                    if self.interrupt_flag.is_triggered() {
+                        self.commit_interrupted_tail(None).await;
+                        return Err(crate::error::Error::Interrupted);
+                    }
+                    error = next;
+                }
             }
         }
     }
@@ -905,8 +938,7 @@ impl OperantAgent {
         // would keep the turn alive instead: review_discipline's
         // `error_exit_skips_the_armed_review`). Only a CLASSIFIED failure
         // earns a re-issue; an unclassified one ends the turn.
-        if !classified.retryable
-            || classified.reason == crate::agent::error_classifier::FailoverReason::Unknown
+        if !classified.earns_recovery()
             || retry_state.is_exhausted()
             || retry_state.turn_retry_exhausted(*turn_retry_failures)
         {
@@ -1762,6 +1794,8 @@ impl OperantAgent {
                                     e,
                                     &mut retry_state,
                                     &mut turn_retry_failures,
+                                    turn_start,
+                                    turn_wall_clock_limit_secs,
                                     |request| self.client.chat_streaming(request),
                                 )
                                 .await
@@ -1785,9 +1819,7 @@ impl OperantAgent {
                             // `error_exit_skips_the_armed_review` — and a
                             // retry on a coin flip is how a deterministic
                             // failure turns into a slow one.
-                            let pokeable = classified.retryable
-                                && classified.reason
-                                    != crate::agent::error_classifier::FailoverReason::Unknown;
+                            let pokeable = classified.earns_recovery();
                             if pokeable
                                 && self
                                 .maybe_poke(
@@ -2157,6 +2189,8 @@ impl OperantAgent {
                                     e,
                                     &mut retry_state,
                                     &mut turn_retry_failures,
+                                    turn_start,
+                                    turn_wall_clock_limit_secs,
                                     |request| self.client.chat(request),
                                 )
                                 .await
@@ -2180,9 +2214,7 @@ impl OperantAgent {
                                     // `error_exit_skips_the_armed_review` — and a
                                     // retry on a coin flip is how a deterministic
                                     // failure turns into a slow one.
-                                    let pokeable = classified.retryable
-                                && classified.reason
-                                    != crate::agent::error_classifier::FailoverReason::Unknown;
+                                    let pokeable = classified.earns_recovery();
                                     if pokeable
                                         && self
                                             .maybe_poke(

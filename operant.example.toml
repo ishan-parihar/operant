@@ -31,6 +31,13 @@ base_url = "https://api.openai.com/v1"
 # aggregate. Prefer the environment variable, and use the provider auth-profile
 # file for long-lived OAuth tokens. Keep operant.toml out of a shared repo.
 timeout_secs = 60
+# Explicit per-model request budgets, in seconds. An entry here WINS over
+# `timeout_secs` and over operant's built-in reasoning floor, and it bounds
+# BOTH the transport's header wait and the agent's per-request ceiling — so
+# one line is enough to give a slow model (or a local alias the floor table
+# cannot match) the time it needs.
+#   model_request_timeouts = { "large-stack" = 600, "provider/slow-model" = 900 }
+model_request_timeouts = {}
 max_context_length = 128000
 # TTL for provider prompt-cache breakpoints: "5m" (default) or "1h".
 # Applies to OpenRouter-compatible endpoints and the Anthropic adapter.

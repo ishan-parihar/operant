@@ -46,11 +46,20 @@ struct SlowThenFastClient {
 }
 
 fn slow_then_fast(slow_calls: usize) -> (SlowThenFastClient, Arc<AtomicUsize>) {
+    slow_then_fast_for(slow_calls, CEILING * 6)
+}
+
+/// Same, with the caller choosing how long the slow calls sleep — so a test
+/// can put the sleep PAST the ceiling it configures.
+fn slow_then_fast_for(
+    slow_calls: usize,
+    slow_for: Duration,
+) -> (SlowThenFastClient, Arc<AtomicUsize>) {
     let counter = Arc::new(AtomicUsize::new(0));
     let client = SlowThenFastClient {
         counter: counter.clone(),
         slow_calls,
-        slow_for: CEILING * 6,
+        slow_for,
     };
     (client, counter)
 }
@@ -337,5 +346,55 @@ fn an_explicit_per_model_budget_is_found() {
     assert_eq!(
         explicit_model_timeout(&std::collections::HashMap::new(), "large-stack"),
         None
+    );
+}
+
+/// The re-issue ladder must respect the TURN's wall clock, not just the
+/// request count.
+///
+/// This is the real-load finding from the red team of iter-2137: the ladder
+/// runs INSIDE one iteration, so the turn-level wall-clock check never fires
+/// while it runs, and a degraded upstream could burn `max_retries × ceiling`
+/// seconds (plus the poke phase) before the turn ended — minutes, against a
+/// gateway channel the operator believes is still working.
+///
+/// `serial` because the limit is the process-global `HERMES_TURN_TIMEOUT`.
+#[tokio::test]
+#[serial_test::serial]
+async fn the_re_issue_ladder_respects_the_turn_wall_clock() {
+    let temp = tempfile::tempdir().unwrap();
+    // A one-second TURN budget against a TWO-second request ceiling: the very
+    // first request has already spent the turn's budget when it expires, so
+    // no re-issue may follow it.
+    unsafe { std::env::set_var("HERMES_TURN_TIMEOUT", "1") };
+    let (client, counter) = slow_then_fast_for(usize::MAX, Duration::from_secs(3));
+    let mut config = test_config();
+    config.request_timeout = Duration::from_secs(2);
+    let agent = OperantAgent::new(
+        config,
+        Box::new(client),
+        ToolRegistry::new(Duration::from_secs(5)),
+        Arc::new(Database::init(temp.path().join("wall_clock.sqlite")).unwrap()),
+    );
+
+    let err = agent
+        .run("hello".to_string())
+        .await
+        .expect_err("a turn whose wall clock is spent must end");
+    unsafe { std::env::remove_var("HERMES_TURN_TIMEOUT") };
+
+    assert!(
+        matches!(err, Error::RequestTimeout { .. }),
+        "the failure must stay typed, got: {err:?}"
+    );
+    // Without the bound: the ladder re-issues until `max_retries` is spent
+    // (4 attempts of 2s each) — eight seconds for a turn whose budget was
+    // one. With it: the first request already spent the budget, so the turn
+    // ends after ONE attempt. There is no poke either: the turn made no
+    // progress and has no open todos, so there is no work to continue.
+    assert_eq!(
+        counter.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the turn's wall clock must stop the ladder, not just the budget"
     );
 }

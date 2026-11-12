@@ -86,6 +86,9 @@ impl OperantTool for OkTool {
 enum Scripted {
     Model(ChatResponse),
     Fail(Error),
+    /// The call hangs for this long before answering — so an interrupt can
+    /// land while the request is in flight.
+    Slow(Duration),
 }
 
 /// A 503 the classifier reads as `Overloaded` (retryable).
@@ -93,6 +96,16 @@ fn overloaded() -> Error {
     Error::Provider {
         status: 503,
         body: "upstream overloaded".to_string(),
+        retry_after: None,
+    }
+}
+
+/// A 400 the classifier reads as `ContextOverflow`: retryable, but
+/// `should_compress` — the compress-then-stop class.
+fn too_big() -> Error {
+    Error::Provider {
+        status: 400,
+        body: "context length exceeded: the prompt is too long".to_string(),
         retry_after: None,
     }
 }
@@ -156,13 +169,24 @@ impl ModelClient for ScriptedClientHandle {
                 }
             }
         }
-        let mut guard = client.script.lock().unwrap_or_else(|e| e.into_inner());
-        if guard.is_empty() {
-            return Ok(text_response("the script ran out"));
-        }
-        match guard.remove(0) {
-            Scripted::Model(response) => Ok(response),
-            Scripted::Fail(error) => Err(error),
+        // The item is TAKEN before any await — holding the script lock
+        // across the sleep would make the future non-Send.
+        let item = {
+            let mut guard = client.script.lock().unwrap_or_else(|e| e.into_inner());
+            if guard.is_empty() {
+                None
+            } else {
+                Some(guard.remove(0))
+            }
+        };
+        match item {
+            Some(Scripted::Model(response)) => Ok(response),
+            Some(Scripted::Fail(error)) => Err(error),
+            Some(Scripted::Slow(for_how_long)) => {
+                tokio::time::sleep(for_how_long).await;
+                Ok(text_response("too late"))
+            }
+            None => Ok(text_response("the script ran out")),
         }
     }
 
@@ -342,5 +366,97 @@ async fn a_deterministic_provider_failure_ends_the_turn_without_a_poke() {
         client.requests(),
         2,
         "no third request may follow a deterministic failure"
+    );
+}
+
+/// A context overflow is compress-ONCE, then stop.
+///
+/// The compress arm handles the first overflow (compress + retry); once it
+/// has run, `compress_attempted` is set and a SECOND overflow reaches the
+/// recovery seam. The same too-big prompt cannot succeed on a re-issue — the
+/// classifier marks an overflow `retryable`, but `should_compress` is the
+/// policy that says "compress, do not re-issue" — so the recovery loop must
+/// stop there instead of burning the turn's whole retry budget on requests
+/// the provider has already rejected, and the bounded poke must not fire
+/// either (it cannot shrink the prompt).
+///
+/// This is the regression guard for `earns_recovery`'s third condition.
+#[tokio::test]
+async fn a_context_overflow_is_not_re_issued_by_the_recovery_seam() {
+    let temp = tempfile::tempdir().unwrap();
+    let client = ScriptedClient::new(vec![
+        // Iteration 1: the model runs a tool that SUCCEEDS.
+        Scripted::Model(tool_call_response(TOOL, "{\"i\":1}")),
+        // Iteration 2: the provider rejects the too-big prompt.
+        Scripted::Fail(too_big()),
+        // The compress arm's retry: it SUCCEEDS with another tool call, so the
+        // turn is still alive and `compress_attempted` is now set.
+        Scripted::Model(tool_call_response(TOOL, "{\"i\":2}")),
+        // Iteration 4: the prompt is too big AGAIN. The compress arm is spent,
+        // so this reaches the recovery seam — and must stop it.
+        Scripted::Fail(too_big()),
+    ]);
+    let agent = build_agent(
+        Arc::clone(&client),
+        temp.path().join("overflow_no_reissue.sqlite"),
+    )
+    .await;
+
+    let err = agent
+        .run("do the work".to_string())
+        .await
+        .expect_err("an overflow the compress arm cannot fix must end the turn");
+
+    assert!(
+        err.to_string().contains("context length"),
+        "the operator sees the provider's own cause, got: {err}"
+    );
+    assert!(
+        !client.poke_seen(),
+        "a synthetic continuation cannot shrink a too-big prompt — no poke"
+    );
+    assert_eq!(
+        client.requests(),
+        4,
+        "the too-big prompt must NOT be re-issued: tool, overflow, compress-retry, \
+         overflow — and nothing more"
+    );
+}
+
+/// An interrupted RE-ISSUE is an interrupt, not a provider failure.
+///
+/// The establishment arm returns the typed `Error::Interrupted` when the
+/// operator stops the turn, and the TUI renders that as "Turn stopped." — no
+/// error card. The re-issue loop must do the same: without the check, an
+/// interrupted re-issue surfaces as a generic agent error and the operator
+/// gets an error card for a turn they stopped themselves.
+#[tokio::test]
+async fn an_interrupted_re_issue_surfaces_the_typed_interrupt() {
+    let temp = tempfile::tempdir().unwrap();
+    let client = ScriptedClient::new(vec![
+        // The first call fails transiently, so the turn RE-ISSUES.
+        Scripted::Fail(overloaded()),
+        // The re-issue is in flight when the interrupt lands.
+        Scripted::Slow(Duration::from_millis(800)),
+    ]);
+    let agent = build_agent(
+        Arc::clone(&client),
+        temp.path().join("interrupted_reissue.sqlite"),
+    )
+    .await;
+
+    let flag = agent.interrupt_flag();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(80)).await;
+        flag.trigger();
+    });
+
+    let err = agent
+        .run("do the work".to_string())
+        .await
+        .expect_err("an interrupted turn must fail");
+    assert!(
+        matches!(err, operant_core::error::Error::Interrupted),
+        "the interrupt must stay TYPED (the TUI shows 'Turn stopped.', not an error card), got: {err:?}"
     );
 }
