@@ -1555,7 +1555,10 @@ impl App {
                 // Detect whether the provider/model changed on disk so the
                 // status line can be honest about what applies now vs. on
                 // restart.
-                let disk_model = operant_core::config::load_app_config(None)
+                // The READ-ONLY load: this only looks at the file to notice a
+                // change, and must not redirect the surgical writer's target
+                // (the RT-488 incident).
+                let disk_model = operant_core::config::load_app_config_read_only(None)
                     .map(|c| c.config.agent.model)
                     .unwrap_or_else(|_| self.config.agent.model.clone());
                 let model_changed = disk_model != self.config.agent.model;

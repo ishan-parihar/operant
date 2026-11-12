@@ -62,7 +62,11 @@ pub async fn handle_trajectory_command(cmd: TrajectorySubcommand) -> Result<()> 
 /// `None` and the export says nothing.
 fn trajectory_cap() -> Option<usize> {
     let path = operant_core::config::loaded_config_path()?;
-    let config = operant_core::config::parse_config_file(&path).ok()?;
+    // The NON-recording parse: this only READS the file the process already
+    // loaded, and a read must never redirect the surgical writer's target
+    // (the RT-488 incident: a read moved the writer, and a later write landed
+    // in the operator's live config).
+    let config = operant_core::config::parse_config_file_without_recording(&path).ok()?;
     let cap = config.agent.max_trajectories;
     if cap == 0 { None } else { Some(cap) }
 }

@@ -1810,7 +1810,11 @@ mod tests {
         let path = dir.join("operant.toml");
         let content = content.replace("__DB__", &dir.join("test.db").display().to_string());
         std::fs::write(&path, &content).unwrap();
-        operant_core::config::parse_config_str(&content, &path).expect("the test config parses")
+        // The NON-recording parse: a test fixture must never become the
+        // process-global surgical-writer target (the RT-488 incident: a test's
+        // fixture value reached the operator's live config).
+        operant_core::config::parse_config_str_without_recording(&content, &path)
+            .expect("the test config parses")
     }
 
     /// The handler, end to end. Every other CLI test pins the helper
@@ -2132,7 +2136,11 @@ mod tests {
         );
         let path = dir.join(format!("{tag}.toml"));
         std::fs::write(&path, &content).unwrap();
-        operant_core::config::parse_config_str(&content, &path).expect("the test config parses")
+        // The NON-recording parse: a test fixture must never become the
+        // process-global surgical-writer target (the RT-488 incident: a test's
+        // fixture value reached the operator's live config).
+        operant_core::config::parse_config_str_without_recording(&content, &path)
+            .expect("the test config parses")
     }
 
     /// Plan verification item 1, PROVEN AT THE HANDLER: a binary the

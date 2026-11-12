@@ -3229,12 +3229,21 @@ pub fn parse_config_str(raw: &str, source: &Path) -> Result<AppConfig> {
     parse_config_str_impl(raw, source, true)
 }
 
+/// Parse a config string without changing the process-global writer target.
+///
+/// A TEST fixture parsed with the recording variant became the surgical
+/// writer's target, and the fixture's value then reached the operator's live
+/// config (the RT-488 incident). Test fixtures use this seam.
+pub fn parse_config_str_without_recording(raw: &str, source: &Path) -> Result<AppConfig> {
+    parse_config_str_impl(raw, source, false)
+}
+
 /// Parse a config without changing the process-global writer target.
 ///
 /// Validation of a pending write must not redirect persistence to the
 /// temporary file: the temporary path is renamed away immediately after
 /// validation, leaving the next write aimed at a file that no longer exists.
-fn parse_config_file_without_recording(path: &Path) -> Result<AppConfig> {
+pub fn parse_config_file_without_recording(path: &Path) -> Result<AppConfig> {
     let raw = std::fs::read_to_string(path).map_err(|error| {
         Error::Config(format!(
             "Failed to read config file '{}': {}",
@@ -5369,6 +5378,35 @@ fn an_explicit_config_write_never_changes_the_process_global_target() {
     );
     let persisted = std::fs::read_to_string(&path).expect("read persisted");
     assert!(persisted.contains("context_window = 200000"));
+}
+
+/// A READ-ONLY PARSE MUST NOT MOVE THE SURGICAL WRITER'S TARGET.
+///
+/// The production read-only sites (the TUI's /reload, the import-config
+/// flow, `config_manage {action:"reload"}`, the trajectory cap, the
+/// gateway's config poller) used the RECORDING parse for work that only
+/// reads. The RT-488 incident was exactly that: a read moved the writer
+/// target, and a later write landed in the operator's live config. The
+/// non-recording seams are what those sites use now.
+#[test]
+fn a_non_recording_parse_does_not_steal_the_write_target() {
+    let _guard = config_path_test_guard();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("operant.toml");
+    std::fs::write(&path, "[agent]\ncontext_window = 128000\n").expect("write config");
+
+    let before = loaded_config_path();
+    operant_core_parse_without_recording(&path);
+    assert_eq!(
+        loaded_config_path(),
+        before,
+        "a read-only parse must not install the surgical writer's target"
+    );
+}
+
+/// The file parse seam.
+fn operant_core_parse_without_recording(path: &std::path::Path) {
+    parse_config_file_without_recording(path).expect("the config parses");
 }
 
 #[test]

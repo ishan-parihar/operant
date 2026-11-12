@@ -2157,7 +2157,10 @@ static CONFIG_ENDPOINT: std::sync::Mutex<Option<ConfigEndpoint>> = std::sync::Mu
 /// file or it does not parse; the caller then keeps what it has.
 fn config_endpoint_on_disk() -> Option<ConfigEndpoint> {
     let path = operant_core::config::loaded_config_path()?;
-    let config = operant_core::config::parse_config_file(&path).ok()?;
+    // The NON-recording parse: this only READS the file the process already
+    // loaded, and a read must never redirect the surgical writer's target
+    // (the RT-488 incident).
+    let config = operant_core::config::parse_config_file_without_recording(&path).ok()?;
     Some(ConfigEndpoint {
         base_url: config.client.base_url,
         api_key: config.client.api_key,

@@ -28,7 +28,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
-use crate::config::{install_runtime_config, load_app_config, runtime_config};
+use crate::config::{install_runtime_config, runtime_config};
 use crate::error::Result;
 use crate::schema::ToolSchema;
 use crate::tools::{OperantTool, ToolContext, ToolResult};
@@ -141,7 +141,11 @@ impl OperantTool for ConfigManageTool {
                 let path = config_file_path();
                 ToolResult::success("config_manage", json!({ "path": path }))
             }
-            "reload" => match load_app_config(None) {
+            // The READ-ONLY load: a reload installs the config in memory, but
+            // it must NOT redirect the surgical writer's target (the RT-488
+            // incident: a read moved the writer, and a later write landed in
+            // the operator's live config).
+            "reload" => match crate::config::load_app_config_read_only(None) {
                 Ok(loaded) => {
                     install_runtime_config(loaded.config.clone());
                     ToolResult::success(

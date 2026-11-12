@@ -43,12 +43,16 @@ impl App {
             Ok(result) => {
                 let paths = crate::tui::adapter_types::ImportPaths::detect();
                 let new_settings = Settings::load_sync().unwrap_or_default();
-                let loaded = operant_core::config::load_app_config(None).unwrap_or_else(|_| {
-                    operant_core::config::LoadedConfig {
-                        config: AppConfig::default(),
-                        source: None,
-                    }
-                });
+                // The READ-ONLY load: this only reads the config to show it
+                // back, and must not redirect the surgical writer's target
+                // (the RT-488 incident).
+                let loaded =
+                    operant_core::config::load_app_config_read_only(None).unwrap_or_else(|_| {
+                        operant_core::config::LoadedConfig {
+                            config: AppConfig::default(),
+                            source: None,
+                        }
+                    });
                 let result_message =
                     crate::tui::adapter_types::summarize_import_result(&result, &paths);
                 let imported_mcp = result.imported_fields.iter().any(|f| f == "mcpServers");
