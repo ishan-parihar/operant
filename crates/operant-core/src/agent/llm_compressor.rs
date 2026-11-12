@@ -73,6 +73,18 @@ pub struct LlmCompressorConfig {
     /// Model to use for summarization. Should be cheaper/faster than the
     /// main model (e.g. "gpt-4o-mini" when main is "gpt-4o").
     pub summarizer_model: String,
+    /// The summarizer's endpoint, when the compression slot pins one.
+    ///
+    /// `None` (the default) means the summarizer rides the PRIMARY route
+    /// with the auxiliary model — the same contract the memory-review slot
+    /// uses. A pinned endpoint gets its own client, and it NEVER inherits
+    /// the primary credential (see [`compression_route_client`]).
+    pub summarizer_base_url: Option<String>,
+    /// The summarizer's credential, when the compression slot pins one.
+    ///
+    /// Pinning only a credential keeps the primary endpoint and swaps the
+    /// key; pinning only an endpoint sends NO credential to that host.
+    pub summarizer_api_key: Option<String>,
     /// Context window size in tokens for the main model.
     pub context_window: usize,
     /// Percentage of context window that triggers compression (0.0–1.0).
@@ -100,6 +112,8 @@ impl Default for LlmCompressorConfig {
     fn default() -> Self {
         Self {
             summarizer_model: "gpt-4o-mini".to_string(),
+            summarizer_base_url: None,
+            summarizer_api_key: None,
             context_window: 128_000,
             threshold_percent: 0.80,
             protect_head_n: 3,
@@ -113,9 +127,72 @@ impl Default for LlmCompressorConfig {
 }
 
 // ---------------------------------------------------------------------------
-// Compression result
+// Compression route
 // ---------------------------------------------------------------------------
 
+/// Build the client the summarizer call rides for a pinned route.
+///
+/// The compression slot's model, endpoint, and credential are ONE route
+/// contract — the same contract the memory-review slot uses (iter-2093).
+/// A model-only slot rides the PRIMARY client but calls the auxiliary
+/// model; a slot that pins an endpoint or a credential gets a DEDICATED
+/// client, so the summarizer never leaks onto the primary route.
+///
+/// Returns `None` when the slot pins no endpoint and no credential: the
+/// caller then uses the primary client as-is.
+///
+/// The credential is NOT inherited across an endpoint override — a key
+/// issued for one host must not be sent to another. A slot that pins only
+/// a credential keeps the primary endpoint and swaps the key.
+pub(crate) fn compression_route_client(
+    base: &crate::client::ClientConfig,
+    primary: &dyn ModelClient,
+    config: &LlmCompressorConfig,
+) -> Option<Arc<dyn ModelClient>> {
+    let base_url = config
+        .summarizer_base_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|url| !url.is_empty())
+        .map(str::to_string);
+    let api_key = config
+        .summarizer_api_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|key| !key.is_empty())
+        .map(str::to_string);
+    if base_url.is_none() && api_key.is_none() {
+        return None;
+    }
+    // Seed from the PRIMARY's LIVE route: a runtime retarget moved the
+    // endpoint, and the configured base is stale.
+    let mut seeded = base.clone();
+    if let Some(url) = primary.base_url() {
+        seeded.base_url = url;
+    }
+    if let Some(key) = primary.current_api_key() {
+        seeded.api_key = Some(key);
+    }
+    // An endpoint override must not carry the primary credential.
+    if base_url.is_some() && api_key.is_none() {
+        seeded.api_key = None;
+    }
+    let slot = crate::config::AuxiliaryModelConfig {
+        provider: None,
+        model: Some(config.summarizer_model.clone()),
+        base_url,
+        api_key,
+    };
+    Some(Arc::new(
+        crate::agent::clients::openai::OpenAIModelClient::new(crate::moa::slot_client(
+            &seeded, &slot,
+        )),
+    ))
+}
+
+// ---------------------------------------------------------------------------
+// Compression result
+// ---------------------------------------------------------------------------
 /// Result of an LLM compression pass.
 #[derive(Debug, Clone)]
 pub struct CompressionResult {
@@ -431,8 +508,20 @@ impl LlmCompressor {
         );
 
         // Step 3: Build summarizer input and call LLM
+        //
+        // The summarizer call rides the COMPRESSION slot's route: the slot's
+        // model, endpoint, and credential are ONE contract, so a slot that
+        // pins an endpoint or a credential must not send its summary to the
+        // primary route with the primary secret. A model-only slot rides
+        // the caller's client unchanged.
+        let base = crate::client::ClientConfig::default();
+        let route_client = compression_route_client(&base, client, &self.config);
+        let summarizer: &dyn ModelClient = match route_client.as_ref() {
+            Some(c) => c.as_ref(),
+            None => client,
+        };
         let summary = match self
-            .generate_summary(client, middle, &self.previous_summary)
+            .generate_summary(summarizer, middle, &self.previous_summary)
             .await
         {
             Ok(s) => s,
@@ -748,6 +837,223 @@ mod tests {
     /// A mock client that answers the summariser call with a fixed string.
     struct SummarizerClient {
         text: String,
+    }
+
+    /// A mock primary client that reports a live route, so the route
+    /// resolver can be checked against it.
+    struct PrimaryClient {
+        base_url: Option<String>,
+        api_key: Option<String>,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::agent::model_client::ModelClient for PrimaryClient {
+        fn provider_name(&self) -> &str {
+            "primary-mock"
+        }
+
+        fn base_url(&self) -> Option<String> {
+            self.base_url.clone()
+        }
+
+        fn current_api_key(&self) -> Option<String> {
+            self.api_key.clone()
+        }
+
+        async fn chat(
+            &self,
+            _request: crate::agent::model_client::ChatRequest,
+        ) -> crate::error::Result<crate::client::ChatResponse> {
+            unreachable!("the primary client must not serve the summarizer call")
+        }
+
+        async fn chat_streaming(
+            &self,
+            _request: crate::agent::model_client::ChatRequest,
+        ) -> crate::error::Result<
+            std::pin::Pin<
+                Box<
+                    dyn futures::Stream<
+                            Item = crate::error::Result<crate::agent::model_client::StreamChunk>,
+                        > + Send,
+                >,
+            >,
+        > {
+            unreachable!("the primary client must not serve the summarizer call")
+        }
+    }
+
+    /// The compression slot's endpoint is READ — the summarizer reaches the
+    /// route the operator configured, not the primary route.
+    ///
+    /// `[auxiliary_models.compression] base_url`/`api_key` were documented
+    /// but read by NOTHING: the summarizer always rode the primary client,
+    /// so a compression slot pointing at a cheaper host silently summarised
+    /// on the primary route instead.
+    #[test]
+    fn the_compression_slot_endpoint_reaches_the_summarizer() {
+        let primary = PrimaryClient {
+            base_url: Some("https://primary.example/v1".to_string()),
+            api_key: Some("primary-secret".to_string()),
+        };
+        let config = LlmCompressorConfig {
+            summarizer_model: "aux-model".to_string(),
+            summarizer_base_url: Some("http://127.0.0.1:9/v1".to_string()),
+            summarizer_api_key: Some("aux-secret".to_string()),
+            ..Default::default()
+        };
+        let client =
+            compression_route_client(&crate::client::ClientConfig::default(), &primary, &config)
+                .expect("a pinned compression route gets a dedicated client");
+        assert_eq!(
+            client.base_url().as_deref(),
+            Some("http://127.0.0.1:9/v1"),
+            "the compression slot's endpoint must win over the primary route"
+        );
+        assert_eq!(
+            client.current_api_key().as_deref(),
+            Some("aux-secret"),
+            "the compression slot's credential must reach its own endpoint"
+        );
+    }
+
+    /// Changing the compression endpoint without supplying a credential
+    /// must NOT send the primary secret to the compression host.
+    #[test]
+    fn a_compression_endpoint_never_inherits_the_primary_credential() {
+        let primary = PrimaryClient {
+            base_url: Some("https://primary.example/v1".to_string()),
+            api_key: Some("primary-secret".to_string()),
+        };
+        let config = LlmCompressorConfig {
+            summarizer_model: "aux-model".to_string(),
+            summarizer_base_url: Some("http://127.0.0.1:9/v1".to_string()),
+            summarizer_api_key: None,
+            ..Default::default()
+        };
+        let client =
+            compression_route_client(&crate::client::ClientConfig::default(), &primary, &config)
+                .expect("a pinned compression endpoint gets a dedicated client");
+        assert_eq!(
+            client.base_url().as_deref(),
+            Some("http://127.0.0.1:9/v1"),
+            "the compression endpoint must win"
+        );
+        assert_eq!(
+            client.current_api_key(),
+            None,
+            "the primary credential must not cross to the compression host"
+        );
+    }
+
+    /// A model-only compression slot keeps the primary client — the
+    /// pre-slot behavior, byte-for-byte.
+    #[test]
+    fn a_model_only_compression_slot_keeps_the_primary_client() {
+        let primary = PrimaryClient {
+            base_url: Some("https://primary.example/v1".to_string()),
+            api_key: Some("primary-secret".to_string()),
+        };
+        let config = LlmCompressorConfig {
+            summarizer_model: "aux-model".to_string(),
+            ..Default::default()
+        };
+        assert!(
+            compression_route_client(&crate::client::ClientConfig::default(), &primary, &config)
+                .is_none(),
+            "a model-only slot must not build a dedicated client"
+        );
+    }
+
+    /// BEHAVIORAL: the summarizer request must REACH the compression
+    /// endpoint the operator configured.
+    ///
+    /// The route-resolution unit tests above prove which client is built;
+    /// this one proves the built client is the one that gets the request.
+    /// A local server stands in for the compression host and records the
+    /// request it received; the primary client is a mock that panics if
+    /// it is ever called, so a regression that routes the summary back to
+    /// the primary fails loudly instead of silently passing.
+    #[tokio::test]
+    async fn the_summarizer_request_reaches_the_compression_endpoint() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let request_seen = Arc::new(std::sync::Mutex::new(String::new()));
+        let for_server = Arc::clone(&request_seen);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind a loopback port");
+        let addr = listener.local_addr().expect("the bound address");
+        tokio::spawn(async move {
+            let Ok((mut socket, _)) = listener.accept().await else {
+                return;
+            };
+            let mut buf = vec![0u8; 64 * 1024];
+            let read = socket.read(&mut buf).await.unwrap_or(0);
+            let head = String::from_utf8_lossy(&buf[..read]).to_string();
+            *for_server.lock().unwrap() = head;
+            let response = r#"{"id":"1","object":"chat.completion","created":0,"model":"aux-model","choices":[{"index":0,"message":{"role":"assistant","content":"a summary"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}"#;
+            let out = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                response.len(),
+                response
+            );
+            let _ = socket.write_all(out.as_bytes()).await;
+            let _ = socket.flush().await;
+        });
+
+        let mut compressor = LlmCompressor::new(LlmCompressorConfig {
+            context_window: 100_000,
+            threshold_percent: 0.0,
+            protect_head_n: 1,
+            protect_tail_n: Some(3),
+            summarizer_model: "aux-model".to_string(),
+            summarizer_base_url: Some(format!("http://{addr}/v1")),
+            summarizer_api_key: Some("compression-secret".to_string()),
+            ..Default::default()
+        });
+
+        let mut messages = vec![
+            make_msg(Role::System, "system"),
+            make_msg(Role::User, "request"),
+        ];
+        for i in 0..10 {
+            messages.push(make_msg(Role::User, format!("filler {i}")));
+            messages.push(make_msg(Role::Assistant, format!("reply {i}")));
+        }
+
+        // The primary client panics if it is called: the summary must go
+        // to the compression endpoint, never to the primary route.
+        let primary = PrimaryClient {
+            base_url: Some("https://primary.example/v1".to_string()),
+            api_key: Some("primary-secret".to_string()),
+        };
+        let result = compressor
+            .compress(messages, &primary)
+            .await
+            .expect("compress");
+
+        assert_eq!(
+            result.summary_text, "a summary",
+            "the summary must come from the compression endpoint"
+        );
+        let request = request_seen.lock().unwrap().clone();
+        assert!(
+            !request.is_empty(),
+            "the compression host must have received the summarizer request"
+        );
+        assert!(
+            request.contains("aux-model"),
+            "the summarizer request must name the compression slot's model: {request}"
+        );
+        assert!(
+            request.contains("compression-secret"),
+            "the summarizer request must carry the compression slot's credential: {request}"
+        );
+        assert!(
+            !request.contains("primary-secret"),
+            "the primary credential must never reach the compression host: {request}"
+        );
     }
 
     #[async_trait::async_trait]

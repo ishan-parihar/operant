@@ -713,6 +713,11 @@ enabled = true
 # base_url = "https://openrouter.ai/api/v1"
 # api_key = "sk-or-..."
 
+# Compression route. Model, base_url, and api_key are one contract, the
+# same shape as the memory-review slot above: model-only rides the primary
+# client (with this model); a pinned endpoint/key gets a dedicated client.
+# A pinned endpoint never inherits the primary credential — give it its own
+# key, or leave both blank to ride the primary route.
 # [auxiliary_models.compression]
 # model = "gpt-4o-mini"   # match your route's model name
 # base_url = ""

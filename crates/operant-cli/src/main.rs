@@ -1132,10 +1132,8 @@ pub(crate) fn llm_compressor_config(
     config: &AppConfig,
     context_window: usize,
 ) -> operant_core::agent::llm_compressor::LlmCompressorConfig {
-    let summarizer_model = config
-        .auxiliary_models
-        .compression
-        .as_ref()
+    let slot = config.auxiliary_models.compression.as_ref();
+    let summarizer_model = slot
         .and_then(|slot| slot.model.clone())
         .map(|m| m.trim().to_string())
         .filter(|m| !m.is_empty())
@@ -1146,11 +1144,25 @@ pub(crate) fn llm_compressor_config(
             );
             operant_core::agent::llm_compressor::LlmCompressorConfig::default().summarizer_model
         });
+    // The slot's model, endpoint, and credential are ONE route: the
+    // summarizer must reach the route the operator configured, not the
+    // primary one. (The slot's endpoint/credential were documented but
+    // unread — the summarizer always rode the primary client.)
+    let summarizer_base_url = slot
+        .and_then(|slot| slot.base_url.clone())
+        .map(|u| u.trim().to_string())
+        .filter(|u| !u.is_empty());
+    let summarizer_api_key = slot
+        .and_then(|slot| slot.api_key.clone())
+        .map(|k| k.trim().to_string())
+        .filter(|k| !k.is_empty());
     operant_core::agent::llm_compressor::LlmCompressorConfig {
         context_window,
         enabled: config.agent.context_compression,
         threshold_percent: config.agent.context_compression_threshold,
         summarizer_model,
+        summarizer_base_url,
+        summarizer_api_key,
         summary_max_chars: config.agent.context_compression_summary_max_chars as usize,
         ..Default::default()
     }
@@ -3674,6 +3686,37 @@ mod tests {
         assert_eq!(
             config.agent.context_window,
             AppConfig::default().agent.context_window
+        );
+    }
+
+    /// The compression slot's endpoint and credential must REACH the
+    /// compressor config.
+    ///
+    /// `[auxiliary_models.compression] base_url`/`api_key` are documented,
+    /// but only `model` was read: the summarizer always rode the primary
+    /// client, so a compression slot pointing at a cheaper host silently
+    /// summarised on the primary route instead. The slot is ONE route —
+    /// model, endpoint, and credential travel together.
+    #[test]
+    fn the_compression_slot_route_reaches_the_compressor_config() {
+        let mut config = AppConfig::default();
+        config.auxiliary_models.compression = Some(operant_core::config::AuxiliaryModelConfig {
+            provider: None,
+            model: Some("aux-model".to_string()),
+            base_url: Some("http://127.0.0.1:9/v1".to_string()),
+            api_key: Some("compression-secret".to_string()),
+        });
+        let compressor = llm_compressor_config(&config, 100_000);
+        assert_eq!(compressor.summarizer_model, "aux-model");
+        assert_eq!(
+            compressor.summarizer_base_url.as_deref(),
+            Some("http://127.0.0.1:9/v1"),
+            "the compression slot's endpoint must reach the compressor config"
+        );
+        assert_eq!(
+            compressor.summarizer_api_key.as_deref(),
+            Some("compression-secret"),
+            "the compression slot's credential must reach the compressor config"
         );
     }
 
