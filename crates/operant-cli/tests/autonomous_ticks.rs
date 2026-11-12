@@ -43,7 +43,15 @@ use operant_core::mcp::McpManager;
 struct StubAgent;
 
 impl StubAgent {
-    async fn run(self, _query: String) -> Result<()> {
+    /// The REAL agent's `run` yields operant's own `error::Error` — the type
+    /// that carries `user_message()`, which the autonomous runner maps onto
+    /// the operator-facing message. This stub must mirror that signature:
+    /// with `anyhow::Error` here, `src/autonomous.rs` (which this target
+    /// `include!`s) does not compile.
+    async fn run(
+        self,
+        _query: String,
+    ) -> std::result::Result<(), operant_core::error::Error> {
         Ok(())
     }
 }
