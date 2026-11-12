@@ -230,6 +230,7 @@ pub fn install() -> Result<Vec<String>> {
     //    wrappers inherit it rather than dropping it.
     std::fs::create_dir_all(extra_agents_dir())
         .with_context(|| format!("creating {}", extra_agents_dir().display()))?;
+    let mut registered = false;
     for agent in REGISTRABLE {
         let launcher = format!("omarchy-{agent}");
         // The hand-written wrapper this replaces tested the AGENT's own binary
@@ -246,12 +247,17 @@ pub fn install() -> Result<Vec<String>> {
         if current.as_deref() != Some(&format!("{launcher}\n")) {
             std::fs::write(&path, format!("{launcher}\n"))
                 .with_context(|| format!("registering {agent}"))?;
+            registered = true;
         }
     }
-    done.push(format!(
-        "registered extra agents in {}",
-        extra_agents_dir().display()
-    ));
+    // Only a CHANGE is reported, so the doctor's "N fixed" count counts fixes
+    // and not steps.
+    if registered {
+        done.push(format!(
+            "registered extra agents in {}",
+            extra_agents_dir().display()
+        ));
+    }
 
     // 2. The wrappers and Operant's launcher.
     //
@@ -273,10 +279,10 @@ pub fn install() -> Result<Vec<String>> {
         if current.as_deref() != Some(contents) {
             // Only the two wrappers the operator might have written by hand
             // are worth keeping a copy of; the launcher is ours.
-            if name != "omarchy-operant" {
-                if let Some(backup) = backup_once(&path)? {
-                    backups.push(backup);
-                }
+            if name != "omarchy-operant"
+                && let Some(backup) = backup_once(&path)?
+            {
+                backups.push(backup);
             }
             std::fs::write(&path, contents)
                 .with_context(|| format!("writing {}", path.display()))?;

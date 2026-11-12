@@ -153,20 +153,26 @@ fn is_linked() -> bool {
 /// mtimes), and an already-linked plugin is not linked again.
 pub fn install() -> Result<Vec<String>> {
     let root = plugin_root();
-    write_assets(&root)?;
-    let mut done = vec![format!("wrote the Herdr plugin to {}", root.display())];
+    let wrote = write_assets(&root)?;
+    // Only what CHANGED is reported, so the doctor's "N fixed" count counts
+    // fixes and not steps.
+    let mut done = Vec::new();
+    if wrote {
+        done.push(format!("wrote the Herdr plugin to {}", root.display()));
+    }
 
     if !herdr_available() {
-        done.push(
-            "herdr is not on PATH — the plugin is written but not registered; \
-             install Herdr, then run this again"
-                .to_string(),
-        );
+        if wrote {
+            done.push(
+                "herdr is not on PATH — the plugin is written but not registered; \
+                 install Herdr, then run this again"
+                    .to_string(),
+            );
+        }
         return Ok(done);
     }
 
     if is_linked() {
-        done.push("herdr already lists the Operant plugin".to_string());
         return Ok(done);
     }
 
@@ -190,7 +196,12 @@ pub fn install() -> Result<Vec<String>> {
 }
 
 /// Write every asset under `root`, skipping the ones already current.
-fn write_assets(root: &Path) -> Result<()> {
+///
+/// Returns whether anything was written. The installer reports only what it
+/// CHANGED: a doctor run on an already-wired machine must not claim it
+/// wrote anything, or the "N fixed" count stops meaning anything.
+fn write_assets(root: &Path) -> Result<bool> {
+    let mut wrote = false;
     for asset in ASSETS {
         let path = root.join(asset.relative);
         let current = std::fs::read_to_string(&path)
@@ -204,6 +215,7 @@ fn write_assets(root: &Path) -> Result<()> {
             }
             continue;
         }
+        wrote = true;
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("creating {}", parent.display()))?;
@@ -214,7 +226,7 @@ fn write_assets(root: &Path) -> Result<()> {
             make_executable(&path)?;
         }
     }
-    Ok(())
+    Ok(wrote)
 }
 
 /// One agent Herdr currently knows about.

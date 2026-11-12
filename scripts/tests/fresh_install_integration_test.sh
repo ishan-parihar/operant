@@ -49,7 +49,12 @@ EOF
 chmod +x "$BIN_DIR/herdr"
 
 run_fix() {
-  HOME="$HOME_DIR" PATH="$BIN_DIR:/usr/bin:/bin" "$OPERANT_BIN" doctor --fix 2>&1
+  # The Herdr environment variables are UNSET on purpose: HERDR_BIN_PATH
+  # points at the real herdr inside a Herdr pane, and a developer's shell
+  # could carry one, which would make the stub unreachable and the test
+  # would be asserting against the real registry.
+  env -u HERDR_BIN_PATH -u HERDR_ENV -u HERDR_SOCKET_PATH -u HERDR_PANE_ID \
+    HOME="$HOME_DIR" PATH="$BIN_DIR:/usr/bin:/bin" "$OPERANT_BIN" doctor --fix 2>&1
 }
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
