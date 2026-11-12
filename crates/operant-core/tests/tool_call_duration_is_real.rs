@@ -299,6 +299,7 @@ fn test_config() -> AgentConfig {
         max_iterations: 3,
         tool_timeout: Duration::from_secs(30),
         request_timeout: Duration::from_secs(30),
+        model_request_timeouts: Default::default(),
         system_prompt: Some("You are a test agent.".to_string()),
         stream: false,
         context_window: 8000,

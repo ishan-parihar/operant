@@ -104,6 +104,11 @@ pub struct AgentConfig {
     pub tool_timeout: Duration,
     /// Timeout for LLM requests
     pub request_timeout: Duration,
+    /// Explicit per-model request timeouts (`model` → budget). An operator's
+    /// per-model decision wins over the global `request_timeout` AND over
+    /// the built-in reasoning floor — the only lever that can cover a local
+    /// alias, which the floor table can never match.
+    pub model_request_timeouts: std::collections::HashMap<String, Duration>,
     /// System prompt for the agent
     pub system_prompt: Option<String>,
     /// Whether to stream responses
@@ -224,6 +229,11 @@ impl From<&BehaviorSettings> for AgentConfig {
             max_iterations: settings.max_iterations,
             tool_timeout: Duration::from_secs(settings.tool_timeout_secs),
             request_timeout: Duration::from_secs(settings.request_timeout_secs),
+            // The per-model budgets live in the CLIENT settings (one knob,
+            // `[client] model_request_timeouts`) and are threaded into the
+            // agent by the CLI's `agent_config()`; the behavior settings do
+            // not carry them, so this starts empty.
+            model_request_timeouts: std::collections::HashMap::new(),
             system_prompt: settings.system_prompt.clone(),
             stream: settings.stream,
             context_window: settings.context_window,
@@ -1701,10 +1711,8 @@ mod tests {
     #[test]
     fn the_ponytail_posture_rides_the_frozen_prefix_when_enabled() {
         let _env_lock = crate::platform::test_env_lock_blocking();
-        let home = std::env::temp_dir().join(format!(
-            "operant-ponytail-prefix-{}",
-            std::process::id()
-        ));
+        let home =
+            std::env::temp_dir().join(format!("operant-ponytail-prefix-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&home);
         let skill_dir = home
             .join("integrations")
@@ -1724,10 +1732,10 @@ mod tests {
         let mut config = AgentConfig::default();
         config.ponytail.enabled = true;
         config.ponytail.inject = crate::config::PonytailInject::AlwaysOn;
-        let db = Database::init(
-            std::env::temp_dir()
-                .join(format!("test_ponytail_prefix_{}.sqlite", std::process::id())),
-        )
+        let db = Database::init(std::env::temp_dir().join(format!(
+            "test_ponytail_prefix_{}.sqlite",
+            std::process::id()
+        )))
         .unwrap();
         let agent = OperantAgent::new(
             config,
@@ -3937,6 +3945,7 @@ mod tests {
             max_iterations: 3,
             tool_timeout: Duration::from_secs(5),
             request_timeout: Duration::from_secs(10),
+            model_request_timeouts: Default::default(),
             system_prompt: Some("You are a test agent.".to_string()),
             stream: true,
             context_window: 8000,
@@ -3992,6 +4001,7 @@ mod tests {
             max_iterations: 3,
             tool_timeout: Duration::from_secs(5),
             request_timeout: Duration::from_secs(10),
+            model_request_timeouts: Default::default(),
             system_prompt: Some("You are a test agent.".to_string()),
             stream: true,
             context_window: 8000,
@@ -4113,6 +4123,7 @@ mod tests {
             max_iterations: 3,
             tool_timeout: Duration::from_secs(5),
             request_timeout: Duration::from_secs(10),
+            model_request_timeouts: Default::default(),
             system_prompt: Some("You are a test agent.".to_string()),
             stream: true,
             context_window: 8000,
@@ -4972,6 +4983,22 @@ mod tests {
             .unwrap();
         assert_eq!(results.len(), 2);
         assert!(results[0].success && results[1].success);
+    }
+    /// An explicit per-model budget wins over the global one — the only
+    /// lever that can cover a local alias, which the vendor-slug floor
+    /// table can never match (2026-11-12 audit).
+    #[test]
+    fn loop_request_timeout_honours_an_explicit_per_model_budget() {
+        let mut agent = test_agent_with_request_timeout(30);
+        agent.config.model = "large-stack".to_string();
+        agent.config.model_request_timeouts.insert(
+            "large-stack".to_string(),
+            std::time::Duration::from_secs(600),
+        );
+        assert_eq!(
+            agent.loop_request_timeout(),
+            std::time::Duration::from_secs(600)
+        );
     }
 }
 

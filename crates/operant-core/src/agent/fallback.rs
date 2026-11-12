@@ -131,6 +131,22 @@ impl Failover {
             Error::Provider { status, body, .. } => {
                 (classify_api_error(Some(*status), body, None), None)
             }
+            // The loop's own request ceiling. Our budget, spent on a request
+            // that never produced a reply — transient by nature (a re-issue
+            // is the remedy), and it must read as `Timeout` so the turn's
+            // retry arm and the cron seam's bounded transient retry both fire.
+            Error::RequestTimeout { .. } => (
+                ClassifiedError {
+                    reason: FailoverReason::Timeout,
+                    status_code: None,
+                    message: err.to_string(),
+                    retryable: true,
+                    should_fallback: true,
+                    should_compress: false,
+                    should_rotate_credential: false,
+                },
+                None,
+            ),
             Error::Config(_) => (
                 ClassifiedError {
                     reason: FailoverReason::FormatError,
@@ -159,7 +175,10 @@ impl Failover {
 
         let advance_model_chain = matches!(
             err,
-            Error::Network(_) | Error::StreamStalled { .. } | Error::RateLimited { .. }
+            Error::Network(_)
+                | Error::StreamStalled { .. }
+                | Error::RequestTimeout { .. }
+                | Error::RateLimited { .. }
         ) || matches!(err, Error::Provider { status, .. } if *status >= 500);
         let switch_provider = classified.is_auth()
             || matches!(
@@ -1206,5 +1225,19 @@ mod tests {
         let err = client.chat(make_request()).await.unwrap_err();
         // Should return auth error from the fallback provider (anthropic)
         assert!(matches!(&err, Error::Authentication(_)));
+    }
+
+    /// The loop's own request ceiling classifies as a Timeout — the typed
+    /// rung ("Connection/read timeout — rebuild client + retry") that an
+    /// untyped `Agent` string could never reach.
+    #[test]
+    fn the_request_ceiling_classifies_as_a_timeout() {
+        let failover = Failover::classify(&Error::RequestTimeout {
+            budget: Duration::from_secs(120),
+            guidance: String::new(),
+        });
+        assert_eq!(failover.reason, FailoverReason::Timeout);
+        assert!(failover.classified.retryable);
+        assert!(!failover.classified.should_compress);
     }
 }

@@ -347,6 +347,7 @@ fn test_config(max_iterations: usize, skill_nudge_interval: usize) -> AgentConfi
         max_iterations,
         tool_timeout: Duration::from_secs(5),
         request_timeout: Duration::from_secs(10),
+        model_request_timeouts: Default::default(),
         system_prompt: Some("You are a test agent.".to_string()),
         stream: false,
         context_window: 8000,

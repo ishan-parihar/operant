@@ -600,8 +600,6 @@ impl OperantAgent {
         allow_poke: bool,
         end: &TurnEndContext<'_>,
     ) -> Result<Option<Message>> {
-        let session_id = end.session_id;
-        let counters = end.counters;
         let outcome = self.attempt_grace_call(messages, None, end).await?;
         match outcome {
             GraceOutcome::Answer(message) => return Ok(Some(message)),
@@ -609,6 +607,40 @@ impl OperantAgent {
         }
 
         // The wrap-up produced nothing. Is there work to continue?
+        if self.maybe_poke(messages, poke, allow_poke, end).await? {
+            return Ok(None);
+        }
+
+        // No poke: announce the empty end now (the same announcement the
+        // wrap-up used to make inline) and hand the empty answer back.
+        let empty = Message::assistant(String::new());
+        self.announce_grace_end(messages, &empty, end).await;
+        Ok(Some(empty))
+    }
+
+    /// The poke decision — issue the bounded synthetic continuation, or say
+    /// no. `true` means a poke was issued and the turn continues.
+    ///
+    /// Split out of [`Self::wrap_up_or_poke`] so the PROVIDER-ERROR path can
+    /// reach it WITHOUT the grace call: the provider has just failed, so
+    /// asking it for a tool-less summary would spend another request on a
+    /// provider that is already refusing.
+    ///
+    /// That missing seam is the 2026-11-12 audit's "the poke does not work on
+    /// an interruption": the establishment error path returned the error
+    /// DEAD, so a slow provider ended the seat's work with an error card
+    /// while the poke's own guard — which had already recorded the error two
+    /// lines earlier — was never asked. A transient failure now gets the
+    /// bounded continuation; a deterministic one still ends the turn.
+    async fn maybe_poke(
+        &self,
+        messages: &mut Vec<Message>,
+        poke: &mut crate::agent::auto_poke::PokeState,
+        allow_poke: bool,
+        end: &TurnEndContext<'_>,
+    ) -> Result<bool> {
+        let session_id = end.session_id;
+        let counters = end.counters;
         let unfinished = crate::tools::todo_tool::unfinished_todo_count(session_id);
         let has_work = unfinished > 0 || counters.succeeded > 0;
         if !allow_poke {
@@ -679,14 +711,10 @@ impl OperantAgent {
                 ),
             })
             .await;
-            return Ok(None);
+            return Ok(true);
         }
 
-        // No poke: announce the empty end now (the same announcement the
-        // wrap-up used to make inline) and hand the empty answer back.
-        let empty = Message::assistant(String::new());
-        self.announce_grace_end(messages, &empty, end).await;
-        Ok(Some(empty))
+        Ok(false)
     }
 
     /// Run the agent with a user query
@@ -752,6 +780,103 @@ impl OperantAgent {
         // exists to remove. `Disabled` never reaches here: the kill-switch
         // already returned `None`.
         Some(TurnAttribution::of(breakdown))
+    }
+
+    /// Re-issue the failed request while the turn's retry budget lasts.
+    ///
+    /// The caller has already classified the FIRST failure (the compress and
+    /// rotate arms run before this one); each re-issue's own failure is
+    /// classified again, so a failure that CHANGES class is re-read rather
+    /// than assumed.
+    ///
+    /// Returns the successful response, or the LAST error when the budget is
+    /// spent: the caller then decides between the bounded poke and the end of
+    /// the turn.
+    async fn reissue_with_budget<T, F, Fut>(
+        &self,
+        messages: &[Message],
+        first_error: crate::error::Error,
+        retry_state: &mut turn_retry_state::TurnRetryState,
+        turn_retry_failures: &mut usize,
+        mut call: F,
+    ) -> Result<T>
+    where
+        F: FnMut(ChatRequest) -> Fut,
+        Fut: std::future::Future<Output = Result<T>>,
+    {
+        let mut error = first_error;
+        loop {
+            let classified = FallbackModelClient::classify_error(&error);
+            let Some(request) = self
+                .prepare_retry_request(
+                    messages,
+                    &classified,
+                    retry_state,
+                    turn_retry_failures,
+                    classified.reason.as_str(),
+                )
+                .await
+            else {
+                return Err(error);
+            };
+            match self.call_with_loop_timeout(call(request)).await {
+                Ok(ok) => return Ok(ok),
+                Err(next) => error = next,
+            }
+        }
+    }
+
+    /// Rebuild the request for a retryable failure that happened BEFORE the
+    /// first byte of the reply.
+    ///
+    /// Until now the turn's retry ladder was reachable only from the
+    /// mid-stream consumption loop (a provider that dropped the body). A
+    /// failure before the first byte — the loop's own `request_timeout`
+    /// ceiling firing, a transport error, a 5xx — had NO arm: the turn died
+    /// on the first occurrence even though the classification said
+    /// `retryable` and the turn's budget (`max_retries`) was untouched.
+    ///
+    /// That is the 2026-11-12 audit's "the poke does not work": a seat's
+    /// scheduled run hit one slow provider, the turn failed, and because the
+    /// failure was an untyped `Agent` string the cron seam's bounded
+    /// transient retry could not see it either — so the seat stayed dark
+    /// until the next cadence tick instead of re-issuing the request.
+    ///
+    /// Returns the rebuilt request when the failure is worth a retry and the
+    /// budget allows one; `None` means the turn must fail now.
+    async fn prepare_retry_request(
+        &self,
+        messages: &[Message],
+        classified: &crate::agent::error_classifier::ClassifiedError,
+        retry_state: &mut turn_retry_state::TurnRetryState,
+        turn_retry_failures: &mut usize,
+        reason: &str,
+    ) -> Option<ChatRequest> {
+        // `Unknown` means the classifier could not place the failure — the
+        // catch-all arm marks EVERY unclassified error retryable, and a
+        // retry on a coin flip is how a deterministic failure turns into a
+        // slow one (a scripted provider error that used to end the turn
+        // would keep the turn alive instead: review_discipline's
+        // `error_exit_skips_the_armed_review`). Only a CLASSIFIED failure
+        // earns a re-issue; an unclassified one ends the turn.
+        if !classified.retryable
+            || classified.reason == crate::agent::error_classifier::FailoverReason::Unknown
+            || retry_state.is_exhausted()
+            || retry_state.turn_retry_exhausted(*turn_retry_failures)
+        {
+            return None;
+        }
+        // The failed call consumed an iteration; the retry gets a fresh one.
+        self.iteration_budget.refund();
+        retry_state.consume_retry();
+        // The cumulative turn-level counter is the backstop for a provider
+        // that fails every time: it bounds the turn even though the
+        // per-call budget is refilled by a success between failures.
+        *turn_retry_failures += 1;
+        self.emit_retry_scheduled(retry_state.retry_count, retry_state.max_retries, reason)
+            .await;
+        let tools = self.tools_for_turn(messages).await;
+        Some(self.fitted_request(&self.effective_model(), messages, tools))
     }
 
     #[expect(
@@ -1487,7 +1612,11 @@ impl OperantAgent {
                             let retry_request = self
                                 .fitted_request(&self.effective_model(), &messages, tools)
                                 .with_reasoning_effort(None);
-                            self.client.chat_streaming(retry_request).await?
+                            // Under the loop ceiling like every other request:
+                            // a re-issue that can hang forever is the same
+                            // bug the ceiling exists to prevent.
+                            self.call_with_loop_timeout(self.client.chat_streaming(retry_request))
+                                .await?
                         } else if classified.should_compress && !retry_state.compress_attempted {
                             retry_state.compress_attempted = true;
                             warn!(reason = %classified.reason, "Context overflow detected — compressing and retrying");
@@ -1569,14 +1698,81 @@ impl OperantAgent {
                                 let tools = self.tools_for_turn(&messages).await;
                                 let retry_request =
                                     self.fitted_request(&self.effective_model(), &messages, tools);
-                                self.client.chat_streaming(retry_request).await?
+                                self.call_with_loop_timeout(self.client.chat_streaming(retry_request))
+                                    .await?
                             } else {
                                 warn!("No more credentials to rotate — returning original error");
                                 return Err(e);
                             }
                         } else {
-                            return Err(e);
+                            // The same arm as the non-streaming path: a
+                            // retryable failure BEFORE the first byte (the
+                            // loop's own request ceiling firing, a transport
+                            // error, a 5xx) earns a re-issue of the SAME
+                            // request while the turn's budget lasts.
+                            match self
+                                .reissue_with_budget(
+                                    &messages,
+                                    e,
+                                    &mut retry_state,
+                                    &mut turn_retry_failures,
+                                    |request| self.client.chat_streaming(request),
+                                )
+                                .await
+                            {
+                                Ok(stream) => stream,
+                                Err(last_error) => {
+                            // The provider call failed and the turn's retry
+                            // budget is spent. A DETERMINISTIC failure ends
+                            // the turn (the poke's guard); a TRANSIENT one
+                            // gets the bounded poke — the seam the
+                            // 2026-11-12 audit reports as "the poke does not
+                            // work on an interruption": the error path used
+                            // to return the error DEAD, so a slow provider
+                            // ended the seat's work with an error card while
+                            // the poke — whose guard had already recorded the
+                            // error — was never asked.
+                            // Only a CLASSIFIED transient failure earns the
+                            // poke. An UNCLASSIFIED error ends the turn: the
+                            // operator's contract — "an error ends the turn",
+                            // pinned by review_discipline's
+                            // `error_exit_skips_the_armed_review` — and a
+                            // retry on a coin flip is how a deterministic
+                            // failure turns into a slow one.
+                            let pokeable = classified.retryable
+                                && classified.reason
+                                    != crate::agent::error_classifier::FailoverReason::Unknown;
+                            if pokeable
+                                && self
+                                .maybe_poke(
+                                    &mut messages,
+                                    &mut poke,
+                                    true,
+                                    &TurnEndContext {
+                                        session_id: &session_id,
+                                        user_query: &user_query,
+                                        counters: TurnCounters {
+                                            iteration,
+                                            tool_calls: total_tool_calls,
+                                            succeeded: successful_tool_calls,
+                                        },
+                                        review_skills: review_skills_pending,
+                                        review_memory: review_memory_pending,
+                                        timing: TurnTiming {
+                                            start: turn_start,
+                                            inference: turn_inference,
+                                            saw_inference,
+                                        },
+                                    },
+                                )
+                                .await?
+                            {
+                                continue;
+                            }
+                            return Err(last_error);
                         }
+                    }
+                }
                     }
                 };
                 // ── Mid-stream drop recovery (hermes parity) ─────────────
@@ -1905,7 +2101,72 @@ impl OperantAgent {
                                 return Err(self.annotate_thinking_timeout(e));
                             }
                         } else {
-                            return Err(self.annotate_thinking_timeout(e));
+                            // A retryable failure before the first byte: the
+                            // turn re-issues the SAME request while its retry
+                            // budget lasts. A new prompt would not help a slow
+                            // provider; a re-issue can.
+                            match self
+                                .reissue_with_budget(
+                                    &messages,
+                                    e,
+                                    &mut retry_state,
+                                    &mut turn_retry_failures,
+                                    |request| self.client.chat(request),
+                                )
+                                .await
+                            {
+                                Ok(response) => response,
+                                Err(last_error) => {
+                                    // The provider call failed and the turn's retry
+                                    // budget is spent. A DETERMINISTIC failure ends
+                                    // the turn (the poke's guard); a TRANSIENT one
+                                    // gets the bounded poke — the seam the
+                                    // 2026-11-12 audit reports as "the poke does not
+                                    // work on an interruption": the error path used
+                                    // to return the error DEAD, so a slow provider
+                                    // ended the seat's work with an error card while
+                                    // the poke — whose guard had already recorded the
+                                    // error — was never asked.
+                                    // Only a CLASSIFIED transient failure earns the
+                                    // poke. An UNCLASSIFIED error ends the turn: the
+                                    // operator's contract — "an error ends the turn",
+                                    // pinned by review_discipline's
+                                    // `error_exit_skips_the_armed_review` — and a
+                                    // retry on a coin flip is how a deterministic
+                                    // failure turns into a slow one.
+                                    let pokeable = classified.retryable
+                                && classified.reason
+                                    != crate::agent::error_classifier::FailoverReason::Unknown;
+                                    if pokeable
+                                        && self
+                                            .maybe_poke(
+                                                &mut messages,
+                                                &mut poke,
+                                                true,
+                                                &TurnEndContext {
+                                                    session_id: &session_id,
+                                                    user_query: &user_query,
+                                                    counters: TurnCounters {
+                                                        iteration,
+                                                        tool_calls: total_tool_calls,
+                                                        succeeded: successful_tool_calls,
+                                                    },
+                                                    review_skills: review_skills_pending,
+                                                    review_memory: review_memory_pending,
+                                                    timing: TurnTiming {
+                                                        start: turn_start,
+                                                        inference: turn_inference,
+                                                        saw_inference,
+                                                    },
+                                                },
+                                            )
+                                            .await?
+                                    {
+                                        continue;
+                                    }
+                                    return Err(self.annotate_thinking_timeout(last_error));
+                                }
+                            }
                         }
                     }
                 };

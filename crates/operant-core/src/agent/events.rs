@@ -33,8 +33,21 @@ impl OperantAgent {
     /// the loop ceiling — the floor is a FLOOR, applied as `max(configured,
     /// floor)` exactly like the client's `effective_timeout`.
     pub(crate) fn loop_request_timeout(&self) -> std::time::Duration {
+        let model = self.model();
+        // An explicit per-model budget is the operator's decision and wins
+        // over the global budget AND over the built-in floor (the floor
+        // table's own contract: it applies "only when no explicit
+        // user-configured per-model timeout exists"). It is also the only
+        // lever that covers a local alias — `large-stack` is a name the
+        // vendor-slug floor table can never match.
+        if let Some(explicit) = crate::reasoning_timeouts::explicit_model_timeout(
+            &self.config.model_request_timeouts,
+            &model,
+        ) {
+            return explicit;
+        }
         let configured = self.config.request_timeout;
-        match crate::reasoning_timeouts::get_reasoning_stale_timeout_floor(&self.model()) {
+        match crate::reasoning_timeouts::get_reasoning_stale_timeout_floor(&model) {
             Some(floor) => configured.max(std::time::Duration::from_secs(floor)),
             None => configured,
         }
@@ -111,9 +124,15 @@ impl OperantAgent {
             result = fut => result,
             budget = ceiling => {
                 warn!(budget = ?budget, "LLM request exceeded loop request_timeout ceiling");
-                Err(crate::error::Error::Agent(format!(
-                    "request timed out after {budget:?} (loop request_timeout ceiling)"
-                )))
+                // TYPED, not a generic `Agent` string: the cron seam's bounded
+                // transient retry, the turn's retry arm and the gateway's turn
+                // classification all branch on the error TYPE. An untyped
+                // string here made every one of them treat a slow provider as
+                // "give up" (2026-11-12 audit).
+                Err(crate::error::Error::RequestTimeout {
+                    budget,
+                    guidance: String::new(),
+                })
             }
             interrupted = interrupt_fut => {
                 warn!("Interrupt flag triggered — aborting in-flight LLM request");
@@ -145,7 +164,18 @@ impl OperantAgent {
                 error = %err,
                 "Thinking-timeout detected on reasoning model — appending guidance"
             );
-            crate::error::Error::Agent(format!("{err}{guidance}"))
+            match err {
+                // A typed request timeout stays TYPED — the guidance rides as
+                // the variant's own field. Re-wrapping it into `Agent` (the
+                // old body) handed the untyped string to the cron seam's
+                // transient-retry gate, which cannot retry an `Agent` error,
+                // so the one model class that needs the ceiling raised was
+                // also the one class whose retry was silently disabled.
+                crate::error::Error::RequestTimeout { budget, .. } => {
+                    crate::error::Error::RequestTimeout { budget, guidance }
+                }
+                other => crate::error::Error::Agent(format!("{other}{guidance}")),
+            }
         } else {
             err
         }

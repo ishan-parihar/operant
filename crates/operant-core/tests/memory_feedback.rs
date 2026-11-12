@@ -219,6 +219,7 @@ fn test_config() -> AgentConfig {
         max_iterations: 6,
         tool_timeout: Duration::from_secs(5),
         request_timeout: Duration::from_secs(10),
+        model_request_timeouts: Default::default(),
         system_prompt: Some("You are a test agent.".to_string()),
         // Non-streaming: the memory hooks sit on the shared post-turn path,
         // which both modes enter.

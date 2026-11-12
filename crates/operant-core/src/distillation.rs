@@ -236,6 +236,7 @@ mod tests {
             base_url: format!("{}/v1", server.url()),
             api_key: None,
             timeout: Duration::from_secs(5),
+            model_request_timeouts: Default::default(),
             max_context_length: 128_000,
             rate_limit: Default::default(),
             prompt_cache_ttl: Default::default(),

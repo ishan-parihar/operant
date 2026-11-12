@@ -36,6 +36,9 @@ pub struct ClientConfig {
     pub api_key: Option<String>,
     /// Default request timeout
     pub timeout: Duration,
+    /// Explicit per-model request timeouts (`model` → seconds). Consulted
+    /// ahead of the built-in reasoning floor; see `ClientSettings`.
+    pub model_request_timeouts: std::collections::HashMap<String, Duration>,
     /// Maximum context length (for truncation warnings)
     pub max_context_length: usize,
     /// Rate limit settings for outbound requests.
@@ -56,6 +59,11 @@ impl From<&ClientSettings> for ClientConfig {
             base_url: settings.base_url.clone(),
             api_key: settings.api_key.clone(),
             timeout: Duration::from_secs(settings.timeout_secs),
+            model_request_timeouts: settings
+                .model_request_timeouts
+                .iter()
+                .map(|(k, v)| (k.clone(), Duration::from_secs(*v)))
+                .collect(),
             max_context_length: settings.max_context_length,
             rate_limit: settings.rate_limit.clone(),
             prompt_cache_ttl: settings.prompt_cache_ttl,
@@ -351,21 +359,38 @@ impl OpenAIClient {
 
         let base_url = std::env::var("OPENAI_BASE_URL").unwrap_or(base.client.base_url);
 
+        let model_request_timeouts = base
+            .client
+            .model_request_timeouts
+            .iter()
+            .map(|(k, v)| (k.clone(), Duration::from_secs(*v)))
+            .collect();
         Ok(Self::new(ClientConfig {
             base_url,
             api_key: api_key.or(base.client.api_key),
             timeout: Duration::from_secs(base.client.timeout_secs),
+            model_request_timeouts,
             max_context_length: base.client.max_context_length,
             rate_limit: base.client.rate_limit.clone(),
             prompt_cache_ttl: base.client.prompt_cache_ttl,
         }))
     }
 
-    /// Effective per-request timeout: the configured timeout, raised to the
-    /// reasoning stale-timeout floor when the model is a known reasoning
-    /// model (R2 — hermes reasoning_timeouts.py parity). A FLOOR — never
-    /// lowers an explicitly configured timeout.
+    /// Effective per-request timeout, in precedence order:
+    ///
+    /// 1. the operator's explicit per-model value — an explicit decision, in
+    ///    either direction (see `ClientConfig::model_request_timeouts`);
+    /// 2. the configured timeout, raised to the reasoning stale-timeout
+    ///    floor when the model is a known reasoning model (R2 — hermes
+    ///    reasoning_timeouts.py parity). A FLOOR, so it never lowers an
+    ///    explicitly configured timeout.
     fn effective_timeout(&self, model: &str) -> Duration {
+        if let Some(explicit) = crate::reasoning_timeouts::explicit_model_timeout(
+            &self.config.model_request_timeouts,
+            model,
+        ) {
+            return explicit;
+        }
         match crate::reasoning_timeouts::get_reasoning_stale_timeout_floor(model) {
             Some(floor) => self.config.timeout.max(Duration::from_secs(floor)),
             None => self.config.timeout,
@@ -665,7 +690,13 @@ impl OpenAIClient {
                 }
                 Err(_) => {
                     if attempt < max_attempts {
-                        warn!(model = %model, attempt, idle_secs = idle.as_secs(), "No response headers in time, retrying");
+                        // Back off before the next attempt: the header-timeout
+                        // branch used to re-issue IMMEDIATELY, so a provider
+                        // that was slow to send headers got hammered with
+                        // back-to-back requests while the budget burned.
+                        let delay_s = exponential_backoff_secs(attempt, base_delay, max_delay);
+                        warn!(model = %model, attempt, idle_secs = idle.as_secs(), delay_secs = delay_s, "No response headers in time, retrying");
+                        tokio::time::sleep(Duration::from_secs(delay_s)).await;
                         continue;
                     }
                     return Err(Error::StreamStalled {
@@ -2328,6 +2359,7 @@ mod tests {
             base_url: format!("http://{addr}"),
             api_key: Some("test-key".into()),
             timeout: Duration::from_secs(10),
+            model_request_timeouts: Default::default(),
             max_context_length: 8000,
             rate_limit: crate::config::RateLimitSettings {
                 max_retries: 1,
@@ -2389,6 +2421,7 @@ mod tests {
             base_url: format!("http://{addr}"),
             api_key: Some("test-key".into()),
             timeout: Duration::from_secs(10),
+            model_request_timeouts: Default::default(),
             max_context_length: 8000,
             rate_limit: crate::config::RateLimitSettings {
                 max_retries: 0,
@@ -2796,6 +2829,7 @@ mod tests {
             base_url: format!("http://{addr}"),
             api_key: Some("test-key".into()),
             timeout: Duration::from_secs(10),
+            model_request_timeouts: Default::default(),
             max_context_length: 8000,
             rate_limit: crate::config::RateLimitSettings {
                 max_retries: 2,
@@ -2942,6 +2976,7 @@ Connection: close
             base_url: format!("http://{addr}"),
             api_key: Some("test-key".into()),
             timeout: Duration::from_secs(10),
+            model_request_timeouts: Default::default(),
             max_context_length: 8000,
             rate_limit: crate::config::RateLimitSettings {
                 max_retries: 2,
@@ -3013,6 +3048,7 @@ Connection: close
             base_url: format!("http://{addr}"),
             api_key: Some("test-key".into()),
             timeout,
+            model_request_timeouts: Default::default(),
             max_context_length: 8000,
             rate_limit: crate::config::RateLimitSettings {
                 max_retries: 1,
@@ -3190,6 +3226,7 @@ Connection: close
             base_url: format!("http://{addr}"),
             api_key: Some("test-key".into()),
             timeout: Duration::from_secs(10),
+            model_request_timeouts: Default::default(),
             max_context_length: 8000,
             rate_limit: crate::config::RateLimitSettings {
                 max_retries: 1,
@@ -3262,6 +3299,7 @@ Connection: close
             base_url: format!("http://{addr}"),
             api_key: Some("test-key".into()),
             timeout: Duration::from_secs(10),
+            model_request_timeouts: Default::default(),
             max_context_length: 8000,
             rate_limit: crate::config::RateLimitSettings {
                 max_retries: 1,

@@ -156,6 +156,32 @@ pub enum Error {
     #[error("The model provider's stream stalled: no data for {idle_secs}s")]
     StreamStalled { idle_secs: u64 },
 
+    /// The agentic loop's own per-request ceiling fired: the request was
+    /// still in flight when the loop's `request_timeout` budget expired.
+    ///
+    /// This is OUR budget, not the provider's — the transport reported no
+    /// error, the request simply did not finish inside the window the loop
+    /// allows. It is transient by nature: the same request can succeed on a
+    /// re-issue, which is exactly what a slow (not broken) provider needs.
+    ///
+    /// It must therefore be a TYPED variant and not a generic `Agent` string.
+    /// Every recovery gate downstream branches on the error TYPE — the cron
+    /// seam's bounded transient retry, the turn's own retry arm, the gateway's
+    /// turn classification — and an untyped string made all of them read this
+    /// as "give up" (2026-11-12 audit: a seat's scheduled poke died on the
+    /// first slow provider and then stayed dark until the next cadence tick,
+    /// because the cron's transient-retry gate could not see the failure).
+    #[error("request timed out after {budget:?} (loop request_timeout ceiling){guidance}")]
+    RequestTimeout {
+        budget: std::time::Duration,
+        /// Thinking-timeout guidance, appended when the model is a known
+        /// reasoning model and the ceiling fired before any content arrived.
+        /// Empty otherwise. A field rather than a re-wrap into `Agent`: the
+        /// TYPE must survive the annotation, or every recovery gate that
+        /// branches on it (cron retry, turn retry arm) loses it again.
+        guidance: String,
+    },
+
     /// The provider's response stream died mid-body and the turn's retry
     /// budget ran out before a re-issue succeeded.
     ///
@@ -277,6 +303,7 @@ impl Error {
             Error::Network(_)
             | Error::IncompleteSseMessage
             | Error::StreamStalled { .. }
+            | Error::RequestTimeout { .. }
             | Error::ToolTimeout { .. }
             | Error::IncompleteXml { .. }
             | Error::RateLimited { .. } => true,
@@ -363,6 +390,12 @@ impl Error {
                          {window}. Run /compact, then send the message again."
                     )
                 }
+            }
+            Error::RequestTimeout { budget, .. } => {
+                format!(
+                    "The model provider did not answer within the agent's request budget \
+                     ({budget:?}) — the request was cancelled before it produced a reply."
+                )
             }
             _ => self.to_string(),
         }
@@ -769,5 +802,28 @@ mod tests {
                 "a byte slice can panic on a multi-byte character: {needle}"
             );
         }
+    }
+
+    /// The loop's request ceiling is a TYPED transient failure. The cron
+    /// seam's bounded transient retry and the turn's retry arm both branch
+    /// on the error TYPE, so an untyped `Agent` string here is exactly what
+    /// made the seat's scheduled poke go dark (2026-11-12 audit).
+    #[test]
+    fn the_request_timeout_is_a_typed_transient_failure() {
+        let err = Error::RequestTimeout {
+            budget: std::time::Duration::from_secs(120),
+            guidance: String::new(),
+        };
+        assert!(err.is_transient(), "a slow provider is retryable");
+        assert!(
+            !err.is_self_healing(),
+            "a timeout needs a re-issue, not a re-prompt"
+        );
+        let display = err.to_string();
+        assert!(display.contains("timed out"), "got: {display}");
+        assert!(
+            display.contains("loop request_timeout ceiling"),
+            "got: {display}"
+        );
     }
 }

@@ -350,6 +350,7 @@ fn test_config(max_iterations: usize) -> AgentConfig {
         max_iterations,
         tool_timeout: Duration::from_secs(5),
         request_timeout: Duration::from_secs(10),
+        model_request_timeouts: Default::default(),
         system_prompt: Some("You are a test agent.".to_string()),
         // Non-streaming: both breakers live on the shared response path,
         // which both modes enter.

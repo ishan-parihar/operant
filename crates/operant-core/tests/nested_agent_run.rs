@@ -429,6 +429,7 @@ fn test_config() -> AgentConfig {
         // child completing proves it did not inherit the parent's tool timeout.
         tool_timeout: Duration::from_secs(5),
         request_timeout: Duration::from_secs(10),
+        model_request_timeouts: Default::default(),
         system_prompt: Some(PARENT_SYSTEM_PROMPT.to_string()),
         stream: false,
         context_window: 8000,

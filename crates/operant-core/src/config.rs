@@ -558,6 +558,18 @@ pub struct ClientSettings {
     pub additional_api_keys: Vec<String>,
     pub timeout_secs: u64,
     pub max_context_length: usize,
+    /// Explicit per-model request timeouts, in seconds.
+    ///
+    /// The escape hatch the reasoning-floor doc has always promised ("a
+    /// FLOOR applied only when no explicit user-configured per-model timeout
+    /// exists"). The floor table matches vendor model ids, so it can never
+    /// cover a local alias (`large-stack`) or an aggregator id whose slug
+    /// the table lacks. This knob wins over both `timeout_secs` and the
+    /// built-in floor, in either direction, for the model named here — and
+    /// the agent's own per-request ceiling reads the same map, so one entry
+    /// bounds BOTH the transport's header wait and the loop's ceiling.
+    #[serde(default)]
+    pub model_request_timeouts: std::collections::HashMap<String, u64>,
     /// Rate limit configuration for outbound API requests.
     pub rate_limit: RateLimitSettings,
     /// TTL for provider prompt-cache breakpoints ("5m" or "1h"). Drives the
@@ -575,6 +587,7 @@ impl Default for ClientSettings {
             additional_api_keys: Vec::new(),
             timeout_secs: 60,
             max_context_length: 128_000,
+            model_request_timeouts: std::collections::HashMap::new(),
             rate_limit: RateLimitSettings::default(),
             prompt_cache_ttl: Default::default(),
         }

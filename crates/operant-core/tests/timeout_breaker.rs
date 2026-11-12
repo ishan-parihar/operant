@@ -345,6 +345,7 @@ fn test_config(max_iterations: usize) -> AgentConfig {
         // stream-level case is covered by its own test below.
         tool_timeout: Duration::from_secs(5),
         request_timeout: Duration::from_secs(10),
+        model_request_timeouts: Default::default(),
         system_prompt: Some("You are a test agent.".to_string()),
         stream: false,
         context_window: 8000,

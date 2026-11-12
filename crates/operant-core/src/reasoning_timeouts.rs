@@ -46,7 +46,11 @@ const REASONING_FLOORS: &[(&str, u64)] = &[
     ("o3-mini", 300),
     ("o4-mini", 300),
     // Anthropic Claude 4.x thinking variants (anchored at claude-opus-4).
+    // The 4.0 generation ships as a DATED id (`claude-sonnet-4-20250514`),
+    // which no version-anchored needle could match — the live 2026-11-12
+    // audit ran on exactly that id and got no floor at all.
     ("claude-opus-4", 240),
+    ("claude-sonnet-4", 240),
     ("claude-opus-5", 240),
     ("claude-sonnet-5", 180),
     ("claude-sonnet-4.5", 180),
@@ -99,14 +103,60 @@ pub fn get_reasoning_stale_timeout_floor(model: &str) -> Option<u64> {
                 return false;
             }
             // Right boundary: at end, or followed by a separator.
+            //
+            // `:` and `+` count as separators because aggregator ids carry a
+            // VARIANT suffix (`dots-studio/dots-3-note-preview:free`,
+            // `openai/o3-mini:online`). Without them the floor never matched
+            // the id the operator actually configured — the `dots-3-note-preview`
+            // entry (added because "cron seat 120s kills") was dead for every
+            // OpenRouter-style id, and `openai/o3-mini:free` matched the
+            // shorter `o3` needle instead of `o3-mini`.
             let end = pos + needle.len();
-            if end < slug.len() && !matches!(bytes[end], b'-' | b'.' | b'_' | b'/') {
+            if end < slug.len() && !matches!(bytes[end], b'-' | b'.' | b'_' | b'/' | b':' | b'+') {
                 return false;
             }
             true
         })
         .max_by_key(|(needle, _)| needle.len())
         .map(|(_, floor)| *floor)
+}
+
+/// The operator's explicit per-model request timeout, if one is configured.
+///
+/// Consulted BEFORE the built-in floor table: the floor table's own doc says
+/// it applies "only when no explicit user-configured per-model timeout
+/// exists", so an explicit value wins in BOTH directions — the operator may
+/// raise a budget for a slow model or lower it for a cheap one.
+///
+/// Matching is the full model id first (case-insensitive), then the slug
+/// after the last `/` — so `large-stack` also covers `openrouter/large-stack`.
+/// This is the only lever that can cover a LOCAL ALIAS: the floor table
+/// matches vendor model ids, and an alias (`large-stack`, `small-stack`) is
+/// a name the table can never see.
+pub fn explicit_model_timeout(
+    overrides: &std::collections::HashMap<String, std::time::Duration>,
+    model: &str,
+) -> Option<std::time::Duration> {
+    if overrides.is_empty() || model.is_empty() {
+        return None;
+    }
+    let model_lower = model.to_ascii_lowercase();
+    let slug = model_lower
+        .rsplit('/')
+        .next()
+        .unwrap_or(&model_lower)
+        .to_string();
+    let mut slug_match: Option<std::time::Duration> = None;
+    for (key, budget) in overrides {
+        let key_lower = key.to_ascii_lowercase();
+        if key_lower == model_lower {
+            return Some(*budget);
+        }
+        if slug_match.is_none() && key_lower == slug {
+            slug_match = Some(*budget);
+        }
+    }
+    slug_match
 }
 
 /// Transport-error substrings that indicate a mid-think upstream kill.
@@ -149,10 +199,12 @@ pub fn build_thinking_timeout_guidance(model: &str) -> String {
          before the first content token arrived. This is a known issue with reasoning \
          models (like {label}) behind cloud gateways (NVIDIA NIM, OpenAI, Anthropic, \
          DeepSeek). Workarounds in priority order:\n\
-         1. Set `provider.timeout_secs: 900` (or a per-model request timeout) in \
-         `~/.operant/operant.toml` to extend the per-call timeout. Operant's built-in \
-         floor for known reasoning models is 600s, so the default is already raised — \
-         this error means the upstream killed the connection anyway.\n\
+         1. Set `[client] timeout_secs: 900` — or, better, a per-model budget \
+         (`[client] model_request_timeouts = {{ \"your-model-id\" = 900 }}`) — in \
+         `~/.operant/operant.toml`. Operant's built-in floor for known reasoning \
+         models is per-model (180s-600s), so the default is already raised for \
+         those ids; this error means the upstream killed the connection anyway, \
+         or the id carries a local alias the floor table cannot match.\n\
          2. Lower `reasoning_effort` to `medium`/`low` (or set `max_tokens` lower) to \
          shorten the thinking phase.\n\
          3. Use a smaller / faster reasoning model."
@@ -229,5 +281,62 @@ mod tests {
         assert!(g.contains("nemotron-3-ultra-550b-a55b"));
         assert!(g.contains("~/.operant/operant.toml"));
         assert!(g.contains("600s"));
+    }
+
+    /// An aggregator id carries a VARIANT suffix (`...:free`). The matcher
+    /// used to stop at the `:`, so the `dots-3-note-preview` entry (added
+    /// because "cron seat 120s kills") never applied to the id the operator
+    /// actually configured.
+    #[test]
+    fn an_aggregator_variant_suffix_still_matches_the_floor() {
+        assert_eq!(
+            get_reasoning_stale_timeout_floor("dots-studio/dots-3-note-preview:free"),
+            Some(300)
+        );
+        assert_eq!(
+            get_reasoning_stale_timeout_floor("deepseek/deepseek-r1:free"),
+            Some(600)
+        );
+        // The LONGER needle wins: `o3-mini` (300s), not `o3` (600s).
+        assert_eq!(
+            get_reasoning_stale_timeout_floor("openai/o3-mini:free"),
+            Some(300)
+        );
+    }
+
+    /// The dated Claude 4 id the live logs show (`claude-sonnet-4-20250514`)
+    /// had no floor at all: the table only carried 4.5/4.6/5.
+    #[test]
+    fn the_dated_claude_4_id_has_a_floor() {
+        assert_eq!(
+            get_reasoning_stale_timeout_floor("claude-sonnet-4-20250514"),
+            Some(240)
+        );
+    }
+
+    /// The operator's explicit per-model budget — the only lever that can
+    /// cover a LOCAL ALIAS, which the vendor-slug floor table can never
+    /// match.
+    #[test]
+    fn an_explicit_per_model_budget_is_found() {
+        let mut overrides = std::collections::HashMap::new();
+        overrides.insert(
+            "large-stack".to_string(),
+            std::time::Duration::from_secs(600),
+        );
+        assert_eq!(
+            explicit_model_timeout(&overrides, "large-stack"),
+            Some(std::time::Duration::from_secs(600))
+        );
+        // The slug form covers a provider-prefixed id.
+        assert_eq!(
+            explicit_model_timeout(&overrides, "openrouter/large-stack"),
+            Some(std::time::Duration::from_secs(600))
+        );
+        assert_eq!(explicit_model_timeout(&overrides, "gpt-4o"), None);
+        assert_eq!(
+            explicit_model_timeout(&std::collections::HashMap::new(), "large-stack"),
+            None
+        );
     }
 }

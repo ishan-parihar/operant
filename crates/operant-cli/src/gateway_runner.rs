@@ -1763,6 +1763,7 @@ fn error_class(e: &operant_core::Error) -> &'static str {
     match e {
         E::Network(_) => "network",
         E::StreamDied { .. } => "stream_died",
+        E::RequestTimeout { .. } => "request_timeout",
         E::Provider { .. } => "provider",
         E::RateLimited { .. } => "rate_limited",
         E::Authentication(_) => "auth",

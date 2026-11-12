@@ -1178,6 +1178,18 @@ pub(crate) fn agent_config(
         agent.system_prompt = Some(prompt.to_string());
     }
     agent.request_timeout = Duration::from_secs(config.agent.request_timeout_secs);
+    // The per-model budgets are ONE knob (`[client] model_request_timeouts`)
+    // and they bound BOTH the transport's header wait and the agent's loop
+    // ceiling — so they are threaded into the agent here as well as into
+    // the client. Without this the agent's ceiling ignored the operator's
+    // per-model budget and killed the request the client was willing to wait
+    // for (2026-11-12 audit).
+    agent.model_request_timeouts = config
+        .client
+        .model_request_timeouts
+        .iter()
+        .map(|(model, secs)| (model.clone(), Duration::from_secs(*secs)))
+        .collect();
     // Permanent tool-approval allowlist (hermes `command_allowlist` parity):
     // seed from the top-level `command_allowlist` config key and persist
     // "always allow" choices to a sidecar JSON in the operant data dir so
@@ -4240,6 +4252,7 @@ mod tests {
             base_url: "https://primary.example/v1".to_string(),
             api_key: Some("sk-primary".to_string()),
             timeout: Duration::from_secs(60),
+            model_request_timeouts: Default::default(),
             max_context_length: 200_000,
             rate_limit: Default::default(),
             prompt_cache_ttl: Default::default(),

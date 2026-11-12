@@ -2022,4 +2022,16 @@ mod tests {
             );
         }
     }
+
+    /// The loop's request ceiling is transient, so the cron seam's bounded
+    /// retry RE-ARMS the job instead of losing the cadence tick (2026-11-12
+    /// audit: the seat went dark until the next scheduled run).
+    #[test]
+    fn a_request_timeout_arms_the_transient_retry() {
+        let err = crate::error::Error::RequestTimeout {
+            budget: std::time::Duration::from_secs(120),
+            guidance: String::new(),
+        };
+        assert!(should_arm_transient_retry(&err));
+    }
 }
