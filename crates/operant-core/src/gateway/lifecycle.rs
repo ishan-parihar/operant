@@ -6,24 +6,22 @@
 //!   run per session key, so two rapid messages to the same conversation
 //!   can never interleave two agent runs.
 //! - [`SessionStallTracker`]: records when each session's turn started so a
-//!   hung turn (agent wedged on a provider call, etc.) can be surfaced.
+//!   hung turn (agent wedged on a provider call, etc.) can be surfaced. The
+//!   turn's start and end are recorded by the gateway's lifecycle path, and
+//!   the DRAIN reads the tracker (RT-525): a drain is exactly where "this
+//!   turn is wedged" matters.
 //! - [`DeliveryLedger`]: bounded record of outbound deliveries (at-least-
 //!   once visibility — every send is accounted, success or failure).
 //! - [`MirrorRule`]: forwards responses for a matched source channel to a
 //!   target channel (e.g. DM → ops group).
-//! - [`TurnExitReason`] + [`classify_turn_error`]: UNWIRED (RT-368, named not shipped) —
-//!   a machine-readable exit classifier with nothing calling it.
-//!   The doc used to claim it was "written to the turn-state journal at close
-//!   (the exit_code/exit_reason columns)" and that "retries, breakers, and
-//!   audits branch on THIS". Neither is true: `classify_turn_error` has ZERO
-//!   production callers (the only references are its own tests), and the
-//!   classifier is not re-exported past this module. The LIVE per-turn
-//!   classification is a different enum — `crate::agent::TurnExitReason`
+//! - [`TurnExitReason`] + [`classify_turn_error`]: a machine-readable exit
+//!   classifier for a turn's error text. The gateway runner calls it to
+//!   classify a failed turn (the exit reason rides the turn's state), so it
+//!   is not the unwired thing this module's doc used to claim. The LIVE
+//!   per-turn classification is a different enum — `crate::agent::TurnExitReason`
 //!   (TextResponse/BudgetExhausted/GraceCall/CircuitBreaker/Interrupted/
 //!   Error), built by `agent::turn_finalizer` and written through
-//!   `TurnDiagnostics::exit_reason`. This classifier's marker tables and
-//!   kill-over-auth precedence are correct and useful; wiring it INTO that
-//!   path (or deleting it) is a product decision, named rather than implied.
+//!   `TurnDiagnostics::exit_reason`.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
@@ -34,12 +32,12 @@ use tokio::sync::Mutex;
 
 /// Machine-readable reason a turn closed.
 ///
-/// UNWIRED (RT-368, named not shipped): the doc used to claim this is "the
-/// turn-state journal's exit_code column" and that "retries, breakers, and
-/// audits branch on THIS" — nothing writes this enum anywhere, and nothing
-/// branches on it (zero production callers; see the module doc for the live
-/// `agent::TurnExitReason` path). The classifier itself is correct; the
-/// claim of its wiring was not.
+/// The doc used to claim this is the turn-state journal's exit-code column,
+/// and that the retry, breaker and audit paths all branch on it — neither
+/// was true. The gateway runner now CALLS `classify_turn_error` to classify a
+/// failed turn, so the classifier has a caller; it is still not the live
+/// per-turn exit path (that is `crate::agent::TurnExitReason`, see the
+/// module doc). The classifier itself is correct.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TurnExitReason {
     /// The turn returned a final response.
@@ -210,11 +208,10 @@ impl Drop for TurnLeaseGuard {
 /// when the turn ends. Sessions still "active" after `stalled(timeout)`
 /// have exceeded the configured stall window without completing.
 ///
-/// UNWIRED (RT-331, named not shipped): no production callers route it —
-/// the lease gate itself (`TurnLease`) is exercised in production, but
-/// the detector that would escalate stalled sessions is complete and
-/// unread. Wiring a sweep over `stalled()` is a product decision; the
-/// doc no longer implies the detector runs.
+/// The detector that surfaces a wedged turn. It is WIRED (RT-525): the
+/// gateway's lifecycle path records the start and the end of every turn,
+/// and the drain reads `stalled()` — a drain is exactly where "this turn
+/// is wedged" matters.
 #[derive(Debug, Clone, Default)]
 pub struct SessionStallTracker {
     inner: Arc<Mutex<HashMap<String, Instant>>>,
@@ -383,12 +380,14 @@ mod rt368_tests {
     /// `crate::agent::TurnExitReason`. Source contract, needles
     /// concatenation-built.
     #[test]
-    fn the_turn_exit_classifier_names_its_unwired_state() {
+    fn the_turn_exit_classifier_names_where_it_is_wired() {
         let src = include_str!("lifecycle.rs");
-        let named = format!("UNWIRED (RT-368, named not {}shipped)", "");
+        // The needle is concatenation-built so this test's own source cannot
+        // satisfy it.
+        let named = ["The gateway runner calls it ", "to"].concat();
         assert!(
-            src.matches(&named).count() >= 2,
-            "both the module doc and the enum doc must name the unwired surface"
+            src.contains(&named),
+            "the module doc must name where the exit classifier is called"
         );
         let old_claim = format!("retries, breakers, and audits branch on {}", "THIS");
         assert!(
@@ -532,12 +531,14 @@ mod tests {
     /// Source-grep contract (the RT-323 shape), the needle concatenation-
     /// built so this test's own source cannot satisfy it.
     #[test]
-    fn the_stall_detector_names_its_unwired_state() {
+    fn the_stall_detector_names_where_it_is_wired() {
         let src = include_str!("lifecycle.rs");
-        let claim = format!("no production callers {}", "route it");
+        // The needle is concatenation-built so this test's own source cannot
+        // satisfy it.
+        let claim = ["the DRAIN reads the tracker", ""].concat();
         assert!(
             src.contains(&claim),
-            "the doc must name the unwired detector — a reader must not infer it runs"
+            "the doc must name where the stall detector is wired — the drain reads it"
         );
     }
 

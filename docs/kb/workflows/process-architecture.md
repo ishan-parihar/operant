@@ -33,3 +33,4 @@
 | process-architecture-027 | done | RT-521 (S): unbounded growth under load (the ingress channel, the per-session queue, the cap's default, the registry's Drop) | — | [2026-11-12] docs/audit/2026-11-12-process-architecture-red-team-execution.md |
 | process-architecture-028 | done | RT-522 (S): the presence registry is never claimed and a claim overwrites a live owner | — | [2026-11-13] docs/audit/2026-11-12-process-architecture-red-team-execution.md |
 | process-architecture-029 | done | RT-524 (S): one persistence rule applied four ways (the rewind fork and the interrupted tail dropped the tool history; the steers were never persisted) | — | [2026-11-13] docs/audit/2026-11-12-process-architecture-red-team-execution.md |
+| process-architecture-030 | done | RT-525 (N): the unwired machinery — the persistence seam deleted, the stall detector wired into the drain | — | [2026-11-13] docs/audit/2026-11-12-process-architecture-red-team-execution.md |

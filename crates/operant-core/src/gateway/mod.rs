@@ -439,10 +439,23 @@ impl Gateway {
     }
 
     pub async fn drain(&self, timeout: std::time::Duration) -> DrainOutcome {
-        match &self.message_handler {
+        let outcome = match &self.message_handler {
             Some(handler) => handler.drain(timeout).await,
             None => DrainOutcome::Idle,
+        };
+        // (RT-525) The drain is exactly where "this turn is wedged" matters:
+        // a session whose turn started longer ago than the drain's own
+        // timeout and never completed. The tracker has been recording the
+        // start of every turn since the turn began; the drain READS it now,
+        // so the stall detector is no longer machinery nobody calls.
+        for (key, age) in self.stall_tracker.stalled(timeout).await {
+            warn!(
+                session = %key,
+                age_ms = age.as_millis() as u64,
+                "the drain found a session whose turn never completed"
+            );
         }
+        outcome
     }
 
     pub async fn stop(&self) -> Result<()> {
@@ -1054,6 +1067,28 @@ impl Gateway {
 
 #[cfg(test)]
 mod tests {
+    /// RT-525: the drain READS the stall tracker.
+    ///
+    /// The tracker has recorded every turn's start since the turn began,
+    /// and the drain is exactly where "this turn is wedged" matters — so the
+    /// drain now names the sessions whose turn never completed. A source
+    /// contract: the read is one line, and the only caller that matters is
+    /// the drain.
+    #[test]
+    fn the_drain_reads_the_stall_tracker() {
+        let source = include_str!("mod.rs");
+        let call = ["stall_tracker.", "stalled("].concat();
+        // The drain's body: from its signature to the end of the function.
+        let start = source.find("pub async fn drain(").expect("the drain");
+        let body = &source[start..];
+        let body = &body[..body.find("\n    }").unwrap_or(body.len())];
+        assert!(
+            body.contains(call.as_str()),
+            "the drain must read the stall tracker — a session whose turn never \
+             completed is the signal a drain needs"
+        );
+    }
+
     /// RT-520: a bind conflict is a START FAILURE, not a silent retry.
     ///
     /// The webhook adapter binds its listen address when it starts. Before

@@ -179,8 +179,8 @@ impl KernelRuntime {
     pub async fn request(&self, method: &str, params: Value) -> Result<Value, String> {
         // Invalidate injection cache on any harness write so next turn sees fresh state.
         // `harness_upsert` is the sidecar's real write method (dispatched at
-        // server.py:156 and called from `persistence_seam.rs`); `harness_set`
-        // was never a method — so the one production write path missed the
+        // server.py:156); `harness_set` was never a method — so the one
+        // production write path missed the
         // invalidation and the injection block served a stale lesson for the
         // 5s TTL (RT-328).
         let is_write = matches!(
