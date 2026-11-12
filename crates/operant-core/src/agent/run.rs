@@ -308,7 +308,7 @@ impl OperantAgent {
             crate::context_management::protected_floor_tokens(messages) + schema_tokens + extra;
         let (minimum_window, minimum_hard_cap) = self.context_caps.context_advice(
             required,
-            super::compress::RESPONSE_RESERVE_TOKENS
+            crate::context_management::RESPONSE_RESERVE_TOKENS
                 + crate::context_management::CONTEXT_DISCLOSURE_RESERVE_TOKENS,
             self.effective_context_window(),
         );
@@ -4034,7 +4034,7 @@ impl OperantAgent {
             if tool_share > 0.0 {
                 let budget = self
                     .effective_context_window()
-                    .saturating_sub(super::compress::RESPONSE_RESERVE_TOKENS);
+                    .saturating_sub(crate::context_management::RESPONSE_RESERVE_TOKENS);
                 let report = crate::context_management::trim_tool_results_to_share(
                     &mut messages,
                     budget,
@@ -4071,7 +4071,7 @@ impl OperantAgent {
         // final-call copy so the model lands the plane instead of
         // opening new work near the ceiling.
         let budget = window;
-        let reserve = super::compress::RESPONSE_RESERVE_TOKENS;
+        let reserve = crate::context_management::RESPONSE_RESERVE_TOKENS;
         // The window minus everything the request cannot give back: the
         // response reserve, the volatile turn tail, and the tool schemas.
         // What is left is the room the MESSAGES may occupy.
@@ -4325,7 +4325,7 @@ impl OperantAgent {
             // messages may occupy.
             let hard_budget = limits
                 .hard
-                .min(window.saturating_sub(super::compress::RESPONSE_RESERVE_TOKENS))
+                .min(window.saturating_sub(crate::context_management::RESPONSE_RESERVE_TOKENS))
                 .saturating_sub(turn_context_tokens)
                 .saturating_sub(schema_tokens);
             let (compacted, within_budget, protected_tokens) =
@@ -4352,7 +4352,7 @@ impl OperantAgent {
                 let required = protected_tokens + schema_tokens + turn_context_tokens;
                 let (minimum_window, minimum_hard_cap) = self.context_caps.context_advice(
                     required,
-                    super::compress::RESPONSE_RESERVE_TOKENS
+                    crate::context_management::RESPONSE_RESERVE_TOKENS
                         + crate::context_management::CONTEXT_DISCLOSURE_RESERVE_TOKENS,
                     window,
                 );
@@ -4371,7 +4371,7 @@ impl OperantAgent {
                 + turn_context_tokens;
             let (minimum_window, minimum_hard_cap) = self.context_caps.context_advice(
                 required,
-                super::compress::RESPONSE_RESERVE_TOKENS
+                crate::context_management::RESPONSE_RESERVE_TOKENS
                     + crate::context_management::CONTEXT_DISCLOSURE_RESERVE_TOKENS,
                 window,
             );

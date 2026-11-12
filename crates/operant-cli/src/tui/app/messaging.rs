@@ -275,17 +275,36 @@ impl App {
         }
 
         // Only escalate — never repeat a threshold already shown.
+        //
+        // The advice must match what the runtime can actually DO. Two facts
+        // the notice used to ignore:
+        //
+        // - Auto-compaction only runs when it is ARMED (`micro_compaction` or
+        //   `context_compression`). With both off, "Running auto-compact…"
+        //   announced an action that never happened.
+        // - `/compact` folds the STORED conversation. It cannot shrink the
+        //   protected prompt (system prompt + skills), the tool schemas or
+        //   the turn tail — so for a request that is over because of THOSE,
+        //   the only remedy is a bigger `agent.context_window`.
+        let auto_compact_armed =
+            self.config.agent.micro_compaction || self.config.agent.context_compression;
         if pct >= 100 && self.token_warning_threshold_shown < 100 {
             self.token_warning_threshold_shown = 100;
-            self.push_notice(
-                NotificationKind::Error,
-                "Context window full. Running auto-compact\u{2026}".to_string(),
-            );
+            let message = if auto_compact_armed {
+                "Context window full. Running auto-compact\u{2026}".to_string()
+            } else {
+                "Context window full. Run /compact, or raise agent.context_window if the \
+                 protected prompt does not fit."
+                    .to_string()
+            };
+            self.push_notice(NotificationKind::Error, message);
         } else if pct >= 95 && self.token_warning_threshold_shown < 95 {
             self.token_warning_threshold_shown = 95;
             self.push_notice(
                 NotificationKind::Error,
-                "Context window 95% full! Run /compact now.".to_string(),
+                "Context window 95% full! Run /compact, or raise agent.context_window if the \
+                 protected prompt does not fit."
+                    .to_string(),
             );
         } else if pct >= 80 && self.token_warning_threshold_shown < 80 {
             self.token_warning_threshold_shown = 80;

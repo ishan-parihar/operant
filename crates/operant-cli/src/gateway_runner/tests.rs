@@ -426,6 +426,8 @@ impl operant_core::agent::ModelClient for ExhaustThenSucceedClient {
                 tokens: 9000,
                 window: 8000,
                 required: 0,
+                minimum_window: 0,
+                minimum_hard_cap: 0,
             });
         }
         Ok(echo_chat_response("recovered after compaction"))

@@ -46,7 +46,7 @@ pub async fn handle_config_command(config: &AppConfig, cmd: ConfigSubcommand) ->
         ConfigSubcommand::Show => handle_show(config),
         ConfigSubcommand::Set { key, value } => handle_set(key, value),
         ConfigSubcommand::Path => handle_path(),
-        ConfigSubcommand::Check => handle_check(config),
+        ConfigSubcommand::Check => handle_check(config).await,
         ConfigSubcommand::Edit => handle_edit(),
         ConfigSubcommand::EnvPath => handle_env_path(),
         ConfigSubcommand::Migrate { apply } => handle_migrate(apply),
@@ -135,7 +135,7 @@ fn handle_path() -> Result<()> {
 }
 
 /// Validate the current configuration and print any warnings.
-fn handle_check(config: &AppConfig) -> Result<()> {
+async fn handle_check(config: &AppConfig) -> Result<()> {
     let mut issues: Vec<String> = Vec::new();
 
     if config.agent.model.is_empty() || config.agent.model == "gpt-4" {
@@ -200,6 +200,37 @@ fn handle_check(config: &AppConfig) -> Result<()> {
     }
     if config.gateway.slack_enabled && config.gateway.slack_token.is_none() {
         issues.push("Slack gateway is enabled but no token is set.".to_string());
+    }
+
+    // The window must be able to hold the content that cannot be folded:
+    // the eager tool schemas and the advertised skills. A window smaller
+    // than that fails EVERY turn — the live deployment sat at 4,242 against
+    // a 8,574-token protected prompt, and this check called it good.
+    match crate::cmd_context::measure_protected_floor(config).await {
+        Ok(floor) if floor.minimum_hard_cap > 0 => {
+            issues.push(format!(
+                "agent.context_hard_cap_tokens is smaller than the protected content \
+                 (~{} tokens: tool schemas ~{}, advertised skills ~{}). Raise the cap to at \
+                 least {} — every turn fails until it fits.",
+                floor.required, floor.schema_tokens, floor.skills_tokens, floor.minimum_hard_cap,
+            ));
+        }
+        Ok(floor) if floor.minimum_window > config.agent.context_window => {
+            issues.push(format!(
+                "agent.context_window is {} but the protected content needs about {} tokens \
+                 (tool schemas ~{}, advertised skills ~{}). Raise it to at least {} — every \
+                 turn fails until it fits.",
+                config.agent.context_window,
+                floor.required,
+                floor.schema_tokens,
+                floor.skills_tokens,
+                floor.minimum_window,
+            ));
+        }
+        Ok(_) => {}
+        Err(e) => {
+            println!("  (context window not measured: {e} — the schema bill could not be built)");
+        }
     }
 
     if issues.is_empty() {
@@ -526,10 +557,14 @@ mod tests {
         assert!(handle_path().is_ok());
     }
 
-    #[test]
-    fn handle_check_default_config_emits_warnings() {
-        let config = AppConfig::default();
-        assert!(handle_check(&config).is_ok());
+    #[tokio::test]
+    async fn handle_check_default_config_emits_warnings() {
+        let mut config = AppConfig::default();
+        // The check measures the live schema bill, which opens the database.
+        // Point it at a temp file so the test never touches the operator's.
+        let dir = tempfile::tempdir().expect("tempdir");
+        config.database_path = dir.path().join("check.sqlite");
+        assert!(handle_check(&config).await.is_ok());
     }
 
     #[test]

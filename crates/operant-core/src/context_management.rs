@@ -968,6 +968,14 @@ impl ContextCapLimits {
     }
 }
 
+/// Tokens the runtime holds back for the model's reply.
+///
+/// The window is the PROMPT plus the REPLY: a request whose prompt fills
+/// the window has no room for the answer, and the provider rejects it with
+/// a 400 before it generates a token. Every budget in the runtime holds
+/// this back, and every advice figure adds it.
+pub const RESPONSE_RESERVE_TOKENS: usize = 4096;
+
 /// Tokens held back for the `<context_budget>` disclosure block.
 ///
 /// The block is appended to the turn context AFTER the cap check (it quotes

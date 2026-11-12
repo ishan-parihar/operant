@@ -9,7 +9,7 @@ use super::*;
 
 /// Tokens held back from the context window for the model's own response, so
 /// budgeted passes size the input against what is actually available.
-pub(crate) const RESPONSE_RESERVE_TOKENS: usize = 4096;
+use crate::context_management::RESPONSE_RESERVE_TOKENS;
 
 // ---------------------------------------------------------------------------
 // Preflight compression config (W1.4 port from the deleted runtime engine)

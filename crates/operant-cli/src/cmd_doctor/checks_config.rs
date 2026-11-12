@@ -483,6 +483,78 @@ pub fn run_config_checks(
     }
 }
 
+/// CAN THE CONFIGURED WINDOW HOLD THE CONTENT THAT CANNOT BE FOLDED?
+///
+/// The eager tool schemas and the advertised skills ride every request and
+/// are never evicted. A window smaller than they are fails EVERY turn —
+/// the live deployment sat at 4,242 tokens against a 8,574-token protected
+/// prompt, and neither `operant doctor` nor `operant config check` said a
+/// word about it.
+///
+/// This is a FLOOR, not a promise: the runtime adds the turn tail (memory
+/// recall, workspace, harness) on top, which the CLI cannot measure.
+pub async fn check_context_window(
+    config: &AppConfig,
+    issues: &mut Vec<String>,
+    manual_issues: &mut Vec<String>,
+) {
+    section_header("Context window");
+    let floor = match crate::cmd_context::measure_protected_floor(config).await {
+        Ok(floor) => floor,
+        Err(e) => {
+            check_warn(
+                "Context window not measured",
+                &format!("{} — the schema bill could not be built", e),
+            );
+            manual_issues.push(format!("Context window not measured: {e}"));
+            return;
+        }
+    };
+    let window = config.agent.context_window;
+    if floor.minimum_hard_cap > 0 {
+        check_fail(
+            "Context window cannot hold the protected content",
+            &format!(
+                "the absolute hard cap is smaller than the protected content (~{} tokens: \
+                 tool schemas ~{}, advertised skills ~{}). Raise \
+                 agent.context_hard_cap_tokens to at least {} — every turn fails until it fits.",
+                floor.required, floor.schema_tokens, floor.skills_tokens, floor.minimum_hard_cap,
+            ),
+        );
+        issues.push(format!(
+            "The context hard cap is smaller than the protected content (~{} tokens) — every \
+             turn fails until agent.context_hard_cap_tokens is at least {}.",
+            floor.required, floor.minimum_hard_cap,
+        ));
+        return;
+    }
+    if floor.minimum_window > window {
+        check_fail(
+            "Context window cannot hold the protected content",
+            &format!(
+                "agent.context_window is {window} but the protected content needs about {} \
+                 tokens (tool schemas ~{}, advertised skills ~{}). Raise it to at least {} — \
+                 every turn fails until it fits.",
+                floor.required, floor.schema_tokens, floor.skills_tokens, floor.minimum_window,
+            ),
+        );
+        issues.push(format!(
+            "agent.context_window is {window} but the protected content needs about {} tokens \
+             — every turn fails until it is at least {}.",
+            floor.required, floor.minimum_window,
+        ));
+        return;
+    }
+    check_ok(
+        "Context window holds the protected content",
+        &format!(
+            "window {window} tokens; protected content ~{} tokens (tool schemas ~{}, \
+             advertised skills ~{})",
+            floor.required, floor.schema_tokens, floor.skills_tokens
+        ),
+    );
+}
+
 /// Is the context meter recording?
 ///
 /// The session rows carry `input_tokens`, `output_tokens` and `api_call_count`
@@ -524,7 +596,9 @@ pub fn check_context_telemetry(
         return;
     }
     if sessions == 0 {
-        check_info("Context meter recording — no sessions yet, the first request starts the record");
+        check_info(
+            "Context meter recording — no sessions yet, the first request starts the record",
+        );
         return;
     }
     // Sessions exist and none of them carry usage. There are two readings and
@@ -573,7 +647,6 @@ pub fn check_context_telemetry(
          `operant context inspect`."
             .to_string(),
     );
-
 }
 
 #[cfg(test)]

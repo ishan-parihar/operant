@@ -75,6 +75,9 @@ pub async fn handle_doctor_command(
     // Is the context meter recording? Without it, every session's token cost
     // is blank and no context policy can be tuned against a measurement.
     checks_config::check_context_telemetry(config, &mut issues, &mut manual_issues);
+    // Can the window hold the content that cannot be folded? A window that
+    // cannot fails every turn, and nothing else in the doctor looked.
+    checks_config::check_context_window(config, &mut issues, &mut manual_issues).await;
     checks_tools::run_tool_checks(config, &mut issues, &mut manual_issues);
     checks_tools::run_integration_checks(&mut issues, &mut manual_issues).await;
     // The editor/pane integrations (Herdr, Omarchy): the checks that answer

@@ -608,7 +608,62 @@ fn apply_one(
 /// costs. That is the property that makes the numbers actionable — they move
 /// when the operator changes config, so the report is a decision surface
 /// rather than a snapshot of the box.
-async fn measure_surfaces(config: &AppConfig) -> Result<ContextBudget> {
+/// What a request carries that CANNOT be folded: the eager tool schemas and
+/// the skills advertised in the frozen prefix.
+///
+/// The turn tail (memory recall, workspace, harness) is a runtime number the
+/// CLI cannot see, so `required` below is a LOWER bound — the runtime adds
+/// the tail to it. That is why the number is a floor and not a promise: it
+/// says "the window is already too small", never "the window is big enough".
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ProtectedFloor {
+    /// Tokens the eager tool schemas add to every request.
+    pub schema_tokens: usize,
+    /// Tokens the advertised skills add to the frozen prefix.
+    pub skills_tokens: usize,
+    /// The lower bound of the content that cannot be folded.
+    pub required: usize,
+    /// The window that would hold it (0 when an absolute hard cap binds).
+    pub minimum_window: usize,
+    /// The absolute hard cap that would hold it (0 when the window binds).
+    pub minimum_hard_cap: usize,
+}
+
+/// Measure the protected floor of THIS config and the advice that would fit it.
+pub(crate) async fn measure_protected_floor(config: &AppConfig) -> Result<ProtectedFloor> {
+    // The skills advertised in the frozen prefix: the same shape the prefix
+    // writes (`  <skill name="X">description</skill>`), so the number is the
+    // one the runtime carries.
+    let mut manager = operant_core::skills::SkillManager::new(config.skills.root_dir.clone());
+    let _ = manager.load_all();
+    let skills_tokens: usize = manager
+        .list_available()
+        .iter()
+        .map(|(name, description)| {
+            estimate_tokens(&format!("  <skill name=\"{name}\">{description}</skill>\n"))
+        })
+        .sum();
+
+    let surfaces = measure_surfaces(config).await?;
+    let schema_tokens = surfaces.total_tokens_per_request;
+    let required = schema_tokens + skills_tokens;
+    let caps = operant_core::context_management::ContextCaps::from(&config.agent);
+    let (minimum_window, minimum_hard_cap) = caps.context_advice(
+        required,
+        operant_core::context_management::RESPONSE_RESERVE_TOKENS
+            + operant_core::context_management::CONTEXT_DISCLOSURE_RESERVE_TOKENS,
+        config.agent.context_window,
+    );
+    Ok(ProtectedFloor {
+        schema_tokens,
+        skills_tokens,
+        required,
+        minimum_window,
+        minimum_hard_cap,
+    })
+}
+
+pub(crate) async fn measure_surfaces(config: &AppConfig) -> Result<ContextBudget> {
     let target = config.agent.context_budget_tokens;
     let mut budget = ContextBudget::new(target);
 

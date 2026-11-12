@@ -6283,6 +6283,51 @@ fn test_usage_event_pushes_token_warning_notification() {
     );
 }
 
+/// THE NOTICE MUST NOT CLAIM AN ACTION THE RUNTIME DOES NOT RUN.
+///
+/// The 100% notice said "Running auto-compact…" whatever the runtime was
+/// configured to do. Auto-compaction is ARMED by `micro_compaction` or
+/// `context_compression`; with both off nothing auto-compacts, so the
+/// notice announced an action that never happened — on the live deployment,
+/// with both off.
+#[test]
+fn the_full_window_notice_does_not_claim_an_auto_compaction_that_is_off() {
+    let mut app = make_app();
+    app.config.agent.micro_compaction = false;
+    app.config.agent.context_compression = false;
+    app.context_window_size = 1_000;
+    app.last_observed_prompt_tokens = Some(1_000);
+
+    app.check_token_warnings();
+
+    let notice = app.status_message.as_deref().unwrap_or_default();
+    assert!(
+        !notice.contains("Running auto-compact"),
+        "the notice must not claim an action that is off: {notice}"
+    );
+    assert!(
+        notice.contains("/compact"),
+        "the notice must still say what to do: {notice}"
+    );
+}
+
+/// With auto-compaction ARMED, the notice may say it is running.
+#[test]
+fn the_full_window_notice_reports_an_armed_auto_compaction() {
+    let mut app = make_app();
+    app.config.agent.micro_compaction = true;
+    app.context_window_size = 1_000;
+    app.last_observed_prompt_tokens = Some(1_000);
+
+    app.check_token_warnings();
+
+    let notice = app.status_message.as_deref().unwrap_or_default();
+    assert!(
+        notice.contains("Running auto-compact"),
+        "an armed auto-compaction must be reported: {notice}"
+    );
+}
+
 #[test]
 fn token_warning_uses_the_prompt_size_not_the_turn_total() {
     // iter-1207: a turn whose PROMPT is small but whose OUTPUT is large
@@ -7821,6 +7866,8 @@ fn a_protected_context_failure_is_surfaced_without_compaction_advice() {
         tokens: 9711,
         window: 4242,
         required: 9711,
+        minimum_window: 13_807,
+        minimum_hard_cap: 0,
     }
     .user_message();
 
