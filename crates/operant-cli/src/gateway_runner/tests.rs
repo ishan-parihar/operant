@@ -378,7 +378,6 @@ fn slow_echo_handler_with_slots(
             db,
         )));
     }
-    let agent = Arc::clone(&slot_agents[0]);
     Arc::new(GatewayMessageHandler {
         admins: vec![],
         slots: slot_pool_of(slot_agents),

@@ -424,8 +424,10 @@ for line in sys.stdin:
     }
 
     fn counting_config(dir: &std::path::Path) -> AppConfig {
-        let mut config = AppConfig::default();
-        config.database_path = dir.join("acp.sqlite");
+        let mut config = AppConfig {
+            database_path: dir.join("acp.sqlite"),
+            ..Default::default()
+        };
         // A base_url that refuses instantly: the test does not need an
         // answer from the model, it needs the MCP child set.
         config.client.base_url = "http://127.0.0.1:1".to_string();
