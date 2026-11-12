@@ -279,16 +279,25 @@ pub enum Error {
     #[error("Context length exceeded")]
     ContextLengthExceeded,
 
-    /// Still at or above `CONTEXT_EXHAUSTED_PERCENT` of the window after every
-    /// rung that may fold ran: the protected head and tail alone do not fit.
+    /// Still at or above the hard cap after every rung that may fold ran: the
+    /// protected head and tail alone do not fit.
     /// Failing here beats sending a request the provider rejects with a 400.
     #[error("Context exhausted: {tokens} of {window} tokens{}", fold_note(.required))]
     ContextExhausted {
         tokens: usize,
         window: usize,
-        /// The protected prompt/turn content alone needs this many tokens.
+        /// The content the request CANNOT give back: the protected head and
+        /// tail, the tool schemas, and the volatile turn tail. None of them
+        /// is evictable, so a window smaller than this can never run a turn.
         /// When present, compaction cannot recover the request.
         required: usize,
+        /// The window that WOULD hold `required` when the binding axis is the
+        /// window (the response reserve and the hard cap's share of it).
+        /// 0 means "no window helps" — the absolute hard cap binds instead.
+        minimum_window: usize,
+        /// The absolute hard cap that WOULD hold `required`, when that is
+        /// the binding axis. 0 means the window is the axis to change.
+        minimum_hard_cap: usize,
     },
 
     // ========== Configuration Errors ==========
@@ -375,15 +384,32 @@ impl Error {
                 tokens,
                 window,
                 required,
+                minimum_window,
+                minimum_hard_cap,
             } => {
                 if *required > 0 {
-                    format!(
-                        "The protected prompt and current turn need about {required} tokens, \
-                         but agent.context_window is only {window}. Increase \
-                         agent.context_window to at least {} tokens; compaction cannot \
-                         shrink protected content.",
-                        required.saturating_add(4096)
-                    )
+                    if *minimum_hard_cap > 0 {
+                        // An ABSOLUTE hard cap binds: a bigger window does not
+                        // move it, so the cap is what the operator must raise.
+                        format!(
+                            "The protected prompt, tool schemas and current turn need about \
+                             {required} tokens, but the configured hard cap is smaller than that. \
+                             Raise agent.context_hard_cap_tokens to at least {minimum_hard_cap} \
+                             tokens; compaction cannot shrink protected content."
+                        )
+                    } else {
+                        let minimum = if *minimum_window > 0 {
+                            *minimum_window
+                        } else {
+                            required.saturating_add(4096)
+                        };
+                        format!(
+                            "The protected prompt, tool schemas and current turn need about \
+                             {required} tokens, but agent.context_window is only {window}. \
+                             Increase agent.context_window to at least {minimum} tokens; \
+                             compaction cannot shrink protected content."
+                        )
+                    }
                 } else {
                     format!(
                         "The conversation needs about {tokens} tokens but the context window is \
@@ -412,6 +438,8 @@ mod tests {
             tokens: 9_800,
             window: 4_242,
             required: 9_711,
+            minimum_window: 13_807,
+            minimum_hard_cap: 0,
         };
         let message = error.user_message();
         assert!(
@@ -427,8 +455,39 @@ mod tests {
             "message names the setting: {message}"
         );
         assert!(
+            message.contains("13807"),
+            "message names the window that would actually fit: {message}"
+        );
+        assert!(
             !message.contains("/compact"),
             "protected content cannot be compacted: {message}"
+        );
+    }
+
+    /// The number the error prints must be the one the BUDGET enforces.
+    ///
+    /// The budget subtracts the response reserve AND the turn tail AND the
+    /// tool schemas from the window; the old message printed `required +
+    /// 4096`, which left the operator's "recommended" window smaller than
+    /// the request it was supposed to fit — following it failed with the
+    /// same message, asking for the value the operator had just set.
+    #[test]
+    fn the_recommended_window_is_the_one_the_budget_enforces() {
+        let error = Error::ContextExhausted {
+            tokens: 33_531,
+            window: 4_242,
+            required: 33_111,
+            minimum_window: 37_207,
+            minimum_hard_cap: 0,
+        };
+        let message = error.user_message();
+        assert!(
+            message.contains("37207"),
+            "the message names the computed minimum: {message}"
+        );
+        assert!(
+            !message.contains("33111 + 4096"),
+            "the reserve-only figure is not the minimum: {message}"
         );
     }
 
@@ -438,6 +497,8 @@ mod tests {
             tokens: 200_000,
             window: 128_000,
             required: 0,
+            minimum_window: 0,
+            minimum_hard_cap: 0,
         };
         let message = error.user_message();
         assert!(
@@ -462,6 +523,8 @@ mod tests {
             tokens: 9_800,
             window: 4_242,
             required: 9_711,
+            minimum_window: 13_807,
+            minimum_hard_cap: 0,
         };
         let line = protected.to_string();
         assert!(
@@ -477,6 +540,8 @@ mod tests {
             tokens: 200_000,
             window: 128_000,
             required: 0,
+            minimum_window: 0,
+            minimum_hard_cap: 0,
         };
         let line = foldable.to_string();
         assert!(

@@ -486,6 +486,12 @@ impl OperantAgent {
         messages: Vec<Message>,
         budget_tokens: usize,
     ) -> (Vec<Message>, bool, usize) {
+        // The response reserve is NOT subtracted here: the caller's budget
+        // already holds it back (the hard cap is a share of the window, and
+        // that share is smaller than the window minus the reserve on every
+        // window above ~8 600 tokens). Subtracting it twice took 4,096
+        // tokens of usable room away from the mid-turn compaction and turned
+        // a compaction into an abort.
         let (mut compacted, outcome) =
             crate::context_management::manage_context_reporting(messages, budget_tokens, 0);
         let orphans = crate::agent::message_safety::drop_orphaned_tool_messages(&mut compacted);
@@ -521,7 +527,10 @@ impl OperantAgent {
         if limits.hard == 0 {
             return Ok(());
         }
-        let tokens = crate::context_management::estimate_total_tokens(messages);
+        // The tool schemas ride every request beside the messages and are
+        // never evicted, so they count against the cap here too.
+        let schema_tokens = self.schema_token_cost().await;
+        let tokens = crate::context_management::estimate_total_tokens(messages) + schema_tokens;
         if !limits.over_hard(tokens) {
             return Ok(());
         }
@@ -536,10 +545,16 @@ impl OperantAgent {
         })
         .await;
         let taken = std::mem::take(messages);
-        let (compacted, within_budget, protected_tokens) =
-            self.compact_to_hard_cap(taken, limits.hard);
+        let (compacted, within_budget, protected_tokens) = self.compact_to_hard_cap(
+            taken,
+            limits
+                .hard
+                .min(limits.window.saturating_sub(RESPONSE_RESERVE_TOKENS))
+                .saturating_sub(schema_tokens),
+        );
         *messages = compacted;
-        let tokens_after = crate::context_management::estimate_total_tokens(messages);
+        let tokens_after =
+            crate::context_management::estimate_total_tokens(messages) + schema_tokens;
         self.emit(AgentEvent::CompactionCompleted {
             tokens_before: tokens,
             tokens_after,
@@ -553,10 +568,19 @@ impl OperantAgent {
                 hard = limits.hard,
                 "Hard context cap could not be met mid-turn — the protected context alone exceeds it"
             );
+            let required = protected_tokens + schema_tokens;
+            let (minimum_window, minimum_hard_cap) = self.context_caps.context_advice(
+                required,
+                RESPONSE_RESERVE_TOKENS
+                    + crate::context_management::CONTEXT_DISCLOSURE_RESERVE_TOKENS,
+                limits.window,
+            );
             return Err(crate::error::Error::ContextExhausted {
                 tokens: tokens_after,
                 window: limits.window,
-                required: protected_tokens,
+                required,
+                minimum_window,
+                minimum_hard_cap,
             });
         }
         info!(
@@ -599,6 +623,27 @@ impl OperantAgent {
         self.last_prompt_tokens
             .load(std::sync::atomic::Ordering::Relaxed)
             .max(crate::context_management::estimate_total_tokens(messages))
+    }
+
+    /// The tokens the request about to be sent will cost.
+    ///
+    /// The larger of two numbers: the provider's last reported prompt count
+    /// (exact, but for the PREVIOUS request) and the local estimate of the
+    /// messages PLUS the tool schemas (which ride every request and were
+    /// never counted — the provider charged 33,531 for a request the runtime
+    /// called 13,157).
+    ///
+    /// The reported count already includes the schemas, so the schema term
+    /// is added to the LOCAL branch only; adding it to both would count it
+    /// twice.
+    pub(crate) fn estimate_request_tokens(
+        &self,
+        messages: &[Message],
+        schema_tokens: usize,
+    ) -> usize {
+        self.last_prompt_tokens
+            .load(std::sync::atomic::Ordering::Relaxed)
+            .max(crate::context_management::estimate_total_tokens(messages) + schema_tokens)
     }
 
     #[expect(

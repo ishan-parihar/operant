@@ -186,9 +186,7 @@ pub fn trim_tool_results_to_share(
             original_chars = original.chars().count(),
             kept_chars = kept.chars().count(),
         );
-        running = running
-            .saturating_sub(before_this)
-            + estimate_message_tokens(&messages[idx]);
+        running = running.saturating_sub(before_this) + estimate_message_tokens(&messages[idx]);
         report.trimmed += 1;
     }
     report.tokens_after = estimate_total_tokens(messages);
@@ -373,11 +371,26 @@ pub fn fit_output_tokens(
     match requested {
         // No cap requested: providers default to their own (often huge)
         // max_tokens, which is exactly the rejection shape. Fit to the room.
-        None => Some(room_u32),
+        //
+        // A zero room means the prompt alone fills the window; `max_tokens:
+        // 0` is not a request any provider accepts, so the fitter asks for
+        // the smallest cap it considers worth requesting instead. The hard
+        // cap has already failed this request by construction (it fires at
+        // 95% of the window), so the provider's overflow error then drives
+        // the recovery rather than a guaranteed 400 on a zero cap.
+        None => Some(if room_u32 == 0 {
+            MIN_FITTED_OUTPUT_TOKENS
+        } else {
+            room_u32
+        }),
         // Requested cap already fits: leave it untouched — the caller's
         // preference is respected, zero behavior change for small prompts.
         Some(req) if req <= room_u32 => None,
-        Some(_) => Some(room_u32),
+        Some(_) => Some(if room_u32 == 0 {
+            MIN_FITTED_OUTPUT_TOKENS
+        } else {
+            room_u32
+        }),
     }
 }
 
@@ -787,6 +800,49 @@ pub struct ContextCaps {
     pub hard_percent: f64,
 }
 
+impl ContextCaps {
+    /// The advice for a request whose unshrinkable content exceeds the
+    /// budget: `(minimum_window, minimum_hard_cap)`.
+    ///
+    /// Exactly one of the two is non-zero:
+    ///
+    /// - An ABSOLUTE hard cap (`hard_tokens`) does not move when the window
+    ///   grows, so when it is the binding axis no window helps — the CAP has
+    ///   to rise.
+    /// - Otherwise the WINDOW has to rise: the response reserve binds, and
+    ///   so does the cap's share of the window.
+    ///
+    /// The old advice (`required + 4096`) ignored the cap's share, the tail
+    /// and the schemas, so the number it printed was smaller than the
+    /// request it was supposed to fit: 12,670 was printed, 12,670 was set,
+    /// and the turn failed identically.
+    pub fn context_advice(&self, required: usize, reserve: usize, window: usize) -> (usize, usize) {
+        let percent_cap = if self.hard_percent > 0.0 && window > 0 {
+            ((window as f64) * self.hard_percent).floor() as usize
+        } else {
+            0
+        };
+        let absolute_cap = self.hard_tokens;
+        let cap = match (absolute_cap, percent_cap) {
+            (0, 0) => 0,
+            (0, p) => p,
+            (a, 0) => a,
+            (a, p) => a.min(p),
+        };
+        // The absolute axis binds and the window cannot move it.
+        if cap > 0 && required > cap && absolute_cap > 0 && absolute_cap <= percent_cap {
+            return (0, required);
+        }
+        let with_reserve = required.saturating_add(reserve);
+        let with_cap = if self.hard_percent > 0.0 {
+            ((required as f64) / self.hard_percent).ceil() as usize
+        } else {
+            0
+        };
+        (with_reserve.max(with_cap), 0)
+    }
+}
+
 impl Default for ContextCaps {
     fn default() -> Self {
         // The ABSOLUTE axis is OFF by default: the compaction threshold must
@@ -912,6 +968,13 @@ impl ContextCapLimits {
     }
 }
 
+/// Tokens held back for the `<context_budget>` disclosure block.
+///
+/// The block is appended to the turn context AFTER the cap check (it quotes
+/// the numbers that check computed), so the budget never saw it. It is a few
+/// lines of text; the margin covers it with room to spare.
+pub const CONTEXT_DISCLOSURE_RESERVE_TOKENS: usize = 256;
+
 // ---------------------------------------------------------------------------
 // Bust permission (plan 06 P1): the gate every history rewrite passes through
 // ---------------------------------------------------------------------------
@@ -919,9 +982,6 @@ impl ContextCapLimits {
 /// Share of the window at which a rewrite pass is forced: the request is too
 /// large to keep appending, so folding and the ladder may run.
 pub const FORCE_BUST_PERCENT: usize = 85;
-/// Share of the window at which a request that no rewrite could bring under
-/// the line fails with `Error::ContextExhausted` instead of a provider 400.
-pub const CONTEXT_EXHAUSTED_PERCENT: usize = 95;
 
 /// Whether this request may rewrite history. Under `None` the request is the
 /// previous request plus appended messages, so the provider's prompt cache
@@ -1571,12 +1631,27 @@ const SPEND_TRUNCATION_FOOTER_PREFIX: &str = "\n[operant: end of tool result —
 ///
 /// Returns `usize::MAX` when `max_share <= 0.0` (guard disabled), so callers
 /// and the guard itself agree on the threshold from one place.
+///
+/// The ceiling never drops below [`MIN_TOOL_RESULT_TOKENS`]: the guard's own
+/// marker plus its reserve costs ~150 tokens, so a smaller ceiling produced
+/// a marker with an EMPTY body ("Only the first 0 tokens are inlined") — the
+/// model was left with no output at all and no error. With a small window
+/// the turn cannot run anyway (the protected content does not fit), so the
+/// floor costs nothing real and keeps the output readable.
 pub fn tool_result_token_limit(budget_tokens: usize, max_share: f64) -> usize {
     if max_share <= 0.0 {
         return usize::MAX;
     }
-    ((budget_tokens as f64) * max_share).round().max(1.0) as usize
+    ((budget_tokens as f64) * max_share)
+        .round()
+        .max(MIN_TOOL_RESULT_TOKENS as f64) as usize
 }
+
+/// The smallest ceiling one tool result may be trimmed to.
+///
+/// Above the guard's own marker + reserve (~150 tokens), so a trimmed result
+/// still carries a readable body.
+pub const MIN_TOOL_RESULT_TOKENS: usize = 256;
 
 /// Guard one tool result against consuming the context window.
 ///

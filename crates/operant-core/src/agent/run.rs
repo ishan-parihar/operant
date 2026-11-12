@@ -266,6 +266,55 @@ impl OperantAgent {
         schemas
     }
 
+    /// Tokens the EAGER tool schemas add to every request.
+    ///
+    /// The schemas ride every request beside the messages and are never
+    /// evicted, so they belong in the protected floor. The runtime measured
+    /// only the messages: on the operator's live deployment a request the
+    /// runtime called 13,157 tokens cost the provider 33,531 — 20,374 of them
+    /// schema bytes the budget never saw (the in-repo ledger test calls this
+    /// out: "the estimate does not model the frozen prefix or the tool
+    /// schemas").
+    ///
+    /// shortcut: the DEFERRED schemas materialised for the current turn are
+    /// not counted here — they are added after this build by `tools_for_turn`.
+    /// The `tool_search` bridge bounds them by `tool_search.listing_max_tokens`.
+    pub(crate) async fn schema_token_cost(&self) -> usize {
+        let schemas = self
+            .registry
+            .get_schemas_for_request(&self.config.tool_search, self.effective_context_window())
+            .await;
+        crate::tools::tool_search::deferred::estimate_schema_tokens(&schemas)
+    }
+
+    /// The tokens a request cannot give back, and the advice that would fit
+    /// them.
+    ///
+    /// Every `ContextExhausted` raise site uses this, so the number the
+    /// operator is told is the one the budget enforces: the protected head
+    /// and tail, the tool schemas, and whatever else the site knows cannot
+    /// shrink (`extra` — the turn tail, where it is not in `messages` yet).
+    ///
+    /// Returns `(required, minimum_window, minimum_hard_cap)`: exactly one of
+    /// the last two is non-zero — an absolute hard cap does not move when the
+    /// window grows.
+    pub(crate) async fn unshrinkable_and_advice(
+        &self,
+        messages: &[Message],
+        extra: usize,
+    ) -> (usize, usize, usize) {
+        let schema_tokens = self.schema_token_cost().await;
+        let required =
+            crate::context_management::protected_floor_tokens(messages) + schema_tokens + extra;
+        let (minimum_window, minimum_hard_cap) = self.context_caps.context_advice(
+            required,
+            super::compress::RESPONSE_RESERVE_TOKENS
+                + crate::context_management::CONTEXT_DISCLOSURE_RESERVE_TOKENS,
+            self.effective_context_window(),
+        );
+        (required, minimum_window, minimum_hard_cap)
+    }
+
     /// Attempt a "grace call" — a toolless summary request to the model.
     ///
     /// Called when the iteration budget or max_iterations is exhausted.
@@ -1740,8 +1789,8 @@ impl OperantAgent {
                                     if retry_classified.should_compress {
                                         let tokens = crate::context_management::
                                             estimate_total_tokens(&messages);
-                                        let required = crate::context_management::
-                                            protected_floor_tokens(&messages);
+                                        let (required, minimum_window, minimum_hard_cap) =
+                                            self.unshrinkable_and_advice(&messages, 0).await;
                                         return Err(Error::ContextExhausted {
                                             tokens,
                                             // The window the check compared
@@ -1750,6 +1799,8 @@ impl OperantAgent {
                                             // same comparison.
                                             window: self.effective_context_window(),
                                             required,
+                                            minimum_window,
+                                            minimum_hard_cap,
                                         });
                                     }
                                     return Err(retry_err);
@@ -2112,14 +2163,14 @@ impl OperantAgent {
                                             crate::context_management::estimate_total_tokens(
                                                 &messages,
                                             );
-                                        let required =
-                                            crate::context_management::protected_floor_tokens(
-                                                &messages,
-                                            );
+                                        let (required, minimum_window, minimum_hard_cap) =
+                                            self.unshrinkable_and_advice(&messages, 0).await;
                                         return Err(Error::ContextExhausted {
                                             tokens,
                                             window: self.effective_context_window(),
                                             required,
+                                            minimum_window,
+                                            minimum_hard_cap,
                                         });
                                     }
                                     return Err(retry_err);
@@ -2164,14 +2215,14 @@ impl OperantAgent {
                                                 crate::context_management::estimate_total_tokens(
                                                     &messages,
                                                 );
-                                            let required =
-                                                crate::context_management::protected_floor_tokens(
-                                                    &messages,
-                                                );
+                                            let (required, minimum_window, minimum_hard_cap) =
+                                                self.unshrinkable_and_advice(&messages, 0).await;
                                             return Err(Error::ContextExhausted {
                                                 tokens,
                                                 window: self.effective_context_window(),
                                                 required,
+                                                minimum_window,
+                                                minimum_hard_cap,
                                             });
                                         }
                                         return Err(retry_err);
@@ -3881,6 +3932,11 @@ impl OperantAgent {
         // The block is not in `messages` while the ladder runs, so its size
         // is charged against the budget explicitly.
         let turn_context_tokens = crate::context_management::estimate_tokens(&turn_context);
+        // The tool schemas ride every request beside the messages and are
+        // never evicted, so they are charged against the budget the same way
+        // the turn-context tail is. Without this the runtime certified
+        // requests the provider rejected (33,531 charged vs 13,157 estimated).
+        let schema_tokens = self.schema_token_cost().await;
 
         // ── Bust permission (plan 06 P1) ─────────────────────────────────
         // Decided once for this request. Under `None` the rewrites below do
@@ -3899,7 +3955,8 @@ impl OperantAgent {
             let conv = self.conversation.read().await;
             crate::context_management::estimate_total_tokens(&conv)
         } + crate::context_management::estimate_tokens(frozen_text)
-            + turn_context_tokens;
+            + turn_context_tokens
+            + schema_tokens;
         let bust = self.compute_bust_permission(frozen_text, request_tokens, window, limits.soft);
         let may_rewrite = bust != BustPermission::None;
         debug!(?bust, request_tokens, window, "Bust permission decided");
@@ -4014,12 +4071,18 @@ impl OperantAgent {
         // final-call copy so the model lands the plane instead of
         // opening new work near the ceiling.
         let budget = window;
-        let reserve = 4096; // tokens reserved for the model's response
+        let reserve = super::compress::RESPONSE_RESERVE_TOKENS;
+        // The window minus everything the request cannot give back: the
+        // response reserve, the volatile turn tail, and the tool schemas.
+        // What is left is the room the MESSAGES may occupy.
         let effective_budget = budget
             .saturating_sub(reserve)
-            .saturating_sub(turn_context_tokens);
+            .saturating_sub(turn_context_tokens)
+            .saturating_sub(schema_tokens)
+            .saturating_sub(crate::context_management::CONTEXT_DISCLOSURE_RESERVE_TOKENS);
 
-        let mut estimated_tokens = self.estimate_current_tokens(&messages) + turn_context_tokens;
+        let mut estimated_tokens =
+            self.estimate_request_tokens(&messages, schema_tokens) + turn_context_tokens;
         // The soft cap IS the preflight threshold: the ladder compacts the
         // history at the turn boundary, before the hard cap is reached. A
         // disabled soft cap (both axes zero) keeps the legacy window
@@ -4102,7 +4165,8 @@ impl OperantAgent {
                     "Preflight rung 1 (TOC/trim): historical tool results re-trimmed"
                 );
             }
-            estimated_tokens = self.estimate_current_tokens(&messages) + turn_context_tokens;
+            estimated_tokens =
+                self.estimate_request_tokens(&messages, schema_tokens) + turn_context_tokens;
 
             // ── Rung 2: decay — deterministic decay-render ──
             if estimated_tokens > preflight_threshold {
@@ -4112,7 +4176,8 @@ impl OperantAgent {
                     PREFLIGHT_DECAY_H50,
                     PREFLIGHT_DECAY_CONSTANT,
                 );
-                estimated_tokens = self.estimate_current_tokens(&messages) + turn_context_tokens;
+                estimated_tokens =
+                    self.estimate_request_tokens(&messages, schema_tokens) + turn_context_tokens;
             }
 
             // ── Rung 3: semantic selection — goal-similarity group cut ──
@@ -4142,8 +4207,8 @@ impl OperantAgent {
                         "Preflight rung 3 (semantic): goal-similarity group cut applied"
                     );
                     messages = cut.apply(messages);
-                    estimated_tokens =
-                        self.estimate_current_tokens(&messages) + turn_context_tokens;
+                    estimated_tokens = self.estimate_request_tokens(&messages, schema_tokens)
+                        + turn_context_tokens;
                 } else {
                     debug!("Preflight rung 3 (semantic): degraded to recency — skipped");
                 }
@@ -4190,7 +4255,24 @@ impl OperantAgent {
         } else if may_rewrite {
             // Standard eviction: remove oldest messages within tiers until
             // the total fits within the effective budget.
-            messages = crate::context_management::evict_to_budget(messages, effective_budget);
+            //
+            // The REPORTING variant is used so the ladder can see that the
+            // eviction did not meet the budget: the old call dropped that
+            // flag, and the only report the operator got was the generic
+            // hard-cap error sixty lines later — with no "eviction could not
+            // meet the budget" anywhere in the logs.
+            let (evicted, outcome) =
+                crate::context_management::evict_to_budget_reporting(messages, effective_budget);
+            messages = evicted;
+            if !outcome.within_budget {
+                warn!(
+                    tokens = outcome.tokens,
+                    budget = effective_budget,
+                    protected_tokens = outcome.protected_tokens,
+                    "context eviction could not meet the budget — the protected \
+                     content (prompt, schemas, live turn) is larger than the window"
+                );
+            }
         }
 
         // RT-182: close the pair the Started event above opened. Same
@@ -4200,8 +4282,9 @@ impl OperantAgent {
         // payload is a report, not a guarantee (the same caveat the event
         // doc carries).
         if ladder_fired {
-            let tokens_after =
-                crate::context_management::estimate_total_tokens(&messages) + turn_context_tokens;
+            let tokens_after = crate::context_management::estimate_total_tokens(&messages)
+                + turn_context_tokens
+                + schema_tokens;
             self.emit(AgentEvent::CompactionCompleted {
                 tokens_before: ladder_tokens_before,
                 tokens_after,
@@ -4220,8 +4303,9 @@ impl OperantAgent {
         //
         // Uses the heuristic estimate, not the reported usage, which can
         // predate the fold just above.
-        let mut final_tokens =
-            crate::context_management::estimate_total_tokens(&messages) + turn_context_tokens;
+        let mut final_tokens = crate::context_management::estimate_total_tokens(&messages)
+            + turn_context_tokens
+            + schema_tokens;
         if limits.over_hard(final_tokens) {
             let tokens_before = final_tokens;
             let messages_before = messages.len();
@@ -4232,14 +4316,24 @@ impl OperantAgent {
             );
             self.emit(AgentEvent::CompactionStarted { tokens_before })
                 .await;
-            // The turn context rides the tail and is not part of `messages`
-            // yet, so it is charged against the cap here.
-            let hard_budget = limits.hard.saturating_sub(turn_context_tokens);
+            // The turn context rides the tail and the schemas ride beside
+            // the messages; neither is part of `messages` yet, so both are
+            // charged against the cap here.
+            // The hard cap is a share of the window, so it already leaves
+            // room for the reply; on a SMALL window the reserve is the
+            // binding figure, and the smaller of the two is the budget the
+            // messages may occupy.
+            let hard_budget = limits
+                .hard
+                .min(window.saturating_sub(super::compress::RESPONSE_RESERVE_TOKENS))
+                .saturating_sub(turn_context_tokens)
+                .saturating_sub(schema_tokens);
             let (compacted, within_budget, protected_tokens) =
                 self.compact_to_hard_cap(messages, hard_budget);
             messages = compacted;
-            final_tokens =
-                crate::context_management::estimate_total_tokens(&messages) + turn_context_tokens;
+            final_tokens = crate::context_management::estimate_total_tokens(&messages)
+                + turn_context_tokens
+                + schema_tokens;
             self.emit(AgentEvent::CompactionCompleted {
                 tokens_before,
                 tokens_after: final_tokens,
@@ -4253,19 +4347,40 @@ impl OperantAgent {
                     hard = limits.hard,
                     "Hard context cap could not be met — the protected context alone exceeds it"
                 );
+                // The content that cannot shrink: the protected head and
+                // tail, the tool schemas, and the turn tail.
+                let required = protected_tokens + schema_tokens + turn_context_tokens;
+                let (minimum_window, minimum_hard_cap) = self.context_caps.context_advice(
+                    required,
+                    super::compress::RESPONSE_RESERVE_TOKENS
+                        + crate::context_management::CONTEXT_DISCLOSURE_RESERVE_TOKENS,
+                    window,
+                );
                 return Err(Error::ContextExhausted {
                     tokens: final_tokens,
                     window,
-                    required: protected_tokens,
+                    required,
+                    minimum_window,
+                    minimum_hard_cap,
                 });
             }
         }
         if limits.over_hard(final_tokens) {
-            let required = crate::context_management::protected_floor_tokens(&messages);
+            let required = crate::context_management::protected_floor_tokens(&messages)
+                + schema_tokens
+                + turn_context_tokens;
+            let (minimum_window, minimum_hard_cap) = self.context_caps.context_advice(
+                required,
+                super::compress::RESPONSE_RESERVE_TOKENS
+                    + crate::context_management::CONTEXT_DISCLOSURE_RESERVE_TOKENS,
+                window,
+            );
             return Err(Error::ContextExhausted {
                 tokens: final_tokens,
                 window,
                 required,
+                minimum_window,
+                minimum_hard_cap,
             });
         }
 
@@ -4328,7 +4443,8 @@ impl OperantAgent {
         // would break the prompt cache on every request. Nothing above the
         // latest user message is touched.
         {
-            let mut used = self.estimate_current_tokens(&messages) + turn_context_tokens;
+            let mut used =
+                self.estimate_request_tokens(&messages, schema_tokens) + turn_context_tokens;
             let build = |used: usize| -> String {
                 let remaining = effective_budget.saturating_sub(used);
                 let mut block = String::from("<context_budget>");

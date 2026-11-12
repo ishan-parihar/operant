@@ -207,7 +207,8 @@ fn test_config(model: &str) -> AgentConfig {
         stream: false,
         context_window: 1_000_000,
         max_tool_result_share: operant_core::context_management::DEFAULT_MAX_TOOL_RESULT_SHARE,
-        max_tool_result_total_share: operant_core::context_management::DEFAULT_MAX_TOOL_RESULT_TOTAL_SHARE,
+        max_tool_result_total_share:
+            operant_core::context_management::DEFAULT_MAX_TOOL_RESULT_TOTAL_SHARE,
         max_healing_attempts: 1,
         fallback_models: Vec::new(),
         fallback_on_errors: false,
@@ -498,4 +499,135 @@ async fn hard_cap_compacts_the_request_mid_turn() {
         1,
         "exactly one compaction — the mid-turn one"
     );
+}
+
+// ── The tool-schema bill (the request the runtime certified) ──────
+
+/// A tool whose SCHEMA is big.
+///
+/// The schema rides every request beside the messages and is never evicted,
+/// so it belongs in the protected floor. The runtime measured only the
+/// messages: on the operator's live deployment a request the runtime called
+/// 13,157 tokens cost the provider 33,531 — 20,374 of them schema bytes the
+/// budget never saw.
+struct BigSchemaTool;
+
+#[async_trait]
+impl OperantTool for BigSchemaTool {
+    fn name(&self) -> &str {
+        "big_schema_probe"
+    }
+
+    fn description(&self) -> &str {
+        "A tool with a large schema."
+    }
+
+    fn schema(&self) -> ToolSchema {
+        ToolSchema::new(
+            "big_schema_probe",
+            "A tool with a large schema.",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "payload": {
+                        "type": "string",
+                        "description": "x".repeat(40_000),
+                    }
+                }
+            }),
+        )
+    }
+
+    async fn execute(&self, _args: serde_json::Value, _context: ToolContext) -> ToolResult {
+        ToolResult::success("big_schema_probe", serde_json::json!({"ok": true}))
+    }
+}
+
+/// An agent whose only tool carries a ~10,000-token schema, on the given
+/// window.
+async fn agent_with_big_schema(window: usize) -> (OperantAgent, Arc<ScriptedClient>) {
+    let client = Arc::new(ScriptedClient::new(vec![text_response("answered")]));
+    let temp = tempfile::tempdir().unwrap();
+    let registry = ToolRegistry::new(Duration::from_secs(5));
+    registry.register(BigSchemaTool).await.unwrap();
+    let (event_tx, _rx) = tokio::sync::mpsc::channel(64);
+    let mut config = test_config("demo-context-caps");
+    config.context_window = window;
+    let agent = OperantAgent::with_events(
+        config,
+        Box::new(ScriptedClientHandle(Arc::clone(&client))),
+        registry,
+        Arc::new(Database::init(temp.path().join("big_schema.sqlite")).unwrap()),
+        event_tx,
+    )
+    // The caps are set HERE, not inherited: another test in this file
+    // installs a runtime config with an ABSOLUTE hard cap, and a cap that
+    // does not move with the window is a different case (the advice then
+    // names the cap, not the window).
+    .with_context_caps(ContextCaps {
+        soft_tokens: 0,
+        soft_percent: 0.0,
+        hard_tokens: 0,
+        hard_percent: 0.95,
+    });
+    (agent, client)
+}
+
+/// THE SCHEMA BILL IS PART OF THE PROTECTED FLOOR.
+///
+/// A window that fits the messages but not the schemas must fail typed, and
+/// the floor it names must include the schema cost — otherwise the runtime
+/// certifies a request the provider will reject (the 33,531-vs-13,157 gap).
+#[tokio::test]
+async fn the_tool_schema_bill_is_part_of_the_protected_floor() {
+    // 8,000 tokens: the messages fit, the ~10,000-token schema bill does not.
+    let (agent, _client) = agent_with_big_schema(8_000).await;
+
+    let err = agent
+        .run("now answer".to_string())
+        .await
+        .expect_err("a request whose schema bill does not fit must fail typed");
+    let Error::ContextExhausted {
+        required,
+        minimum_window,
+        ..
+    } = err
+    else {
+        panic!("expected ContextExhausted, got {err:?}");
+    };
+    assert!(
+        required >= 10_000,
+        "the schema bill must be in the floor (40 000 chars ≈ 10 000 tokens): {required}"
+    );
+    assert!(
+        minimum_window > required,
+        "the named window must be bigger than the content it holds: {minimum_window} <= {required}"
+    );
+}
+
+/// THE WINDOW THE ERROR NAMES MUST ACTUALLY RUN THE NEXT REQUEST.
+///
+/// This is the production failure: the error said "increase to at least
+/// 12,670", the operator set 12,670, and the turn failed again with the same
+/// message. The number the error prints is now computed from the same terms
+/// the budget enforces, so setting it makes the turn fit.
+#[tokio::test]
+async fn the_window_the_error_names_is_enough_to_run_the_next_request() {
+    let (agent, _client) = agent_with_big_schema(8_000).await;
+    let err = agent
+        .run("now answer".to_string())
+        .await
+        .expect_err("the small window must fail typed");
+    let Error::ContextExhausted { minimum_window, .. } = err else {
+        panic!("expected ContextExhausted, got {err:?}");
+    };
+
+    // The operator follows the advice.
+    let (agent, client) = agent_with_big_schema(minimum_window).await;
+    let answer = agent
+        .run("now answer".to_string())
+        .await
+        .expect("the window the error named must run the turn");
+    assert_eq!(answer.content, "answered");
+    assert_eq!(client.requests(), 1, "the turn must reach the provider");
 }
