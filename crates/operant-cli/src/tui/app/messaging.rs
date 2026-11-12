@@ -252,8 +252,13 @@ impl App {
         // a third answer to the same question.
         let window = if self.context_window_size > 0 {
             self.context_window_size as u32
-        } else {
+        } else if self.config.agent.context_window > 0 {
             self.config.agent.context_window as u32
+        } else {
+            // AUTOMATIC (0) and no refresh yet: the endpoint's answer has not
+            // arrived, so the built-in default stands in for it. Without this
+            // the denominator was 0 and NO warning could ever fire.
+            operant_core::context_window::DEFAULT_CONTEXT_WINDOW as u32
         };
         if window == 0 {
             return;

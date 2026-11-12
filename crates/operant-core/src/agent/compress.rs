@@ -552,14 +552,13 @@ impl OperantAgent {
         // the smaller of the two is the budget the messages may occupy. A
         // window BELOW the reserve has no reply room at all: the cap is then
         // the only figure that means anything.
-        let reserve_cap = limits.window.saturating_sub(RESPONSE_RESERVE_TOKENS);
-        let prompt_cap = if reserve_cap > 0 {
-            limits.hard.min(reserve_cap)
-        } else {
-            limits.hard
-        };
+        // The hard cap IS the prompt's budget: it is a share of the window
+        // (95% by default), so it already leaves room for the reply. Taking
+        // the response reserve out of it again makes this path a second,
+        // stricter ladder, and on a small window it leaves the protected tail
+        // nothing to fit into and turns a compaction into an abort.
         let (compacted, within_budget, protected_tokens) =
-            self.compact_to_hard_cap(taken, prompt_cap.saturating_sub(schema_tokens));
+            self.compact_to_hard_cap(taken, limits.hard.saturating_sub(schema_tokens));
         *messages = compacted;
         let tokens_after =
             crate::context_management::estimate_total_tokens(messages) + schema_tokens;

@@ -4476,14 +4476,14 @@ impl OperantAgent {
             // the cap is then the only figure that means anything, and
             // taking the reserve out of it would leave the messages nothing
             // and fail every turn typed.
-            let reserve_cap =
-                window.saturating_sub(crate::context_management::RESPONSE_RESERVE_TOKENS);
-            let prompt_cap = if reserve_cap > 0 {
-                limits.hard.min(reserve_cap)
-            } else {
-                limits.hard
-            };
-            let hard_budget = prompt_cap
+            // The hard cap IS the prompt's budget: it is a share of the
+            // window (95% by default), so it already leaves room for the
+            // reply. Taking the response reserve out of it again makes this
+            // path a second, stricter ladder, and on a small window it leaves
+            // the protected tail nothing to fit into and turns a compaction
+            // into an abort (the 64-parallel-result case).
+            let hard_budget = limits
+                .hard
                 .saturating_sub(turn_context_tokens)
                 .saturating_sub(schema_tokens);
             let (compacted, within_budget, protected_tokens) =

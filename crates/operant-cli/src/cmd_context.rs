@@ -715,8 +715,21 @@ fn apply_one(
             .nth(1)
             .with_context(|| format!("unparseable proposal action: {}", opt.action))?
             .to_string();
-        operant_core::config::persist_config_key("cli.inject_help", &next)
-            .map_err(|e| anyhow::anyhow!("failed to persist cli.inject_help: {e:?}"))?;
+        // The EXPLICIT path, not the process-global writer target: this
+        // handler writes the config it was handed. The global target is
+        // whatever some OTHER load recorded (a test fixture, a reload), and
+        // writing through it put a proposal into a file nobody asked for —
+        // the RT-488 shape.
+        match config.config_path.as_ref() {
+            Some(path) => {
+                operant_core::config::persist_config_key_at(path, "cli.inject_help", &next)
+                    .map_err(|e| anyhow::anyhow!("failed to persist cli.inject_help: {e:?}"))?;
+            }
+            None => {
+                operant_core::config::persist_config_key("cli.inject_help", &next)
+                    .map_err(|e| anyhow::anyhow!("failed to persist cli.inject_help: {e:?}"))?;
+            }
+        }
         return Ok(true);
     }
     Ok(false)
