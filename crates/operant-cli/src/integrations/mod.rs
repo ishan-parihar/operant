@@ -27,3 +27,49 @@
 
 pub mod herdr_plugin;
 pub mod omarchy_agent;
+
+/// What wiring the integrations changed, and what failed.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FixReport {
+    /// One line per thing that was done.
+    pub fixed: Vec<String>,
+    /// One line per thing that failed.
+    pub errors: Vec<String>,
+}
+
+/// Wire every integration whose counterpart program is present.
+///
+/// This is the single place that knows how to install both, so the fresh
+/// install path (`scripts/install.sh`), the setup wizard and
+/// `operant doctor --fix` all do the same thing.
+///
+/// Each installer is idempotent and reports what it changed. A missing
+/// counterpart program is NOT a failure: Herdr and Omarchy are optional, and
+/// a machine with neither is a supported machine.
+pub fn fix_all() -> FixReport {
+    let mut report = FixReport::default();
+
+    if herdr_plugin::herdr_available() {
+        match herdr_plugin::install() {
+            Ok(lines) => report.fixed.extend(lines),
+            Err(e) => report.errors.push(format!("herdr integration: {e}")),
+        }
+    } else {
+        report
+            .fixed
+            .push("herdr is not installed — nothing to set up".to_string());
+    }
+
+    if omarchy_agent::omarchy_available() {
+        match omarchy_agent::install() {
+            Ok(lines) => report.fixed.extend(lines),
+            Err(e) => report.errors.push(format!("omarchy integration: {e}")),
+        }
+    } else {
+        report
+            .fixed
+            .push("omarchy is not installed — nothing to set up".to_string());
+    }
+
+    report
+}

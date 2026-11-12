@@ -315,6 +315,7 @@ pub async fn run_setup_wizard(
         Some("terminal") => {
             step_terminal(&mut updated, true).await?;
             step_tools(&mut updated, true).await?;
+            step_integrations(&mut updated).await?;
         }
         Some("tts") => {
             step_tts(&mut updated, true).await?;
@@ -374,6 +375,11 @@ pub async fn run_setup_wizard(
 
                 // Step 5b: Browser & Skills setup
                 step_browser_and_skills(&mut updated).await?;
+
+                // Step 5c: Editor & pane integrations (Herdr, the Omarchy
+                // agent menu). These are what make Operant visible in the
+                // surrounding infrastructure on a fresh machine.
+                step_integrations(&mut updated).await?;
 
                 // Step 6: Agent behaviour settings
                 step_agent_settings(&mut updated, false).await?;
@@ -1086,6 +1092,71 @@ async fn download_file_to(
 }
 
 /// Browser binary pre-install and skills directory setup.
+/// Wire the editor and pane integrations (Herdr, the Omarchy agent menu).
+///
+/// A fresh install has to be told about its surroundings: Herdr then shows
+/// Operant's sessions in its pane list instead of leaving them as plain
+/// terminals, and the Omarchy menu offers Operant as a default agent.
+///
+/// Both counterparts are OPTIONAL — a machine without Herdr or without
+/// Omarchy is a supported machine — so this step reports what it finds and
+/// only writes when there is something to wire. It is the interactive
+/// counterpart of `operant doctor --fix`, and both call the same installer.
+async fn step_integrations(_config: &mut AppConfig) -> Result<()> {
+    print_page_header("Editor & Pane Integrations");
+
+    let herdr = crate::integrations::herdr_plugin::status();
+    let omarchy = crate::integrations::omarchy_agent::status();
+
+    // -- Herdr -------------------------------------------------------------
+    if !crate::integrations::herdr_plugin::herdr_available() {
+        print_info("Herdr is not installed — nothing to wire (run this again once it is).");
+    } else if herdr.files_current && herdr.linked {
+        print_success("Herdr: the Operant plugin is installed and registered");
+    } else {
+        print_warning(&format!(
+            "Herdr is installed but the Operant plugin is not wired yet{}",
+            if herdr.linked { "" } else { " (not registered)" }
+        ));
+    }
+
+    // -- Omarchy -----------------------------------------------------------
+    if !crate::integrations::omarchy_agent::omarchy_available() {
+        print_info("Omarchy is not installed — nothing to wire (run this again once it is).");
+    } else if omarchy.wrappers_current && omarchy.registered && omarchy.menu_row {
+        print_success("Omarchy: operant is registered and offered in the agent menu");
+    } else {
+        print_warning("Omarchy is installed but operant is not yet in the agent menu");
+    }
+
+    // -- Offer to wire -----------------------------------------------------
+    let herdr_needs_work = crate::integrations::herdr_plugin::herdr_available()
+        && !(herdr.files_current && herdr.linked);
+    let omarchy_needs_work = crate::integrations::omarchy_agent::omarchy_available()
+        && !(omarchy.wrappers_current && omarchy.registered && omarchy.menu_row);
+
+    if !herdr_needs_work && !omarchy_needs_work {
+        return Ok(());
+    }
+
+    if !prompt_yes_no("Wire them now?", true)? {
+        print_info("Run `operant doctor --fix` whenever you want to wire them.");
+        return Ok(());
+    }
+
+    let report = crate::integrations::fix_all();
+    for line in &report.fixed {
+        print_success(line);
+    }
+    for line in &report.errors {
+        print_warning(line);
+    }
+    if report.errors.is_empty() {
+        print_success("Done. Herdr and the Omarchy agent menu are wired.");
+    }
+    Ok(())
+}
+
 async fn step_browser_and_skills(config: &mut AppConfig) -> Result<()> {
     print_page_header("Browser & Skills Setup");
 

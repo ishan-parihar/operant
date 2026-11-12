@@ -253,23 +253,16 @@ pub fn install() -> Result<Vec<String>> {
         extra_agents_dir().display()
     ));
 
-    // 2. Back up the wrappers this is about to replace, once.
+    // 2. The wrappers and Operant's launcher.
+    //
+    // A wrapper is BACKED UP only when it is actually about to be replaced.
+    // Backing up unconditionally left a copy of this integration's own
+    // wrapper behind on every later run, which is noise in ~/.local/bin and
+    // makes the install non-idempotent: the second run changed the home
+    // even though it had nothing to change.
     std::fs::create_dir_all(local_bin())
         .with_context(|| format!("creating {}", local_bin().display()))?;
     let mut backups = Vec::new();
-    for name in ["omarchy-default-agent", "omarchy-agent"] {
-        if let Some(backup) = backup_once(&local_bin().join(name))? {
-            backups.push(backup);
-        }
-    }
-    if !backups.is_empty() {
-        done.push(format!(
-            "backed up the previous wrapper(s): {}",
-            backups.join(", ")
-        ));
-    }
-
-    // 3. The wrappers and Operant's launcher.
     for (name, contents, executable) in [
         ("omarchy-default-agent", wrapper_contents().as_str(), true),
         ("omarchy-agent", OMARCHY_AGENT, true),
@@ -278,6 +271,13 @@ pub fn install() -> Result<Vec<String>> {
         let path = local_bin().join(name);
         let current = std::fs::read_to_string(&path).ok();
         if current.as_deref() != Some(contents) {
+            // Only the two wrappers the operator might have written by hand
+            // are worth keeping a copy of; the launcher is ours.
+            if name != "omarchy-operant" {
+                if let Some(backup) = backup_once(&path)? {
+                    backups.push(backup);
+                }
+            }
             std::fs::write(&path, contents)
                 .with_context(|| format!("writing {}", path.display()))?;
             done.push(format!("wrote {}", path.display()));
@@ -285,6 +285,12 @@ pub fn install() -> Result<Vec<String>> {
         if executable {
             make_executable(&path)?;
         }
+    }
+    if !backups.is_empty() {
+        done.push(format!(
+            "backed up the previous wrapper(s): {}",
+            backups.join(", ")
+        ));
     }
 
     // 4. The menu row, so the agent is selectable at all.

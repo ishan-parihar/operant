@@ -286,39 +286,27 @@ fn fix_editor_integrations(fixed: &mut u32, errors: &mut u32) {
 
     println!("\nEditor and pane integrations");
 
-    // -- Herdr ------------------------------------------------------------
+    // A missing counterpart program is not an error: Herdr and Omarchy are
+    // optional, and a machine with neither is a supported machine.
     if !herdr_plugin::herdr_available() {
         println!("  \u{2192} herdr is not installed — nothing to set up");
-    } else {
-        match herdr_plugin::install() {
-            Ok(done) => {
-                for line in done {
-                    println!("  \u{2713} {}", line);
-                }
-                *fixed += 1;
-            }
-            Err(e) => {
-                eprintln!("  \u{2717} herdr integration: {e}");
-                *errors += 1;
-            }
-        }
     }
-
-    // -- Omarchy ----------------------------------------------------------
     if !omarchy_agent::omarchy_available() {
         println!("  \u{2192} omarchy is not installed — nothing to set up");
-    } else {
-        match omarchy_agent::install() {
-            Ok(done) => {
-                for line in done {
-                    println!("  \u{2713} {}", line);
-                }
-                *fixed += 1;
-            }
-            Err(e) => {
-                eprintln!("  \u{2717} omarchy integration: {e}");
-                *errors += 1;
-            }
+    }
+
+    // The installers live in one place so the fresh install path, the setup
+    // wizard and the doctor all wire the same files.
+    let report = crate::integrations::fix_all();
+    for line in &report.fixed {
+        if line.contains("nothing to set up") {
+            continue;
         }
+        println!("  \u{2713} {}", line);
+        *fixed += 1;
+    }
+    for line in &report.errors {
+        eprintln!("  \u{2717} {}", line);
+        *errors += 1;
     }
 }

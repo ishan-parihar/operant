@@ -176,6 +176,20 @@ log ">>> generated: ${HOME}/.operant/skills <<<"
 bash "$(dirname "$0")/install-skills.sh" || echo "WARN: skill seeding failed (non-fatal)"
 
 echo ""
+echo "=== Wiring Editor and Pane Integrations ==="
+# A fresh install has to be told about its surroundings, or the agent is
+# invisible in them:
+#   * Herdr   — without the plugin and the reporter, an Operant session is a
+#                plain terminal in Herdr's pane list.
+#   * Omarchy — without the user-level wrappers and the menu row, Operant is
+#                not offered as a default agent.
+# Both counterparts are optional: a machine with neither is a supported
+# machine, and the doctor says so rather than failing. Best-effort — never
+# abort the install over an integration.
+"$BIN_DIR/operant" doctor --fix 2>&1 | sed -n '/Editor and pane integrations/,$p' \
+  || echo "WARN: integration setup failed (non-fatal)"
+
+echo ""
 echo "=== Installing Gateway systemd Service ==="
 # The unit file's single source of truth lives in the binary itself
 # (`operant gateway install`) — no template to drift out of sync. Enabled so
