@@ -453,6 +453,25 @@ impl Gateway {
             if adapter.is_enabled() {
                 info!(platform = %name, "Starting platform adapter with channel");
                 if let Err(e) = adapter.start_with_channel(message_tx.clone()).await {
+                    // (RT-520) A BIND failure is PERMANENT: the retry
+                    // supervisor would retry it every 5 s forever while the
+                    // port stayed held by something else, and every status
+                    // surface said "enabled" while no inbound event could
+                    // arrive. The start fails loudly instead — the operator
+                    // sees it at boot, not by waiting for events that never
+                    // come.
+                    if Self::is_bind_failure(&e) {
+                        error!(
+                            platform = %name,
+                            error = %e,
+                            "The adapter could not bind its listen address; the gateway \
+                             will not start"
+                        );
+                        *self.running.write().await = false;
+                        return Err(crate::Error::Config(format!(
+                            "the {name} adapter could not bind its listen address: {e}"
+                        )));
+                    }
                     error!(platform = %name, error = %e, "Failed to start adapter with channel");
                     Self::supervise_adapter_start(
                         self.running.clone(),
@@ -464,6 +483,24 @@ impl Gateway {
             }
         }
         Ok(())
+    }
+
+    /// Whether an adapter start failure is a BIND failure (RT-520).
+    ///
+    /// A bind failure is permanent — the address is taken — so it must not
+    /// go to the retry supervisor, which would retry it forever while the
+    /// status surfaces said "enabled". The `io::Error` kind is the
+    /// authority; the message check covers the adapters that wrap the
+    /// error before handing it over.
+    fn is_bind_failure(error: &crate::Error) -> bool {
+        if let crate::Error::Io(io) = error {
+            return matches!(
+                io.kind(),
+                std::io::ErrorKind::AddrInUse | std::io::ErrorKind::AddrNotAvailable
+            );
+        }
+        let message = error.to_string().to_lowercase();
+        message.contains("address already in use") || message.contains("addrinuse")
     }
 
     /// Supervise a failed adapter start in the background: transient failures
@@ -948,6 +985,36 @@ impl Gateway {
 
 #[cfg(test)]
 mod tests {
+    /// RT-520: a bind conflict is a START FAILURE, not a silent retry.
+    ///
+    /// The webhook adapter binds its listen address when it starts. Before
+    /// this, a bind failure was logged and handed to the retry supervisor,
+    /// which retried it every 5 s FOREVER while the port stayed held by
+    /// something else — and every status surface said "enabled" while no
+    /// inbound event could arrive.
+    #[tokio::test]
+    async fn a_bind_conflict_is_a_start_failure() {
+        // Hold the port.
+        let holder = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("hold a port");
+        let addr = holder.local_addr().expect("addr").to_string();
+
+        let adapter =
+            std::sync::Arc::new(crate::gateway::WebhookAdapter::new(true).with_addr(addr.clone()));
+        let gw = Gateway::new(GatewayConfig::default()).with_adapter(adapter);
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let error = gw
+            .start_with_channel(tx)
+            .await
+            .expect_err("a bind conflict must fail the start, not be retried forever");
+        let message = error.to_string().to_lowercase();
+        assert!(
+            message.contains("bind") || message.contains("address already in use"),
+            "the failure must name the bind, got: {error}"
+        );
+    }
+
     use super::*;
 
     #[test]

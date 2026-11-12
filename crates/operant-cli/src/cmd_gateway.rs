@@ -376,8 +376,22 @@ fn cmd_status(config: &AppConfig, deep: bool, json: bool) -> Result<()> {
     println!(
         "Webhooks:  {}  {}",
         if gw.webhooks_enabled {
-            let addr = gw.webhooks_addr.as_deref().unwrap_or("localhost:0");
-            format!("enabled (listen on {addr})")
+            // (RT-520) The EFFECTIVE address — the adapter's real default
+            // is 127.0.0.1:8080, and the old line printed "localhost:0"
+            // from the config alone — and a PROBE of the listener, because
+            // "enabled" said nothing about whether the events can arrive:
+            // a port conflict left every status surface saying enabled
+            // while no inbound event ever came.
+            let addr = gw
+                .webhooks_addr
+                .as_deref()
+                .unwrap_or(operant_core::gateway::WebhookAdapter::DEFAULT_LISTEN_ADDR);
+            let probe = if webhook_listener_reachable(addr) {
+                "reachable"
+            } else {
+                "NOT REACHABLE"
+            };
+            format!("enabled (listen on {addr} — {probe})")
         } else {
             "disabled".to_string()
         },
@@ -639,6 +653,24 @@ async fn cmd_run(config: &AppConfig) -> Result<()> {
 }
 
 /// Start the gateway service via systemd.
+/// Whether the webhook listener is actually accepting connections (RT-520).
+///
+/// A configured webhook that cannot bind is invisible in every status
+/// surface that reads the config — the operator waits for events that
+/// never arrive. The probe is a short blocking connect: the status
+/// command is a one-shot, and the timeout keeps it from hanging.
+fn webhook_listener_reachable(addr: &str) -> bool {
+    use std::net::ToSocketAddrs;
+    let Ok(mut addrs) = addr.to_socket_addrs() else {
+        return false;
+    };
+    // Port 0 means "pick one at bind time" — there is nothing to probe.
+    let Some(target) = addrs.find(|a| a.port() != 0) else {
+        return false;
+    };
+    std::net::TcpStream::connect_timeout(&target, std::time::Duration::from_millis(300)).is_ok()
+}
+
 async fn cmd_start() -> Result<()> {
     let out = tokio::process::Command::new("systemctl")
         .args(["--user", "start", "operant-gateway"])
