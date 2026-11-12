@@ -130,15 +130,6 @@ pub struct AppConfig {
     /// Omarchy agent menu). Both are optional; both are dark-merged.
     #[serde(default)]
     pub integrations: IntegrationsSettings,
-    /// `[compression]` — the evidence layer's tool-result compression.
-    ///
-    /// Off by default: the layer is a NO-OP at the tool-result chokepoint
-    /// while `enabled` is false, so the section is behaviour-neutral until
-    /// an operator opts in. `min_size` is the smallest result worth shaping
-    /// (bytes), `shell` selects how shell output is compressed, and
-    /// `families` overrides the chain per subject family.
-    #[serde(default)]
-    pub compression: crate::agent::evidence::EvidenceConfig,
 }
 
 impl Default for AppConfig {
@@ -188,7 +179,6 @@ impl Default for AppConfig {
             command_allowlist: Vec::new(),
             holon: HolonSettings::default(),
             integrations: IntegrationsSettings::default(),
-            compression: crate::agent::evidence::EvidenceConfig::default(),
         }
     }
 }
@@ -775,6 +765,23 @@ pub struct BehaviorSettings {
     /// Set to 0.0 to disable the guard.
     #[serde(default = "default_max_tool_result_share")]
     pub max_tool_result_share: f64,
+
+    /// The share of the assembled context that TOOL RESULTS may hold, in
+    /// aggregate.
+    ///
+    /// `max_tool_result_share` caps ONE result; this caps the sum. Without
+    /// the aggregate half, N results each under the per-message cap add up
+    /// without bound — MEASURED on the operator's live long-horizon session:
+    /// 540 tool results holding 1 106 028 characters against 11 057
+    /// characters of actual conversation, none of them individually large
+    /// enough to trip the per-message guard.
+    ///
+    /// 0 disables the aggregate trim. Default 0.40: tool output may be at
+    /// most two fifths of the assembled budget, and the oldest results are
+    /// trimmed (results only — the call that asked for them survives, so the
+    /// pair stays well-formed and the description is not lost).
+    #[serde(default = "default_max_tool_result_total_share")]
+    pub max_tool_result_total_share: f64,
     /// Max consecutive tool-only iterations before force-answer kicks in.
     /// When the LLM calls tools N times in a row without producing text,
     /// the agent omits tools from the request to force a textual response.
@@ -968,6 +975,11 @@ fn default_lcm_rollup_interval_minutes() -> u64 {
 
 /// Default for `max_tool_result_share` — 5% of the context window. See
 /// `context_management::DEFAULT_MAX_TOOL_RESULT_SHARE` for the rationale.
+/// Default for `max_tool_result_total_share` — 40 % of the assembled context.
+fn default_max_tool_result_total_share() -> f64 {
+    crate::context_management::DEFAULT_MAX_TOOL_RESULT_TOTAL_SHARE
+}
+
 fn default_max_tool_result_share() -> f64 {
     crate::context_management::DEFAULT_MAX_TOOL_RESULT_SHARE
 }
@@ -1023,6 +1035,7 @@ impl Default for BehaviorSettings {
             context_hard_cap_percent: default_context_hard_cap_percent(),
             context_compression_summary_max_chars: default_summary_max_chars(),
             max_tool_result_share: default_max_tool_result_share(),
+            max_tool_result_total_share: default_max_tool_result_total_share(),
             max_consecutive_tool_only: 90,
             fallback_models: Vec::new(),
             guardrail_exempt_tools: Vec::new(),
@@ -2623,20 +2636,6 @@ pub fn runtime_config() -> AppConfig {
         .read()
         .map(|config| config.clone())
         .unwrap_or_else(|_| AppConfig::default())
-}
-
-/// The evidence layer's configuration (`[compression]`) from the
-/// process-global runtime config.
-///
-/// Reads only the section: the tool-result chokepoint asks for it once per
-/// result, and a whole-config clone per result would copy every other
-/// section to answer for four fields.
-pub fn compression_config() -> crate::agent::evidence::EvidenceConfig {
-    let store = RUNTIME_CONFIG.get_or_init(|| RwLock::new(AppConfig::default()));
-    store
-        .read()
-        .map(|config| config.compression.clone())
-        .unwrap_or_default()
 }
 
 /// Files that sit beside the live config and are never read.
@@ -4408,66 +4407,6 @@ wonderful_unknown_key = 42
             Path::new("memory://ponytail-scope-bad"),
         );
         assert!(wrong_scope.is_err(), "top-level [ponytail] must not bind");
-    }
-
-    /// The `[compression]` section is the evidence layer's operator surface.
-    /// The defaults are pinned because a knob that silently changed one
-    /// would change every operator's tool results without their asking —
-    /// and because `enabled = false` must be the DEFAULT so the section is
-    /// behaviour-neutral until an operator opts in.
-    #[test]
-    fn the_compression_section_round_trips_with_its_documented_defaults() {
-        let defaults: AppConfig = toml::from_str("").expect("an empty config loads");
-        assert!(
-            !defaults.compression.enabled,
-            "the layer must be OFF by default"
-        );
-        assert_eq!(defaults.compression.min_size, 512);
-        assert_eq!(
-            defaults.compression.shell,
-            crate::agent::evidence::ShellMode::Aft
-        );
-        assert!(defaults.compression.families.is_empty());
-
-        // The documented defaults survive a serde round-trip: a section that
-        // could not be re-serialized is a section the config writer cannot
-        // persist through.
-        let raw = toml::to_string(&defaults.compression).expect("the section serializes");
-        let back: crate::agent::evidence::EvidenceConfig =
-            toml::from_str(&raw).expect("the section parses back");
-        assert!(!back.enabled);
-        assert_eq!(back.min_size, 512);
-        assert_eq!(back.shell, crate::agent::evidence::ShellMode::Aft);
-        assert!(back.families.is_empty());
-
-        // The four knobs bind, including a per-family override.
-        let parsed = parse_config_str(
-            r#"
-[compression]
-enabled = true
-min_size = 1024
-shell = "native"
-
-[compression.families.read]
-enabled = false
-chain = "code"
-"#,
-            Path::new("memory://compression-probe"),
-        )
-        .unwrap();
-        assert!(parsed.compression.enabled);
-        assert_eq!(parsed.compression.min_size, 1024);
-        assert_eq!(
-            parsed.compression.shell,
-            crate::agent::evidence::ShellMode::Native
-        );
-        let read = parsed
-            .compression
-            .families
-            .get("read")
-            .expect("the read family override parses");
-        assert_eq!(read.enabled, Some(false));
-        assert_eq!(read.chain.as_deref(), Some("code"));
     }
 
     /// The `[bylaws]` block (wave-2 slice F2) maps onto the real fields —

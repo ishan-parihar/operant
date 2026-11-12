@@ -9,7 +9,7 @@ use super::*;
 
 /// Tokens held back from the context window for the model's own response, so
 /// budgeted passes size the input against what is actually available.
-const RESPONSE_RESERVE_TOKENS: usize = 4096;
+pub(crate) const RESPONSE_RESERVE_TOKENS: usize = 4096;
 
 // ---------------------------------------------------------------------------
 // Preflight compression config (W1.4 port from the deleted runtime engine)
@@ -845,6 +845,102 @@ impl OperantAgent {
             && let Ok(mut total) = self.session_cost_usd.write()
         {
             *total += cost;
+        }
+
+        // ── Bank the request: session meter + per-request context ledger ──
+        // The provider's numbers are the only ground truth about what a
+        // session cost, and until this they were never written anywhere the
+        // operator could read: `sessions.input_tokens` stayed 0 for every one
+        // of the 3 271 sessions on the live database, so `operant insights
+        // sessions` and the `session_insights` tool reported "Tokens: 0" for
+        // a window in which a single session had spent hundreds of thousands
+        // of context tokens.
+        //
+        // The ledger row carries the SHAPE of the context as well as its cost:
+        // the composition is what turns "this session was expensive" into
+        // "this session was expensive because 99 % of it was tool output",
+        // which is the difference between a policy that can be tuned and one
+        // that can only be guessed at.
+        //
+        // Best-effort by design: a failed meter write must never fail a turn
+        // the model already answered.
+        {
+            use std::sync::atomic::Ordering;
+            self.usage_prompt_tokens
+                .fetch_add(u64::from(usage.prompt_tokens), Ordering::Relaxed);
+            self.usage_completion_tokens
+                .fetch_add(u64::from(usage.completion_tokens), Ordering::Relaxed);
+            self.usage_api_calls.fetch_add(1, Ordering::Relaxed);
+
+            let session_id = self.session_id.read().ok().and_then(|sid| sid.clone());
+            // No session bound yet (the agent is still being built): there is
+            // nothing to bank against, and that is not an error.
+            let Some(session_id) = session_id else {
+                return;
+            };
+            let stats = self
+                .last_context_stats
+                .lock()
+                .ok()
+                .and_then(|slot| slot.clone());
+            let composition = stats
+                .as_ref()
+                .map(|s| s.composition.clone())
+                .unwrap_or_default();
+            let (budget_tokens, window_tokens, ladder_fired, tokens_before, messages_before) =
+                stats
+                    .as_ref()
+                    .map(|s| {
+                        (
+                            s.budget_tokens,
+                            s.window_tokens,
+                            s.ladder_fired,
+                            s.tokens_before_ladder,
+                            s.messages_before_ladder,
+                        )
+                    })
+                    .unwrap_or((0, 0, false, 0, 0));
+            let request_seq = self
+                .database
+                .next_context_request_seq(&session_id)
+                .unwrap_or_default();
+            let note = if ladder_fired {
+                Some(format!(
+                    "ladder fired: {} msgs / {} tokens before",
+                    messages_before, tokens_before
+                ))
+            } else {
+                None
+            };
+            let record = crate::database::ContextRequestRecord {
+                session_id: session_id.clone(),
+                request_seq,
+                created_at: chrono::Utc::now().to_rfc3339(),
+                prompt_tokens: i64::from(usage.prompt_tokens),
+                completion_tokens: i64::from(usage.completion_tokens),
+                total_tokens: i64::from(usage.total_tokens),
+                estimated_context_tokens: composition.estimated_tokens as i64,
+                message_count: composition.messages as i64,
+                tool_result_tokens: composition.tool_result_tokens as i64,
+                user_tokens: composition.user_tokens as i64,
+                assistant_tokens: composition.assistant_tokens as i64,
+                tool_call_count: composition.tool_call_count as i64,
+                budget_tokens: budget_tokens as i64,
+                window_tokens: window_tokens as i64,
+                ladder_fired,
+                note,
+            };
+            if let Err(e) = self.database.record_context_request(&record) {
+                tracing::warn!(error = %e, session_id = %session_id, "failed to record context request");
+            }
+            if let Err(e) = self.database.add_session_usage(
+                &session_id,
+                i64::from(usage.prompt_tokens),
+                i64::from(usage.completion_tokens),
+                1,
+            ) {
+                tracing::warn!(error = %e, session_id = %session_id, "failed to bank session usage");
+            }
         }
     }
 }

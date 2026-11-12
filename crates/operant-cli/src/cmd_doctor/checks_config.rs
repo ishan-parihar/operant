@@ -483,6 +483,99 @@ pub fn run_config_checks(
     }
 }
 
+/// Is the context meter recording?
+///
+/// The session rows carry `input_tokens`, `output_tokens` and `api_call_count`
+/// columns, and until the context meter landed NOTHING wrote them: on the
+/// operator's database every one of the 3 271 sessions reported zero tokens,
+/// so `operant insights sessions` and the `session_insights` tool showed
+/// "Tokens: 0" for a window in which a single session had spent hundreds of
+/// thousands of context tokens.
+///
+/// A blank meter is an ADVISORY, not a failure: a database full of sessions
+/// from before the meter existed is exactly what a long-lived install looks
+/// like, and the next request starts the record. What must never happen is
+/// the meter being blank on a database whose sessions are NEW — that is the
+/// defect, and this check is how it becomes visible.
+pub fn check_context_telemetry(
+    config: &AppConfig,
+    issues: &mut Vec<String>,
+    manual_issues: &mut Vec<String>,
+) {
+    section_header("Context telemetry");
+    let db = match operant_core::database::Database::init(config.database_path.clone()) {
+        Ok(db) => db,
+        Err(e) => {
+            check_warn(
+                "Context meter unreadable",
+                &format!("{} — context usage cannot be reported", e),
+            );
+            manual_issues.push(format!("Context meter unreadable: {e}"));
+            return;
+        }
+    };
+    let metered = db.sessions_with_recorded_usage().unwrap_or(0);
+    let sessions = db.list_sessions(10_000).map(|s| s.len()).unwrap_or(0);
+    if metered > 0 {
+        check_ok(
+            "Context meter recording",
+            &format!("{metered} of {sessions} session(s) carry token usage"),
+        );
+        return;
+    }
+    if sessions == 0 {
+        check_info("Context meter recording — no sessions yet, the first request starts the record");
+        return;
+    }
+    // Sessions exist and none of them carry usage. There are two readings and
+    // they call for different responses: the sessions may all predate the
+    // meter (expected on a long-lived install), or the meter may not be
+    // writing (a defect). The NEWEST session decides: if it is recent, it ran
+    // AFTER the meter existed, so its blank token count means the meter is
+    // not writing.
+    let newest = db.newest_session_id().ok().flatten();
+    let live_and_unmetered = newest.as_deref().and_then(|sid| {
+        let usage = db.session_usage(sid).ok()?;
+        let sessions = db.list_sessions(10_000).ok()?;
+        let started = sessions
+            .iter()
+            .find(|s| s.id == sid)
+            .map(|s| s.created_at.clone())?;
+        let recent = chrono::Utc::now().signed_duration_since(
+            chrono::DateTime::parse_from_rfc3339(&started)
+                .map(|dt| dt.with_timezone(&chrono::Utc))
+                .unwrap_or_else(|_| chrono::Utc::now()),
+        );
+        Some(usage.message_count > 0 && usage.api_call_count == 0 && recent.num_minutes() < 60)
+    });
+    if live_and_unmetered == Some(true) {
+        check_fail(
+            "Context meter is not recording",
+            "the newest session has messages but no token usage",
+        );
+        issues.push(
+            "Context meter is not recording: the newest session ran but its token usage is \
+             blank. `operant context inspect` shows what the ledger holds."
+                .to_string(),
+        );
+        return;
+    }
+    check_warn(
+        "Context meter has no records",
+        &format!(
+            "{sessions} session(s), none with token usage — sessions predating the meter \
+             look like this; so does a meter that is not writing"
+        ),
+    );
+    manual_issues.push(
+        "Context meter has no records: session token counts are blank. Sessions from before \
+         the meter existed are expected; run one turn and re-check with \
+         `operant context inspect`."
+            .to_string(),
+    );
+
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

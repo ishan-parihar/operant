@@ -26,7 +26,6 @@ pub use super::datetime_tool::{DateTimeTool, TimestampTool};
 pub use super::debug_helpers::{EchoTool, EnvVarTool, SystemInfoTool};
 pub use super::discord_tool::{DiscordAdminTool, DiscordTool};
 pub use super::env_probe_tool::EnvProbeTool;
-pub use super::evidence_recall::EvidenceRecallTool;
 pub use super::file_state::FileStateTool;
 pub use super::file_tools::{FileListTool, FileReadTool, FileSearchTool, FileWriteTool};
 pub use super::home_assistant_tool::HomeAssistantTool;
@@ -89,10 +88,6 @@ pub async fn register_builtin_tools(
 ) -> Result<()> {
     registry.register(BrowserTool).await?;
     registry.register(CheckpointTool::new()).await?;
-    // The other end of the evidence layer's provenance marker: without it a
-    // '[compressed: …]' marker would name a retrieval path that does not
-    // exist, and the model would be promised a recovery it cannot get.
-    registry.register(EvidenceRecallTool).await?;
     registry.register(FileReadTool).await?;
     registry.register(FileWriteTool).await?;
     registry.register(FileSearchTool).await?;
@@ -291,7 +286,6 @@ pub fn builtin_tool_names() -> Vec<&'static str> {
         "debug_env",
         "debug_system",
         "env_probe",
-        "evidence_recall",
         "file_list",
         "file_read",
         "file_search",

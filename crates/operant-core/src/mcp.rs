@@ -2442,32 +2442,24 @@ impl OperantTool for McpNamespacedTool {
     }
 }
 
+/// A registry handle the MCP manager can unregister its tools from.
+///
+/// The manager derives `Debug`, and `ToolRegistry` does not implement it
+/// (its tool map holds trait objects), so the handle carries its own
+/// `Debug` that names the registry without printing it.
+#[derive(Clone)]
+struct RegistryHandle(ToolRegistry);
+
+impl std::fmt::Debug for RegistryHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("RegistryHandle(<tool registry>)")
+    }
+}
+
 /// `(server_name, qualified_tool_name)` pairs: the MCP tools a
 /// [`McpManager`] synced into a registry, tagged with the server they
 /// came from so one server can be torn out without the others.
 type RegistryEntries = Vec<(String, String)>;
-
-/// A registry in the manager's list of served registries (RT-517).
-///
-/// The manager derives `Debug` and `ToolRegistry` does not implement it
-/// (its tool map holds trait objects), so the list carries an entry that
-/// names the registry without printing it.
-#[derive(Clone)]
-struct RegistryEntry(ToolRegistry);
-
-impl std::ops::Deref for RegistryEntry {
-    type Target = ToolRegistry;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl std::fmt::Debug for RegistryEntry {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("RegistryEntry(<tool registry>)")
-    }
-}
 
 /// MCP server connection manager
 #[derive(Debug, Clone)]
@@ -2482,13 +2474,7 @@ pub struct McpManager {
     /// simply drop every name (that would take the other servers' live
     /// tools with it).
     registered_tool_names: Arc<RwLock<RegistryEntries>>,
-    /// Whether this manager already has a stdio watchdog (RT-517).
-    ///
-    /// One watchdog per MANAGER: two registry builds over one manager used
-    /// to start two watchdogs over the same server map, and neither
-    /// `reconnect` was serialised against the other.
-    watchdog_started: Arc<std::sync::atomic::AtomicBool>,
-    /// The registries the MCP tools were synced into.
+    /// The registry the MCP tools were synced into.
     ///
     /// (RT-516) Without it a removed server's tools stayed REGISTERED:
     /// the registry still held `mcp_<server>/<tool>`, and calling one
@@ -2496,14 +2482,7 @@ pub struct McpManager {
     /// a TRANSPORT failure — so the call-time auto-reconnect RESPAWNED
     /// the child the operator had just removed. The registry handle is
     /// what lets a removal take the tools out.
-    ///
-    /// (RT-517) It is a LIST, because one manager can serve SEVERAL
-    /// registries: a process that builds more than one agent (the gateway
-    /// builds two; an agent pool builds one per slot) shares THIS manager
-    /// — and therefore the MCP CHILDREN — across them. A removal has to
-    /// take the tools out of every one of them, and the watchdog has to
-    /// re-sync into every one of them.
-    registries: Arc<RwLock<Vec<RegistryEntry>>>,
+    registry: Arc<RwLock<Option<RegistryHandle>>>,
     /// The last connect failure per server name.
     ///
     /// A server that fails to connect is NOT inserted into `servers`, so
@@ -2523,8 +2502,7 @@ impl Default for McpManager {
         Self {
             servers: Arc::new(RwLock::new(HashMap::new())),
             registered_tool_names: Arc::new(RwLock::new(Vec::new())),
-            registries: Arc::new(RwLock::new(Vec::new())),
-            watchdog_started: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            registry: Arc::new(RwLock::new(None)),
             connect_failures: Arc::new(RwLock::new(HashMap::new())),
         }
     }
@@ -2726,19 +2704,17 @@ impl McpManager {
         // TRANSPORT failure, so the call-time auto-reconnect RESPAWNED
         // the child the operator had just removed — a removal that
         // brought the server back. The other servers' tools stay.
-        let removed_names: Vec<String> = {
-            let mut prev = self.registered_tool_names.write().await;
-            let (mine, rest): (RegistryEntries, RegistryEntries) =
-                prev.drain(..).partition(|(server, _)| server == name);
-            *prev = rest;
-            mine.into_iter().map(|(_server, tool)| tool).collect()
-        };
-        // Every registry this manager serves, not just the last one synced
-        // (RT-517): a stale entry in ANY of them is a tool that reaches a
-        // server this manager no longer has.
-        for registry in self.registries.read().await.clone() {
-            for tool_name in removed_names.iter() {
-                registry.unregister(tool_name).await;
+        let registry = self.registry.read().await.clone();
+        if let Some(RegistryHandle(registry)) = registry {
+            let removed_names: Vec<String> = {
+                let mut prev = self.registered_tool_names.write().await;
+                let (mine, rest): (RegistryEntries, RegistryEntries) =
+                    prev.drain(..).partition(|(server, _)| server == name);
+                *prev = rest;
+                mine.into_iter().map(|(_server, tool)| tool).collect()
+            };
+            for tool_name in removed_names {
+                registry.unregister(&tool_name).await;
             }
         }
         Ok(())
@@ -2785,28 +2761,15 @@ impl McpManager {
     /// surface a precise "N tools synced" completion message.
     pub async fn sync_tools_to_registry(&self, registry: &ToolRegistry) -> usize {
         // Remember the registry, so a later `remove_server` can take this
-        // server's tools OUT of it (RT-516) — and out of EVERY other
-        // registry this manager serves (RT-517: one manager, many
-        // registries).
-        {
-            let mut registries = self.registries.write().await;
-            if !registries.iter().any(|other| other.ptr_eq(registry)) {
-                registries.push(RegistryEntry(registry.clone()));
-            }
-        }
+        // server's tools OUT of it (RT-516).
+        *self.registry.write().await = Some(RegistryHandle(registry.clone()));
 
-        // Unregister the previously synced tools — from THE REGISTRY BEING
-        // SYNCED, which is the one whose copy is being replaced. The other
-        // registries this manager serves keep their own copies: they were
-        // synced at their own time, and a removal takes the tools out of
-        // all of them (see `remove_server`).
-        let mut prev_names: RegistryEntries = {
-            let mut names = self.registered_tool_names.write().await;
-            names.drain(..).collect()
-        };
+        // Unregister all previously synced tools
+        let mut prev_names = self.registered_tool_names.write().await;
         for (_server, name) in prev_names.iter() {
             registry.unregister(name).await;
         }
+        prev_names.clear();
 
         // Register current tools with namespaced names
         let servers = self.servers.read().await;
@@ -2836,9 +2799,6 @@ impl McpManager {
                 }
             }
         }
-        // The names this manager synced, so a later removal can take out
-        // exactly this server's tools (RT-516).
-        *self.registered_tool_names.write().await = prev_names;
         registered
     }
 
@@ -2851,41 +2811,27 @@ impl McpManager {
     /// The task is detached — it dies with the process — and is safe to
     /// spawn from short-lived CLI commands (an empty sweep is a cheap
     /// no-op). Returns the task handle so callers can abort it if needed.
-    /// Spawn the stdio watchdog for THIS manager.
-    ///
-    /// (RT-517) One watchdog per MANAGER, not per registry build: two
-    /// registry builds over one manager used to start two watchdogs over
-    /// the same server map, and neither `reconnect` was serialised against
-    /// the other. The watchdog re-syncs into EVERY registry this manager
-    /// serves, so a process with several agents still gets the restarted
-    /// tools everywhere.
-    pub fn spawn_watchdog(&self, interval: Duration) -> Option<tokio::task::JoinHandle<()>> {
-        if self
-            .watchdog_started
-            .swap(true, std::sync::atomic::Ordering::SeqCst)
-        {
-            tracing::debug!("The MCP watchdog is already running for this manager");
-            return None;
-        }
+    pub fn spawn_watchdog(
+        &self,
+        registry: ToolRegistry,
+        interval: Duration,
+    ) -> tokio::task::JoinHandle<()> {
         let manager = self.clone();
-        Some(tokio::spawn(async move {
+        tokio::spawn(async move {
             let mut ticker = tokio::time::interval(interval);
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
                 ticker.tick().await;
                 let restarted = manager.sweep_stdio_servers().await;
                 if restarted > 0 {
-                    let mut synced = 0usize;
-                    for registry in manager.registries.read().await.clone() {
-                        synced += manager.sync_tools_to_registry(&registry).await;
-                    }
+                    let synced = manager.sync_tools_to_registry(&registry).await;
                     info!(
                         restarted,
                         synced, "MCP watchdog: stdio servers restarted, tools re-synced"
                     );
                 }
             }
-        }))
+        })
     }
 
     /// One watchdog sweep: for every connected stdio server whose child has
@@ -3919,98 +3865,6 @@ for line in sys.stdin:
         );
     }
 
-    /// RT-517: ONE watchdog per manager.
-    ///
-    /// Two registry builds over one manager used to start two watchdogs
-    /// over the same server map, and neither `reconnect` was serialised
-    /// against the other — so a crash could be reconnected twice at once.
-    /// RT-517: a removal takes the server's tools out of EVERY registry
-    /// this manager serves.
-    ///
-    /// The gateway builds two registry builds over one manager (the agent
-    /// and the cron agent), an agent pool builds one per slot, and the ACP
-    /// daemon serves every client's registry. A removal that cleaned only
-    /// the LAST registry left the other ones holding a tool that reaches a
-    /// server this manager no longer has — the call-time auto-reconnect
-    /// respawns the child.
-    #[tokio::test]
-    async fn removing_a_server_takes_its_tools_out_of_every_registry_it_serves() {
-        let dir = std::env::temp_dir().join(format!("mcp-multi-registry-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("create temp dir");
-        let script = dir.join("one_tool_server.py");
-        std::fs::write(&script, SLOW_MCP_SERVER).expect("write the server");
-
-        let manager = McpManager::new();
-        for server in ["keep", "drop"] {
-            manager
-                .add_stdio_server(
-                    server,
-                    "python3".to_string(),
-                    vec![script.to_string_lossy().to_string()],
-                    HashMap::new(),
-                )
-                .await
-                .expect("the server connects");
-        }
-
-        let first = ToolRegistry::new(std::time::Duration::from_secs(30));
-        let second = ToolRegistry::new(std::time::Duration::from_secs(30));
-        assert_eq!(manager.sync_tools_to_registry(&first).await, 2);
-        assert_eq!(
-            manager.sync_tools_to_registry(&second).await,
-            2,
-            "the second registry gets the same tools from the SAME children"
-        );
-        let kept = qualified_tool_name("keep", "slow.echo");
-        let dropped = qualified_tool_name("drop", "slow.echo");
-        assert!(first.get(&dropped).await.is_some());
-        assert!(second.get(&dropped).await.is_some());
-
-        manager
-            .remove_server("drop")
-            .await
-            .expect("the server is removed");
-
-        assert!(
-            first.get(&dropped).await.is_none(),
-            "the FIRST registry must lose the removed server's tools (RT-517)"
-        );
-        assert!(
-            second.get(&dropped).await.is_none(),
-            "the SECOND registry must lose the removed server's tools too — one \
-             manager, several registries"
-        );
-        assert!(
-            first.get(&kept).await.is_some(),
-            "the kept server's tools stay in the first registry"
-        );
-        assert!(
-            second.get(&kept).await.is_some(),
-            "the kept server's tools stay in the second registry"
-        );
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[tokio::test]
-    async fn one_manager_starts_one_watchdog() {
-        let manager = McpManager::new();
-        let first = manager.spawn_watchdog(std::time::Duration::from_millis(50));
-        assert!(
-            first.is_some(),
-            "the first call must start the watchdog for this manager"
-        );
-        let second = manager.spawn_watchdog(std::time::Duration::from_millis(50));
-        assert!(
-            second.is_none(),
-            "a second registry build must NOT start a second watchdog over the same \
-             server map — two watchdogs can reconnect the same child twice"
-        );
-        if let Some(handle) = first {
-            handle.abort();
-        }
-    }
-
     /// RT-516: removing a server must take ITS tools out of the registry.
     ///
     /// Left registered, the `mcp_<server>/<tool>` entry still reached the
@@ -4368,18 +4222,13 @@ for line in sys.stdin:
             .write()
             .await
             .insert("fake".to_string(), McpTransport::Stdio(client.clone()));
-        // (RT-517) The watchdog no longer takes a registry: it re-syncs
-        // into every registry the manager serves, so a second registry
-        // build does not need a second watchdog.
-        let _registry = ToolRegistry::new(std::time::Duration::from_secs(10));
+        let registry = ToolRegistry::new(std::time::Duration::from_secs(10));
 
         // Crash the child, then let the background watchdog recover it.
         client.kill_child().await;
         assert!(!client.process_alive().await);
 
-        let handle = manager
-            .spawn_watchdog(std::time::Duration::from_millis(50))
-            .expect("the first call starts the watchdog");
+        let handle = manager.spawn_watchdog(registry, std::time::Duration::from_millis(50));
 
         // Poll instead of sleeping a fixed window: under parallel test load
         // the reconnect handshake (spawn python3 + initialize) can outlive a

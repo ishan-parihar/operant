@@ -24,6 +24,29 @@ use std::sync::Arc;
 pub enum ContextSubcommand {
     /// Show DAG engine status: db path, tail budget, node counts
     Status,
+
+    /// Inspect what a session's context actually WAS: the per-request ledger
+    /// (provider-metered tokens vs the engine's own estimate, and the split
+    /// between tool output and conversation), plus the session's totals.
+    ///
+    /// A different axis from `status`/`budget`: those say what the engine is
+    /// configured to do and what every request must pay; this says what the
+    /// requests that already ran actually cost, and what they were made of.
+    /// Without it, the only answer to "why was that session expensive" is a
+    /// guess — the meter existed but nothing read it back.
+    Inspect {
+        /// Session id (default: the newest session in the database)
+        #[arg(long)]
+        session: Option<String>,
+
+        /// How many ledger rows to show (default: 20; the newest ones)
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+
+        /// Emit JSON instead of the rendered view
+        #[arg(long)]
+        json: bool,
+    },
     /// Recall nodes from the DAG by FTS query
     Recall {
         /// Search query (phrase semantics)
@@ -192,6 +215,44 @@ pub async fn handle_context_command(config: &AppConfig, cmd: ContextSubcommand) 
                 print!("{}", status_report(&engine)?);
             } else {
                 print!("{}", compact_status_report(config)?);
+            }
+        }
+        ContextSubcommand::Inspect {
+            session,
+            limit,
+            json,
+        } => {
+            let db = operant_core::database::Database::init(config.database_path.clone())
+                .context("Failed to open database")?;
+            let sid = match session {
+                Some(s) => s,
+                None => db
+                    .newest_session_id()
+                    .context("Failed to find the newest session")?
+                    .ok_or_else(|| anyhow::anyhow!("no sessions in the database yet"))?,
+            };
+            if json {
+                let usage = db
+                    .session_usage(&sid)
+                    .context("Failed to read session usage")?;
+                let rows = db
+                    .context_ledger_for_session(&sid, limit.clamp(1, 500))
+                    .context("Failed to read the context ledger")?;
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "session_id": sid,
+                        "input_tokens": usage.input_tokens,
+                        "output_tokens": usage.output_tokens,
+                        "api_call_count": usage.api_call_count,
+                        "message_count": usage.message_count,
+                        "tool_call_count": usage.tool_call_count,
+                        "actual_cost_usd": usage.actual_cost_usd,
+                        "requests": rows,
+                    })
+                );
+            } else {
+                print!("{}", inspect_report(&db, &sid, limit.clamp(1, 500))?);
             }
         }
         ContextSubcommand::Recall {
@@ -1225,6 +1286,68 @@ fn compact_status_report(config: &AppConfig) -> Result<String> {
     ));
     out.push_str(&format!("  sessions    : {}\n", sessions.len()));
     out.push_str("  lossless DAG : off (set agent.context_engine = \"lcm\" for DAG status)\n");
+    Ok(out)
+}
+
+/// Render what a session's context actually was.
+///
+/// The two numbers that matter are side by side on purpose: the provider's
+/// own prompt count (what it charged for) and the engine's estimate of the
+/// assembled context (what the ladder thought it was sending). They disagree
+/// — the chars/4 estimator undercounts a tool-call turn's arguments — and the
+/// gap between them is the only way to see the estimator drifting.
+fn inspect_report(
+    db: &operant_core::database::Database,
+    session_id: &str,
+    limit: usize,
+) -> Result<String> {
+    let usage = db
+        .session_usage(session_id)
+        .context("Failed to read session usage")?;
+    let rows = db
+        .context_ledger_for_session(session_id, limit)
+        .context("Failed to read the context ledger")?;
+    let mut out = String::new();
+    out.push_str(&format!("Context inspect — session {session_id}\n"));
+    out.push_str(&format!(
+        "  metered : input {} tok · output {} tok · {} requests",
+        usage.input_tokens, usage.output_tokens, usage.api_call_count
+    ));
+    if let Some(cost) = usage.actual_cost_usd {
+        out.push_str(&format!(" · cost ${cost:.4}"));
+    }
+    out.push('\n');
+    out.push_str(&format!(
+        "  stored  : {} messages · {} tool calls\n",
+        usage.message_count, usage.tool_call_count
+    ));
+    if rows.is_empty() {
+        out.push_str("  ledger  : no rows — this session ran before the context meter existed\n");
+        return Ok(out);
+    }
+    out.push_str(&format!("  ledger  : {} request row(s)\n\n", rows.len()));
+    out.push_str(&format!(
+        "{:<5} {:>10} {:>11} {:>12} {:>7} {:>12} {:>7} {:>7}\n",
+        "SEQ", "PROMPT", "COMPLETION", "EST-CONTEXT", "MSGS", "TOOL-RESULT", "SHARE", "LADDER"
+    ));
+    for r in &rows {
+        let share = if r.estimated_context_tokens > 0 {
+            100.0 * r.tool_result_tokens as f64 / r.estimated_context_tokens as f64
+        } else {
+            0.0
+        };
+        out.push_str(&format!(
+            "{:<5} {:>10} {:>11} {:>12} {:>7} {:>12} {:>6.1}% {:>7}\n",
+            r.request_seq,
+            r.prompt_tokens,
+            r.completion_tokens,
+            r.estimated_context_tokens,
+            r.message_count,
+            r.tool_result_tokens,
+            share,
+            if r.ladder_fired { "yes" } else { "-" }
+        ));
+    }
     Ok(out)
 }
 

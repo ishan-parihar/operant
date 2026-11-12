@@ -104,6 +104,26 @@ CREATE TABLE IF NOT EXISTS compression_locks (
     expires_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS context_ledger (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL,
+    request_seq INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    prompt_tokens INTEGER NOT NULL DEFAULT 0,
+    completion_tokens INTEGER NOT NULL DEFAULT 0,
+    total_tokens INTEGER NOT NULL DEFAULT 0,
+    estimated_context_tokens INTEGER NOT NULL DEFAULT 0,
+    message_count INTEGER NOT NULL DEFAULT 0,
+    tool_result_tokens INTEGER NOT NULL DEFAULT 0,
+    user_tokens INTEGER NOT NULL DEFAULT 0,
+    assistant_tokens INTEGER NOT NULL DEFAULT 0,
+    tool_call_count INTEGER NOT NULL DEFAULT 0,
+    budget_tokens INTEGER NOT NULL DEFAULT 0,
+    window_tokens INTEGER NOT NULL DEFAULT 0,
+    ladder_fired INTEGER NOT NULL DEFAULT 0,
+    note TEXT
+);
+
 ";
 
 /// Indexes created AFTER reconcile_columns() to avoid referencing columns
@@ -117,6 +137,7 @@ CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, timestam
 CREATE INDEX IF NOT EXISTS idx_messages_session_active
     ON messages(session_id, active, timestamp);
 CREATE INDEX IF NOT EXISTS idx_compression_locks_expires ON compression_locks(expires_at);
+CREATE INDEX IF NOT EXISTS idx_context_ledger_session ON context_ledger(session_id, request_seq);
 ";
 
 /// Database manager for persistent storage.
@@ -684,6 +705,204 @@ impl Database {
         Ok(())
     }
 
+    /// Accumulate provider-metered usage onto a session row.
+    ///
+    /// The session token columns existed since v1 and were never written by the
+    /// live path — only the rewind fork and the tests filled them — so every
+    /// session on the operator's database reported zero tokens, and the whole
+    /// downstream cost/context reporting (the `insights sessions` command, the
+    /// `session_insights` tool) rendered "Tokens: 0" for a window in which one
+    /// session had burned hundreds of thousands of context tokens. The meter has
+    /// to be written where the usage is observed, which is inside the request
+    /// loop, not at turn end: a turn that dies mid-execution must still have
+    /// banked the requests it already made.
+    ///
+    /// Accumulating (not assigning) is what makes the per-turn call sites
+    /// idempotent per request rather than per turn.
+    pub fn add_session_usage(
+        &self,
+        session_id: &str,
+        prompt_tokens: i64,
+        completion_tokens: i64,
+        api_calls: i64,
+    ) -> Result<()> {
+        if prompt_tokens == 0 && completion_tokens == 0 && api_calls == 0 {
+            return Ok(());
+        }
+        let conn = self.lock_conn()?;
+        conn.execute(
+            "UPDATE sessions SET
+                input_tokens = input_tokens + ?1,
+                output_tokens = output_tokens + ?2,
+                api_call_count = api_call_count + ?3
+             WHERE id = ?4",
+            params![prompt_tokens, completion_tokens, api_calls, session_id],
+        )
+        .map_err(|e| Error::Agent(format!("Failed to add session usage: {}", e)))?;
+        Ok(())
+    }
+
+    /// Write one row of the per-request context ledger.
+    ///
+    /// The ledger is the feedback loop for every context policy: without it, no
+    /// one can answer "what did the last request actually send, what did it cost,
+    /// and what did the ladder do to it" — so no policy can be tuned and no
+    /// regression can be caught. See `agent::emit_usage_and_cost`, the one
+    /// caller, and `operant context inspect`, the operator view.
+    pub fn record_context_request(&self, record: &ContextRequestRecord) -> Result<()> {
+        let conn = self.lock_conn()?;
+        conn.execute(
+            "INSERT INTO context_ledger (
+                session_id, request_seq, created_at, prompt_tokens, completion_tokens,
+                total_tokens, estimated_context_tokens, message_count, tool_result_tokens,
+                user_tokens, assistant_tokens, tool_call_count, budget_tokens,
+                window_tokens, ladder_fired, note
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+            params![
+                record.session_id,
+                record.request_seq,
+                record.created_at,
+                record.prompt_tokens,
+                record.completion_tokens,
+                record.total_tokens,
+                record.estimated_context_tokens,
+                record.message_count,
+                record.tool_result_tokens,
+                record.user_tokens,
+                record.assistant_tokens,
+                record.tool_call_count,
+                record.budget_tokens,
+                record.window_tokens,
+                record.ladder_fired,
+                record.note,
+            ],
+        )
+        .map_err(|e| Error::Agent(format!("Failed to record context request: {}", e)))?;
+        Ok(())
+    }
+
+    /// The newest ledger rows for a session, oldest-first (so a caller can
+    /// render a timeline), bounded by `limit`.
+    pub fn context_ledger_for_session(
+        &self,
+        session_id: &str,
+        limit: usize,
+    ) -> Result<Vec<ContextRequestRecord>> {
+        let conn = self.lock_conn()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT session_id, request_seq, created_at, prompt_tokens, completion_tokens,
+                        total_tokens, estimated_context_tokens, message_count, tool_result_tokens,
+                        user_tokens, assistant_tokens, tool_call_count, budget_tokens,
+                        window_tokens, ladder_fired, note
+                 FROM context_ledger WHERE session_id = ?1
+                 ORDER BY request_seq DESC, id DESC LIMIT ?2",
+            )
+            .map_err(|e| Error::Agent(format!("Failed to prepare ledger read: {}", e)))?;
+        let rows = stmt
+            .query_map(params![session_id, limit], |row| {
+                Ok(ContextRequestRecord {
+                    session_id: row.get(0)?,
+                    request_seq: row.get(1)?,
+                    created_at: row.get(2)?,
+                    prompt_tokens: row.get(3)?,
+                    completion_tokens: row.get(4)?,
+                    total_tokens: row.get(5)?,
+                    estimated_context_tokens: row.get(6)?,
+                    message_count: row.get(7)?,
+                    tool_result_tokens: row.get(8)?,
+                    user_tokens: row.get(9)?,
+                    assistant_tokens: row.get(10)?,
+                    tool_call_count: row.get(11)?,
+                    budget_tokens: row.get(12)?,
+                    window_tokens: row.get(13)?,
+                    ladder_fired: row.get::<_, i64>(14)? != 0,
+                    note: row.get(15)?,
+                })
+            })
+            .map_err(|e| Error::Agent(format!("Failed to query ledger: {}", e)))?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|e| Error::Agent(format!("Failed to read ledger row: {}", e)))?;
+        let mut rows = rows;
+        rows.reverse();
+        Ok(rows)
+    }
+
+    /// How many sessions have any recorded token usage at all.
+    ///
+    /// The telemetry check ("is context observable on this database?") is a
+    /// COUNT against the meter, not a config read: the meter being blank is the
+    /// defect, and `operant doctor` reports it as one.
+    pub fn sessions_with_recorded_usage(&self) -> Result<i64> {
+        let conn = self.lock_conn()?;
+        conn.query_row(
+            "SELECT COUNT(*) FROM sessions
+             WHERE input_tokens > 0 OR output_tokens > 0 OR api_call_count > 0",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|e| Error::Agent(format!("Failed to count metered sessions: {}", e)))
+    }
+
+    /// The newest first message id for a session (the request sequence counter
+    /// is per session, so the ledger needs a stable ordinal per row).
+    pub fn next_context_request_seq(&self, session_id: &str) -> Result<i64> {
+        let conn = self.lock_conn()?;
+        let n: i64 = conn
+            .query_row(
+                "SELECT COALESCE(MAX(request_seq), 0) FROM context_ledger WHERE session_id = ?1",
+                params![session_id],
+                |row| row.get(0),
+            )
+            .map_err(|e| Error::Agent(format!("Failed to read ledger seq: {}", e)))?;
+        Ok(n + 1)
+    }
+
+    /// Read one session's metered usage.
+    pub fn session_usage(&self, session_id: &str) -> Result<SessionUsage> {
+        let conn = self.lock_conn()?;
+        conn.query_row(
+            "SELECT input_tokens, output_tokens, api_call_count, message_count,
+                    tool_call_count, actual_cost_usd
+             FROM sessions WHERE id = ?1",
+            params![session_id],
+            |row| {
+                Ok(SessionUsage {
+                    input_tokens: row.get::<_, Option<i64>>(0)?.unwrap_or(0),
+                    output_tokens: row.get::<_, Option<i64>>(1)?.unwrap_or(0),
+                    api_call_count: row.get::<_, Option<i64>>(2)?.unwrap_or(0),
+                    message_count: row.get::<_, Option<i64>>(3)?.unwrap_or(0),
+                    tool_call_count: row.get::<_, Option<i64>>(4)?.unwrap_or(0),
+                    actual_cost_usd: row.get(5)?,
+                })
+            },
+        )
+        .map_err(|e| Error::Agent(format!("Failed to read session usage: {}", e)))
+    }
+
+    /// The newest session id in the database (by start time).
+    ///
+    /// The default target for `operant context inspect`: an operator asking
+    /// "what did the last session cost" should not have to know the id.
+    pub fn newest_session_id(&self) -> Result<Option<String>> {
+        let conn = self.lock_conn()?;
+        let mut stmt = conn
+            .prepare("SELECT id FROM sessions ORDER BY started_at DESC LIMIT 1")
+            .map_err(|e| Error::Agent(format!("Failed to prepare newest session: {}", e)))?;
+        let mut rows = stmt
+            .query([])
+            .map_err(|e| Error::Agent(format!("Failed to query newest session: {}", e)))?;
+        match rows.next() {
+            Ok(Some(row)) => {
+                Ok(Some(row.get::<_, String>(0).map_err(|e| {
+                    Error::Agent(format!("Failed to read session id: {}", e))
+                })?))
+            }
+            Ok(None) => Ok(None),
+            Err(e) => Err(Error::Agent(format!("Failed to step sessions: {}", e))),
+        }
+    }
+
     /// Save a session with full Python-compatible fields.
     pub fn save_session_full(&self, session: &SessionData) -> Result<()> {
         let conn = self.lock_conn()?;
@@ -796,8 +1015,21 @@ impl Database {
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|e| Error::Agent(format!("Failed to start transaction: {}", e)))?;
         tx.execute(
-            "INSERT INTO messages (session_id, role, content, timestamp) VALUES (?1, ?2, ?3, ?4)",
-            params![session_id, role, content, timestamp],
+            "INSERT INTO messages (session_id, role, content, timestamp, token_count)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                session_id,
+                role,
+                content,
+                timestamp,
+                // The same estimator the eviction uses (4 tokens of role
+                // overhead plus the content), so a row's token_count and the
+                // ladder's arithmetic agree. This column existed since v1 and
+                // was NEVER written by the live path, so every message row on
+                // the operator's database carried NULL and the per-message
+                // cost of a session could not be read back at all.
+                (crate::context_management::estimate_tokens(content) + 4) as i64
+            ],
         )
         .map_err(|e| Error::Agent(format!("Failed to save message: {}", e)))?;
         // Mirror hermes append_message: increment the session's message_count
@@ -2474,6 +2706,51 @@ pub struct Message {
     pub role: String,
     pub content: String,
     pub timestamp: String,
+}
+
+/// What one session cost, as the meter recorded it.
+///
+/// This is the number `operant insights sessions` and the `session_insights`
+/// tool could never show, because nothing wrote it: the session rows carried
+/// zero tokens for every session on the operator's database.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SessionUsage {
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub api_call_count: i64,
+    pub message_count: i64,
+    pub tool_call_count: i64,
+    pub actual_cost_usd: Option<f64>,
+}
+
+/// One row of the per-request context ledger.
+///
+/// A row answers, for ONE request the agent made: how many tokens the provider
+/// charged for the prompt and the completion, how many tokens the assembled
+/// context was estimated at, what that context was made of (tool results vs
+/// user text vs assistant text), and whether the context ladder fired on it.
+///
+/// The provider numbers and the estimate are BOTH recorded on purpose: they
+/// disagree (the chars/4 estimate undercounts a tool-call turn's arguments),
+/// and the ratio between them is the only way to see the estimator drifting.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ContextRequestRecord {
+    pub session_id: String,
+    pub request_seq: i64,
+    pub created_at: String,
+    pub prompt_tokens: i64,
+    pub completion_tokens: i64,
+    pub total_tokens: i64,
+    pub estimated_context_tokens: i64,
+    pub message_count: i64,
+    pub tool_result_tokens: i64,
+    pub user_tokens: i64,
+    pub assistant_tokens: i64,
+    pub tool_call_count: i64,
+    pub budget_tokens: i64,
+    pub window_tokens: i64,
+    pub ladder_fired: bool,
+    pub note: Option<String>,
 }
 
 /// Full session data matching Python operant_state.py schema.

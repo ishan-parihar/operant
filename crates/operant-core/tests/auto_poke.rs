@@ -236,6 +236,7 @@ fn test_config(max_iterations: usize) -> AgentConfig {
         stream: false,
         context_window: 8000,
         max_tool_result_share: operant_core::context_management::DEFAULT_MAX_TOOL_RESULT_SHARE,
+        max_tool_result_total_share: operant_core::context_management::DEFAULT_MAX_TOOL_RESULT_TOTAL_SHARE,
         record_trajectories: false,
         skill_nudge_interval: 0,
         memory_review_interval: 0,

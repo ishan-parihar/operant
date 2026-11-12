@@ -45,6 +45,201 @@ pub fn estimate_tokens(text: &str) -> usize {
     text.chars().count().div_ceil(4)
 }
 
+/// The aggregate ceiling on the tool-output share of an assembled context.
+///
+/// `guard_tool_output_spend` caps ONE tool result at 5 % of the window; it has
+/// no aggregate half, so N results each under that cap add up without bound.
+/// MEASURED on the operator's live long-horizon session: 988 messages, 540
+/// tool results, 1 106 028 characters of tool output against 11 057
+/// characters of actual conversation — 99 % of the stored context was tool
+/// output, and none of it individually large enough to trip the per-message
+/// guard.
+///
+/// The number is the fraction of the assembled budget tool results may hold.
+/// Magic Context carries the same idea as a lane in its reduction pass, next
+/// to the per-call cap.
+pub const DEFAULT_MAX_TOOL_RESULT_TOTAL_SHARE: f64 = 0.40;
+
+/// How many of the NEWEST tool results are never trimmed: the evidence the
+/// current turn is still acting on. Trimming it would remove the very bytes
+/// the model needs to answer.
+pub const TOOL_TRIM_PROTECT_LAST: usize = 8;
+
+/// How much of a trimmed result survives at the front — enough to identify
+/// what the tool returned without paying for the whole of it.
+pub const TOOL_TRIM_KEEP_CHARS: usize = 400;
+
+/// The marker a trimmed tool result carries. It states the tool, the original
+/// size and what was withheld, so a reader can tell "this was trimmed" from
+/// "the tool returned nothing".
+pub const TOOL_TRIM_MARKER: &str = "[tool result trimmed]";
+
+/// What one aggregate trim pass did.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ToolTrimReport {
+    /// How many tool results were trimmed.
+    pub trimmed: usize,
+    /// Estimated tokens before the pass.
+    pub tokens_before: usize,
+    /// Estimated tokens after the pass.
+    pub tokens_after: usize,
+}
+
+impl ToolTrimReport {
+    /// The tokens the pass removed.
+    pub fn saved(&self) -> usize {
+        self.tokens_before.saturating_sub(self.tokens_after)
+    }
+}
+
+/// Trim the oldest tool results until the tool-output share of the context is
+/// at or below `share` of `budget_tokens`.
+///
+/// ## The property this exists for: the call survives, the output does not
+///
+/// The engine's eviction unit is the tool GROUP — a tool call and its results
+/// travel together, because a `tool_use` without its `tool_result` is a
+/// malformed request. That unit means a dropped result always takes its call
+/// DESCRIPTION with it, which is exactly backwards: the description is the
+/// cheap part (a tool name and small arguments) and the output is the
+/// expensive part. This pass trims RESULTS ONLY and rewrites each one in
+/// place, so the pair stays well-formed and the description survives.
+///
+/// ## Order and protection
+///
+/// Oldest results first (the newest is the current turn's evidence), and the
+/// newest `protect_last` results are never trimmed. The turn context, the
+/// system prompt and the user's own words are never touched — only
+/// `Role::Tool` messages are candidates.
+///
+/// ## Reversibility
+///
+/// This trims the BUILT list, not the stored conversation: the store keeps the
+/// verbatim result (the DAG when the lossless engine is on, the message row
+/// otherwise), so a trimmed result is recoverable rather than lost.
+pub fn trim_tool_results_to_share(
+    messages: &mut [Message],
+    budget_tokens: usize,
+    share: f64,
+    protect_last: usize,
+    trim_chars: usize,
+) -> ToolTrimReport {
+    let before = estimate_total_tokens(messages);
+    let mut report = ToolTrimReport {
+        tokens_before: before,
+        tokens_after: before,
+        ..Default::default()
+    };
+    if share <= 0.0 || share >= 1.0 || messages.is_empty() {
+        return report;
+    }
+    let limit = (budget_tokens as f64 * share) as usize;
+    let tool_total: usize = messages
+        .iter()
+        .filter(|m| m.role == crate::client::Role::Tool)
+        .map(estimate_message_tokens)
+        .sum();
+    if tool_total <= limit {
+        return report;
+    }
+    // The tool messages, oldest first, minus the protected tail.
+    let tool_indices: Vec<usize> = messages
+        .iter()
+        .enumerate()
+        .filter(|(_, m)| m.role == crate::client::Role::Tool)
+        .map(|(i, _)| i)
+        .collect();
+    let protected_from = tool_indices
+        .len()
+        .saturating_sub(protect_last.min(tool_indices.len()));
+    let mut running = tool_total;
+    for &idx in &tool_indices[..protected_from] {
+        if running <= limit {
+            break;
+        }
+        let original = messages[idx].content.clone();
+        // Already trimmed: do not trim a trim.
+        if original.starts_with(TOOL_TRIM_MARKER) {
+            continue;
+        }
+        let before_this = estimate_message_tokens(&messages[idx]);
+        let kept: String = original.chars().take(trim_chars).collect();
+        let tool = messages[idx]
+            .name
+            .clone()
+            .unwrap_or_else(|| "tool".to_string());
+        messages[idx].content = format!(
+            "{TOOL_TRIM_MARKER} {tool}: {original_chars} chars returned, the first \
+             {kept_chars} are kept and the rest is withheld to fit the context \
+             budget. The full output is still in the session store.",
+            original_chars = original.chars().count(),
+            kept_chars = kept.chars().count(),
+        );
+        running = running
+            .saturating_sub(before_this)
+            + estimate_message_tokens(&messages[idx]);
+        report.trimmed += 1;
+    }
+    report.tokens_after = estimate_total_tokens(messages);
+    report
+}
+
+/// The composition of an assembled context, by role.
+///
+/// The tiered eviction knows the TIERS but not the SHAPE: it evicts oldest-first
+/// within a tier and has no idea that, in a long tool-using session, the tier it
+/// evicts first (tool results) is 99 % of the bytes. This breakdown is what
+/// makes that visible — to the ledger, to `operant context inspect`, and to any
+/// future policy that has to choose what to keep.
+///
+/// The split is by the ROLE THE PROVIDER SEES, and it uses the same estimator as
+/// the eviction (`estimate_message_tokens`), so the numbers here and the numbers
+/// the ladder acts on are the same numbers.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ContextComposition {
+    /// How many messages the assembled context holds.
+    pub messages: usize,
+    /// The engine's estimate of the whole assembled context.
+    pub estimated_tokens: usize,
+    /// Tokens held by tool RESULTS (the tier the eviction hits first).
+    pub tool_result_tokens: usize,
+    /// Tokens held by user messages.
+    pub user_tokens: usize,
+    /// Tokens held by assistant messages, including their tool-call arguments.
+    pub assistant_tokens: usize,
+    /// Tokens held by system messages (the frozen prefix).
+    pub system_tokens: usize,
+    /// How many tool calls the context carries (the assistant turns that asked
+    /// for the results above).
+    pub tool_call_count: usize,
+}
+
+/// Measure an assembled context by role.
+///
+/// Pure and allocation-free: this runs once per request on the hot path, and it
+/// must never be the reason a request is slow.
+pub fn context_composition(messages: &[Message]) -> ContextComposition {
+    use crate::client::Role;
+    let mut out = ContextComposition {
+        messages: messages.len(),
+        ..Default::default()
+    };
+    for msg in messages {
+        let tokens = estimate_message_tokens(msg);
+        match msg.role {
+            Role::Tool => out.tool_result_tokens += tokens,
+            Role::User => out.user_tokens += tokens,
+            Role::Assistant => out.assistant_tokens += tokens,
+            Role::System => out.system_tokens += tokens,
+        }
+        if let Some(calls) = msg.tool_calls.as_ref() {
+            out.tool_call_count += calls.len();
+        }
+    }
+    out.estimated_tokens = estimate_total_tokens(messages);
+    out
+}
+
 /// Estimate the token count of a single message (role + content).
 ///
 /// The count covers the WHOLE message the provider sees — not just its

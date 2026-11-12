@@ -225,7 +225,7 @@ impl OperantAgent {
                 .and_then(|calls| serde_json::to_string(calls).ok()),
             tool_name: None,
             timestamp: chrono::Utc::now().to_rfc3339(),
-            token_count: None,
+            token_count: Some(crate::context_management::estimate_message_tokens(message) as i64),
             finish_reason,
             reasoning: message.reasoning.clone(),
             reasoning_content: None,

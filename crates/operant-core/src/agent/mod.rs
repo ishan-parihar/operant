@@ -8,7 +8,6 @@
 pub(crate) mod background_review;
 pub mod chat_provider;
 pub mod error_classifier;
-pub mod evidence;
 pub mod insights;
 pub mod iteration_budget;
 pub mod learn_prompt;
@@ -116,6 +115,10 @@ pub struct AgentConfig {
     /// `BehaviorSettings::max_tool_result_share`; see
     /// `context_management::DEFAULT_MAX_TOOL_RESULT_SHARE`.
     pub max_tool_result_share: f64,
+
+    /// The share of the assembled context that tool RESULTS may hold, in
+    /// aggregate. See `BehaviorSettings::max_tool_result_total_share`.
+    pub max_tool_result_total_share: f64,
     /// Max self-healing attempts on tool errors
     pub max_healing_attempts: usize,
     /// The most trajectory files to keep in `~/.operant/trajectories`.
@@ -225,6 +228,7 @@ impl From<&BehaviorSettings> for AgentConfig {
             stream: settings.stream,
             context_window: settings.context_window,
             max_tool_result_share: settings.max_tool_result_share,
+            max_tool_result_total_share: settings.max_tool_result_total_share,
             max_healing_attempts: settings.max_healing_attempts,
             max_trajectories: settings.max_trajectories,
             // Row 3 / RT-209: turn attribution is aggregated and emitted on the
@@ -458,6 +462,39 @@ pub struct UserTurnMark {
     pub conv_epoch: u64,
     /// The prompt text (relocation key after compaction).
     pub text: String,
+}
+
+/// What the last request's context looked like, captured at assembly time.
+///
+/// This is the engine's own answer to "what did you just send?" — the shape of
+/// the assembled context (how many messages, how many tokens, and how those
+/// tokens split between tool results, user text and assistant text), the budget
+/// it was fitted to, and whether the compaction ladder fired on it.
+///
+/// It exists because the context was, until now, **unobservable after the fact**:
+/// the session rows carried zero token counts for every session on the
+/// operator's database, so no one could tell a 10 k session from a 600 k one, and
+/// no policy could be tuned against a measurement. The stats are captured where
+/// the assembly happens (the one place that knows the final numbers) and
+/// journalled by the request loop.
+#[derive(Debug, Clone, Default)]
+pub struct ContextAssemblyStats {
+    /// The shape of the assembled context, by role.
+    pub composition: crate::context_management::ContextComposition,
+    /// The budget the context was fitted to (the effective budget, after the
+    /// response reserve and the turn context are subtracted).
+    pub budget_tokens: usize,
+    /// The context window the request was fitted into.
+    pub window_tokens: usize,
+    /// Whether the compaction ladder fired on this assembly.
+    pub ladder_fired: bool,
+    /// The message count before the ladder ran (0 when it did not).
+    pub messages_before_ladder: usize,
+    /// The token estimate before the ladder ran (0 when it did not).
+    pub tokens_before_ladder: usize,
+    /// How many provider requests this agent has made in this turn — the
+    /// ordinal the ledger row carries.
+    pub request_seq: u64,
 }
 
 pub struct OperantAgent {
@@ -779,6 +816,23 @@ pub struct OperantAgent {
     /// ContextEngine.should_compress off real API usage, not a char/4 guess.
     /// Atomic so the streaming path can update it lock-free.
     last_prompt_tokens: std::sync::atomic::AtomicUsize,
+    /// The shape of the LAST assembled context, captured by `build_messages`.
+    ///
+    /// Interior-mutable because the assembly runs on the request path and the
+    /// ledger write happens when the provider reports the usage: the two happen
+    /// at different points of the same request, and the second one needs what
+    /// the first one measured.
+    last_context_stats: Arc<std::sync::Mutex<Option<ContextAssemblyStats>>>,
+    /// Provider-metered prompt tokens accumulated for the current turn.
+    ///
+    /// The meter is per turn and is banked into the session row by the request
+    /// loop, so a turn that dies mid-execution still leaves the requests it
+    /// actually made on the record.
+    usage_prompt_tokens: std::sync::atomic::AtomicU64,
+    /// Provider-metered completion tokens accumulated for the current turn.
+    usage_completion_tokens: std::sync::atomic::AtomicU64,
+    /// How many provider requests this turn has made.
+    usage_api_calls: std::sync::atomic::AtomicU64,
     /// Per-turn Mixture-of-Agents guidance (G5, hermes `moa_loop.py`
     /// parity). Computed BEFORE `run()` via `crate::moa::aggregate_moa_context`
     /// and drained into `build_messages` as a system message for this turn
@@ -3887,6 +3941,7 @@ mod tests {
             stream: true,
             context_window: 8000,
             max_tool_result_share: crate::context_management::DEFAULT_MAX_TOOL_RESULT_SHARE,
+            max_tool_result_total_share: crate::context_management::DEFAULT_MAX_TOOL_RESULT_TOTAL_SHARE,
             max_healing_attempts: 1,
             fallback_models: Vec::new(),
             fallback_on_errors: false,
@@ -3941,6 +3996,7 @@ mod tests {
             stream: true,
             context_window: 8000,
             max_tool_result_share: crate::context_management::DEFAULT_MAX_TOOL_RESULT_SHARE,
+            max_tool_result_total_share: crate::context_management::DEFAULT_MAX_TOOL_RESULT_TOTAL_SHARE,
             max_healing_attempts: 1,
             fallback_models: Vec::new(),
             fallback_on_errors: false,
@@ -4061,6 +4117,7 @@ mod tests {
             stream: true,
             context_window: 8000,
             max_tool_result_share: crate::context_management::DEFAULT_MAX_TOOL_RESULT_SHARE,
+            max_tool_result_total_share: crate::context_management::DEFAULT_MAX_TOOL_RESULT_TOTAL_SHARE,
             max_healing_attempts: 1,
             fallback_models: Vec::new(),
             fallback_on_errors: false,

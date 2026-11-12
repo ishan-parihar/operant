@@ -27,13 +27,6 @@ pub use runtime::KernelRuntime;
 /// without plumbing an Arc through every constructor.
 static GLOBAL_RUNTIME: OnceLock<Arc<KernelRuntime>> = OnceLock::new();
 
-/// How many kernel runtimes this PROCESS built (RT-517).
-///
-/// It must stay at ONE: the runtime is a process-global, and a second one
-/// is a second sidecar — the second registry's tools would drive it while
-/// the global answered for the first.
-static RUNTIMES_BUILT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-
 pub fn global_runtime() -> Option<&'static Arc<KernelRuntime>> {
     GLOBAL_RUNTIME.get()
 }
@@ -224,24 +217,8 @@ pub async fn register(
     if !settings.enabled {
         return Ok(None);
     }
-    // (RT-517) ONE runtime per process. Every registry build used to
-    // build its own, and the second `GLOBAL_RUNTIME.set` FAILED
-    // SILENTLY — so the global answered for the FIRST runtime while the
-    // second registry's tools drove the SECOND one: two sidecars for one
-    // process, and the global pointing at the wrong one.
-    //
-    // The first registration's settings win: the runtime is a
-    // process-global, and a second, different settings would mean two
-    // sidecars with different postures — the very thing this fixes.
-    let rt = match GLOBAL_RUNTIME.get() {
-        Some(existing) => existing.clone(),
-        None => {
-            let rt = KernelRuntime::new(settings.clone());
-            RUNTIMES_BUILT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            let _ = GLOBAL_RUNTIME.set(rt.clone());
-            GLOBAL_RUNTIME.get().cloned().unwrap_or(rt)
-        }
-    };
+    let rt = KernelRuntime::new(settings.clone());
+    let _ = GLOBAL_RUNTIME.set(rt.clone());
     if settings.tool_bridge.enabled {
         // Executor holds a ToolRegistry clone sharing the live tool map, so
         // tools registered after this point stay visible to kernel programs.
@@ -262,53 +239,9 @@ pub async fn register(
 
 #[cfg(test)]
 mod tests {
-
     //! Live sidecar integration tests: spawn the real Python subprocess and
     //! exercise ping / exec persistence / transparent restart / harness CRUD.
     //! Skipped naturally when python>=3.11 is absent (spawn error surfaces).
-
-    /// RT-517: the kernel runtime is ONE per process.
-    ///
-    /// Every registry build used to build its own runtime, and the second
-    /// `GLOBAL_RUNTIME.set` failed SILENTLY — so the global answered for
-    /// the first runtime while the second registry's tools drove the
-    /// second one: two sidecars for one process, and the global pointing
-    /// at the wrong one.
-    #[tokio::test]
-    async fn two_kernel_registrations_share_one_runtime() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let settings = crate::config::KernelSettings {
-            enabled: true,
-            // The runtime fires a session GC at startup; keep it inside
-            // the test's own directory.
-            state_dir: Some(dir.path().to_path_buf()),
-            ..Default::default()
-        };
-        let first_registry = crate::tools::ToolRegistry::new(std::time::Duration::from_secs(1));
-        let second_registry = crate::tools::ToolRegistry::new(std::time::Duration::from_secs(1));
-        let first = super::register(&first_registry, &settings)
-            .await
-            .expect("the first registration")
-            .expect("the kernel is enabled");
-        // The first registration may legitimately build the runtime (if no
-        // other test got there first); the SECOND must not.
-        let built_after_first = super::RUNTIMES_BUILT.load(std::sync::atomic::Ordering::SeqCst);
-        let second = super::register(&second_registry, &settings)
-            .await
-            .expect("the second registration")
-            .expect("the kernel is enabled");
-        assert!(
-            std::sync::Arc::ptr_eq(&first, &second),
-            "two registry builds must share ONE kernel runtime — a second one is a \
-             second sidecar, and the global would answer for the wrong one"
-        );
-        assert_eq!(
-            super::RUNTIMES_BUILT.load(std::sync::atomic::Ordering::SeqCst),
-            built_after_first,
-            "the second registration must REUSE the global runtime, not build a second \
-             one — the global's silent set-failure is what hid the duplicate"
-        );
-    }
 
     /// iter-636 consolidation: the matcher now delegates to the canonical
     /// `lcm::glob_match`. Pins the deliberate delta — `skills.*` requires

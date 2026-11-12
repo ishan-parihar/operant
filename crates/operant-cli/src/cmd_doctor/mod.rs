@@ -67,6 +67,9 @@ pub async fn handle_doctor_command(config: &AppConfig, fix: bool, json: bool) ->
 
     // Each section runs its checks and returns (issues, manual_issues).
     checks_config::run_config_checks(config, &mut issues, &mut manual_issues);
+    // Is the context meter recording? Without it, every session's token cost
+    // is blank and no context policy can be tuned against a measurement.
+    checks_config::check_context_telemetry(config, &mut issues, &mut manual_issues);
     checks_tools::run_tool_checks(config, &mut issues, &mut manual_issues);
     checks_tools::run_integration_checks(&mut issues, &mut manual_issues).await;
     // The editor/pane integrations (Herdr, Omarchy): the checks that answer
