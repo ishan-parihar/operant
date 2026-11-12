@@ -102,11 +102,46 @@ pub struct Gateway {
     dispatch_breaker: Option<Arc<DispatchBreaker>>,
 }
 
+/// What a drain did (RT-509).
+///
+/// A restart used to abort the turn in flight: the tokio runtime dropped
+/// every spawned turn, so a half-finished tool call left the transcript
+/// claiming the tool never ran. The drain interrupts the running turn and
+/// gives it time to END — and says honestly which of the three outcomes
+/// happened.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DrainOutcome {
+    /// No turn was in flight — nothing to drain.
+    Idle,
+    /// The turn in flight was interrupted and ended inside the bound.
+    Drained,
+    /// The turn was still running when the bound expired.
+    TimedOut,
+}
+
+impl DrainOutcome {
+    /// Whether the process may go away without losing a turn.
+    pub fn is_drained(self) -> bool {
+        matches!(self, DrainOutcome::Idle | DrainOutcome::Drained)
+    }
+}
+
 /// Handler for incoming messages from any platform
 #[async_trait::async_trait]
 pub trait MessageHandler: Send + Sync {
     /// Handle an incoming message
     async fn handle(&self, message: IncomingMessage) -> Result<OutgoingMessage>;
+
+    /// (RT-509) Drain the turn in flight before the process goes away.
+    ///
+    /// The default says there is nothing to drain — handlers with no
+    /// long-running turn (tests, harnesses) stay untouched. A handler that
+    /// runs turns MUST override this: the interrupt is what stops the
+    /// turn, and the wait is what lets it commit its interrupted tail
+    /// before the runtime drops it.
+    async fn drain(&self, _timeout: std::time::Duration) -> DrainOutcome {
+        DrainOutcome::Idle
+    }
 
     /// Record a feed item (channel/group post captured at route time,
     /// plan-2026-10-09 §3). No-op default: handlers without a context
@@ -362,6 +397,18 @@ impl Gateway {
     }
 
     /// Stop the gateway and all adapters
+    /// (RT-509) Drain the turn in flight, and report what happened.
+    ///
+    /// Called BEFORE the adapters stop: the turn must be interrupted and
+    /// given time to end while the runtime is still alive, so its
+    /// transcript is complete and the next start can offer the resume.
+    pub async fn drain(&self, timeout: std::time::Duration) -> DrainOutcome {
+        match &self.message_handler {
+            Some(handler) => handler.drain(timeout).await,
+            None => DrainOutcome::Idle,
+        }
+    }
+
     pub async fn stop(&self) -> Result<()> {
         *self.running.write().await = false;
 
@@ -1401,6 +1448,51 @@ mod tests {
         assert!(out.is_some(), "the admin's group command keeps its turn");
         assert_eq!(handler.feeds.load(Ordering::SeqCst), 2);
         assert_eq!(handler.turns.load(Ordering::SeqCst), 1);
+    }
+
+    /// RT-509: the gateway asks its handler to drain the turn in flight
+    /// before it stops, and reports what the handler said.
+    ///
+    /// A restart used to abort the turn: the runtime dropped every spawned
+    /// turn, so a half-finished tool call left the transcript claiming the
+    /// tool never ran.
+    #[tokio::test]
+    async fn the_gateway_drains_its_handler_before_it_stops() {
+        use std::sync::atomic::AtomicBool;
+
+        struct DrainingHandler {
+            drained: AtomicBool,
+            outcome: DrainOutcome,
+        }
+        #[async_trait::async_trait]
+        impl MessageHandler for DrainingHandler {
+            async fn handle(&self, _message: IncomingMessage) -> Result<OutgoingMessage> {
+                Ok(OutgoingMessage::new("c", "ok"))
+            }
+            async fn drain(&self, _timeout: std::time::Duration) -> DrainOutcome {
+                self.drained.store(true, Ordering::SeqCst);
+                self.outcome
+            }
+        }
+
+        let handler = Arc::new(DrainingHandler {
+            drained: AtomicBool::new(false),
+            outcome: DrainOutcome::Drained,
+        });
+        let gw = Arc::new(Gateway::new(GatewayConfig::default()).with_handler(handler.clone()));
+        let outcome = gw.drain(std::time::Duration::from_secs(1)).await;
+        assert_eq!(outcome, DrainOutcome::Drained);
+        assert!(
+            handler.drained.load(Ordering::SeqCst),
+            "the gateway must ask the handler to drain the turn in flight"
+        );
+
+        // A gateway with no handler has nothing to drain.
+        let bare = Gateway::new(GatewayConfig::default());
+        assert_eq!(
+            bare.drain(std::time::Duration::from_secs(1)).await,
+            DrainOutcome::Idle
+        );
     }
 
     #[async_trait::async_trait]

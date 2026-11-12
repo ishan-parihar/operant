@@ -191,9 +191,9 @@ pub use curator::{CuratorEngine, CuratorReport, CuratorState, archiver, backup, 
 pub use distillation::distill_session_to_memory;
 pub use error::{Error, Result};
 pub use gateway::{
-    ChannelDirectory, ChannelInfo, ChannelType, EmailAdapter, Gateway, GatewayConfig, GatewayStats,
-    IncomingMessage, OutgoingMessage, PlatformAdapter, PlatformSession, SessionStore, SmsAdapter,
-    TelegramAdapter, UserInfo, WebhookAdapter, WhatsAppAdapter, format_startup_message,
+    ChannelDirectory, ChannelInfo, ChannelType, DrainOutcome, EmailAdapter, Gateway, GatewayConfig,
+    GatewayStats, IncomingMessage, OutgoingMessage, PlatformAdapter, PlatformSession, SessionStore,
+    SmsAdapter, TelegramAdapter, UserInfo, WebhookAdapter, WhatsAppAdapter, format_startup_message,
     handle_admin_command,
 };
 pub use gateway_session::{

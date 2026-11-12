@@ -1976,3 +1976,89 @@ async fn gateway_search_drives_the_session_search_tool_over_the_real_store() {
         "a bare /search must be shaped as a browse, got: {browse}"
     );
 }
+
+/// RT-509: the drain INTERRUPTS the turn in flight and waits for it to
+/// end, so a restart does not abort the turn mid-tool.
+///
+/// A restart used to abort the turn: the tokio runtime dropped every
+/// spawned turn, so a half-finished tool call left the transcript
+/// claiming the tool never ran.
+#[tokio::test]
+async fn the_drain_interrupts_the_turn_in_flight_and_waits_for_it_to_end() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let handler = slow_echo_handler(&dir, 0);
+
+    // No turn in flight: nothing to drain.
+    assert_eq!(
+        handler.drain(Duration::from_secs(1)).await,
+        DrainOutcome::Idle,
+        "a gateway with no running turn has nothing to drain"
+    );
+
+    // A turn in flight: it holds the lock until it is interrupted.
+    let flag = handler.agent.interrupt_flag();
+    let task_flag = flag.clone();
+    let turn = tokio::spawn({
+        let handler = handler.clone();
+        async move {
+            let _turn = handler.turn_lock.lock().await;
+            while !task_flag.is_triggered() {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        }
+    });
+    *handler
+        .running_session
+        .lock()
+        .unwrap_or_else(|e| e.into_inner()) = Some("s1".to_string());
+    // Let the turn claim the lock.
+    tokio::time::sleep(Duration::from_millis(20)).await;
+
+    let outcome = handler.drain(Duration::from_secs(5)).await;
+    assert_eq!(
+        outcome,
+        DrainOutcome::Drained,
+        "the drain must wait for the interrupted turn to END"
+    );
+    assert!(
+        flag.is_triggered(),
+        "the drain must interrupt the turn in flight — that is what makes it end"
+    );
+    turn.await.expect("the turn task ends");
+}
+
+/// RT-509: a turn that does NOT end inside the bound is reported as such.
+///
+/// The drain must never hold the daemon's shutdown hostage: the outcome
+/// says "timed out" so the stop log is honest about what happened.
+#[tokio::test]
+async fn a_wedged_turn_is_reported_as_a_timed_out_drain() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let handler = slow_echo_handler(&dir, 0);
+
+    // A turn that ignores the interrupt and holds the lock.
+    let turn = tokio::spawn({
+        let handler = handler.clone();
+        async move {
+            let _turn = handler.turn_lock.lock().await;
+            tokio::time::sleep(Duration::from_secs(30)).await;
+        }
+    });
+    *handler
+        .running_session
+        .lock()
+        .unwrap_or_else(|e| e.into_inner()) = Some("s1".to_string());
+    tokio::time::sleep(Duration::from_millis(20)).await;
+
+    let outcome = handler.drain(Duration::from_millis(100)).await;
+    assert_eq!(
+        outcome,
+        DrainOutcome::TimedOut,
+        "a turn that ignores the interrupt must be reported, not waited on forever"
+    );
+    assert!(
+        !outcome.is_drained(),
+        "a timed-out drain is NOT a drained turn"
+    );
+    turn.abort();
+}

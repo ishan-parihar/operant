@@ -9,9 +9,9 @@ use base64::Engine;
 use operant_core::agent::{AgentEvent, OperantAgent};
 use operant_core::config::AppConfig;
 use operant_core::gateway::{
-    DiscordAdapter, EmailAdapter, Gateway, GatewayConfig, IncomingMessage, MessageHandler,
-    OutgoingMessage, PlatformAdapter, SlackAdapter, SmsAdapter, TelegramAdapter, WebhookAdapter,
-    WhatsAppAdapter,
+    DiscordAdapter, DrainOutcome, EmailAdapter, Gateway, GatewayConfig, IncomingMessage,
+    MessageHandler, OutgoingMessage, PlatformAdapter, SlackAdapter, SmsAdapter, TelegramAdapter,
+    WebhookAdapter, WhatsAppAdapter,
 };
 use operant_core::gateway_pipeline::{MessagePipeline, PipelineAction};
 use operant_core::interrupt::InterruptFlag;
@@ -2421,6 +2421,54 @@ impl MessageHandler for GatewayMessageHandler {
             .cloned()
             .unwrap_or_else(|| "premiere".to_string());
         injector.record_feed_item(&seat, &message.username, &message.content);
+    }
+
+    /// (RT-509) Drain the turn in flight before the process goes away.
+    ///
+    /// A restart used to abort the turn: the tokio runtime dropped every
+    /// spawned turn, so a half-finished tool call left the transcript
+    /// claiming the tool never ran, and the operator's next message
+    /// started from a lie.
+    ///
+    /// The drain INTERRUPTS the running turn and waits (bounded) for it to
+    /// end, so the agent commits its interrupted tail (the interrupted
+    /// marker and the DB flag are written by the turn itself — RT-511)
+    /// while the runtime is still alive.
+    ///
+    /// Only ONE turn runs at a time (the global `turn_lock`), so the
+    /// shared interrupt flag can only reach the turn that is actually
+    /// running — the same reasoning the `/stop` command uses.
+    async fn drain(&self, timeout: Duration) -> DrainOutcome {
+        let running = self
+            .running_session
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let Some(session) = running else {
+            return DrainOutcome::Idle;
+        };
+        tracing::info!(
+            session_id = %session,
+            timeout_secs = timeout.as_secs(),
+            "Draining the turn in flight before the gateway stops"
+        );
+        self.agent.interrupt_flag().trigger();
+        // The turn holds the lock for its whole run, so acquiring it means
+        // the turn ENDED. The bound keeps a wedged turn from holding the
+        // daemon's shutdown hostage.
+        match tokio::time::timeout(timeout, self.turn_lock.lock()).await {
+            Ok(_turn) => {
+                tracing::info!(session_id = %session, "The turn in flight was drained");
+                DrainOutcome::Drained
+            }
+            Err(_) => {
+                tracing::warn!(
+                    session_id = %session,
+                    "The turn in flight did not end inside the drain bound; stopping anyway"
+                );
+                DrainOutcome::TimedOut
+            }
+        }
     }
 
     async fn handle(&self, mut message: IncomingMessage) -> operant_core::Result<OutgoingMessage> {
@@ -6219,11 +6267,34 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
 }
 
 /// Stop the gateway
-pub async fn stop_gateway() -> Result<String> {
-    let mut guard = runner().lock().await;
+/// How long a drain waits for the turn in flight to end (RT-509).
+///
+/// Below systemd's default `TimeoutStopSec` (90 s), so a drain never
+/// makes the unit look like it failed to stop.
+const DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
 
-    match guard.take() {
+pub async fn stop_gateway() -> Result<String> {
+    // Take the gateway out of the slot FIRST, so a concurrent status
+    // check does not block for the length of the drain.
+    let gateway = {
+        let mut guard = runner().lock().await;
+        guard.take()
+    };
+
+    match gateway {
         Some(gateway) => {
+            // (RT-509) Drain BEFORE the adapters stop and before the
+            // runtime drops the spawned turns: the turn in flight is
+            // interrupted and given time to END, so its transcript is
+            // complete and the next start can offer the resume. Without
+            // this, a restart aborted the turn mid-tool.
+            let outcome = gateway.drain(DRAIN_TIMEOUT).await;
+            if !outcome.is_drained() {
+                tracing::warn!(
+                    ?outcome,
+                    "The gateway is stopping with a turn still in flight"
+                );
+            }
             gateway.stop().await.context("Failed to stop gateway")?;
             let _ = std::fs::remove_file(pid_file_path());
             Ok("Gateway stopped.".to_string())
