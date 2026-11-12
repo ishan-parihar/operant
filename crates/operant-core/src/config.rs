@@ -5396,17 +5396,12 @@ fn a_non_recording_parse_does_not_steal_the_write_target() {
     std::fs::write(&path, "[agent]\ncontext_window = 128000\n").expect("write config");
 
     let before = loaded_config_path();
-    operant_core_parse_without_recording(&path);
+    parse_config_file_without_recording(&path).expect("the config parses");
     assert_eq!(
         loaded_config_path(),
         before,
         "a read-only parse must not install the surgical writer's target"
     );
-}
-
-/// The file parse seam.
-fn operant_core_parse_without_recording(path: &std::path::Path) {
-    parse_config_file_without_recording(path).expect("the config parses");
 }
 
 #[test]
