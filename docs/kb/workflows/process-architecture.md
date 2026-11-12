@@ -28,3 +28,4 @@
 | process-architecture-022 | done | RT-534 (M): two concurrent slots steal each other's cron delivery target (the origin rides the turn) | — | [2026-11-12] docs/audit/2026-11-12-process-architecture-red-team-execution.md |
 | process-architecture-023 | done | RT-535 (M): the sessions sharing a slot inherit each other's model, effort and charter | — | [2026-11-12] docs/audit/2026-11-12-process-architecture-red-team-execution.md |
 | process-architecture-024 | done | RT-536 (M): the gateway's own tests wrote the operator's live state file | — | [2026-11-12] docs/audit/2026-11-12-process-architecture-red-team-execution.md |
+| process-architecture-025 | done | RT-526 (N): the daemon lock file is unlinked on drop; the docs describe a gateway that does not exist | — | [2026-11-12] docs/audit/2026-11-12-process-architecture-red-team-execution.md |

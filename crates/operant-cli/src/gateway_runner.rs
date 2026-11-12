@@ -1902,16 +1902,15 @@ fn pid_file_path() -> std::path::PathBuf {
 /// releases it when the holder dies, so a crashed gateway never wedges
 /// the next start, and a pid-file race can never let two through.
 struct GatewayDaemonLock {
+    /// The open file descriptor that HOLDS the flock. Dropping the guard
+    /// closes it and the kernel releases the lock.
+    ///
+    /// (RT-526) The lock file is NOT unlinked. `flock` protects the open
+    /// INODE, so removing the path let a second starter create a NEW inode
+    /// and lock that one — two daemons holding "the lock", the exact
+    /// duplicate the flock was added for. A leftover file is harmless: the
+    /// next starter opens the SAME inode and locks it.
     _file: std::fs::File,
-    path: std::path::PathBuf,
-}
-
-impl Drop for GatewayDaemonLock {
-    fn drop(&mut self) {
-        // Best effort: the flock is released by the fd close regardless, and
-        // a leftover lock file is harmless (the next gateway re-locks it).
-        let _ = std::fs::remove_file(&self.path);
-    }
 }
 
 /// The guards that have been taken and MUST STAY for the process's life.
@@ -1925,7 +1924,8 @@ impl Drop for GatewayDaemonLock {
 /// restarts push new guards and the older ones stay held until process exit,
 /// which is itself never a second daemon. A process exit or crash closes the
 /// fds and the kernel releases the flock, so the leak has no staleness cost;
-/// the lock file itself is removed by `Drop` and a leftover file is harmless.
+/// the lock file itself is NOT removed (RT-526: `flock` protects the inode, so
+/// unlinking the path would let a second daemon lock a NEW inode).
 static GATEWAY_DAEMON_LOCKS: std::sync::Mutex<Vec<GatewayDaemonLock>> =
     std::sync::Mutex::new(Vec::new());
 
@@ -1933,11 +1933,16 @@ static GATEWAY_DAEMON_LOCKS: std::sync::Mutex<Vec<GatewayDaemonLock>> =
 /// holds it. `Ok(None)` means REFUSE TO START — the caller must not boot a
 /// second daemon.
 fn acquire_gateway_daemon_lock() -> Result<Option<GatewayDaemonLock>> {
+    acquire_gateway_daemon_lock_at(operant_core::platform::operant_home().join("gateway.lock"))
+}
+
+/// The same lock, at an explicit path (RT-526) — the seam a test uses, so
+/// the test does not need the process's operant home.
+fn acquire_gateway_daemon_lock_at(path: std::path::PathBuf) -> Result<Option<GatewayDaemonLock>> {
     #[cfg(unix)]
     {
         use std::os::fd::AsRawFd;
 
-        let path = operant_core::platform::operant_home().join("gateway.lock");
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -1948,7 +1953,7 @@ fn acquire_gateway_daemon_lock() -> Result<Option<GatewayDaemonLock>> {
             .open(&path)
             .with_context(|| format!("open gateway lock {}", path.display()))?;
         let taken = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0;
-        Ok(taken.then_some(GatewayDaemonLock { _file: file, path }))
+        Ok(taken.then_some(GatewayDaemonLock { _file: file }))
     }
     #[cfg(not(unix))]
     {
@@ -1958,7 +1963,6 @@ fn acquire_gateway_daemon_lock() -> Result<Option<GatewayDaemonLock>> {
         Ok(Some(GatewayDaemonLock {
             _file: std::fs::File::create(std::path::PathBuf::from("NUL"))
                 .context("windows no-op lock placeholder")?,
-            path: std::path::PathBuf::new(),
         }))
     }
 }

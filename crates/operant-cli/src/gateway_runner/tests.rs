@@ -745,6 +745,43 @@ fn the_gateway_sets_the_cron_origin_on_the_slots_agent() {
     );
 }
 
+/// (RT-526) A second daemon is refused while the first holds the lock, and
+/// the lock FILE STAYS.
+///
+/// `flock` protects the open INODE. The guard used to unlink the path when
+/// it dropped, so a process still holding the old inode and a new starter
+/// locking a NEW inode could both hold "the lock" — the duplicate daemon
+/// the flock was added for.
+#[test]
+fn a_second_daemon_is_refused_while_the_first_holds_the_lock() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let lock_path = tmp.path().join("gateway.lock");
+
+    let first = super::acquire_gateway_daemon_lock_at(lock_path.clone())
+        .expect("the lock is taken")
+        .expect("the first holder takes it");
+    let second =
+        super::acquire_gateway_daemon_lock_at(lock_path.clone()).expect("the lock is checked");
+    assert!(
+        second.is_none(),
+        "a second daemon must be REFUSED while the first holds the lock"
+    );
+    assert!(
+        lock_path.exists(),
+        "the lock file must STAY: flock protects the inode, so unlinking the \
+         path would let a second daemon lock a new inode"
+    );
+
+    // Once the holder is gone, the next starter takes the SAME inode.
+    drop(first);
+    let third = super::acquire_gateway_daemon_lock_at(lock_path).expect("the lock is taken");
+    assert!(
+        third.is_some(),
+        "the next starter must take the lock once the holder is gone"
+    );
+    drop(third);
+}
+
 /// (RT-536) The daemon's state file sits next to THE DATABASE it
 /// describes — never in the operator's live home.
 ///

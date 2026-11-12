@@ -41,11 +41,15 @@ a real adapter.
 
 ## The daemon (`gateway_runner.rs`)
 
-A singleton gateway instance persists across CLI commands in one
-process; `operant gateway run` starts the daemon (systemd unit
-`operant-gateway` on the operator's box). A second `gateway run` refuses
-to start (flock, iter-1335). Status surfaces include the daemon's
-RSS/HWM (`gateway status --memory`, iter-1337). Turn handling lives in
+`operant gateway run` starts ONE daemon per machine (systemd unit
+`operant-gateway` on the operator's box), and the CLI commands are
+clients of it — they do not each run their own gateway (the daemon's
+lock file, RT-526: `flock` protects the open inode, so the lock file is
+never unlinked and a second `gateway run` is refused while the first
+holds it, iter-1335). Status surfaces include the daemon's RSS/HWM —
+the status command's `memory` section (iter-1337; there is NO `--memory`
+flag: the section is always in the output, and its live numbers ride the
+daemon's own state file, RT-523). Turn handling lives in
 the `gateway_runner/` submodule split (turn_state etc.), which applies
 per-channel policy, the dispatch breaker, and session scoping before
 the agent runs.
