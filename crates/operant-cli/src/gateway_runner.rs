@@ -966,7 +966,6 @@ async fn handle_runtime_command(
             // touches transports and the registry, not the conversation,
             // and holding the lock through 60s server spawns would block
             // every chat's turns for a tools refresh.
-            let agent = Arc::clone(&handler.agent);
             let manager = handler.mcp_manager.clone();
             let servers = handler.mcp_server_configs.clone();
             let started = std::time::Instant::now();
@@ -986,9 +985,13 @@ async fn handle_runtime_command(
                     Err(e) => failures.push(format!("{name}: {e}")),
                 }
             }
-            // Materialize the tools into the LIVE registry (the same
-            // shared-map handle the agent reads per iteration).
-            let tools = manager.sync_tools_to_registry(&agent.registry()).await;
+            // Materialize the tools into EVERY slot's LIVE registry (RT-508:
+            // one manager, several agents — the MCP CHILDREN are shared, the
+            // registries are not, so each one needs the tools).
+            let mut tools = 0usize;
+            for slot in handler.slots.iter() {
+                tools += manager.sync_tools_to_registry(&slot.agent.registry()).await;
+            }
             let elapsed = started.elapsed().as_secs_f64();
             let mut msg = format!(
                 "🔄 MCP reload complete in {elapsed:.1}s — {} server(s) reconnected: {}.",
@@ -999,7 +1002,7 @@ async fn handle_runtime_command(
                     reconnected.join(", ")
                 }
             );
-            msg.push_str(&format!(" {tools} tool(s) synced to the live registry."));
+            msg.push_str(&format!(" {tools} tool(s) synced to the live registries."));
             if !failures.is_empty() {
                 msg.push_str(&format!(" Failed: {}", failures.join("; ")));
             }
@@ -1008,30 +1011,43 @@ async fn handle_runtime_command(
 
         // ── /reload-skills — rescan + runtime swap (set_skill_manager) ──
         "reload-skills" => {
-            let agent = Arc::clone(&handler.agent);
             let skills_dir = handler.skills_root_dir.clone();
-            let mut mgr = operant_core::skills::SkillManager::new(skills_dir.clone());
-            // Ponytail phase 3: keep the extra root across reloads — a
-            // rescan that silently dropped integration skills would make
-            // /skill ponytail-review fail right after a reload.
-            mgr.add_extra_root(operant_core::ponytail::installed_skills_dir());
-            // iter-1720: same duty for skill-plugin roots — a rescan must
-            // not drop a plugin's skills.
-            #[cfg(feature = "plugins-wasm")]
-            for root in handler.wasm_plugin_skill_roots.clone() {
-                mgr.add_extra_root(Some(root));
-            }
-            match mgr.load_all() {
-                Ok(loaded) => {
-                    let count = loaded.len();
-                    agent.set_skill_manager(Some(mgr));
+            // (RT-508) EVERY slot gets its own SkillManager: the field is
+            // owned by each agent, and a manager swapped into one slot
+            // would leave the other slots on the stale list.
+            let build = || {
+                let mut mgr = operant_core::skills::SkillManager::new(skills_dir.clone());
+                // Ponytail phase 3: keep the extra root across reloads — a
+                // rescan that silently dropped integration skills would make
+                // /skill ponytail-review fail right after a reload.
+                mgr.add_extra_root(operant_core::ponytail::installed_skills_dir());
+                // iter-1720: same duty for skill-plugin roots — a rescan must
+                // not drop a plugin's skills.
+                #[cfg(feature = "plugins-wasm")]
+                for root in handler.wasm_plugin_skill_roots.clone() {
+                    mgr.add_extra_root(Some(root));
+                }
+                mgr.load_all().map(|loaded| (mgr, loaded.len()))
+            };
+            match build() {
+                Ok((first, count)) => {
+                    let slots = handler.slots.iter().count();
+                    handler.slots.slots[0].agent.set_skill_manager(Some(first));
+                    let mut swapped = 1usize;
+                    for slot in &handler.slots.slots[1..] {
+                        if let Ok((mgr, _)) = build() {
+                            slot.agent.set_skill_manager(Some(mgr));
+                            swapped += 1;
+                        }
+                    }
                     tracing::info!(
                         skills = count,
+                        slots = swapped,
                         dir = %skills_dir.display(),
-                        "Gateway /reload-skills: rescanned and swapped the live skill manager"
+                        "Gateway /reload-skills: rescanned and swapped the live skill managers"
                     );
                     Some(format!(
-                        "🔄 Skills reloaded: {count} skill(s) from `{}` — the agent's next message sees the fresh list.",
+                        "🔄 Skills reloaded: {count} skill(s) from `{}` on {swapped} of {slots} agent slot(s) — the next message sees the fresh list.",
                         skills_dir.display()
                     ))
                 }
@@ -1060,7 +1076,7 @@ async fn handle_runtime_command(
                 // Read-only report of what the agent will send next.
                 // No session scope needed: the getter only touches the
                 // agent's own cell, not the conversation.
-                let held = handler.agent.reasoning_effort();
+                let held = handler.slots.slot_for(session_key).agent.reasoning_effort();
                 return Some(match held {
                     Some(e) => format!(
                         "🧮 Reasoning effort for this session: `{e}`.\nChange with `/effort off|minimal|low|medium|high|xhigh`."
@@ -1307,7 +1323,7 @@ async fn handle_runtime_command(
         // the turn agree about what is in there.
         "memory" => {
             let query = args.trim().to_string();
-            let provider = handler.agent.memory_provider();
+            let provider = handler.slots.slot_for(session_key).agent.memory_provider();
             let Some(provider) = provider else {
                 return Some(
                     "🧠 No memory backend is attached to this session.\nSet `[memory] provider` in the config (the default `memory-wire` is the in-process engine) and restart.".to_string(),
@@ -2181,8 +2197,79 @@ type ServerConfigTuple = (
     bool,
 );
 
-struct GatewayMessageHandler {
+/// How many agent slots the gateway runs (RT-508).
+///
+/// One slot per concurrent conversation: a slot is a full agent with its
+/// OWN conversation, so a turn in one slot cannot retarget another slot's
+/// turn — the corruption the single global lock existed to prevent.
+///
+/// Four is the default because a gateway serves a handful of seats, not a
+/// thousand: the slots exist so a busy chat does not block the others.
+/// The CLI's scale story is the daemon (RT-513): many clients, ONE
+/// process, one child set.
+const AGENT_SLOT_COUNT: usize = 4;
+
+/// One agent slot (RT-508).
+///
+/// The slot owns the agent AND the one-turn-at-a-time lock that used to
+/// be global. The lock is per slot because the agent is: two turns in the
+/// SAME slot serialize (they share the conversation), and two turns in
+/// DIFFERENT slots run concurrently.
+struct AgentSlot {
+    /// The slot's agent. Its conversation belongs to the sessions that
+    /// land in this slot.
     agent: Arc<OperantAgent>,
+    /// The agent's recap-engine activity handle (iters 793/794): the
+    /// dispatch notifies it on every user message so the idle recap is
+    /// cancelled by activity. It belongs to the AGENT, so it belongs to
+    /// the slot. `None` = the agent has no recap engine.
+    recap_activity: Option<operant_core::recap::RecapActivity>,
+    /// ONE turn at a time IN THIS SLOT.
+    lock: tokio::sync::Mutex<()>,
+}
+
+/// The gateway's agent slots (RT-508).
+///
+/// The gateway used to run ONE agent for the whole machine, so every
+/// chat's turn took the same global lock: a busy chat blocked every other
+/// chat, every platform and the cron agent, and the queue wait was
+/// measured but never acted on ("an agent per seat — measure queue wait
+/// first"). The slots are that upgrade path.
+struct AgentSlots {
+    slots: Vec<AgentSlot>,
+}
+
+impl AgentSlots {
+    /// The slot index for a session key.
+    ///
+    /// DETERMINISTIC, so a session always lands in the same slot and its
+    /// conversation is not swapped by another session between turns. The
+    /// hash is `DefaultHasher`, which is fixed-seeded — the mapping does
+    /// not change between runs, so a session keeps its slot across a
+    /// gateway restart.
+    fn index_for(&self, session_key: &str) -> usize {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let mut hasher = DefaultHasher::new();
+        session_key.hash(&mut hasher);
+        (hasher.finish() as usize) % self.slots.len().max(1)
+    }
+
+    /// The slot for a session key.
+    fn slot_for(&self, session_key: &str) -> &AgentSlot {
+        &self.slots[self.index_for(session_key)]
+    }
+
+    /// Every slot, for the drain (RT-508): a stopping gateway interrupts
+    /// every running turn, not just one.
+    fn iter(&self) -> impl Iterator<Item = &AgentSlot> {
+        self.slots.iter()
+    }
+}
+
+struct GatewayMessageHandler {
+    /// The agent slots this gateway runs turns on (RT-508).
+    slots: AgentSlots,
     /// `gateway.admins`. A turn from a sender outside this list is not retained
     /// as memory (KB-6).
     admins: Vec<String>,
@@ -2223,21 +2310,21 @@ struct GatewayMessageHandler {
     /// gateway turn's mirror of the scheduler's cron seam. `None` = no
     /// injection, turns byte-identical (dark-mergeable).
     context_injection: Option<Arc<operant_core::org::context_injection::ContextInjector>>,
-    /// One gateway turn at a time on the shared agent (2026-10-16 audit,
-    /// plan 06A). Every chat shares ONE `Arc<OperantAgent>` whose hot
-    /// conversation slot is swapped by `set_session_id`; two concurrent
+    /// (RT-508) The one-turn-at-a-time lock MOVED into the agent slots:
+    /// every chat used to share ONE `Arc<OperantAgent>` whose hot
+    /// conversation slot is swapped by `set_session_id`, so two concurrent
     /// turns retarget each other mid-run and one chat's tool results land
-    /// in the other's persisted transcript. Held from the retarget to the
-    /// end of `handle`.
-    // ponytail: one turn at a time. Upgrade path: an agent per seat (the
-    // create_runtime_agent seam) if a busy chat starves others — measure
-    // queue wait first.
-    turn_lock: tokio::sync::Mutex<()>,
-    /// The session whose turn currently holds `turn_lock` — the `/stop`
-    /// attach gate. The interrupt flag is ONE object shared by every
-    /// chat, so handing it to a non-running session's command context
-    /// would let that session stop someone else's turn.
-    running_session: std::sync::Mutex<Option<String>>,
+    /// in the other's persisted transcript. Each slot now owns an agent
+    /// AND its lock, so turns in different slots run concurrently and the
+    /// corruption the global lock prevented cannot happen.
+    /// The sessions whose turn currently holds a SLOT's lock, and the slot
+    /// each holds — the `/stop` attach gate. The interrupt flag is ONE
+    /// object per slot, so handing it to a non-running session's command
+    /// context would let that session stop someone else's turn.
+    ///
+    /// (RT-508) It is a MAP, not a single option: the slots run turns
+    /// concurrently, so several sessions can be running at once.
+    running_session: std::sync::Mutex<std::collections::HashMap<String, usize>>,
     /// Sessions whose still-queued turn the user `/stop`ped (W3-2). Written
     /// and consumed under the `running_session` mutex, so a stop decided
     /// "not running yet" can never race the turn's claim of the lock.
@@ -2296,8 +2383,11 @@ impl GatewayMessageHandler {
         F: FnOnce(Arc<OperantAgent>, String) -> Fut,
         Fut: std::future::Future<Output = String>,
     {
-        // 1. One mutation surface at a time — same lock a turn takes.
-        let _turn = self.turn_lock.lock().await;
+        // 1. One mutation surface at a time — the SLOT's lock, the same
+        // lock a turn in that slot takes (RT-508). A command for a chat
+        // in another slot is not blocked by this one.
+        let slot = self.slots.slot_for(session_key);
+        let _turn = slot.lock.lock().await;
 
         // 2. THIS chat's session id, resolved exactly as `handle` does.
         // The gateway lock is a tokio Mutex held by no other command-path
@@ -2319,10 +2409,10 @@ impl GatewayMessageHandler {
             .unwrap_or(derived);
         // Load THIS chat's transcript. The swap persists the outgoing
         // conversation back to the store, so no other chat loses context.
-        self.agent.set_session_id(session_id.clone());
+        slot.agent.set_session_id(session_id.clone());
 
         // 3. The operation, under the lock, against the invoker's session.
-        op(Arc::clone(&self.agent), session_id).await
+        op(Arc::clone(&slot.agent), session_id).await
     }
 
     /// Plan 06A: `/stop` may only stop the turn that currently holds
@@ -2338,7 +2428,7 @@ impl GatewayMessageHandler {
             .running_session
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        if running.as_deref() == Some(session_key) {
+        if running.contains_key(session_key) {
             turn_inflight.get(session_key).cloned()
         } else {
             None
@@ -2358,7 +2448,7 @@ impl GatewayMessageHandler {
             .running_session
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        if running.as_deref() != Some(session_key) && turn_inflight.contains_key(session_key) {
+        if !running.contains_key(session_key) && turn_inflight.contains_key(session_key) {
             self.cancelled_queued
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
@@ -2372,10 +2462,16 @@ impl GatewayMessageHandler {
 
 /// Clears `running_session` when the turn ends, on every return path — a
 /// stale "running" marker would send every later `/stop` into the void.
-struct RunningSessionGuard<'a>(&'a std::sync::Mutex<Option<String>>);
+struct RunningSessionGuard<'a> {
+    running: &'a std::sync::Mutex<std::collections::HashMap<String, usize>>,
+    session_key: String,
+}
 impl Drop for RunningSessionGuard<'_> {
     fn drop(&mut self) {
-        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        self.running
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&self.session_key);
     }
 }
 
@@ -2439,36 +2535,52 @@ impl MessageHandler for GatewayMessageHandler {
     /// shared interrupt flag can only reach the turn that is actually
     /// running — the same reasoning the `/stop` command uses.
     async fn drain(&self, timeout: Duration) -> DrainOutcome {
-        let running = self
-            .running_session
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
-        let Some(session) = running else {
-            return DrainOutcome::Idle;
-        };
-        tracing::info!(
-            session_id = %session,
-            timeout_secs = timeout.as_secs(),
-            "Draining the turn in flight before the gateway stops"
-        );
-        self.agent.interrupt_flag().trigger();
-        // The turn holds the lock for its whole run, so acquiring it means
-        // the turn ENDED. The bound keeps a wedged turn from holding the
-        // daemon's shutdown hostage.
-        match tokio::time::timeout(timeout, self.turn_lock.lock()).await {
-            Ok(_turn) => {
-                tracing::info!(session_id = %session, "The turn in flight was drained");
-                DrainOutcome::Drained
-            }
-            Err(_) => {
-                tracing::warn!(
-                    session_id = %session,
-                    "The turn in flight did not end inside the drain bound; stopping anyway"
-                );
-                DrainOutcome::TimedOut
+        // (RT-508) The slots run turns concurrently, so a stopping gateway
+        // must drain EVERY slot, not one turn.
+        let mut running_slots: Vec<usize> = Vec::new();
+        for (index, slot) in self.slots.iter().enumerate() {
+            if slot.lock.try_lock().is_err() {
+                running_slots.push(index);
+                // The interrupt is what makes the turn END — and it goes
+                // only to the slot that IS running: a slot with no turn
+                // must keep its flag clean, because the next turn in it
+                // would otherwise start already-interrupted.
+                slot.agent.interrupt_flag().trigger();
             }
         }
+        if running_slots.is_empty() {
+            return DrainOutcome::Idle;
+        }
+        tracing::info!(
+            slots = ?running_slots,
+            timeout_secs = timeout.as_secs(),
+            "Draining the turns in flight before the gateway stops"
+        );
+        // Each slot's turn holds its lock for the whole run, so acquiring
+        // the lock means the turn ENDED. One deadline for all the slots:
+        // the bound keeps a wedged turn from holding the daemon's
+        // shutdown hostage.
+        let deadline = tokio::time::Instant::now() + timeout;
+        for index in running_slots {
+            let slot = &self.slots.slots[index];
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
+                tracing::warn!(slot = index, "The drain bound expired; stopping anyway");
+                return DrainOutcome::TimedOut;
+            }
+            if tokio::time::timeout(remaining, slot.lock.lock())
+                .await
+                .is_err()
+            {
+                tracing::warn!(
+                    slot = index,
+                    "The turn in flight did not end inside the drain bound; stopping anyway"
+                );
+                return DrainOutcome::TimedOut;
+            }
+        }
+        tracing::info!("The turns in flight were drained");
+        DrainOutcome::Drained
     }
 
     async fn handle(&self, mut message: IncomingMessage) -> operant_core::Result<OutgoingMessage> {
@@ -2600,14 +2712,21 @@ impl MessageHandler for GatewayMessageHandler {
         let mut queued = false;
         // Queue visibility (plan 06A): if another chat's turn holds the
         // lock, show the platform typing indicator while this one waits.
-        if self.turn_lock.try_lock().is_err() {
+        // (RT-508) The slot is the unit of concurrency: the lock is the
+        // slot's, and the agent is the slot's.
+        let slot = self.slots.slot_for(&session_key);
+        if slot.lock.try_lock().is_err() {
             queued = true;
             let gw = self.gateway.lock().await;
             if let Some(ref g) = *gw {
                 let _ = g.send_typing(&message.platform, &message.channel_id, message.thread_id);
             }
         }
-        let _turn = self.turn_lock.lock().await;
+        let _turn = slot.lock.lock().await;
+
+        // (RT-508) The turn runs on ITS slot's agent: this conversation
+        // belongs to this slot, so no other chat can retarget it mid-run.
+        let agent = &slot.agent;
         let queue_wait = queue_wait_start.elapsed();
         if queued {
             self.queue_waits
@@ -2616,7 +2735,10 @@ impl MessageHandler for GatewayMessageHandler {
                 .record(queue_wait, &session_key);
         }
 
-        let _running_marker = RunningSessionGuard(&self.running_session);
+        let _running_marker = RunningSessionGuard {
+            running: &self.running_session,
+            session_key: session_key.clone(),
+        };
         {
             let mut running = self
                 .running_session
@@ -2631,13 +2753,13 @@ impl MessageHandler for GatewayMessageHandler {
             {
                 return Err(operant_core::Error::Interrupted);
             }
-            *running = Some(session_key.clone());
+            running.insert(session_key.clone(), self.slots.index_for(&session_key));
         }
         // Arm a clean interrupt latch at TURN START. This used to run in
         // the dispatch loop, where a second chat's dispatch could wipe a
         // `/stop` aimed at the RUNNING chat (plan 06A failure case 4).
         // Inside the lock the reset can only ever affect this turn.
-        self.agent.interrupt_flag().reset();
+        agent.interrupt_flag().reset();
         // Process-global per-turn state moves inside the lock for the same
         // reason (it used to be set in the dispatch closure, where two
         // overlapping chats could interleave their origins).
@@ -2655,12 +2777,11 @@ impl MessageHandler for GatewayMessageHandler {
         // `continue` after a restart came back to five prompts and no answers.
         // `set_session_id` takes `&self` and works through `Arc<OperantAgent>`,
         // the same shape as the `set_model` call further down.
-        self.agent.set_session_id(session_id.clone());
+        agent.set_session_id(session_id.clone());
 
         // Ensure session exists in DB
         let now = chrono::Utc::now().to_rfc3339();
-        let _ = self
-            .agent
+        let _ = agent
             .db()
             .save_session(&session_id, None, "gateway", &now, &now);
 
@@ -2785,12 +2906,12 @@ impl MessageHandler for GatewayMessageHandler {
             // after the operator changed the model, with a key that was
             // present the whole time. The `.env` rotation path already
             // has this fallback; this path needed the same one.
-            let current_key = self.agent.current_api_key();
-            self.agent.set_endpoint(
+            let current_key = agent.current_api_key();
+            agent.set_endpoint(
                 &endpoint.base_url,
                 endpoint.api_key.as_deref().or(current_key.as_deref()),
             );
-            self.agent.set_model(endpoint.model);
+            agent.set_model(endpoint.model);
         }
 
         // Read session metadata and apply overrides before running the agent.
@@ -2813,9 +2934,9 @@ impl MessageHandler for GatewayMessageHandler {
             // (iter-162: apply model override via agent.set_model(). Was
             // previously read but not applied — the agent's config.model
             // was private with no setter API.)
-            if *model != self.agent.model() {
+            if *model != agent.model() {
                 tracing::info!(model_override = %model, "Applying model override from session metadata");
-                self.agent.set_model(model.clone());
+                agent.set_model(model.clone());
             }
         }
 
@@ -2840,12 +2961,12 @@ impl MessageHandler for GatewayMessageHandler {
         let mut store_session_key: Option<String> = None;
         // GW-3: every turn starts unseated; the binding below sets the seat
         // again only when this chat has an employee.
-        self.agent.clear_seat_id();
+        agent.clear_seat_id();
         // KB-8: every turn starts in its unbound scope, so a sender with no
         // session row never inherits the previous turn's scope. A bound seat
         // overrides it below.
         let unbound_scope = unbound_scope_for(&self.admins, &message.platform, &message.user_id);
-        if let Some(p) = self.agent.memory_provider() {
+        if let Some(p) = agent.memory_provider() {
             p.set_scope(&unbound_scope);
         }
         {
@@ -2870,7 +2991,7 @@ impl MessageHandler for GatewayMessageHandler {
                     // mode; ungoverned (None) in personal mode. No charter
                     // injection — job descriptions are Holon's now.
                     if let Some(emp) = entry.employee_id.clone() {
-                        self.agent.set_seat_id(emp.clone());
+                        agent.set_seat_id(emp.clone());
                         // (plan 06B) the turn's memory bank follows the
                         // seat binding — inside the turn lock, so a
                         // concurrent chat's seat can never interleave: a
@@ -2878,13 +2999,13 @@ impl MessageHandler for GatewayMessageHandler {
                         // and never sees the personal bank or another
                         // seat's (the owner's unbound chats keep the
                         // personal bank).
-                        if let Some(p) = self.agent.memory_provider() {
+                        if let Some(p) = agent.memory_provider() {
                             p.set_scope(&operant_core::memory_wire::MemoryScope::Seat {
                                 identity: emp,
                             })
                         }
                     }
-                    self.agent.set_charter(None);
+                    agent.set_charter(None);
                     tracing::debug!(
                         session_key = %session_key,
                         "session runs as its bound employee"
@@ -3080,7 +3201,7 @@ impl MessageHandler for GatewayMessageHandler {
         let query = if let (Some(injector), Some(employee_id)) =
             (self.context_injection.as_ref(), bound_employee.as_ref())
         {
-            let charter = self.agent.charter();
+            let charter = agent.charter();
             let exclude = [operant_core::org::context_injection::content_hash(
                 &message.content,
             )];
@@ -3098,7 +3219,7 @@ impl MessageHandler for GatewayMessageHandler {
         tracing::info!(
             session_key = %session_key,
             session_id = %session_id,
-            agent_session_id = ?self.agent.session_id(),
+            agent_session_id = ?agent.session_id(),
             platform = %message.platform,
             channel = %message.channel_id,
             thread_id = ?message.thread_id,
@@ -3117,10 +3238,10 @@ impl MessageHandler for GatewayMessageHandler {
                     match seat_envelope {
                         Some(envelope) => {
                             operant_core::agent::SEAT_BUDGET_ENVELOPE
-                                .scope(envelope, self.agent.run(q))
+                                .scope(envelope, agent.run(q))
                                 .await
                         }
-                        None => self.agent.run(q).await,
+                        None => agent.run(q).await,
                     }
                 })
                 .await
@@ -3133,7 +3254,7 @@ impl MessageHandler for GatewayMessageHandler {
             run_result,
             Err(operant_core::error::Error::ContextExhausted { required: 0, .. })
         ) {
-            let (before, after) = self.agent.compact_history_now().await;
+            let (before, after) = agent.compact_history_now().await;
             tracing::warn!(
                 messages_before = before,
                 messages_after = after,
@@ -3360,8 +3481,7 @@ impl MessageHandler for GatewayMessageHandler {
                 // made a failed turn look like a message the bot ignored: the
                 // reloaded session showed prompts and no answers, so the history
                 // actively misrepresented what had happened.
-                let _ = self
-                    .agent
+                let _ = agent
                     .db()
                     .save_message(&session_id, "assistant", &text, &now);
 
@@ -3939,21 +4059,53 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
         "gateway",
     ));
     store_seat_approver(seat_approver);
-    let agent = crate::create_runtime_agent_with(
-        app_config,
-        &app_config.agent,
-        None,
-        event_tx.clone(),
-        &mcp_manager,
-        &app_config.skills.root_dir,
-        None, // gateway has no status bar; the agent keeps its internal registry
-        // `true`: this is the process's long-lived agent, so its LCM
-        // maintenance workers must spawn (cron below passes `false`).
-        true,
-        // BUGS.md D-5 — the hoisted pair; see the comment above.
-        Some(memory.clone()),
-    )
-    .await?;
+    // (RT-508) The agent SLOTS: one agent per slot, each with its OWN
+    // conversation. The gateway used to run ONE agent for the whole machine,
+    // so every chat's turn took the same global lock — a busy chat blocked
+    // every other chat, every platform and the cron agent, and the queue
+    // wait was measured but never acted on. The slots are that upgrade
+    // path, and they share the hoisted pair (memory), the MCP manager (so
+    // the MCP CHILDREN are shared) and the permission channel.
+    let mut slots: Vec<AgentSlot> = Vec::with_capacity(AGENT_SLOT_COUNT);
+    for _ in 0..AGENT_SLOT_COUNT {
+        let mut agent = crate::create_runtime_agent_with(
+            app_config,
+            &app_config.agent,
+            None,
+            event_tx.clone(),
+            &mcp_manager,
+            &app_config.skills.root_dir,
+            None, // gateway has no status bar; the agent keeps its internal registry
+            // `true`: these are the process's long-lived agents, so their
+            // LCM maintenance workers must spawn (cron passes `false`).
+            true,
+            // BUGS.md D-5 — the hoisted pair; see the comment above.
+            Some(memory.clone()),
+        )
+        .await?;
+        let idle = app_config.agent.recap_idle_seconds;
+        let gateway_recap_activity = agent.attach_recap_engine(
+            std::time::Duration::from_secs(idle),
+            app_config.recap.clone(),
+            crate::client_config(app_config),
+        );
+        agent.attach_advisor(app_config.advisor.clone(), crate::client_config(app_config));
+        slots.push(AgentSlot {
+            agent: Arc::new(
+                agent
+                    .with_permissions(permission_tx.clone())
+                    .with_seat_authority(Some(Arc::clone(&seat_authority))),
+            ),
+            recap_activity: Some(gateway_recap_activity),
+            lock: tokio::sync::Mutex::new(()),
+        });
+    }
+    let agent_count = slots.len();
+    tracing::info!(
+        slots = agent_count,
+        "The gateway agent slots are ready — each slot runs one conversation at \
+         a time, and the slots run concurrently"
+    );
     // Idle recap + advisor on the GATEWAY agent too (iters 793/794 wired
     // the TUI only — the flagship surface for both is a Telegram user
     // stepping away, so the gateway agent is where the engines earn their
@@ -3970,25 +4122,13 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
     // would double LLM spend on every org seat tick. The TUI and the live
     // gateway chat are the interactive surfaces; that is where the
     // engines run.
-    let mut agent = agent;
-    let idle = app_config.agent.recap_idle_seconds;
-    let gateway_recap_activity = agent.attach_recap_engine(
-        std::time::Duration::from_secs(idle),
-        app_config.recap.clone(),
-        crate::client_config(app_config),
-    );
-    agent.attach_advisor(app_config.advisor.clone(), crate::client_config(app_config));
     // Wire the permission channel so the agent can request approval for
     // dangerous tools (bash, file_write, file_edit). Without this, the
     // agent runs tools silently. (Bug #1 from iter-98 audit.)
     // Clone before the gateway agent consumes the sender. Cron gets the same
     // channel so its permission posture is UNCHANGED by this commit (see below).
+    // Cron gets the SAME permission channel (see the posture note below).
     let cron_permission_tx = permission_tx.clone();
-    let agent = Arc::new(
-        agent
-            .with_permissions(permission_tx)
-            .with_seat_authority(Some(Arc::clone(&seat_authority))),
-    );
 
     // Cron gets its OWN agent, not a clone of the gateway's.
     //
@@ -4114,7 +4254,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
     endpoint_changed_on_disk();
 
     let handler = Arc::new(GatewayMessageHandler {
-        agent,
+        slots: AgentSlots { slots },
         admins: app_config.gateway.admins.clone(),
         current_session_id: tokio::sync::Mutex::new(None),
         gateway: tokio::sync::Mutex::new(None),
@@ -4132,8 +4272,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
         )
         .ok()
         .map(Arc::new),
-        turn_lock: tokio::sync::Mutex::new(()),
-        running_session: std::sync::Mutex::new(None),
+        running_session: std::sync::Mutex::new(std::collections::HashMap::new()),
         cancelled_queued: Default::default(),
         // RT-175: the runtime-command handles. The MCP manager is the
         // SAME clone-over-Arc instance the agent's tools live behind;
@@ -5209,7 +5348,9 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
         // Idle-recap cancel handle (omp parity): cloned per turn so the
         // dispatch loop's original stays valid — same Arc-free clone
         // discipline as the channel clones above.
-        let recap_activity_for_turns = gateway_recap_activity.clone();
+        // (RT-508) The recap engine belongs to the AGENT, so the handle
+        // comes from the session's slot — the dispatch looks it up per
+        // turn.
         // A live handle on each running turn's interrupt flag, so `/stop` has
         // real machinery to signal: the agent's run loop already polls this
         // exact flag. A `()` here — which is what this used to be — meant there
@@ -5376,7 +5517,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                                     // boundary, so /steer from a channel
                                     // reaches the RUNNING turn like the TUI's.
                                     .with_steer_queue(Some(
-                                        handler_for_stop.agent.steer_queue_handle(),
+                                        handler_for_stop.slots.slot_for(&session_key).agent.steer_queue_handle(),
                                     ));
                                     if let Some(response_text) =
                                         handle_command(cmd_def.name, cmd_args, &ctx)
@@ -5681,7 +5822,13 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                         // never cleared would brick the agent for the rest
                         // of the session — the reset inside the lock keeps
                         // both invariants.
-                        let stop_flag = handler_for_stop.agent.interrupt_flag();
+                        // (RT-508) The interrupt flag belongs to the
+                        // session's slot's agent.
+                        let stop_flag = handler_for_stop
+                            .slots
+                            .slot_for(&session_key)
+                            .agent
+                            .interrupt_flag();
                         turn_inflight.insert(session_key.clone(), stop_flag);
                         let gw = gw_for_turns.clone();
                         let app_config_clone = app_config_for_turns.clone();
@@ -5689,7 +5836,13 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                         let current_channel = current_channel_for_turns.clone();
                         let telegram_token = telegram_token_for_turns.clone();
                         let done_tx = turn_done_tx.clone();
-                        let recap_activity_for_turn = recap_activity_for_turns.clone();
+                        // (RT-508) The recap engine belongs to the AGENT,
+                        // so the handle is the session's SLOT's.
+                        let recap_activity_for_turn = handler_for_stop
+                            .slots
+                            .slot_for(&session_key)
+                            .recap_activity
+                            .clone();
                         let session_pins_for_turns = session_pins.clone();
                         let session_channels_for_turns = session_channels.clone();
                         // The credential rotation below pushes a rotated
@@ -5886,7 +6039,9 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                     // User activity arrived: the recap exists to greet a
                     // returning user, never to interrupt one (omp parity —
                     // same contract as the TUI's submit_user_message).
-                    recap_activity_for_turn.notify();
+                    if let Some(activity) = &recap_activity_for_turn {
+                        activity.notify();
+                    }
                     // (notify is a try_send on the shared channel — the per-turn
                     // clone keeps the dispatch loop's original valid.)
 
@@ -5905,7 +6060,11 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                         .filter(|k| !k.trim().is_empty())
                     {
                         tracing::info!("credential rotated from .env; updating the live client");
-                        handler_for_turn.agent.set_api_key(key);
+                        handler_for_turn
+                            .slots
+                            .slot_for(&session_key)
+                            .agent
+                            .set_api_key(key);
                     }
                     if let Some(base_url) = rotated
                         .base_url
@@ -5918,7 +6077,11 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                         // change would leave the agent with no credential at
                         // all and the next request would fail with "no
                         // available keys".
-                        let current = handler_for_turn.agent.base_url();
+                        let current = handler_for_turn
+                            .slots
+                            .slot_for(&session_key)
+                            .agent
+                            .base_url();
                         if current.as_deref() != Some(base_url) {
                             tracing::info!("endpoint rotated from .env; updating the live client");
                             // Pass the key the client is USING when the file
@@ -5931,8 +6094,18 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                                 .as_deref()
                                 .filter(|k| !k.trim().is_empty())
                                 .map(str::to_string)
-                                .or_else(|| handler_for_turn.agent.current_api_key());
-                            handler_for_turn.agent.set_endpoint(base_url, key.as_deref());
+                                .or_else(|| {
+                        handler_for_turn
+                            .slots
+                            .slot_for(&session_key)
+                            .agent
+                            .current_api_key()
+                    });
+                            handler_for_turn
+                        .slots
+                        .slot_for(&session_key)
+                        .agent
+                        .set_endpoint(base_url, key.as_deref());
                         }
                     }
 

@@ -166,7 +166,7 @@ async fn record_feed_routes_channel_posts_through_the_seat_map() {
     );
     let handler = GatewayMessageHandler {
         admins: vec![],
-        agent,
+        slots: slot_pool(agent),
         current_session_id: tokio::sync::Mutex::new(None),
         gateway: tokio::sync::Mutex::new(None),
         session_pins: Arc::new(SessionPins::default()),
@@ -175,8 +175,7 @@ async fn record_feed_routes_channel_posts_through_the_seat_map() {
         summary_ttl_minutes: 30,
         default_budget: operant_core::config::BudgetSettings::default(),
         context_injection: Some(injector),
-        turn_lock: tokio::sync::Mutex::new(()),
-        running_session: std::sync::Mutex::new(None),
+        running_session: std::sync::Mutex::new(std::collections::HashMap::new()),
         cancelled_queued: Default::default(),
         // RT-175: runtime-command handles (unused by this suite — see
         // slow_echo_handler for the rationale).
@@ -328,23 +327,61 @@ impl operant_core::agent::ModelClient for SlowEchoClient {
 
 /// A handler over ONE shared agent with the scripted client — the
 /// production shape: every chat talks to the same `Arc<OperantAgent>`.
+/// Build the agent slots a test handler runs on (RT-508).
+///
+/// ONE slot: the tests exercise a single conversation, and the slot
+/// count is a production concern (how much concurrency the gateway runs).
+fn slot_pool(agent: Arc<OperantAgent>) -> AgentSlots {
+    slot_pool_of(vec![agent])
+}
+
+/// The slots for a test handler (RT-508): one agent per slot, each with
+/// its own lock.
+fn slot_pool_of(agents: Vec<Arc<OperantAgent>>) -> AgentSlots {
+    AgentSlots {
+        slots: agents
+            .into_iter()
+            .map(|agent| AgentSlot {
+                agent,
+                recap_activity: None,
+                lock: tokio::sync::Mutex::new(()),
+            })
+            .collect(),
+    }
+}
+
 fn slow_echo_handler(dir: &tempfile::TempDir, delay_ms: u64) -> Arc<GatewayMessageHandler> {
-    let db = Arc::new(
-        operant_core::database::Database::init(dir.path().join("agent.sqlite")).expect("db"),
-    );
-    let cfg = operant_core::agent::AgentConfig {
-        stream: false, // the scripted client answers through `chat`
-        ..operant_core::agent::AgentConfig::default()
-    };
-    let agent = Arc::new(operant_core::agent::OperantAgent::new(
-        cfg,
-        Box::new(SlowEchoClient { delay_ms }),
-        operant_core::tools::ToolRegistry::new(Duration::from_secs(5)),
-        db,
-    ));
+    slow_echo_handler_with_slots(dir, delay_ms, 1)
+}
+
+/// The same handler with N agent slots (RT-508): each slot gets its OWN
+/// agent — and so its own conversation — over its own database file.
+fn slow_echo_handler_with_slots(
+    dir: &tempfile::TempDir,
+    delay_ms: u64,
+    slot_count: usize,
+) -> Arc<GatewayMessageHandler> {
+    let mut slot_agents: Vec<Arc<operant_core::agent::OperantAgent>> = Vec::new();
+    for index in 0..slot_count.max(1) {
+        let db = Arc::new(
+            operant_core::database::Database::init(dir.path().join(format!("agent{index}.sqlite")))
+                .expect("db"),
+        );
+        let cfg = operant_core::agent::AgentConfig {
+            stream: false, // the scripted client answers through `chat`
+            ..operant_core::agent::AgentConfig::default()
+        };
+        slot_agents.push(Arc::new(operant_core::agent::OperantAgent::new(
+            cfg,
+            Box::new(SlowEchoClient { delay_ms }),
+            operant_core::tools::ToolRegistry::new(Duration::from_secs(5)),
+            db,
+        )));
+    }
+    let agent = Arc::clone(&slot_agents[0]);
     Arc::new(GatewayMessageHandler {
         admins: vec![],
-        agent,
+        slots: slot_pool_of(slot_agents),
         current_session_id: tokio::sync::Mutex::new(None),
         gateway: tokio::sync::Mutex::new(None),
         session_pins: Arc::new(SessionPins::default()),
@@ -353,8 +390,7 @@ fn slow_echo_handler(dir: &tempfile::TempDir, delay_ms: u64) -> Arc<GatewayMessa
         summary_ttl_minutes: 30,
         default_budget: operant_core::config::BudgetSettings::default(),
         context_injection: None,
-        turn_lock: tokio::sync::Mutex::new(()),
-        running_session: std::sync::Mutex::new(None),
+        running_session: std::sync::Mutex::new(std::collections::HashMap::new()),
         cancelled_queued: Default::default(),
         // RT-175: runtime-command handles. Empty MCP set (no servers to
         // reconnect) and a nonexistent skills dir (a rescan loads zero
@@ -427,7 +463,7 @@ fn context_exhaustion_handler(dir: &tempfile::TempDir) -> Arc<GatewayMessageHand
     ));
     Arc::new(GatewayMessageHandler {
         admins: vec![],
-        agent,
+        slots: slot_pool(agent),
         current_session_id: tokio::sync::Mutex::new(None),
         gateway: tokio::sync::Mutex::new(None),
         session_pins: Arc::new(SessionPins::default()),
@@ -436,8 +472,7 @@ fn context_exhaustion_handler(dir: &tempfile::TempDir) -> Arc<GatewayMessageHand
         summary_ttl_minutes: 30,
         default_budget: operant_core::config::BudgetSettings::default(),
         context_injection: None,
-        turn_lock: tokio::sync::Mutex::new(()),
-        running_session: std::sync::Mutex::new(None),
+        running_session: std::sync::Mutex::new(std::collections::HashMap::new()),
         cancelled_queued: Default::default(),
         mcp_manager: operant_core::mcp::McpManager::new(),
         mcp_server_configs: Vec::new(),
@@ -509,8 +544,8 @@ async fn concurrent_chats_keep_disjoint_transcripts() {
     ] {
         let key = format!("{platform}:{channel}:{user}");
         let sid = derived_gateway_session_id(&key);
-        handler.agent.set_session_id(sid);
-        let contents: Vec<String> = handler
+        handler.slots.slots[0].agent.set_session_id(sid);
+        let contents: Vec<String> = handler.slots.slots[0]
             .agent
             .conversation()
             .await
@@ -521,6 +556,114 @@ async fn concurrent_chats_keep_disjoint_transcripts() {
             contents,
             vec![format!("from-{tag}"), format!("answer-from-{tag}")],
             "session {key} must hold only its own turn"
+        );
+    }
+}
+
+/// (RT-508) Two chats in DIFFERENT slots turn at the SAME time, and each
+/// stored conversation holds only its own rows.
+///
+/// The gateway used to run ONE agent for the whole machine: every chat's
+/// turn took the same global lock, so a busy chat blocked every other
+/// chat, every platform and the cron agent — and the queue wait was
+/// measured but never acted on ("an agent per seat — measure queue wait
+/// first"). The slots are that upgrade path.
+///
+/// The proof is the RUNNING MAP: with one slot, chat B would be queued
+/// behind chat A and would never register as running while A is still in
+/// flight. With two slots both register, and each slot's agent keeps its
+/// own conversation.
+#[tokio::test]
+async fn two_slots_turn_concurrently_and_keep_disjoint_transcripts() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let handler = slow_echo_handler_with_slots(&dir, 300, 2);
+    let key_a = "telegram:c-a:u-a";
+    let key_b = "discord:c-b:u-b";
+    assert_ne!(
+        handler.slots.index_for(key_a),
+        handler.slots.index_for(key_b),
+        "the two chats must land in different slots for this test to measure \
+         concurrency"
+    );
+
+    let msg_a = IncomingMessage::new("telegram", "u-a", "A", "c-a", "from-A");
+    let msg_b = IncomingMessage::new("discord", "u-b", "B", "c-b", "from-B");
+
+    let h = Arc::clone(&handler);
+    let turn_a = tokio::spawn(async move { h.handle(msg_a).await });
+    // Wait until A is in flight.
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while !handler
+        .running_session
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .contains_key(key_a)
+    {
+        assert!(std::time::Instant::now() < deadline, "A never started");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+
+    let h = Arc::clone(&handler);
+    let turn_b = tokio::spawn(async move { h.handle(msg_b).await });
+    // BOTH turns must be in flight AT THE SAME TIME: the running map holds
+    // both keys. With one agent B would be queued behind A, and A's entry
+    // would be gone by the time B registered — so the two keys are never
+    // present together.
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let running = handler
+            .running_session
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        if running.contains_key(key_a) && running.contains_key(key_b) {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the two turns never ran at the same time — they are still serialized"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+
+    let out_a = turn_a.await.expect("join A").expect("A turn completes");
+    let out_b = turn_b.await.expect("join B").expect("B turn completes");
+    assert!(
+        out_a.content.contains("answer-from-A"),
+        "{:?}",
+        out_a.content
+    );
+    assert!(
+        out_b.content.contains("answer-from-B"),
+        "{:?}",
+        out_b.content
+    );
+
+    // Each stored conversation holds ONLY its own user message and answer.
+    for (platform, channel, user, tag, other) in [
+        ("telegram", "c-a", "u-a", "A", "B"),
+        ("discord", "c-b", "u-b", "B", "A"),
+    ] {
+        let key = format!("{platform}:{channel}:{user}");
+        let sid = derived_gateway_session_id(&key);
+        let slot = handler.slots.slot_for(&key);
+        slot.agent.set_session_id(sid);
+        let contents: Vec<String> = slot
+            .agent
+            .conversation()
+            .await
+            .iter()
+            .map(|m| m.content.clone())
+            .collect();
+        assert!(
+            contents.iter().any(|c| c.contains(&format!("from-{tag}"))),
+            "session {key} must hold its own turn, got {contents:?}"
+        );
+        assert!(
+            !contents
+                .iter()
+                .any(|c| c.contains(&format!("from-{other}"))),
+            "session {key} must not hold the other chat's turn, got {contents:?}"
         );
     }
 }
@@ -537,8 +680,8 @@ async fn stop_attaches_only_to_the_running_turns_session() {
     let key_b = "discord:c-b:u-b".to_string();
     // Both turns registered the way the dispatch loop registers them.
     let mut turn_inflight: HashMap<String, InterruptFlag> = HashMap::new();
-    turn_inflight.insert(key_a.clone(), handler.agent.interrupt_flag());
-    turn_inflight.insert(key_b.clone(), handler.agent.interrupt_flag());
+    turn_inflight.insert(key_a.clone(), handler.slots.slots[0].agent.interrupt_flag());
+    turn_inflight.insert(key_b.clone(), handler.slots.slots[0].agent.interrupt_flag());
 
     let h = Arc::clone(&handler);
     let msg_a = IncomingMessage::new("telegram", "u-a", "A", "c-a", "from-A");
@@ -552,7 +695,7 @@ async fn stop_attaches_only_to_the_running_turns_session() {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone();
-        if running.as_deref() == Some(key_a.as_str()) {
+        if running.contains_key(key_a.as_str()) {
             break;
         }
         assert!(
@@ -590,19 +733,18 @@ async fn stop_cancels_a_queued_turn_before_it_starts() {
     let key_a = "telegram:c-a:u-a".to_string();
     let key_b = "discord:c-b:u-b".to_string();
     let mut turn_inflight: HashMap<String, InterruptFlag> = HashMap::new();
-    turn_inflight.insert(key_a.clone(), handler.agent.interrupt_flag());
-    turn_inflight.insert(key_b.clone(), handler.agent.interrupt_flag());
+    turn_inflight.insert(key_a.clone(), handler.slots.slots[0].agent.interrupt_flag());
+    turn_inflight.insert(key_b.clone(), handler.slots.slots[0].agent.interrupt_flag());
 
     let h = Arc::clone(&handler);
     let msg_a = IncomingMessage::new("telegram", "u-a", "A", "c-a", "from-A");
     let turn_a = tokio::spawn(async move { h.handle(msg_a).await });
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    while handler
+    while !handler
         .running_session
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .as_deref()
-        != Some(key_a.as_str())
+        .contains_key(key_a.as_str())
     {
         assert!(std::time::Instant::now() < deadline, "A never started");
         tokio::time::sleep(Duration::from_millis(10)).await;
@@ -1460,7 +1602,7 @@ async fn gateway_effort_settles_into_the_agents_live_cell() {
     ));
     let handler = GatewayMessageHandler {
         admins: vec![],
-        agent: Arc::clone(&agent),
+        slots: slot_pool(Arc::clone(&agent)),
         current_session_id: tokio::sync::Mutex::new(None),
         gateway: tokio::sync::Mutex::new(None),
         session_pins: Arc::new(SessionPins::default()),
@@ -1469,8 +1611,7 @@ async fn gateway_effort_settles_into_the_agents_live_cell() {
         summary_ttl_minutes: 30,
         default_budget: operant_core::config::BudgetSettings::default(),
         context_injection: None,
-        turn_lock: tokio::sync::Mutex::new(()),
-        running_session: std::sync::Mutex::new(None),
+        running_session: std::sync::Mutex::new(std::collections::HashMap::new()),
         cancelled_queued: Default::default(),
         mcp_manager: operant_core::mcp::McpManager::new(),
         mcp_server_configs: Vec::new(),
@@ -1594,7 +1735,7 @@ async fn gateway_export_writes_this_sessions_transcript_as_markdown() {
     ));
     let handler = GatewayMessageHandler {
         admins: vec![],
-        agent: Arc::clone(&agent),
+        slots: slot_pool(Arc::clone(&agent)),
         current_session_id: tokio::sync::Mutex::new(None),
         gateway: tokio::sync::Mutex::new(None),
         session_pins: Arc::new(SessionPins::default()),
@@ -1603,8 +1744,7 @@ async fn gateway_export_writes_this_sessions_transcript_as_markdown() {
         summary_ttl_minutes: 30,
         default_budget: operant_core::config::BudgetSettings::default(),
         context_injection: None,
-        turn_lock: tokio::sync::Mutex::new(()),
-        running_session: std::sync::Mutex::new(None),
+        running_session: std::sync::Mutex::new(std::collections::HashMap::new()),
         cancelled_queued: Default::default(),
         mcp_manager: operant_core::mcp::McpManager::new(),
         mcp_server_configs: Vec::new(),
@@ -1726,7 +1866,7 @@ async fn gateway_memory_reports_the_live_provider_and_recalls_through_it() {
     );
     let handler = GatewayMessageHandler {
         admins: vec![],
-        agent: Arc::clone(&agent),
+        slots: slot_pool(Arc::clone(&agent)),
         current_session_id: tokio::sync::Mutex::new(None),
         gateway: tokio::sync::Mutex::new(None),
         session_pins: Arc::new(SessionPins::default()),
@@ -1735,8 +1875,7 @@ async fn gateway_memory_reports_the_live_provider_and_recalls_through_it() {
         summary_ttl_minutes: 30,
         default_budget: operant_core::config::BudgetSettings::default(),
         context_injection: None,
-        turn_lock: tokio::sync::Mutex::new(()),
-        running_session: std::sync::Mutex::new(None),
+        running_session: std::sync::Mutex::new(std::collections::HashMap::new()),
         cancelled_queued: Default::default(),
         mcp_manager: operant_core::mcp::McpManager::new(),
         mcp_server_configs: Vec::new(),
@@ -1824,7 +1963,7 @@ async fn gateway_skill_expands_a_real_installed_skill() {
 
     let handler = GatewayMessageHandler {
         admins: vec![],
-        agent: Arc::clone(&agent),
+        slots: slot_pool(Arc::clone(&agent)),
         current_session_id: tokio::sync::Mutex::new(None),
         gateway: tokio::sync::Mutex::new(None),
         session_pins: Arc::new(SessionPins::default()),
@@ -1833,8 +1972,7 @@ async fn gateway_skill_expands_a_real_installed_skill() {
         summary_ttl_minutes: 30,
         default_budget: operant_core::config::BudgetSettings::default(),
         context_injection: None,
-        turn_lock: tokio::sync::Mutex::new(()),
-        running_session: std::sync::Mutex::new(None),
+        running_session: std::sync::Mutex::new(std::collections::HashMap::new()),
         cancelled_queued: Default::default(),
         mcp_manager: operant_core::mcp::McpManager::new(),
         mcp_server_configs: Vec::new(),
@@ -1919,7 +2057,7 @@ async fn gateway_search_drives_the_session_search_tool_over_the_real_store() {
     ));
     let handler = GatewayMessageHandler {
         admins: vec![],
-        agent: Arc::clone(&agent),
+        slots: slot_pool(Arc::clone(&agent)),
         current_session_id: tokio::sync::Mutex::new(None),
         gateway: tokio::sync::Mutex::new(None),
         session_pins: Arc::new(SessionPins::default()),
@@ -1928,8 +2066,7 @@ async fn gateway_search_drives_the_session_search_tool_over_the_real_store() {
         summary_ttl_minutes: 30,
         default_budget: operant_core::config::BudgetSettings::default(),
         context_injection: None,
-        turn_lock: tokio::sync::Mutex::new(()),
-        running_session: std::sync::Mutex::new(None),
+        running_session: std::sync::Mutex::new(std::collections::HashMap::new()),
         cancelled_queued: Default::default(),
         mcp_manager: operant_core::mcp::McpManager::new(),
         mcp_server_configs: Vec::new(),
@@ -1996,23 +2133,25 @@ async fn the_drain_interrupts_the_turn_in_flight_and_waits_for_it_to_end() {
     );
 
     // A turn in flight: it holds the lock until it is interrupted.
-    let flag = handler.agent.interrupt_flag();
+    let flag = handler.slots.slots[0].agent.interrupt_flag();
     let task_flag = flag.clone();
+    // (RT-508) The turn signals that it HOLDS the slot's lock: the drain
+    // detects an in-flight turn by the lock being held, so the test must
+    // not race it.
+    let (holding_tx, holding_rx) = tokio::sync::oneshot::channel();
     let turn = tokio::spawn({
         let handler = handler.clone();
         async move {
-            let _turn = handler.turn_lock.lock().await;
+            let _turn = handler.slots.slots[0].lock.lock().await;
+            let _ = holding_tx.send(());
             while !task_flag.is_triggered() {
                 tokio::time::sleep(Duration::from_millis(5)).await;
             }
         }
     });
-    *handler
-        .running_session
-        .lock()
-        .unwrap_or_else(|e| e.into_inner()) = Some("s1".to_string());
-    // Let the turn claim the lock.
-    tokio::time::sleep(Duration::from_millis(20)).await;
+    holding_rx
+        .await
+        .expect("the turn must claim the slot's lock");
 
     let outcome = handler.drain(Duration::from_secs(5)).await;
     assert_eq!(
@@ -2037,18 +2176,18 @@ async fn a_wedged_turn_is_reported_as_a_timed_out_drain() {
     let handler = slow_echo_handler(&dir, 0);
 
     // A turn that ignores the interrupt and holds the lock.
+    let (holding_tx, holding_rx) = tokio::sync::oneshot::channel();
     let turn = tokio::spawn({
         let handler = handler.clone();
         async move {
-            let _turn = handler.turn_lock.lock().await;
+            let _turn = handler.slots.slots[0].lock.lock().await;
+            let _ = holding_tx.send(());
             tokio::time::sleep(Duration::from_secs(30)).await;
         }
     });
-    *handler
-        .running_session
-        .lock()
-        .unwrap_or_else(|e| e.into_inner()) = Some("s1".to_string());
-    tokio::time::sleep(Duration::from_millis(20)).await;
+    holding_rx
+        .await
+        .expect("the wedged turn must claim the slot's lock");
 
     let outcome = handler.drain(Duration::from_millis(100)).await;
     assert_eq!(
