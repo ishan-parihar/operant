@@ -9,6 +9,14 @@ impl App {
         cost_tracker: Arc<CostTracker>,
         command_registry: crate::commands::CommandRegistry,
     ) -> Self {
+        // The stall watchdog's monitor thread (RT-467). The module was
+        // ported with its bookkeeping primitives but without the monitor,
+        // so no thread ever read the beat clock and a frozen TUI left the
+        // log exactly as silent as the module exists to fix. The monitor is
+        // independent of the UI thread, which is the point: it still reports
+        // when the UI is wedged. `start_monitor` is idempotent, so the many
+        // `App::new` calls in the test suite start exactly one.
+        crate::tui::operant_app::logging::watchdog::start_monitor();
         let auth_store = crate::tui::adapter_types::AuthStore::load();
         // (plan 2026-10-24 M5) Start the personal-history word predictor
         // when enabled. The history load here is the same file up-arrow

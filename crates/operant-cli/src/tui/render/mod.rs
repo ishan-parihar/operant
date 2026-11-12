@@ -49,6 +49,15 @@ const SPINNER: &[char] = &[
 pub fn render_app(frame: &mut Frame, app: &App) {
     let size = frame.area();
 
+    // The stall watchdog's liveness signal (RT-467). A freeze stops the
+    // frames, so the frame path is the one place that can say the UI is
+    // alive — and `is_streaming` says whether a turn was in flight, which
+    // is what opens the stall gate (an idle TUI waiting for input is not
+    // stalled). This is the FIRST thing the frame does, because the error
+    // modal below returns early and a beat after that return would never
+    // be written on the one surface the operator is staring at.
+    crate::tui::operant_app::logging::watchdog::frame(app.is_streaming);
+
     // The ported jcode chrome (operant_ui::draw, upstream ui.rs:2659-3624) owns
     // the whole frame: the full-frame clear, every band, and the per-frame
     // colour substitution at its tail. operant's dispatch rows are gone; what
