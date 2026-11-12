@@ -140,6 +140,9 @@ impl OperantAgent {
             )),
             database,
             session_id: Arc::new(std::sync::RwLock::new(None)),
+            // (RT-511) No host has assigned a session yet; the turn
+            // prologue's own mint must not claim one.
+            host_assigned_session: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             seat_id: Arc::new(std::sync::RwLock::new(None)),
             charter: Arc::new(std::sync::RwLock::new(None)),
             standing_goal: Arc::new(std::sync::RwLock::new(None)),
@@ -240,6 +243,9 @@ impl OperantAgent {
             capability_manager: Arc::new(std::sync::RwLock::new(None)),
             database,
             session_id: Arc::new(std::sync::RwLock::new(None)),
+            // (RT-511) No host has assigned a session yet; the turn
+            // prologue's own mint must not claim one.
+            host_assigned_session: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             seat_id: Arc::new(std::sync::RwLock::new(None)),
             charter: Arc::new(std::sync::RwLock::new(None)),
             standing_goal: Arc::new(std::sync::RwLock::new(None)),

@@ -46,10 +46,48 @@ pub struct TurnContext {
     pub messages: Vec<Message>,
 }
 
-#[expect(
-    clippy::expect_used,
-    reason = "poisoned lock: panic is the intended recovery"
-)]
+/// A short, human-readable title for the interrupted-session marker.
+///
+/// The marker's title is what a resume notice shows without a database
+/// lookup, so it must be the operator's own words — their first prompt —
+/// and short enough to read at a glance.
+fn interrupted_title(query: &str) -> String {
+    const MAX: usize = 60;
+    let trimmed = query.trim();
+    if trimmed.chars().count() <= MAX {
+        return trimmed.to_string();
+    }
+    let head: String = trimmed.chars().take(MAX).collect();
+    format!("{}…", head.trim_end())
+}
+
+/// Clear the interrupted-session records for `session_id`.
+///
+/// (RT-511) The records are written when a turn STARTS, so a kill
+/// mid-turn leaves them behind. A turn that ended CLEANLY must take
+/// them back: the session was answered, and a leftover record would
+/// offer a resume for work that is already done.
+///
+/// The file marker is a single slot shared by every session in the
+/// home, so it is deleted only when it names THIS session — a clean
+/// turn in one session must not delete another session's offer.
+///
+/// Called on the clean terminal-reply paths only. A turn that was
+/// broken off (circuit breaker, interrupt, error, budget) leaves the
+/// records in place: that session WAS cut off, and that is the answer
+/// the operator needs.
+pub async fn clear_interrupted_records(agent: &OperantAgent, session_id: &str) {
+    if let Err(e) = agent.database.clear_session_interrupted(session_id) {
+        warn!(error = %e, "Failed to clear the interrupted-session flag");
+    }
+    if !crate::session_interrupted::clear_marker_for(session_id) {
+        debug!(
+            session_id = %session_id,
+            "No interrupted-session marker for this session to clear"
+        );
+    }
+}
+
 /// Run the once-per-turn setup and return the loop's input context.
 ///
 /// Performs:
@@ -62,6 +100,10 @@ pub struct TurnContext {
 ///
 /// Behavior is identical to the original inline prologue; this is a
 /// pure move-and-name refactor with no semantic change.
+#[expect(
+    clippy::expect_used,
+    reason = "poisoned lock: panic is the intended recovery"
+)]
 pub async fn build_turn_context(agent: &OperantAgent, user_query: &str) -> Result<TurnContext> {
     // ── 0. @-reference expansion ─────────────────────────────────────
     // Expand `@file:`, `@folder:`, `@git:…`, `@url:…` tokens the user typed
@@ -115,11 +157,21 @@ pub async fn build_turn_context(agent: &OperantAgent, user_query: &str) -> Resul
     // trajectory became unreachable: the gateway reloads its own
     // stable `gw_<hash>` id, which the per-turn `sess_<uuid>` rows never
     // appeared under.
+    // Whether a HOST owns this session id (the TUI/WebSocket via
+    // `with_persistent_session`, the gateway via `set_session_id`). Only a
+    // host-owned session has a boot path that can offer it back, and the
+    // file marker IS that offer — so it is written for those sessions and
+    // not for a one-shot run that minted its own id (RT-511).
+    let host_owned = agent.host_assigned_session();
     let session_id = match agent.session_id() {
         Some(id) => id,
         None => {
             let id = format!("sess_{}", uuid::Uuid::new_v4());
             agent.set_session_id(id.clone());
+            // The prologue's OWN mint is not a host assignment, and
+            // `set_session_id` cannot tell the two apart — so undo the
+            // mark here. Read BEFORE the mint (above), for the same reason.
+            agent.set_host_assigned_session(false);
             id
         }
     };
@@ -209,6 +261,37 @@ pub async fn build_turn_context(agent: &OperantAgent, user_query: &str) -> Resul
         // Not fatal: a stale flag costs one extra resume notice, and failing a
         // turn over it would be a far worse trade.
         warn!(error = %e, "Failed to clear the interrupted-session flag");
+    }
+
+    // ── 5b. Record that THIS session is live RIGHT NOW (RT-511) ──────
+    //
+    // The interrupted-session records used to be written by ONE path —
+    // the TUI's exit teardown — so a SIGKILL, a SIGTERM, a panic and
+    // every gateway exit wrote NOTHING: the next launch offered no
+    // resume notice, the session rendered as `Idle`, and
+    // `operant sessions list --interrupted` printed "No interrupted
+    // sessions" for a session that had been cut off mid-turn — the
+    // question the feature exists to answer, answered wrongly.
+    //
+    // The turn START is the only moment guaranteed to run before the
+    // work that can be interrupted, so that is where the records go:
+    // the file marker (the one-generation resume offer) and the DB flag
+    // (what the session list shows). The clear above must come FIRST —
+    // it retires the previous process's record, and this one replaces
+    // it.
+    //
+    // Both are best-effort: a turn must not fail over its own
+    // bookkeeping. A record that could not be written costs one resume
+    // offer; a turn that died over it costs the operator's work.
+    let title = interrupted_title(&effective_query);
+    if host_owned {
+        let marker = crate::session_interrupted::SessionInterrupted::new(&session_id, &title);
+        if let Err(e) = crate::session_interrupted::write_marker(&marker) {
+            warn!(error = %e, "Failed to write the interrupted-session marker");
+        }
+    }
+    if let Err(e) = agent.database.mark_session_interrupted(&session_id) {
+        warn!(error = %e, "Failed to flag the session interrupted");
     }
     // The operator's employee tag: stamp the seat on the row (plan
     // 2026-10-28 iter-A). Personal mode leaves the column NULL. A separate
@@ -523,7 +606,16 @@ mod tests {
         /// construction, which it never controls per chat.
         #[tokio::test]
         async fn host_assigned_session_id_receives_the_turn() {
+            // (RT-511) This turn is host-assigned, so it writes the
+            // interrupted-session marker. The home is therefore redirected
+            // to the test's own temp dir under the crate's environment
+            // lock: a test's marker must never land in the operator's real
+            // home, and must never race another test's marker.
+            let _env = crate::platform::test_env_lock().await;
             let dir = tempfile::tempdir().expect("tempdir");
+            let previous_home = std::env::var("HERMES_HOME").ok();
+            // SAFETY: serialised by the crate-wide environment lock.
+            unsafe { std::env::set_var("HERMES_HOME", dir.path()) };
             let db = Arc::new(Database::init(dir.path().join("t.db")).expect("db init"));
             let agent = agent_with_db(&db);
 
@@ -564,6 +656,92 @@ mod tests {
             assert_eq!(ws.session_id().as_deref(), Some("gw_ws"));
             let ws_ctx = build_turn_context(&ws, "ws turn").await.expect("ws turn");
             assert_eq!(ws_ctx.session_id, "gw_ws");
+
+            match previous_home {
+                Some(v) => unsafe { std::env::set_var("HERMES_HOME", v) },
+                None => unsafe { std::env::remove_var("HERMES_HOME") },
+            }
+        }
+
+        /// RT-511: a turn START records the session as live, and a CLEAN
+        /// end takes the record back.
+        ///
+        /// The records used to be written by ONE path — the TUI's exit
+        /// teardown — so a SIGKILL, a SIGTERM, a panic and every gateway
+        /// exit wrote NOTHING: the next launch offered no resume notice,
+        /// the session rendered as `Idle`, and `operant sessions list
+        /// --interrupted` printed "No interrupted sessions" for a session
+        /// that had been cut off mid-turn — the question the feature
+        /// exists to answer, answered wrongly.
+        ///
+        /// The marker file lives in the operant home, so the home is
+        /// redirected for the test's duration under the crate's
+        /// environment lock (the RT-99 pattern: prove the sandbox before
+        /// writing into it).
+        #[tokio::test]
+        async fn a_turn_start_records_the_session_as_live_and_a_clean_end_takes_it_back() {
+            let _env = crate::platform::test_env_lock().await;
+            let home =
+                std::env::temp_dir().join(format!("operant-turn-marker-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&home);
+            std::fs::create_dir_all(&home).expect("temp home");
+            let previous = std::env::var("HERMES_HOME").ok();
+            // SAFETY: serialised by the crate-wide environment lock, and
+            // restored before every assertion below.
+            unsafe { std::env::set_var("HERMES_HOME", &home) };
+            assert_eq!(
+                crate::platform::operant_home(),
+                home,
+                "the marker must be written into the TEST's home, never the operator's"
+            );
+
+            let db = Arc::new(Database::init(home.join("test.db")).expect("test db"));
+            // A HOST-owned session: only those have a boot path that can
+            // offer the resume back, which is what the file marker is for.
+            let agent = agent_with_db(&db).with_persistent_session("gw_marker".to_string());
+
+            // The turn prologue saves the session row BEFORE it flags it,
+            // so one turn is enough to leave both records behind.
+            build_turn_context(&agent, "do the thing")
+                .await
+                .expect("turn");
+
+            // The file marker: the one-generation resume offer.
+            let marker = crate::session_interrupted::read_marker()
+                .expect("the turn start must write the marker");
+            assert_eq!(marker.session_id, "gw_marker");
+            assert!(
+                marker.title.contains("do the thing"),
+                "the marker title must be the operator's prompt, got: {:?}",
+                marker.title
+            );
+
+            // The DB flag: what `operant sessions list --interrupted` reads.
+            assert!(
+                db.interrupted_session_ids()
+                    .expect("flag query")
+                    .contains(&"gw_marker".to_string()),
+                "the session must be flagged interrupted while the turn is live"
+            );
+
+            // A CLEAN end takes both back.
+            clear_interrupted_records(&agent, "gw_marker").await;
+
+            assert!(
+                crate::session_interrupted::read_marker().is_none(),
+                "a clean turn must not leave a resume offer behind"
+            );
+            assert!(
+                !db.interrupted_session_ids()
+                    .expect("flag query")
+                    .contains(&"gw_marker".to_string()),
+                "a clean turn must not leave the session flagged interrupted"
+            );
+
+            match previous {
+                Some(v) => unsafe { std::env::set_var("HERMES_HOME", v) },
+                None => unsafe { std::env::remove_var("HERMES_HOME") },
+            }
         }
     }
 }
