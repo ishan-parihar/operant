@@ -12,6 +12,13 @@ impl PromptInputState {
         parse_file_ref_token(&self.text[..self.cursor]).is_some()
     }
 
+    /// A live `/command` token under the caret — the gate for the popup's
+    /// Up/Down navigation. It used to be `text.starts_with('/')`, which
+    /// missed a command typed after prose (2026-11-12).
+    pub fn has_slash_command_token(&self) -> bool {
+        super::typeahead::slash_token_range(&self.text[..self.cursor]).is_some()
+    }
+
     /// Update typeahead suggestions for slash commands and file references in the current text.
     pub fn update_suggestions(
         &mut self,
@@ -157,9 +164,25 @@ impl PromptInputState {
         {
             let new_cursor = match s.source {
                 TypeaheadSource::SlashCommand => {
-                    // Replace entire text; discard anything after cursor too.
-                    self.text = s.text.clone();
-                    self.text.len()
+                    // Splice the command TOKEN — never the whole buffer.
+                    // The text in FRONT of the command and the draft tail
+                    // after the caret both survive (2026-11-12). The
+                    // whole-buffer rewrite this replaces deleted both: the
+                    // `@` arm has always spliced
+                    // (`accept_suggestion_file_ref_after_text_preserves_prefix`),
+                    // the slash arm never did.
+                    let tail = self.text[self.cursor..].to_string();
+                    match super::typeahead::slash_token_range(&self.text[..self.cursor]) {
+                        Some((start, _end)) => {
+                            let prefix = self.text[..start].to_string();
+                            self.text = format!("{}{}{}", prefix, s.text, tail);
+                            prefix.len() + s.text.len()
+                        }
+                        // No live token under the caret: an accept must not
+                        // touch the buffer (the anchor-less contract the
+                        // FileRef arm already has).
+                        None => self.cursor,
+                    }
                 }
                 TypeaheadSource::SkillRef => {
                     // Replace the live `$query` token with the chosen

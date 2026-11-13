@@ -2378,15 +2378,20 @@ impl App {
                     let area = self.last_input_area.get();
                     let width = area.width.saturating_sub(4) as usize;
                     self.prompt_input.move_visual_up(width);
-                } else if self.prompt_input.history_pos.is_some()
-                    && !self.prompt_input.text.contains('\n')
-                {
+                } else if self.prompt_input.history_pos.is_some() {
                     // (2026-10-25) Browsing wins over the popup (OMP
                     // precedence: #historyIndex > -1 first): Up steps to the
                     // older entry even if a stale popup lingers.
+                    //
+                    // (2026-11-12) The `!text.contains('\n')` half of this
+                    // guard is gone. A recalled MULTI-LINE entry made the
+                    // caret walk up a line instead of stepping the ladder,
+                    // so browsing never advanced past the first recall —
+                    // the operator's "up/dn must scroll the prompt history
+                    // rather than being blocked by the cursor position".
                     self.prompt_input.history_up();
                 } else if !self.prompt_input.suggestions.is_empty()
-                    && (self.prompt_input.text.starts_with('/')
+                    && (self.prompt_input.has_slash_command_token()
                         || self.prompt_input.has_active_file_ref())
                 {
                     // Suggestions visible: navigate them
@@ -2406,10 +2411,23 @@ impl App {
                         self.prompt_input.history_up();
                     }
                 } else {
-                    // Multi-line input: move cursor up within the text.
+                    // Multi-line input: move the caret up one visual row,
+                    // and fall through to HISTORY when the caret is
+                    // already on the top row. `move_visual_up` reports
+                    // whether it moved (2026-11-12: the return value was
+                    // discarded, so Up on the top row of a multi-line draft
+                    // did nothing at all — the caret could never reach the
+                    // history ladder). A zero width means the composer has
+                    // not been laid out yet: the visual-row model is
+                    // undefined there, so nothing is recalled.
                     let area = self.last_input_area.get();
                     let width = area.width.saturating_sub(4) as usize;
-                    self.prompt_input.move_visual_up(width);
+                    if width > 0
+                        && !self.prompt_input.move_visual_up(width)
+                        && !self.prompt_input.history.is_empty()
+                    {
+                        self.prompt_input.history_up();
+                    }
                 }
                 self.refresh_prompt_input();
             }
@@ -2433,14 +2451,15 @@ impl App {
                     let area = self.last_input_area.get();
                     let width = area.width.saturating_sub(4) as usize;
                     self.prompt_input.move_visual_down(width);
-                } else if self.prompt_input.history_pos.is_some()
-                    && !self.prompt_input.text.contains('\n')
-                {
+                } else if self.prompt_input.history_pos.is_some() {
                     // (2026-10-25) Browsing wins over the popup (OMP
                     // precedence): Down steps to the newer entry.
+                    //
+                    // (2026-11-12) The multi-line gate is gone — a recalled
+                    // multi-line entry must keep stepping the ladder.
                     self.prompt_input.history_down();
                 } else if !self.prompt_input.suggestions.is_empty()
-                    && (self.prompt_input.text.starts_with('/')
+                    && (self.prompt_input.has_slash_command_token()
                         || self.prompt_input.has_active_file_ref())
                 {
                     // Suggestions visible: navigate them

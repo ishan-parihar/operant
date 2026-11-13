@@ -156,6 +156,23 @@ fn model_word_eq_prev(head: &[u8], prev: &str) -> bool {
         && &head[head.len() - prev.len()..] == prev.as_bytes()
 }
 
+/// The seed dictionary's answer for `key`, offered only when the learned
+/// vocabulary knows no word under that prefix at all.
+///
+/// The frequency confidence is on the same `0.0..=1.0` scale the show
+/// threshold reads, so the operator's threshold setting governs the
+/// dictionary too: a higher threshold hides the rarer words.
+fn dictionary_answer(key: &str, threshold: f64, learned_has_prefix: bool) -> Option<Suggestion> {
+    if learned_has_prefix {
+        return None;
+    }
+    let (suffix, confidence) = super::dictionary::completion(key)?;
+    if confidence < threshold {
+        return None;
+    }
+    Some(Suggestion { suffix, confidence })
+}
+
 /// Best completion of `prefix` given the editor text before it and the
 /// session's submitted prompts. `None` = show no ghost.
 pub fn complete(
@@ -176,6 +193,14 @@ pub fn complete(
     // Vocabulary candidates: every word under the prefix feeds the mass;
     // eligibility only gates which may be OFFERED.
     let prefix_ids = model.prefix_ids(&key);
+    // Does the LEARNED side know anything under this prefix at all? The
+    // seed dictionary answers ONLY when it does not (2026-11-12): it fills a
+    // vocabulary gap and never competes with — or revives — what the
+    // operator's own history says.
+    let learned_has_prefix = !prefix_ids.is_empty()
+        || window
+            .keys()
+            .any(|word| word.starts_with(&key) && word.len() > key.len());
     let mut cands: Vec<(String, Cand)> = Vec::new();
     let mut mass = 0.0f64;
     for id in prefix_ids {
@@ -244,8 +269,15 @@ pub fn complete(
             best = Some((cand, value));
         }
     }
-    let ((word, _), value) = best?;
     let threshold = threshold_override.unwrap_or(p.show_threshold);
+    let Some(((word, _), value)) = best else {
+        // The learned vocabulary knows NO word under this prefix: the seed
+        // DICTIONARY answers instead (2026-11-12). Without it the predictor
+        // is silent until the operator has submitted the same word twice (the
+        // MIN_PROMPTS hygiene gate), so the ghost never appears at all on a
+        // fresh install.
+        return dictionary_answer(&key, threshold, learned_has_prefix);
+    };
     if value < threshold {
         return None;
     }
@@ -363,6 +395,36 @@ mod query_tests {
             decoded.bigram(tool, rel[0]) > 0.0,
             "the `tool reload` bigram must survive the load-time remap"
         );
+    }
+
+    #[test]
+    fn the_seed_dictionary_answers_a_prefix_the_learned_model_never_saw() {
+        // The cold-start case (2026-11-12): nothing has been submitted yet,
+        // so the learned vocabulary is empty and the seed dictionary answers.
+        let m = Model::default();
+        let s = complete(&m, &[], "please hel", "hel", None)
+            .expect("the seed dictionary completes an unseen word");
+        assert_eq!(s.suffix, "p");
+    }
+
+    #[test]
+    fn the_learned_model_outranks_the_seed_dictionary() {
+        // "parser" is the learned model's word after "refactor the"; the
+        // seed dictionary must never replace it.
+        let m = trained();
+        let s = complete(&m, &[], "can you refactor the par", "par", None)
+            .expect("the learned model completes");
+        assert_eq!(s.suffix, "ser");
+    }
+
+    #[test]
+    fn the_seed_dictionary_does_not_revive_a_word_the_hygiene_gate_rejected() {
+        // "parser" appears in ONE prompt only: the hygiene gate says do not
+        // suggest it, and the seed dictionary must not step in either.
+        let mut m = Model::default();
+        m.learn("can you refactor the parser");
+        let s = complete(&m, &[], "can you refactor the par", "par", None);
+        assert!(s.is_none(), "an ineligible learned word stays ineligible");
     }
 
     #[test]

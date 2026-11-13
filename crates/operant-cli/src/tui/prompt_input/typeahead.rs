@@ -261,11 +261,36 @@ pub fn file_ref_display_label(path: &str, is_dir: bool) -> String {
     }
 }
 
+/// The byte range of the slash-command completion token under the caret:
+/// the whitespace-delimited `/…` word that holds the last `/` before the
+/// caret.
+///
+/// The token is whitespace-delimited rather than "the text starts with `/`",
+/// so a command typed after prose completes too (`look at /rev`) and the
+/// accept splices exactly this token — the text in front of it survives.
+///
+/// A command name holds exactly one `/`; a word with a second one is a path
+/// (`/usr/bin`), and a path must never open the command popup.
+pub fn slash_token_range(before_cursor: &str) -> Option<(usize, usize)> {
+    let slash = before_cursor.rfind('/')?;
+    let start = before_cursor[..slash]
+        .rfind(char::is_whitespace)
+        .map_or(0, |i| i + 1);
+    let word = before_cursor[start..]
+        .split_whitespace()
+        .next()
+        .unwrap_or_default();
+    if !word.starts_with('/') || word[1..].contains('/') {
+        return None;
+    }
+    Some((start, start + word.len()))
+}
+
 /// The fuzzy-tier request for the current input, or `None` when the popup
 /// is not in an `@` file token or the tail after the last `/` is empty
 /// (pure listing mode — the synchronous immediate listing suffices).
 pub fn active_file_query(input: &str) -> Option<PendingFileQuery> {
-    if input.trim_start().starts_with('/') {
+    if input.trim_start().starts_with('/') || slash_token_range(input).is_some() {
         return None; // slash-command input: no file tier
     }
     let token = parse_file_ref_token(input)?;
@@ -292,18 +317,36 @@ pub fn compute_typeahead(
     file_autocomplete_limit: usize,
     file_autocomplete_show_hidden: bool,
 ) -> Vec<TypeaheadSuggestion> {
-    // Handle slash commands: /help, /clear, etc.
-    if input.starts_with('/') {
+    // Handle slash commands: /help, /clear, etc. The token is the
+    // whitespace-delimited `/…` word under the caret, so a command typed
+    // after prose completes too (2026-11-12: the text had to START with
+    // `/`, so "look at /rev" completed to nothing at all).
+    if let Some((start, end)) = slash_token_range(input) {
+        let token = &input[start..end];
+        let after = &input[end..];
         // /skill <prefix> and /bundle <prefix> expand to installed skill /
         // bundle names (hermes parity — the model-facing expansion takes a
         // name, so completing the name is the useful step).
-        if let Some(rest) = input.strip_prefix("/skill ") {
-            return compute_name_completions("skill", rest, TypeaheadSource::SlashCommand);
+        if token == "/skill" && after.starts_with(char::is_whitespace) {
+            return compute_name_completions(
+                "skill",
+                after.trim_start(),
+                TypeaheadSource::SlashCommand,
+            );
         }
-        if let Some(rest) = input.strip_prefix("/bundle ") {
-            return compute_name_completions("bundle", rest, TypeaheadSource::SlashCommand);
+        if token == "/bundle" && after.starts_with(char::is_whitespace) {
+            return compute_name_completions(
+                "bundle",
+                after.trim_start(),
+                TypeaheadSource::SlashCommand,
+            );
         }
-        return compute_slash_suggestions(input, slash_commands, usage);
+        // The caret has left the command name (a space follows it): the name
+        // is complete, so the command popup closes.
+        if after.starts_with(char::is_whitespace) {
+            return Vec::new();
+        }
+        return compute_slash_suggestions(token, slash_commands, usage);
     }
 
     // Handle file references: @, @/, @~/, @src/, etc.

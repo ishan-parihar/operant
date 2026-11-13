@@ -389,11 +389,14 @@ fn command_suggestion_lines(
 /// Extract the slash-command portion of the typed input that should be matched
 /// against suggestion command tokens for highlighting purposes.
 fn command_suggestion_needle(input: &str) -> Option<String> {
+    // The needle is the `/command` WORD, not the whole line: a command typed
+    // after prose ("look at /rev") highlights against its own token
+    // (2026-11-12). The word must not hold a second `/` — that is a path.
     let trimmed = input.trim_start();
-    if !trimmed.starts_with('/') {
-        return None;
-    }
-    Some(trimmed.to_string())
+    let word = trimmed
+        .split_whitespace()
+        .find(|word| word.starts_with('/') && !word[1..].contains('/'))?;
+    Some(word.to_string())
 }
 
 /// Build spans for a suggestion command, recoloring the characters that the
@@ -2861,16 +2864,8 @@ pub(super) fn draw_input(
     Some(cursor)
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct WrappedInputSegment {
-    text: String,
-    start_char: usize,
-    end_char: usize,
-    display_width: usize,
-}
-
 /// Wrapped/raw text plus the wrapped-to-raw line map for the composer's
-/// copy-selection snapshot. Wrapped rows mirror `wrap_input_segments` exactly
+/// copy-selection snapshot. Wrapped rows mirror `wrap_input_rows` exactly
 /// (the same function that lays out the rendered rows), while raw lines are
 /// the logical `\n`-separated input lines, so copying a selection that spans
 /// a soft wrap yields the original text without injected line breaks.
@@ -2884,7 +2879,7 @@ pub(crate) fn input_copy_snapshot_parts(
 ) -> (Vec<String>, Vec<String>, Vec<super::WrappedLineMap>) {
     use unicode_width::UnicodeWidthChar;
 
-    let segments = wrap_input_segments(input, line_width);
+    let segments = crate::tui::prompt_input::wrap_input_rows(input, line_width);
     let raw_lines: Vec<String> = input.split('\n').map(str::to_owned).collect();
 
     // (raw_line, display_col) at each char boundary of the input.
@@ -2919,83 +2914,13 @@ pub(crate) fn input_copy_snapshot_parts(
     (wrapped_plain, raw_lines, line_map)
 }
 
-fn wrap_input_segments(input: &str, line_width: usize) -> Vec<WrappedInputSegment> {
-    use unicode_width::UnicodeWidthChar;
-
-    let chars: Vec<char> = input.chars().collect();
-    if chars.is_empty() {
-        return vec![WrappedInputSegment {
-            text: String::new(),
-            start_char: 0,
-            end_char: 0,
-            display_width: 0,
-        }];
-    }
-
-    let mut segments = Vec::new();
-    let mut pos = 0;
-    let mut char_count = 0;
-
-    while pos <= chars.len() {
-        let newline_pos = chars[pos..].iter().position(|&c| c == '\n');
-        let segment_end = match newline_pos {
-            Some(rel_pos) => pos + rel_pos,
-            None => chars.len(),
-        };
-
-        let segment = &chars[pos..segment_end];
-        let mut seg_pos = 0;
-        loop {
-            let mut display_width = 0;
-            let mut end = seg_pos;
-            while end < segment.len() {
-                let cw = segment[end].width().unwrap_or(0);
-                if display_width + cw > line_width {
-                    break;
-                }
-                display_width += cw;
-                end += 1;
-            }
-            if end == seg_pos && seg_pos < segment.len() {
-                end = seg_pos + 1;
-                display_width = segment[seg_pos].width().unwrap_or(0);
-            }
-
-            let text: String = segment[seg_pos..end].iter().collect();
-            let start_char = char_count;
-            let end_char = char_count + (end - seg_pos);
-            segments.push(WrappedInputSegment {
-                text,
-                start_char,
-                end_char,
-                display_width,
-            });
-            char_count = end_char;
-
-            if end >= segment.len() {
-                break;
-            }
-            seg_pos = end;
-        }
-
-        if newline_pos.is_some() {
-            char_count += 1;
-            pos = segment_end + 1;
-        } else {
-            break;
-        }
-    }
-
-    segments
-}
-
 /// [operant adaptation] Split one wrapped segment's text into up to three
 /// spans (before / selected / after) when the active shift-selection
 /// intersects it. Selection is char-index space, clamped to the segment;
 /// jcode paints its textarea selection as reverse video, so that's the style
 /// used here.
 fn selected_text_spans(
-    segment: &WrappedInputSegment,
+    segment: &crate::tui::prompt_input::VisualRow,
     sel_chars: Option<(usize, usize)>,
 ) -> Vec<Span<'static>> {
     let text = &segment.text;
@@ -3026,7 +2951,10 @@ fn selected_text_spans(
     spans
 }
 
-fn cursor_col_for_segment(segment: &WrappedInputSegment, cursor_char_pos: usize) -> usize {
+fn cursor_col_for_segment(
+    segment: &crate::tui::prompt_input::VisualRow,
+    cursor_char_pos: usize,
+) -> usize {
     use unicode_width::UnicodeWidthChar;
 
     let chars_before = cursor_char_pos.saturating_sub(segment.start_char);
@@ -3117,7 +3045,7 @@ fn wrap_input_text_gutter<'a>(
             crate::tui::operant_app::core::byte_offset_to_char_index(input, e),
         )
     });
-    let wrapped_segments = wrap_input_segments(input, line_width);
+    let wrapped_segments = crate::tui::prompt_input::wrap_input_rows(input, line_width);
     let mut lines: Vec<Line> = Vec::new();
     let mut cursor_line = 0;
     let mut cursor_col = 0;
@@ -3240,7 +3168,7 @@ pub(crate) fn visual_line_move(
     }
     let cursor_char_pos =
         crate::tui::operant_app::core::byte_offset_to_char_index(input, cursor_pos);
-    let segments = wrap_input_segments(input, line_width);
+    let segments = crate::tui::prompt_input::wrap_input_rows(input, line_width);
     if segments.len() < 2 {
         return None;
     }

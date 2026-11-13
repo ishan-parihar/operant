@@ -1187,7 +1187,16 @@ fn every_advertised_binding_dispatches() {
         // chords — were unguarded: a repurposed chord there (Alt+V's "Toggle
         // Vim mode" was advertised and dispatched by NOTHING) had nothing to
         // fail. These are the Prompt rows, checked the same way.
-        ("Enter", "Submit prompt"),
+        // The description names the ACTUAL dispatch (iter-2172): Enter while
+        // a turn streams STEERS that turn rather than starting a new one, so
+        // the catalogue row says so. The pin was still the pre-2172 short
+        // string, and the "one chord, one description" invariant this list
+        // enforces could not be satisfied by shortening the row back — the
+        // row is right and the pin was stale.
+        (
+            "Enter",
+            "Submit prompt (steers the running turn while it streams)",
+        ),
         ("Shift+Enter", "Insert newline"),
         ("Esc", "Cancel"),
         ("Tab", "Accept completion"),
@@ -5091,6 +5100,71 @@ fn test_down_moves_forward_through_history() {
         "Down is catalogued as \"Next history\"; it must advance the index"
     );
     assert_eq!(app.prompt_input.text, "newer");
+}
+
+/// The operator's contract (2026-11-12): "the up/dn keys must seamlessly
+/// scroll between the previous prompt history rather than getting blocked
+/// due to incorrect cursor position which must be at top/bottom when
+/// navigating". Up walks the draft's visual rows first and falls through
+/// to the history ladder when the caret is ALREADY on the top row — the
+/// caret may only block the ladder while there is a row above it.
+#[test]
+fn up_walks_the_draft_rows_then_recalls_the_history_at_the_top_row() {
+    let mut app = make_app();
+    app.last_input_area
+        .set(ratatui::prelude::Rect::new(0, 0, 80, 12));
+    app.prompt_input.history = vec!["older prompt".to_string(), "newest prompt".to_string()];
+    app.prompt_input.text = "line one\nline two".to_string();
+    app.prompt_input.cursor = app.prompt_input.text.len();
+    app.refresh_prompt_input();
+
+    // The caret starts on the LAST visual row: Up walks the text.
+    app.handle_key_event(press_key(KeyCode::Up, KeyModifiers::NONE));
+    assert_eq!(
+        app.prompt_input.text, "line one\nline two",
+        "Up moves the caret inside the draft while a row is above it"
+    );
+    assert_eq!(
+        app.prompt_input.history_pos, None,
+        "the draft is not history until the caret is on the top row"
+    );
+
+    // The caret is now on the TOP visual row: Up recalls the newest entry.
+    app.prompt_input.cursor = 0;
+    app.handle_key_event(press_key(KeyCode::Up, KeyModifiers::NONE));
+    assert_eq!(app.prompt_input.text, "newest prompt");
+    assert_eq!(app.prompt_input.history_pos, Some(1));
+}
+
+/// A recalled MULTI-LINE entry must keep stepping the ladder — the browsing
+/// branch used to be gated on single-line text, so Up/Down fed the caret
+/// instead of the history.
+#[test]
+fn a_recalled_multiline_entry_still_steps_the_history_ladder() {
+    let mut app = make_app();
+    app.last_input_area
+        .set(ratatui::prelude::Rect::new(0, 0, 80, 12));
+    app.prompt_input.history = vec!["older\nprompt".to_string(), "newest\nprompt".to_string()];
+    app.prompt_input.text = "draft".to_string();
+    app.refresh_prompt_input();
+
+    app.handle_key_event(press_key(KeyCode::Up, KeyModifiers::NONE));
+    assert_eq!(app.prompt_input.text, "newest\nprompt");
+
+    // The recalled entry is multi-line: Up must STILL step the ladder.
+    app.handle_key_event(press_key(KeyCode::Up, KeyModifiers::NONE));
+    assert_eq!(app.prompt_input.text, "older\nprompt");
+    assert_eq!(app.prompt_input.history_pos, Some(0));
+
+    // Down walks back toward the draft, and the draft comes back intact.
+    app.handle_key_event(press_key(KeyCode::Down, KeyModifiers::NONE));
+    assert_eq!(app.prompt_input.text, "newest\nprompt");
+    app.handle_key_event(press_key(KeyCode::Down, KeyModifiers::NONE));
+    assert_eq!(
+        app.prompt_input.text, "draft",
+        "walking past the newest entry restores the operator's draft"
+    );
+    assert_eq!(app.prompt_input.history_pos, None);
 }
 
 #[test]

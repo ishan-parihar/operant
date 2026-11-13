@@ -36,7 +36,9 @@ impl PromptInputState {
         if operant_core::skill_mentions::active_skill_token(before_cursor).is_some() {
             return None; // inside a $skill mention
         }
-        if self.text.trim_start().starts_with('/') {
+        if self.text.trim_start().starts_with('/')
+            || super::typeahead::slash_token_range(&self.text[..self.cursor]).is_some()
+        {
             return None; // slash-command input
         }
         if before_cursor.matches('`').count() % 2 == 1 {

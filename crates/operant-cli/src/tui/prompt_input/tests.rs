@@ -1640,6 +1640,54 @@ fn has_active_file_ref_no_at() {
     assert!(!s.has_active_file_ref());
 }
 
+// ---- the caret and the painter must agree on the row -------------------
+
+/// The caret's row and the painter's row are ONE model now (2026-11-12).
+/// The caret used to resolve its row as `display_col / width`, which put a
+/// caret sitting at the end of a full-width row on the NEXT row — and Up/Down
+/// then walked a row the operator cannot see.
+#[test]
+fn the_caret_row_is_the_row_the_painter_draws() {
+    let mut s = PromptInputState::new();
+    s.text = "abcdefghij".to_string(); // exactly one full row of ten cells
+    s.cursor = s.text.len();
+    let rows = super::visual::wrap_input_rows(&s.text, 10);
+    assert_eq!(rows.len(), 1, "the line fits in one painted row");
+    assert_eq!(
+        s.cursor_visual_pos(10),
+        (0, 10),
+        "the caret stays on the row the painter drew"
+    );
+}
+
+/// A CJK row is ten cells wide but only five characters: the caret must still
+/// land on the painted row, and the column must be a DISPLAY column.
+#[test]
+fn the_caret_column_is_a_display_column_on_a_cjk_row() {
+    let mut s = PromptInputState::new();
+    s.text = "你你你你你".to_string();
+    s.cursor = s.text.len();
+    let rows = super::visual::wrap_input_rows(&s.text, 10);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(s.cursor_visual_pos(10), (0, 10));
+}
+
+/// Up from the second painted row lands on the first painted row's end — the
+/// old model computed the target as "row index × width CHARACTERS", which is
+/// a byte offset past the end of a CJK row.
+#[test]
+fn moving_up_lands_on_the_painted_row() {
+    let mut s = PromptInputState::new();
+    s.text = "你你你你你你你你你你".to_string(); // ten wide chars = two rows
+    s.cursor = s.text.len();
+    assert!(s.move_visual_up(10), "there is a row above");
+    assert_eq!(
+        s.cursor,
+        "你你你你你".len(),
+        "the caret lands at the end of the first painted row"
+    );
+}
+
 // ---- accept_suggestion FileRef tests ------------------------------------
 
 #[test]
@@ -1697,6 +1745,100 @@ fn accept_suggestion_file_ref_preserves_tail() {
     // The tail already starts with a space: no second one is inserted.
     assert_eq!(s.text, "@file:src/main.rs more text");
     assert_eq!(s.cursor, "@file:src/main.rs".len());
+}
+
+// ---- slash-command completion: the TOKEN is spliced, never the buffer ---
+
+/// The operator's contract (2026-11-12): "when using tab with slash
+/// command, all text in front of it must not be deleted". The accept
+/// replaces the `/command` TOKEN and leaves every other character of the
+/// draft alone.
+#[test]
+fn accept_suggestion_slash_command_preserves_the_text_in_front() {
+    let mut s = PromptInputState::new();
+    s.text = "look at /rev".to_string();
+    s.cursor = s.text.len();
+    s.suggestions = vec![TypeaheadSuggestion {
+        text: "/review".to_string(),
+        display: "/review".to_string(),
+        description: "review".to_string(),
+        source: TypeaheadSource::SlashCommand,
+    }];
+    s.suggestion_index = Some(0);
+    s.accept_suggestion();
+    assert_eq!(s.text, "look at /review");
+    assert_eq!(s.cursor, "look at /review".len());
+}
+
+/// The same contract for the DRAFT TAIL: a multi-line prompt whose first
+/// line is a command must survive the accept. The whole-buffer rewrite
+/// this replaces deleted the tail (and every line below it).
+#[test]
+fn accept_suggestion_slash_command_preserves_the_draft_tail() {
+    let mut s = PromptInputState::new();
+    s.text = "/rev\nand some notes".to_string();
+    s.cursor = 4;
+    s.suggestions = vec![TypeaheadSuggestion {
+        text: "/review".to_string(),
+        display: "/review".to_string(),
+        description: "review".to_string(),
+        source: TypeaheadSource::SlashCommand,
+    }];
+    s.suggestion_index = Some(0);
+    s.accept_suggestion();
+    assert_eq!(s.text, "/review\nand some notes");
+    assert_eq!(s.cursor, "/review".len());
+}
+
+/// An accept with no live token under the caret must not touch the buffer.
+#[test]
+fn accepting_a_slash_command_with_no_token_never_clobbers_the_buffer() {
+    let mut s = PromptInputState::new();
+    s.text = "look at /rev".to_string();
+    s.cursor = 0;
+    s.suggestions = vec![TypeaheadSuggestion {
+        text: "/review".to_string(),
+        display: "/review".to_string(),
+        description: "review".to_string(),
+        source: TypeaheadSource::SlashCommand,
+    }];
+    s.suggestion_index = Some(0);
+    s.accept_suggestion();
+    assert_eq!(s.text, "look at /rev");
+}
+
+/// The popup opens on the `/command` TOKEN under the caret, not only when
+/// the text starts with `/`.
+#[test]
+fn a_slash_command_after_prose_opens_the_popup() {
+    let cmds = [("review", "Review")];
+    let suggestions = compute_typeahead("look at /rev", &cmds, &UsageStore::default(), 15, false);
+    assert_eq!(suggestions.len(), 1);
+    assert_eq!(suggestions[0].text, "/review");
+}
+
+/// A PATH is not a command: a token with a second `/` never opens the
+/// command popup.
+#[test]
+fn a_path_token_never_opens_the_command_popup() {
+    let cmds = [("review", "Review")];
+    for input in ["/usr/bin", "/usr/b", "see /usr/bin"] {
+        assert!(
+            compute_typeahead(input, &cmds, &UsageStore::default(), 15, false).is_empty(),
+            "{input} must not offer slash commands"
+        );
+    }
+}
+
+/// The command name ends at the space: the popup closes once the caret
+/// leaves the name.
+#[test]
+fn the_command_popup_closes_after_the_command_name() {
+    let cmds = [("review", "Review")];
+    assert!(
+        compute_typeahead("/review ", &cmds, &UsageStore::default(), 15, false).is_empty(),
+        "a completed command name closes the popup"
+    );
 }
 
 // ---- history-nav fix (2026-10-25): recall must not open the popup ----

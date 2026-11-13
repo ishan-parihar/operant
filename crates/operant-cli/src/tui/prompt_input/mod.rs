@@ -36,6 +36,7 @@ pub use typeahead::{
     fuzzy_file_suggestions, parse_file_ref_token, register_invocable_skills,
 };
 pub use vim::{DotRepeatAction, VimFindKind, VimMode, VimPendingState, apply_vim_key};
+pub use visual::{VisualRow, wrap_input_rows};
 
 // Only `tests.rs` needs this in scope (it resolves `Color` through
 // `use super::*`); production code reads its colours from `theme_colors`.

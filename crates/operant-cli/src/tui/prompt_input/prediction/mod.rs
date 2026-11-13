@@ -15,6 +15,7 @@
 //!                                   └─ persist()         [clean exit]
 //! ```
 
+pub mod dictionary;
 pub mod model;
 pub mod query;
 pub mod snapshot;
