@@ -972,6 +972,93 @@ fn a_subagent_row_names_its_delegation_status_without_focusing_it() {
     );
 }
 
+// ---- (audit 2026-11-13, finding 1) the directory reaches the row and the pane ----
+
+/// The row shows a session's directory. `sessions.cwd` was never written by any
+/// production path before that audit, so this span was silent for the hub's
+/// whole life — the write now lands at turn_context.rs beside the seat stamp.
+#[test]
+fn a_session_row_names_its_directory() {
+    let mut r = row("s-dir", Some("in the repo"), None);
+    r.cwd = Some("/srv/agentic-harness/operant".to_string());
+    let (list, _preview) = hub_rows(vec![r]);
+    let joined = list.join("\n");
+    assert!(
+        joined.contains("\u{1f4c2} operant"),
+        "the row must carry the directory's basename: {joined}"
+    );
+}
+
+/// The basename is not the path, and the FULL path must be recoverable — the
+/// preview's `project:` line is where it lives (codex's details pane prints the
+/// thread's cwd the same way, agents_overview_view.rs:535-536).
+#[test]
+fn the_preview_names_the_full_project_path() {
+    let mut r = row("s-dir", Some("in the repo"), None);
+    r.cwd = Some("/srv/agentic-harness/operant".to_string());
+    let (_list, preview) = hub_rows(vec![r]);
+    let joined = preview.join("\n");
+    assert!(
+        joined.contains("project: /srv/agentic-harness/operant"),
+        "the preview must print the full path: {joined}"
+    );
+}
+
+/// A row that never recorded a directory says so rather than guessing one: 3,302
+/// of the operator's sessions predate the cwd write, and a fabricated path is
+/// worse than an honest dash.
+#[test]
+fn a_row_with_no_cwd_says_it_rather_than_guessing() {
+    let (list, preview) = hub_rows(vec![row("s-nodir", Some("legacy"), None)]);
+    assert!(
+        preview.join("\n").contains("project: — (not recorded)"),
+        "the preview must say the path was never captured: {preview:?}"
+    );
+    assert!(
+        !list.join("\n").contains("\u{1f4c2}"),
+        "and no directory glyph may be invented on the row: {list:?}"
+    );
+}
+
+/// The row is NOT allowed to repeat a fact the section heading already carries:
+/// under `Directory` grouping the heading IS the path. This is the same rule
+/// Stage B applied to the delegation status (`pending  pending`).
+#[test]
+fn the_directory_is_not_repeated_under_directory_grouping() {
+    let mut a = row("s-a", Some("alpha"), None);
+    a.cwd = Some("/work/alpha".to_string());
+    let mut b = row("s-b", Some("beta"), None);
+    b.cwd = Some("/work/beta".to_string());
+    let mut hub = SessionHubState::new();
+    hub.visible = true;
+    hub.group_mode = HubGroupMode::Directory;
+    hub.replace_rows(vec![a, b]);
+    let mut ctx = crate::tui::render::FrameCtx {
+        size: ratatui::layout::Rect::new(0, 0, 120, 40),
+        preview_max_scroll: None,
+        stop: false,
+    };
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 40)).unwrap();
+    terminal
+        .draw(|f| crate::tui::session_hub::render_session_hub(f, &hub, f.area(), &mut ctx))
+        .unwrap();
+    let rows = crate::tui::debug::debug_hub::buffer_rows(terminal.backend().buffer());
+    let list_rows: Vec<String> = rows
+        .into_iter()
+        .map(|l| l.chars().take(47).collect())
+        .collect();
+    let joined = list_rows.join("\n");
+    assert!(
+        joined.contains("/work/alpha"),
+        "the heading carries the path: {joined}"
+    );
+    let glyph_rows = list_rows.iter().filter(|r| r.contains("\u{1f4c2}")).count();
+    assert_eq!(
+        glyph_rows, 0,
+        "no row may print the directory glyph when the grouping already names it: {joined}"
+    );
+}
+
 /// The fix must not leak: an ordinary session row keeps its REAL numbers,
 /// because for sessions those are measured and true.
 ///

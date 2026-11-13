@@ -701,12 +701,43 @@ fn render_list_body(frame: &mut Frame, state: &SessionHubState, area: ratatui::l
                 // order, until the rest fits.
                 //
                 // The order is chosen by recoverability, not by preference:
+                //   0. The DIRECTORY goes before status — it is the newest field
+                //      and the most recoverable of all: the preview pane prints
+                //      the full path (the `Project` line, codex's
+                //      agents_overview_view.rs:535-536), and grouping by
+                //      directory draws every path as a section heading.
                 //   1. STATUS goes first — it has its own named column in the
                 //      header above (Stage B), so it is recoverable by looking up.
                 //   2. The ID is next — the preview pane prints it in full.
                 //   Age, messages, tokens and cost are NEVER dropped: they are
                 //   the reason the operator opened the list.
+                //
+                // The directory is also NOT repeated when the hub is already
+                // grouped by directory: the section heading IS the path, and
+                // printing it again per row is the same mistake Stage B made
+                // with the delegation status (`pending  pending`).
+                //
+                // (2026-11-13, audit finding 1) The basename, not the path: the
+                // full path lives in the preview's Project line, and a row is 46
+                // columns wide. `cwd` was never written before that audit, so
+                // this span was silent on every row for the hub's whole life;
+                // the write landed at turn_context.rs beside the seat stamp.
+                let directory_shown = state.group_mode != HubGroupMode::Directory
+                    && row.cwd.as_deref().is_some_and(|c| !c.is_empty());
+                let dir_tag: String = row
+                    .cwd
+                    .as_deref()
+                    .filter(|_| directory_shown)
+                    .map(|c| {
+                        let base = std::path::Path::new(c)
+                            .file_name()
+                            .map(|f| f.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| c.to_string());
+                        format!("  \u{1f4c2} {base}")
+                    })
+                    .unwrap_or_default();
                 let metrics_width = emp.chars().count()
+                    + dir_tag.chars().count()
                     + format!("{} msg", row.message_count).chars().count()
                     + tokens_suffix(row.tokens).chars().count()
                     + row.status.label().chars().count()
@@ -717,6 +748,15 @@ fn render_list_body(frame: &mut Frame, state: &SessionHubState, area: ratatui::l
                         format!("${:.4}", row.cost_usd).chars().count()
                     }
                     + 8;
+                // Drop the directory FIRST: it is the field the row can most
+                // easily afford to lose, because it is the field the pane and
+                // the grouping both restore.
+                let show_dir = metrics_width as usize + 13 <= inner_width as usize;
+                let metrics_width = if show_dir {
+                    metrics_width
+                } else {
+                    metrics_width.saturating_sub(dir_tag.chars().count())
+                };
                 // Drop the status column BEFORE shrinking the id: the header
                 // above already names it (Stage B), so it is the one field here
                 // the row can afford to lose. Shrinking the id first would burn
@@ -765,6 +805,15 @@ fn render_list_body(frame: &mut Frame, state: &SessionHubState, area: ratatui::l
                         )
                     }
                 };
+                // The directory, the FIRST field the ladder drops (see the
+                // ladder above): recoverable in the preview's `Project` line and
+                // in the directory grouping's headings, which is the same
+                // recoverability argument the ladder already makes for status.
+                let dir_span = if show_dir {
+                    Span::styled(dir_tag, Style::default().fg(theme_colors::muted()))
+                } else {
+                    Span::styled(String::new(), Style::default())
+                };
                 let mut meta_spans = vec![
                     // ID first: it is the row's handle, and the one thing an
                     // operator is never otherwise shown on screen.
@@ -773,6 +822,7 @@ fn render_list_body(frame: &mut Frame, state: &SessionHubState, area: ratatui::l
                         Style::default().fg(theme_colors::muted()),
                     ),
                     Span::styled(emp, Style::default().fg(theme_colors::muted())),
+                    dir_span,
                     usage_span,
                 ];
                 // Stage B also fills a real gap: a session row's status was
@@ -1023,6 +1073,24 @@ fn render_preview(
                     match &row.employee_id {
                         Some(e) => format!("employee: {e}"),
                         None => "employee: — (personal)".to_string(),
+                    },
+                    Style::default().fg(theme_colors::muted()),
+                )),
+                // (2026-11-13, audit finding 1) The directory, in FULL, in the
+                // one place a path fits. The row carries the basename only (its
+                // budget is 46 columns and it sheds the basename first), so the
+                // FULL path has to be recoverable somewhere — this is it, and
+                // it is codex's own layout: `agents_overview_view.rs:535-536`
+                // prints `Project` then the thread's cwd in the details pane
+                // beside the prompt.
+                //
+                // Rows written before the cwd write landed are honestly NULL
+                // (no path was ever captured), so the line says `—` rather
+                // than guessing a directory the session never recorded.
+                Line::from(Span::styled(
+                    match row.cwd.as_deref().filter(|c| !c.is_empty()) {
+                        Some(cwd) => format!("project: {cwd}"),
+                        None => "project: — (not recorded)".to_string(),
                     },
                     Style::default().fg(theme_colors::muted()),
                 )),
