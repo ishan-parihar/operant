@@ -11040,9 +11040,13 @@ mod enter_chord_tests {
         );
     }
 
-    /// Ctrl+Enter while a turn streams QUEUES the draft into the steer
-    /// queue (jcode's `handle_alternate_enter` → SendAction::Queue) and
-    /// clears the composer. The operator's "CTRL+ENTER must queue it".
+    /// Ctrl+Enter while a turn streams QUEUES the draft for the NEXT turn
+    /// (jcode's `handle_alternate_enter` → SendAction::Queue) and clears the
+    /// composer. The operator's "CTRL+ENTER must queue it".
+    ///
+    /// The draft must NOT land in the agent's steer queue: that queue is
+    /// drained BETWEEN iterations, so a "queued" message was injected into
+    /// the RUNNING turn whenever the turn had another iteration left.
     #[test]
     fn ctrl_enter_queues_the_draft_while_streaming() {
         let mut app = make_app();
@@ -11055,10 +11059,14 @@ mod enter_chord_tests {
         let submitted = app.handle_key_event(press_key(KeyCode::Enter, KeyModifiers::CONTROL));
 
         assert!(!submitted, "Ctrl+Enter must not submit while streaming");
+        assert!(
+            queue.try_lock().unwrap().is_empty(),
+            "a QUEUED message must not reach the agent's steer queue"
+        );
         assert_eq!(
-            queue.try_lock().unwrap().as_slice(),
+            app.next_turn_queue,
             ["then check the tests".to_string()],
-            "the draft must land in the steer queue"
+            "the draft must land in the next-turn queue"
         );
         assert!(
             app.prompt_input.text.is_empty(),
@@ -11067,7 +11075,7 @@ mod enter_chord_tests {
         assert!(
             app.status_notice()
                 .as_deref()
-                .is_some_and(|n| n.contains("Steer queued")),
+                .is_some_and(|n| n.contains("Queued for the next turn")),
             "the queue must be announced: {:?}",
             app.status_notice()
         );
@@ -11075,10 +11083,10 @@ mod enter_chord_tests {
 
     /// Ctrl+Enter ALWAYS queues — the operator's contract: "CTRL+ENTER still
     /// does not queue correctly", and before that "shortcuts like ctrl+enter
-    /// must queue the message". While idle the draft joins the steer queue
-    /// and waits for the next turn (the submit path delivers it WITH that
-    /// turn); it is never submitted straight into a turn the operator did not
-    /// ask for.
+    /// must queue the message". While idle the draft joins the next-turn
+    /// queue and waits for the next turn (the submit path delivers it WITH
+    /// that turn); it is never submitted straight into a turn the operator
+    /// did not ask for.
     #[test]
     fn ctrl_enter_queues_when_idle() {
         let mut app = make_app();
@@ -11090,10 +11098,14 @@ mod enter_chord_tests {
         let submitted = app.handle_key_event(press_key(KeyCode::Enter, KeyModifiers::CONTROL));
 
         assert!(!submitted, "idle Ctrl+Enter must not submit — it queues");
+        assert!(
+            queue.try_lock().unwrap().is_empty(),
+            "a QUEUED message must not reach the agent's steer queue"
+        );
         assert_eq!(
-            queue.try_lock().unwrap().as_slice(),
+            app.next_turn_queue,
             ["hello there".to_string()],
-            "the draft must land in the steer queue"
+            "the draft must land in the next-turn queue"
         );
         assert!(
             app.prompt_input.text.is_empty(),
@@ -11102,7 +11114,7 @@ mod enter_chord_tests {
         assert!(
             app.status_notice()
                 .as_deref()
-                .is_some_and(|n| n.contains("Steer queued")),
+                .is_some_and(|n| n.contains("Queued for the next turn")),
             "the queue must be announced: {:?}",
             app.status_notice()
         );

@@ -1069,7 +1069,8 @@ pub(super) fn finalize_frame_metrics(
             display_messages: app.display_messages().len(),
             display_messages_version: app.display_messages_version(),
             user_messages: app.display_user_message_count(),
-            queued_messages: app.queued_messages().len(),
+            // Both pending kinds: the next-turn queue AND the live steers.
+            queued_messages: app.queued_messages().len() + app.pending_steers().len(),
             streaming_text_len: app.streaming_text().len(),
             prepare_ms: prep_elapsed.as_secs_f64() * 1000.0,
             draw_ms: draw_elapsed.as_secs_f64() * 1000.0,

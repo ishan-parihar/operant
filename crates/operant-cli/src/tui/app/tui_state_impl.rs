@@ -237,11 +237,19 @@ impl TuiState for App {
     }
 
     fn queued_messages(&self) -> &[String] {
-        // The mirror of the live steer queue (see `App::queued_messages`).
-        // This used to return `&[]` behind a `[port-decision]` stub, so the
-        // queued band never rendered anything and the operator's queued
+        // The NEXT-turn queue (Ctrl+Enter, /queue): delivered WITH the next
+        // turn. This used to return `&[]` behind a `[port-decision]` stub, so
+        // the queued band never rendered anything and the operator's queued
         // messages were invisible until they were drained.
-        &self.queued_messages
+        &self.next_turn_queue
+    }
+
+    fn pending_steers(&self) -> &[String] {
+        // The mirror of the LIVE steer queue (see `App::steer_queue_mirror`):
+        // messages that reach the model inside the RUNNING turn at its next
+        // iteration boundary. A separate list from `queued_messages` so the
+        // band can say WHICH kind each message is.
+        &self.steer_queue_mirror
     }
 
     fn interleave_message(&self) -> Option<&str> {

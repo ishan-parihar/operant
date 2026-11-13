@@ -86,6 +86,19 @@ pub struct CommandContext<'a> {
     /// (RT-175: the old gateway /steer wrote `steer_message` — a key with zero
     /// readers — and replied "steer updated").
     pub steer_queue: Option<std::sync::Arc<tokio::sync::Mutex<Vec<String>>>>,
+    /// The gateway's NEXT-turn queue, keyed by session — where `/queue`
+    /// writes. `None` means this context was built without a gateway
+    /// runtime, and `/queue` must say so rather than writing a metadata key
+    /// nothing reads.
+    pub next_turn_queue: Option<NextTurnQueue>,
+    /// Whether THIS chat's turn is running right now.
+    ///
+    /// (2026-11-12) A steer steers a RUNNING turn. With no turn running
+    /// there is nothing to steer, and parking the message in the live steer
+    /// queue would make it arrive as a mid-turn injection in some later turn
+    /// — the queue's job, under the queue's name. The same rule the TUI's
+    /// `/steer` follows.
+    pub turn_running: bool,
 }
 
 impl<'a> CommandContext<'a> {
@@ -109,6 +122,8 @@ impl<'a> CommandContext<'a> {
             session_pins: None,
             session_key: "",
             steer_queue: None,
+            next_turn_queue: None,
+            turn_running: false,
         }
     }
 
@@ -152,7 +167,35 @@ impl<'a> CommandContext<'a> {
         self.steer_queue = queue;
         self
     }
+
+    /// Attach the gateway's NEXT-turn queue (keyed by session) so `/queue`
+    /// has somewhere real to write.
+    #[must_use]
+    pub fn with_next_turn_queue(mut self, queue: Option<NextTurnQueue>) -> Self {
+        self.next_turn_queue = queue;
+        self
+    }
+
+    /// Record whether this chat's turn is running (2026-11-12): `/steer`
+    /// steers a RUNNING turn and refuses otherwise, exactly like the TUI's.
+    #[must_use]
+    pub fn with_turn_running(mut self, running: bool) -> Self {
+        self.turn_running = running;
+        self
+    }
 }
+
+/// The gateway's NEXT-turn queue, keyed by session.
+///
+/// A QUEUE is not a STEER, and this is the store that keeps them apart.
+/// The agent's steer queue is drained BETWEEN iterations, so a message
+/// parked there reaches the model inside the RUNNING turn. This one waits
+/// for the next turn in the SAME chat, and is delivered with it.
+///
+/// Keyed by the dispatch loop's session key (platform + channel [+ thread]
+/// [+ user]) so two chats in the same slot never borrow each other's queue.
+pub type NextTurnQueue =
+    std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, Vec<String>>>>;
 
 /// Definition of a single Telegram bot command.
 #[derive(Debug)]
@@ -1369,31 +1412,50 @@ pub fn handle_command(cmd_name: &str, _args: &str, ctx: &CommandContext<'_>) -> 
             "↩️ Undo runs against the live agent — unavailable in this context. On a running gateway, send `/undo` again from the chat.".into()
         }
 
-        // RT-175: the TUI's /queue is the steer-queue surface — empty
-        // lists the LIVE queue, text is an alias for /steer. The old arm
-        // wrote a `queued_prompts` metadata key no runtime ever read
-        // (theater). Mirroring the TUI exactly: try_lock mirrors its
-        // contract — a contended queue means the agent is draining it
-        // RIGHT NOW, which is a retry, not a failure.
+        // (2026-11-12) /queue is the NEXT-TURN queue — the one way to park a
+        // message on a channel. It used to be an alias for /steer, so a
+        // "queued" message was injected into the RUNNING turn whenever the
+        // turn had another iteration left. Now the three are distinct:
+        // /steer steers the turn that is running, /queue waits for the next
+        // one, and a DIRECT message while a turn runs is a steer.
         "queue" => {
             let a = _args.trim();
-            if !a.is_empty() {
-                // Reuse the /steer arm verbatim: same queue, same delivery
-                // semantics (reaches the agent at the next iteration
-                // boundary).
-                return handle_command("steer", a, ctx);
-            }
-            let Some(queue) = ctx.steer_queue.as_ref() else {
-                return Some("▶️ Queue is unavailable here — no live agent is attached to this gateway process.".to_string());
+            let Some(queue) = ctx.next_turn_queue.as_ref() else {
+                return Some("▶️ Queueing is unavailable here — no live gateway is attached to this process.".to_string());
             };
-            match queue.try_lock() {
-                Ok(q) if q.is_empty() => "▶️ Queue is empty — nothing is waiting for the agent.".into(),
-                Ok(q) => format!(
-                    "▶️ Queued ({}): {}",
-                    q.len(),
-                    q.iter().map(|s| format!("`{s}`")).collect::<Vec<_>>().join("; ")
-                ),
-                Err(_) => "▶️ The queue is busy — the agent is draining it right now.".into(),
+            if ctx.session_key.is_empty() {
+                return Some("▶️ Queueing is unavailable here — this message has no session to queue for.".to_string());
+            }
+            if !a.is_empty() {
+                let Ok(mut map) = queue.lock() else {
+                    return Some("▶️ The queue is busy right now — send `/queue` again in a moment. Nothing was written.".to_string());
+                };
+                let pending = map.entry(ctx.session_key.to_string()).or_default();
+                pending.push(a.to_string());
+                let depth = pending.len();
+                tracing::info!(
+                    user = %ctx.user_id,
+                    platform = %ctx.platform,
+                    session_key = %ctx.session_key,
+                    depth,
+                    "Gateway /queue: parked for the next turn"
+                );
+                return Some(format!(
+                    "▶️ **Queued for the next turn** ({depth} waiting).\nIt is delivered with the next turn in this chat.\nQueued: `{a}`"
+                ));
+            }
+            let Ok(map) = queue.lock() else {
+                return Some("▶️ The queue is busy right now — try again in a moment.".to_string());
+            };
+            let pending = map.get(ctx.session_key).cloned().unwrap_or_default();
+            if pending.is_empty() {
+                "▶️ Queue is empty — nothing is waiting for the next turn.".into()
+            } else {
+                format!(
+                    "▶️ Queued for the next turn ({}): {}",
+                    pending.len(),
+                    pending.iter().map(|s| format!("`{s}`")).collect::<Vec<_>>().join("; ")
+                )
             }
         }
 
@@ -2007,9 +2069,18 @@ pub fn handle_command(cmd_name: &str, _args: &str, ctx: &CommandContext<'_>) -> 
             // flag, which nothing in the runtime ever read. try_lock mirrors
             // the TUI contract: a contended queue means the agent is draining
             // it RIGHT NOW, which is a retry, not a failure.
+            //
+            // (2026-11-12) A steer steers a RUNNING turn. With no turn
+            // running there is nothing to steer: parking the message in the
+            // live steer queue would make it arrive as a mid-turn injection
+            // in some later turn — the queue's job, under the queue's name.
             let a = _args.trim();
             if a.is_empty() {
                 "Usage: `/steer <direction>` — guides the conversation in a specific direction.\nThe steer message reaches the agent at its next iteration boundary.".into()
+            } else if !ctx.turn_running {
+                return Some(
+                    "🧭 Nothing is running to steer — use `/queue <text>` to hold this for the next turn instead.".into(),
+                );
             } else {
                 let Some(queue) = ctx.steer_queue.as_ref() else {
                     return Some(
@@ -2025,7 +2096,7 @@ pub fn handle_command(cmd_name: &str, _args: &str, ctx: &CommandContext<'_>) -> 
                             queued = q.len(),
                             "Gateway /steer: pushed to the live steer queue"
                         );
-                        format!("🧭 **Steer queued.** It reaches the agent at its next iteration boundary.\nSteer: `{a}`")
+                        format!("🧭 **Steered.** It reaches the agent at its next iteration boundary.\nSteer: `{a}`")
                     }
                     Err(_) => {
                         tracing::info!(
@@ -3520,23 +3591,43 @@ mod tests {
 
         // With the queue attached: the steer text lands in the queue.
         let ctx = CommandContext::new(None, &cfg, true, "op-1", "telegram", "chan-1")
-            .with_steer_queue(Some(std::sync::Arc::clone(&queue)));
+            .with_steer_queue(Some(std::sync::Arc::clone(&queue)))
+            .with_turn_running(true);
         let resp =
             handle_command("steer", "prefer the serde path", &ctx).expect("/steer must be handled");
         let drained: Vec<String> = queue.lock().await.drain(..).collect();
         assert_eq!(drained, vec!["prefer the serde path".to_string()]);
-        assert!(resp.contains("queued"));
+        assert!(
+            resp.contains("Steer"),
+            "the reply must name the action it took: {resp}"
+        );
         assert!(
             !resp.contains("steer updated"),
             "the old theater reply must be gone"
         );
 
         // Without a queue: honest refusal, not a fake success.
-        let no_q = CommandContext::new(None, &cfg, true, "op-1", "telegram", "chan-1");
+        let no_q = CommandContext::new(None, &cfg, true, "op-1", "telegram", "chan-1")
+            .with_turn_running(true);
         let refused = handle_command("steer", "x", &no_q).expect("handled");
         assert!(
             refused.contains("unavailable"),
             "no live agent must be said aloud"
+        );
+
+        // (2026-11-12) With no turn running there is nothing to steer: the
+        // refusal must point at the queue, which is the action for a message
+        // that waits for the next turn.
+        let idle = CommandContext::new(None, &cfg, true, "op-1", "telegram", "chan-1")
+            .with_steer_queue(Some(std::sync::Arc::clone(&queue)));
+        let idle_refusal = handle_command("steer", "z", &idle).expect("handled");
+        assert!(
+            idle_refusal.contains("/queue"),
+            "an idle steer must point at the queue: {idle_refusal}"
+        );
+        assert!(
+            queue.try_lock().unwrap().is_empty(),
+            "a refused steer must write nothing"
         );
 
         // Contended queue (held across the call): retry guidance, nothing lost.
@@ -4330,6 +4421,49 @@ mod rt175_tests {
         assert!(
             resp.contains("unavailable") || resp.contains("Queue is"),
             "/queue must report the live queue, got: {resp}"
+        );
+    }
+
+    /// (2026-11-12) /queue parks a message for the NEXT turn and NEVER
+    /// touches the agent's steer queue.
+    ///
+    /// It used to be an alias for /steer, so a "queued" message was injected
+    /// into the RUNNING turn whenever the turn had another iteration left —
+    /// the operator could neither predict nor see which happened.
+    #[test]
+    fn queue_parks_for_the_next_turn_and_never_steers() {
+        let cfg = AppConfig::default();
+        let steer = std::sync::Arc::new(tokio::sync::Mutex::new(Vec::<String>::new()));
+        let next: crate::gateway_commands::NextTurnQueue =
+            std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+        let ctx = CommandContext::new(None, &cfg, true, "op-1", "telegram", "chan-1")
+            .with_session_key("telegram:chan-1:op-1")
+            .with_steer_queue(Some(std::sync::Arc::clone(&steer)))
+            .with_next_turn_queue(Some(std::sync::Arc::clone(&next)));
+
+        let resp = handle_command("queue", "do the thing", &ctx).expect("a reply");
+
+        assert!(
+            resp.contains("Queued"),
+            "the reply must name the action it took: {resp}"
+        );
+        assert!(
+            steer.try_lock().unwrap().is_empty(),
+            "a queued message must not reach the steer queue"
+        );
+        let parked = next
+            .lock()
+            .unwrap()
+            .get("telegram:chan-1:op-1")
+            .cloned()
+            .unwrap_or_default();
+        assert_eq!(parked, vec!["do the thing".to_string()]);
+
+        // And /queue lists what is parked.
+        let listed = handle_command("queue", "", &ctx).expect("a reply");
+        assert!(
+            listed.contains("do the thing"),
+            "/queue must list the parked messages: {listed}"
         );
     }
 

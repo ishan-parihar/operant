@@ -3717,6 +3717,10 @@ impl OperantAgent {
                         messages.push(steer_msg.clone());
                         // (RT-524) The steer is persisted: the operator's
                         // mid-turn guidance has to survive a restart.
+                        // (2026-11-12) And a steer is now the DIRECT
+                        // mid-stream message, not only `/steer` — so this is
+                        // the operator's own words reaching the transcript,
+                        // which is why it must be a real row.
                         self.add_and_persist_message(steer_msg).await;
                     }
                     // Same machinery Ctrl-C drives: the flag makes every

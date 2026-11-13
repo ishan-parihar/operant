@@ -421,12 +421,20 @@ impl App {
         }
     }
 
-    /// Pop the head of the live steer queue — the same queue `/steer` and
-    /// `/queue` write to. FIFO: index 0 is what the agent would consume
-    /// next, since `drain_steers` drains the queue from the front.
-    fn pop_queued_message(&self) -> Result<Option<String>, &'static str> {
+    /// Pop the head of the pending-message ladder: the NEXT-turn queue
+    /// first (the messages the operator explicitly parked), then the live
+    /// steer queue (the messages waiting to reach the running turn).
+    ///
+    /// FIFO in both: index 0 is what would be consumed next — the agent's
+    /// `drain_steers` drains the steer queue from the front, and the
+    /// next-turn queue is delivered in the order it was queued.
+    fn pop_queued_message(&mut self) -> Result<Option<String>, &'static str> {
+        if let Some(text) = self.next_turn_queue.first().cloned() {
+            self.next_turn_queue.remove(0);
+            return Ok(Some(text));
+        }
         let Some(handle) = self.steer_queue_handle.as_ref() else {
-            return Err("Nothing queued (no live agent).");
+            return Err("Nothing queued.");
         };
         let Ok(mut q) = handle.try_lock() else {
             return Err("Queue is busy (agent is draining it).");

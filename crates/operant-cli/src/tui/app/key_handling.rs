@@ -2178,18 +2178,21 @@ impl App {
             // The operator's contract: "CTRL+ENTER still does not queue
             // correctly" and, before that, "shortcuts like ctrl+enter must
             // queue the message". The key means QUEUE, so it queues in both
-            // states: while a turn streams the draft joins the steer queue
-            // and the agent sees it at the next model call; while idle it
-            // waits in the same queue and is delivered WITH the next turn
-            // (see `take_pending_queued_messages`).
+            // states — and "queue" means ONE thing: the message waits for
+            // the NEXT turn. It is NOT a steer: the old arm pushed into the
+            // agent's steer queue, which the agent drains BETWEEN iterations,
+            // so a "queued" message was injected into the RUNNING turn
+            // whenever the turn had another iteration left. The draft now
+            // goes to the App's own next-turn queue and is delivered WITH
+            // the next turn (see `take_pending_queued_messages`).
             //
             // It is NEVER a submission: the plain-Enter arm below would submit
             // the very draft the operator asked to queue, and the `return
             // false` keeps that arm from seeing this key.
             //
-            // A failed push must NOT lose the draft: `queue_steer` refuses
-            // without consuming, so the composer is only cleared after the
-            // text is held.
+            // A failed push must NOT lose the draft: `queue_for_next_turn`
+            // refuses without consuming, so the composer is only cleared
+            // after the text is held.
             KeyCode::Enter
                 if key.modifiers.contains(KeyModifiers::CONTROL)
                     && !key.modifiers.contains(KeyModifiers::SHIFT) =>
@@ -2198,12 +2201,13 @@ impl App {
                 if held.trim().is_empty() {
                     self.set_status_notice("Nothing to queue — the composer is empty.".to_string());
                 } else {
-                    let notice = self.queue_steer(&held);
-                    let queued = notice.starts_with("Steer queued");
+                    let notice = self.queue_for_next_turn(&held);
+                    let queued = notice.starts_with("Queued");
                     if queued {
                         // Success: consume the composer (take() also
                         // clears any paste-placeholder metadata).
                         let _ = self.prompt_input.take();
+                        self.remember_prompt_history(&held);
                     }
                     self.set_status_notice(notice);
                 }
@@ -2480,17 +2484,46 @@ impl App {
 
             // (2026-10-27) Enter on a PLAIN prompt while a turn streams:
             // the submit arm above gates on !is_streaming, so this used to
-            // fall to `_ => {}` — a silent dead key. The text stays in the
-            // composer (deliberately: queueing plain prompts is /queue's
-            // job, not a hidden side effect), but the key must SAY so.
+            // fall to `_ => {}` — a silent dead key.
+            //
+            // (2026-11-12) It is no longer dead, and it is no longer a
+            // notice: a DIRECT mid-stream message is a STEER. The operator
+            // typed it while the model was working; the only useful reading
+            // is "change what you are doing now", and the agent's steer queue
+            // delivers exactly that at the next iteration boundary.
+            //
+            // The dead-key notice used to point at `/queue` for this — but
+            // `/queue <text>` was an alias for `/steer <text>`, so the
+            // advice sent the operator to the very action the notice was
+            // warning against. Now the two are genuinely different: plain
+            // Enter steers the running turn, Ctrl+Enter queues for the next
+            // one.
+            //
             // Commands never land here — the guard above already took
             // steer/queue and every registered command.
             KeyCode::Enter if self.is_streaming && key.modifiers == KeyModifiers::NONE => {
-                self.set_status_notice(
-                    "A turn is running — use /queue to queue this for the next turn, or wait.\n\
-                     The text is kept in the composer."
-                        .to_string(),
-                );
+                let held = self.prompt_input.text.clone();
+                if held.trim().is_empty() {
+                    self.set_status_notice("Nothing to steer — the composer is empty.".to_string());
+                } else {
+                    let notice = self.steer_now(&held);
+                    let steered = notice.starts_with("Steered");
+                    if steered {
+                        // Success: consume the composer (take() also clears
+                        // any paste-placeholder metadata) and keep the text
+                        // reachable from the recall ladder.
+                        //
+                        // `prompt_input.take()` — NOT `App::take_input()`:
+                        // the latter arms the failed-input restore slot, and
+                        // a steer that was already delivered to the agent
+                        // must never come back into the composer as if it
+                        // had been lost.
+                        let _ = self.prompt_input.take();
+                        self.remember_prompt_history(&held);
+                    }
+                    self.set_status_notice(notice);
+                }
+                self.refresh_prompt_input();
             }
             _ => {}
         }

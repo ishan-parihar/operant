@@ -188,7 +188,14 @@ pub trait TuiState {
         None
     }
     fn is_processing(&self) -> bool;
+    /// Messages queued for the NEXT turn (Ctrl+Enter, `/queue`). Delivered
+    /// WITH the next turn — never into the running one.
     fn queued_messages(&self) -> &[String];
+    /// Messages steering the RUNNING turn: injected at the agent's next
+    /// iteration boundary. A separate list from `queued_messages` because a
+    /// steer and a queued message are different actions with different
+    /// delivery times.
+    fn pending_steers(&self) -> &[String];
     fn interleave_message(&self) -> Option<&str>;
     /// Messages sent as soft interrupt but not yet injected (shown in queue preview)
     fn pending_soft_interrupts(&self) -> &[String];

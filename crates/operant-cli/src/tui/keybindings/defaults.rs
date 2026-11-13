@@ -92,7 +92,19 @@ impl KeyBindingRegistry {
                 modifiers: KeyModifiers::NONE,
                 action: KeyAction::Submit,
                 context: BindingContext::Prompt,
-                description: "Submit prompt",
+                description: "Submit prompt (steers the running turn while it streams)",
+            },
+            // Ctrl+Enter: QUEUE. The chord means "hold this for the NEXT
+            // turn" — never "inject this into the turn that is running".
+            // It used to push into the agent's steer queue, which the agent
+            // drains BETWEEN iterations, so a "queued" message landed in the
+            // running turn whenever the turn had another iteration left.
+            DefaultBinding {
+                key: KeyCode::Enter,
+                modifiers: KeyModifiers::CONTROL,
+                action: KeyAction::Queue,
+                context: BindingContext::Prompt,
+                description: "Queue prompt for the next turn",
             },
             DefaultBinding {
                 key: KeyCode::Enter,

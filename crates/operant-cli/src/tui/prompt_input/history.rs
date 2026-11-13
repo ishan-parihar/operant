@@ -120,6 +120,25 @@ impl PromptInputState {
     }
 }
 
+
+/// What a paste is allowed to put in the composer: printable text, newlines,
+/// and tabs widened to four spaces. See `paste` for why the rest is dropped.
+fn sanitize_pasted_text(text: &str) -> String {
+    // Whole sequences first, so `ESC[31m` leaves no `[31m` behind as visible
+    // text — the renderer already uses this scanner for captured output.
+    let text = crate::tui::operant_app::message::strip_ansi_escape_sequences(text);
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        match c {
+            '\n' => out.push('\n'),
+            '\t' => out.push_str("    "),
+            c if c.is_control() => {}
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -141,22 +160,4 @@ mod tests {
         state.paste("line one\nline two");
         assert_eq!(state.text, "line one\nline two");
     }
-}
-
-/// What a paste is allowed to put in the composer: printable text, newlines,
-/// and tabs widened to four spaces. See `paste` for why the rest is dropped.
-fn sanitize_pasted_text(text: &str) -> String {
-    // Whole sequences first, so `ESC[31m` leaves no `[31m` behind as visible
-    // text — the renderer already uses this scanner for captured output.
-    let text = crate::tui::operant_app::message::strip_ansi_escape_sequences(text);
-    let mut out = String::with_capacity(text.len());
-    for c in text.chars() {
-        match c {
-            '\n' => out.push('\n'),
-            '\t' => out.push_str("    "),
-            c if c.is_control() => {}
-            c => out.push(c),
-        }
-    }
-    out
 }

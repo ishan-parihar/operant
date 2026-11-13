@@ -2541,6 +2541,15 @@ struct GatewayMessageHandler {
     /// (RT-508) It is a MAP, not a single option: the slots run turns
     /// concurrently, so several sessions can be running at once.
     running_session: std::sync::Mutex<std::collections::HashMap<String, usize>>,
+    /// Messages QUEUED for the NEXT turn, per session.
+    ///
+    /// (2026-11-12) A QUEUE is not a STEER. The agent's steer queue is
+    /// drained BETWEEN iterations, so a message parked there reaches the
+    /// model inside the RUNNING turn — which is why `/queue` used to be an
+    /// alias for `/steer` and a "queued" message landed in the turn the
+    /// operator was trying to steer. This store waits for the next turn in
+    /// the SAME chat.
+    next_turn_queue: crate::gateway_commands::NextTurnQueue,
     /// Sessions whose still-queued turn the user `/stop`ped (W3-2). Written
     /// and consumed under the `running_session` mutex, so a stop decided
     /// "not running yet" can never race the turn's claim of the lock.
@@ -2719,6 +2728,31 @@ impl GatewayMessageHandler {
         } else {
             false
         }
+    }
+
+    /// (2026-11-12) True when THIS session's turn is currently live.
+    ///
+    /// Per-session, NOT per-slot: `running_session` is a MAP (RT-508) so the
+    /// slots run turns concurrently, and another chat's turn holding the same
+    /// slot must not make this chat's message a steer.
+    fn session_is_running(&self, session_key: &str) -> bool {
+        self.running_session
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains_key(session_key)
+    }
+
+    /// Take the messages this session QUEUED for the next turn (FIFO).
+    ///
+    /// Read by the turn end so the messages are delivered WITH the turn that
+    /// just started, ahead of the draft the operator sent. Read by `/queue`
+    /// too (peeked, not taken) so the operator can see the queue.
+    fn take_queued_messages(&self, session_key: &str) -> Vec<String> {
+        self.next_turn_queue
+            .lock()
+            .ok()
+            .and_then(|mut map| map.remove(session_key))
+            .unwrap_or_default()
     }
 }
 
@@ -3493,6 +3527,28 @@ impl MessageHandler for GatewayMessageHandler {
             injector.render_section(employee_id, charter.as_deref(), &query, &exclude)
         } else {
             query
+        };
+
+        // (2026-11-12) A message the chat QUEUED (channel `/queue`) is
+        // delivered WITH this turn, ahead of the draft that just arrived —
+        // they queued first. Taken here, under the slot lock, so the next
+        // turn in THIS chat picks up whatever is left.
+        //
+        // The queue is this handler's own store, NOT the agent's steer
+        // queue: the agent drains that one BETWEEN iterations, which would
+        // inject the message into the running turn instead of the next one.
+        let query = {
+            let queued = self.take_queued_messages(&session_key);
+            if queued.is_empty() {
+                query
+            } else {
+                tracing::info!(
+                    session_key = %session_key,
+                    depth = queued.len(),
+                    "Delivering the chat's queued messages with this turn"
+                );
+                format!("{}\n\n{}", queued.join("\n\n"), query)
+            }
         };
 
         // Turn start. `reloaded` is logged because it is the single fact that
@@ -4579,6 +4635,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
         .ok()
         .map(Arc::new),
         running_session: std::sync::Mutex::new(std::collections::HashMap::new()),
+        next_turn_queue: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         cancelled_queued: Default::default(),
         // RT-175: the runtime-command handles. The MCP manager is the
         // SAME clone-over-Arc instance the agent's tools live behind;
@@ -5852,7 +5909,22 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                                     // reaches the RUNNING turn like the TUI's.
                                     .with_steer_queue(Some(
                                         handler_for_stop.slots.slot_for(&session_key).agent.steer_queue_handle(),
-                                    ));
+                                    ))
+                                    // (2026-11-12) The NEXT-turn queue: where
+                                    // `/queue` parks a message. Separate from
+                                    // the steer queue above — that one is
+                                    // drained BETWEEN iterations, so a message
+                                    // parked there reaches the model inside the
+                                    // RUNNING turn.
+                                    .with_next_turn_queue(Some(
+                                        std::sync::Arc::clone(&handler_for_stop.next_turn_queue),
+                                    ))
+                                    // (2026-11-12) A steer steers a RUNNING
+                                    // turn; with no turn running the message
+                                    // belongs in the next-turn queue.
+                                    .with_turn_running(
+                                        handler_for_stop.session_is_running(&session_key),
+                                    );
                                     if let Some(response_text) =
                                         handle_command(cmd_def.name, cmd_args, &ctx)
                                     {
@@ -6043,7 +6115,42 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                                     });
                                 }
 
-                                tracing::info!(
+                                                                 // ── (2026-11-12) A DIRECT message while THIS session's turn
+                                 // runs is a STEER ───────────────────────────────────────────
+                                 //
+                                 // The operator typed it while the model was working; the only
+                                 // useful reading is "change what you are doing now". The agent's
+                                 // steer queue delivers exactly that at the next iteration
+                                 // boundary.
+                                 //
+                                 // Before this, the message waited for the slot lock and then
+                                 // started a SECOND turn — so a channel could not steer at all,
+                                 // and queueing was the only behaviour it had. On a channel there
+                                 // is no Ctrl+Enter, so `/queue` is the ONLY way to park a message
+                                 // for the next turn.
+                                 //
+                                 // Per-session, not per-slot: another chat's turn holding the same
+                                 // slot does not make this chat's message a steer.
+                                 if handler_for_stop.session_is_running(&session_key) {
+                                     let slot = handler_for_stop.slots.slot_for(&session_key);
+                                     slot.agent.steer(msg.content.clone()).await;
+                                     tracing::info!(
+                                         user = %msg.user_id,
+                                         platform = %platform,
+                                         channel = %channel_id,
+                                         session_key = %session_key,
+                                         "Gateway command dispatch: prose steered into the running turn"
+                                     );
+                                     let response = OutgoingMessage::new(
+                                         &msg.channel_id,
+                                         "🧭 **Steered** — it reaches the agent at its next iteration boundary.\nUse `/queue <text>` to hold a message for the next turn instead.",
+                                     )
+                                     .with_thread_id(msg.thread_id);
+                                     gw.send_to_platform(&platform, response).await?;
+                                     return Ok(true);
+                                 }
+
+tracing::info!(
                                     user = %msg.user_id,
                                     platform = %platform,
                                     channel = %channel_id,

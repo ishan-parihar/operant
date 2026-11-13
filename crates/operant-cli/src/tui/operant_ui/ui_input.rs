@@ -81,11 +81,17 @@ pub(super) fn composer_hint(app: &dyn TuiState) -> Option<String> {
         return Some("↗ Next prompt opens a new session".to_string());
     }
     if app.is_processing() && !app.input().is_empty() {
-        // ONE truth: while a turn streams, Ctrl/Cmd+Enter QUEUES the draft into
-        // the steer queue. There is no "send now" path — the key handler's
-        // alternate-Enter arm queues while streaming and submits while idle,
+        // ONE truth for the two actions, both of which are reachable right
+        // now: plain Enter STEERS the running turn (the draft reaches the
+        // model at the agent's next iteration boundary), and
+        // Ctrl/Cmd+Enter QUEUES it for the NEXT turn. There is no "send now"
+        // path — a plain Enter never starts a second turn while one streams —
         // and plan mode changes neither.
-        return Some("Ctrl/Cmd+Enter to queue".to_string());
+        //
+        // The hint used to name only the queue, because the steer was a dead
+        // key that told the operator to run `/queue <text>`, which was a
+        // steer. Both chords are named now.
+        return Some("Enter to steer · Ctrl/Cmd+Enter to queue".to_string());
     }
     None
 }
@@ -570,6 +576,7 @@ pub(super) fn pending_prompt_count(app: &dyn TuiState) -> usize {
             .map(|msg| !msg.is_empty())
             .unwrap_or(false);
     app.queued_messages().len() + pending_count + if interleave { 1 } else { 0 }
+        + app.pending_steers().len()
 }
 
 pub(super) fn pending_queue_preview(app: &dyn TuiState) -> Vec<String> {
@@ -593,6 +600,13 @@ pub(super) fn pending_queue_preview(app: &dyn TuiState) -> Vec<String> {
                 normalized.chars().take(100).collect::<String>()
             ));
         }
+    }
+    for msg in app.pending_steers() {
+        let normalized = normalize_repaint_sensitive_notice_text(msg);
+        previews.push(format!(
+            "🧭 {}",
+            normalized.chars().take(100).collect::<String>()
+        ));
     }
     for msg in app.queued_messages() {
         let normalized = normalize_repaint_sensitive_notice_text(msg);
@@ -618,6 +632,9 @@ pub(super) fn draw_queued(frame: &mut Frame, app: &dyn TuiState, area: Rect, sta
             items.push((QueuedMsgType::Interleave, msg));
         }
     }
+    for msg in app.pending_steers() {
+        items.push((QueuedMsgType::Steer, msg.as_str()));
+    }
     for msg in app.queued_messages() {
         items.push((QueuedMsgType::Queued, msg.as_str()));
     }
@@ -635,6 +652,7 @@ pub(super) fn draw_queued(frame: &mut Frame, app: &dyn TuiState, area: Rect, sta
                 QueuedMsgType::Pending => ("↻", pending_color(), pending_color(), false),
                 QueuedMsgType::Interleave => ("⚡", asap_color(), asap_color(), false),
                 QueuedMsgType::Queued => ("⏳", queued_color(), queued_color(), true),
+                QueuedMsgType::Steer => ("🧭", asap_color(), asap_color(), false),
             };
             let mut msg_style = Style::default().fg(msg_color);
             if dim {
@@ -3198,6 +3216,10 @@ enum QueuedMsgType {
     Pending,
     Interleave,
     Queued,
+    /// Steering the RUNNING turn: the agent injects it at its next iteration
+    /// boundary. A distinct glyph from `Queued` so the operator can tell the
+    /// two apart — they are different actions with different delivery.
+    Steer,
 }
 
 /// Move the cursor one *visual* (wrapped) row up (`delta = -1`) or down

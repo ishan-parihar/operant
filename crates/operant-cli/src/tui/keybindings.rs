@@ -15,7 +15,7 @@ use std::sync::LazyLock;
 
 /// Action that can be bound to a key.
 ///
-/// This is a *catalogue*: 59 of these 62 actions have a default binding, the
+/// This is a *catalogue*: 60 of these 63 actions have a default binding, the
 /// other 3 are declared-but-unbound (the table has no chord for them yet).
 /// An enum-level allow is the right granularity for that — 3 scattered
 /// per-variant attributes would be more noise than signal, and blanket-
@@ -113,6 +113,10 @@ pub enum KeyAction {
 
     // App-level
     Submit,
+    /// Queue the composer for the NEXT turn. A queue is not a steer: a steer
+    /// (the same `Submit` action while a turn runs) reaches the model inside
+    /// the RUNNING turn, and a queued message waits for the next one.
+    Queue,
     Cancel,
     ShowHelp,
     ShowCommandPalette,

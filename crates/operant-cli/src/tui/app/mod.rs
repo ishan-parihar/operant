@@ -578,11 +578,19 @@ pub struct App {
     pub steer_queue_handle: Option<Arc<tokio::sync::Mutex<Vec<String>>>>,
     /// Mirror of the live steer queue's contents (the tokio Mutex vec the
     /// drain owns), refreshed at every push, every recall and every agent-event
-    /// drain so the composer's queued-message band renders the REAL queue.
-    /// It existed as `&[]` behind a `[port-decision]` stub, so a queued message
-    /// (Ctrl+Enter mid-stream, /steer, /queue) was invisible to the operator —
+    /// drain so the composer's band renders the REAL pending steers.
+    /// It existed as `&[]` behind a `[port-decision]` stub, so a pending
+    /// steer (plain Enter mid-stream, /steer) was invisible to the operator —
     /// the queue looked dead even though the agent drained it.
-    pub queued_messages: Vec<String>,
+    pub steer_queue_mirror: Vec<String>,
+    /// Messages the operator QUEUED for the NEXT turn (Ctrl+Enter, `/queue`).
+    ///
+    /// A SEPARATE store from the live steer queue, and that separation is the
+    /// whole contract: the steer queue is drained by the agent BETWEEN
+    /// iterations, so a message parked there reaches the model inside the
+    /// RUNNING turn — a steer. This one is delivered WITH the next turn, so it
+    /// cannot leak into a turn the operator did not aim it at.
+    pub next_turn_queue: Vec<String>,
     /// Queued request for a real MCP reconnect from the interactive loop.
     pub pending_mcp_reconnect: bool,
     /// Pending MCP panel-auth request for the interactive loop.

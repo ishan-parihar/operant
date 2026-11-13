@@ -187,82 +187,127 @@ impl App {
         })
     }
 
-    /// Mirror the live steer queue onto the App so the composer's
-    /// queued-message band renders the REAL queue instead of a stub.
+    /// Mirror the live steer queue onto the App so the composer's band
+    /// renders the REAL pending steers instead of a stub.
     ///
     /// A `try_lock` failure KEEPS the previous mirror: the agent holds the
     /// lock while it drains the queue, and answering "the queue is empty"
     /// then would make a real queue flicker out of existence mid-drain.
     pub(crate) fn refresh_steer_queue_mirror(&mut self) {
         let Some(handle) = self.steer_queue_handle.as_ref() else {
-            self.queued_messages.clear();
+            self.steer_queue_mirror.clear();
             return;
         };
         if let Ok(queue) = handle.try_lock() {
-            self.queued_messages = queue.clone();
+            self.steer_queue_mirror = queue.clone();
         }
     }
 
-    /// Push `text` into the live steer queue and return a status string
-    /// describing the outcome. The same queue serves both states: while
-    /// streaming the agent drains it at the next iteration boundary, while
-    /// idle the loop drains it on the next turn — so /steer and /queue
-    /// are meaningful either way. Mirrors the live steer path in
-    /// adapter_types.rs, but uses `try_lock` because this runs on the
-    /// sync slash-command path while the queue is a tokio Mutex.
-    /// (iter-240 — wires /steer and /queue `<text>` to the real steer queue.)
-    /// (2026-10-27) `pub(super)`: the Ctrl+Enter queue key in key_handling
-    /// drives the same path — one mechanism, two entries.
-    pub(super) fn queue_steer(&mut self, text: &str) -> String {
-        const NO_QUEUE: &str = "Steer is unavailable (no live agent).";
-        const QUEUE_BUSY: &str = "Queue is busy (agent is draining it).";
+    /// Push `text` into the LIVE steer queue: the agent drains it at the
+    /// next iteration boundary, so it lands in the CURRENT turn.
+    ///
+    /// This is the "direct mid-stream message" path — plain Enter while a
+    /// turn streams. It is NOT a queue: a queued message waits for the NEXT
+    /// turn (see `queue_for_next_turn`), and steering into the running turn
+    /// is the only way to change what the model is doing right now.
+    ///
+    /// Mirrors the live steer path in adapter_types.rs, but uses `try_lock`
+    /// because this runs on the sync slash-command path while the queue is
+    /// a tokio Mutex.
+    /// (iter-240 — wires /steer to the real steer queue.)
+    /// (2026-11-12) `pub(crate)`: the plain-Enter steer key in key_handling
+    /// and the submit path in adapter_types.rs drive the same mechanism.
+    pub(crate) fn steer_now(&mut self, text: &str) -> String {
+        const NO_AGENT: &str = "Steering is unavailable (no live agent).";
+        const NOT_RUNNING: &str =
+            "Nothing is running to steer — use /queue to park this for the next turn.";
+        const QUEUE_BUSY: &str = "The steer queue is busy (the agent is draining it).";
+        if self.steer_queue_handle.is_none() {
+            return NO_AGENT.to_string();
+        }
+        // A steer steers a RUNNING turn. With no turn running there is
+        // nothing to steer, and parking the message in the live steer queue
+        // would make it arrive as a mid-turn injection in some later turn —
+        // the queue's job, under the queue's name.
+        if !self.is_streaming {
+            return NOT_RUNNING.to_string();
+        }
         let notice = match self.steer_queue_handle.as_ref() {
             Some(handle) => match handle.try_lock() {
                 Ok(mut q) => {
                     q.push(text.to_string());
-                    if self.is_streaming {
-                        format!("Steer queued: {}", text)
-                    } else {
-                        format!("Steer queued for the next turn: {}", text)
-                    }
+                    format!("Steered into the running turn: {}", text)
                 }
                 Err(_) => QUEUE_BUSY.to_string(),
             },
-            None => NO_QUEUE.to_string(),
+            None => NO_AGENT.to_string(),
         };
-        // The queued band and the recall ladder are the operator's only proof
-        // that the message is pending at all: without the mirror the queue
-        // looked dead, and without the history entry the message was
-        // unreachable once it left the composer.
-        if notice.starts_with("Steer queued") {
+        // The band is the operator's only proof that the steer is pending:
+        // without the mirror it looked dead, and the agent drains it at an
+        // iteration boundary without saying so.
+        if notice.starts_with("Steered") {
             self.refresh_steer_queue_mirror();
-            self.remember_prompt_history(text);
         }
         notice
     }
 
-    /// Take the messages the operator QUEUED that are still pending.
+    /// Queue `text` for the NEXT turn.
     ///
-    /// The queue is drained by the AGENT between iterations, so a message
-    /// queued while the TUI is IDLE has no iteration boundary to wait for: it
-    /// would sit until the turn after the next one (or forever, if the next
-    /// turn ends in a single iteration). The submit path takes those pending
-    /// messages and delivers them WITH the next turn, ahead of the draft the
-    /// operator just sent — they queued first.
+    /// The queue is the App's own store — NOT the agent's steer queue: that
+    /// one is drained BETWEEN iterations (mid-turn delivery), so a message
+    /// parked there would land in the turn the operator asked to steer, not
+    /// the next one. This one is delivered WITH the next turn (see
+    /// `take_pending_queued_messages`).
+    pub(crate) fn queue_for_next_turn(&mut self, text: &str) -> String {
+        if self.steer_queue_handle.is_none() {
+            return "Queueing is unavailable (no live agent to deliver to).".to_string();
+        }
+        self.next_turn_queue.push(text.to_string());
+        format!("Queued for the next turn: {}", text)
+    }
+
+    /// Render the LIVE steer queue — what the agent will inject into the
+    /// running turn at its next iteration boundary.
+    pub(crate) fn render_steer_queue(&self) -> String {
+        match self.steer_queue_handle.as_ref() {
+            Some(handle) => match handle.try_lock() {
+                Ok(q) if q.is_empty() => {
+                    "No steers pending — the running turn has no queued guidance.".to_string()
+                }
+                Ok(q) => format!("Steering ({}): {}", q.len(), q.join("; ")),
+                Err(_) => "The steer queue is busy (the agent is draining it).".to_string(),
+            },
+            None => "No live agent — nothing can be steered.".to_string(),
+        }
+    }
+
+    /// Render the NEXT-turn queue — what will be delivered with the next
+    /// turn the operator starts.
+    pub(crate) fn render_next_turn_queue(&self) -> String {
+        if self.next_turn_queue.is_empty() {
+            "Queue is empty — nothing is waiting for the next turn.".to_string()
+        } else {
+            format!(
+                "Queued for the next turn ({}): {}",
+                self.next_turn_queue.len(),
+                self.next_turn_queue.join("; ")
+            )
+        }
+    }
+
+    /// Take the messages the operator QUEUED for the next turn.
     ///
-    /// FIFO order; the queue and the queued band are left in step with what
-    /// was taken.
+    /// The submit path delivers them WITH the next turn, ahead of the draft
+    /// the operator just sent — they queued first.
+    ///
+    /// This reads the App's own next-turn queue and NEVER the agent's steer
+    /// queue: draining the steer queue here stole steers that were meant for
+    /// the RUNNING turn and carried them into the next one — the two actions
+    /// had become the same action, which is exactly what the split fixes.
+    ///
+    /// FIFO order.
     pub(crate) fn take_pending_queued_messages(&mut self) -> Vec<String> {
-        let mut pending = Vec::new();
-        if let Some(handle) = &self.steer_queue_handle
-            && let Ok(mut q) = handle.try_lock()
-        {
-            pending.append(&mut q);
-        }
-        if !pending.is_empty() {
-            self.refresh_steer_queue_mirror();
-        }
-        pending
+        std::mem::take(&mut self.next_turn_queue)
     }
 
     /// Render `/keys`: the full active catalogue grouped by context, with the
@@ -1520,37 +1565,43 @@ impl App {
                 true
             }
 
-            // /steer <message> — inject guidance into the live steer queue so
+            // /steer <message> — inject guidance into the LIVE steer queue so
             // the agent picks it up at the next iteration boundary mid-turn.
+            // /steer with no text LISTS what is pending there.
             // (iter-240 — wires to the real steer_queue_handle backend.)
             "steer" => {
                 let notice = if args.is_empty() {
-                    "Usage: /steer <message> (inject guidance while the agent is streaming)"
-                        .to_string()
+                    self.render_steer_queue()
                 } else {
-                    self.queue_steer(args)
+                    let notice = self.steer_now(args);
+                    // The recall ladder is the operator's only proof that the
+                    // message was accepted: without the history entry it was
+                    // unreachable once it left the composer.
+                    if notice.starts_with("Steered") {
+                        self.remember_prompt_history(args);
+                    }
+                    notice
                 };
                 self.set_status_notice(notice);
                 true
             }
 
-            // /queue — list the live steer queue; /queue <text> is an alias for
-            // /steer <text>. operant has no separate pending-input queue — the
-            // steer queue IS the queue. (iter-240.)
+            // /queue — the NEXT-turn queue: /queue <text> parks a message for
+            // the turn AFTER this one, /queue lists what is parked.
+            //
+            // A queued message is NOT a steer: it must not reach the model
+            // while the current turn is still running. (The old arm made
+            // /queue <text> an alias for /steer <text>, so a "queued" message
+            // was injected into the running turn.)
             "queue" => {
                 let msg = if !args.is_empty() {
-                    self.queue_steer(args)
-                } else {
-                    match self.steer_queue_handle.as_ref() {
-                        Some(handle) => match handle.try_lock() {
-                            Ok(q) if q.is_empty() => "Queue is empty".to_string(),
-                            Ok(q) => format!("Queued ({}): {}", q.len(), q.join("; ")),
-                            Err(_) => "Queue is busy (agent is draining it).".to_string(),
-                        },
-                        None => {
-                            "Nothing queued (queue is active only while streaming).".to_string()
-                        }
+                    let notice = self.queue_for_next_turn(args);
+                    if notice.starts_with("Queued") {
+                        self.remember_prompt_history(args);
                     }
+                    notice
+                } else {
+                    self.render_next_turn_queue()
                 };
                 self.set_status_notice(msg);
                 true
@@ -2446,46 +2497,63 @@ mod tests {
         }
     }
 
-    // ---- /steer must land in the steer queue in BOTH states ----------------
-    // The queue is the whole contract: the loop drains it at the next
-    // iteration boundary (run.rs `drain_steers`). Previously the Enter arm
-    // was gated on `!is_streaming` while `queue_steer` refused when idle,
-    // so /steer was a guaranteed no-op in either state.
+    // ---- /steer steers a RUNNING turn; /queue parks for the NEXT one -----
+    // The two are different actions with different delivery times, and they
+    // used to be one action: `/queue <text>` was an alias for `/steer <text>`
+    // and both pushed into the agent's steer queue, which the agent drains
+    // BETWEEN iterations — so a "queued" message landed in the RUNNING turn
+    // whenever the turn had another iteration left.
 
     #[test]
-    fn steer_should_queue_when_streaming() {
+    fn steer_lands_in_the_live_steer_queue_while_streaming() {
         let mut app = make_app();
         let queue = make_steer_queue();
         app.steer_queue_handle = Some(std::sync::Arc::clone(&queue));
         app.is_streaming = true;
 
-        let status = app.queue_steer("focus on the parser");
+        let status = app.steer_now("focus on the parser");
 
         assert_eq!(
             queue.try_lock().unwrap().as_slice(),
             ["focus on the parser".to_string()]
         );
-        assert_eq!(status, "Steer queued: focus on the parser");
+        assert_eq!(status, "Steered into the running turn: focus on the parser");
     }
 
     #[test]
-    fn steer_should_apply_when_idle() {
+    fn steer_refuses_when_nothing_is_running() {
         let mut app = make_app();
         let queue = make_steer_queue();
         app.steer_queue_handle = Some(std::sync::Arc::clone(&queue));
         app.is_streaming = false;
 
-        let status = app.queue_steer("use the CLI instead");
+        let status = app.steer_now("use the CLI instead");
 
-        // Same queue — idle, the loop drains it on the next turn.
-        assert_eq!(
-            queue.try_lock().unwrap().as_slice(),
-            ["use the CLI instead".to_string()]
+        // Nothing is running, so there is nothing to steer: parking it in the
+        // live steer queue would make it arrive as a mid-turn injection in
+        // some later turn. The queue is the action for that.
+        assert!(queue.try_lock().unwrap().is_empty());
+        assert!(
+            status.contains("/queue"),
+            "the refusal must point at the queue: {status}"
         );
-        assert_eq!(
-            status,
-            "Steer queued for the next turn: use the CLI instead"
+    }
+
+    #[test]
+    fn queue_parks_for_the_next_turn_and_never_touches_the_steer_queue() {
+        let mut app = make_app();
+        let queue = make_steer_queue();
+        app.steer_queue_handle = Some(std::sync::Arc::clone(&queue));
+        app.is_streaming = true;
+
+        let status = app.queue_for_next_turn("then check the tests");
+
+        assert_eq!(status, "Queued for the next turn: then check the tests");
+        assert!(
+            queue.try_lock().unwrap().is_empty(),
+            "a queued message must NOT reach the agent's steer queue"
         );
+        assert_eq!(app.next_turn_queue, ["then check the tests".to_string()]);
     }
 
     #[test]
@@ -2495,28 +2563,37 @@ mod tests {
         app.set_prompt_text("/steer focus on the parser".to_string());
 
         // Submit must be reachable mid-turn, otherwise the steering text can
-        // never reach `queue_steer` while a turn is streaming.
+        // never reach the steer path while a turn is streaming.
         assert!(app.handle_key_event(press_key(KeyCode::Enter, KeyModifiers::NONE)));
     }
 
     #[test]
-    fn plain_prompt_should_not_submit_while_streaming() {
+    fn plain_prompt_mid_stream_steers_instead_of_starting_a_second_turn() {
         let mut app = make_app();
+        let queue = make_steer_queue();
+        app.steer_queue_handle = Some(std::sync::Arc::clone(&queue));
         app.is_streaming = true;
         app.set_prompt_text("keep going".to_string());
 
-        // Opening the gate for /steer must not let ordinary prompts start a
+        // A DIRECT mid-stream message is a STEER: it must not start a
         // second turn while one is already streaming.
         assert!(!app.handle_key_event(press_key(KeyCode::Enter, KeyModifiers::NONE)));
 
-        // (2026-10-27) But the dead key must SAY so now instead of doing
-        // nothing — the silent swallow is what made the operator think
-        // Enter was broken while a turn streamed.
+        assert_eq!(
+            queue.try_lock().unwrap().as_slice(),
+            ["keep going".to_string()],
+            "the draft must reach the live steer queue"
+        );
+        assert!(
+            app.prompt_input.text.is_empty(),
+            "a delivered steer consumes the composer"
+        );
         assert!(
             app.status_message
                 .as_deref()
-                .is_some_and(|m| m.contains("A turn is running")),
-            "plain-prompt Enter mid-stream must surface the /queue hint"
+                .is_some_and(|m| m.contains("Steered")),
+            "the steer must be announced: {:?}",
+            app.status_message
         );
     }
 

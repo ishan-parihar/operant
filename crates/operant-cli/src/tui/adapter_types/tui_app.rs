@@ -783,29 +783,24 @@ impl TuiApp {
         // live turn to steer; the guard above only catches the stopping
         // window where steering is pointless (the interrupt is already
         // fired).
-        if self.app.is_streaming
-            && let Some(handle) = &self.app.steer_queue_handle
-        {
-            let notice = {
-                let mut q = handle.lock().await;
-                q.push(text.clone());
-                format!(
-                    "Steer queued: {}",
-                    text.chars().take(60).collect::<String>()
-                )
-            };
-            // The notice is set AFTER the queue guard is released: the guard
-            // borrows the app, and the notice needs it mutably.
+        //
+        // (2026-11-12) This branch now goes through the SAME App method the
+        // plain-Enter-mid-stream key uses (`App::steer_now`), so a steer
+        // always refreshes the pending band — the old inline push left the
+        // band stale, and the operator could not see that their steer was
+        // pending at all. History is NOT recorded here: the composer path
+        // already recorded it in `App::take_input`.
+        if self.app.is_streaming && self.app.steer_queue_handle.is_some() {
+            let notice = self.app.steer_now(&text);
             self.app.set_status_notice(notice);
             return;
         }
-        // A message the operator QUEUED while the TUI was IDLE is delivered
-        // WITH this turn, ahead of the draft they just submitted: they queued
-        // it first. The agent's own steer drain only runs BETWEEN iterations,
-        // so a message queued before a turn had no boundary to wait for — it
-        // would sit until the turn after the next one (or forever, if that
-        // turn ended in a single iteration). This is the "queued but never
-        // delivered" half of the operator's Ctrl+Enter report.
+        // A message the operator QUEUED for the NEXT turn is delivered WITH
+        // this turn, ahead of the draft they just submitted: they queued it
+        // first. The queue is the App's own store — NOT the agent's steer
+        // queue, which drains BETWEEN iterations (mid-turn delivery). That
+        // separation is the whole contract: a queued message must not reach
+        // the model inside the turn the operator asked to steer.
         let mut text = text;
         let pending = self.app.take_pending_queued_messages();
         if !pending.is_empty() {
