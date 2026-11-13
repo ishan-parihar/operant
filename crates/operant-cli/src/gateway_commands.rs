@@ -3711,7 +3711,7 @@ mod tests {
         );
         assert!(clamped.ends_with('…'), "a cut description marks the cut");
 
-        let json = telegram_commands_json(&[("ponytail-audit".to_string(), long)]);
+        let json = telegram_bot_commands(&[("ponytail-audit".to_string(), long)]);
         assert!(json.contains(r#""command":"ponytail_audit""#), "{json}");
         let parsed: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
         let entry = parsed
