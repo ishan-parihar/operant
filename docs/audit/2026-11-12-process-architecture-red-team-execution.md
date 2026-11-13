@@ -105,7 +105,7 @@ was load-tested, and no number in this report was invented.
   `tools::checkpoint_tool::tests::two_sessions_in_one_directory_do_not_share_the_checkpoint_list`
   (two mutation-proofed assertions).
 
-### 6. The file-state snapshots are shared by every chat — **CLOSED (iter-2156)**
+### 6. The file-state snapshots are shared by every chat — **CLOSED (iter-2158)**
 (`crates/operant-core/src/tools/file_state.rs:23`)
 
 - **What this is:** one process-global map of file snapshots (the file-edit
@@ -113,12 +113,12 @@ was load-tested, and no number in this report was invented.
 - **Problem:** two chats editing the same file interleave their snapshots.
 - **Fix:** key the map by session and path.
 - **If we skip it:** a chat's file undo can restore another chat's snapshot.
-- **Closed in iter-2156:** the map is keyed by (session, path) and the session
+- **Closed in iter-2158:** the map is keyed by (session, path) and the session
   rides the tool's operations through the context. Pinned by
   `tools::file_state::tests::two_sessions_snapshots_of_one_file_do_not_interleave`
   (mutation-proved).
 
-### 7. The conversation-reload decision races between slots — **CLOSED (iter-2153)**
+### 7. The conversation-reload decision races between slots — **CLOSED (iter-2155)**
 (`crates/operant-cli/src/gateway_runner.rs:2843`)
 
 - **What this is:** the handler keeps ONE `current_session_id` to decide
@@ -129,7 +129,7 @@ was load-tested, and no number in this report was invented.
 - **Fix:** the decision belongs to the slot (each slot has one agent and one
   conversation), so the cell belongs to the slot.
 - **If we skip it:** a redundant rehydrate per turn — slower, not wrong.
-- **Closed in iter-2153:** the handler's shared `current_session_id` is gone;
+- **Closed in iter-2155:** the handler's shared `current_session_id` is gone;
   each slot owns a `loaded_session` cell, and the decision reads and writes
   the slot of THIS session. Pinned by
   `gateway_runner::tests::the_reload_decision_belongs_to_the_slot`
@@ -170,11 +170,33 @@ RT-538 (the shared file-state snapshots, closed in iter-2158).
 
 ## Verdict
 
-The campaign's direction is right and its claims hold under reading, but it
+**Every finding in this report is CLOSED**, and the ledger says so: the
+must-fix rows RT-533…RT-536, the should-fix rows RT-538 (file-state snapshots)
+and RT-541 (the checkpoint list), the redundancy row RT-525, and the
+reload-decision race (finding 7) are all closed with a named regression test.
+
+The campaign's direction was right and its claims hold under reading, but it
 shipped one design consequence unexamined: **making the gateway concurrent
 turned process-global state into shared state between turns.** Findings 1–3
-are that gap; they are small, they are in the code this campaign wrote, and
-they must be fixed before the slots are trusted with more than one seat.
+were that gap; they were small, they were in the code this campaign wrote, and
+they are now fixed, so the slots can be trusted with more than one seat.
+
+The same lesson generalised: the shared-state hunt found the SAME shape again
+in the file-state snapshots (finding 6) and the checkpoint list (finding 5) —
+process-global maps keyed by something coarser than a session. Both are fixed
+by adding the session to the key.
+
+**One regression was caught and re-landed:** a peer's iter-2123 reverted the
+whole RT-517 fix (the shared AFT pool, the reused kernel runtime and the single
+watchdog all disappeared, and the ledger row reopened) while the CHANGELOG
+entry stayed. iter-2176 re-landed it and re-ran its 4 mutation-proved tests.
+
+**Honest limits.** The 100–1000 parallel-agent target is still a TARGET: no
+load test has been run in this session, so the claims are architectural (one
+runtime, one pool, one watchdog, one socket server, one tool registry per
+process) and not measured throughput. The release build and the gateway restart
+could not run in this sandbox (no systemd user bus), so every commit here is
+pushed but NOT deployed.
 
 **Lean: the open RT-525 row removes about 1,350 lines; the rest of the
 campaign's output adds no new dependency.**
