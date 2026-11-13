@@ -62,6 +62,17 @@ kernel sidecar and MCP children
 | a session | dies with its client | outlives its client |
 | two clients on one session | two processes, two conversations | one conversation, two views |
 
+## What the protocol carries
+
+The event type is the agent's own `AgentEvent`
+(`crates/operant-core/src/agent/mod.rs`) — 25 variants, now serialisable, because
+a turn has to reach a client in another process. `TurnExitReason`
+(`crates/operant-core/src/agent/turn_finalizer.rs`), `Message` and `ToolResult`
+are wire types too. The test
+`the_agent_event_round_trips_through_json` walks every variant: a new variant
+added without a round-trip case fails it, so the wire type and its test grow
+together.
+
 ## The protocol, in one paragraph
 
 JSON lines over a unix socket, the shape the ACP server already uses. Two

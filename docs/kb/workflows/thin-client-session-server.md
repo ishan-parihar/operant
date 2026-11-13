@@ -35,7 +35,7 @@ lies), RT-551 (no published session cost), RT-552 (the read-only session API).
 
 | id | status | item | claim | verdict |
 |---|---|---|---|---|
-| thin-client-session-server-001 | open | I1: the agent's event type becomes a wire type (AgentEvent serialisable) | — | — |
+| thin-client-session-server-001 | done | I1: the agent's event type becomes a wire type (AgentEvent serialisable) | — | [2026-11-14] docs/audit/2026-11-13-server-process-architecture-scale-audit.md |
 | thin-client-session-server-002 | open | I2: the session protocol as data (client command, server event, versioned envelope) | — | — |
 | thin-client-session-server-003 | open | I3: the gateway serves a client socket (two clients, one process, one child set) | — | — |
 | thin-client-session-server-004 | open | I4: a session on the server that a client can drive (two clients share one live session) | — | — |

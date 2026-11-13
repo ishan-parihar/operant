@@ -19,6 +19,7 @@
 //! Thresholds and decay parameters for proactive context compression,
 //! extracted from the agent loop for clarity.
 
+use serde::{Deserialize, Serialize};
 use std::fmt;
 
 use crate::agent::background_review::SelfEvolutionState;
@@ -46,7 +47,11 @@ pub const PREFLIGHT_DECAY_CONSTANT: f64 = 20.0;
 // ---------------------------------------------------------------------------
 
 /// Why the turn ended. Matches hermes-agent's `_turn_exit_reason` strings.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// It is a wire type: the session protocol sends the reason to a client that
+/// is not this process (RT-546), so it crosses a socket like every other
+/// agent event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TurnExitReason {
     /// Model produced a text response (normal completion).
     TextResponse,

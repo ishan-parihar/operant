@@ -27,6 +27,8 @@ pub use turn_finalizer::TurnExitReason;
 pub mod turn_retry_state;
 pub mod turn_rules;
 
+use serde::{Deserialize, Serialize};
+
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -280,8 +282,14 @@ impl From<&BehaviorSettings> for AgentConfig {
     }
 }
 
-/// Events emitted by the agent
-#[derive(Debug, Clone)]
+/// Events emitted by the agent.
+///
+/// The enum is a WIRE type (RT-546): the session protocol sends a turn to a
+/// client that lives in another process — a terminal attached to the server
+/// — so an `AgentEvent` must survive a JSON round trip. `TurnExitReason`,
+/// `Message` and `ToolResult` (the three payload types that carry data of their
+/// own) are serializable too; the test below walks every variant.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum AgentEvent {
     /// Thinking/reasoning step
     Thinking { content: String },
@@ -4640,6 +4648,137 @@ mod tests {
             "persisted pattern must reload"
         );
         assert!(reloaded.contains("code_execution"));
+    }
+
+    /// RT-546: the agent's event type must cross a socket.
+    ///
+    /// The session protocol sends a turn to a client in another process, so
+    /// every variant of `AgentEvent` has to survive a JSON round trip. The
+    /// test walks EVERY variant — a new variant added without a round-trip
+    /// case fails here, which is the point: the wire type and its test grow
+    /// together.
+    #[test]
+    fn the_agent_event_round_trips_through_json() {
+        let message = Message {
+            role: Role::Assistant,
+            content: "done".to_string(),
+            reasoning: None,
+            name: None,
+            tool_call_id: None,
+            tool_calls: None,
+            extra_content: None,
+        };
+        let events = vec![
+            AgentEvent::Thinking {
+                content: "hmm".to_string(),
+            },
+            AgentEvent::Reasoning {
+                text: "because".to_string(),
+            },
+            AgentEvent::ToolStart {
+                tool_call_id: "call_1".to_string(),
+                name: "terminal".to_string(),
+                arguments: "{}".to_string(),
+            },
+            AgentEvent::ToolComplete {
+                result: crate::tools::ToolResult {
+                    content: "ok".to_string(),
+                    success: true,
+                    ..Default::default()
+                },
+            },
+            AgentEvent::ToolError {
+                tool_call_id: "call_1".to_string(),
+                name: "terminal".to_string(),
+                error: "boom".to_string(),
+            },
+            AgentEvent::Content {
+                text: "hello".to_string(),
+            },
+            AgentEvent::Done {
+                message,
+                reason: TurnExitReason::TextResponse,
+            },
+            AgentEvent::IterationComplete { iteration: 2 },
+            AgentEvent::Error {
+                error: "bad".to_string(),
+            },
+            AgentEvent::Usage {
+                input_tokens: 1,
+                output_tokens: 2,
+                total_tokens: 3,
+            },
+            AgentEvent::Cost {
+                cost_usd: Some(0.5),
+                input_tokens: 1,
+                output_tokens: 2,
+                model: "gpt-5".to_string(),
+            },
+            AgentEvent::RateLimitNotice {
+                retry_after_secs: Some(30),
+            },
+            AgentEvent::TurnStarted { turn_id: 7 },
+            AgentEvent::StreamCorrupted { dropped_events: 4 },
+            AgentEvent::ToolPermissionRequest {
+                tool_name: "terminal".to_string(),
+                tool_id: "call_1".to_string(),
+                description: "Execute terminal tool".to_string(),
+                danger_explanation: "This runs a shell command".to_string(),
+                input_preview: Some("ls -la".to_string()),
+            },
+            AgentEvent::BackgroundReview {
+                summary: "learned".to_string(),
+                session_id: "s1".to_string(),
+            },
+            AgentEvent::Notice {
+                text: "heads up".to_string(),
+            },
+            AgentEvent::AsyncDelegation {
+                delegation_id: "d1".to_string(),
+                status: "running".to_string(),
+                summary: "working".to_string(),
+            },
+            AgentEvent::CompactionStarted { tokens_before: 900 },
+            AgentEvent::CompactionCompleted {
+                tokens_before: 900,
+                tokens_after: 100,
+                messages_before: 20,
+                messages_after: 4,
+            },
+            AgentEvent::RetryScheduled {
+                attempt: 1,
+                max_attempts: 5,
+                reason: "rate limited".to_string(),
+            },
+            AgentEvent::ModelFallback {
+                from: "gpt-5".to_string(),
+                to: "gpt-5-mini".to_string(),
+                reason: "overloaded".to_string(),
+            },
+            AgentEvent::SubagentStarted {
+                subagent_id: "sa1".to_string(),
+                role: "worker".to_string(),
+                depth: 1,
+            },
+            AgentEvent::SubagentStopped {
+                subagent_id: "sa1".to_string(),
+                status: "done".to_string(),
+                summary: "finished".to_string(),
+            },
+            AgentEvent::TodoUpdated {
+                total: 3,
+                completed: 1,
+                in_progress: 1,
+            },
+        ];
+
+        for event in events {
+            let json = serde_json::to_string(&event).expect("an agent event must serialise");
+            let back: AgentEvent =
+                serde_json::from_str(&json).expect("an agent event must deserialise");
+            let again = serde_json::to_string(&back).expect("the round trip must serialise again");
+            assert_eq!(json, again, "the event changed across the wire: {event:?}");
+        }
     }
 
     #[test]
