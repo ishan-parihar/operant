@@ -419,3 +419,41 @@ fn the_queue_command_lists_the_parked_messages() {
         "/queue must list the parked messages: {notice}"
     );
 }
+
+/// (iter-2217) `/steer` leaves a row in the transcript TOO.
+///
+/// The row was pushed only at the plain-Enter key site, so the documented,
+/// discoverable steer — `/steer <text>` — still sent the operator's words
+/// into the running turn without ever showing them on screen. The row is now
+/// pushed by `App::steer_now` itself, which every steer entry point reaches.
+#[test]
+fn the_steer_slash_command_leaves_a_row_in_the_transcript() {
+    use crate::tui::adapter_types::types::{MessageContent, Role};
+
+    let mut app = super::tests::make_app();
+    let queue = make_steer_queue();
+    app.steer_queue_handle = Some(std::sync::Arc::clone(&queue));
+    app.is_streaming = true;
+
+    assert!(app.handle_tui_command("steer", "prefer the serde path"));
+
+    assert_eq!(
+        queue.try_lock().unwrap().as_slice(),
+        ["prefer the serde path".to_string()],
+        "the steer must reach the agent's live steer queue"
+    );
+    let user_rows: Vec<&str> = app
+        .messages
+        .iter()
+        .filter(|m| m.role == Role::User)
+        .filter_map(|m| match &m.content {
+            MessageContent::Text(t) => Some(t.as_str()),
+            MessageContent::Blocks(_) => None,
+        })
+        .collect();
+    assert_eq!(
+        user_rows,
+        ["prefer the serde path"],
+        "the operator's steered words must be a row they can see"
+    );
+}

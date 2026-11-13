@@ -247,6 +247,26 @@ impl App {
         // iteration boundary without saying so.
         if notice.starts_with("Steered") {
             self.refresh_steer_queue_mirror();
+            // (iter-2217) And it is a row in the TRANSCRIPT, not only a
+            // notice. The agent injects the steer into the running
+            // conversation and persists it; the TUI's transcript is its own
+            // vec, so without this the operator's words appear NOWHERE —
+            // the composer cleared, the band entry dropped the moment the
+            // agent drained it, and there was no proof they had ever said it.
+            //
+            // It lives HERE, once, because every steer entry point must be
+            // visible, not just one: the plain-Enter-mid-stream key, `/steer`
+            // and the adapter's streaming submit path all reach this method.
+            // A row pushed only at the key site is a row the other two never
+            // get — which is exactly the half-closed gap iter-2212 left.
+            //
+            // `Message::user` directly, NOT `add_message`: the latter calls
+            // `begin_user_turn_snapshot`, and a steer must not become a rewind
+            // mark (the agent excludes steers from marks by construction —
+            // they never pass `build_turn_context`).
+            self.messages.push(Message::user(text.to_string()));
+            self.invalidate_transcript();
+            self.on_new_message();
         }
         notice
     }
