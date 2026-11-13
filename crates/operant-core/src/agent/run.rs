@@ -3323,7 +3323,8 @@ impl OperantAgent {
                         // must not reach the model before the archive row
                         // exists.
                         let result_was_lossy = marker.is_some();
-                        let content = model_facing_tool_result(body, &full_body, marker.as_deref(), true);
+                        let content =
+                            model_facing_tool_result(body, &full_body, marker.as_deref(), true);
 
                         // ── Memory write mirroring (hermes parity) ────────
                         // When a built-in memory tool writes an entry
@@ -3874,6 +3875,24 @@ impl OperantAgent {
             .await
         };
         let resolved = crate::context_window::resolve(configured, learned, discovered);
+        // The silent fallback is the shape of the original bug: an
+        // unreachable endpoint left the window at the 128k default and said
+        // nothing, so a 1M model was budgeted against 10% of the window it
+        // pays for. Say it out loud when the default is what is actually
+        // used — and say it when the endpoint could not be reached, which is
+        // a different fact from "it reported no limit".
+        if configured == crate::context_window::AUTOMATIC
+            && resolved.source == crate::context_window::WindowSource::Default
+        {
+            warn!(
+                model = %self.model(),
+                provider = %self.client.provider_name(),
+                "the context window fell back to the built-in default — the provider reported no \
+                 limit and the endpoint was unreachable. The agent will budget against \
+                 {} tokens until the endpoint answers.",
+                resolved.window
+            );
+        }
         let previous = self.resolved_window();
         *self
             .resolved_window

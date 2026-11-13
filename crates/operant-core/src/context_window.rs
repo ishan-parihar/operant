@@ -158,9 +158,26 @@ pub struct Discovered {
     pub context_window: Option<usize>,
     pub window_source: Option<WindowSource>,
     pub max_output: Option<usize>,
+    /// Whether the provider's OWN listing answered.
+    ///
+    /// The distinction matters because "the endpoint said nothing" and "the
+    /// endpoint could not be reached" are different facts with different
+    /// remedies, and they used to look identical: both left the window at
+    /// the 128k default, silently. On a 1M model that is 10% of the window
+    /// the operator pays for — the same class of surprise as the original
+    /// 4,242-token window, except it heals by luck when the endpoint comes
+    /// back.
+    pub endpoint_reachable: bool,
 }
 
 impl Discovered {
+    /// Record whether the provider's own listing answered, without
+    /// disturbing the answers this value carries.
+    fn with_reachability(mut self, reachable: bool) -> Self {
+        self.endpoint_reachable = reachable;
+        self
+    }
+
     /// Merge another source underneath this one (self wins where it has an
     /// answer). Used to layer models.dev beneath the provider's own listing.
     fn or(self, fallback: Self) -> Self {
@@ -168,6 +185,7 @@ impl Discovered {
             context_window: self.context_window.or(fallback.context_window),
             window_source: self.window_source.or(fallback.window_source),
             max_output: self.max_output.or(fallback.max_output),
+            endpoint_reachable: self.endpoint_reachable || fallback.endpoint_reachable,
         }
     }
 }
@@ -298,14 +316,20 @@ pub async fn discover(
     if let Some(hit) = cache_get(&key) {
         return hit;
     }
-    let endpoint = discover_endpoint(provider, base_url, api_key, model).await;
+    // ONE fetch: `discover_endpoint` reports whether the endpoint ANSWERED
+    // (not whether it had something to say about this model — "reachable but
+    // silent" and "unreachable" are different facts, and the second one means
+    // the window fell back to a default).
+    let (endpoint_reachable, endpoint) =
+        discover_endpoint(provider, base_url, api_key, model).await;
     let catalog = discover_catalog(provider, model).await;
     let discovered = match (endpoint, catalog) {
         (Some(endpoint), Some(catalog)) => endpoint.or(catalog),
         (Some(endpoint), None) => endpoint,
         (None, Some(catalog)) => catalog,
         (None, None) => Discovered::default(),
-    };
+    }
+    .with_reachability(endpoint_reachable);
     cache_put(key, discovered);
     discovered
 }
@@ -315,24 +339,37 @@ async fn discover_endpoint(
     base_url: &str,
     api_key: Option<&str>,
     model: &str,
-) -> Option<Discovered> {
-    let family = wire_family(provider)?;
-    let rows = model_catalog::fetch_live_details(family, base_url, api_key)
-        .await
-        .ok()?;
-    let row = rows.iter().find(|row| {
-        row.id == model
-            || row
-                .id
-                .rsplit('/')
-                .next()
-                .is_some_and(|leaf| leaf == model.rsplit('/').next().unwrap_or(model))
-    })?;
-    Some(Discovered {
-        context_window: row.context_length,
-        window_source: row.context_length.map(|_| WindowSource::Endpoint),
-        max_output: row.max_output,
-    })
+) -> (bool, Option<Discovered>) {
+    let Some(family) = wire_family(provider) else {
+        return (false, None);
+    };
+    let rows = match model_catalog::fetch_live_details(family, base_url, api_key).await {
+        Ok(rows) => rows,
+        // Unreachable, or no `/models` listing at all: the window then comes
+        // from the next leg (the catalog, or the default), and the caller
+        // must be able to say SO rather than letting it look like "not
+        // reported".
+        Err(_) => return (false, None),
+    };
+    // The endpoint ANSWERED, even when it has nothing to say about this
+    // model: that is a different fact from being unreachable.
+    let discovered = rows
+        .iter()
+        .find(|row| {
+            row.id == model
+                || row
+                    .id
+                    .rsplit('/')
+                    .next()
+                    .is_some_and(|leaf| leaf == model.rsplit('/').next().unwrap_or(model))
+        })
+        .map(|row| Discovered {
+            context_window: row.context_length,
+            window_source: row.context_length.map(|_| WindowSource::Endpoint),
+            max_output: row.max_output,
+            endpoint_reachable: true,
+        });
+    (true, discovered)
 }
 
 async fn discover_catalog(provider: &str, model: &str) -> Option<Discovered> {
@@ -352,6 +389,9 @@ async fn discover_catalog(provider: &str, model: &str) -> Option<Discovered> {
                     max_output: caps
                         .max_output
                         .and_then(|tokens| usize::try_from(tokens).ok()),
+                    // The catalog is not the provider: reachability is the
+                    // endpoint's fact, and this leg never speaks for it.
+                    endpoint_reachable: false,
                 });
             }
         }
@@ -379,12 +419,42 @@ pub fn wire_family(provider: &str) -> Option<WireFamily> {
 mod tests {
     use super::*;
 
+    /// "The endpoint answered but has nothing for this model" and "the
+    /// endpoint could not be reached" are DIFFERENT facts, and they used to
+    /// look identical: both left the window at the 128k default and said
+    /// nothing. A provider outage silently budgeted a 1M model against 10%
+    /// of the window it pays for.
+    #[test]
+    fn reachability_is_recorded_even_when_the_endpoint_has_no_answer() {
+        // Reachable but silent for this model.
+        let reachable = Discovered {
+            endpoint_reachable: true,
+            ..Discovered::default()
+        };
+        assert!(reachable.endpoint_reachable);
+        // Unreachable: the default's reachability is false.
+        assert!(!Discovered::default().endpoint_reachable);
+    }
+
+    /// The resolved window says WHICH source answered, so the caller can
+    /// name it — and an automatic window with no answer at all falls back to
+    /// the documented default, never to the 0 sentinel.
+    #[test]
+    fn an_automatic_window_with_no_answer_uses_the_default() {
+        let resolved = resolve(AUTOMATIC, None, Discovered::default());
+        assert_eq!(resolved.window, DEFAULT_CONTEXT_WINDOW);
+        assert_eq!(resolved.source, WindowSource::Default);
+    }
+
+    use super::*;
+
     #[test]
     fn configured_wins_over_every_live_source() {
         let resolved = resolve(
             200_000,
             Some(64_000),
             Discovered {
+                endpoint_reachable: false,
                 context_window: Some(1_048_576),
                 window_source: Some(WindowSource::Endpoint),
                 max_output: Some(32_768),
@@ -401,6 +471,7 @@ mod tests {
             AUTOMATIC,
             None,
             Discovered {
+                endpoint_reachable: false,
                 context_window: Some(1_048_576),
                 window_source: Some(WindowSource::Endpoint),
                 max_output: Some(131_072),
@@ -416,6 +487,7 @@ mod tests {
     #[test]
     fn a_learned_limit_beats_the_endpoint_but_not_the_operator() {
         let discovered = Discovered {
+            endpoint_reachable: false,
             context_window: Some(1_048_576),
             window_source: Some(WindowSource::Endpoint),
             max_output: None,
@@ -451,6 +523,7 @@ mod tests {
             AUTOMATIC,
             None,
             Discovered {
+                endpoint_reachable: false,
                 context_window: Some(200_000),
                 window_source: Some(WindowSource::Catalog),
                 max_output: None,

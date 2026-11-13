@@ -435,6 +435,10 @@ pub(crate) struct ResolvedWindowReport {
     pub endpoint_window: Option<usize>,
     /// The model's output ceiling, when a source knows it.
     pub max_output: Option<usize>,
+    /// Whether the provider's own listing answered. False means the window
+    /// could not be learned from the provider — a different fact from "the
+    /// provider reports no limit for this model".
+    pub endpoint_reachable: bool,
 }
 
 /// Resolve the window for a config, without touching the network twice.
@@ -470,6 +474,7 @@ pub(crate) async fn resolve_window_for_report_with_key(
     // consumes it: the report names what the endpoint said even when the
     // operator's override is what the runtime uses.
     let endpoint_window = discovered.context_window;
+    let discovered_reachable = discovered.endpoint_reachable;
     let resolved =
         operant_core::context_window::resolve(config.agent.context_window, learned, discovered);
     (
@@ -479,6 +484,7 @@ pub(crate) async fn resolve_window_for_report_with_key(
             learned,
             endpoint_window,
             max_output: resolved.max_output,
+            endpoint_reachable: discovered_reachable,
         },
         key,
     )
@@ -535,6 +541,7 @@ async fn window_command(config: &AppConfig, refresh: bool, reset: bool, json: bo
                 "learned": learned,
                 "learned_key": key,
                 "endpoint_window": report.endpoint_window,
+                "endpoint_reachable": report.endpoint_reachable,
                 "discovered_source": report.source,
                 "resolved": report.window,
                 "source": report.source,
@@ -557,9 +564,12 @@ async fn window_command(config: &AppConfig, refresh: bool, reset: bool, json: bo
     );
     println!(
         "  endpoint     : {}",
-        report
-            .endpoint_window
-            .map_or_else(|| "not reported".to_string(), |tokens| tokens.to_string())
+        match (report.endpoint_reachable, report.endpoint_window) {
+            (true, Some(tokens)) => tokens.to_string(),
+            (true, None) => "reachable, but reports no limit for this model".to_string(),
+            (false, _) =>
+                "UNREACHABLE — the window could not be learned from the provider".to_string(),
+        }
     );
     println!("  resolved     : {} ({})", report.window, report.source);
     println!(

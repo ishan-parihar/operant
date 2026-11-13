@@ -815,7 +815,10 @@ pub fn skill_command_names(token: &str) -> Vec<String> {
 /// The vendor skills as command rows from explicit roots — the pure core of
 /// [`crate::skill_roots::vendor_skill_command_rows`], so a test can pin it
 /// without the real install.
-pub fn skill_command_rows_for_roots(pool: &std::path::Path, roots: &[std::path::PathBuf]) -> Vec<(String, String)> {
+pub fn skill_command_rows_for_roots(
+    pool: &std::path::Path,
+    roots: &[std::path::PathBuf],
+) -> Vec<(String, String)> {
     if roots.is_empty() {
         return Vec::new();
     }
@@ -5053,10 +5056,8 @@ mod rt179_skill_tests {
         // The registry does NOT need a per-skill entry for this: the command
         // list carries the skills command, and the vendor skills show in
         // `/help` and the Telegram menu through the rows.
-        let rows = skill_command_rows_for_roots(
-            &dir.path().join("skills"),
-            std::slice::from_ref(&vendor),
-        );
+        let rows =
+            skill_command_rows_for_roots(&dir.path().join("skills"), std::slice::from_ref(&vendor));
         assert!(
             rows.iter().any(|(name, _)| name == "ponytail-review"),
             "the vendor skill must be a published command row, got: {rows:?}"
