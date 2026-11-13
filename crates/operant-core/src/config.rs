@@ -586,6 +586,15 @@ pub struct ClientSettings {
     /// adapters (zeroclaw port: was hardcoded to the 5-minute default).
     #[serde(default)]
     pub prompt_cache_ttl: crate::agent::clients::prompt_caching::CacheTtl,
+    /// DEPRECATED — accepted so old configs still parse, and IGNORED.
+    ///
+    /// The context window is `agent.context_window` (and the resolver's
+    /// answer for it). This key had two writers and no reader: it was a
+    /// second source of truth for one fact. Removing it outright broke
+    /// every install whose file carried it — the config schema denies
+    /// unknown fields, so the runtime refused to start at all — so it stays
+    /// as an accepted alias with nothing reading or writing it.
+    pub max_context_length: usize,
 }
 
 impl Default for ClientSettings {
@@ -598,6 +607,9 @@ impl Default for ClientSettings {
             model_request_timeouts: std::collections::HashMap::new(),
             rate_limit: RateLimitSettings::default(),
             prompt_cache_ttl: Default::default(),
+            // The deprecated alias keeps its old default so a round-trip
+            // through the config writer does not change an old file.
+            max_context_length: 128_000,
         }
     }
 }
@@ -3783,6 +3795,31 @@ mod rt418_tests {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    /// The deprecated `client.max_context_length` key must still PARSE.
+    ///
+    /// The config schema denies unknown fields, so removing the key outright
+    /// made every install whose file carried it refuse to start — the live
+    /// deployment on this host did exactly that (the gateway could not come
+    /// up). The key is accepted and ignored; the window is
+    /// `agent.context_window`.
+    #[test]
+    fn an_old_config_with_the_removed_client_key_still_parses() {
+        let toml = r#"
+[client]
+base_url = "https://example.invalid/v1"
+max_context_length = 1048576
+
+[agent]
+model = "demo"
+context_window = 0
+"#;
+        let parsed: AppConfig = toml::from_str(toml).expect("an old config must parse");
+        assert_eq!(parsed.client.max_context_length, 1_048_576);
+        assert_eq!(parsed.agent.context_window, 0);
+    }
+
     /// THE AGENT-FACING HALF IS NOT WIRED — this test exists so nobody
     /// assumes it is, including a future me.
     ///
