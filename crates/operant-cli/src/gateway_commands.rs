@@ -3257,6 +3257,21 @@ pub fn handle_command(cmd_name: &str, _args: &str, ctx: &CommandContext<'_>) -> 
     })
 }
 
+/// A Telegram bot-command description: 1-256 characters. A skill
+/// description routinely runs longer (the ponytail audit prompt alone is
+/// ~340), and Telegram rejects the WHOLE `setMyCommands` request with
+/// HTTP 400 when any single description is over the limit — which leaves
+/// the previously published menu in place and silently drops the new
+/// commands. So the cut happens HERE, once, instead of losing the set.
+fn telegram_command_description(description: &str) -> String {
+    let clamped: String = description.chars().take(253).collect();
+    if clamped.chars().count() < description.chars().count() {
+        format!("{clamped}…")
+    } else {
+        clamped
+    }
+}
+
 /// Generate a JSON string suitable for Telegram's `setMyCommands` API.
 ///
 /// Only non-admin commands are included. Command names with hyphens are
@@ -3341,7 +3356,7 @@ pub fn telegram_bot_commands(vendor_skill_commands: &[(String, String)]) -> Stri
             .map(|ch| if ch == '-' { '_' } else { ch })
             .collect();
 
-        let escaped_desc: String = description
+        let escaped_desc: String = telegram_command_description(description)
             .chars()
             .flat_map(|ch| match ch {
                 '"' => vec!['\\', '"'],
@@ -3678,6 +3693,37 @@ mod tests {
         assert!(json.ends_with(']'));
         assert!(json.contains(r#""command":""#));
         assert!(!json.contains(r#""command":"reload-mcp""#));
+    }
+
+    /// Telegram rejects the WHOLE `setMyCommands` request (HTTP 400) when
+    /// any one description is over 256 characters — so a long skill
+    /// description silently cost the operator the ENTIRE menu, and the
+    /// six skill commands with it. The clamp is the difference between a
+    /// published menu and a dropped one.
+    #[test]
+    fn a_long_skill_description_cannot_reject_the_whole_command_menu() {
+        let long = "x".repeat(400);
+        let clamped = telegram_command_description(&long);
+        assert!(
+            clamped.chars().count() <= 256,
+            "a Telegram description must fit in 256 characters, got {}",
+            clamped.chars().count()
+        );
+        assert!(clamped.ends_with('…'), "a cut description marks the cut");
+
+        let json = telegram_commands_json(&[("ponytail-audit".to_string(), long)]);
+        assert!(json.contains(r#""command":"ponytail_audit""#), "{json}");
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+        let entry = parsed
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["command"] == "ponytail_audit")
+            .expect("the skill command is published");
+        assert!(
+            entry["description"].as_str().unwrap().chars().count() <= 256,
+            "the published description must fit Telegram's limit"
+        );
     }
 
     #[test]
