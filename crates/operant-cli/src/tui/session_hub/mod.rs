@@ -446,6 +446,19 @@ pub struct SessionHubState {
     /// `None` = every employee, which is the default: a filter that hid rows
     /// before the operator asked for one is a filter nobody can trust.
     employee_filter: Option<String>,
+    /// Hide every tool call in the preview (`t`).
+    ///
+    /// The operator asked for "an option to hide all the tool-calls, so that
+    /// the prompts, and the end of turn output remains". This is an operant
+    /// feature, NOT a codex port: codex has only `RawReasoningVisibility`
+    /// (codex-rs/tui/src/thread_transcript.rs:62-65), which hides the
+    /// REASONING traces — codex has no way to hide tool calls at all.
+    ///
+    /// What it hides: the `[tool]` labels attached to an assistant turn, and
+    /// the tool RESULT messages themselves. What it leaves: the prompts the
+    /// operator typed and the assistant's end-of-turn output — which is
+    /// exactly the pair the operator named.
+    pub hide_tool_calls: bool,
 }
 
 impl Default for SessionHubState {
@@ -479,6 +492,7 @@ impl SessionHubState {
             pending_archive: None,
             live_session_id: None,
             employee_filter: None,
+            hide_tool_calls: false,
         }
     }
 
@@ -654,6 +668,16 @@ impl SessionHubState {
             }
         };
         self.rebuild_visible();
+    }
+
+    /// Flip the tool-call visibility in the preview (`t`).
+    ///
+    /// A pure presentation flag: the transcript is NOT reloaded, because the
+    /// tool calls are still in the cached messages and are still what the
+    /// operator may want back with one more keypress. Re-fetching would be
+    /// both slower and a worse answer.
+    pub fn toggle_tool_calls(&mut self) {
+        self.hide_tool_calls = !self.hide_tool_calls;
     }
 
     /// The employee this list is restricted to, for the header's chip.

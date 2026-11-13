@@ -999,6 +999,89 @@ fn a_subagent_row_names_its_delegation_status_without_focusing_it() {
     );
 }
 
+// ---- (2026-11-13) hide the tool calls: the prompts and the end of turn remain ----
+
+/// A hub painted with a transcript that has prompts, tool calls and tool
+/// results, so the toggle has something to hide.
+fn hub_with_transcript() -> SessionHubState {
+    let mut hub = SessionHubState::new();
+    hub.visible = true;
+    hub.replace_rows(vec![row("s1", Some("work"), None)]);
+    let mut with_call = msg("assistant", "reading the file");
+    with_call.tool_calls = vec!["file_read".to_string()];
+    assert!(
+        hub.apply_preview(
+            "s1",
+            vec![
+                msg("user", "the prompt"),
+                with_call,
+                msg("tool", "the tool output"),
+                msg("assistant", "the end of turn"),
+            ],
+            0,
+        ),
+        "the preview applies to the selected row"
+    );
+    hub
+}
+
+/// The toggle hides the tool calls AND their results, and leaves exactly what
+/// the operator asked to keep: the prompt and the end of turn.
+#[test]
+fn hiding_the_tool_calls_leaves_the_prompt_and_the_end_of_turn() {
+    let mut hub = hub_with_transcript();
+    let (_, before) = hub_rows_with(&mut hub);
+    let before_joined = before.join("\n");
+    assert!(before_joined.contains("file_read"), "{before_joined}");
+    assert!(before_joined.contains("the tool output"), "{before_joined}");
+
+    hub.toggle_tool_calls();
+    let (_, after) = hub_rows_with(&mut hub);
+    let after_joined = after.join("\n");
+    assert!(
+        !after_joined.contains("file_read"),
+        "the tool call must be hidden: {after_joined}"
+    );
+    assert!(
+        !after_joined.contains("the tool output"),
+        "the tool RESULT must be hidden with the call: {after_joined}"
+    );
+    assert!(
+        after_joined.contains("the prompt"),
+        "the prompt must remain: {after_joined}"
+    );
+    assert!(
+        after_joined.contains("the end of turn"),
+        "the end-of-turn output must remain: {after_joined}"
+    );
+}
+
+/// The toggle must be VISIBLE: a preview that silently loses its tool calls
+/// reads as a broken transcript.
+#[test]
+fn the_hidden_tool_calls_are_named_in_the_preview() {
+    let mut hub = hub_with_transcript();
+    hub.toggle_tool_calls();
+    let (_, preview) = hub_rows_with(&mut hub);
+    assert!(
+        preview.join("\n").contains("tool calls hidden"),
+        "the preview must say the calls are hidden: {preview:?}"
+    );
+}
+
+/// One keypress restores them: the transcript is not reloaded, the cached
+/// messages still carry the calls.
+#[test]
+fn the_tool_calls_come_back_with_another_keypress() {
+    let mut hub = hub_with_transcript();
+    hub.toggle_tool_calls();
+    hub.toggle_tool_calls();
+    let (_, preview) = hub_rows_with(&mut hub);
+    let joined = preview.join("\n");
+    assert!(joined.contains("file_read"), "{joined}");
+    assert!(joined.contains("the tool output"), "{joined}");
+}
+
 // ---- (2026-11-13) the employee axis: filter by IDENTITY, not by boolean ----
 
 /// The boolean filter the ladder used to carry ("is it employee-tagged at

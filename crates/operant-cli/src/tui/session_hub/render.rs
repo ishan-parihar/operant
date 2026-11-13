@@ -1162,8 +1162,24 @@ fn render_preview(
                             Style::default().fg(theme_colors::muted()),
                         )));
                     }
+                    if state.hide_tool_calls {
+                        // The toggle must be VISIBLE. A preview that silently
+                        // loses its tool calls reads as a broken transcript,
+                        // and the operator cannot tell "hidden on purpose"
+                        // from "not loaded".
+                        lines.push(Line::from(Span::styled(
+                            "— tool calls hidden (t shows them) —",
+                            Style::default().fg(theme_colors::warning()),
+                        )));
+                    }
                     lines.push(Line::from(""));
                     for (i, msg) in msgs.iter().enumerate() {
+                        // A tool RESULT is the tool call's output — hiding the
+                        // call but keeping its result would leave the operator
+                        // reading the output of a call they cannot see.
+                        if state.hide_tool_calls && msg.role == "tool" {
+                            continue;
+                        }
                         let (label, color) = match msg.role.as_str() {
                             "user" => ("you", theme_colors::accent()),
                             "assistant" => ("agent", theme_colors::success()),
@@ -1188,11 +1204,19 @@ fn render_preview(
                             ),
                             Style::default().fg(color).add_modifier(Modifier::BOLD),
                         )];
-                        for call in &msg.tool_calls {
-                            spans.push(Span::styled(
-                                format!("[{call}] "),
-                                Style::default().fg(theme_colors::warning()),
-                            ));
+                        // (2026-11-13) The tool-call labels are hidden with
+                        // the tool RESULTS, not separately: the operator asked
+                        // for "an option to hide all the tool-calls, so that the
+                        // prompts, and the end of turn output remains", and a
+                        // `[file_read]` label with no context is the same noise
+                        // the toggle exists to remove.
+                        if !state.hide_tool_calls {
+                            for call in &msg.tool_calls {
+                                spans.push(Span::styled(
+                                    format!("[{call}] "),
+                                    Style::default().fg(theme_colors::warning()),
+                                ));
+                            }
                         }
                         spans.push(Span::raw(first_line(&msg.content)));
                         lines.push(Line::from(spans));

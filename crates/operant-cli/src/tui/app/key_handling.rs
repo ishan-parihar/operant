@@ -732,6 +732,11 @@ impl App {
                 // They are ANDed, never merged: one list of tabs for both
                 // makes neither readable.
                 KeyCode::Char('e') => self.session_hub.cycle_employee(),
+                // Hide the tool calls in the preview (2026-11-13): an operant
+                // feature, not a codex port. The operator wants the prompts
+                // and the end-of-turn output, with the machinery between them
+                // out of the way.
+                KeyCode::Char('t') => self.session_hub.toggle_tool_calls(),
                 // Cycle the grouping (Stage C, plan 2026-11-02). Codex binds
                 // `g` to its `Group:` control for the same reason: the filter
                 // (`s`) decides which rows exist, grouping decides the order
