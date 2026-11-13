@@ -208,6 +208,88 @@ fn a_live_row_auto_anchors_the_branch_root_when_the_load_lands() {
     assert_eq!(ids, vec!["s-live", "s-live-fork"], "{ids:?}");
 }
 
+// ---- (audit 2026-11-13, finding 2) the live row is MARKED, not assumed ----
+//
+// The test above pre-set `status = RowStatus::Live` by hand, which is exactly
+// what no production path did: the only assignment of `Live` anywhere was
+// inside `refresh_subagent_rows`' Subagent arm, so a *session* row could never
+// be Live, `HubFilterMode::Active` selected nothing, the ⚡ glyph never drew on
+// a session, and this branch-root lookup always missed. These tests pin the
+// producer.
+
+#[test]
+fn set_live_session_id_marks_the_streaming_row_live() {
+    let mut hub = SessionHubState::new();
+    hub.set_live_session_id(Some("s-mine".to_string()));
+    hub.replace_rows(vec![
+        row("s-mine", Some("the session I am in"), None),
+        row("s-other", None, None),
+    ]);
+    let mine = hub.rows.iter().find(|r| r.id == "s-mine").map(|r| r.status);
+    let other = hub
+        .rows
+        .iter()
+        .find(|r| r.id == "s-other")
+        .map(|r| r.status);
+    assert_eq!(mine, Some(RowStatus::Live), "the streaming row is Live");
+    assert_eq!(other, Some(RowStatus::Idle), "no other row moves");
+}
+
+#[test]
+fn the_live_mark_overrides_an_older_interrupted_record() {
+    // A session that died in a previous process carries the interrupted
+    // marker, and the turn START clears it before any work can be
+    // interrupted. So once it is streaming again it is not "cut off".
+    let mut hub = SessionHubState::new();
+    hub.set_live_session_id(Some("s-reopened".to_string()));
+    let mut interrupted = row("s-reopened", Some("reopened"), None);
+    interrupted.status = RowStatus::Interrupted;
+    hub.replace_rows(vec![interrupted]);
+    assert_eq!(
+        hub.rows[0].status,
+        RowStatus::Live,
+        "a live session is not a session that was cut off"
+    );
+}
+
+#[test]
+fn no_live_id_leaves_every_row_idle() {
+    // `None` is the truth for a hub opened before the agent's first turn
+    // mints an id — not a gap to paper over by guessing.
+    let mut hub = SessionHubState::new();
+    hub.set_live_session_id(None);
+    hub.replace_rows(vec![row("s-a", None, None), row("s-b", None, None)]);
+    assert!(hub.rows.iter().all(|r| matches!(r.status, RowStatus::Idle)));
+}
+
+#[test]
+fn the_live_id_alone_anchors_the_branch_filter() {
+    // The auto-anchor previously searched for a `Live` row and always missed;
+    // with the mark gone the id itself is the anchor.
+    let mut hub = SessionHubState::new();
+    hub.filter_mode = HubFilterMode::CurrentBranch;
+    hub.set_live_session_id(Some("s-live".to_string()));
+    hub.replace_rows(vec![
+        row("s-live", Some("live"), None),
+        branch_row("s-live-fork", "s-live"),
+        row("s-other", None, None),
+    ]);
+    assert_eq!(hub.branch_root.as_deref(), Some("s-live"));
+    let ids: Vec<&str> = hub.visible_rows().iter().map(|r| r.id.as_str()).collect();
+    assert_eq!(ids, vec!["s-live", "s-live-fork"], "{ids:?}");
+}
+
+#[test]
+fn the_active_filter_finds_the_streaming_row() {
+    let mut hub = SessionHubState::new();
+    hub.set_live_session_id(Some("s-mine".to_string()));
+    hub.replace_rows(vec![row("s-mine", None, None), row("s-other", None, None)]);
+    hub.filter_mode = HubFilterMode::Active;
+    hub.rebuild_visible();
+    let ids: Vec<&str> = hub.visible_rows().iter().map(|r| r.id.as_str()).collect();
+    assert_eq!(ids, vec!["s-mine"], "{ids:?}");
+}
+
 #[test]
 fn the_filter_cycle_includes_the_branch_view_between_active_and_archived() {
     let mut hub = SessionHubState::new();

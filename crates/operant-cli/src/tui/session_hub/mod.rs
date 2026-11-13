@@ -360,6 +360,26 @@ pub struct SessionHubState {
     /// Stage E archive confirm: `Some(id)` while the operator has pressed `a`
     /// on a row and is being asked to confirm before it is parked.
     pub pending_archive: Option<String>,
+    /// The id of the session THIS process is streaming into, fed by the App
+    /// from the agent's own session handle.
+    ///
+    /// Why this field exists: `RowStatus::Live` is documented as "the session
+    /// this process is actively streaming into right now"
+    /// (`operant_core::session::listing`), and `HubFilterMode::Active` selects
+    /// it — but nothing ever SET it on a session row. The only production
+    /// assignment of `Live` was inside the `RowKind::Subagent` arm of
+    /// `refresh_subagent_rows`, so the "active" tab read 0 rows always, the ⚡
+    /// glyph never appeared on a session, and the branch-root auto-detection
+    /// below (which looks for a `Live` row) always missed (audit 2026-11-13,
+    /// finding 2). The database cannot know it either — the comment on
+    /// `list_sessions_rich` says "the hub sets `Live` on the current session id
+    /// after loading", and that hub code did not exist. This is it.
+    ///
+    /// `None` before the agent's first turn mints an id: `agent.session_id()`
+    /// is `None` at adapter construction (session_switch.rs:56-65 records the
+    /// same fact), so a hub opened on a fresh start has no live session and
+    /// every row stays Idle — which is the truth.
+    live_session_id: Option<String>,
 }
 
 impl Default for SessionHubState {
@@ -391,6 +411,7 @@ impl SessionHubState {
             focused_subagent: None,
             branch_root: None,
             pending_archive: None,
+            live_session_id: None,
         }
     }
 
@@ -525,6 +546,41 @@ impl SessionHubState {
         changed
     }
 
+    /// Tell the hub which session this process is streaming into, so the row
+    /// can be marked `RowStatus::Live`.
+    ///
+    /// Called by the App's session-list drain, whose whole job is "the rows
+    /// landed, tell the hub about it" — the one moment the hub holds a full row
+    /// set it is about to filter, group and render, and therefore the one place
+    /// a `Live` mark cannot be missed by a path that never rebuilds the
+    /// visible set.
+    ///
+    /// No-op on `None`, which is the truth for a hub opened before the agent's
+    /// first turn mints an id.
+    pub fn set_live_session_id(&mut self, id: Option<String>) {
+        self.live_session_id = id;
+    }
+
+    /// Mark the row the agent is streaming into as `RowStatus::Live`.
+    ///
+    /// One assignment, applied to `self.rows` before every filter/group/sort
+    /// derivation, so the mark cannot be stale for any of them. It overrides
+    /// `Interrupted` deliberately: a turn START clears the interrupted marker
+    /// (`turn_context`'s `clear_session_interrupted` runs before any work can
+    /// be interrupted), so a session that is live now is not a session that
+    /// was cut off — and `RowStatus::Interrupted`'s own doc comment ranks it
+    /// below Archived precisely because it means "resumable accident".
+    fn mark_live_row(&mut self) {
+        let Some(live) = self.live_session_id.as_ref() else {
+            return;
+        };
+        for row in self.rows.iter_mut() {
+            if &row.id == live {
+                row.status = RowStatus::Live;
+            }
+        }
+    }
+
     /// Replace the backing rows (background load landed) and keep the
     /// selection on the same row id when possible.
     pub fn replace_rows(&mut self, rows: Vec<SessionEntryV2>) {
@@ -532,13 +588,22 @@ impl SessionHubState {
         // (audit R1) the CurrentBranch filter needs an anchor. Without one
         // (the operator opened by Ctrl+B, not by a session switch), take the
         // live row — the only session the App could be streaming into.
+        // This search used to always miss: no session row was ever marked
+        // Live, so Ctrl+B silently fell through to `None` and the branch
+        // filter showed every session in the store (audit 2026-11-13,
+        // finding 2).
         if self.branch_root.is_none() {
             self.branch_root = rows
                 .iter()
                 .find(|r| matches!(r.status, RowStatus::Live))
-                .map(|r| r.id.clone());
+                .map(|r| r.id.clone())
+                .or_else(|| self.live_session_id.clone());
         }
         self.rows = rows;
+        // The live mark is applied AFTER `rows` is assigned and BEFORE
+        // `rebuild_visible`, so the filter counts, the grouping keys and the
+        // status column all see the same row.
+        self.mark_live_row();
         self.loading = false;
         self.rebuild_visible();
         if let Some(id) = keep

@@ -163,6 +163,20 @@ impl App {
                         count: rows.len(),
                         at: crate::tui::debug::event_bus::now_secs(),
                     });
+                // The hub marks `RowStatus::Live` on the row this process is
+                // streaming into (audit 2026-11-13, finding 2: nothing ever
+                // set it on a session row, so the "active" filter and the ⚡
+                // glyph were dead and Ctrl+B's branch anchor always missed).
+                // Fed BEFORE `replace_rows` because that call marks the row
+                // from this id as it assigns the row set — the one moment the
+                // hub holds rows it is about to filter. `None` before the
+                // first turn mints an id is the truth, not a gap: there is no
+                // live session yet.
+                let live = self
+                    .core_session_switch
+                    .as_ref()
+                    .and_then(|s| s.session_id());
+                self.session_hub.set_live_session_id(live);
                 self.session_hub.replace_rows(rows);
                 self.session_list_rx = None;
                 if std::mem::take(&mut self.rename_on_list_load) {
