@@ -137,6 +137,28 @@ fn run(home: &Path) -> Output {
     continue_cmd(home).output().expect("run operant continue")
 }
 
+/// Run `operant sessions resume --last` — the recap surface, which consumes the
+/// interrupted-session marker and re-orients the operator before they continue.
+fn run_resume_last(home: &Path) -> Output {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_operant"));
+    cmd.args(["sessions", "resume", "--last"])
+        .env_clear()
+        .env("PATH", std::env::var("PATH").unwrap_or_default())
+        .env("HOME", home)
+        .env("HERMES_HOME", home)
+        .env("OPERANT_CONFIG_DIR", home);
+    for key in [
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "OPENAI_BASE_URL",
+        "GITHUB_TOKEN",
+        "SOURCEHOUND_HOST",
+    ] {
+        cmd.env_remove(key);
+    }
+    cmd.output().expect("run operant sessions resume --last")
+}
+
 fn stdout(out: &Output) -> String {
     String::from_utf8_lossy(&out.stdout).to_string()
 }
@@ -301,6 +323,30 @@ fn the_interrupted_marker_beats_recency() {
     assert!(
         text.contains("Interrupted work"),
         "the marker's title rides along: {text}"
+    );
+}
+
+/// The recap's "to continue" line names the ONE-LINE command, not only the
+/// three-step walk through the TUI's picker.
+///
+/// This notice exists to re-orient an operator who already holds the id; the
+/// shortest path from the recap back into the session is the command that
+/// attaches to it.
+#[test]
+fn the_recap_notice_names_the_continue_command() {
+    let fixt = Fixture::new("recap-continue");
+    fixt.seed_sessions(
+        ("sess_older", "Investigate the importer"),
+        ("sess_marked", "The marked one"),
+    )
+    .write_marker("sess_marked", "Interrupted work");
+
+    let out = run_resume_last(fixt.path());
+    let text = format!("{}{}", stdout(&out), String::from_utf8_lossy(&out.stderr));
+    assert!(out.status.success(), "the recap must work: {text}");
+    assert!(
+        text.contains("operant continue sess_marked"),
+        "the one-line command must be named: {text}"
     );
 }
 
