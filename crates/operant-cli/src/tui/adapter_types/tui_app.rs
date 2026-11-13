@@ -626,6 +626,12 @@ impl TuiApp {
                         // and the stopping-turn guard both live inside
                         // submit_user_message now — the composer block that
                         // used to live here was a third copy of them.
+                        //
+                        // A `$skill` mention is the composer-side spelling of
+                        // `/skill <name>`: the mention expands into the SAME
+                        // invocation message the slash command builds, so the
+                        // agent's loop sees one shape whichever the user typed.
+                        let input = self.expand_skill_mentions(input);
                         self.submit_user_message(agent, input).await;
                     } else {
                         // No agent — the runtime failed to build, so the
@@ -710,6 +716,28 @@ impl TuiApp {
     /// Shared by the initial-query path, /retry, and the /skill + /bundle
     /// expansion so the submission wiring lives in exactly one place.
     /// (iter-320 — dedupe three near-identical submission blocks.)
+    /// Expand any `$skill` mention in the composer's text.
+    ///
+    /// Returns the text unchanged when the message carries no mention. A
+    /// mention that does not resolve is reported in the status line and the
+    /// text is left alone — a typo must not silently swallow the user's words.
+    fn expand_skill_mentions(&mut self, input: String) -> String {
+        let vendor_roots = crate::skill_roots::vendor_skill_roots(&self.app.config);
+        let expansion = operant_core::skill_mentions::expand_skill_mentions_in(
+            &self.app.config.skills.root_dir,
+            &input,
+            self.app.current_session.as_deref(),
+            &vendor_roots,
+        );
+        if !expansion.unresolved.is_empty() {
+            self.app.set_status_notice(format!(
+                "Skill '{}' not found — use /skills to browse installed skills.",
+                expansion.unresolved.join("', '")
+            ));
+        }
+        expansion.message.unwrap_or(input)
+    }
+
     async fn submit_user_message(
         &mut self,
         agent: &std::sync::Arc<operant_core::agent::OperantAgent>,

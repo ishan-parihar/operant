@@ -873,4 +873,64 @@ pub trait PlatformAdapter: Send + Sync {
         )
         .await
     }
+
+    /// Offer a paginated list the operator picks from — the skill picker's
+    /// button plane.
+    ///
+    /// `items` are `(label, detail)` pairs, `page` the zero-based page index
+    /// and `per_page` the page size. `message_id` is `Some(..)` when the page
+    /// REPLACES an existing picker message (navigation) and `None` for a new
+    /// one. Platforms with interactive components override this to render
+    /// tappable rows plus navigation buttons; the default sends a plain-text
+    /// list with the page range, so a platform without buttons still answers.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a picker message carries its destination (chat, thread, and the \
+                  message it replaces), its offer (title, rows, page) and its \
+                  page size — a struct would only move the same fields for two \
+                  callers"
+    )]
+    async fn send_picker(
+        &self,
+        channel_id: &str,
+        thread_id: Option<i64>,
+        message_id: Option<&str>,
+        title: &str,
+        items: &[(String, String)],
+        page: usize,
+        per_page: usize,
+    ) -> Result<()> {
+        let per_page = per_page.max(1);
+        let start = (page * per_page).min(items.len());
+        let end = (start + per_page).min(items.len());
+        let mut body = format!("{title}\n");
+        if items.is_empty() {
+            body.push_str("(nothing to pick)");
+        } else {
+            for (offset, (label, detail)) in items[start..end].iter().enumerate() {
+                body.push_str(&format!("{}. {label}", start + offset + 1));
+                if !detail.is_empty() {
+                    body.push_str(&format!(" — {detail}\n"));
+                } else {
+                    body.push('\n');
+                }
+            }
+            if items.len() > per_page {
+                body.push_str(&format!(
+                    "\n(page {}/{} — send `/skill <name>` to run one)\n",
+                    page + 1,
+                    items.len().div_ceil(per_page)
+                ));
+            }
+        }
+        let message = OutgoingMessage::new(channel_id, &body)
+            .no_markdown()
+            .with_thread_id(thread_id);
+        if let Some(mid) = message_id {
+            self.edit_message(channel_id, mid, &message).await?;
+        } else {
+            self.send_message(message).await?;
+        }
+        Ok(())
+    }
 }

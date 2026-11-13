@@ -2576,3 +2576,113 @@ async fn a_wedged_turn_is_reported_as_a_timed_out_drain() {
     );
     turn.abort();
 }
+
+/// The `$` skill plane: a picker tap resolves through the pending list, and
+/// an invoked picker is consumed while navigation is not.
+///
+/// The buttons are index-based (Telegram caps callback_data at 64 bytes, and
+/// skill names are not guaranteed to fit), so the pending list IS the index
+/// space — which makes "the index survives a re-render" load-bearing.
+#[test]
+fn skill_picker_taps_resolve_through_the_pending_list() {
+    let key = "telegram:dm:skill-picker".to_string();
+    let seed = || {
+        PENDING_SKILL_PICKERS
+            .get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(
+                key.clone(),
+                PendingSkillPicker {
+                    entries: vec![
+                        ("alpha".to_string(), "first".to_string()),
+                        ("beta".to_string(), "second".to_string()),
+                        ("gamma".to_string(), "third".to_string()),
+                    ],
+                    query: "a".to_string(),
+                },
+            );
+    };
+
+    // `skill:1` invokes the entry at index 1.
+    seed();
+    let marker = serde_json::json!({ "action": { "kind": "invoke", "idx": 1 } });
+    assert_eq!(
+        skill_tap_action(&marker, &key),
+        Some(SkillTapAction::Invoke("beta".to_string())),
+        "the tap must resolve to the skill the button named"
+    );
+    assert!(
+        pending_skill_picker(&key).is_none(),
+        "an invoked picker must be consumed — a stale tap cannot re-run it"
+    );
+
+    // A page tap reads the picker and does NOT consume it.
+    seed();
+    let marker = serde_json::json!({ "action": { "kind": "page", "page": 1 } });
+    assert_eq!(
+        skill_tap_action(&marker, &key),
+        Some(SkillTapAction::Page(1)),
+        "a navigation tap must carry the page it wants"
+    );
+    assert!(
+        pending_skill_picker(&key).is_some(),
+        "navigation must not consume the picker — the next page's buttons need it"
+    );
+
+    // An index past the end names nothing: the picker expired under the tap.
+    let marker = serde_json::json!({ "action": { "kind": "invoke", "idx": 99 } });
+    assert_eq!(
+        skill_tap_action(&marker, &key),
+        None,
+        "an out-of-range index must not resolve to a skill"
+    );
+
+    // A dismissal is a dismissal, and it consumes the picker.
+    seed();
+    let marker = serde_json::json!({ "action": { "kind": "cancel" } });
+    assert_eq!(
+        skill_tap_action(&marker, &key),
+        Some(SkillTapAction::Cancel),
+        "a cancel tap must be recognised"
+    );
+    assert!(
+        pending_skill_picker(&key).is_some(),
+        "a dismissal does not consume the list — the tap is decided by kind"
+    );
+}
+
+/// The `$` mention plane: a channel message naming a skill expands into the
+/// SAME invocation message the TUI's composer builds, so one code path — and
+/// one curator telemetry write — serves every surface.
+#[tokio::test]
+async fn a_channel_skill_mention_expands_into_the_invocation_message() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let skill_dir = dir.path().join("probe-skill");
+    std::fs::create_dir_all(&skill_dir).expect("skill dir");
+    std::fs::write(
+        skill_dir.join("SKILL.md"),
+        "---\nname: probe-skill\ndescription: A probe\n---\n\n# Do the probe step.\n",
+    )
+    .expect("SKILL.md");
+
+    let expansion = operant_core::skill_mentions::expand_skill_mentions_in(
+        dir.path(),
+        "apply $probe-skill to this diff",
+        None,
+        &[],
+    );
+    let message = expansion.message.expect("the mention must expand");
+    assert!(
+        message.contains("Do the probe step"),
+        "the expansion must carry the skill's body, got: {message}"
+    );
+    assert!(
+        message.contains("has invoked the \"probe-skill\" skill"),
+        "the expansion must be the invocation message the agent follows, got: {message}"
+    );
+    assert!(
+        message.contains("apply to this diff"),
+        "the user's words must ride the expansion, got: {message}"
+    );
+}

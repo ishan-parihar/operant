@@ -6,6 +6,10 @@ use crate::tui::slash_usage::{UsageStore, rank_commands};
 pub enum TypeaheadSource {
     SlashCommand,
     FileRef,
+    /// A `$skill` invocation mention (codex `$`-tier parity). Unlike a slash
+    /// command it lives MID-SENTENCE, so accepting it must extend the buffer
+    /// rather than submit it.
+    SkillRef,
 }
 
 /// Outcome of accepting a suggestion during an Enter (submit) keypress.
@@ -54,6 +58,17 @@ impl TypeaheadSuggestion {
             display,
             description,
             source: TypeaheadSource::FileRef,
+        }
+    }
+
+    /// A `$skill` mention row: `text` is the token the agent-side expander
+    /// reads (`$<name>`), `display` the same token shown in the popup.
+    pub fn skill_ref(text: String, description: String) -> Self {
+        Self {
+            display: text.clone(),
+            text,
+            description,
+            source: TypeaheadSource::SkillRef,
         }
     }
 }
@@ -266,9 +281,10 @@ pub fn active_file_query(input: &str) -> Option<PendingFileQuery> {
 
 /// Compute typeahead suggestions for the current input.
 ///
-/// Handles two kinds of suggestions:
+/// Handles three kinds of suggestions:
 /// - `/` slash commands (e.g. `/help`, `/clear`)
 /// - `@` file references (e.g. `@src/`, `@~/Documents/`)
+/// - `$` skill mentions (e.g. `apply $ponytail to this`), mid-sentence
 pub fn compute_typeahead(
     input: &str,
     slash_commands: &[(&str, &str)],
@@ -291,11 +307,18 @@ pub fn compute_typeahead(
     }
 
     // Handle file references: @, @/, @~/, @src/, etc.
-    compute_file_suggestions(
+    let file_suggestions = compute_file_suggestions(
         input,
         file_autocomplete_limit,
         file_autocomplete_show_hidden,
-    )
+    );
+    if !file_suggestions.is_empty() {
+        return file_suggestions;
+    }
+
+    // A `$` mention is the LAST token under the cursor (the same "live tail"
+    // rule the `@` tier applies), so the two tiers never both claim one popup.
+    compute_skill_mention_suggestions(input)
 }
 
 /// Compute typeahead suggestions for slash commands only (e.g., `/help`).
@@ -404,6 +427,60 @@ pub(super) fn set_typeahead_names(skill_names: Vec<String>, bundle_names: Vec<St
     names.clear();
     names.extend(skill_names);
     names.extend(bundle_names);
+}
+
+/// The installed skills with their descriptions, for the `$` mention tier.
+///
+/// The `/skill <Tab>` tier above needs only names; the `$` popup shows what
+/// each skill DOES, so it needs the description too.
+static SKILL_MENTION_SNAPSHOT: std::sync::OnceLock<std::sync::RwLock<Vec<(String, String)>>> =
+    std::sync::OnceLock::new();
+
+/// Register the installed skills (name + description) for the `$` mention
+/// tier. Called by the app whenever the skills directory is (re)scanned.
+pub fn register_skill_mentions(entries: Vec<(String, String)>) {
+    let _guard = SKILL_SNAPSHOT_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    set_skill_mentions(entries);
+}
+
+/// Lock-free inner writer used by `register_skill_mentions` and by the
+/// typeahead test (which holds `SKILL_SNAPSHOT_LOCK` across its assertions).
+pub(super) fn set_skill_mentions(entries: Vec<(String, String)>) {
+    let snapshot = SKILL_MENTION_SNAPSHOT.get_or_init(|| std::sync::RwLock::new(Vec::new()));
+    let mut snapshot = snapshot.write().unwrap_or_else(|e| e.into_inner());
+    snapshot.clear();
+    snapshot.extend(entries);
+}
+
+/// Compute `$skill` mention completions for the live token under the cursor.
+///
+/// The grammar lives in `operant_core::skill_mentions` — one owner for what
+/// counts as a mention — so the popup and the expander can never disagree
+/// about where a token starts or ends.
+fn compute_skill_mention_suggestions(input: &str) -> Vec<TypeaheadSuggestion> {
+    let Some(token) = operant_core::skill_mentions::active_skill_token(input) else {
+        return Vec::new();
+    };
+    let query = token.query.to_lowercase();
+    let snapshot = SKILL_MENTION_SNAPSHOT.get_or_init(|| std::sync::RwLock::new(Vec::new()));
+    let entries = snapshot.read().unwrap_or_else(|e| e.into_inner());
+    entries
+        .iter()
+        .filter(|(name, _)| query.is_empty() || name.to_lowercase().contains(&query))
+        .take(20)
+        .map(|(name, description)| {
+            TypeaheadSuggestion::skill_ref(
+                format!("${name}"),
+                if description.is_empty() {
+                    "skill".to_string()
+                } else {
+                    description.clone()
+                },
+            )
+        })
+        .collect()
 }
 
 /// Compute typeahead suggestions for file references (e.g., `@src/main.rs`).

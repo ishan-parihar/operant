@@ -1529,6 +1529,73 @@ mod tests {
         assert!(TelegramAdapter::choice_message_from_callback(&cb).is_none());
     }
 
+    /// A skill-picker button tap must synthesize a message carrying the
+    /// `skill_callback` raw marker (the action, the picker chat/message ids
+    /// and the tap user) so the dispatch layer can invoke the skill or
+    /// re-render the page without the tap ever reaching the agent as prose.
+    #[test]
+    fn skill_callback_synthesizes_marked_message() {
+        let cb = serde_json::json!({
+            "id": "cb_8",
+            "data": "skill:2",
+            "from": {"id": 888, "first_name": "Ishan"},
+            "message": {
+                "chat": {"id": -100999, "type": "supergroup"},
+                "message_id": 88,
+                "message_thread_id": 4242,
+                "text": "🧩 Skills"
+            }
+        });
+        let msg = TelegramAdapter::skill_message_from_callback(&cb).expect("callback parsed");
+        assert_eq!(msg.thread_id, Some(4242));
+        assert!(msg.is_group_chat);
+        assert_eq!(msg.content, "__skill__invoke");
+        let marker = msg.raw.get("skill_callback").expect("marker present");
+        assert_eq!(marker["chat_id"], "-100999");
+        assert_eq!(marker["message_id"], 88);
+        assert_eq!(marker["user"], "Ishan");
+        assert_eq!(marker["action"]["kind"], "invoke");
+        assert_eq!(marker["action"]["idx"], 2);
+    }
+
+    /// The picker's navigation taps are their own actions, and a data string
+    /// that is neither is not a skill tap at all.
+    #[test]
+    fn skill_page_and_cancel_callbacks_are_distinguished() {
+        let page = serde_json::json!({
+            "id": "cb_9",
+            "data": "skillpage:1",
+            "from": {"id": 889},
+            "message": {"chat": {"id": 5}, "message_id": 9}
+        });
+        let msg = TelegramAdapter::skill_message_from_callback(&page).expect("parsed");
+        assert_eq!(msg.content, "__skill__page");
+        assert_eq!(
+            msg.raw["skill_callback"]["action"]["page"], 1,
+            "the tap must carry the page it wants"
+        );
+
+        let cancel = serde_json::json!({
+            "id": "cb_10",
+            "data": "skillcancel",
+            "from": {"id": 890},
+            "message": {"chat": {"id": 5}, "message_id": 10}
+        });
+        let msg = TelegramAdapter::skill_message_from_callback(&cancel).expect("parsed");
+        assert_eq!(msg.content, "__skill__cancel");
+
+        let other = serde_json::json!({
+            "id": "cb_11",
+            "data": "approval:deny",
+            "from": {"id": 891},
+            "message": {"chat": {"id": 5}}
+        });
+        assert!(
+            TelegramAdapter::skill_message_from_callback(&other).is_none(),
+            "a non-skill callback must not be read as a skill tap"
+        );
+    }
+
     /// An `approval:always` button tap must synthesize `/approve always` so
     /// the shared gateway_commands resolver grants the permanent allowlist
     /// (hermes `always` → command_allowlist parity), carrying the thread and

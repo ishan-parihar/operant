@@ -33,6 +33,9 @@ impl PromptInputState {
         if parse_file_ref_token(before_cursor).is_some() {
             return None; // inside an @file:/@folder: reference
         }
+        if operant_core::skill_mentions::active_skill_token(before_cursor).is_some() {
+            return None; // inside a $skill mention
+        }
         if self.text.trim_start().starts_with('/') {
             return None; // slash-command input
         }

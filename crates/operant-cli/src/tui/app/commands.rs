@@ -551,7 +551,8 @@ impl App {
                     }
                     None => {
                         self.set_status_notice(format!(
-                            "Skill '{}' not found. Use /skills to browse installed skills.",
+                            "Skill '{}' not found. Use /skills to browse installed skills, \
+                             or type $<name> to invoke one inline.",
                             skill_name
                         ));
                         true
@@ -1659,6 +1660,13 @@ impl App {
                             .iter()
                             .map(|s| s.name.clone())
                             .collect();
+                        // The `$skill` mention popup carries the description.
+                        let skill_mentions = self
+                            .skills_view
+                            .skills
+                            .iter()
+                            .map(|s| (s.name.clone(), s.description.clone()))
+                            .collect();
                         let bundle_names =
                             operant_core::agent::skill_bundle::refresh_skill_bundles()
                                 .keys()
@@ -1668,6 +1676,7 @@ impl App {
                             skill_names,
                             bundle_names,
                         );
+                        crate::tui::prompt_input::register_skill_mentions(skill_mentions);
                         self.set_status_notice(format!(
                             "Rescanned {} skill{}. Browse with /skills (agent picks up changes on restart).",
                             count,

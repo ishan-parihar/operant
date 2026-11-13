@@ -845,6 +845,137 @@ pub(crate) fn derived_gateway_session_id(session_key: &str) -> String {
 /// `handler` is the dispatch loop's live handler (the one holding the
 /// turn lock and the agent), `name` the canonical command name, `args`
 /// the raw argument text, `session_key` the invoking chat's routing key.
+/// How many skills one picker page offers.
+const SKILL_PICKER_PAGE: usize = 8;
+
+/// The vendor skill roots — the installed content integrations plus the
+/// plugin roots captured at start: ONE list, the same one the SkillManager
+/// and the in-loop tools read.
+fn vendor_skill_roots_for(handler: &GatewayMessageHandler) -> Vec<std::path::PathBuf> {
+    #[cfg(feature = "plugins-wasm")]
+    let host = handler.wasm_plugin_skill_roots.clone();
+    #[cfg(not(feature = "plugins-wasm"))]
+    let host: Vec<std::path::PathBuf> = Vec::new();
+    operant_core::skills::vendor_skill_roots(&host)
+}
+
+/// Offer the skills matching `query` to a chat as a button plane.
+///
+/// The pending list lives in `PENDING_SKILL_PICKERS`, keyed by chat: the
+/// buttons are index-based, so the list IS the index space and a re-render
+/// keeps every earlier button honest.
+///
+/// Returns false when there is nothing to offer or the platform cannot
+/// render a picker — the caller then falls back to the plain-text listing.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the picker's destination (platform, chat, thread, the message it \
+              replaces), its pool (skills dir, vendor roots), its query and its \
+              page — one message, one argument each"
+)]
+async fn offer_skill_picker(
+    gw: &Gateway,
+    platform: &str,
+    channel_id: &str,
+    thread_id: Option<i64>,
+    message_id: Option<&str>,
+    skills_dir: &std::path::Path,
+    vendor_roots: &[std::path::PathBuf],
+    query: &str,
+    page: usize,
+) -> bool {
+    let entries = if query.trim().is_empty() {
+        operant_core::skill_mentions::loadable_skills(skills_dir, vendor_roots)
+    } else {
+        operant_core::skill_mentions::search_skills(skills_dir, vendor_roots, query, 100)
+    };
+    if entries.is_empty() {
+        return false;
+    }
+    let Some(adapter) = gw.adapter_for(platform) else {
+        return false;
+    };
+    let key = format!("{platform}:{channel_id}");
+    if let Ok(mut guard) = PENDING_SKILL_PICKERS
+        .get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+        .lock()
+    {
+        guard.insert(
+            key,
+            PendingSkillPicker {
+                entries: entries.clone(),
+                query: query.to_string(),
+            },
+        );
+    }
+    let title = if query.trim().is_empty() {
+        format!(
+            "🧩 Skills — pick one to run it ({} available)",
+            entries.len()
+        )
+    } else {
+        format!("🧩 Skills matching `{query}` ({} found)", entries.len())
+    };
+    adapter
+        .send_picker(
+            channel_id,
+            thread_id,
+            message_id,
+            &title,
+            &entries,
+            page,
+            SKILL_PICKER_PAGE,
+        )
+        .await
+        .is_ok()
+}
+
+/// What a skill-picker tap asks for, before any I/O.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SkillTapAction {
+    /// Run the skill with this name.
+    Invoke(String),
+    /// Re-render the picker at this page.
+    Page(usize),
+    /// Dismiss the picker.
+    Cancel,
+}
+
+/// Read the pending picker and decide what a tap asks for.
+///
+/// Pure apart from the pending-list read, so the decision is testable without
+/// a live platform: the caller does the I/O. `None` means the tap names
+/// nothing — the picker expired — so the caller should offer a fresh one.
+fn skill_tap_action(marker: &serde_json::Value, key: &str) -> Option<SkillTapAction> {
+    let action = marker.get("action")?;
+    match action.get("kind").and_then(|k| k.as_str())? {
+        "invoke" => {
+            let idx = action.get("idx").and_then(|i| i.as_u64()).unwrap_or(0) as usize;
+            let name = PENDING_SKILL_PICKERS
+                .get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+                .lock()
+                .ok()
+                .and_then(|mut guard| guard.remove(key))
+                .and_then(|picker| picker.entries.get(idx).map(|(name, _)| name.clone()))?;
+            Some(SkillTapAction::Invoke(name))
+        }
+        "page" => Some(SkillTapAction::Page(
+            action.get("page").and_then(|p| p.as_u64()).unwrap_or(0) as usize,
+        )),
+        "cancel" => Some(SkillTapAction::Cancel),
+        _ => None,
+    }
+}
+
+/// The pending picker for a chat, if one is open.
+fn pending_skill_picker(key: &str) -> Option<PendingSkillPicker> {
+    PENDING_SKILL_PICKERS
+        .get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+        .lock()
+        .ok()
+        .and_then(|guard| guard.get(key).cloned())
+}
+
 async fn handle_runtime_command(
     handler: &GatewayMessageHandler,
     name: &str,
@@ -1418,11 +1549,7 @@ async fn handle_runtime_command(
             // The vendor roots — the installed content integrations plus the
             // plugin roots captured at start: ONE list, the same one the
             // SkillManager and the in-loop tools read.
-            #[cfg(feature = "plugins-wasm")]
-            let host = handler.wasm_plugin_skill_roots.clone();
-            #[cfg(not(feature = "plugins-wasm"))]
-            let host: Vec<std::path::PathBuf> = Vec::new();
-            let vendor_roots = operant_core::skills::vendor_skill_roots(&host);
+            let vendor_roots = vendor_skill_roots_for(handler);
             if rest.is_empty() {
                 // The browse half, over a channel: the REAL installed list,
                 // not a canned "see the TUI". A root with no skills says so
@@ -1461,7 +1588,9 @@ async fn handle_runtime_command(
                             rows.len() - CHANNEL_SKILL_HEAD
                         ));
                     }
-                    reply.push_str("\n`/skill <name> [instruction]` to run one.");
+                    reply.push_str(
+                        "\nSend `$<name>` to run one inline, or `/skill <name> [instruction]`.",
+                    );
                 }
                 return Some(reply);
             }
@@ -1734,6 +1863,23 @@ pub(crate) fn approve_seat_escalation(
 /// The next incoming message from that channel is routed as the reply
 /// instead of being sent to the agent. (iter-161)
 pub static PENDING_USER_QUESTIONS: OnceLock<PendingUserQuestions> = OnceLock::new();
+
+/// The skill picker a chat is looking at.
+///
+/// One entry per chat, keyed `"{platform}:{channel_id}"`. The picker's
+/// buttons are INDEX-based, so this list IS the index space: a re-rendered
+/// page keeps every earlier button honest.
+#[derive(Debug, Clone)]
+pub struct PendingSkillPicker {
+    /// The skills on offer: `(name, description)`.
+    pub entries: Vec<(String, String)>,
+    /// The query that produced them ("" = browse everything).
+    pub query: String,
+}
+
+/// The per-chat skill pickers.
+pub static PENDING_SKILL_PICKERS: OnceLock<std::sync::Mutex<HashMap<String, PendingSkillPicker>>> =
+    OnceLock::new();
 
 /// Live YOLO-mode channels: keys are `"{platform}:{channel_id}"` for channels
 /// that opted into skipping approval prompts (via `/yolo` in the gateway). The
@@ -4592,7 +4738,10 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
         // went to the configured endpoint.
         let api_base = operant_core::tools::platform_bases::telegram_api_base();
         let cmd_url = format!("{}/bot{}/setMyCommands", api_base, token);
-        let cmd_body = format!(r#"{{"commands":{}}}"#, telegram_bot_commands(&crate::skill_roots::vendor_skill_command_rows(app_config)));
+        let cmd_body = format!(
+            r#"{{"commands":{}}}"#,
+            telegram_bot_commands(&crate::skill_roots::vendor_skill_command_rows(app_config))
+        );
         // Bounded retry: this fires once during boot — exactly when the
         // network may still be settling (the same race that kills adapter
         // starts). Without retries the command menu silently stays
@@ -5644,6 +5793,26 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                                     )
                                     .with_thread_id(msg.thread_id);
                                     gw.send_to_platform(&platform, response).await?;
+                                } else if cmd_def.name == "skills"
+                                    && cmd_args.trim().is_empty()
+                                    && offer_skill_picker(
+                                        &gw,
+                                        &platform,
+                                        &msg.channel_id,
+                                        msg.thread_id,
+                                        None,
+                                        &handler_for_stop.skills_root_dir,
+                                        &vendor_skill_roots_for(&handler_for_stop),
+                                        "",
+                                        0,
+                                    )
+                                    .await
+                                {
+                                    // The channel's skill SEARCH: the picker WAS
+                                    // rendered, so the command is fully handled
+                                    // here. A platform that cannot render buttons
+                                    // (or a skills dir with nothing loadable) falls
+                                    // through to the plain-text listing below.
                                 } else if let Some(reply) = handle_runtime_command(
                                     &handler_for_stop,
                                     cmd_def.name,
@@ -6002,6 +6171,167 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                                     && let Ok(mut guard) = g.lock()
                                 {
                                     *guard = Some(pending_map);
+                                }
+                            }
+                        }
+
+                        // ── 1.8 The skill picker and `$skill` mentions ────────
+                        // A channel has no composer, so the `$` grammar is
+                        // how a chat names a skill. Two shapes reach it:
+                        //
+                        //   * an inline mention ("apply $ponytail here") —
+                        //     expanded into the SAME invocation message the
+                        //     TUI's composer builds, so the skill's content
+                        //     reaches the turn;
+                        //   * a bare `$`, or a name that resolves to nothing —
+                        //     answered by the picker, the utility surface a
+                        //     channel can render (tappable rows + navigation).
+                        let skill_vendor_roots = vendor_skill_roots_for(&handler_for_stop);
+                        if let Some(marker) = msg.raw.get("skill_callback").cloned() {
+                            let key = format!("{platform}:{}", msg.channel_id);
+                            match skill_tap_action(&marker, &key) {
+                                Some(SkillTapAction::Invoke(name)) => {
+                                    let session = derived_gateway_session_id(&session_key);
+                                    match operant_core::agent::skill_preprocessing::build_skill_invocation_message_in(
+                                        &handler_for_stop.skills_root_dir,
+                                        &name,
+                                        "",
+                                        Some(session.as_str()),
+                                        &skill_vendor_roots,
+                                    ) {
+                                        // The tap IS a request to run the
+                                        // skill: the expansion becomes the turn
+                                        // body and the ordinary turn path below
+                                        // runs it.
+                                        Some(text) => msg.content = text,
+                                        None => {
+                                            let response = OutgoingMessage::new(
+                                                &msg.channel_id,
+                                                format!("Skill `{name}` is no longer loadable."),
+                                            )
+                                            .no_markdown()
+                                            .with_thread_id(msg.thread_id);
+                                            gw.send_to_platform(&platform, response).await?;
+                                            return Ok(true);
+                                        }
+                                    }
+                                }
+                                Some(SkillTapAction::Page(page)) => {
+                                    // Navigation replaces the picker message IN
+                                    // PLACE, so a chat does not collect one
+                                    // message per page.
+                                    let picker = pending_skill_picker(&key);
+                                    let message_id = marker
+                                        .get("message_id")
+                                        .and_then(|m| m.as_i64())
+                                        .map(|m| m.to_string());
+                                    let query = picker.as_ref().map(|p| p.query.clone()).unwrap_or_default();
+                                    offer_skill_picker(
+                                        &gw,
+                                        &platform,
+                                        &msg.channel_id,
+                                        msg.thread_id,
+                                        message_id.as_deref(),
+                                        &handler_for_stop.skills_root_dir,
+                                        &skill_vendor_roots,
+                                        &query,
+                                        page,
+                                    )
+                                    .await;
+                                    return Ok(true);
+                                }
+                                Some(SkillTapAction::Cancel) => {
+                                    // Clear the buttons so a dismissed picker
+                                    // cannot be re-tapped.
+                                    if let Some(adapter) = gw.adapter_for(&platform)
+                                        && let Some(chat) =
+                                            marker.get("chat_id").and_then(|c| c.as_str())
+                                        && let Some(mid) =
+                                            marker.get("message_id").and_then(|m| m.as_i64())
+                                    {
+                                        let _ = adapter
+                                            .edit_message(
+                                                chat,
+                                                &mid.to_string(),
+                                                &OutgoingMessage::new(
+                                                    chat,
+                                                    "🧩 Picker dismissed.",
+                                                )
+                                                .no_markdown(),
+                                            )
+                                            .await;
+                                    }
+                                    return Ok(true);
+                                }
+                                None => {
+                                    // The picker expired under the tap: offer a
+                                    // fresh one rather than a dead button.
+                                    offer_skill_picker(
+                                        &gw,
+                                        &platform,
+                                        &msg.channel_id,
+                                        msg.thread_id,
+                                        None,
+                                        &handler_for_stop.skills_root_dir,
+                                        &skill_vendor_roots,
+                                        "",
+                                        0,
+                                    )
+                                    .await;
+                                    return Ok(true);
+                                }
+                            }
+                        } else {
+                            let mentions =
+                                operant_core::skill_mentions::find_skill_mentions(&msg.content);
+                            if !mentions.is_empty() {
+                                let session = derived_gateway_session_id(&session_key);
+                                let expansion =
+                                    operant_core::skill_mentions::expand_skill_mentions_in(
+                                        &handler_for_stop.skills_root_dir,
+                                        &msg.content,
+                                        Some(session.as_str()),
+                                        &skill_vendor_roots,
+                                    );
+                                if let Some(text) = expansion.message {
+                                    msg.content = text;
+                                } else if let Some(unknown) = expansion.unresolved.first() {
+                                    // An unknown name is better answered by
+                                    // offering the skills that DO exist than by
+                                    // sending `$typo` to the agent.
+                                    let offered = offer_skill_picker(
+                                        &gw,
+                                        &platform,
+                                        &msg.channel_id,
+                                        msg.thread_id,
+                                        None,
+                                        &handler_for_stop.skills_root_dir,
+                                        &skill_vendor_roots,
+                                        unknown,
+                                        0,
+                                    )
+                                    .await;
+                                    if offered {
+                                        return Ok(true);
+                                    }
+                                    // No picker possible: the raw text goes to
+                                    // the agent, which can say what it knows.
+                                }
+                            } else if msg.content.trim() == "$" {
+                                let offered = offer_skill_picker(
+                                    &gw,
+                                    &platform,
+                                    &msg.channel_id,
+                                    msg.thread_id,
+                                    None,
+                                    &handler_for_stop.skills_root_dir,
+                                    &skill_vendor_roots,
+                                    "",
+                                    0,
+                                )
+                                .await;
+                                if offered {
+                                    return Ok(true);
                                 }
                             }
                         }

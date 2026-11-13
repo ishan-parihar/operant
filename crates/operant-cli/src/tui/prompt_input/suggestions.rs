@@ -133,6 +133,11 @@ impl PromptInputState {
                 // Either way Enter must keep editing, not submit.
                 AcceptForSubmitOutcome::ExtendInput
             }
+            Some(TypeaheadSource::SkillRef) => {
+                // A mention lives mid-sentence: Tab or Enter drops `$name`
+                // into the buffer at the cursor and the instruction follows.
+                AcceptForSubmitOutcome::ExtendInput
+            }
             Some(TypeaheadSource::SlashCommand) | None => {
                 // Slash commands replace the whole input — Enter submits the command.
                 AcceptForSubmitOutcome::Submit
@@ -155,6 +160,30 @@ impl PromptInputState {
                     // Replace entire text; discard anything after cursor too.
                     self.text = s.text.clone();
                     self.text.len()
+                }
+                TypeaheadSource::SkillRef => {
+                    // Replace the live `$query` token with the chosen
+                    // `$name`, keeping the text before it and the tail after
+                    // the cursor. A trailing space lets the instruction follow.
+                    let tail = self.text[self.cursor..].to_string();
+                    match operant_core::skill_mentions::active_skill_token(
+                        &self.text[..self.cursor],
+                    ) {
+                        Some(token) => {
+                            let mut new_text = self.text[..token.start].to_string();
+                            new_text.push_str(&s.text);
+                            if !tail.starts_with(char::is_whitespace) {
+                                new_text.push(' ');
+                            }
+                            let cursor = new_text.len();
+                            new_text.push_str(&tail);
+                            self.text = new_text;
+                            cursor
+                        }
+                        // The anchor `$` is gone (Home with a stale popup):
+                        // nothing to apply, leave the draft alone.
+                        None => self.cursor,
+                    }
                 }
                 TypeaheadSource::FileRef => {
                     // Replace from the last word-boundary @ up to the cursor.

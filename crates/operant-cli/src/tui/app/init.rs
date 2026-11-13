@@ -402,16 +402,23 @@ impl App {
         // `/bundle <Tab>` typeahead (hermes parity — the expansion takes a
         // name, so completing it is the useful step). Best-effort: a missing
         // or unreadable skills dir just yields an empty completion set.
-        let skill_names =
+        let loaded_skills =
             operant_core::skills::SkillManager::new(app.config.skills.root_dir.clone())
                 .load_all()
-                .map(|loaded| loaded.into_iter().map(|s| s.name).collect())
                 .unwrap_or_default();
+        let skill_names = loaded_skills.iter().map(|s| s.name.clone()).collect();
+        // The `$skill` mention popup shows what each skill DOES, so it needs
+        // the description beside the name.
+        let skill_mentions = loaded_skills
+            .iter()
+            .map(|s| (s.name.clone(), s.description.clone()))
+            .collect();
         let bundle_names = operant_core::agent::skill_bundle::list_bundles()
             .into_iter()
             .map(|b| b.slug.clone())
             .collect();
         crate::tui::prompt_input::register_typeahead_names(skill_names, bundle_names);
+        crate::tui::prompt_input::register_skill_mentions(skill_mentions);
 
         app
     }

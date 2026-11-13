@@ -273,7 +273,10 @@ const REGISTERED_COMMANDS: &[RegisteredCommand] = &[
     ),
     RegisteredCommand::public(
         "/skills",
-        "Show loaded skills and operant-endorsed recommendations",
+        // The `$name` form is the composer's: a skill named INSIDE a message
+        // is invoked by the mention, and this panel is where you find the
+        // names to type.
+        "Show loaded skills; type $name in a message to invoke one",
     ),
     RegisteredCommand::public("/version", "Show current version"),
     RegisteredCommand::public("/changelog", "Show recent changes in this build"),

@@ -2439,3 +2439,93 @@ fn accepting_a_suggestion_with_no_anchor_never_clobbers_the_buffer() {
     );
     assert!(s.suggestions.is_empty(), "the popup still dismisses");
 }
+
+// ---- `$skill` mention typeahead (the dollar-sigil invocation) ------------
+
+/// Register the mention snapshot for a test, holding the writer lock so a
+/// parallel test that constructs `App` cannot replace it mid-assertion.
+fn register_mention_skills(entries: &[(&str, &str)]) -> std::sync::MutexGuard<'static, ()> {
+    let guard = super::typeahead::SKILL_SNAPSHOT_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    super::typeahead::set_skill_mentions(
+        entries
+            .iter()
+            .map(|(n, d)| (n.to_string(), d.to_string()))
+            .collect(),
+    );
+    guard
+}
+
+#[test]
+fn typeahead_skill_mentions_complete_mid_sentence() {
+    let _guard = register_mention_skills(&[
+        ("ponytail", "Lazy senior dev mode"),
+        ("ponytail-audit", "Audit a repo"),
+        ("axi", "Agent CLI standards"),
+    ]);
+    let cmds: [(&str, &str); 0] = [];
+
+    // The composer asks with the text UP TO THE CURSOR, so the token is the
+    // live tail — mid-sentence, with the instruction already typed after it.
+    let s = compute_typeahead("apply $pony", &cmds, &UsageStore::default(), 15, false);
+    assert!(s.iter().any(|x| x.text == "$ponytail"), "{s:?}");
+    assert!(s.iter().any(|x| x.text == "$ponytail-audit"), "{s:?}");
+    // A non-matching skill is not offered.
+    assert!(!s.iter().any(|x| x.text == "$axi"), "{s:?}");
+    // The row carries the skill's description.
+    let row = s.iter().find(|x| x.text == "$ponytail").expect("the row");
+    assert_eq!(row.description, "Lazy senior dev mode");
+
+    // The popup follows the CURSOR: once the caret has moved past the token,
+    // the mention is no longer being typed and nothing is offered.
+    let s = compute_typeahead(
+        "apply $pony to this",
+        &cmds,
+        &UsageStore::default(),
+        15,
+        false,
+    );
+    assert!(
+        !s.iter().any(|x| x.text == "$ponytail"),
+        "a mention the caret has left must not keep the popup open: {s:?}"
+    );
+}
+
+#[test]
+fn typeahead_never_offers_a_mention_for_shell_syntax() {
+    let _guard = register_mention_skills(&[("home", "A skill that happens to be named home")]);
+    let cmds: [(&str, &str); 0] = [];
+    for input in ["echo $HOME", "costs $5", "user$name", "in ${VAR}"] {
+        let s = compute_typeahead(input, &cmds, &UsageStore::default(), 15, false);
+        assert!(s.is_empty(), "{input} offered {s:?}");
+    }
+}
+
+#[test]
+fn accepting_a_skill_mention_replaces_the_token_in_place() {
+    let _guard = register_mention_skills(&[("ponytail", "Lazy senior dev mode")]);
+    let mut s = PromptInputState::new();
+    s.text = "apply $pony to this".to_string();
+    s.cursor = "apply $pony".len();
+    s.update_suggestions(&[], &UsageStore::default(), 15, false);
+    assert_eq!(s.suggestions.len(), 1);
+    s.accept_suggestion();
+    // The text before the token and the tail after the cursor both survive.
+    assert_eq!(s.text, "apply $ponytail to this");
+    assert_eq!(s.cursor, "apply $ponytail".len());
+}
+
+#[test]
+fn accepting_a_skill_mention_keeps_editing_rather_than_submitting() {
+    let _guard = register_mention_skills(&[("ponytail", "Lazy senior dev mode")]);
+    let mut s = PromptInputState::new();
+    s.text = "$pony".to_string();
+    s.cursor = s.text.len();
+    s.update_suggestions(&[], &UsageStore::default(), 15, false);
+    assert_eq!(
+        s.accept_suggestion_for_submit(),
+        AcceptForSubmitOutcome::ExtendInput
+    );
+    assert_eq!(s.text, "$ponytail ");
+}

@@ -836,6 +836,83 @@ impl PlatformAdapter for TelegramAdapter {
         Ok(())
     }
 
+    /// The skill picker's button plane: one tappable row per skill plus a
+    /// navigation row (◀ Prev / ✕ Cancel / Next ▶).
+    ///
+    /// The callback data is INDEX-based (`skill:<idx>`), never the skill name:
+    /// Telegram caps callback_data at 64 bytes and skill names are not
+    /// guaranteed to fit. The dispatch layer maps the index back through the
+    /// pending picker, so the same buttons keep working after a re-render.
+    async fn send_picker(
+        &self,
+        channel_id: &str,
+        thread_id: Option<i64>,
+        message_id: Option<&str>,
+        title: &str,
+        items: &[(String, String)],
+        page: usize,
+        per_page: usize,
+    ) -> Result<()> {
+        let per_page = per_page.max(1);
+        let start = (page * per_page).min(items.len());
+        let end = (start + per_page).min(items.len());
+        let mut rows: Vec<Vec<serde_json::Value>> = items[start..end]
+            .iter()
+            .enumerate()
+            .map(|(offset, (label, detail))| {
+                let text = if detail.is_empty() {
+                    label.clone()
+                } else {
+                    format!("{label} — {detail}")
+                };
+                vec![serde_json::json!({
+                    "text": text,
+                    "callback_data": format!("skill:{}", start + offset),
+                })]
+            })
+            .collect();
+        let mut nav: Vec<serde_json::Value> = Vec::new();
+        if page > 0 {
+            nav.push(serde_json::json!({
+                "text": "◀ Prev",
+                "callback_data": format!("skillpage:{}", page - 1),
+            }));
+        }
+        nav.push(serde_json::json!({
+            "text": "✕ Cancel",
+            "callback_data": "skillcancel",
+        }));
+        if end < items.len() {
+            nav.push(serde_json::json!({
+                "text": "Next ▶",
+                "callback_data": format!("skillpage:{}", page + 1),
+            }));
+        }
+        rows.push(nav);
+        let mut body = serde_json::json!({
+            "chat_id": channel_id,
+            "text": title,
+            "reply_markup": { "inline_keyboard": rows },
+        });
+        if let Some(tid) = thread_id {
+            body["message_thread_id"] = serde_json::json!(tid);
+        }
+        let (url, body) = match message_id {
+            // Navigation replaces the picker message IN PLACE, so the chat
+            // does not collect one message per page.
+            Some(mid) => {
+                body["message_id"] = serde_json::json!(mid);
+                (format!("{}/editMessageText", self.api_url()), body)
+            }
+            None => (format!("{}/sendMessage", self.api_url()), body),
+        };
+        let resp = self.client.post(url).json(&body).send().await?;
+        let status = resp.status();
+        let body_text = resp.text().await.unwrap_or_default();
+        telegram_prompt_outcome(status.as_u16(), &body_text, "skill picker")?;
+        Ok(())
+    }
+
     fn config_json(&self) -> serde_json::Value {
         serde_json::json!({
             "platform": "telegram",
@@ -1307,7 +1384,88 @@ impl TelegramAdapter {
             return Self::choice_message_from_callback(cb);
         }
 
+        // ── The skill picker's taps ───────────────────────────────────────
+        // `skill:<idx>` invokes a skill, `skillpage:<n>` navigates the
+        // picker, `skillcancel` dismisses it. The synthesized message
+        // carries a `skill_callback` marker so the dispatch layer knows
+        // this is a tap and not prose.
+        if data.starts_with("skill:") || data.starts_with("skillpage:") || data == "skillcancel" {
+            let _ = client
+                .post(format!("{api}/answerCallbackQuery"))
+                .json(&serde_json::json!({
+                    "callback_query_id": cb_id,
+                    "text": "✅",
+                }))
+                .send()
+                .await;
+            return Self::skill_message_from_callback(cb);
+        }
+
         None
+    }
+
+    /// Synthesize the inbound message a skill-picker button tap produces.
+    /// Pure — no I/O — so it is unit-testable. The message carries a
+    /// `skill_callback` raw marker (the action, the picker chat/message ids
+    /// and the tap user) so the dispatch layer can invoke the skill or
+    /// re-render the page without the tap ever reaching the agent as prose.
+    pub(crate) fn skill_message_from_callback(cb: &serde_json::Value) -> Option<IncomingMessage> {
+        let data = cb.get("data").and_then(serde_json::Value::as_str)?;
+        let action = if let Some(idx) = data.strip_prefix("skill:") {
+            serde_json::json!({ "kind": "invoke", "idx": idx.parse::<usize>().unwrap_or(0) })
+        } else if let Some(page) = data.strip_prefix("skillpage:") {
+            serde_json::json!({ "kind": "page", "page": page.parse::<usize>().unwrap_or(0) })
+        } else if data == "skillcancel" {
+            serde_json::json!({ "kind": "cancel" })
+        } else {
+            return None;
+        };
+        let message = cb.get("message")?;
+        let chat = message.get("chat")?;
+        let channel_id = chat
+            .get("id")
+            .and_then(serde_json::Value::as_i64)
+            .map(|i| i.to_string())?;
+        let thread_id = message.get("message_thread_id").and_then(|t| t.as_i64());
+        let is_group = matches!(
+            chat.get("type").and_then(|t| t.as_str()),
+            Some("group" | "supergroup")
+        );
+        let user_name = cb
+            .get("from")
+            .and_then(|f| f.get("first_name"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("User")
+            .to_string();
+        let kind = action
+            .get("kind")
+            .and_then(|k| k.as_str())
+            .unwrap_or("")
+            .to_string();
+        Some(
+            IncomingMessage::new(
+                "telegram",
+                cb.get("from")
+                    .and_then(|f| f.get("id"))
+                    .and_then(serde_json::Value::as_i64)
+                    .map(|i| i.to_string())
+                    .unwrap_or_default(),
+                user_name.clone(),
+                channel_id.clone(),
+                format!("__skill__{kind}"),
+            )
+            .with_thread_id(thread_id)
+            .with_group_chat(is_group)
+            .with_raw(serde_json::json!({
+                "skill_callback": {
+                    "chat_id": channel_id,
+                    "message_id": message.get("message_id").and_then(serde_json::Value::as_i64),
+                    "thread_id": thread_id,
+                    "user": user_name,
+                    "action": action,
+                }
+            })),
+        )
     }
 
     /// Synthesize the `/approve` / `/deny` text command that an inline-keyboard
