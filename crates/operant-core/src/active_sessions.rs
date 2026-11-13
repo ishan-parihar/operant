@@ -504,6 +504,7 @@ mod tests {
         );
     }
 
+    #[test]
     fn sanitizes_session_keys_for_filenames() {
         let root = temp_root("sanitize");
         let tracker = ActiveSessionTracker::new(root.clone(), None);
