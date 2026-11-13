@@ -42,7 +42,7 @@ pub(crate) const CHROME_ROWS: usize = 3;
 /// not a column, it is a guess.
 fn chrome_items(state: &SessionHubState, inner_width: u16) -> Vec<ListItem<'static>> {
     let mut items = vec![
-        ListItem::new(render_header(state)),
+        ListItem::new(render_header(state, inner_width)),
         ListItem::new(render_tab_bar(state, inner_width)),
     ];
     // Right-align the two columns whose values are right-aligned in the rows,
@@ -263,7 +263,12 @@ fn tokens_suffix(tokens: u64) -> String {
 
 /// Per-char search highlight, jcode's `highlight_spans` semantics: tokens
 /// matched independently (OR), overlapping/adjacent merged.
-pub(crate) fn highlight_spans(text: &str, tokens: &[String], base: Style, hl: Style) -> Vec<Span<'static>> {
+pub(crate) fn highlight_spans(
+    text: &str,
+    tokens: &[String],
+    base: Style,
+    hl: Style,
+) -> Vec<Span<'static>> {
     if tokens.is_empty() || text.is_empty() {
         return vec![Span::styled(text.to_string(), base)];
     }
@@ -420,7 +425,33 @@ fn render_list(frame: &mut Frame, state: &SessionHubState, area: ratatui::layout
 /// g`: one line that answers "where am I" AND "what changes the organisation".
 /// Stage C adds the `Group:` clause; the span vector is shaped for it now so
 /// adding it will not restructure this function.
-fn render_header(state: &SessionHubState) -> Line<'static> {
+fn render_header(state: &SessionHubState, inner_width: u16) -> Line<'static> {
+    // (2026-11-14, audit finding 2) The header is BUILT under a budget.
+    //
+    // It used to be concatenated and hope. The honest row count added by
+    // iter-2189 ("500 of 3302 rows") pushed the line to 51 cells against the
+    // pane's 46, and the List CLIPS a line that does not fit — so the group
+    // mode was cut to "a" and the `g` key vanished. The operator lost the
+    // grouping affordance on the exact width they work at, and the comment
+    // above this function still claimed the header measured 46 of 46.
+    //
+    // The budget is spent in a fixed order, least valuable first:
+    //   1. the group clause drops to its short label ("dir", not
+    //      "directory"), then to the bare key;
+    //   2. the search clause's tail — the query is already visible in the
+    //      search row above, so a truncated repeat is enough;
+    //   3. the "s cycle" hint — the tab bar below IS the filter row, and the
+    //      empty-state line names the key.
+    // What is never dropped: the row count (it is the honest-window claim),
+    // the employee chip (it names the axis that is filtering the list), and
+    // the grouping itself.
+    let budget = inner_width as usize;
+    let count_clause = match state.store_total() {
+        Some(total) if total > state.rows.len() => {
+            format!("  {} of {} rows", state.rows.len(), total)
+        }
+        _ => format!("  {} rows", state.rows.len()),
+    };
     let mut spans = vec![
         Span::styled(
             " Sessions",
@@ -428,66 +459,72 @@ fn render_header(state: &SessionHubState) -> Line<'static> {
                 .fg(theme_colors::accent())
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(
-            // "N of M" when the store total is known: the hub loads a PAGE
-            // (500 rows), so a bare "500 rows" read as "these are all your
-            // sessions" while 2,802 of 3,302 sat past the page (audit finding
-            // 3 — the silent cap).
-            match state.store_total() {
-                Some(total) if total > state.rows.len() => {
-                    format!("  {} of {} rows", state.rows.len(), total)
-                }
-                _ => format!("  {} rows", state.rows.len()),
-            },
-            Style::default().fg(theme_colors::muted()),
-        ),
+        Span::styled(count_clause, Style::default().fg(theme_colors::muted())),
     ];
-    // The search row sits above this list, so say what the list is showing
-    // rather than letting the operator wonder whether the counts include the
-    // search. The counts deliberately do NOT: see `filter_counts`.
-    if !state.search_query.is_empty() {
+    let used: usize = spans.iter().map(|s| s.content.chars().count()).sum();
+
+    // The employee chip: the axis that is filtering the list, named. It comes
+    // before the hint because it is the one thing on this line that changes
+    // what the operator is looking at.
+    if let Some(emp) = state.employee_filter() {
         spans.push(Span::styled(
-            format!("  matching \"{}\"", state.search_query),
-            Style::default().fg(theme_colors::text()),
-        ));
-    }
-    // Without the key hints the tab bar and the group headings read as
-    // decoration.
-    //
-    // The employee axis (2026-11-13) REPLACES this hint when it is engaged:
-    // the header measures 46 of the pane's 46 inner columns before anything
-    // is added, so there is no room for a second chip — and the hint is the
-    // only thing here that the tab bar already implies (the tab bar IS the
-    // filter row). The group clause drops to its short label at the same time,
-    // so the chip has somewhere to live.
-    match state.employee_filter() {
-        Some(emp) => spans.push(Span::styled(
             format!("  e:{emp}"),
             Style::default().fg(theme_colors::accent()),
-        )),
-        None => spans.push(Span::styled(
-            "  s cycle",
-            Style::default().fg(theme_colors::muted()),
-        )),
+        ));
     }
+
     // The `Group:` clause, codex's own header line shape. Stage C fills in the
     // mode and the key that changes it: the header alone now answers both
     // "which axis is this list ordered by" and "which key reorders it".
-    spans.push(Span::styled(
-        format!(
-            "  Group: {}  {}",
-            if state.employee_filter().is_some() {
-                // The short form, so the employee chip fits: the header is at
-                // 46 of 46 inner columns and the chip has to displace
-                // something.
-                state.group_mode.short_label()
-            } else {
-                state.group_mode.label()
-            },
-            state.group_mode.key()
-        ),
-        Style::default().fg(theme_colors::text()),
-    ));
+    let group_full = format!(
+        "  Group: {}  {}",
+        state.group_mode.label(),
+        state.group_mode.key()
+    );
+    let group_short = format!(
+        "  Group: {}  {}",
+        state.group_mode.short_label(),
+        state.group_mode.key()
+    );
+    let group_bare = format!("  {}", state.group_mode.key());
+    for group in [&group_full, &group_short, &group_bare] {
+        let w = group.chars().count();
+        if used + w <= budget {
+            spans.push(Span::styled(
+                group.clone(),
+                Style::default().fg(theme_colors::text()),
+            ));
+            break;
+        }
+    }
+
+    // The search clause, capped: the query is on the search row above, so
+    // this is a reminder, not the source of truth.
+    if !state.search_query.is_empty() {
+        let room = budget.saturating_sub(used);
+        // "  matching \"…\"" is 13 cells; below that the clause is noise.
+        if room >= 13 {
+            let mut q: String = state.search_query.chars().take(room - 15).collect();
+            if q.len() < state.search_query.len() {
+                q.push('…');
+            }
+            spans.push(Span::styled(
+                format!("  matching \"{q}\""),
+                Style::default().fg(theme_colors::text()),
+            ));
+        }
+    }
+
+    // The key hint goes LAST, and only if there is still room: without it the
+    // tab bar and the group headings read as decoration, but a clipped header
+    // is worse than a missing hint.
+    let used: usize = spans.iter().map(|s| s.content.chars().count()).sum();
+    if state.employee_filter().is_none() && used + 9 <= budget {
+        spans.push(Span::styled(
+            "  s cycle",
+            Style::default().fg(theme_colors::muted()),
+        ));
+    }
     Line::from(spans)
 }
 
@@ -528,54 +565,97 @@ fn render_tab_bar(state: &SessionHubState, width: u16) -> Line<'static> {
     // ("current dir", "this branch's tree" and "by employee" pushed `archived`
     // clean off the edge and the count the operator needed was the silent
     // casualty). codex degrades, so we do too.
-    let total_width = |long: bool, sep: u16, with_sort: bool| -> u16 {
-        let tabs = counts
-            .iter()
-            .map(|(m, n)| {
-                let label = if long { m.label() } else { m.short_label() };
-                (label.chars().count() + 1 + n.to_string().len()) as u16 + sep
-            })
-            .sum::<u16>();
-        if with_sort {
-            tabs + sort_width(long)
-        } else {
-            tabs
+    // (2026-11-14, audit finding 18) This formula has to measure the string
+    // that actually gets rendered. The old one added `sep` for EVERY tab and
+    // never counted the leading space: there are only `counts.len() - 1`
+    // separators between the pills, and one space before the first. It
+    // over-counted by `sep - 1`, which is conservative for overflow — it never
+    // let the bar overflow — but it rejected rungs that fit by exactly one
+    // cell and made the "fits exactly" claim in the comment below wrong.
+    let total_width = |tier: LabelTier, sep: u16, with_sort: bool, counts_on_all: bool| -> u16 {
+        let mut tabs = 0u16;
+        for (i, (m, n)) in counts.iter().enumerate() {
+            let label = match tier {
+                LabelTier::Long => m.label(),
+                LabelTier::Short => m.short_label(),
+                LabelTier::Min => m.min_label(),
+            };
+            // A pill is "label<space><count>". The count is only rendered
+            // on the pill when `counts_on_all` or it is the active one —
+            // that is the rung's escape hatch when the labels alone fit but
+            // the labels plus seven counts do not.
+            let with_count = counts_on_all || *m == state.filter_mode;
+            tabs += label.chars().count() as u16;
+            tabs += n.to_string().len() as u16;
+            tabs += 1;
+            if !with_count {
+                tabs -= n.to_string().len() as u16;
+            }
+            if i + 1 < counts.len() {
+                tabs += sep;
+            }
         }
+        let mut w = 1 + tabs;
+        if with_sort {
+            w += sort_width(tier == LabelTier::Long);
+        }
+        w
     };
     const SEP: u16 = 2;
+    /// Which spelling of the filter names the bar is using. (2026-11-14,
+    /// finding 1) added the `Min` tier: with 500 loaded rows the counts reach
+    /// three digits and the short labels plus their counts measured 54 cells
+    /// against 46, so the bar fell to "the active filter alone" — which hides
+    /// the filters themselves, the thing the row exists to show.
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum LabelTier {
+        Long,
+        Short,
+        Min,
+    }
 
-    // The ladder's rungs, richest first. The sort clause is dropped between the
-    // long and compact rungs: long labels + sort overflow, compact labels +
-    // sort fit, and the filter tabs alone are the last resort.
-    let (use_long, sep, show_sort) = if total_width(true, SEP, true) <= width {
-        (true, SEP, true)
-    } else if total_width(false, SEP, true) <= width {
-        (false, SEP, true)
-    } else if total_width(false, 1, true) <= width {
-        // The measured rung that matters most: at the 48-column pane (120x40,
-        // the common case) the six compact labels plus a two-column gap leave
-        // three columns, and the sort clause needs eight — but the SAME labels
-        // with a one-column gap fit exactly. Dropping the sort here instead
-        // would hide the key on the exact width most operators work at, which
-        // is the Stage B finding one rung earlier.
-        (false, 1, true)
-    } else if total_width(false, 1, false) <= width {
-        (false, 1, false)
-    } else {
-        // Degrade to the active filter alone; a count nobody can read is
-        // decoration, and the header above still names the filter.
-        let active = counts
-            .iter()
-            .find(|(m, _)| *m == state.filter_mode)
-            .map_or_else(|| "0".to_string(), |(_, n)| n.to_string());
-        return Line::from(vec![Span::styled(
-            format!(" {} {}", state.filter_mode.label(), active),
-            Style::default()
-                .bg(theme_colors::selection_bg())
-                .fg(theme_colors::accent())
-                .add_modifier(Modifier::BOLD),
-        )]);
-    };
+    // The ladder's rungs, richest first: the label spelling degrades, then the
+    // counts, and the sort clause is dropped with the labels as it always was.
+    // "Counts on the active pill only" comes AFTER the min tier because it
+    // answers a less useful question — "how many are in the filter I am on" —
+    // while the min tier keeps every count, which is "which filter even has
+    // anything in it": the operator's question when they open the hub.
+    let (tier, sep, show_sort, counts_on_all) =
+        if total_width(LabelTier::Long, SEP, true, true) <= width {
+            (LabelTier::Long, SEP, true, true)
+        } else if total_width(LabelTier::Short, SEP, true, true) <= width {
+            (LabelTier::Short, SEP, true, true)
+        } else if total_width(LabelTier::Short, 1, true, true) <= width {
+            (LabelTier::Short, 1, true, true)
+        } else if total_width(LabelTier::Short, 1, false, true) <= width {
+            (LabelTier::Short, 1, false, true)
+        } else if total_width(LabelTier::Min, 1, false, true) <= width {
+            // The rung that holds at the common width with real counts: seven
+            // one-letter labels, their counts, one-column gaps and no sort
+            // clause — measured 35 cells against the pane's 46.
+            (LabelTier::Min, 1, false, true)
+        } else if total_width(LabelTier::Min, 1, false, false) <= width {
+            // The seven labels with counts on the ACTIVE pill only. This comes
+            // before collapsing to a single pill, and that order is the fix:
+            // the earlier ladder fell straight from "seven pills" to "one
+            // pill", and that last step is where the operator lost the ability
+            // to see what the filters were without cycling through them.
+            (LabelTier::Min, 1, false, false)
+        } else {
+            // Degrade to the active filter alone; a count nobody can read is
+            // decoration, and the header above still names the filter.
+            let active = counts
+                .iter()
+                .find(|(m, _)| *m == state.filter_mode)
+                .map_or_else(|| "0".to_string(), |(_, n)| n.to_string());
+            return Line::from(vec![Span::styled(
+                format!(" {} {}", state.filter_mode.label(), active),
+                Style::default()
+                    .bg(theme_colors::selection_bg())
+                    .fg(theme_colors::accent())
+                    .add_modifier(Modifier::BOLD),
+            )]);
+        };
 
     let mut spans: Vec<Span<'static>> = Vec::with_capacity(counts.len() * 3 + 1);
     spans.push(Span::styled(
@@ -586,12 +666,18 @@ fn render_tab_bar(state: &SessionHubState, width: u16) -> Line<'static> {
         // A mode with nothing in it still renders: "active 0" is the answer to
         // "is anything running", which is the operator's question at a session
         // hub, and hiding the tab would hide the zero that answers it.
-        let label = if use_long {
-            mode.label().to_string()
-        } else {
-            mode.short_label().to_string()
+        let label = match tier {
+            LabelTier::Long => mode.label().to_string(),
+            LabelTier::Short => mode.short_label().to_string(),
+            LabelTier::Min => mode.min_label().to_string(),
         };
-        let text = format!("{label} {n}");
+        // On the rung where only the ACTIVE pill carries a count, the others
+        // render the label alone — the label is what lets the operator aim.
+        let text = if counts_on_all || *mode == state.filter_mode {
+            format!("{label} {n}")
+        } else {
+            label.clone()
+        };
         let style = if *mode == state.filter_mode {
             Style::default()
                 .bg(theme_colors::selection_bg())
@@ -611,7 +697,7 @@ fn render_tab_bar(state: &SessionHubState, width: u16) -> Line<'static> {
         // the ACTIVE filter tab for the eye. The long clause names its own key
         // (`o`) because a control whose affordance is invisible is decoration.
         spans.push(Span::styled(
-            sort_clause(use_long),
+            sort_clause(tier == LabelTier::Long),
             Style::default().fg(theme_colors::text()),
         ));
     }
@@ -760,10 +846,29 @@ fn render_list_body(frame: &mut Frame, state: &SessionHubState, area: ratatui::l
                 // is dropped when the title leaves no room, and never at the
                 // cost of the metrics.
                 let title_text = row_title(row);
-                let title_width = title_text.chars().count();
-                let dir_span = if !dir_tag.is_empty()
-                    && title_width + dir_tag.chars().count() < inner_width as usize
-                {
+                // The status glyph rides the title line, so it is part of the
+                // line's width (audit finding 16).
+                // The status glyph rides the title line (" <glyph> "), so it
+                // is part of the line's width (audit finding 16). The archive
+                // arm is the same three cells with a different glyph.
+                let status_prefix = if state.pending_archive_pos() == Some(i) {
+                    " \u{1f5d1} ".to_string()
+                } else {
+                    format!(" {} ", status_glyph(row.status))
+                };
+                // (2026-11-14, audit finding 16) The gate measures SCREEN
+                // CELLS, not characters, and it counts the whole line.
+                //
+                // It used to count characters and ignore the prefix, so a
+                // 33-character title admitted an 11-character tag that then
+                // rendered 48 cells in a 46-cell pane: the operator saw
+                // "opera" — a directory that does not exist. The folder glyph
+                // is TWO cells and the status glyph is another 3-4, so both
+                // the tag and the prefix have to be measured in cells.
+                let title_line_cells = crate::tui::render::utils::display_width(&title_text)
+                    + crate::tui::render::utils::display_width(&status_prefix)
+                    + crate::tui::render::utils::display_width(&dir_tag);
+                let dir_span = if !dir_tag.is_empty() && title_line_cells <= inner_width as usize {
                     Some(Span::styled(
                         dir_tag.clone(),
                         Style::default().fg(theme_colors::muted()),
@@ -880,6 +985,32 @@ fn render_list_body(frame: &mut Frame, state: &SessionHubState, area: ratatui::l
                 {
                     id_budget -= 1;
                 }
+                // (2026-11-14, audit finding 17) THE FLOOR.
+                //
+                // The ladder used to end here: the id shrank to 3 and then the
+                // List simply clipped whatever did not fit. The code comment
+                // above promises "Age, messages, tokens and cost are NEVER
+                // dropped", but with an employee badge the badge alone is 20
+                // of the pane's 46 cells, so the age and the cost were cut off
+                // exactly on the rows the operator most wants to read.
+                //
+                // The badge is the most recoverable field on the line — the
+                // preview prints the employee in full, and the `e` axis
+                // filters by it — so it is what yields when the line cannot
+                // hold everything. The id yields first (it is fully
+                // recoverable too), then the badge, and only then is the line
+                // allowed to clip.
+                let emp_cost = emp.chars().count();
+                let show_emp = metrics_width as usize + id_budget + 1 <= inner_width as usize;
+                // The badge's width comes out of the budget when the line
+                // cannot hold it. The value is not used again — the span
+                // below is what is gated — but the subtraction is the
+                // measurement the gate is based on.
+                let _metrics_width = if show_emp {
+                    metrics_width
+                } else {
+                    metrics_width.saturating_sub(emp_cost)
+                };
                 let short_id: String = row.id.chars().take(id_budget).collect();
                 // (2026-10-30) A subagent row printed "$0.0000 · 0 msg · 0.000k
                 // tok" and asserted a fact it did not have: `records_snapshot`
@@ -922,7 +1053,15 @@ fn render_list_body(frame: &mut Frame, state: &SessionHubState, area: ratatui::l
                         format!("#{short_id}"),
                         Style::default().fg(theme_colors::muted()),
                     ),
-                    Span::styled(emp, Style::default().fg(theme_colors::muted())),
+                    // The badge is dropped when the line cannot hold it
+                    // (audit finding 17): it is the most recoverable field
+                    // here — the preview prints the employee in full and the
+                    // `e` axis filters by it — and keeping it costs the age and
+                    // the cost, which are not recoverable from this row.
+                    Span::styled(
+                        if show_emp { emp.clone() } else { String::new() },
+                        Style::default().fg(theme_colors::muted()),
+                    ),
                     usage_span,
                 ];
                 // Stage B also fills a real gap: a session row's status was

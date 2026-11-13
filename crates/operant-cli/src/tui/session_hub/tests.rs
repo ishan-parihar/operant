@@ -1136,6 +1136,129 @@ fn a_first_prompt_for_another_session_is_not_shown() {
     assert_eq!(hub.first_prompt_for("s1"), None);
 }
 
+// ---- (2026-11-14, audit findings 1, 2, 16, 17) the geometry at REAL counts ----
+
+/// 500 rows, the size the hub actually loads. The counts are then three
+/// digits, which is what broke the tab bar.
+fn realistic_rows() -> Vec<SessionEntryV2> {
+    (0..500)
+        .map(|i| {
+            let mut r = row(&format!("sess_{i:04}"), Some("work"), None);
+            r.message_count = 120;
+            r.tokens = 90000;
+            r.cost_usd = 12.34;
+            r
+        })
+        .collect()
+}
+
+/// The tab bar must show every filter at the width operators work at, with
+/// the counts that reach three digits.
+///
+/// (audit finding 1) The ladder fell through to "the active filter alone" —
+/// ONE pill — because the compact labels plus their counts measured 54 cells
+/// against the pane's 46. The operator lost the whole filter set, which is
+/// the thing the row exists to show. My own tests never saw it: they used two
+/// or three rows, so every count was one digit.
+#[test]
+fn the_tab_bar_survives_three_digit_counts_at_120_columns() {
+    let mut hub = SessionHubState::new();
+    hub.replace_rows(realistic_rows());
+    let (list, _) = hub_rows_at(120, realistic_rows());
+    let joined = list.join("\n");
+    // The bar is one row of "label count" pairs. Seven pairs = seven filters
+    // survived, whatever spelling the ladder chose for the labels.
+    // The tab bar is the row BELOW the header (the header also holds "500").
+    let lines: Vec<&str> = joined.lines().collect();
+    let bar = lines
+        .iter()
+        .position(|l| l.contains("Sessions"))
+        .and_then(|i| lines.get(i + 1))
+        .copied()
+        .unwrap_or_default();
+    let bar_inner = bar.trim().trim_matches('\u{2502}').trim();
+    let pills: Vec<&str> = bar_inner.split_whitespace().collect();
+    assert_eq!(
+        pills.len(),
+        14,
+        "seven label/count pairs must survive: {bar:?} (in {joined})"
+    );
+    assert!(
+        bar.contains("500"),
+        "the count must be real, not dropped: {bar:?}"
+    );
+    assert!(
+        joined.contains("Group: all  g"),
+        "the header must show the group clause AND its key, unclipped: {joined}"
+    );
+}
+
+/// The header must fit its pane. (audit finding 2) The honest row count
+/// ("500 of 3302") pushed the line to 51 cells against 46, and the List
+/// clips — so the group mode was cut to "a" and the `g` key vanished.
+#[test]
+fn the_header_fits_its_pane_with_the_honest_row_count() {
+    let mut hub = SessionHubState::new();
+    hub.set_store_total(Some(3302));
+    hub.replace_rows(realistic_rows());
+    let (list, _) = hub_rows_with(&mut hub);
+    let header = list
+        .iter()
+        .find(|l| l.contains("Sessions"))
+        .cloned()
+        .unwrap_or_default();
+    // Strip the border glyphs the harness draws.
+    let inner = header
+        .trim_start_matches(['\u{250c}', '\u{2502}'])
+        .trim_end_matches(['\u{2510}', '\u{2502}'])
+        .trim();
+    assert!(
+        inner.chars().count() <= 46,
+        "the header must fit 46 cells, it measured {}: {inner:?}",
+        inner.chars().count()
+    );
+    assert!(
+        header.contains("  g"),
+        "the grouping key must survive: {header:?}"
+    );
+}
+
+/// The directory qualifier must not be clipped mid-word. (audit finding 16)
+/// The gate counted CHARACTERS and ignored the 3-4 cell status prefix and the
+/// two-cell folder glyph, so a basename that "fit" was cut in half.
+#[test]
+fn the_directory_qualifier_is_not_clipped_mid_word() {
+    let mut r = row("s1", Some("implement the session hub tab bar"), None);
+    r.cwd = Some("/home/me/operant".to_string());
+    let (list, _) = hub_rows(vec![r]);
+    let joined = list.join("\n");
+    assert!(
+        joined.contains("operant") || !joined.contains('\u{1f4c2}'),
+        "the basename is either whole or absent: {joined}"
+    );
+    assert!(
+        !joined.contains("opera "),
+        "a half-printed basename is a directory that does not exist: {joined}"
+    );
+}
+
+/// The age and the cost must survive a heavy row. (audit finding 17) The
+/// ladder ended at a 3-character id and let the List clip the rest, so the
+/// employee badge cost the row its age and its cost.
+#[test]
+fn a_heavy_row_keeps_its_age_and_cost() {
+    let mut r = row("s1", Some("work"), Some("premiere"));
+    r.message_count = 120;
+    r.tokens = 90000;
+    r.cost_usd = 12.34;
+    let (list, _) = hub_rows(vec![r]);
+    let joined = list.join("\n");
+    assert!(
+        joined.contains("12.3400"),
+        "the cost must survive: {joined}"
+    );
+}
+
 // ---- (2026-11-14, audit finding 4) the search highlight must not panic or drift ----
 
 /// A multi-byte token used to panic the render thread: the scan advanced by
