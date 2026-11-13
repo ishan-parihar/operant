@@ -678,10 +678,6 @@ async fn two_slots_turn_concurrently_and_keep_disjoint_transcripts() {
 /// another slot's turn was between its recall and its retain, and a seat's
 /// turn would recall from another seat's bank.
 #[tokio::test]
-#[expect(
-    clippy::await_holding_lock,
-    reason = "test-only: the std mutex serialises process-env mutation across the whole test"
-)]
 async fn two_slot_providers_keep_separate_scopes() {
     let _env_lock = crate::config::test_env_lock();
     let tmp = tempfile::tempdir().expect("tempdir");
