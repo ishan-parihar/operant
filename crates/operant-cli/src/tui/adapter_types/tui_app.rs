@@ -702,7 +702,8 @@ impl TuiApp {
             println!();
             println!(
                 "{}",
-                crate::cmd_continue::format_exit_leftover(
+                crate::cmd_continue::format_continue_hint(
+                    crate::cmd_continue::exit_state(self.app.exit_is_deliberate),
                     &session_id,
                     self.app.session_title.as_deref()
                 )
@@ -1527,6 +1528,14 @@ impl TuiApp {
                 let old = agent.session_id().unwrap_or_default();
                 let fresh = operant_core::agent::rewind::new_session_id();
                 agent.set_session_id(fresh.clone());
+                // The outgoing session is released: this process no longer
+                // writes there, and a claim it keeps would make
+                // `operant continue <old-id>` refuse a session nobody is in.
+                // (The fresh id cannot be owned by anyone — it was minted
+                // here — so there is nothing to claim.)
+                if !old.is_empty() {
+                    app.release_session_claim(&old);
+                }
                 // The new session starts with no standing goal (the App's copy
                 // is cleared below); the agent's copy goes with it.
                 agent.set_standing_goal(None);
@@ -1561,6 +1570,18 @@ impl TuiApp {
                 // old session in the store, rebuild the display from the
                 // agent's conversation.
                 let old = agent.session_id().unwrap_or_default();
+                // Claim BEFORE the retarget — the frame loop's drain does the
+                // same, and the two alternate on whether a turn is streaming.
+                // A refused claim stops the switch: attaching to a session
+                // another live process owns puts two writers on one session's
+                // rows.
+                if !app.claim_session(&session_id) {
+                    let short: String = session_id.chars().take(8).collect();
+                    app.set_status_notice(format!(
+                        "Session {short} is live in another window — not switching."
+                    ));
+                    return;
+                }
                 agent.set_session_id(session_id.clone());
                 agent.notify_session_switch(&session_id, &old, false);
                 // RT-206: keep the retained id in step with the switch.

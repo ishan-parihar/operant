@@ -15545,3 +15545,59 @@ fn a_deliberate_exit_leaves_no_interrupted_flag() {
 
     let _ = std::fs::remove_file(&app.config.database_path);
 }
+
+
+/// A switch to a session another live window owns must NOT happen.
+///
+/// The retarget is the thing that puts a SECOND WRITER on that session's
+/// rows — the race the presence registry exists to prevent. The claim is
+/// therefore taken BEFORE the retarget and is authoritative: a refusal stops
+/// the switch instead of being logged after it.
+///
+/// The registry is the real one: a record naming pid 1 (always alive, never
+/// this process) is a live owner this process cannot take over. The record is
+/// removed on the way out, so the suite leaves nothing behind.
+#[test]
+fn a_switch_to_a_session_another_window_owns_is_refused() {
+    let mut app = make_app();
+    // The retarget is recorded by the switch closure, so the test can see
+    // whether the agent was moved at all.
+    let switched: std::sync::Arc<std::sync::Mutex<Vec<String>>> = Default::default();
+    let switched_for_retarget = std::sync::Arc::clone(&switched);
+    app.core_session_switch = Some(std::sync::Arc::new(
+        crate::tui::session_switch::SessionSwitchSource::new(
+            move |id| {
+                switched_for_retarget
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .push(id.to_string());
+            },
+            Vec::new,
+            || Some("sess-mine".to_string()),
+        ),
+    ));
+
+    // A live owner elsewhere.
+    let foreign = format!("sess-foreign-{}", std::process::id());
+    operant_core::active_sessions::register_presence(&foreign, 1).expect("register the owner");
+    struct Cleanup(String);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            operant_core::active_sessions::unregister_presence(&self.0);
+        }
+    }
+    let _cleanup = Cleanup(foreign.clone());
+    app.pending_switch_session = Some(foreign.clone());
+
+    assert!(
+        !app.apply_pending_switch(),
+        "a refused claim must STOP the switch, not log it afterwards"
+    );
+    assert!(
+        switched
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_empty(),
+        "the agent must not have been retargeted onto a session another window owns"
+    );
+}

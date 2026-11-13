@@ -64,13 +64,19 @@ pub fn format_continue_hint(state: &str, session_id: &str, title: Option<&str>) 
     )
 }
 
-/// The leftover the TUI prints after the terminal is restored.
+/// The headline the exit leftover carries.
 ///
-/// The command comes first under a heading that says what it does — the
-/// operator's next action should be readable without parsing the sentence
-/// above it.
-pub fn format_exit_leftover(session_id: &str, title: Option<&str>) -> String {
-    format_continue_hint("Session saved", session_id, title)
+/// A deliberate close (`/exit`) SAVED the session; a Ctrl+C INTERRUPTED it —
+/// the session was cut off mid-flight. The leftover has to say which: the
+/// session row says `interrupted`, and two records that disagree about the
+/// same exit are worse than either alone. An operator deciding whether to
+/// continue a half-finished turn reads the sentence, not the row.
+pub fn exit_state(deliberate: bool) -> &'static str {
+    if deliberate {
+        "Session saved"
+    } else {
+        "Session was interrupted"
+    }
 }
 
 /// Resolve the session `operant continue` should attach to.
@@ -161,9 +167,12 @@ pub async fn handle_continue_command(
         // No TTY: the TUI cannot enter raw mode here, so print what the
         // operator needs instead of failing with a crossterm error.
         crate::warn_tui_fallback(config.tui.rich_output);
+        // "Session", not "Session saved": nothing was closed here — the
+        // session is at rest in the store, and the command below is what
+        // continues it from a terminal that has one.
         println!(
             "{}",
-            format_exit_leftover(&target.id, target.title.as_deref())
+            format_continue_hint("Session", &target.id, target.title.as_deref())
         );
     }
     Ok(())
@@ -191,7 +200,11 @@ mod tests {
     /// command, not merely that the id appears somewhere in the text.
     #[test]
     fn the_leftover_prints_the_exact_continue_command() {
-        let leftover = format_exit_leftover("sess_abc123", Some("Fix the importer"));
+        let leftover = format_continue_hint(
+            exit_state(true),
+            "sess_abc123",
+            Some("Fix the importer"),
+        );
         assert!(
             leftover.contains("operant continue sess_abc123"),
             "the leftover must name the command verbatim: {leftover:?}"
@@ -206,15 +219,34 @@ mod tests {
     /// id alone is enough to continue it.
     #[test]
     fn an_untitled_session_still_prints_the_command() {
-        let leftover = format_exit_leftover("sess_abc123", None);
+        let leftover = format_continue_hint(exit_state(true), "sess_abc123", None);
         assert!(
             leftover.contains("operant continue sess_abc123"),
             "the leftover must name the command verbatim: {leftover:?}"
         );
-        let blank = format_exit_leftover("sess_abc123", Some("   "));
+        let blank = format_continue_hint(exit_state(true), "sess_abc123", Some("   "));
         assert!(
             blank.contains("operant continue sess_abc123"),
             "a blank title must not swallow the command: {blank:?}"
+        );
+    }
+
+    /// The exit headline must tell the operator WHICH kind of exit it was: a
+    /// deliberate close saved the session, a Ctrl+C interrupted it. The
+    /// session row says `interrupted` too — two records that disagree about
+    /// the same exit are worse than either alone.
+    #[test]
+    fn the_exit_headline_distinguishes_a_deliberate_close_from_an_interruption() {
+        assert_eq!(exit_state(true), "Session saved");
+        assert_eq!(exit_state(false), "Session was interrupted");
+        let interrupted = format_continue_hint(
+            exit_state(false),
+            "sess_abc123",
+            Some("Fix the importer"),
+        );
+        assert!(
+            interrupted.starts_with("Session was interrupted"),
+            "an interrupted exit must not read as a clean save: {interrupted:?}"
         );
     }
 

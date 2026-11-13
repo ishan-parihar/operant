@@ -79,15 +79,44 @@ impl App {
         let Some(session_id) = self.herdr_session_id() else {
             return;
         };
-        match operant_core::active_sessions::claim_session_here(&session_id) {
-            Ok(true) => {}
-            Ok(false) => tracing::warn!(
-                session_id = %session_id,
-                "another live process owns this session — the claim was refused"
-            ),
-            Err(e) => {
-                tracing::debug!(error = %e, "failed to claim the session for this process")
+        self.claim_session(&session_id);
+    }
+
+    /// Claim `session_id` for this process. `false` when ANOTHER live process
+    /// owns it, or when the claim could not be recorded.
+    ///
+    /// The primitive behind every claim in the tree, and the one that can be
+    /// ASKED for a verdict: a caller that is about to retarget the agent has
+    /// to know whether the claim succeeded, because attaching to a session
+    /// another process owns puts two writers on one session's rows — the race
+    /// the registry exists to prevent.
+    pub(crate) fn claim_session(&self, session_id: &str) -> bool {
+        match operant_core::active_sessions::claim_session_here(session_id) {
+            Ok(true) => true,
+            Ok(false) => {
+                tracing::warn!(
+                    session_id = %session_id,
+                    "another live process owns this session — the claim was refused"
+                );
+                false
             }
+            Err(e) => {
+                tracing::debug!(error = %e, "failed to claim the session for this process");
+                false
+            }
+        }
+    }
+
+    /// Release this process's claim on `session_id`.
+    ///
+    /// The ownership check matters: the record is per session, so an
+    /// unconditional delete would erase ANOTHER process's claim if it
+    /// re-claimed the session after us.
+    pub(crate) fn release_session_claim(&self, session_id: &str) {
+        if operant_core::active_sessions::session_presence(session_id)
+            .is_some_and(|p| p.pid == std::process::id())
+        {
+            operant_core::active_sessions::unregister_presence(session_id);
         }
     }
 

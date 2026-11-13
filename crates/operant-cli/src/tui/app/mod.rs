@@ -1700,6 +1700,59 @@ impl App {
     /// drain clears when it retargets is cleared here too, because a host that
     /// switches session through the frame loop and then /clears through the
     /// drain must end in the same state either way.
+    /// Apply the pending session switch, if one is armed.
+    ///
+    /// Returns whether a switch was applied.
+    ///
+    /// The CLAIM comes first and decides: a refused claim means another live
+    /// process owns that session, and switching to it anyway would put two
+    /// writers on one session's rows — the race the presence registry exists
+    /// to prevent. A refused switch is reported and DROPPED, not retried:
+    /// retrying would fight the other process for the same session.
+    ///
+    /// iter-2150 claims at every turn start (the id exists there); this
+    /// covers the switch that has not run a turn yet — every `operant
+    /// continue` attach, and every hub switch the operator reads before
+    /// typing.
+    pub fn apply_pending_switch(&mut self) -> bool {
+        // While a turn is streaming the flag stays armed: the outer drain
+        // owns every retarget that could race a live turn, and its
+        // `Option::take` still finds it.
+        if self.is_streaming {
+            return false;
+        }
+        let Some(session_id) = self.pending_switch_session.take() else {
+            return false;
+        };
+        let Some(source) = self.core_session_switch.as_ref() else {
+            // No handle (a host without an agent): put the flag back so the
+            // outer drain can still try, and say why it is not done.
+            self.pending_switch_session = Some(session_id);
+            self.set_status_notice("No agent attached — cannot switch session.".to_string());
+            return false;
+        };
+        // The OUTGOING id, read before the switch: after it, the source
+        // reports the incoming session and the old claim would be released
+        // against the wrong id.
+        let previous = source.session_id();
+        if !self.claim_session(&session_id) {
+            let short: String = session_id.chars().take(8).collect();
+            self.set_status_notice(format!(
+                "Session {short} is live in another window — not switching."
+            ));
+            return false;
+        }
+        let conv = source.switch_to(&session_id);
+        self.apply_session_conversation(conv, &session_id);
+        // The outgoing session is released: this process no longer writes
+        // there, and a claim it keeps would make `operant continue <old-id>`
+        // refuse a session nobody is in.
+        if let Some(previous) = previous {
+            self.release_session_claim(&previous);
+        }
+        true
+    }
+
     fn apply_session_conversation(
         &mut self,
         conv: Vec<operant_core::client::Message>,
@@ -1848,47 +1901,7 @@ impl App {
             // While streaming the flag is left armed on purpose: the outer drain
             // owns every retarget that could race a live turn, and its
             // `Option::take` still finds it.
-            if !self.is_streaming
-                && let Some(session_id) = self.pending_switch_session.take()
-            {
-                if let Some(source) = self.core_session_switch.as_ref() {
-                    // The OUTGOING id, read before the switch: after it, the
-                    // source reports the incoming session and the old claim
-                    // would be released against the wrong id.
-                    let previous = source.session_id();
-                    let conv = source.switch_to(&session_id);
-                    self.apply_session_conversation(conv, &session_id);
-                    // The session this process is now attached to must be
-                    // CLAIMED: the presence registry is what `operant
-                    // continue` consults before attaching, and a session
-                    // nobody claimed is one two windows can own at once.
-                    //
-                    // iter-2150 claims at every turn start (the id exists
-                    // there); this covers the switch that has not run a turn
-                    // yet — which is every `operant continue` attach, and every
-                    // hub switch the operator reads before typing.
-                    self.claim_current_session();
-                    // And the outgoing one is released: this process no longer
-                    // writes there, and a claim it keeps would make
-                    // `operant continue <old-id>` refuse a session nobody is
-                    // in. The ownership check matters — the record is per
-                    // session, so an unconditional delete would erase ANOTHER
-                    // process's claim if it re-claimed the session after us.
-                    if let Some(previous) = previous
-                        && operant_core::active_sessions::session_presence(&previous)
-                            .is_some_and(|p| p.pid == std::process::id())
-                    {
-                        operant_core::active_sessions::unregister_presence(&previous);
-                    }
-                } else {
-                    // No handle (a host without an agent): put the flag back so
-                    // the outer drain can still try, and say why it is not done.
-                    self.pending_switch_session = Some(session_id);
-                    self.set_status_notice(
-                        "No agent attached — cannot switch session.".to_string(),
-                    );
-                }
-            }
+            self.apply_pending_switch();
             if self.should_exit {
                 // A simulated run's screen/style dump must reflect the LAST
                 // applied event: `terminal.draw` happens before the event
