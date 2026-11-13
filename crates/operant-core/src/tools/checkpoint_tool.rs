@@ -87,6 +87,11 @@ pub struct CheckpointManager {
     /// Interior mutability so the process-global manager can be configured
     /// from `&self` (it lives in a `OnceLock`).
     config: std::sync::Mutex<CheckpointConfig>,
+    /// The (session, directory) pairs already checkpointed this turn.
+    ///
+    /// The key carries the session (RT-539): the dedup set is global, so one
+    /// chat's checkpoint of a directory suppressed ANOTHER chat's checkpoint
+    /// of the same directory.
     checkpointed_dirs: std::sync::Mutex<std::collections::HashSet<String>>,
     /// Why the last `ensure_checkpoint` refused, when it refused for a
     /// reason the caller can act on (a size-bound skip). `None` after a
@@ -143,6 +148,28 @@ impl CheckpointManager {
         }
     }
 
+    /// The store for a working directory IN ONE SESSION (RT-539).
+    ///
+    /// The store used to be keyed by the working directory alone, and every
+    /// gateway chat shares the working directory — so one chat's
+    /// `checkpoint_list` returned another chat's checkpoints, and one
+    /// chat's restore could roll the tree back to another chat's snapshot.
+    /// The session is part of the key now.
+    ///
+    /// `None` (no session in the context) keeps the legacy per-directory
+    /// store, so a non-gateway caller and the operator's own view are
+    /// unchanged.
+    pub fn store_path_for(&self, working_dir: &str, session_id: Option<&str>) -> PathBuf {
+        self.config
+            .lock()
+            .map(|g| {
+                g.base_dir
+                    .join("store")
+                    .join(store_name_for(working_dir, session_id))
+            })
+            .unwrap_or_default()
+    }
+
     /// Delete the shadow store for a working directory and report how many
     /// bytes it held.
     ///
@@ -155,15 +182,41 @@ impl CheckpointManager {
     /// The store holds SNAPSHOTS of the working directory, so deleting it
     /// removes a rollback history and nothing else. The caller decides.
     pub fn clear_store(&self, working_dir: &str) -> crate::Result<u64> {
-        let store = self.store_path(working_dir);
-        if !store.exists() {
-            return Ok(0);
+        // EVERY session's store for this directory (RT-539): the stores are
+        // per (directory, session) now, so clearing only the session-less
+        // one would leave every chat's snapshots on disk — the operator's
+        // `clear` says it clears this directory's checkpoints.
+        let mut bytes = 0u64;
+        for store in self.stores_for(working_dir) {
+            if !store.exists() {
+                continue;
+            }
+            bytes += dir_size(&store);
+            std::fs::remove_dir_all(&store).map_err(|e| {
+                crate::error::Error::Agent(format!("Failed to remove the checkpoint store: {e}"))
+            })?;
         }
-        let bytes = dir_size(&store);
-        std::fs::remove_dir_all(&store).map_err(|e| {
-            crate::error::Error::Agent(format!("Failed to remove the checkpoint store: {e}"))
-        })?;
         Ok(bytes)
+    }
+
+    /// Every store that belongs to a working directory: the session-less one
+    /// and every session-scoped one (RT-539).
+    fn stores_for(&self, working_dir: &str) -> Vec<PathBuf> {
+        let Ok(config) = self.config.lock() else {
+            return Vec::new();
+        };
+        let store_root = config.base_dir.join("store");
+        let mut stores = vec![store_root.join(store_name_for(working_dir, None))];
+        let prefix = format!("{}-", store_name_for(working_dir, None));
+        if let Ok(entries) = std::fs::read_dir(&store_root) {
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if name.starts_with(&prefix) {
+                    stores.push(entry.path());
+                }
+            }
+        }
+        stores
     }
 
     /// Why the last `ensure_checkpoint` call refused, if it refused for a
@@ -178,8 +231,25 @@ impl CheckpointManager {
         self.last_skip_reason.lock().ok().and_then(|r| r.clone())
     }
 
-    /// Take a checkpoint of the given directory
+    /// Take a checkpoint of the given directory.
+    ///
+    /// The session-less form; see [`Self::ensure_checkpoint_for`].
     pub fn ensure_checkpoint(&self, working_dir: &str, reason: &str) -> bool {
+        self.ensure_checkpoint_for(None, working_dir, reason)
+    }
+
+    /// Take a checkpoint of the given directory FOR ONE SESSION (RT-539).
+    ///
+    /// Every gateway chat shares the working directory, so a store keyed by
+    /// the directory alone was shared by every chat: one chat's list showed
+    /// another chat's checkpoints, and one chat's restore rolled the tree
+    /// back to another chat's snapshot.
+    pub fn ensure_checkpoint_for(
+        &self,
+        session_id: Option<&str>,
+        working_dir: &str,
+        reason: &str,
+    ) -> bool {
         let config_guard = match self.config.lock() {
             Ok(g) => g,
             Err(_) => return false,
@@ -202,16 +272,20 @@ impl CheckpointManager {
             return false;
         }
 
-        // Check if already checkpointed this turn
+        // Check if already checkpointed this turn. The key carries the
+        // session (RT-539): the set is global, so one chat's checkpoint of a
+        // directory suppressed ANOTHER chat's checkpoint of the same
+        // directory.
+        let dedup_key = dedup_key(session_id, working_dir);
         let is_new = {
             let mut dirs = match self.checkpointed_dirs.lock() {
                 Ok(d) => d,
                 Err(_) => return false,
             };
-            if dirs.contains(working_dir) {
+            if dirs.contains(&dedup_key) {
                 return false;
             }
-            dirs.insert(working_dir.to_string());
+            dirs.insert(dedup_key);
             true
         };
 
@@ -220,7 +294,7 @@ impl CheckpointManager {
         }
 
         // Take the checkpoint
-        self.take_checkpoint(working_dir, reason)
+        self.take_checkpoint(session_id, working_dir, reason)
     }
 
     /// Internal: take a checkpoint into the shadow store.
@@ -231,7 +305,7 @@ impl CheckpointManager {
     /// implementation ran `git add`/`git commit` inside the user's repo — see
     /// BUGS.md R12-2). Works in any directory — a project git repo is not
     /// required, and the user's git identity is never consulted.
-    fn take_checkpoint(&self, working_dir: &str, reason: &str) -> bool {
+    fn take_checkpoint(&self, session_id: Option<&str>, working_dir: &str, reason: &str) -> bool {
         let workdir = PathBuf::from(working_dir);
         if !workdir.is_dir() {
             return false;
@@ -300,7 +374,9 @@ impl CheckpointManager {
             .lock()
             .map(|g| g.base_dir.clone())
             .unwrap_or_default();
-        let store = base_dir.join("store").join(store_name(working_dir));
+        let store = base_dir
+            .join("store")
+            .join(store_name_for(working_dir, session_id));
         if let Err(e) = ensure_store(&store) {
             warn!("{e}");
             return false;
@@ -361,10 +437,22 @@ impl CheckpointManager {
         }
     }
 
-    /// List available checkpoints for a directory
+    /// List available checkpoints for a directory.
+    ///
+    /// The session-less form; see [`Self::list_checkpoints_for`].
     pub fn list_checkpoints(&self, working_dir: &str, limit: Option<usize>) -> Vec<Checkpoint> {
+        self.list_checkpoints_for(None, working_dir, limit)
+    }
+
+    /// List the checkpoints of one session in a directory (RT-539).
+    pub fn list_checkpoints_for(
+        &self,
+        session_id: Option<&str>,
+        working_dir: &str,
+        limit: Option<usize>,
+    ) -> Vec<Checkpoint> {
         let workdir = PathBuf::from(working_dir);
-        let store = self.store_path(working_dir);
+        let store = self.store_path_for(working_dir, session_id);
         if !store.join("HEAD").exists() {
             return Vec::new();
         }
@@ -480,13 +568,24 @@ impl CheckpointManager {
         commit_hash: &str,
         file_path: Option<&str>,
     ) -> Result<String> {
+        self.restore_for(None, working_dir, commit_hash, file_path)
+    }
+
+    /// Restore from one session's store (RT-539).
+    pub fn restore_for(
+        &self,
+        session_id: Option<&str>,
+        working_dir: &str,
+        commit_hash: &str,
+        file_path: Option<&str>,
+    ) -> Result<String> {
         // hermes `_validate_file_path` parity: the target never reaches git
         // unchecked — absolute paths and `..` traversal are rejected up front.
         if let Some(target) = file_path {
             validate_restore_path(target, working_dir).map_err(Error::Agent)?;
         }
         let workdir = PathBuf::from(working_dir);
-        let store = self.store_path(working_dir);
+        let store = self.store_path_for(working_dir, session_id);
         if !store.join("HEAD").exists() {
             return Err(Error::Agent(format!(
                 "No checkpoint store for {}",
@@ -515,10 +614,22 @@ impl CheckpointManager {
         ))
     }
 
-    /// Show diff between a checkpoint and the current working tree
+    /// Show diff between a checkpoint and the current working tree.
+    ///
+    /// The session-less form; see [`Self::diff_for`].
     pub fn diff(&self, working_dir: &str, commit_hash: &str) -> Result<String> {
+        self.diff_for(None, working_dir, commit_hash)
+    }
+
+    /// Diff against one session's store (RT-539).
+    pub fn diff_for(
+        &self,
+        session_id: Option<&str>,
+        working_dir: &str,
+        commit_hash: &str,
+    ) -> Result<String> {
         let workdir = PathBuf::from(working_dir);
-        let store = self.store_path(working_dir);
+        let store = self.store_path_for(working_dir, session_id);
         if !store.join("HEAD").exists() {
             return Err(Error::Agent(format!(
                 "No checkpoint store for {}",
@@ -543,14 +654,6 @@ impl CheckpointManager {
 }
 
 impl CheckpointManager {
-    /// Stable shadow-store path for a working directory.
-    fn store_path(&self, working_dir: &str) -> PathBuf {
-        self.config
-            .lock()
-            .map(|g| g.base_dir.join("store").join(store_name(working_dir)))
-            .unwrap_or_default()
-    }
-
     /// Drop the oldest shadow-store commits so at most `max_snapshots` remain.
     /// Uses `git update-ref`, which is safe on a bare store and never touches
     /// the user's index or worktree.
@@ -649,6 +752,32 @@ fn store_name(working_dir: &str) -> String {
     hasher.update(working_dir.as_bytes());
     let digest = hasher.finalize();
     hex::encode(&digest[..8])
+}
+
+/// The dedup key for a (session, directory) pair (RT-539).
+fn dedup_key(session_id: Option<&str>, working_dir: &str) -> String {
+    match session_id {
+        Some(session) => format!("{session}\u{1f}{working_dir}"),
+        None => working_dir.to_string(),
+    }
+}
+
+/// The store name for a (directory, session) pair (RT-539).
+///
+/// The session-less name is the directory's own hash, so a caller with no
+/// session (the operator's CLI, a test) keeps the store it had. A session
+/// gets the directory's hash plus the session's hash, so two chats in the
+/// same directory never share a store.
+fn store_name_for(working_dir: &str, session_id: Option<&str>) -> String {
+    let base = store_name(working_dir);
+    let Some(session) = session_id else {
+        return base;
+    };
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(session.as_bytes());
+    let digest = hasher.finalize();
+    format!("{}-{}", base, hex::encode(&digest[..8]))
 }
 
 /// Maximum files a checkpoint directory may contain — hermes
@@ -1006,7 +1135,7 @@ impl OperantTool for CheckpointTool {
         )
     }
 
-    async fn execute(&self, args: Value, _context: ToolContext) -> ToolResult {
+    async fn execute(&self, args: Value, context: ToolContext) -> ToolResult {
         let action = args
             .get("action")
             .and_then(|v| v.as_str())
@@ -1017,6 +1146,16 @@ impl OperantTool for CheckpointTool {
             .and_then(|v| v.as_str())
             .unwrap_or(".");
 
+        // (RT-539) The session scopes the checkpoint store. Every gateway
+        // chat shares the working directory, so a store keyed by the
+        // directory alone was shared by every chat: one chat's list showed
+        // another chat's checkpoints, and one chat's restore rolled the tree
+        // back to another chat's snapshot.
+        let session_id = context
+            .session_id
+            .clone()
+            .or_else(|| context.get("session_id").map(str::to_string));
+
         let manager = get_checkpoint_manager();
 
         match action {
@@ -1026,7 +1165,8 @@ impl OperantTool for CheckpointTool {
                     .and_then(|v| v.as_str())
                     .unwrap_or("manual checkpoint");
 
-                let success = manager.ensure_checkpoint(working_dir, reason);
+                let success =
+                    manager.ensure_checkpoint_for(session_id.as_deref(), working_dir, reason);
 
                 if success {
                     ToolResult::success(
@@ -1054,7 +1194,8 @@ impl OperantTool for CheckpointTool {
                     .get("limit")
                     .and_then(|v| v.as_u64())
                     .map(|v| v as usize);
-                let checkpoints = manager.list_checkpoints(working_dir, limit);
+                let checkpoints =
+                    manager.list_checkpoints_for(session_id.as_deref(), working_dir, limit);
                 ToolResult::success(
                     "checkpoint_list",
                     serde_json::json!({
@@ -1073,7 +1214,12 @@ impl OperantTool for CheckpointTool {
 
                 let file_path = args.get("file_path").and_then(|v| v.as_str());
 
-                match manager.restore(working_dir, commit_hash, file_path) {
+                match manager.restore_for(
+                    session_id.as_deref(),
+                    working_dir,
+                    commit_hash,
+                    file_path,
+                ) {
                     Ok(msg) => ToolResult::success(
                         "checkpoint_restore",
                         serde_json::json!({
@@ -1090,7 +1236,7 @@ impl OperantTool for CheckpointTool {
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
 
-                match manager.diff(working_dir, commit_hash) {
+                match manager.diff_for(session_id.as_deref(), working_dir, commit_hash) {
                     Ok(diff) => ToolResult::success(
                         "checkpoint_diff",
                         serde_json::json!({
@@ -1328,7 +1474,7 @@ mod tests {
             mgr.ensure_checkpoint(home.to_str().unwrap(), "one"),
             "the checkpoint must be taken"
         );
-        let store = mgr.store_path(home.to_str().unwrap());
+        let store = mgr.store_path_for(home.to_str().unwrap(), None);
         assert!(store.exists(), "the store must exist after a checkpoint");
 
         let bytes = mgr
@@ -1431,7 +1577,7 @@ mod tests {
         );
 
         // The store's own objects must not be in the commit.
-        let store = mgr.store_path(home.to_str().unwrap());
+        let store = mgr.store_path_for(home.to_str().unwrap(), None);
         let listing = StdCommand::new("git")
             .args(["ls-tree", "-r", "--name-only", "HEAD"])
             .current_dir(&store)
@@ -1520,6 +1666,75 @@ mod tests {
         let mgr = CheckpointManager::new();
         assert!(!mgr.is_enabled());
         assert!(!mgr.ensure_checkpoint(".", "test"));
+    }
+
+    /// RT-539: two chats in the SAME working directory do not share the
+    /// checkpoint list.
+    ///
+    /// The store was keyed by the working directory alone, and every gateway
+    /// chat shares the working directory — so one chat's `checkpoint_list`
+    /// returned another chat's checkpoints, and one chat's restore rolled
+    /// the tree back to another chat's snapshot.
+    #[test]
+    fn two_sessions_in_one_directory_do_not_share_the_checkpoint_list() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("shared.txt");
+        std::fs::write(&path, "one").expect("the file");
+        let work = dir.path().to_str().expect("utf8").to_string();
+
+        let mgr = CheckpointManager::new();
+        mgr.configure(CheckpointConfig {
+            base_dir: dir.path().join("checkpoints"),
+            enabled: true,
+            ..Default::default()
+        });
+
+        // Chat A checkpoints the directory.
+        assert!(
+            mgr.ensure_checkpoint_for(Some("chat-a"), &work, "chat a's snapshot"),
+            "chat A's checkpoint must be taken"
+        );
+
+        // Chat B checkpoints the SAME directory: the per-turn dedup set was
+        // global, so chat A's checkpoint used to suppress chat B's.
+        assert!(
+            mgr.ensure_checkpoint_for(Some("chat-b"), &work, "chat b's snapshot"),
+            "chat B's checkpoint must be taken — chat A's must not suppress it"
+        );
+
+        // Each chat sees only its own.
+        let a = mgr.list_checkpoints_for(Some("chat-a"), &work, None);
+        let b = mgr.list_checkpoints_for(Some("chat-b"), &work, None);
+        assert_eq!(a.len(), 1, "chat A must see exactly its own checkpoint");
+        assert_eq!(b.len(), 1, "chat B must see exactly its own checkpoint");
+        assert_eq!(
+            a[0].reason, "chat a's snapshot",
+            "chat A's list must not carry chat B's snapshot"
+        );
+        assert_eq!(
+            b[0].reason, "chat b's snapshot",
+            "chat B's list must not carry chat A's snapshot"
+        );
+
+        // A chat that never checkpointed sees nothing.
+        let stranger = mgr.list_checkpoints_for(Some("chat-c"), &work, None);
+        assert!(
+            stranger.is_empty(),
+            "a chat that never checkpointed must see no checkpoints — the store \
+             was shared by every chat"
+        );
+
+        // The operator's clear reclaims EVERY session's store for the dir.
+        let bytes = mgr.clear_store(&work).expect("clear every session's store");
+        assert!(bytes > 0, "the reclaim must report the bytes it freed");
+        assert!(
+            mgr.list_checkpoints_for(Some("chat-a"), &work, None)
+                .is_empty()
+                && mgr
+                    .list_checkpoints_for(Some("chat-b"), &work, None)
+                    .is_empty(),
+            "the operator's clear must remove every session's store"
+        );
     }
 
     /// RT-348: `list_checkpoints` reported the diff stat as hardcoded 0/0/0 --
