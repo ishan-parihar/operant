@@ -121,6 +121,10 @@ pub struct AgentConfig {
     /// `BehaviorSettings::max_tool_result_share`; see
     /// `context_management::DEFAULT_MAX_TOOL_RESULT_SHARE`.
     pub max_tool_result_share: f64,
+    /// The token ceiling on the advertised-skills block in the frozen prefix.
+    /// Threaded from `BehaviorSettings::advertised_skills_token_budget`; 0
+    /// means the built-in default.
+    pub advertised_skills_token_budget: usize,
 
     /// The share of the assembled context that tool RESULTS may hold, in
     /// aggregate. See `BehaviorSettings::max_tool_result_total_share`.
@@ -239,6 +243,7 @@ impl From<&BehaviorSettings> for AgentConfig {
             stream: settings.stream,
             context_window: settings.context_window,
             max_tool_result_share: settings.max_tool_result_share,
+            advertised_skills_token_budget: settings.advertised_skills_token_budget,
             max_tool_result_total_share: settings.max_tool_result_total_share,
             max_healing_attempts: settings.max_healing_attempts,
             max_trajectories: settings.max_trajectories,
@@ -1724,6 +1729,59 @@ mod tests {
         assert_eq!(agent.build_frozen_prefix(), plain);
     }
 
+    /// The advertised-skills budget is CONFIG-LEVEL, not a constant.
+    ///
+    /// The operator owns the number: a bigger budget advertises more skills
+    /// (and protects more of the window), a smaller one protects the window
+    /// harder. 0 means the built-in default.
+    #[tokio::test]
+    async fn the_advertised_skills_budget_is_the_operator_s_number() {
+        use crate::skills::{Skill, SkillManager};
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let skills_dir = dir.path().join("skills");
+        let mut manager = SkillManager::new(skills_dir.clone());
+        for i in 0..40 {
+            let name = format!("skill-{i:03}");
+            let skill_dir = skills_dir.join(&name);
+            std::fs::create_dir_all(&skill_dir).expect("skill dir");
+            std::fs::write(
+                skill_dir.join("SKILL.md"),
+                format!(
+                    "---\nname: {name}\ndescription: {}\n---\n\nbody\n",
+                    "x".repeat(200)
+                ),
+            )
+            .expect("skill file");
+        }
+        manager.load_all().expect("skills load");
+
+        let db = Database::init(dir.path().join("skills.sqlite")).expect("db");
+        let agent = OperantAgent::new(
+            AgentConfig {
+                advertised_skills_token_budget: 200,
+                ..AgentConfig::default()
+            },
+            Box::new(OpenAIModelClient::new(OpenAIClient::new(
+                crate::client::ClientConfig::default(),
+            ))),
+            ToolRegistry::new(Duration::from_secs(1)),
+            Arc::new(db),
+        )
+        .with_skill_manager(manager);
+
+        let prefix = agent.build_frozen_prefix();
+        let advertised = prefix.matches("<skill name=\"").count();
+        assert!(
+            advertised > 0 && advertised < 40,
+            "the operator's 200-token budget must bind: {advertised} of 40 advertised"
+        );
+        assert!(
+            prefix.contains("not advertised"),
+            "the block must SAY that skills were dropped"
+        );
+    }
+
     /// The advertised-skills block has a CEILING, and says what it dropped.
     ///
     /// The block rides every request inside the frozen prefix, which is the
@@ -2288,6 +2346,7 @@ mod tests {
                 // test's "last user message carries the block" assumption meets
                 // the wrap-up notice instead. The disclosure's arithmetic is
                 // what this test pins; the window is fixture state.
+                advertised_skills_token_budget: 0,
                 context_window: 128_000,
                 ..AgentConfig::default()
             },
@@ -2504,6 +2563,7 @@ mod tests {
         let db = Database::init(std::path::PathBuf::from("micro-compact-test.sqlite")).unwrap();
         let agent = OperantAgent::new(
             AgentConfig {
+                advertised_skills_token_budget: 0,
                 context_window: 50_000,
                 ..AgentConfig::default()
             },
@@ -2560,6 +2620,7 @@ mod tests {
         let db2 = Database::init(std::path::PathBuf::from("micro-compact-off.sqlite")).unwrap();
         let agent2 = OperantAgent::new(
             AgentConfig {
+                advertised_skills_token_budget: 0,
                 context_window: 50_000,
                 ..AgentConfig::default()
             },
@@ -2592,6 +2653,7 @@ mod tests {
         let db = Database::init(dir.path().join("bust.sqlite")).unwrap();
         let agent = OperantAgent::new(
             AgentConfig {
+                advertised_skills_token_budget: 0,
                 context_window: window,
                 ..AgentConfig::default()
             },
@@ -2916,6 +2978,7 @@ mod tests {
         let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let agent = OperantAgent::new(
             AgentConfig {
+                advertised_skills_token_budget: 0,
                 context_window: 200_000,
                 ..AgentConfig::default()
             },
@@ -2986,6 +3049,7 @@ mod tests {
         let agent = OperantAgent::new(
             AgentConfig {
                 // A large CONFIGURED window: the history below fits it.
+                advertised_skills_token_budget: 0,
                 context_window: 200_000,
                 ..AgentConfig::default()
             },
@@ -3123,6 +3187,7 @@ mod tests {
         let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let agent = OperantAgent::new(
             AgentConfig {
+                advertised_skills_token_budget: 0,
                 context_window: 200_000,
                 stream: false,
                 ..AgentConfig::default()
@@ -3167,6 +3232,7 @@ mod tests {
         let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let agent = OperantAgent::new(
             AgentConfig {
+                advertised_skills_token_budget: 0,
                 context_window: 200_000,
                 stream: true,
                 ..AgentConfig::default()
@@ -3219,6 +3285,7 @@ mod tests {
         let db = Database::init(std::path::PathBuf::from("ladder-fire-test.sqlite")).unwrap();
         let agent = OperantAgent::new(
             AgentConfig {
+                advertised_skills_token_budget: 0,
                 context_window: 10_000,
                 ..AgentConfig::default()
             },
@@ -3337,6 +3404,7 @@ mod tests {
         });
         let agent = OperantAgent::new(
             AgentConfig {
+                advertised_skills_token_budget: 0,
                 context_window: 10_000,
                 ..AgentConfig::default()
             },
@@ -3540,6 +3608,7 @@ mod tests {
         // workspace context alone far exceeds that, so assemble() must compact
         // and inject the stored rollup.
         let agent_cfg = AgentConfig {
+            advertised_skills_token_budget: 0,
             context_window: 8_000,
             ..AgentConfig::default()
         };
@@ -4147,6 +4216,7 @@ mod tests {
             model_request_timeouts: Default::default(),
             system_prompt: Some("You are a test agent.".to_string()),
             stream: true,
+            advertised_skills_token_budget: 0,
             context_window: 8000,
             max_tool_result_share: crate::context_management::DEFAULT_MAX_TOOL_RESULT_SHARE,
             max_tool_result_total_share:
@@ -4204,6 +4274,7 @@ mod tests {
             model_request_timeouts: Default::default(),
             system_prompt: Some("You are a test agent.".to_string()),
             stream: true,
+            advertised_skills_token_budget: 0,
             context_window: 8000,
             max_tool_result_share: crate::context_management::DEFAULT_MAX_TOOL_RESULT_SHARE,
             max_tool_result_total_share:
@@ -4327,6 +4398,7 @@ mod tests {
             model_request_timeouts: Default::default(),
             system_prompt: Some("You are a test agent.".to_string()),
             stream: true,
+            advertised_skills_token_budget: 0,
             context_window: 8000,
             max_tool_result_share: crate::context_management::DEFAULT_MAX_TOOL_RESULT_SHARE,
             max_tool_result_total_share:

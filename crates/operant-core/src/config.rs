@@ -808,6 +808,19 @@ pub struct BehaviorSettings {
     /// exceeded the model is told the result's size, its share of the window
     /// and its estimated input price, and only a marked prefix is inlined.
     /// Set to 0.0 to disable the guard.
+    /// The token ceiling on the advertised-skills block in the frozen prefix.
+    ///
+    /// The block rides every request inside the system message, which is
+    /// PROTECTED: it can never be evicted. Without a ceiling the installed
+    /// skill count decides whether every turn can run at all — 99 skills
+    /// cost ~7,000 tokens here, and a 500-skill install would put the
+    /// protected floor above a 32,000-token window. The skills that fit are
+    /// advertised; the rest are dropped and the drop is stated in the block.
+    ///
+    /// 0 means the built-in default (4,000 tokens).
+    #[serde(default = "default_advertised_skills_token_budget")]
+    pub advertised_skills_token_budget: usize,
+
     #[serde(default = "default_max_tool_result_share")]
     pub max_tool_result_share: f64,
 
@@ -1025,6 +1038,10 @@ fn default_max_tool_result_total_share() -> f64 {
     crate::context_management::DEFAULT_MAX_TOOL_RESULT_TOTAL_SHARE
 }
 
+fn default_advertised_skills_token_budget() -> usize {
+    crate::context_management::ADVERTISED_SKILLS_TOKEN_BUDGET
+}
+
 fn default_max_tool_result_share() -> f64 {
     crate::context_management::DEFAULT_MAX_TOOL_RESULT_SHARE
 }
@@ -1079,6 +1096,7 @@ impl Default for BehaviorSettings {
             context_hard_cap_tokens: default_context_hard_cap_tokens(),
             context_hard_cap_percent: default_context_hard_cap_percent(),
             context_compression_summary_max_chars: default_summary_max_chars(),
+            advertised_skills_token_budget: default_advertised_skills_token_budget(),
             max_tool_result_share: default_max_tool_result_share(),
             max_tool_result_total_share: default_max_tool_result_total_share(),
             max_consecutive_tool_only: 90,

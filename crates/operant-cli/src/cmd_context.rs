@@ -868,12 +868,17 @@ pub(crate) async fn measure_protected_floor(
     // count the skills that are actually advertised. Measuring every
     // installed skill would over-state the protected content and report a
     // floor the runtime never carries.
+    let skills_budget = if config.agent.advertised_skills_token_budget > 0 {
+        config.agent.advertised_skills_token_budget
+    } else {
+        operant_core::context_management::ADVERTISED_SKILLS_TOKEN_BUDGET
+    };
     let mut skills_tokens = 0usize;
     let mut skills_advertised = 0usize;
     let mut skills_dropped = 0usize;
     for (name, description) in manager.list_available() {
         let cost = estimate_tokens(&format!("  <skill name=\"{name}\">{description}</skill>\n"));
-        if skills_tokens + cost > operant_core::context_management::ADVERTISED_SKILLS_TOKEN_BUDGET {
+        if skills_tokens + cost > skills_budget {
             skills_dropped += 1;
             continue;
         }

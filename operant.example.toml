@@ -74,6 +74,13 @@ stream = true
 # source. Values 1..=4096 are rejected: the runtime reserves 4096 tokens for
 # the response.
 context_window = 0
+
+# The token ceiling on the advertised-skills block in the frozen prefix. The
+# block rides every request inside the system message, which cannot be
+# evicted, so without a ceiling the installed skill count decides whether
+# every turn can run at all. The skills that fit are advertised; the rest are
+# dropped and the drop is stated in the block. 0 = the built-in default (4000).
+advertised_skills_token_budget = 0
 # Context caps — BOTH axes bind, and the SMALLER one wins.
 #
 # The soft cap is the turn-boundary compaction trigger: crossing it compacts

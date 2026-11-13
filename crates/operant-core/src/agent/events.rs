@@ -1181,7 +1181,11 @@ impl OperantAgent {
                 // turn. The skills that fit are advertised; the rest are
                 // DROPPED and the drop is visible, because a skill the model
                 // cannot see is a skill it will never pick.
-                let budget = crate::context_management::ADVERTISED_SKILLS_TOKEN_BUDGET;
+                let budget = if self.config.advertised_skills_token_budget > 0 {
+                    self.config.advertised_skills_token_budget
+                } else {
+                    crate::context_management::ADVERTISED_SKILLS_TOKEN_BUDGET
+                };
                 let mut used = 0usize;
                 let mut advertised = 0usize;
                 let mut dropped = 0usize;
