@@ -893,6 +893,17 @@ impl ToolRegistry {
             .collect()
     }
 
+    /// Whether two registries are THE SAME registry.
+    ///
+    /// (RT-517) The registry is a handle over shared state, so a caller
+    /// that keeps a LIST of registries (the MCP manager serves every
+    /// registry it has synced into) needs to know whether the registry it
+    /// is about to add is already there. The comparison is by the shared
+    /// tool map's address — the thing the clone shares.
+    pub fn ptr_eq(&self, other: &ToolRegistry) -> bool {
+        Arc::ptr_eq(&self.tools, &other.tools)
+    }
+
     pub async fn get(&self, name: &str) -> Option<Arc<dyn OperantTool>> {
         // (plan 2026-10-26 phase 2) retired names resolve through the alias
         // layer — `get("memory_recall")` returns the memory_search tool.
