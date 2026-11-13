@@ -1680,6 +1680,16 @@ pub fn tool_result_token_limit(budget_tokens: usize, max_share: f64) -> usize {
         .max(MIN_TOOL_RESULT_TOKENS as f64) as usize
 }
 
+/// The token ceiling on the advertised-skills block in the frozen prefix.
+///
+/// The block rides every request and is PROTECTED (the frozen prefix is the
+/// system message: it is never evicted), so without a ceiling the installed
+/// skill count decides whether every turn can run at all — 98 skills already
+/// cost ~7,000 tokens here, and a 500-skill install would put the protected
+/// floor above a 32,000-token window. The skills that fit are advertised; the
+/// rest are dropped, and the drop is stated in the block itself.
+pub const ADVERTISED_SKILLS_TOKEN_BUDGET: usize = 4_000;
+
 /// The smallest ceiling one tool result may be trimmed to.
 ///
 /// Above the guard's own marker + reserve (~111 tokens), so a trimmed result

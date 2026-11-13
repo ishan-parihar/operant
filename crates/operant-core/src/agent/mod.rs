@@ -1724,6 +1724,84 @@ mod tests {
         assert_eq!(agent.build_frozen_prefix(), plain);
     }
 
+    /// The advertised-skills block has a CEILING, and says what it dropped.
+    ///
+    /// The block rides every request inside the frozen prefix, which is the
+    /// system message — PROTECTED, never evicted. Without a ceiling the
+    /// installed skill count decides whether every turn can run at all: 98
+    /// skills already cost ~7,000 tokens here, and a 500-skill install would
+    /// put the protected floor above a 32,000-token window. The skills that
+    /// fit are advertised; the rest are dropped and the drop is STATED, so
+    /// the model knows to reach for the skills tool.
+    #[tokio::test]
+    async fn the_advertised_skills_block_has_a_ceiling_and_says_what_it_dropped() {
+        use crate::skills::{Skill, SkillManager};
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let skills_dir = dir.path().join("skills");
+        let mut manager = SkillManager::new(skills_dir.clone());
+        // 300 skills, each with a description big enough to matter.
+        for i in 0..300 {
+            let name = format!("skill-{i:03}");
+            let skill_dir = skills_dir.join(&name);
+            std::fs::create_dir_all(&skill_dir).expect("skill dir");
+            std::fs::write(
+                skill_dir.join("SKILL.md"),
+                format!(
+                    "---\nname: {name}\ndescription: {}\n---\n\nbody\n",
+                    "x".repeat(200)
+                ),
+            )
+            .expect("skill file");
+        }
+        manager.load_all().expect("skills load");
+        assert!(
+            manager.list_available().len() >= 250,
+            "the fixture must really have hundreds of skills, got {}",
+            manager.list_available().len()
+        );
+
+        let db = Database::init(dir.path().join("skills.sqlite")).expect("db");
+        let agent = OperantAgent::new(
+            AgentConfig::default(),
+            Box::new(OpenAIModelClient::new(OpenAIClient::new(
+                crate::client::ClientConfig::default(),
+            ))),
+            ToolRegistry::new(Duration::from_secs(1)),
+            Arc::new(db),
+        )
+        .with_skill_manager(manager);
+
+        let prefix = agent.build_frozen_prefix();
+        let advertised = prefix.matches("<skill name=\"").count();
+        assert!(
+            advertised > 0,
+            "the block must still advertise the skills that fit"
+        );
+        assert!(
+            advertised < 300,
+            "the block must NOT advertise every skill: {advertised} of 300"
+        );
+        // The ceiling is a TOKEN budget, so the cost is what matters.
+        let block = prefix
+            .split("<available_skills>")
+            .nth(1)
+            .and_then(|rest| rest.split("</available_skills>").next())
+            .expect("the block");
+        let tokens = crate::context_management::estimate_tokens(block);
+        assert!(
+            tokens <= crate::context_management::ADVERTISED_SKILLS_TOKEN_BUDGET,
+            "the advertised block costs {tokens} tokens, over the \
+             {} ceiling",
+            crate::context_management::ADVERTISED_SKILLS_TOKEN_BUDGET
+        );
+        assert!(
+            prefix.contains("were not advertised") || prefix.contains("not advertised"),
+            "the block must SAY that skills were dropped: {}",
+            &prefix[prefix.len().saturating_sub(400)..]
+        );
+    }
+
     /// Ponytail phase 4 (iter-2116): the always-on posture must reach the
     /// PROMPT, not merely the config. With `[agent.ponytail] enabled = true`
     /// and `inject = "always_on"`, the frozen prefix carries the INSTALLED

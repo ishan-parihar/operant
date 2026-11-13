@@ -1174,15 +1174,42 @@ impl OperantAgent {
             // will refuse. `list_available()` is the advertising door.
             let skills = skill_manager.list_available();
             if !skills.is_empty() {
+                // The advertised block rides EVERY request and can never be
+                // evicted (it is part of the frozen prefix), so it needs a
+                // ceiling of its own: 500 installed skills would otherwise
+                // put the protected floor above a 32k window and kill every
+                // turn. The skills that fit are advertised; the rest are
+                // DROPPED and the drop is visible, because a skill the model
+                // cannot see is a skill it will never pick.
+                let budget = crate::context_management::ADVERTISED_SKILLS_TOKEN_BUDGET;
+                let mut used = 0usize;
+                let mut advertised = 0usize;
+                let mut dropped = 0usize;
                 frozen.push_str("\n\n<available_skills>\n");
                 for (name, description) in &skills {
-                    frozen.push_str(&format!(
+                    let line = format!(
                         "  <skill name=\"{}\">{}</skill>\n",
                         escape_xml_text(name),
                         escape_xml_text(description)
-                    ));
+                    );
+                    let cost = crate::context_management::estimate_tokens(&line);
+                    if used + cost > budget {
+                        dropped += 1;
+                        continue;
+                    }
+                    used += cost;
+                    advertised += 1;
+                    frozen.push_str(&line);
                 }
                 frozen.push_str("</available_skills>");
+                if dropped > 0 {
+                    // The model must be able to find what it cannot see.
+                    frozen.push_str(&format!(
+                        "\n({advertised} skill(s) advertised, {dropped} more installed but not \
+                         advertised: the block has a {budget}-token ceiling. Use the skills tool \
+                         to list them.)"
+                    ));
+                }
             }
             // hermes parity: skill-management principles ride the same
             // frozen prefix so the background-review fork inherits them
