@@ -515,7 +515,7 @@ These are the user's intentional design choices. Do not replace, remove, or
   and the vendor skills are listed as commands in the command palette, in
   `/help` and in the Telegram menu. Refresh the content alone with
   `operant update integrations --only ponytail`. `[agent.ponytail]`
-  config separates the POSTURE from the CONTENT refresh (iter-2202): the
+  config separates the POSTURE from the CONTENT refresh (iter-2204): the
   posture defaults OFF (`enabled=false`, `default_level="full"`,
   `inject="on_invoke"`, and `inject="always_on"` rides the frozen prefix as
   a `<ponytail>` block (level suffix for lite/ultra), NEVER on Holon runs),
