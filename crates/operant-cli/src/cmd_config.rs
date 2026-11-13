@@ -206,7 +206,13 @@ async fn handle_check(config: &AppConfig) -> Result<()> {
     // the eager tool schemas and the advertised skills. A window smaller
     // than that fails EVERY turn — the live deployment sat at 4,242 against
     // a 8,574-token protected prompt, and this check called it good.
-    match crate::cmd_context::measure_protected_floor(config).await {
+    // The RESOLVED window, not the configured value: with an AUTOMATIC
+    // config the configured value is 0, and the old guard skipped the check
+    // entirely — so a model whose real window cannot hold the protected
+    // content failed every turn with nothing saying so.
+    let report = crate::cmd_context::resolve_window_for_report(config).await;
+    let window = report.window;
+    match crate::cmd_context::measure_protected_floor(config, window).await {
         Ok(floor) if floor.minimum_hard_cap > 0 => {
             issues.push(format!(
                 "agent.context_hard_cap_tokens is smaller than the protected content \
@@ -215,18 +221,12 @@ async fn handle_check(config: &AppConfig) -> Result<()> {
                 floor.required, floor.schema_tokens, floor.skills_tokens, floor.minimum_hard_cap,
             ));
         }
-        // `0` is AUTOMATIC: the resolver picks the model's real window, so a
-        // configured-vs-floor comparison says nothing (the old guard would
-        // have reported every automatic window as 0 and always failed).
-        Ok(floor)
-            if config.agent.context_window > 0
-                && floor.minimum_window > config.agent.context_window =>
-        {
+        Ok(floor) if floor.minimum_window > window => {
             issues.push(format!(
-                "agent.context_window is {} but the protected content needs about {} tokens \
-                 (tool schemas ~{}, advertised skills ~{}). Raise it to at least {} — every \
-                 turn fails until it fits.",
-                config.agent.context_window,
+                "the context window is {window} tokens ({}) but the protected content needs \
+                 about {} tokens (tool schemas ~{}, advertised skills ~{}). Raise it to at \
+                 least {} — every turn fails until it fits.",
+                crate::cmd_doctor::checks_config::window_source_label(report.source),
                 floor.required,
                 floor.schema_tokens,
                 floor.skills_tokens,

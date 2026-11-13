@@ -414,11 +414,88 @@ pub async fn handle_context_command(config: &AppConfig, cmd: ContextSubcommand) 
     Ok(())
 }
 
+/// The window the agent budgets against, and where it came from.
+///
+/// ONE resolver for every surface that reports a window: the agent (core),
+/// `operant context window`, `operant config check` and `operant doctor`.
+/// They used to answer the question differently — the agent resolved it, the
+/// doctor compared the floor against the CONFIGURED value (0 under
+/// AUTOMATIC, so it reported a false failure on every fresh install), and
+/// the budget report measured the schema bill against the configured value
+/// too (a second denominator).
+pub(crate) struct ResolvedWindowReport {
+    /// The window the agent budgets against.
+    pub window: usize,
+    /// Where it came from (`configured`, `learned`, `endpoint`, `catalog`,
+    /// `default`).
+    pub source: &'static str,
+    /// The learned limit, when one is stored.
+    pub learned: Option<usize>,
+    /// The endpoint's answer, when the endpoint answered.
+    pub endpoint_window: Option<usize>,
+    /// The model's output ceiling, when a source knows it.
+    pub max_output: Option<usize>,
+}
+
+/// Resolve the window for a config, without touching the network twice.
+///
+/// The learned limit comes from the database (the agent's own store); the
+/// endpoint answer is fetched once and cached by the core resolver.
+pub(crate) async fn resolve_window_for_report(config: &AppConfig) -> ResolvedWindowReport {
+    resolve_window_for_report_inner(config).await
+}
+
+/// The report plus the learned-limit key, for the surfaces that reset it.
+pub(crate) async fn resolve_window_for_report_with_key(
+    config: &AppConfig,
+) -> (ResolvedWindowReport, String) {
+    use operant_core::context_window::{learned_from_meta, learned_limit_key};
+
+    let model = config.agent.model.trim().to_string();
+    let provider = crate::tui::provider::infer_provider_from_model(&model)
+        .unwrap_or_else(|| "openai".to_string());
+    let key = learned_limit_key(&provider, &model);
+    let learned = Database::init(config.database_path.clone())
+        .ok()
+        .and_then(|db| db.get_state_meta(&key))
+        .and_then(|value| learned_from_meta(Some(value)));
+    let discovered = operant_core::context_window::discover(
+        &provider,
+        &config.client.base_url,
+        config.client.api_key.as_deref(),
+        &model,
+    )
+    .await;
+    // Read the endpoint's answer BEFORE the move into `resolve`, which
+    // consumes it: the report names what the endpoint said even when the
+    // operator's override is what the runtime uses.
+    let endpoint_window = discovered.context_window;
+    let resolved =
+        operant_core::context_window::resolve(config.agent.context_window, learned, discovered);
+    (
+        ResolvedWindowReport {
+            window: resolved.window,
+            source: resolved.source.as_str(),
+            learned,
+            endpoint_window,
+            max_output: resolved.max_output,
+        },
+        key,
+    )
+}
+
+/// Just the window number, for the surfaces that compare against it.
+pub(crate) async fn resolve_window(config: &AppConfig) -> usize {
+    resolve_window_for_report(config).await.window
+}
+
+async fn resolve_window_for_report_inner(config: &AppConfig) -> ResolvedWindowReport {
+    resolve_window_for_report_with_key(config).await.0
+}
+
 /// Report and manage the context window the agent budgets against.
 async fn window_command(config: &AppConfig, refresh: bool, reset: bool, json: bool) -> Result<()> {
-    use operant_core::context_window::{
-        clear_discovery_cache, discover, learned_from_meta, learned_limit_key, resolve,
-    };
+    use operant_core::context_window::{clear_discovery_cache, learned_limit_key};
 
     if refresh {
         clear_discovery_cache();
@@ -442,15 +519,11 @@ async fn window_command(config: &AppConfig, refresh: bool, reset: bool, json: bo
         return Ok(());
     }
 
-    let learned = learned_from_meta(db.get_state_meta(&key));
-    let discovered = discover(
-        &provider,
-        &config.client.base_url,
-        config.client.api_key.as_deref(),
-        &model,
-    )
-    .await;
-    let resolved = resolve(configured, learned, discovered);
+    // ONE resolution for every surface that reports a window (the agent,
+    // this command, `operant config check`, `operant doctor`): the helper
+    // reads the learned limit and asks the endpoint exactly once.
+    let (report, _) = resolve_window_for_report_with_key(config).await;
+    let learned = report.learned;
 
     if json {
         println!(
@@ -461,11 +534,11 @@ async fn window_command(config: &AppConfig, refresh: bool, reset: bool, json: bo
                 "configured": configured,
                 "learned": learned,
                 "learned_key": key,
-                "endpoint_window": discovered.context_window,
-                "discovered_source": discovered.window_source.map(|source| source.as_str()),
-                "resolved": resolved.window,
-                "source": resolved.source.as_str(),
-                "max_output": resolved.max_output,
+                "endpoint_window": report.endpoint_window,
+                "discovered_source": report.source,
+                "resolved": report.window,
+                "source": report.source,
+                "max_output": report.max_output,
             }))?
         );
         return Ok(());
@@ -484,23 +557,19 @@ async fn window_command(config: &AppConfig, refresh: bool, reset: bool, json: bo
     );
     println!(
         "  endpoint     : {}",
-        discovered
-            .context_window
+        report
+            .endpoint_window
             .map_or_else(|| "not reported".to_string(), |tokens| tokens.to_string())
     );
-    println!(
-        "  resolved     : {} ({})",
-        resolved.window,
-        resolved.source.as_str()
-    );
+    println!("  resolved     : {} ({})", report.window, report.source);
     println!(
         "  max output   : {}",
-        resolved.max_output.map_or_else(
+        report.max_output.map_or_else(
             || "unknown (absolute guard applies)".to_string(),
             |tokens| tokens.to_string()
         )
     );
-    if resolved.source == operant_core::context_window::WindowSource::Learned {
+    if report.source == "learned" {
         println!(
             "\n  A rejected request taught the learned limit. `operant context window --reset` \
              clears it; a single successful request above it clears it automatically."
@@ -511,7 +580,7 @@ async fn window_command(config: &AppConfig, refresh: bool, reset: bool, json: bo
 
 /// Report the per-request surface bill.
 async fn budget_command(config: &AppConfig, only: Option<&str>, json: bool) -> Result<()> {
-    let budget = measure_surfaces(config).await?;
+    let budget = measure_surfaces(config, resolve_window(config).await).await?;
 
     if let Some(want) = only {
         let hit = budget
@@ -586,7 +655,7 @@ async fn budget_command(config: &AppConfig, only: Option<&str>, json: bool) -> R
 
 /// Propose the moves that bring the budget under target.
 async fn optimize_command(config: &AppConfig, apply: bool, floor: usize, json: bool) -> Result<()> {
-    let budget = measure_surfaces(config).await?;
+    let budget = measure_surfaces(config, resolve_window(config).await).await?;
     let mut proposals = operant_core::context_budget::optimize(&budget);
     // Drop proposals whose marginal saving is under the floor: trimming
     // capability for a rounding error is a bad trade, and the loop exists
@@ -765,7 +834,15 @@ pub(crate) struct ProtectedFloor {
 }
 
 /// Measure the protected floor of THIS config and the advice that would fit it.
-pub(crate) async fn measure_protected_floor(config: &AppConfig) -> Result<ProtectedFloor> {
+///
+/// `window` is the RESOLVED window (what the agent budgets against), not the
+/// configured value: with an AUTOMATIC config the configured value is 0, and
+/// measuring the schema bill against 0 is a different measurement than the
+/// one the runtime makes.
+pub(crate) async fn measure_protected_floor(
+    config: &AppConfig,
+    window: usize,
+) -> Result<ProtectedFloor> {
     // The skills advertised in the frozen prefix: the same shape the prefix
     // writes (`  <skill name="X">description</skill>`), so the number is the
     // one the runtime carries.
@@ -779,7 +856,7 @@ pub(crate) async fn measure_protected_floor(config: &AppConfig) -> Result<Protec
         })
         .sum();
 
-    let surfaces = measure_surfaces(config).await?;
+    let surfaces = measure_surfaces(config, window).await?;
     let schema_tokens = surfaces.total_tokens_per_request;
     let required = schema_tokens + skills_tokens;
     let caps = operant_core::context_management::ContextCaps::from(&config.agent);
@@ -787,7 +864,7 @@ pub(crate) async fn measure_protected_floor(config: &AppConfig) -> Result<Protec
         required,
         operant_core::context_management::RESPONSE_RESERVE_TOKENS
             + operant_core::context_management::CONTEXT_DISCLOSURE_RESERVE_TOKENS,
-        config.agent.context_window,
+        window,
     );
     Ok(ProtectedFloor {
         schema_tokens,
@@ -798,7 +875,7 @@ pub(crate) async fn measure_protected_floor(config: &AppConfig) -> Result<Protec
     })
 }
 
-pub(crate) async fn measure_surfaces(config: &AppConfig) -> Result<ContextBudget> {
+pub(crate) async fn measure_surfaces(config: &AppConfig, window: usize) -> Result<ContextBudget> {
     let target = config.agent.context_budget_tokens;
     let mut budget = ContextBudget::new(target);
 
@@ -828,7 +905,7 @@ pub(crate) async fn measure_surfaces(config: &AppConfig) -> Result<ContextBudget
     // There is deliberately NO builtin roll-up alongside these: a roll-up
     // plus its own components double-counts, and the total would overstate
     // the bill the agent actually pays.
-    for tool in per_tool_schemas(&registry, config.agent.context_window).await {
+    for tool in per_tool_schemas(&registry, window).await {
         budget.push(SurfaceCost::new(
             format!("tool:{}", tool.name),
             "tool-schema",

@@ -493,13 +493,30 @@ pub fn run_config_checks(
 ///
 /// This is a FLOOR, not a promise: the runtime adds the turn tail (memory
 /// recall, workspace, harness) on top, which the CLI cannot measure.
+/// How the window was resolved, in the operator's words.
+pub(crate) fn window_source_label(source: &str) -> &'static str {
+    match source {
+        "endpoint" => "the provider endpoint's limit",
+        "learned" => "a limit learned from a provider overflow",
+        "catalog" => "the models.dev catalog",
+        "default" => "the built-in default; the provider reported no limit",
+        _ => "the operator's override",
+    }
+}
+
 pub async fn check_context_window(
     config: &AppConfig,
     issues: &mut Vec<String>,
     manual_issues: &mut Vec<String>,
 ) {
     section_header("Context window");
-    let floor = match crate::cmd_context::measure_protected_floor(config).await {
+    // The RESOLVED window, not the configured value: with an AUTOMATIC
+    // config the configured value is 0, and comparing the floor against 0
+    // reported a false failure on every fresh install ("the window is 0 but
+    // the protected content needs 23344 tokens") while the turns ran fine.
+    let report = crate::cmd_context::resolve_window_for_report(config).await;
+    let window = report.window;
+    let floor = match crate::cmd_context::measure_protected_floor(config, window).await {
         Ok(floor) => floor,
         Err(e) => {
             check_warn(
@@ -510,7 +527,6 @@ pub async fn check_context_window(
             return;
         }
     };
-    let window = config.agent.context_window;
     if floor.minimum_hard_cap > 0 {
         check_fail(
             "Context window cannot hold the protected content",
@@ -532,25 +548,34 @@ pub async fn check_context_window(
         check_fail(
             "Context window cannot hold the protected content",
             &format!(
-                "agent.context_window is {window} but the protected content needs about {} \
-                 tokens (tool schemas ~{}, advertised skills ~{}). Raise it to at least {} — \
-                 every turn fails until it fits.",
-                floor.required, floor.schema_tokens, floor.skills_tokens, floor.minimum_window,
+                "the context window is {window} tokens ({}) but the protected content needs \
+                 about {} tokens (tool schemas ~{}, advertised skills ~{}). Raise it to at \
+                 least {} — every turn fails until it fits.",
+                window_source_label(report.source),
+                floor.required,
+                floor.schema_tokens,
+                floor.skills_tokens,
+                floor.minimum_window,
             ),
         );
         issues.push(format!(
-            "agent.context_window is {window} but the protected content needs about {} tokens \
-             — every turn fails until it is at least {}.",
-            floor.required, floor.minimum_window,
+            "the context window is {window} tokens ({}) but the protected content needs \
+             about {} tokens — every turn fails until it is at least {}.",
+            window_source_label(report.source),
+            floor.required,
+            floor.minimum_window,
         ));
         return;
     }
     check_ok(
         "Context window holds the protected content",
         &format!(
-            "window {window} tokens; protected content ~{} tokens (tool schemas ~{}, \
+            "window {window} tokens ({}); protected content ~{} tokens (tool schemas ~{}, \
              advertised skills ~{})",
-            floor.required, floor.schema_tokens, floor.skills_tokens
+            window_source_label(report.source),
+            floor.required,
+            floor.schema_tokens,
+            floor.skills_tokens
         ),
     );
 }
@@ -736,6 +761,53 @@ mod tests {
                 "{key} is classified differently by the .env and ambient scans"
             );
         }
+    }
+
+    /// The doctor's context-window verdict must be about the RESOLVED window.
+    ///
+    /// With an AUTOMATIC config (0 — the shipped default) the old code
+    /// compared the protected floor against 0 and reported "every turn fails
+    /// until it fits" while the turns ran fine: the resolver had already
+    /// picked the model's real window. A false failure on every fresh
+    /// install is how a check stops being read.
+    #[test]
+    fn the_window_verdict_uses_the_resolved_window_not_the_sentinel() {
+        assert_eq!(
+            window_source_label("endpoint"),
+            "the provider endpoint's limit"
+        );
+        assert_eq!(
+            window_source_label("learned"),
+            "a limit learned from a provider overflow"
+        );
+        assert_eq!(
+            window_source_label("default"),
+            "the built-in default; the provider reported no limit"
+        );
+        assert_eq!(window_source_label("configured"), "the operator's override");
+    }
+
+    /// The sentinel only ever means "ask the provider"; a check that treats
+    /// it as a number reports a failure that cannot happen.
+    #[test]
+    fn an_automatic_window_is_not_a_zero_window() {
+        let automatic = operant_core::context_window::AUTOMATIC;
+        assert_eq!(automatic, 0);
+        // The resolver never hands back 0: an automatic window with no
+        // answer falls back to the documented default.
+        let resolved = operant_core::context_window::resolve(
+            automatic,
+            None,
+            operant_core::context_window::Discovered::default(),
+        );
+        assert!(
+            resolved.window > 0,
+            "the resolved window is never the sentinel"
+        );
+        assert_eq!(
+            resolved.source,
+            operant_core::context_window::WindowSource::Default
+        );
     }
 
     /// And the negative side: nothing may be accepted by one scan and not the
