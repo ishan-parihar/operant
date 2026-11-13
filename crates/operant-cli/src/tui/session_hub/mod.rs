@@ -67,6 +67,16 @@ pub enum HubFilterMode {
     ByEmployee,
     /// Live rows only: the streaming session + pending delegations.
     Active,
+    /// Sessions that were cut off mid-turn — the question the operator opens
+    /// the hub to answer (audit 2026-11-13, finding 4).
+    ///
+    /// `RowStatus::Interrupted` is the persisted `end_reason = 'interrupted'`
+    /// marker, and it had no filter at all: `HubFilterMode` cycled All |
+    /// CurrentDir | ByEmployee | Active | CurrentBranch | Archived, so the
+    /// only way to find an interrupted session was to scan every row for a
+    /// status label. On the operator's database that is 22 sessions, all of
+    /// them unreachable through the keyboard.
+    Interrupted,
     /// The current session and its forks/children — the Ctrl+B branch
     /// view (audit R1 2026-10-28: replaces the session_branching
     /// overlay, which listed exactly this set).
@@ -80,7 +90,11 @@ impl HubFilterMode {
             Self::All => Self::CurrentDir,
             Self::CurrentDir => Self::ByEmployee,
             Self::ByEmployee => Self::Active,
-            Self::Active => Self::CurrentBranch,
+            // Interrupted sits between Active and CurrentBranch because that
+            // is where the operator's question sits: what needs me (Active),
+            // then what was cut off (Interrupted), then my own branch (Ctrl+B).
+            Self::Active => Self::Interrupted,
+            Self::Interrupted => Self::CurrentBranch,
             Self::CurrentBranch => Self::Archived,
             Self::Archived => Self::All,
         }
@@ -92,23 +106,25 @@ impl HubFilterMode {
             Self::CurrentDir => "current dir",
             Self::ByEmployee => "by employee",
             Self::Active => "active",
+            Self::Interrupted => "interrupted",
             Self::CurrentBranch => "this branch's tree",
             Self::Archived => "archived",
         }
     }
 
-    /// The compact form the tab bar falls back to when six long labels do not
+    /// The compact form the tab bar falls back to when the long labels do not
     /// fit. Codex's `toolbar_for_width` degrades the same way rather than
     /// letting the last pill fall off the edge — the count at the far right is
     /// the one the operator needs (it is the filter they have not tried yet).
-    /// Every form is unambiguous at the lead: `cur`/`emp`/`live`/`br`/`arch`
-    /// all start differently, so the compact row can be read.
+    /// Every form is unambiguous at the lead: `cur`/`emp`/`live`/`int`/`br`/
+    /// `arch` all start differently, so the compact row can be read.
     pub fn short_label(self) -> &'static str {
         match self {
             Self::All => "all",
             Self::CurrentDir => "cur",
             Self::ByEmployee => "emp",
             Self::Active => "live",
+            Self::Interrupted => "int",
             Self::CurrentBranch => "br",
             Self::Archived => "arch",
         }
@@ -243,6 +259,9 @@ pub(super) fn row_matches_filter(
                     }
                 )
         }
+        // A session that was streaming when the owning process went away
+        // (audit 2026-11-13, finding 4): the one state with no tab before this.
+        HubFilterMode::Interrupted => matches!(r.status, RowStatus::Interrupted),
         HubFilterMode::Archived => matches!(r.status, RowStatus::Archived),
         HubFilterMode::CurrentBranch => match branch_root {
             Some(root) => r.id == root || r.parent_id.as_deref() == Some(root),
@@ -740,7 +759,7 @@ impl SessionHubState {
         let cwd = std::env::current_dir()
             .ok()
             .map(|p| p.to_string_lossy().to_string());
-        let mut modes = Vec::with_capacity(6);
+        let mut modes = Vec::with_capacity(7);
         let mut mode = HubFilterMode::All;
         loop {
             modes.push(mode);

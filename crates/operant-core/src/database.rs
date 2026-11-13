@@ -1577,9 +1577,39 @@ impl Database {
     /// delegation registry is process-local, so the caller (same process)
     /// appends `RowKind::Subagent` rows from
     /// [`crate::tools::async_delegation::records_snapshot`].
+    ///
+    /// This is the FIRST page (the newest `limit` rows). The page-aware form
+    /// is [`Self::list_sessions_rich_page`]; both share one SQL statement, so
+    /// a surface cannot end up with a second, different row shape (RT-A).
     pub fn list_sessions_rich(
         &self,
         limit: usize,
+    ) -> Result<Vec<crate::session::listing::SessionEntryV2>> {
+        self.list_sessions_rich_page(limit, None)
+    }
+
+    /// One page of the unified row, older than `before`.
+    ///
+    /// `before` is an `updated_at` value — the last row of the page the caller
+    /// already holds. Passing `None` gives the same result as
+    /// [`Self::list_sessions_rich`].
+    ///
+    /// Why the cursor exists: the hub loaded `list_sessions_rich(500)` and that
+    /// was the whole of its world. `LIMIT 500` is applied AFTER the `GROUP BY`,
+    /// so the 500 are the 500 *newest* and every older session is unreachable
+    /// from the hub — permanently, for any filter (audit 2026-11-13, finding
+    /// 3: on the operator's database, 2,802 of 3,302 sessions sat past the cap).
+    /// A cursor makes the cap a WINDOW the operator pages through instead of a
+    /// wall they cannot see.
+    ///
+    /// The comparison is on the same `COALESCE(ended_at, started_at)` text the
+    /// ORDER BY uses, so a page boundary is never skipped: a row that ties the
+    /// cursor exactly is excluded (it was in the previous page) rather than
+    /// repeated or missed.
+    pub fn list_sessions_rich_page(
+        &self,
+        limit: usize,
+        before: Option<&str>,
     ) -> Result<Vec<crate::session::listing::SessionEntryV2>> {
         let conn = self.lock_conn()?;
         let mut stmt = conn
@@ -1591,18 +1621,26 @@ impl Database {
                         COALESCE(s.actual_cost_usd, s.estimated_cost_usd, 0.0) AS cost_usd,
                         COUNT(m.id) AS msg_count,
                        CASE WHEN s.end_reason = 'interrupted' THEN 1 ELSE 0 END AS interrupted
-                 FROM sessions s
-                 LEFT JOIN messages m ON s.id = m.session_id
-                 GROUP BY s.id
-                 ORDER BY updated_at DESC
-                 LIMIT ?1",
+                  FROM sessions s
+                  LEFT JOIN messages m ON s.id = m.session_id
+                  WHERE COALESCE(s.ended_at, s.started_at) < ?2
+                  GROUP BY s.id
+                  ORDER BY updated_at DESC
+                  LIMIT ?1",
             )
             .map_err(|e| {
-                Error::Agent(format!("Failed to prepare list_sessions_rich: {}", e))
+                Error::Agent(format!("Failed to prepare list_sessions_rich_page: {}", e))
             })?;
 
+        // The no-cursor sentinel: an RFC3339 instant no row can reach, so the
+        // comparison is trivially true and the page is the first `limit` rows.
+        // One statement instead of two keeps this the single shape RT-A asked
+        // for — a second SQL string is how the shapes drift apart again.
+        const NO_CURSOR: &str = "9999-12-31T23:59:59.999999999+00:00";
+        let cursor = before.unwrap_or(NO_CURSOR);
+
         let rows = stmt
-            .query_map(params![limit], |row| {
+            .query_map(params![limit, cursor], |row| {
                 Ok(RichSessionRow {
                     id: row.get(0)?,
                     title: row.get(1)?,
@@ -1660,6 +1698,22 @@ impl Database {
             });
         }
         Ok(out)
+    }
+
+    /// How many sessions the store holds, with no LIMIT and no filter.
+    ///
+    /// The number the session hub's header prints beside the row count. Why it
+    /// is a separate query rather than `rows.len()`: the hub loads a PAGE, so
+    /// its own length is the page size and not the store — printing a bare
+    /// "Sessions" next to 500 when the store holds 3,302 is the silent lie
+    /// audit finding 3 is about. One `COUNT(*)` over the same table is the
+    /// whole truth and costs no join.
+    pub fn count_sessions(&self) -> Result<usize> {
+        let conn = self.lock_conn()?;
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM sessions", [], |row| row.get(0))
+            .map_err(|e| Error::Agent(format!("Failed to count sessions: {}", e)))?;
+        Ok(n.max(0) as usize)
     }
 
     /// Search sessions by content query (using FTS5).
@@ -5386,6 +5440,68 @@ mod tests {
             .expect("a miss must not error");
         let rows = db.list_sessions_rich(10).expect("list");
         assert!(rows.iter().all(|r| r.cwd.is_none()));
+    }
+
+    /// The page cursor walks the store past the first page (audit 2026-11-13,
+    /// finding 3): `LIMIT` after the `GROUP BY` made the first `limit` rows the
+    /// hub's whole world, and every older session unreachable.
+    #[test]
+    fn the_page_cursor_walks_past_the_first_page_without_a_gap() {
+        let db = test_db();
+        let base = chrono::Utc::now() - chrono::Duration::days(1);
+        for i in 0..6 {
+            // `updated_at` is COALESCE(ended_at, started_at): start in the past
+            // so the ordering is deterministic across the six rows.
+            let at = (base + chrono::Duration::minutes(i64::from(i))).to_rfc3339();
+            let id = format!("page-{i}");
+            db.save_session(&id, None, "agent", &at, &at).expect("save");
+        }
+
+        let first = db.list_sessions_rich_page(3, None).expect("first page");
+        assert_eq!(first.len(), 3, "the page honours its limit");
+        let cursor = first.last().map(|r| r.updated_at.to_rfc3339());
+        let second = db
+            .list_sessions_rich_page(3, cursor.as_deref())
+            .expect("second page");
+
+        let first_ids: Vec<&str> = first.iter().map(|r| r.id.as_str()).collect();
+        let second_ids: Vec<&str> = second.iter().map(|r| r.id.as_str()).collect();
+        assert!(
+            first_ids.iter().all(|id| !second_ids.contains(id)),
+            "no row is repeated across the page boundary: {first_ids:?} vs {second_ids:?}"
+        );
+        assert_eq!(
+            first_ids.len() + second_ids.len(),
+            6,
+            "the two pages cover the store exactly: {first_ids:?} + {second_ids:?}"
+        );
+    }
+
+    /// The store count is a separate number from the page length — that
+    /// distinction IS finding 3's fix, because the header prints both.
+    #[test]
+    fn count_sessions_reports_the_store_not_the_page() {
+        let db = test_db();
+        let before = db.count_sessions().expect("count");
+        let now = chrono::Utc::now().to_rfc3339();
+        for i in 0..4 {
+            let id = format!("cnt-{i}");
+            db.save_session(&id, None, "agent", &now, &now)
+                .expect("save");
+        }
+        let total = db.count_sessions().expect("count");
+        assert_eq!(
+            total,
+            before + 4,
+            "the count tracks the store (test_db already seeds one row)"
+        );
+        let page = db.list_sessions_rich(2).expect("page");
+        assert_eq!(page.len(), 2, "a page is a page");
+        assert_ne!(
+            page.len(),
+            total,
+            "the page must not be mistaken for the store"
+        );
     }
     /// A tool-result row: the model-visible copy plus, when they differ, the
     /// tool's own output.

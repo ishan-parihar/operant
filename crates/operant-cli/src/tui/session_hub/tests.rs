@@ -252,6 +252,61 @@ fn the_live_mark_overrides_an_older_interrupted_record() {
     );
 }
 
+// ---- (audit 2026-11-13, finding 4) the interrupted tab ----
+
+#[test]
+fn the_interrupted_filter_is_in_the_cycle_between_active_and_the_branch() {
+    let mut hub = SessionHubState::new();
+    hub.filter_mode = HubFilterMode::Active;
+    hub.cycle_filter();
+    assert_eq!(
+        hub.filter_mode,
+        HubFilterMode::Interrupted,
+        "interrupted follows active: what needs me, then what was cut off"
+    );
+    hub.cycle_filter();
+    assert_eq!(hub.filter_mode, HubFilterMode::CurrentBranch);
+    hub.cycle_filter();
+    assert_eq!(hub.filter_mode, HubFilterMode::Archived);
+    hub.cycle_filter();
+    assert_eq!(hub.filter_mode, HubFilterMode::All);
+}
+
+#[test]
+fn the_interrupted_filter_lists_the_sessions_that_were_cut_off() {
+    // The state had no filter at all before this: 22 sessions on the operator's
+    // database, reachable only by reading 500 rows by eye.
+    let mut hub = SessionHubState::new();
+    let mut cut = row("s-cut", Some("died mid-turn"), None);
+    cut.status = RowStatus::Interrupted;
+    hub.replace_rows(vec![
+        cut,
+        row("s-idle", None, None),
+        row("s-done", None, None),
+    ]);
+    hub.filter_mode = HubFilterMode::Interrupted;
+    hub.rebuild_visible();
+    let ids: Vec<&str> = hub.visible_rows().iter().map(|r| r.id.as_str()).collect();
+    assert_eq!(ids, vec!["s-cut"], "{ids:?}");
+}
+
+#[test]
+fn the_interrupted_tab_count_agrees_with_the_visible_set() {
+    // The Stage A rule: one predicate feeds both the count and the list.
+    let mut hub = SessionHubState::new();
+    let mut cut = row("s-cut", None, None);
+    cut.status = RowStatus::Interrupted;
+    hub.replace_rows(vec![cut, row("s-a", None, None), row("s-b", None, None)]);
+    let counts = hub.filter_counts();
+    let interrupted = counts
+        .iter()
+        .find(|(m, _)| *m == HubFilterMode::Interrupted)
+        .map(|(_, n)| *n)
+        .expect("the mode is in the ladder");
+    assert_eq!(interrupted, 1);
+    assert_eq!(counts.len(), 7, "one tab per mode, including the new one");
+}
+
 #[test]
 fn no_live_id_leaves_every_row_idle() {
     // `None` is the truth for a hub opened before the agent's first turn
@@ -292,8 +347,19 @@ fn the_active_filter_finds_the_streaming_row() {
 
 #[test]
 fn the_filter_cycle_includes_the_branch_view_between_active_and_archived() {
+    // The ladder is All → CurrentDir → ByEmployee → Active → Interrupted →
+    // CurrentBranch → Archived → All. `Interrupted` entered between Active and
+    // CurrentBranch (audit 2026-11-13, finding 4): what needs me, then what was
+    // cut off, then my own branch. This test pinned the old six-mode ladder
+    // before that, so it is the guard for the new one.
     let mut hub = SessionHubState::new();
     hub.filter_mode = HubFilterMode::Active;
+    hub.cycle_filter();
+    assert_eq!(
+        hub.filter_mode,
+        HubFilterMode::Interrupted,
+        "interrupted follows active"
+    );
     hub.cycle_filter();
     assert_eq!(hub.filter_mode, HubFilterMode::CurrentBranch);
     assert_eq!(hub.filter_mode.label(), "this branch's tree");
@@ -753,17 +819,27 @@ const FRAME_WIDTH: u16 = 120;
 const LIST_PANE_END: usize = 47;
 
 fn hub_rows(rows: Vec<SessionEntryV2>) -> (Vec<String>, Vec<String>) {
+    hub_rows_at(FRAME_WIDTH, rows)
+}
+
+/// The same paint at an arbitrary frame width.
+///
+/// `LIST_PANE_END` is derived from the hub's 40% split, so it has to move with
+/// the frame: clipping at 47 on a 160-column frame would silently cut the sort
+/// clause off and the test above would pass for the wrong reason.
+fn hub_rows_at(width: u16, rows: Vec<SessionEntryV2>) -> (Vec<String>, Vec<String>) {
     use crate::tui::debug::debug_hub::buffer_rows;
     use crate::tui::render::FrameCtx;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+    let pane_end = (usize::from(width) * 2 / 5).min(usize::from(width));
     let mut hub = SessionHubState::new();
     hub.visible = true;
     hub.loading = false;
     hub.replace_rows(rows);
-    let mut terminal = Terminal::new(TestBackend::new(FRAME_WIDTH, 40)).unwrap();
+    let mut terminal = Terminal::new(TestBackend::new(width, 40)).unwrap();
     let mut ctx = FrameCtx {
-        size: ratatui::layout::Rect::new(0, 0, FRAME_WIDTH, 40),
+        size: ratatui::layout::Rect::new(0, 0, width, 40),
         preview_max_scroll: None,
         stop: false,
     };
@@ -775,8 +851,8 @@ fn hub_rows(rows: Vec<SessionEntryV2>) -> (Vec<String>, Vec<String>) {
     buffer_rows(terminal.backend().buffer())
         .into_iter()
         .map(|line| {
-            let list = line.chars().take(LIST_PANE_END).collect::<String>();
-            let preview = line.chars().skip(LIST_PANE_END).collect::<String>();
+            let list = line.chars().take(pane_end).collect::<String>();
+            let preview = line.chars().skip(pane_end).collect::<String>();
             (list, preview)
         })
         .unzip()
@@ -2131,24 +2207,55 @@ fn no_sort_key_sorts_by_a_field_the_row_does_not_have() {
 }
 
 #[test]
-fn the_sort_clause_renders_in_the_controls_row() {
-    // The clause must actually reach the buffer: a control that exists in the
-    // model and not on the screen is decoration the operator cannot find.
+fn the_controls_row_carries_every_filter_tab_with_its_count() {
+    // The Stage A contract, one assertion per tab: a control that exists in the
+    // model and not on the screen is decoration the operator cannot find. The
+    // seventh tab (`int`) is the audit-2026-11-13 finding-4 addition.
     let (list, _preview) = hub_rows(vec![
         row("rich", Some("priciest"), None),
         row("mid", Some("middle"), None),
         row("cheap", Some("cheapest"), None),
     ]);
-    // Match on the tab bar's own content rather than its leading glyph: the
-    // row is a `│` border plus the tabs, so prefix-matching `all ` never hits.
-    let controls = list
-        .iter()
-        .find(|r| r.contains(" arch 0") || r.contains("Sort:"))
-        .unwrap_or_else(|| panic!("the controls row must render: {list:?}"));
+    let joined = list.join("\n");
+    for label in ["all", "cur", "emp", "live", "int", "br", "arch"] {
+        assert!(
+            joined.contains(&format!("{label} ")),
+            "the controls row must render the `{label}` tab with its count: {joined}"
+        );
+    }
+}
+
+#[test]
+fn the_sort_clause_survives_at_a_frame_that_can_afford_it() {
+    // The ladder in render_tab_bar drops the sort clause FIRST and LAST-resorts
+    // to the active filter alone — the documented priority is "the filter tabs
+    // are the operator's aim, the sort is a refinement". Seven tabs cost more
+    // than the sixth did, so the sort now leaves at the 120-column frame the
+    // hub is usually measured at (46 inner columns cannot carry 7 tabs + the
+    // clause; MEASURED: tabs alone = 43, with the clause = 50).
+    //
+    // This test pins BOTH halves of that contract:
+    //   - at the narrow frame the seven tabs still render and the clause is
+    //     dropped BY DESIGN (the tabs win), and
+    //   - at a wider frame the clause returns, so the sort key is never lost
+    //     to the operator — only deferred to a terminal with room.
+    let rows = vec![
+        row("rich", Some("priciest"), None),
+        row("mid", Some("middle"), None),
+        row("cheap", Some("cheapest"), None),
+    ];
+    let (narrow, _) = hub_rows(rows.clone());
+    let narrow_joined = narrow.join("\n");
     assert!(
-        controls.contains("recent"),
-        "a fresh hub's sort clause must name its own key (`recent`) — the \\
-         operator has to be able to see which ORDER the list is in: {controls:?}"
+        narrow_joined.contains("int "),
+        "the seven tabs survive the narrow frame — that is the priority: {narrow_joined}"
+    );
+    let (wide, _) = hub_rows_at(160, rows);
+    let wide_joined = wide.join("\n");
+    assert!(
+        wide_joined.contains("recent"),
+        "the sort clause must return on a frame that can afford it, or the \\
+         sort key is decoration the operator cannot find: {wide_joined}"
     );
 }
 
@@ -2263,12 +2370,27 @@ fn the_armed_row_is_marked_on_the_drawn_buffer() {
 // stages interfere with each other — the row fill lands on cells the column
 // header also owns, and the sort clause shares the controls row with the filter
 // tabs. This is the check that they coexist.
+//
+// Rendered at a WIDE frame (2026-11-13, audit finding 4's seventh tab): the
+// controls row's degradation ladder drops the sort clause FIRST, and seven tabs
+// push it off the 46-column pane the hub gets at the 120-column frame — MEASURED
+// 43 columns of tabs alone, 50 with the clause. This hub must show BOTH the tabs
+// and the sort, so it paints at 160 columns, where the ladder's second rung
+// carries both. The narrow-frame half of the contract is asserted by
+// `the_sort_clause_survives_at_a_frame_that_can_afford_it`.
 
 #[test]
 fn every_stages_claim_holds_on_one_drawn_hub() {
     use crate::tui::render::FrameCtx;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+
+    /// The frame this cross-stage hub paints at. Wide enough that the controls
+    /// row carries all seven filter tabs AND the sort clause, which is the
+    /// whole point of asserting them together.
+    const WIDE: u16 = 160;
+    /// The list pane's width at `WIDE` under the hub's 40% split.
+    const PANE_END: usize = 64;
 
     // A hub with enough rows to exercise: grouping, the fill, the zebra, and
     // both panes. Rows carry DIFFERENT costs/messages so a sort is observable.
@@ -2299,9 +2421,9 @@ fn every_stages_claim_holds_on_one_drawn_hub() {
     hub.sort_mode = HubSortMode::Cost;
     hub.rebuild_visible();
 
-    let mut terminal = Terminal::new(TestBackend::new(FRAME_WIDTH, 40)).unwrap();
+    let mut terminal = Terminal::new(TestBackend::new(WIDE, 40)).unwrap();
     let mut ctx = FrameCtx {
-        size: ratatui::layout::Rect::new(0, 0, FRAME_WIDTH, 40),
+        size: ratatui::layout::Rect::new(0, 0, WIDE, 40),
         preview_max_scroll: None,
         stop: false,
     };
@@ -2360,7 +2482,7 @@ fn every_stages_claim_holds_on_one_drawn_hub() {
     // rather than assuming a constant offset.
     // Scope to the LIST pane: each `screen` row carries BOTH panes concatenated,
     // so a plain `contains("priciest")` matches the preview's title line too.
-    let list_pane = |r: &String| r.chars().take(LIST_PANE_END).collect::<String>();
+    let list_pane = |r: &String| r.chars().take(PANE_END).collect::<String>();
     let selected_y = screen
         .iter()
         .position(|r| list_pane(r).contains("priciest"))
