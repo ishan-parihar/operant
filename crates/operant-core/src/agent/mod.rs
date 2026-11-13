@@ -552,6 +552,10 @@ pub struct OperantAgent {
     /// (/effort picker, model picker, Shift+Tab) and the gateway. `None`
     /// when the config is empty or the current model rejected the field.
     reasoning_effort: Arc<std::sync::RwLock<Option<String>>>,
+    /// The runtime POSTURE override for this agent (iter-2211): per-chat,
+    /// because a process-global static made one chat's `/ponytail` flip
+    /// every other chat in the daemon. `None` = the config applies.
+    posture_override: Arc<std::sync::RwLock<Option<crate::ponytail::PostureOverride>>>,
     /// Models that returned a reasoning-param rejection (plan 03): the
     /// field is skipped for these for the rest of the session.
     unsupported_effort_models: std::sync::Mutex<std::collections::HashSet<String>>,
@@ -1703,6 +1707,55 @@ mod tests {
     }
 
     #[test]
+    /// (iter-2211) The posture is PER SESSION: the override lives on the
+    /// agent, so two chats (two agents) hold independent postures. The old
+    /// process-global static made one chat's `/ponytail` flip every chat in
+    /// the daemon — upstream warns about exactly that in its Hermes note.
+    #[test]
+    fn each_agent_holds_its_own_posture_override() {
+        // A fresh temp dir per run: a stale file in temp_dir() carries an
+        // old schema and the FTS bootstrap refuses to re-create the table.
+        let tmp = tempfile::tempdir().unwrap();
+        let db_a = Database::init(tmp.path().join("posture-a.sqlite")).unwrap();
+        let db_b = Database::init(tmp.path().join("posture-b.sqlite")).unwrap();
+        let agent_a = OperantAgent::new(
+            AgentConfig::default(),
+            Box::new(OpenAIModelClient::new(OpenAIClient::new(
+                crate::client::ClientConfig::default(),
+            ))),
+            ToolRegistry::new(Duration::from_secs(1)),
+            Arc::new(db_a),
+        );
+        let agent_b = OperantAgent::new(
+            AgentConfig::default(),
+            Box::new(OpenAIModelClient::new(OpenAIClient::new(
+                crate::client::ClientConfig::default(),
+            ))),
+            ToolRegistry::new(Duration::from_secs(1)),
+            Arc::new(db_b),
+        );
+        assert_eq!(agent_a.posture_override(), None);
+        assert_eq!(agent_b.posture_override(), None);
+
+        agent_a.set_posture_override(Some(crate::ponytail::PostureOverride::Level(
+            crate::config::PonytailLevel::Ultra,
+        )));
+
+        assert_eq!(
+            agent_a.posture_override(),
+            Some(crate::ponytail::PostureOverride::Level(
+                crate::config::PonytailLevel::Ultra
+            )),
+            "the agent that switched carries its own level"
+        );
+        assert_eq!(
+            agent_b.posture_override(),
+            None,
+            "the other chat's agent must not inherit it — the process-global \
+             cell is what made one chat's switch flip every chat"
+        );
+    }
+
     fn wave2_charter_rides_the_frozen_prefix_and_none_keeps_it_byte_identical() {
         // Wave 2 (ORGANISM-ARCHITECTURE §2): the bound employee's charter is
         // appended to the frozen prefix inside an explicit marker so the

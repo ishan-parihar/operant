@@ -82,19 +82,6 @@ pub enum PostureOverride {
     Off,
 }
 
-static POSTURE_OVERRIDE: std::sync::RwLock<Option<PostureOverride>> = std::sync::RwLock::new(None);
-
-/// Set the process-global posture override (the `/ponytail` command).
-pub fn set_posture_override(override_value: Option<PostureOverride>) {
-    if let Ok(mut cell) = POSTURE_OVERRIDE.write() {
-        *cell = override_value;
-    }
-}
-
-/// The current process-global posture override (`None` = config applies).
-pub fn posture_override() -> Option<PostureOverride> {
-    POSTURE_OVERRIDE.read().ok().and_then(|cell| *cell)
-}
 
 /// The posture in force: the runtime override when one is set, else the
 /// config (on only when `enabled` AND `inject = "always_on"`). `None` = off.
@@ -140,30 +127,6 @@ pub fn bare_command_effect(
     }
 }
 
-/// Test-only: the override cell guard pattern (`reasoning_override_test_guard`).
-#[cfg(test)]
-pub(crate) struct PostureOverrideGuard {
-    _lock: std::sync::MutexGuard<'static, ()>,
-}
-
-#[cfg(test)]
-impl Drop for PostureOverrideGuard {
-    fn drop(&mut self) {
-        set_posture_override(None);
-    }
-}
-
-#[cfg(test)]
-static POSTURE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-#[cfg(test)]
-pub(crate) fn posture_override_test_guard() -> PostureOverrideGuard {
-    PostureOverrideGuard {
-        _lock: POSTURE_TEST_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner),
-    }
-}
 
 /// The upstream level suffix lines (plan: lite/ultra are two-sentence
 /// deltas carried as a suffix; `full` is upstream's own default and carries
@@ -191,27 +154,20 @@ fn level_suffix_line(level: crate::config::PonytailLevel) -> Option<&'static str
 /// upstream's core "lazy senior dev" prompt — with frontmatter stripped.
 /// Byte-stability: the block only changes when the install updates or the
 /// level/override changes, so the prompt-cache discipline holds.
-pub fn frozen_prefix_block(settings: &crate::config::PonytailSettings) -> Option<String> {
+pub fn frozen_prefix_block(
+    settings: &crate::config::PonytailSettings,
+    override_value: Option<PostureOverride>,
+) -> Option<String> {
     // Holon runs NEVER carry personal postures — the org brief is the only
     // guidance for a bound body (plan's design preference, called out in
     // the example toml).
     if crate::platform::is_holon_run() {
         return None;
     }
-    // Resolve the effective injection decision: config first, override
-    // can force a level or force off.
-    let inject = match posture_override() {
-        Some(PostureOverride::Off) => false,
-        Some(PostureOverride::Level(_)) => true,
-        None => settings.enabled && settings.inject == crate::config::PonytailInject::AlwaysOn,
-    };
-    if !inject {
-        return None;
-    }
-    let level = match posture_override() {
-        Some(PostureOverride::Level(l)) => l,
-        _ => settings.default_level,
-    };
+    // The posture in force: the runtime override when one is set, else the
+    // config (iter-2207: ONE rule, shared with the `/ponytail` command and
+    // the gateway's per-chat arm). `None` = off — no block.
+    let level = effective_level(settings, override_value)?;
     // The ruleset body comes from the installed core skill. Missing body
     // (not installed) injects NOTHING rather than an empty shell — a
     // `<ponytail>` block with no content would be worse than absent.
@@ -366,7 +322,6 @@ mod tests {
     /// default (off / on_invoke) config.
     #[test]
     fn frozen_prefix_block_gates_on_config_and_override() {
-        let _posture = posture_override_test_guard();
         let _env = crate::platform::test_env_lock_blocking();
         let key = "HERMES_HOME";
         let original = std::env::var(key).ok();
@@ -395,15 +350,15 @@ mod tests {
         };
 
         // Default config: no block (skills only, zero prompt-byte change).
-        assert!(frozen_prefix_block(&off).is_none());
+        assert!(frozen_prefix_block(&off, None).is_none());
         // on_invoke: still no block even when enabled.
         let invoke_only = crate::config::PonytailSettings {
             inject: crate::config::PonytailInject::OnInvoke,
             ..on.clone()
         };
-        assert!(frozen_prefix_block(&invoke_only).is_none());
+        assert!(frozen_prefix_block(&invoke_only, None).is_none());
         // enabled + always_on: the block carries body + tags.
-        let block = frozen_prefix_block(&on).expect("enabled+always_on must inject");
+        let block = frozen_prefix_block(&on, None).expect("enabled+always_on must inject");
         assert!(block.contains("<ponytail>"));
         assert!(block.contains("LAZY SENIOR DEV BODY"));
         assert!(
@@ -417,36 +372,35 @@ mod tests {
             default_level: crate::config::PonytailLevel::Lite,
             ..on.clone()
         };
-        let lite = frozen_prefix_block(&lite_settings).unwrap();
+        let lite = frozen_prefix_block(&lite_settings, None).unwrap();
         assert!(lite.contains("Level: lite"));
         let ultra_settings = crate::config::PonytailSettings {
             default_level: crate::config::PonytailLevel::Ultra,
             ..on.clone()
         };
-        let ultra = frozen_prefix_block(&ultra_settings).unwrap();
+        let ultra = frozen_prefix_block(&ultra_settings, None).unwrap();
         assert!(ultra.contains("Level: ultra"));
 
         // Runtime override: forces injection even from the off config...
-        set_posture_override(Some(PostureOverride::Level(
-            crate::config::PonytailLevel::Ultra,
-        )));
-        let forced = frozen_prefix_block(&off).expect("override forces injection");
+        let forced = frozen_prefix_block(
+            &off,
+            Some(PostureOverride::Level(crate::config::PonytailLevel::Ultra)),
+        )
+        .expect("override forces injection");
         assert!(
             forced.contains("Level: ultra"),
             "override level wins over config"
         );
         // ...and Off suppresses even the enabled config.
-        set_posture_override(Some(PostureOverride::Off));
-        assert!(frozen_prefix_block(&on).is_none());
+        assert!(frozen_prefix_block(&on, Some(PostureOverride::Off)).is_none());
 
         // Not installed: enabled config still injects NOTHING (no empty
         // shell) — point the home at an empty dir.
-        set_posture_override(None);
         let empty = base.join("empty-home");
         std::fs::create_dir_all(&empty).unwrap();
         // SAFETY: serialised by the crate's environment lock.
         unsafe { std::env::set_var(key, &empty) };
-        assert!(frozen_prefix_block(&on).is_none());
+        assert!(frozen_prefix_block(&on, None).is_none());
 
         match original {
             Some(val) => unsafe { std::env::set_var(key, val) },

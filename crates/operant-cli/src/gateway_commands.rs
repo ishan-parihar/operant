@@ -598,6 +598,17 @@ pub static COMMAND_REGISTRY: &[CommandDef] = &[
         admin_only: false,
     },
     CommandDef {
+        // (iter-2211) The posture, per chat. Upstream's `/ponytail` is the
+        // level switch; here it is scoped to the chat that typed it, so one
+        // chat's level cannot become the daemon's level.
+        name: "ponytail",
+        description: "Set the ponytail posture for this chat (lite|full|ultra|off)",
+        aliases: &[],
+        category: "Tools",
+        args_hint: "[lite|full|ultra|off]",
+        admin_only: false,
+    },
+    CommandDef {
         name: "skills",
         description: "List installed skills, or expand one for this chat",
         aliases: &["skill"],
@@ -3349,15 +3360,28 @@ pub fn telegram_bot_commands(vendor_skill_commands: &[(String, String)]) -> Stri
     // command character, so it becomes an underscore and the gateway's
     // resolution accepts both spellings.
     for (name, description) in vendor_skill_commands {
+        let sanitized_name: String = name
+            .chars()
+            .map(|ch| if ch == '-' { '_' } else { ch })
+            .collect();
+        // ONE owner per command name (iter-2211): a built-in command wins a
+        // collision with a vendor skill — `/ponytail` is the posture switch,
+        // and the vendor skill of the same name stays behind `/skill
+        // ponytail`. Without this the menu would carry the name TWICE and
+        // Telegram rejects the WHOLE setMyCommands request.
+        if COMMAND_REGISTRY.iter().any(|cmd| {
+            cmd.name
+                .chars()
+                .map(|ch| if ch == '-' { '_' } else { ch })
+                .eq(sanitized_name.chars())
+        }) {
+            continue;
+        }
         if !first {
             json.push(',');
         }
         first = false;
 
-        let sanitized_name: String = name
-            .chars()
-            .map(|ch| if ch == '-' { '_' } else { ch })
-            .collect();
 
         let escaped_desc: String = telegram_command_description(description)
             .chars()
@@ -3726,6 +3750,38 @@ mod tests {
         assert!(
             entry["description"].as_str().unwrap().chars().count() <= 256,
             "the published description must fit Telegram's limit"
+        );
+    }
+
+    /// ONE owner per command name (iter-2211): a built-in command wins a
+    /// collision with a vendor skill — `/ponytail` is the posture switch, and
+    /// the vendor skill of the same name stays behind `/skill ponytail`.
+    /// Without this the menu would carry the name TWICE and Telegram rejects
+    /// the WHOLE setMyCommands request (HTTP 400).
+    #[test]
+    fn a_built_in_command_owns_its_name_over_a_vendor_skill() {
+        let vendor = vec![
+            ("ponytail".to_string(), "Lazy senior dev mode".to_string()),
+            ("ponytail-audit".to_string(), "Quality audit of a whole repo".to_string()),
+        ];
+        let json = telegr[REDACTED](&vendor);
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+        let commands: Vec<&str> = parsed
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["command"].as_str().unwrap())
+            .collect();
+        // exactly one entry for the built-in's name ...
+        assert_eq!(
+            commands.iter().filter(|c| **c == "ponytail").count(),
+            1,
+            "the menu must carry the built-in's name once: {commands:?}"
+        );
+        // ... and the vendor skill that does NOT collide is still published.
+        assert!(
+            commands.contains(&"ponytail_audit"),
+            "the vendor skill stays behind its own command: {commands:?}"
         );
     }
 

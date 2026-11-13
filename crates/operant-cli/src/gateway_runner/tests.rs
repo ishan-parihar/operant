@@ -2393,6 +2393,86 @@ async fn the_skill_command_sees_the_vendor_roots_the_handler_captures() {
     );
 }
 
+/// (iter-2211) The posture is PER CHAT: `/ponytail` settles into the agent
+/// that serves THIS chat's session — not a process-global cell — so one
+/// chat's level cannot become every chat's level. A junk level is refused
+/// without touching the cell.
+#[tokio::test]
+async fn the_posture_command_settles_into_the_agents_cell() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let agent_db = Arc::new(
+        operant_core::database::Database::init(dir.path().join("agent.sqlite")).expect("db"),
+    );
+    let agent = Arc::new(operant_core::agent::OperantAgent::new(
+        operant_core::agent::AgentConfig::default(),
+        Box::new(
+            operant_core::agent::clients::openai::OpenAIModelClient::new(
+                operant_core::client::OpenAIClient::new(
+                    operant_core::client::ClientConfig::default(),
+                ),
+            ),
+        ),
+        operant_core::tools::ToolRegistry::new(std::time::Duration::from_secs(1)),
+        agent_db.clone(),
+    ));
+    let handler = GatewayMessageHandler {
+        admins: vec![],
+        slots: slot_pool(Arc::clone(&agent)),
+        gateway: tokio::sync::Mutex::new(None),
+        session_pins: Arc::new(SessionPins::default()),
+        exit_reasons: ExitReasonMap::default(),
+        turn_usage: TurnUsageMap::default(),
+        summary_ttl_minutes: 30,
+        default_budget: operant_core::config::BudgetSettings::default(),
+        context_injection: None,
+        running_session: std::sync::Mutex::new(std::collections::HashMap::new()),
+        next_turn_queue: std::sync::Arc::new(std::sync::Mutex::new(
+            std::collections::HashMap::new(),
+        )),
+        cancelled_queued: Default::default(),
+        mcp_manager: operant_core::mcp::McpManager::new(),
+        mcp_server_configs: Vec::new(),
+        skills_root_dir: dir.path().join("skills-absent"),
+        #[cfg(feature = "plugins-wasm")]
+        wasm_plugin_skill_roots: Vec::new(),
+        queue_waits: tokio::sync::Mutex::new(Default::default()),
+    };
+    assert_eq!(agent.posture_override(), None, "starts from the config");
+
+    let reply = handle_runtime_command(&handler, "ponytail", "lite", "telegram:dm:u1")
+        .await
+        .expect("/ponytail must be a runtime command");
+    assert!(reply.contains("lite"), "the reply names the level: {reply}");
+    assert_eq!(
+        agent.posture_override(),
+        Some(operant_core::ponytail::PostureOverride::Level(
+            operant_core::config::PonytailLevel::Lite
+        )),
+        "the command must settle into the agent's live cell — an arm that \
+         only replies leaves the prefix unchanged"
+    );
+
+    let off = handle_runtime_command(&handler, "ponytail", "off", "telegram:dm:u1")
+        .await
+        .expect("off must reply");
+    assert!(off.contains("off"), "got: {off}");
+    assert_eq!(
+        agent.posture_override(),
+        Some(operant_core::ponytail::PostureOverride::Off),
+        "/ponytail off must clear the level"
+    );
+
+    let junk = handle_runtime_command(&handler, "ponytail", "banana", "telegram:dm:u1")
+        .await
+        .expect("junk must reply");
+    assert!(junk.contains("Unknown ponytail level"), "got: {junk}");
+    assert_eq!(
+        agent.posture_override(),
+        Some(operant_core::ponytail::PostureOverride::Off),
+        "a junk level must not touch the cell"
+    );
+}
+
 /// RT-179 plan item 3.5 — `/search` must drive the REAL `session_search`
 /// tool over the agent's OWN store, so the channel answer is what the model
 /// itself would find. The plan said "resolve which search first": resolved

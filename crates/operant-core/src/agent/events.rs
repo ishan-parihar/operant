@@ -789,6 +789,28 @@ impl OperantAgent {
     /// (plan 03) Live-set the reasoning effort. `None` disables sending the
     /// field. Called by the TUI (/effort picker, model picker, Shift+Tab)
     /// and by the rejection fallback.
+    /// The configured posture for this agent (the gateway's per-chat
+    /// `/ponytail` needs it to resolve the level in force).
+    pub fn ponytail_settings(&self) -> &crate::config::PonytailSettings {
+        &self.config.ponytail
+    }
+
+    /// (iter-2211) Set THIS agent's posture override — the gateway's
+    /// per-chat `/ponytail` and the TUI's `/ponytail` land here instead of a
+    /// process-global static, so one chat's posture cannot leak into
+    /// another's.
+    pub fn set_posture_override(&self, value: Option<crate::ponytail::PostureOverride>) {
+        tracing::info!(?value, "Agent posture override set at runtime");
+        if let Ok(mut cell) = self.posture_override.write() {
+            *cell = value;
+        }
+    }
+
+    /// The current posture override for this agent (`None` = config applies).
+    pub fn posture_override(&self) -> Option<crate::ponytail::PostureOverride> {
+        self.posture_override.read().ok().and_then(|cell| *cell)
+    }
+
     pub fn set_reasoning_effort(&self, effort: Option<String>) {
         tracing::info!(?effort, "Agent reasoning effort set at runtime");
         *self
@@ -1270,7 +1292,9 @@ impl OperantAgent {
         // the level or the install changes these prefix bytes: cache
         // invalidation is the documented consequence (same class as any
         // config change).
-        if let Some(block) = crate::ponytail::frozen_prefix_block(&self.config.ponytail) {
+            if let Some(block) =
+            crate::ponytail::frozen_prefix_block(&self.config.ponytail, self.posture_override())
+        {
             frozen.push_str(&block);
         }
         // C1 — kernel-evolved prompt sections. Appended to the frozen

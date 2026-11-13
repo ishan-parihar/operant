@@ -1898,12 +1898,12 @@ impl App {
             // asked); `off` clears injection for this process.
             "ponytail" => {
                 use operant_core::config::PonytailLevel;
-                use operant_core::ponytail::{PostureOverride, set_posture_override};
+                use operant_core::ponytail::PostureOverride;
                 let requested = args.trim().to_ascii_lowercase();
                 if requested == "show" || requested == "status" {
                     // Report only — never a switch (operant's own words).
                     let configured = &self.config.agent.ponytail;
-                    let notice = match operant_core::ponytail::posture_override() {
+                    let notice = match self.posture_override {
                         Some(PostureOverride::Level(l)) => format!(
                             "ponytail: {l} (runtime override; config: enabled={}, \
                              inject={:?}, level={})",
@@ -1936,7 +1936,7 @@ impl App {
                     let configured = &self.config.agent.ponytail;
                     let notice = match operant_core::ponytail::bare_command_effect(
                         configured,
-                        operant_core::ponytail::posture_override(),
+                        self.posture_override,
                     ) {
                         operant_core::ponytail::BareCommand::Report(level) => format!(
                             "ponytail: {level} (the posture is on; /ponytail off clears \
@@ -1949,7 +1949,7 @@ impl App {
                                  ruleset on disk."
                                     .to_string()
                             } else {
-                                set_posture_override(Some(PostureOverride::Level(level)));
+                                self.posture_override = Some(PostureOverride::Level(level));
                                 format!(
                                     "ponytail: {level} — switched ON (it was off); the \
                                      frozen prefix carries the ruleset from the NEXT turn \
@@ -1976,7 +1976,7 @@ impl App {
                             );
                             return true;
                         }
-                        set_posture_override(Some(PostureOverride::Level(level)));
+                        self.posture_override = Some(PostureOverride::Level(level));
                         self.set_status_notice(format!(
                             "ponytail: {level} — the frozen prefix carries the ruleset \
                              from the NEXT turn (a level switch invalidates the prompt \
@@ -1985,7 +1985,7 @@ impl App {
                         true
                     }
                     "off" => {
-                        set_posture_override(Some(PostureOverride::Off));
+                        self.posture_override = Some(PostureOverride::Off);
                         self.set_status_notice(
                             "ponytail: off for this process — config on disk is \
                              untouched; a restart returns to [agent.ponytail].",

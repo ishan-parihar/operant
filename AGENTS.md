@@ -523,6 +523,14 @@ These are the user's intentional design choices. Do not replace, remove, or
   checked against upstream's tags at startup whatever the posture is,
   because a content integration that stops updating when its posture is off
   is a broken integration, not a quiet one.
+  the POSTURE is per-CHAT (iter-2217): the override lives on the agent
+  that serves the session (not a process-global cell), the TUI sets it
+  through the run loop like `/effort`, and the gateway grew
+  `/ponytail [lite|full|ultra|off]` scoped to the chat that typed it —
+  upstream's bare rule included. A slot handover resets the posture to the
+  config, and ONE owner per command name decides the menu: a built-in
+  wins a collision with a vendor skill (otherwise Telegram rejects the
+  whole `setMyCommands` request).
   `/ponytail [lite|full|ultra|off]` is a runtime override (config
   untouched); a BARE `/ponytail` switches the posture ON at the default
   level when it is off and reports the level in force when it is on —

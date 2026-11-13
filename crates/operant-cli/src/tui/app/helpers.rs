@@ -29,11 +29,19 @@ pub fn tui_slash_command_data(
     // (iter-2159). They are computed ONCE (the App caches them) — the
     // typeahead runs on every keystroke, and a skills scan per keystroke
     // is not a cost anyone should pay.
-    rows.extend(
-        vendor_skill_commands
-            .iter()
-            .map(|(name, description)| (name.clone(), description.clone())),
-    );
+    //
+    // ONE owner per command name (iter-2211): a built-in command wins a
+    // collision with a vendor skill — `/ponytail` is the posture switch,
+    // and the vendor skill of the same name stays behind `/skill
+    // ponytail`. Without this the palette would carry the name TWICE and
+    // the typeahead would offer an entry the built-in owns.
+    let builtin_names: std::collections::HashSet<String> = rows.iter().map(|(name, _)| name.clone()).collect();
+    for (name, description) in vendor_skill_commands {
+        if builtin_names.contains(name) {
+            continue;
+        }
+        rows.push((name.clone(), description.clone()));
+    }
     rows
 }
 

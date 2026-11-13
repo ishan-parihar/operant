@@ -1694,6 +1694,15 @@ impl TuiApp {
             };
             app.set_status_notice(format!("Reasoning effort: {shown}"));
         }
+
+        // (iter-2211) the POSTURE, the same seam: the `/ponytail` command
+        // sets the App's override and the loop applies it to the agent
+        // before the next request — per-session, not per-process.
+        if let Some(posture) = app.posture_override
+            && let Some(agent) = agent
+        {
+            agent.set_posture_override(Some(posture));
+        }
         // `/connect`: retarget the live client at the chosen provider's
         // endpoint BEFORE the model switch below, so the very next request
         // goes to the new host with the new key.

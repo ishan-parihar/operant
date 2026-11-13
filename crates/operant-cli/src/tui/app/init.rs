@@ -341,6 +341,7 @@ impl App {
             model_cycle: Vec::new(),
             pending_compact: false,
             pending_effort: (!toml_effort.is_empty()).then(|| toml_effort.clone()),
+            posture_override: None,
             pending_model: None,
             pending_endpoint: None,
             agent_interrupt: None,

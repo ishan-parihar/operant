@@ -1723,6 +1723,83 @@ async fn handle_runtime_command(
             }
         }
 
+        // ── /ponytail [lite|full|ultra|off] — the posture, for THIS chat ──
+        // (iter-2211) Per-CHAT: the override lives on the session's agent,
+        // not in a process-global cell, so one chat's posture cannot flip
+        // every other chat in the daemon (upstream warns about exactly
+        // that in its Hermes note: "runtime mode is process-local").
+        // Upstream's rule: a bare `/ponytail` switches the posture ON at the
+        // default level when it is off, and otherwise reports the level.
+        "ponytail" => {
+            let requested = args.trim().to_ascii_lowercase();
+            let reply = handler
+                .run_session_scoped_command(session_key, move |agent, _session_id| async move {
+                    let configured = agent.ponytail_settings().clone();
+                    match requested.as_str() {
+                        "" => match operant_core::ponytail::bare_command_effect(
+                            &configured,
+                            agent.posture_override(),
+                        ) {
+                            operant_core::ponytail::BareCommand::Report(level) => format!(
+                                "ponytail: {level} (the posture is on for this chat; \
+                                 /ponytail off clears it)"
+                            ),
+                            operant_core::ponytail::BareCommand::SwitchOn(level) => {
+                                if operant_core::ponytail::installed_ruleset().is_none() {
+                                    "ponytail is not installed — run `operant update \
+                                     --integrations` first; the posture needs the upstream \
+                                     ruleset on disk."
+                                        .to_string()
+                                } else {
+                                    agent.set_posture_override(Some(
+                                        operant_core::ponytail::PostureOverride::Level(level),
+                                    ));
+                                    format!(
+                                        "ponytail: {level} — switched ON for this chat (it \
+                                         was off); the frozen prefix carries the ruleset from \
+                                         the NEXT turn (/ponytail off clears it)."
+                                    )
+                                }
+                            }
+                        },
+                        "off" => {
+                            agent.set_posture_override(Some(
+                                operant_core::ponytail::PostureOverride::Off,
+                            ));
+                            "ponytail: off for this chat — the config on disk is untouched."
+                                .to_string()
+                        }
+                        "lite" | "full" | "ultra" => {
+                            let level = match requested.as_str() {
+                                "lite" => operant_core::config::PonytailLevel::Lite,
+                                "ultra" => operant_core::config::PonytailLevel::Ultra,
+                                _ => operant_core::config::PonytailLevel::Full,
+                            };
+                            if operant_core::ponytail::installed_ruleset().is_none() {
+                                "ponytail is not installed — run `operant update \
+                                 --integrations` first; the posture needs the upstream ruleset on \
+                                 disk."
+                                    .to_string()
+                            } else {
+                                agent.set_posture_override(Some(
+                                    operant_core::ponytail::PostureOverride::Level(level),
+                                ));
+                                format!(
+                                    "ponytail: {level} — the frozen prefix carries the ruleset \
+                                     from the NEXT turn for THIS chat (a level switch \
+                                     invalidates the prompt cache, like any config change)."
+                                )
+                            }
+                        }
+                        other => format!(
+                            "Unknown ponytail level '{other}' — use lite|full|ultra|off"
+                        ),
+                    }
+                })
+                .await;
+            Some(reply)
+        }
+
         // ── /search <query> — long-term conversation recall ──────────────
         // RT-179 plan item 3.5. The plan said "resolve which search first":
         // resolved. The TUI's `/search` (`commands.rs:373`, aliased `/find`)
@@ -3646,6 +3723,9 @@ impl MessageHandler for GatewayMessageHandler {
         // session's own overrides are read below.
         agent.clear_model_override();
         agent.set_reasoning_effort(slot.default_effort.clone());
+        // (iter-2211) the posture is per-session too: the next chat that
+        // takes this slot starts from the config, not from this chat's level.
+        agent.set_posture_override(None);
         agent.set_charter(None);
         // KB-8: every turn starts in its unbound scope, so a sender with no
         // session row never inherits the previous turn's scope. A bound seat
