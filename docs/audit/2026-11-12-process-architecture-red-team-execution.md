@@ -89,7 +89,7 @@ was load-tested, and no number in this report was invented.
 
 ## Should fix
 
-### 5. The checkpoint list is shared by every chat — **CLOSED (iter-2159)**
+### 5. The checkpoint list is shared by every chat — **CLOSED (iter-2171)**
 (`crates/operant-core/src/tools/checkpoint_tool.rs:30`)
 
 - **What this is:** checkpoints live in one process-global manager, keyed by
@@ -99,7 +99,7 @@ was load-tested, and no number in this report was invented.
   work in progress.
 - **Fix:** key the checkpoints by session as well as working directory.
 - **If we skip it:** a seat can read another seat's checkpoints.
-- **Closed in iter-2159:** the store is keyed by (session, directory), the
+- **Closed in iter-2171:** the store is keyed by (session, directory), the
   per-turn dedup key carries the session, and the tool reads the session from
   the tool context. Pinned by
   `tools::checkpoint_tool::tests::two_sessions_in_one_directory_do_not_share_the_checkpoint_list`
@@ -143,7 +143,7 @@ ways, closed iter-2151), RT-525 (about 1,350 lines of implemented, tested,
 unwired machinery, closed iter-2152) and RT-526 (the daemon lock file is
 unlinked on drop, closed iter-2142). Each carries its own fix and test in the
 ledger. The two findings this report raised that are still open are tracked
-as ledger rows RT-539 (the shared checkpoint list, closed in iter-2159) and
+as ledger rows RT-541 (the shared checkpoint list, closed in iter-2171) and
 RT-538 (the shared file-state snapshots, closed in iter-2158).
 
 ---
