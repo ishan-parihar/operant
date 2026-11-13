@@ -209,8 +209,12 @@ impl App {
             return false;
         };
         match rx.try_recv() {
-            Ok((session_id, Some((messages, hidden)))) => {
+            Ok((session_id, Some((messages, hidden, first_prompt)))) => {
                 self.preview_rx = None;
+                // The first prompt is recorded BEFORE the preview is applied:
+                // `apply_preview` refuses a result for a row the operator has
+                // already left, and the prompt belongs to the same row.
+                self.session_hub.set_first_prompt(&session_id, first_prompt);
                 if self
                     .session_hub
                     .apply_preview(&session_id, messages, hidden)

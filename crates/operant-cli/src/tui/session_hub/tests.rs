@@ -999,6 +999,62 @@ fn a_subagent_row_names_its_delegation_status_without_focusing_it() {
     );
 }
 
+// ---- (2026-11-13) the FIRST prompt, beside the last ----
+
+/// The first thing the operator TYPED is the answer to "how did this session
+/// start". The load read every message and the tail window dropped it.
+#[test]
+fn the_first_user_prompt_is_the_first_thing_the_operator_typed() {
+    let mut messages = vec![msg("system", "a system line")];
+    messages.push(msg("user", "  "));
+    messages.push(msg("user", "the opening question"));
+    messages.push(msg("assistant", "the answer"));
+    assert_eq!(
+        SessionHubState::first_user_prompt(&messages).as_deref(),
+        Some("the opening question"),
+        "a system line is not a prompt and an empty one is not a prompt"
+    );
+}
+
+/// The preview shows it: the operator asked for "first-message/last-message",
+/// and the last message is the window itself.
+#[test]
+fn the_preview_shows_the_first_prompt_above_the_tail() {
+    let mut hub = SessionHubState::new();
+    hub.visible = true;
+    hub.replace_rows(vec![row("s1", Some("work"), None)]);
+    hub.set_first_prompt("s1", Some("how did this session start?".to_string()));
+    assert!(
+        hub.apply_preview(
+            "s1",
+            vec![msg("user", "a later prompt"), msg("assistant", "the end")],
+            3,
+        ),
+        "the preview applies"
+    );
+    let (_, preview) = hub_rows_with(&mut hub);
+    let joined = preview.join("\n");
+    assert!(
+        joined.contains("first: how did this session start?"),
+        "the first prompt must be visible: {joined}"
+    );
+    assert!(
+        joined.contains("a later prompt"),
+        "and the tail must still be there: {joined}"
+    );
+}
+
+/// A prompt that arrives for a row the operator has already left must not be
+/// painted on the row they are now looking at.
+#[test]
+fn a_first_prompt_for_another_session_is_not_shown() {
+    let mut hub = SessionHubState::new();
+    hub.visible = true;
+    hub.replace_rows(vec![row("s1", Some("work"), None)]);
+    hub.set_first_prompt("s-other", Some("someone else's prompt".to_string()));
+    assert_eq!(hub.first_prompt_for("s1"), None);
+}
+
 // ---- (2026-11-13) hide the tool calls: the prompts and the end of turn remain ----
 
 /// A hub painted with a transcript that has prompts, tool calls and tool

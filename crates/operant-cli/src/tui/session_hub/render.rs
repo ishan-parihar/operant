@@ -1149,6 +1149,19 @@ fn render_preview(
                     Style::default().fg(theme_colors::muted()),
                 )),
             ];
+            // (2026-11-13) The session's FIRST user prompt, above the tail
+            // window. The operator asked for "scrolling mechanism through the
+            // user-prompt, like first-message/last-message": the last message
+            // is the window itself, and the first message was being discarded
+            // by the load. It is shown as one line, truncated, because a
+            // prompt can be a paragraph and the pane is the operator's
+            // reading space, not a transcript viewer.
+            if let Some(first) = state.first_prompt_for(&row.id) {
+                lines.push(Line::from(Span::styled(
+                    format!("first: {}", first_line(first)),
+                    Style::default().fg(theme_colors::muted()),
+                )));
+            }
             // The transcript itself (jcode's preview body). The load is
             // asynchronous, so the pane shows an explicit state rather than
             // silently looking empty — the two states that read as "the

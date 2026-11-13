@@ -459,6 +459,19 @@ pub struct SessionHubState {
     /// operator typed and the assistant's end-of-turn output — which is
     /// exactly the pair the operator named.
     pub hide_tool_calls: bool,
+    /// The session's FIRST user prompt, kept beside the tail window.
+    ///
+    /// The operator asked for "scrolling mechanism through the user-prompt,
+    /// like first-message/last-message". The last message is already
+    /// reachable — the preview's window IS the tail — but the FIRST prompt was
+    /// discarded: the load read every message and `window_messages` kept the
+    /// last 400, so the opening line of the conversation was read and thrown
+    /// away on every load (audit finding 6).
+    ///
+    /// It is kept here rather than in a new column because it costs nothing:
+    /// the load already has the messages, and the field is the answer to a
+    /// question the operator asks of every session they open.
+    preview_first_prompt: Option<(String, String)>,
 }
 
 impl Default for SessionHubState {
@@ -493,6 +506,7 @@ impl SessionHubState {
             live_session_id: None,
             employee_filter: None,
             hide_tool_calls: false,
+            preview_first_prompt: None,
         }
     }
 
@@ -1168,6 +1182,36 @@ impl SessionHubState {
     /// row — a load that landed after the operator moved on belongs to a
     /// row nobody is looking at (the stale-write guard jcode gets for free
     /// from comparing `pending.session_id`).
+    /// Record the session's FIRST user prompt, so the preview can show it
+    /// beside the tail window.
+    ///
+    /// The id is carried with it for the same reason `apply_preview` carries
+    /// one: the operator moves the selection while the load is in flight, and
+    /// a prompt that arrives for a row the operator has left must not be
+    /// painted on the row they are now looking at.
+    pub fn set_first_prompt(&mut self, session_id: &str, prompt: Option<String>) {
+        match prompt {
+            Some(p) => self.preview_first_prompt = Some((session_id.to_string(), p)),
+            None => {
+                if self
+                    .preview_first_prompt
+                    .as_ref()
+                    .is_some_and(|(id, _)| id == session_id)
+                {
+                    self.preview_first_prompt = None;
+                }
+            }
+        }
+    }
+
+    /// The first prompt of the session whose preview is showing.
+    pub fn first_prompt_for(&self, session_id: &str) -> Option<&str> {
+        self.preview_first_prompt
+            .as_ref()
+            .filter(|(id, _)| id == session_id)
+            .map(|(_, p)| p.as_str())
+    }
+
     pub fn apply_preview(
         &mut self,
         session_id: &str,
@@ -1232,6 +1276,20 @@ impl SessionHubState {
     /// `PREVIEW_MESSAGE_LIMIT` and count the user prompts that fell off the
     /// head, so the pane can number prompts globally (jcode's
     /// `build_messages_preview_with_offset`).
+    /// The FIRST user prompt in a message list.
+    ///
+    /// "First" means the first thing the operator TYPED: a system line is not
+    /// a prompt, and an empty one is not a prompt either. The preview shows
+    /// this above the tail window, so the operator can see how the
+    /// conversation opened without scrolling a 400-message window back to the
+    /// top.
+    pub fn first_user_prompt(messages: &[PreviewMessage]) -> Option<String> {
+        messages
+            .iter()
+            .find(|m| m.role == "user" && !m.content.trim().is_empty())
+            .map(|m| m.content.trim().to_string())
+    }
+
     pub fn window_messages(messages: Vec<PreviewMessage>) -> (Vec<PreviewMessage>, usize) {
         let skip = messages.len().saturating_sub(PREVIEW_MESSAGE_LIMIT);
         let hidden_prompts = messages[..skip]

@@ -89,7 +89,13 @@ use tracing::debug;
 /// `clippy::type_complexity` is in this repo's gate.
 pub type PreviewLoadRx = tokio::sync::mpsc::Receiver<(
     String,
-    Option<(Vec<crate::tui::session_hub::PreviewMessage>, usize)>,
+    Option<(
+        Vec<crate::tui::session_hub::PreviewMessage>,
+        usize,
+        // The session's FIRST user prompt, captured before the tail window
+        // dropped it (2026-11-13): "first-message/last-message".
+        Option<String>,
+    )>,
 )>;
 
 // ---------------------------------------------------------------------------
@@ -2019,11 +2025,20 @@ impl App {
                                     .into_iter()
                                     .filter_map(crate::tui::session_hub::preview_message_from_row)
                                     .collect::<Vec<_>>();
+                                // The FIRST user prompt, captured BEFORE the
+                                // tail window drops it (2026-11-13): the
+                                // operator asked for "first-message/last-message"
+                                // and the load already had the first message in
+                                // hand — it was read and discarded.
+                                let first_prompt =
+                                    crate::tui::session_hub::SessionHubState::first_user_prompt(
+                                        &messages,
+                                    );
                                 let (windowed, hidden) =
                                     crate::tui::session_hub::SessionHubState::window_messages(
                                         messages,
                                     );
-                                Some((windowed, hidden))
+                                Some((windowed, hidden, first_prompt))
                             })
                             .await
                             .unwrap_or(None);
