@@ -121,6 +121,31 @@ impl HubFilterMode {
         }
     }
 
+    /// The tightest form of the tab bar's ladder: one letter.
+    ///
+    /// (2026-11-14, audit finding 1) The compact rung measured 54 cells
+    /// against the pane's 46 once any count reached two digits. The hub loads
+    /// 500 rows, so the counts were 500/22/1/300/100/5/12 and the bar fell
+    /// through to "the active filter alone" — all seven tabs and every count
+    /// gone, on the width most operators work at. My own tests never saw it:
+    /// they used two or three rows, so every count was one digit.
+    ///
+    /// This tier measures 35 cells WITH the counts, which is the rung that
+    /// actually holds. The compact rung's own rule still holds — every form
+    /// is unambiguous at the lead — because the seven first letters are a, n,
+    /// w, r, i, c, b: all different, so the tight row can still be read.
+    pub fn min_label(self) -> &'static str {
+        match self {
+            Self::All => "a",
+            Self::NeedsYou => "n",
+            Self::Working => "w",
+            Self::Ready => "r",
+            Self::Inactive => "i",
+            Self::CurrentDir => "c",
+            Self::CurrentBranch => "b",
+        }
+    }
+
     /// The compact form the tab bar falls back to when the long labels do not
     /// fit. Codex's `toolbar_for_width` degrades the same way rather than
     /// letting the last pill fall off the edge — the count at the far right is
