@@ -1507,7 +1507,6 @@ mod tests {
     /// The API must accept the cookie the browser sends on a same-origin
     /// fetch — that is what lets the UI work without the token being
     /// readable by JavaScript.
-    #[test]
     /// RT-518: the dashboard accepts the gateway API's cookie name too.
     ///
     /// The dashboard minted `operant_dashboard_token` and the gateway API
@@ -1536,6 +1535,7 @@ mod tests {
         );
     }
 
+    #[test]
     fn the_api_accepts_the_dashboard_cookie() {
         let state = DashboardState {
             start_time: Instant::now(),

@@ -83,7 +83,7 @@ fn the_full_text_the_marker_names_is_the_one_the_store_keeps() {
         session,
         call,
         "item 0 of 400\nitem 1 of 400\n[compressed: dedup — …]",
-        &format!("item 0 of 400\nitem 1 of 400\nitem 2 of 400\nitem 3 of 400\n"),
+        "item 0 of 400\nitem 1 of 400\nitem 2 of 400\nitem 3 of 400\n",
     );
     let key = operant_core::agent::evidence::recall::key_for(Some(session), call);
     assert_eq!(key, "sess-1:call-1");
@@ -278,7 +278,6 @@ fn a_family_the_operator_turns_off_is_left_alone() {
         min_size: 1,
         shell: ShellMode::Native,
         families,
-        ..EvidenceConfig::default()
     };
     let out = compress("terminal", &text, &cfg);
     assert!(!out.changed(), "a disabled family must be left alone");
@@ -303,7 +302,6 @@ fn a_family_override_that_enables_works_over_a_disabled_master() {
         min_size: 1,
         shell: ShellMode::Native,
         families,
-        ..EvidenceConfig::default()
     };
     let out = compress("terminal", &text, &cfg);
     assert!(out.changed(), "the enabled family must compress");
@@ -366,7 +364,6 @@ fn an_unknown_chain_name_falls_back_instead_of_disabling() {
         min_size: 1,
         shell: ShellMode::Native,
         families,
-        ..EvidenceConfig::default()
     };
     let out = compress("terminal", &text, &cfg);
     assert!(out.changed(), "an unknown chain name must fall back");

@@ -825,7 +825,7 @@ fn a_flooding_chats_queue_stays_bounded() {
     let mut queue: VecDeque<(String, IncomingMessage)> = VecDeque::new();
     let key = "telegram:c-a:u-a".to_string();
     for index in 0..1000 {
-        let message = IncomingMessage::new("telegram", "u-a", "A", "c-a", &format!("m{index}"));
+        let message = IncomingMessage::new("telegram", "u-a", "A", "c-a", format!("m{index}"));
         if super::queue_has_room(&queue, &key) {
             queue.push_back((key.clone(), message));
         } else {
