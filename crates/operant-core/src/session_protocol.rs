@@ -78,6 +78,28 @@ pub enum WireMessage {
     },
 }
 
+impl WireMessage {
+    /// The session this message is about, if it is about one.
+    ///
+    /// The server uses it to decide which session's events a client is
+    /// subscribed to (RT-544).
+    pub fn session_id(&self) -> Option<&str> {
+        match self {
+            Self::Hello | Self::HelloOk { .. } => None,
+            Self::Prompt { session_id, .. }
+            | Self::Steer { session_id, .. }
+            | Self::Queue { session_id, .. }
+            | Self::Cancel { session_id, .. }
+            | Self::Approve { session_id, .. }
+            | Self::Deny { session_id, .. }
+            | Self::Switch { session_id }
+            | Self::LoadHistory { session_id }
+            | Self::Event { session_id, .. } => Some(session_id),
+            Self::Error { session_id, .. } => session_id.as_deref(),
+        }
+    }
+}
+
 /// The envelope: the version plus the message.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Envelope {

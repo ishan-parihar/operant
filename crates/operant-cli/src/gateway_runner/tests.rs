@@ -350,6 +350,7 @@ fn slot_pool_of(agents: Vec<Arc<OperantAgent>>) -> AgentSlots {
                 default_effort: None,
                 lock: tokio::sync::Mutex::new(()),
                 loaded_session: tokio::sync::Mutex::new(None),
+                session_cell: None,
             })
             .collect(),
     }
@@ -2987,7 +2988,10 @@ async fn the_gateway_session_socket_serves_two_clients_on_one_process() {
 
     let dir = tempfile::tempdir().expect("a temp dir");
     let socket = dir.path().join("gateway-session.sock");
-    let handler = std::sync::Arc::new(GatewaySessionHandler);
+    let handler = std::sync::Arc::new(GatewaySessionHandler {
+        handler: None,
+        bus: std::sync::Arc::new(SessionBus::new()),
+    });
     let server = tokio::spawn(operant_core::session_server::run_session_socket(
         handler,
         socket.clone(),
@@ -3033,4 +3037,42 @@ async fn the_gateway_session_socket_serves_two_clients_on_one_process() {
     }
 
     server.abort();
+}
+
+/// RT-544: the bus routes an event to the slot that owns the session, and to
+/// no other slot.
+///
+/// A session maps to one slot by the deterministic hash, so the slot IS the
+/// subscription unit. An event published on one slot must not reach a client
+/// subscribed to another.
+#[tokio::test]
+async fn the_session_bus_routes_an_event_to_its_slot_and_no_other() {
+    let bus = SessionBus::new();
+    let mut mine = bus.sender_for("s1").subscribe();
+    let mut other = bus.sender_for("s2").subscribe();
+
+    bus.publish(
+        "s1",
+        operant_core::agent::AgentEvent::Content {
+            text: "for slot one".to_string(),
+        },
+    );
+
+    let received = tokio::time::timeout(std::time::Duration::from_secs(5), mine.recv())
+        .await
+        .expect("the subscriber must receive the event")
+        .expect("the event must arrive");
+    match received {
+        operant_core::session_protocol::WireMessage::Event { session_id, .. } => {
+            assert_eq!(session_id, "s1", "the event must name its session");
+        }
+        other => panic!("the subscriber must receive an event, got {other:?}"),
+    }
+
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(200), other.recv())
+            .await
+            .is_err(),
+        "a client subscribed to another slot must not see this event"
+    );
 }

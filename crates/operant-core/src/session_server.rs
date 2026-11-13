@@ -15,6 +15,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::sync::broadcast;
 
 use crate::session_protocol::{PROTOCOL_VERSION, WireMessage, decode, encode};
 
@@ -28,6 +29,17 @@ pub trait SessionHandler: Send + Sync + 'static {
     /// The replies are written to the client that sent the message. A handler
     /// that has nothing to say returns no replies.
     fn handle(&self, message: WireMessage) -> Vec<WireMessage>;
+
+    /// Subscribe to a session's live events (RT-544).
+    ///
+    /// A client that prompts a session must SEE the turn: the agent's events
+    /// flow to every client attached to that session, not only to the one that
+    /// asked. The default is no subscription, so a handler that only answers
+    /// questions works unchanged.
+    fn subscribe(&self, session_id: &str) -> Option<broadcast::Receiver<WireMessage>> {
+        let _ = session_id;
+        None
+    }
 }
 
 /// Serve the session protocol over a UNIX socket until the process ends.
@@ -80,7 +92,56 @@ where
     W: tokio::io::AsyncWrite + Unpin,
 {
     let mut lines = BufReader::new(reader).lines();
-    while let Some(line) = lines.next_line().await? {
+    // The client's subscription to the sessions it has asked about. A client
+    // that never sends a session-scoped message has none and is served as
+    // before: ask, answer.
+    let mut subscription: Option<broadcast::Receiver<WireMessage>> = None;
+
+    loop {
+        // The next thing to do: the client's next line, or the next event on
+        // a subscribed session. Whichever happens first wins, so a live turn
+        // streams without waiting for the client to speak.
+        let line = match &mut subscription {
+            Some(rx) => {
+                let read = async {
+                    let next = lines.next_line().await;
+                    next
+                };
+                tokio::select! {
+                    received = rx.recv() => {
+                        match received {
+                            Ok(message) => {
+                                write_line(&mut writer, &message).await?;
+                                continue;
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                                // The session ended; stop waiting on it.
+                                subscription = None;
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                                // The client was too slow to keep up. Say so
+                                // rather than pretending nothing happened.
+                                write_line(
+                                    &mut writer,
+                                    &WireMessage::Error {
+                                        session_id: None,
+                                        message: format!(
+                                            "the client fell behind by {skipped} event(s)"
+                                        ),
+                                    },
+                                )
+                                .await?;
+                            }
+                        }
+                        continue;
+                    }
+                    next = read => next?,
+                }
+            }
+            None => lines.next_line().await?,
+        };
+
+        let Some(line) = line else { break };
         let trimmed = line.trim();
         if trimmed.is_empty() {
             continue;
@@ -98,6 +159,18 @@ where
                 continue;
             }
         };
+
+        // A message that names a session subscribes the client to that
+        // session's events (RT-544): the turn's events then arrive without the
+        // client asking again.
+        let session_id = message.session_id();
+        if let Some(session_id) = session_id
+            && subscription.is_none()
+            && let Some(rx) = handler.subscribe(session_id)
+        {
+            subscription = Some(rx);
+        }
+
         for reply in handler.handle(message) {
             write_line(&mut writer, &reply).await?;
         }
@@ -210,6 +283,153 @@ mod tests {
             1,
             "the server must have handled the prompt"
         );
+
+        server.abort();
+    }
+
+    /// RT-544: two clients on ONE session see the SAME turn.
+    ///
+    /// A client that names a session is subscribed to it, so the session's
+    /// events arrive without the client asking again — and a second client on
+    /// the same session sees them too.
+    #[tokio::test]
+    async fn two_clients_on_one_session_see_the_same_turn() {
+        use crate::agent::AgentEvent;
+        use tokio::io::AsyncWriteExt;
+
+        /// A handler whose "turn" publishes one event to the session.
+        #[derive(Clone)]
+        struct PublishingHandler {
+            bus: broadcast::Sender<WireMessage>,
+        }
+
+        impl SessionHandler for PublishingHandler {
+            fn handle(&self, message: WireMessage) -> Vec<WireMessage> {
+                match message {
+                    WireMessage::Hello => vec![WireMessage::HelloOk { sessions: vec![] }],
+                    WireMessage::Prompt { session_id, .. } => {
+                        // The turn's events: published to the session, not
+                        // returned as a reply.
+                        let _ = self.bus.send(WireMessage::Event {
+                            session_id: session_id.clone(),
+                            event: AgentEvent::Content {
+                                text: "from the turn".to_string(),
+                            },
+                        });
+                        vec![]
+                    }
+                    _ => vec![],
+                }
+            }
+
+            fn subscribe(&self, _session_id: &str) -> Option<broadcast::Receiver<WireMessage>> {
+                Some(self.bus.subscribe())
+            }
+        }
+
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let socket = dir.path().join("session.sock");
+        let (bus, _) = broadcast::channel(16);
+        let handler = Arc::new(PublishingHandler { bus });
+        let server = tokio::spawn(run_session_socket(handler, socket.clone()));
+        for _ in 0..200 {
+            if socket.exists() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+
+        async fn exchange(stream: &mut tokio::net::UnixStream, message: &WireMessage) -> String {
+            let line = encode(message, PROTOCOL_VERSION).expect("a message encodes");
+            stream
+                .write_all(line.as_bytes())
+                .await
+                .expect("the message must be written");
+            stream
+                .write_all(b"\n")
+                .await
+                .expect("the newline must be written");
+            let mut reader = BufReader::new(&mut *stream);
+            let mut reply = String::new();
+            tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                reader.read_line(&mut reply),
+            )
+            .await
+            .expect("the server must answer")
+            .expect("the reply must be read");
+            reply.trim_end().to_string()
+        }
+
+        let mut first = tokio::net::UnixStream::connect(&socket)
+            .await
+            .expect("the first client must connect");
+        let mut second = tokio::net::UnixStream::connect(&socket)
+            .await
+            .expect("the second client must connect");
+
+        // The second client subscribes by naming the session. A message that
+        // only subscribes has no reply, so the hello AFTER it is what proves
+        // the server processed it — one connection is ordered.
+        let load = encode(
+            &WireMessage::LoadHistory {
+                session_id: "s1".to_string(),
+            },
+            PROTOCOL_VERSION,
+        )
+        .expect("load history encodes");
+        second
+            .write_all(load.as_bytes())
+            .await
+            .expect("the subscription must be written");
+        second
+            .write_all(b"\n")
+            .await
+            .expect("the newline must be written");
+        let _ = exchange(&mut second, &WireMessage::Hello).await;
+
+        // The first client prompts the session.
+        let prompt = encode(
+            &WireMessage::Prompt {
+                session_id: "s1".to_string(),
+                text: "hello".to_string(),
+            },
+            PROTOCOL_VERSION,
+        )
+        .expect("the prompt encodes");
+        first
+            .write_all(prompt.as_bytes())
+            .await
+            .expect("the prompt must be written");
+        first
+            .write_all(b"\n")
+            .await
+            .expect("the newline must be written");
+
+        // BOTH clients see the turn's event.
+        for (name, stream) in [("first", &mut first), ("second", &mut second)] {
+            let mut reader = BufReader::new(&mut *stream);
+            let mut line = String::new();
+            tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                reader.read_line(&mut line),
+            )
+            .await
+            .unwrap_or_else(|_| panic!("{name} must receive the session's event"))
+            .expect("the event must be read");
+            match decode(&line, PROTOCOL_VERSION).expect("the event must decode") {
+                WireMessage::Event { session_id, event } => {
+                    assert_eq!(session_id, "s1", "{name} must see the right session");
+                    match event {
+                        AgentEvent::Content { text } => {
+                            assert_eq!(text, "from the turn", "{name} must see the turn's text");
+                        }
+                        other => panic!("{name} saw the wrong event: {other:?}"),
+                    }
+                }
+                other => panic!("{name} must receive an event, got {other:?}"),
+            }
+        }
 
         server.abort();
     }

@@ -2497,13 +2497,60 @@ fn slot_memory_provider() -> Option<Arc<operant_core::memory_wire::MemoryWirePro
         .map(Arc::new)
 }
 
-/// The gateway's answer on the session socket (RT-542).
+use operant_core::session_protocol::WireMessage;
+use tokio::sync::broadcast;
+
+/// The gateway's session bus (RT-544).
+///
+/// One broadcast sender per SESSION. The slot that is serving a session
+/// publishes the turn's events under that session's id, and a client that
+/// attaches to the session subscribes by id — so two clients on one session see
+/// the same turn, and a client on another session does not.
+struct SessionBus {
+    senders: std::sync::Mutex<std::collections::HashMap<String, broadcast::Sender<WireMessage>>>,
+}
+
+impl SessionBus {
+    fn new() -> Self {
+        Self {
+            senders: std::sync::Mutex::new(std::collections::HashMap::new()),
+        }
+    }
+
+    /// The sender for a session, created on first use.
+    fn sender_for(&self, session_id: &str) -> broadcast::Sender<WireMessage> {
+        let mut senders = self.senders.lock().expect("the bus lock is not poisoned");
+        senders
+            .entry(session_id.to_string())
+            .or_insert_with(|| broadcast::channel(256).0)
+            .clone()
+    }
+
+    /// Publish one agent event to the session's subscribers.
+    fn publish(&self, session_id: &str, event: AgentEvent) {
+        // A closed channel means nobody is attached; that is not an error.
+        let _ = self.sender_for(session_id).send(WireMessage::Event {
+            session_id: session_id.to_string(),
+            event,
+        });
+    }
+}
+
+/// The gateway's answer on the session socket (RT-542, RT-544).
 ///
 /// The gateway OWNS the runtime — this handler only speaks the protocol on its
-/// behalf. For now it answers the handshake with the sessions this daemon has
-/// claimed (the presence registry is what the daemon writes), and names the
-/// commands it does not serve yet instead of going quiet.
-struct GatewaySessionHandler;
+/// behalf. A prompt is run in the SLOT that owns that session (the deterministic
+/// hash), and the slot's events flow back to every client attached to the
+/// session through the bus.
+struct GatewaySessionHandler {
+    /// The gateway's own message handler, which owns the slots and the agents.
+    ///
+    /// `None` in a test that exercises the socket and the handshake without a
+    /// gateway: a prompt is then answered with a named error rather than a
+    /// silent turn.
+    handler: Option<std::sync::Arc<GatewayMessageHandler>>,
+    bus: std::sync::Arc<SessionBus>,
+}
 
 impl operant_core::session_server::SessionHandler for GatewaySessionHandler {
     fn handle(
@@ -2517,11 +2564,50 @@ impl operant_core::session_server::SessionHandler for GatewaySessionHandler {
                     operant_core::active_sessions::presence_session_ids_for_pid(std::process::id());
                 vec![WireMessage::HelloOk { sessions }]
             }
+            // A prompt runs the turn in the SLOT that owns this session.
+            //
+            // The reply is not the answer: the answer arrives as events on
+            // the client's subscription. The turn is spawned so this client's
+            // connection stays free to receive them.
+            WireMessage::Prompt { session_id, text } => {
+                let Some(handler) = self.handler.as_ref().map(std::sync::Arc::clone) else {
+                    return vec![WireMessage::Error {
+                        session_id: None,
+                        message: "this server has no agent slots to run a turn in".to_string(),
+                    }];
+                };
+                let bus = std::sync::Arc::clone(&self.bus);
+                tokio::spawn(async move {
+                    let index = handler.slots.index_for(&session_id);
+                    let slot = handler.slots.slot_for(&session_id);
+                    // ONE turn at a time in this slot (the same lock every
+                    // other gateway turn takes).
+                    let _guard = slot.lock.lock().await;
+                    // The slot's session is what its forwarder publishes the
+                    // events under, so it is set before the turn runs.
+                    if let Some(cell) = slot.session_cell.as_ref() {
+                        if let Ok(mut held) = cell.lock() {
+                            *held = Some(session_id.clone());
+                        }
+                    }
+                    let agent = std::sync::Arc::clone(&slot.agent);
+                    let _ = agent.run(text).await;
+                    let _ = index;
+                });
+                vec![]
+            }
             other => vec![WireMessage::Error {
                 session_id: None,
                 message: format!("the session protocol does not serve this yet: {other:?}"),
             }],
         }
+    }
+
+    fn subscribe(
+        &self,
+        session_id: &str,
+    ) -> Option<tokio::sync::broadcast::Receiver<operant_core::session_protocol::WireMessage>> {
+        Some(self.bus.sender_for(session_id).subscribe())
     }
 }
 
@@ -2566,6 +2652,12 @@ struct AgentSlot {
     /// the OTHER slot's session id and decide to reload a conversation it
     /// already had — a redundant rehydrate per turn.
     loaded_session: tokio::sync::Mutex<Option<String>>,
+    /// The session this slot is serving RIGHT NOW (RT-544).
+    ///
+    /// The slot's event forwarder publishes under this session id, so a client
+    /// attached to the session sees the turn it asked for. It is set by the
+    /// turn before the agent runs and read by the forwarder on every event.
+    session_cell: Option<std::sync::Arc<std::sync::Mutex<Option<String>>>>,
 }
 
 /// The gateway's agent slots (RT-508).
@@ -4457,22 +4549,6 @@ pub async fn start_gateway(
     // single-instance discipline.
     crate::gateway_api::spawn_if_enabled(&app_config.gateway, &app_config.database_path).await;
 
-    // RT-542: the session socket. The gateway is already the server that owns
-    // the agent, the registry, the MCP children and the databases; this is the
-    // port a terminal client uses to reach it instead of building its own
-    // copy. It is bound here, while this process holds the daemon lock, so the
-    // socket and the channels live and die together.
-    if let Some(socket) = session_socket {
-        let handler = std::sync::Arc::new(GatewaySessionHandler);
-        tokio::spawn(async move {
-            if let Err(e) = operant_core::session_server::run_session_socket(handler, socket).await
-            {
-                tracing::error!(error = %e, "the session socket server stopped");
-            }
-        });
-        tracing::info!("the gateway will serve the session socket for attaching clients");
-    }
-
     let mut guard = runner().lock().await;
 
     if guard.is_some()
@@ -4541,7 +4617,17 @@ pub async fn start_gateway(
 
     let mcp_manager = McpManager::new();
 
-    // Create event channel for tool progress previews
+    // The session bus (RT-544): a client that attaches to a session receives
+    // that session's agent events. One broadcast per session, published by the
+    // slot's own event forwarder.
+    let session_bus = std::sync::Arc::new(SessionBus::new());
+
+    // Create event channel for tool progress previews. RT-544 moved the
+    // channel INTO the slot (one per slot), because an event has to know which
+    // session it belongs to before it can be published on the bus — and the
+    // shared channel told every consumer only "an event happened". The slots
+    // merge into the one consumer the rest of the gateway already reads, so
+    // nothing downstream changed.
     let (event_tx, mut event_rx) = mpsc::channel::<AgentEvent>(256);
     // (platform, channel_id, telegram thread_id) — thread_id is forwarded so
     // all outbound progress/stream/error messages land in the same forum
@@ -4662,11 +4748,35 @@ pub async fn start_gateway(
             )),
             None => None,
         };
+        // ONE channel per slot (RT-544). The slot's session is known to the
+        // slot (loaded_session), so the forwarder can publish the event on the
+        // bus under the session it belongs to — and still merge into the
+        // process's single consumer.
+        let (slot_event_tx, mut slot_event_rx) = mpsc::channel::<AgentEvent>(256);
+        let merge = event_tx.clone();
+        let bus = std::sync::Arc::clone(&session_bus);
+        let session_cell: std::sync::Arc<std::sync::Mutex<Option<String>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(None));
+        let cell_for_forwarder = std::sync::Arc::clone(&session_cell);
+        tokio::spawn(async move {
+            while let Some(event) = slot_event_rx.recv().await {
+                // Publish under the session this slot is serving, so a client
+                // attached to that session sees the event (RT-544).
+                let session = cell_for_forwarder.lock().ok().and_then(|held| held.clone());
+                if let Some(id) = session.as_deref() {
+                    bus.publish(id, event.clone());
+                }
+                // The single consumer the rest of the gateway reads.
+                if merge.send(event).await.is_err() {
+                    break;
+                }
+            }
+        });
         let mut agent = crate::create_runtime_agent_with(
             app_config,
             &app_config.agent,
             None,
-            event_tx.clone(),
+            slot_event_tx,
             &mcp_manager,
             &app_config.skills.root_dir,
             None, // gateway has no status bar; the agent keeps its internal registry
@@ -4696,6 +4806,7 @@ pub async fn start_gateway(
                 .then(|| app_config.agent.reasoning_effort.clone()),
             lock: tokio::sync::Mutex::new(()),
             loaded_session: tokio::sync::Mutex::new(None),
+            session_cell: Some(session_cell),
         });
     }
     let agent_count = slots.len();
@@ -4901,6 +5012,25 @@ pub async fn start_gateway(
         queue_waits: tokio::sync::Mutex::new(QueueWaitStats::default()),
     });
     gateway = gateway.with_handler(handler.clone());
+
+    // RT-542: the session socket, bound once the handler exists — a prompt on
+    // it runs a turn in the slot that owns the session, so the socket needs
+    // the slots. It is bound while this process holds the daemon lock, so the
+    // socket and the channels live and die together.
+    if let Some(socket) = session_socket {
+        let session_handler = std::sync::Arc::new(GatewaySessionHandler {
+            handler: Some(std::sync::Arc::clone(&handler)),
+            bus: std::sync::Arc::clone(&session_bus),
+        });
+        tokio::spawn(async move {
+            if let Err(e) =
+                operant_core::session_server::run_session_socket(session_handler, socket).await
+            {
+                tracing::error!(error = %e, "the session socket server stopped");
+            }
+        });
+        tracing::info!("the gateway will serve the session socket for attaching clients");
+    }
 
     let gateway = Arc::new(gateway);
 
