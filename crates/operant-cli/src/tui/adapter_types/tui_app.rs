@@ -712,10 +712,6 @@ impl TuiApp {
         result
     }
 
-    /// Push `text` as a user message and spawn an agent turn for it.
-    /// Shared by the initial-query path, /retry, and the /skill + /bundle
-    /// expansion so the submission wiring lives in exactly one place.
-    /// (iter-320 — dedupe three near-identical submission blocks.)
     /// Expand any `$skill` mention in the composer's text.
     ///
     /// Returns the text unchanged when the message carries no mention. A
@@ -738,6 +734,10 @@ impl TuiApp {
         expansion.message.unwrap_or(input)
     }
 
+    /// Push `text` as a user message and spawn an agent turn for it.
+    /// Shared by the initial-query path, /retry, and the /skill + /bundle
+    /// expansion so the submission wiring lives in exactly one place.
+    /// (iter-320 — dedupe three near-identical submission blocks.)
     async fn submit_user_message(
         &mut self,
         agent: &std::sync::Arc<operant_core::agent::OperantAgent>,
