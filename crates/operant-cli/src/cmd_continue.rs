@@ -87,8 +87,11 @@ pub fn exit_state(deliberate: bool) -> &'static str {
 ///    rather than a guess;
 /// 2. the interrupted-session marker — the session the last TUI was working on
 ///    when it went away, which is what "continue" means with no argument;
-/// 3. the most recently updated session — the fallback that keeps the command
-///    usable when the marker was already consumed by another surface.
+/// 3. the most recently ACTIVE session — the fallback that keeps the command
+///    usable when the marker was already consumed by another surface. "Active"
+///    means the newest MESSAGE, not the newest start: a crashed session never
+///    ended, so ranking by started/ended would bury it under sessions the
+///    operator finished hours ago.
 ///
 /// The marker is passed IN rather than read here: reading it inside would make
 /// this function depend on a file in the operator's home directory, and a
@@ -115,11 +118,13 @@ fn resolve_target_session(
             title: Some(marker.title.clone()).filter(|t| !t.trim().is_empty()),
         });
     }
+    // By the last MESSAGE, not by started/ended: a session that never ended
+    // (a crash, a SIGKILL, a closed terminal) must answer "what was I working
+    // on" — `list_sessions` would rank it by when it started and answer with a
+    // session the operator already finished. See the DB method's note.
     let most_recent = db
-        .list_sessions(1)
-        .context("Failed to list sessions")?
-        .into_iter()
-        .next()
+        .most_recent_session_by_activity()
+        .context("Failed to read the most recent session")?
         .context("No sessions found — start one with `operant chat`.")?;
     Ok(TargetSession {
         id: most_recent.id,
@@ -281,16 +286,33 @@ mod tests {
         assert_eq!(target.title.as_deref(), Some("interrupted work"));
     }
 
-    /// With neither an id nor a marker the most recent session is the answer.
+    /// With neither an id nor a marker the most recently ACTIVE session is the
+    /// answer — and "active" is the newest MESSAGE, not the newest start.
+    ///
+    /// The shape is the case this ordering exists for: `sess_crashed` STARTED
+    /// first and never ended (a crash, a SIGKILL, a closed terminal), while
+    /// `sess_finished` started later and ended normally. Ranking by
+    /// started/ended buries the crashed session under one the operator already
+    /// finished, so "continue with no id" answers the wrong session — exactly
+    /// when the operator most needs it.
     #[test]
-    fn without_an_id_or_a_marker_the_most_recent_session_is_used() {
+    fn without_an_id_or_a_marker_the_most_recently_active_session_is_used() {
         let db = test_db();
-        db.save_session("sess_old", Some("old"), "test", "2026-01-01", "2026-01-01")
+        // Started days earlier, never ended, and its last turn is the NEWEST
+        // thing in the store.
+        db.save_session("sess_crashed", Some("crashed"), "test", "2026-01-01", "2026-01-01")
             .expect("save_session");
-        db.save_session("sess_new", Some("new"), "test", "2026-01-02", "2026-01-02")
+        db.save_message("sess_crashed", "user", "the last thing I asked", "2026-01-09T10:00:00Z")
+            .expect("save_message");
+        // Started later and finished normally, but its last turn is OLDER.
+        db.save_session("sess_finished", Some("finished"), "test", "2026-01-05", "2026-01-05")
             .expect("save_session");
+        db.save_message("sess_finished", "user", "an older turn", "2026-01-06T09:00:00Z")
+            .expect("save_message");
+
         let target = resolve_target_session(&db, None, None).expect("resolve");
-        assert_eq!(target.id, "sess_new");
+        assert_eq!(target.id, "sess_crashed");
+        assert_eq!(target.title.as_deref(), Some("crashed"));
     }
 
     /// An empty database has no session to continue, and the error must say

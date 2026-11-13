@@ -1566,6 +1566,54 @@ impl Database {
         Ok(sessions)
     }
 
+    /// The session whose most recent MESSAGE is the newest, with its row.
+    ///
+    /// `list_sessions` orders by `COALESCE(ended_at, started_at)`, which ranks
+    /// a session that never ENDED — a crash, a SIGKILL, a closed terminal — by
+    /// when it STARTED. A session that crashed two hours ago therefore sorts
+    /// BELOW one that started after it and finished normally, so "the most
+    /// recent session" answers the wrong question: the session the operator
+    /// was last working in is the one whose last TURN is newer, not the one
+    /// that began last.
+    ///
+    /// INNER JOIN on purpose: a session with no messages has nothing to
+    /// rehydrate, so it is not a candidate for continuing.
+    pub fn most_recent_session_by_activity(&self) -> Result<Option<DatabaseSession>> {
+        let conn = self.lock_conn()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT s.id, s.title, s.source, s.started_at, s.ended_at,
+                        COUNT(m.id) AS msg_count, s.actual_cost_usd
+                 FROM sessions s
+                 JOIN messages m ON m.session_id = s.id
+                 GROUP BY s.id
+                 ORDER BY MAX(m.timestamp) DESC
+                 LIMIT 1",
+            )
+            .map_err(|e| Error::Agent(format!("Failed to prepare most_recent_session_by_activity: {}", e)))?;
+        let mut rows = stmt
+            .query_map([], |row| {
+                Ok(DatabaseSession {
+                    id: row.get(0)?,
+                    title: row.get(1)?,
+                    source: row.get(2)?,
+                    created_at: row.get(3)?,
+                    // `ended_at` is NULL for a session that never ended (the
+                    // common case for the crashed session this query exists
+                    // to find), so the same coalesce `list_sessions` applies.
+                    updated_at: row
+                        .get::<_, Option<String>>(4)?
+                        .unwrap_or_else(|| row.get::<_, String>(3).unwrap_or_default()),
+                    message_count: row.get::<_, i32>(5)? as usize,
+                    actual_cost_usd: row.get(6)?,
+                })
+            })
+            .map_err(|e| Error::Agent(format!("Most recent session by activity query error: {}", e)))?;
+        rows.next()
+            .transpose()
+            .map_err(|e| Error::Agent(format!("Row error: {}", e)))
+    }
+
     /// List recent sessions as the unified `SessionEntryV2` record — the
     /// ONE shape every surface renders (session hub, CLI, gateway routes;
     /// plan 2026-10-28, audit RT-A).
@@ -3372,6 +3420,71 @@ mod tests {
         )
         .expect("Failed to create test session");
         db
+    }
+
+    /// The crashed session is the most recently ACTIVE one, even though
+    /// `list_sessions` buries it.
+    ///
+    /// A session that never ended (a crash, a SIGKILL, a closed terminal) ranks
+    /// by its START time in `list_sessions`'s `COALESCE(ended_at, started_at)`
+    /// ordering, so a session the operator finished LATER sorts above it — and
+    /// "the most recent session" then answers the wrong question. This test
+    /// pins the ordering that answers the right one, and also asserts the old
+    /// ordering really does bury it, so the two queries cannot silently
+    /// converge and hide the regression this method exists to fix.
+    #[test]
+    fn the_most_recent_session_by_activity_is_the_crashed_one_not_the_last_started() {
+        let db = test_db(); // a helper session with no messages: not a candidate
+        db.save_session("sess_crashed", Some("crashed"), "test", "2026-01-01", "2026-01-01")
+            .expect("save_session");
+        db.save_message("sess_crashed", "user", "the newest turn", "2026-01-09T10:00:00Z")
+            .expect("save_message");
+        // Starts later and ends normally, but its last turn is OLDER.
+        db.save_session("sess_finished", Some("finished"), "test", "2026-01-05", "2026-01-05")
+            .expect("save_session");
+        db.save_message("sess_finished", "user", "an older turn", "2026-01-06T09:00:00Z")
+            .expect("save_message");
+
+        let by_activity = db
+            .most_recent_session_by_activity()
+            .expect("query")
+            .expect("a session with messages");
+        assert_eq!(by_activity.id, "sess_crashed");
+        assert_eq!(by_activity.title.as_deref(), Some("crashed"));
+
+        // The old ordering really does bury it: started/ended ranks the
+        // later-STARTED finished session first.
+        let by_listing = db.list_sessions(1).expect("list");
+        assert_eq!(by_listing[0].id, "sess_finished");
+    }
+
+    /// A session with no messages is not a candidate for continuing: there is
+    /// nothing to rehydrate, so the INNER JOIN is deliberate.
+    #[test]
+    fn the_most_recent_session_by_activity_skips_a_session_with_no_messages() {
+        let db = test_db();
+        // Newest start in the whole store, and zero turns.
+        db.save_session("sess-empty", Some("empty"), "test", "2026-01-09", "2026-01-09")
+            .expect("save_session");
+        db.save_session("sess-with", Some("with"), "test", "2026-01-01", "2026-01-01")
+            .expect("save_session");
+        db.save_message("sess-with", "user", "a turn", "2026-01-02T00:00:00Z")
+            .expect("save_message");
+
+        let found = db
+            .most_recent_session_by_activity()
+            .expect("query")
+            .expect("a row");
+        assert_eq!(found.id, "sess-with");
+    }
+
+    /// No messages at all is a legitimate empty, not an error.
+    #[test]
+    fn the_most_recent_session_by_activity_is_none_when_no_session_has_messages() {
+        let db = test_db();
+        db.save_session("sess-empty", Some("empty"), "test", "2026-01-09", "2026-01-09")
+            .expect("save_session");
+        assert!(db.most_recent_session_by_activity().expect("query").is_none());
     }
 
     fn test_db_path() -> (Database, PathBuf) {
