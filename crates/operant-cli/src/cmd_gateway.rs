@@ -60,7 +60,15 @@ pub enum PairingAction {
 #[derive(Debug, Clone, Subcommand)]
 pub enum GatewaySubcommand {
     /// Run the gateway in foreground (blocking, Ctrl+C to stop)
-    Run,
+    Run {
+        /// Also serve the session socket, so a terminal client can attach to
+        /// THIS daemon instead of building a runtime of its own (RT-542).
+        ///
+        /// Without the flag the gateway serves the channels only, exactly as
+        /// before.
+        #[arg(long, value_name = "PATH")]
+        socket: Option<std::path::PathBuf>,
+    },
     /// Show gateway status (enabled platforms, runtime state)
     Status {
         /// Show detailed service status including systemd info
@@ -130,7 +138,7 @@ pub async fn handle_gateway_command(
     json: bool,
 ) -> Result<()> {
     match cmd {
-        GatewaySubcommand::Run => cmd_run(config).await,
+        GatewaySubcommand::Run { socket } => cmd_run(config, socket).await,
         GatewaySubcommand::Status { deep } => cmd_status(config, deep, json),
         GatewaySubcommand::Sessions => cmd_sessions(config),
         GatewaySubcommand::Channels => cmd_channels(config),
@@ -575,7 +583,7 @@ pub(crate) fn cmd_install(_config: &AppConfig, force: bool, system: bool) -> Res
 }
 
 /// Run the gateway in foreground.
-async fn cmd_run(config: &AppConfig) -> Result<()> {
+async fn cmd_run(config: &AppConfig, socket: Option<std::path::PathBuf>) -> Result<()> {
     // Audit finding 1 (iter-1335): `start_gateway` returns a REFUSAL
     // message when another daemon owns the flock — and the plain
     // `Ok(message)` flow below used to fall straight into the signal wait,
@@ -583,7 +591,7 @@ async fn cmd_run(config: &AppConfig) -> Result<()> {
     // itself. Ask the runner whether this process actually holds a
     // gateway: `is_running()` is false exactly in the refusal case (and in
     // the in-process already-running case, which prints the same way).
-    let msg = crate::gateway_runner::start_gateway(config).await?;
+    let msg = crate::gateway_runner::start_gateway(config, socket).await?;
     let started = crate::gateway_runner::is_running().await;
     println!("{msg}");
     if !started {

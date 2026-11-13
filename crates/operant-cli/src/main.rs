@@ -3427,7 +3427,7 @@ async fn run(
     let is_gateway_daemon = matches!(
         cli.command,
         Some(Commands::Gateway {
-            cmd: cmd_gateway::GatewaySubcommand::Run,
+            cmd: cmd_gateway::GatewaySubcommand::Run { .. },
             ..
         })
     );

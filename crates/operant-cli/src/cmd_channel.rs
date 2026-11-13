@@ -112,7 +112,7 @@ pub async fn handle_channel_command(
             // gateway — otherwise the runtime drops the spawned tasks the
             // instant the command returns and the gateway dies immediately
             // (reviewer-caught bug).
-            let msg = crate::gateway_runner::start_gateway(config).await?;
+            let msg = crate::gateway_runner::start_gateway(config, None).await?;
             if json {
                 println!("{}", serde_json::json!({"status":"started","message": msg}));
                 println!(

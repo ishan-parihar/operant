@@ -1518,7 +1518,7 @@ async fn test_gateway_start_stop_with_disabled_platforms() {
         ..Default::default()
     };
 
-    let start_msg = start_gateway(&config).await.unwrap();
+    let start_msg = start_gateway(&config, None).await.unwrap();
     let running = is_running().await;
     let stop_msg = stop_gateway().await.unwrap();
     let not_running = is_running().await;
@@ -1690,7 +1690,7 @@ async fn the_daemon_lock_survives_the_start_functions_return() {
     // Drive the REAL start: it acquires the lock and (the fix) leaks the guard
     // into the process-global slot. No platform is enabled, so this starts
     // nothing but the lock and the runner handle.
-    let start_msg = start_gateway(&config)
+    let start_msg = start_gateway(&config, None)
         .await
         .expect("the first start must succeed");
     assert!(
@@ -2946,4 +2946,91 @@ async fn prose_steers_the_running_turn_and_never_steals_a_question_answer() {
     );
     // Clean up so no other test sees this channel's question.
     map.lock().await.remove(&channel_key);
+}
+
+/// RT-542: the gateway's session socket serves MANY clients on ONE process.
+///
+/// The whole point of the socket: a client that attaches costs a connection,
+/// not a runtime. Two clients connect to the gateway's own handler on one
+/// socket, both are answered, and both are answered by the SAME handler — one
+/// server, one state.
+#[tokio::test]
+async fn the_gateway_session_socket_serves_two_clients_on_one_process() {
+    use operant_core::session_protocol::{PROTOCOL_VERSION, WireMessage, decode, encode};
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+
+    /// Write one message (with its newline) and read one line back.
+    ///
+    /// The exchange is bounded: a server that does not answer must FAIL the
+    /// test, not hang it.
+    async fn exchange(stream: &mut tokio::net::UnixStream, message: &WireMessage) -> String {
+        let line = encode(message, PROTOCOL_VERSION).expect("a message encodes");
+        stream
+            .write_all(line.as_bytes())
+            .await
+            .expect("the message must be written");
+        stream
+            .write_all(b"\n")
+            .await
+            .expect("the newline must be written");
+        let mut reader = tokio::io::BufReader::new(&mut *stream);
+        let mut reply = String::new();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            reader.read_line(&mut reply),
+        )
+        .await
+        .expect("the server must answer within ten seconds")
+        .expect("the reply must be read");
+        reply.trim_end().to_string()
+    }
+
+    let dir = tempfile::tempdir().expect("a temp dir");
+    let socket = dir.path().join("gateway-session.sock");
+    let handler = std::sync::Arc::new(GatewaySessionHandler);
+    let server = tokio::spawn(operant_core::session_server::run_session_socket(
+        handler,
+        socket.clone(),
+    ));
+    for _ in 0..200 {
+        if socket.exists() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert!(socket.exists(), "the gateway must bind its session socket");
+
+    let mut first = tokio::net::UnixStream::connect(&socket)
+        .await
+        .expect("the first client must connect");
+    let mut second = tokio::net::UnixStream::connect(&socket)
+        .await
+        .expect("the second client must connect");
+
+    for stream in [&mut first, &mut second] {
+        let reply = exchange(stream, &WireMessage::Hello).await;
+        match decode(&reply, PROTOCOL_VERSION).expect("the reply must decode") {
+            WireMessage::HelloOk { .. } => {}
+            other => panic!("the client must be answered with hello ok, got {other:?}"),
+        }
+    }
+
+    // A command the gateway does not serve yet is NAMED, not silently dropped.
+    let answer = exchange(
+        &mut first,
+        &WireMessage::Prompt {
+            session_id: "s1".to_string(),
+            text: "hello".to_string(),
+        },
+    )
+    .await;
+    match decode(&answer, PROTOCOL_VERSION).expect("the answer must decode") {
+        WireMessage::Error { message, .. } => assert!(
+            !message.is_empty(),
+            "the error must name why the server is silent"
+        ),
+        other => panic!("an unserved command must be answered with an error, got {other:?}"),
+    }
+
+    server.abort();
 }

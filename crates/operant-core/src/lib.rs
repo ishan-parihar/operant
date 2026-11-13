@@ -132,6 +132,7 @@ pub mod session;
 pub mod session_interrupted;
 pub mod session_protocol;
 pub mod session_recap;
+pub mod session_server;
 pub mod shell_hooks;
 pub mod skill_marketplace;
 pub mod skill_mentions;

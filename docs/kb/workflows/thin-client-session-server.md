@@ -37,7 +37,7 @@ lies), RT-551 (no published session cost), RT-552 (the read-only session API).
 |---|---|---|---|---|
 | thin-client-session-server-001 | done | I1: the agent's event type becomes a wire type (AgentEvent serialisable) | — | [2026-11-14] docs/audit/2026-11-13-server-process-architecture-scale-audit.md |
 | thin-client-session-server-002 | done | I2: the session protocol as data (client command, server event, versioned envelope) | — | [2026-11-14] docs/plans/2026-11-13-thin-client-session-server-plan.md |
-| thin-client-session-server-003 | open | I3: the gateway serves a client socket (two clients, one process, one child set) | — | — |
+| thin-client-session-server-003 | done | I3: the gateway serves a client socket (two clients, one process, one child set) | — | [2026-11-14] docs/plans/2026-11-13-thin-client-session-server-plan.md |
 | thin-client-session-server-004 | open | I4: a session on the server that a client can drive (two clients share one live session) | — | — |
 | thin-client-session-server-005 | open | I5: the TUI can attach (--attach; an attached client builds no registry) | — | — |
 | thin-client-session-server-006 | open | I6: approve, deny and cancel cross the socket (cancel really cancels) | — | — |

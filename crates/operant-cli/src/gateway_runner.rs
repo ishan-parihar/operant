@@ -2497,6 +2497,34 @@ fn slot_memory_provider() -> Option<Arc<operant_core::memory_wire::MemoryWirePro
         .map(Arc::new)
 }
 
+/// The gateway's answer on the session socket (RT-542).
+///
+/// The gateway OWNS the runtime — this handler only speaks the protocol on its
+/// behalf. For now it answers the handshake with the sessions this daemon has
+/// claimed (the presence registry is what the daemon writes), and names the
+/// commands it does not serve yet instead of going quiet.
+struct GatewaySessionHandler;
+
+impl operant_core::session_server::SessionHandler for GatewaySessionHandler {
+    fn handle(
+        &self,
+        message: operant_core::session_protocol::WireMessage,
+    ) -> Vec<operant_core::session_protocol::WireMessage> {
+        use operant_core::session_protocol::WireMessage;
+        match message {
+            WireMessage::Hello => {
+                let sessions =
+                    operant_core::active_sessions::presence_session_ids_for_pid(std::process::id());
+                vec![WireMessage::HelloOk { sessions }]
+            }
+            other => vec![WireMessage::Error {
+                session_id: None,
+                message: format!("the session protocol does not serve this yet: {other:?}"),
+            }],
+        }
+    }
+}
+
 /// How many agent slots the gateway runs (RT-508).
 ///
 /// One slot per concurrent conversation: a slot is a full agent with its
@@ -4381,7 +4409,10 @@ fn build_session_context(
 /// Constructs a `GatewayConfig` from `app_config.gateway.*` fields,
 /// builds the enabled platform adapters, creates the gateway session
 /// handler, and starts polling for incoming messages.
-pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
+pub async fn start_gateway(
+    app_config: &AppConfig,
+    session_socket: Option<std::path::PathBuf>,
+) -> Result<String> {
     // Audit finding 3, first half: cap the arena count BEFORE the tokio
     // runtime spawns its workers. glibc's default is one arena per core;
     // on a 12-core box that is up to 12 × 64 MiB-aligned retained regions
@@ -4425,6 +4456,22 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
     // held HERE, so spawning after it means the API shares the daemon's
     // single-instance discipline.
     crate::gateway_api::spawn_if_enabled(&app_config.gateway, &app_config.database_path).await;
+
+    // RT-542: the session socket. The gateway is already the server that owns
+    // the agent, the registry, the MCP children and the databases; this is the
+    // port a terminal client uses to reach it instead of building its own
+    // copy. It is bound here, while this process holds the daemon lock, so the
+    // socket and the channels live and die together.
+    if let Some(socket) = session_socket {
+        let handler = std::sync::Arc::new(GatewaySessionHandler);
+        tokio::spawn(async move {
+            if let Err(e) = operant_core::session_server::run_session_socket(handler, socket).await
+            {
+                tracing::error!(error = %e, "the session socket server stopped");
+            }
+        });
+        tracing::info!("the gateway will serve the session socket for attaching clients");
+    }
 
     let mut guard = runner().lock().await;
 
