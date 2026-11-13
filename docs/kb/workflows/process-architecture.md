@@ -36,3 +36,6 @@
 | process-architecture-030 | done | RT-525 (N): the unwired machinery — the persistence seam deleted, the stall detector wired into the drain | — | [2026-11-13] docs/audit/2026-11-12-process-architecture-red-team-execution.md |
 | process-architecture-031 | done | RT-541 (S): the checkpoint list is shared by every chat | — | [2026-11-13] docs/audit/2026-11-12-process-architecture-red-team-execution.md |
 |process-architecture-032|done|RT-538 (S): the file-state snapshots are shared by every chat|—|[2026-11-13] docs/audit/2026-11-12-process-architecture-red-team-execution.md (RT-538 closed iter-2158)|
+| process-architecture-033 | open | RT-542 (M): the TUI and every CLI session build the whole stack — the server/client split is missing | — | — |
+| process-architecture-034 | open | RT-543 (M): there are two daemons and neither shares anything — one server, one child fleet | — | — |
+| process-architecture-035 | open | RT-545/RT-546 (S): the ACP protocol cannot carry an interactive session and AgentEvent cannot cross a socket | — | — |
