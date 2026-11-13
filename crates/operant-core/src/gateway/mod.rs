@@ -1560,6 +1560,28 @@ mod tests {
 
     /// The picker's navigation taps are their own actions, and a data string
     /// that is neither is not a skill tap at all.
+    /// A picker row's label must stay READABLE: the skill descriptions run to
+    /// hundreds of characters (the meta-skills), and a 700-character Telegram
+    /// button is unreadable on a phone. The name is the discriminator, so it
+    /// has to survive the cap.
+    #[test]
+    fn a_picker_row_label_is_capped_and_keeps_the_name() {
+        let long = "x".repeat(700);
+        let label = super::types::picker_label("workspace-lint", &long);
+        assert!(
+            label.chars().count() <= 64,
+            "the label must be capped, got {} chars",
+            label.chars().count()
+        );
+        assert!(
+            label.starts_with("workspace-lint"),
+            "the name must survive the cap, got: {label}"
+        );
+        // A short description is kept whole.
+        let short = super::types::picker_label("axi", "Agent CLI standards.");
+        assert_eq!(short, "axi — Agent CLI standards.");
+    }
+
     #[test]
     fn skill_page_and_cancel_callbacks_are_distinguished() {
         let page = serde_json::json!({

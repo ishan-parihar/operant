@@ -762,7 +762,7 @@ fn render_list_body(frame: &mut Frame, state: &SessionHubState, area: ratatui::l
                 let title_text = row_title(row);
                 let title_width = title_text.chars().count();
                 let dir_span = if !dir_tag.is_empty()
-                    && title_width + dir_tag.chars().count() + 1 <= inner_width as usize
+                    && title_width + dir_tag.chars().count() < inner_width as usize
                 {
                     Some(Span::styled(
                         dir_tag.clone(),

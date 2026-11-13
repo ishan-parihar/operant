@@ -899,7 +899,7 @@ pub trait PlatformAdapter: Send + Sync {
         items: &[(String, String)],
         page: usize,
         per_page: usize,
-    ) -> Result<()> {
+    ) -> Result<Option<String>> {
         let per_page = per_page.max(1);
         let start = (page * per_page).min(items.len());
         let end = (start + per_page).min(items.len());
@@ -928,9 +928,28 @@ pub trait PlatformAdapter: Send + Sync {
             .with_thread_id(thread_id);
         if let Some(mid) = message_id {
             self.edit_message(channel_id, mid, &message).await?;
+            Ok(Some(mid.to_string()))
         } else {
             self.send_message(message).await?;
+            Ok(None)
         }
-        Ok(())
     }
+}
+
+/// The label one picker row carries: the skill's name and a SHORT gist of its
+/// description.
+///
+/// The descriptions run to hundreds of characters (the meta-skills), and a
+/// 700-character Telegram button is unreadable on a phone. The name is the
+/// discriminator; the gist is the hint.
+pub fn picker_label(name: &str, description: &str) -> String {
+    /// The longest label a picker row carries.
+    const MAX_LABEL: usize = 64;
+    let gist = description.split_whitespace().collect::<Vec<_>>().join(" ");
+    let label = format!("{name} — {gist}");
+    if label.chars().count() <= MAX_LABEL {
+        return label;
+    }
+    let kept: String = label.chars().take(MAX_LABEL - 1).collect();
+    format!("{kept}…")
 }

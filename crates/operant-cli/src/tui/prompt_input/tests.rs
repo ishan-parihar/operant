@@ -2529,3 +2529,49 @@ fn accepting_a_skill_mention_keeps_editing_rather_than_submitting() {
     );
     assert_eq!(s.text, "$ponytail ");
 }
+
+#[test]
+fn the_name_tiers_offer_the_vendor_roots_too() {
+    // Two pools: the operator's own, and a vendor (integration) root — the
+    // shape `~/.operant/skills` + `~/.operant/integrations/ponytail-v*/skills`
+    // has on this host. A vendor skill typed in full always resolved; the
+    // popup used to omit it, which read as "not installed".
+    let root = std::env::temp_dir().join(format!("operant-mention-pools-{}", std::process::id()));
+    let pool = root.join("skills");
+    let vendor = root.join("vendor");
+    for (dir, name) in [(&pool, "alpha-skill"), (&vendor, "ponytail-review")] {
+        let skill_dir = dir.join(name);
+        std::fs::create_dir_all(&skill_dir).expect("pool");
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            format!("---\nname: {name}\ndescription: The {name} skill.\n---\n\n# {name}\n"),
+        )
+        .expect("SKILL.md");
+    }
+    let guard = super::typeahead::SKILL_SNAPSHOT_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    super::typeahead::set_invocable_skills(&pool, &[vendor.clone()], Vec::new());
+
+    // The `$` popup offers the vendor skill.
+    let s = compute_typeahead("$pony", &[], &UsageStore::default(), 15, false);
+    assert!(
+        s.iter().any(|x| x.text == "$ponytail-review"),
+        "the popup must offer the vendor skill, got: {s:?}"
+    );
+    // `/skill <Tab>` completes it too — ONE pool, two tiers.
+    let s = compute_typeahead("/skill pony", &[], &UsageStore::default(), 15, false);
+    assert!(
+        s.iter().any(|x| x.text == "/skill ponytail-review"),
+        "the slash tier must complete the vendor skill, got: {s:?}"
+    );
+    // The operator's own skill is there too.
+    let s = compute_typeahead("$alpha", &[], &UsageStore::default(), 15, false);
+    assert!(
+        s.iter().any(|x| x.text == "$alpha-skill"),
+        "the operator pool must still be offered, got: {s:?}"
+    );
+
+    drop(guard);
+    std::fs::remove_dir_all(&root).ok();
+}

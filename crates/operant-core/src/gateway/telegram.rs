@@ -852,7 +852,7 @@ impl PlatformAdapter for TelegramAdapter {
         items: &[(String, String)],
         page: usize,
         per_page: usize,
-    ) -> Result<()> {
+    ) -> Result<Option<String>> {
         let per_page = per_page.max(1);
         let start = (page * per_page).min(items.len());
         let end = (start + per_page).min(items.len());
@@ -860,13 +860,8 @@ impl PlatformAdapter for TelegramAdapter {
             .iter()
             .enumerate()
             .map(|(offset, (label, detail))| {
-                let text = if detail.is_empty() {
-                    label.clone()
-                } else {
-                    format!("{label} — {detail}")
-                };
                 vec![serde_json::json!({
-                    "text": text,
+                    "text": super::types::picker_label(label, detail),
                     "callback_data": format!("skill:{}", start + offset),
                 })]
             })
@@ -910,7 +905,16 @@ impl PlatformAdapter for TelegramAdapter {
         let status = resp.status();
         let body_text = resp.text().await.unwrap_or_default();
         telegram_prompt_outcome(status.as_u16(), &body_text, "skill picker")?;
-        Ok(())
+        // The message id is how a tap is matched to the picker it belongs to:
+        // a chat can have TWO pickers open, and an index means nothing without
+        // the list it was drawn from.
+        let sent_id = serde_json::from_str::<serde_json::Value>(&body_text)
+            .ok()
+            .and_then(|v| v.get("result")?.get("message_id").cloned())
+            .and_then(|v| v.as_i64())
+            .map(|v| v.to_string())
+            .or_else(|| message_id.map(|m| m.to_string()));
+        Ok(sent_id)
     }
 
     fn config_json(&self) -> serde_json::Value {

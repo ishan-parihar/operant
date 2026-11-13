@@ -895,19 +895,6 @@ async fn offer_skill_picker(
     let Some(adapter) = gw.adapter_for(platform) else {
         return false;
     };
-    let key = format!("{platform}:{channel_id}");
-    if let Ok(mut guard) = PENDING_SKILL_PICKERS
-        .get_or_init(|| std::sync::Mutex::new(HashMap::new()))
-        .lock()
-    {
-        guard.insert(
-            key,
-            PendingSkillPicker {
-                entries: entries.clone(),
-                query: query.to_string(),
-            },
-        );
-    }
     let title = if query.trim().is_empty() {
         format!(
             "🧩 Skills — pick one to run it ({} available)",
@@ -916,7 +903,7 @@ async fn offer_skill_picker(
     } else {
         format!("🧩 Skills matching `{query}` ({} found)", entries.len())
     };
-    adapter
+    let Ok(sent_id) = adapter
         .send_picker(
             channel_id,
             thread_id,
@@ -927,7 +914,27 @@ async fn offer_skill_picker(
             SKILL_PICKER_PAGE,
         )
         .await
-        .is_ok()
+    else {
+        // The picker never landed: there are no buttons to answer, so there
+        // is nothing to remember either.
+        return false;
+    };
+    // The pending list is stored AFTER the send: the message id is what a tap
+    // is matched against, and a picker that never landed has no id.
+    if let Ok(mut guard) = PENDING_SKILL_PICKERS
+        .get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+        .lock()
+    {
+        guard.insert(
+            format!("{platform}:{channel_id}"),
+            PendingSkillPicker {
+                entries,
+                query: query.to_string(),
+                message_id: sent_id,
+            },
+        );
+    }
+    true
 }
 
 /// What a skill-picker tap asks for, before any I/O.
@@ -948,22 +955,98 @@ pub(crate) enum SkillTapAction {
 /// nothing — the picker expired — so the caller should offer a fresh one.
 fn skill_tap_action(marker: &serde_json::Value, key: &str) -> Option<SkillTapAction> {
     let action = marker.get("action")?;
-    match action.get("kind").and_then(|k| k.as_str())? {
+    let kind = action.get("kind").and_then(|k| k.as_str())?;
+    let tapped_message = marker
+        .get("message_id")
+        .and_then(|v| v.as_i64())
+        .map(|v| v.to_string());
+    let mut pending = PENDING_SKILL_PICKERS
+        .get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+        .lock()
+        .ok()?;
+    let entry = pending.get(key).cloned();
+    // A tap belongs to the picker message it was rendered into. A chat can
+    // have TWO pickers open (the operator ran `$` again while the first was
+    // still on screen), and the callback carries an INDEX — which means
+    // nothing without the list it was drawn from. A tap from any other
+    // picker is STALE: it must not invoke the wrong skill, and it must not
+    // consume the picker that IS on offer.
+    if let Some(entry) = &entry
+        && let (Some(pending_mid), Some(tapped_mid)) = (&entry.message_id, &tapped_message)
+        && pending_mid != tapped_mid
+    {
+        return None;
+    }
+    match kind {
         "invoke" => {
             let idx = action.get("idx").and_then(|i| i.as_u64()).unwrap_or(0) as usize;
-            let name = PENDING_SKILL_PICKERS
-                .get_or_init(|| std::sync::Mutex::new(HashMap::new()))
-                .lock()
-                .ok()
-                .and_then(|mut guard| guard.remove(key))
-                .and_then(|picker| picker.entries.get(idx).map(|(name, _)| name.clone()))?;
+            let name = entry?.entries.get(idx).map(|(name, _)| name.clone())?;
+            pending.remove(key);
             Some(SkillTapAction::Invoke(name))
         }
         "page" => Some(SkillTapAction::Page(
             action.get("page").and_then(|p| p.as_u64()).unwrap_or(0) as usize,
         )),
-        "cancel" => Some(SkillTapAction::Cancel),
+        "cancel" => {
+            pending.remove(key);
+            Some(SkillTapAction::Cancel)
+        }
         _ => None,
+    }
+}
+
+/// What an inbound message's `$skill` surface asks for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SkillSurface {
+    /// The message names a skill: this is the invocation message to send.
+    Invoke(String),
+    /// The operator asked for the picker: a bare `$`, or a name that
+    /// resolves to nothing. The string is the query.
+    Picker(String),
+    /// The message carries no `$` surface at all.
+    None,
+}
+
+/// Read a message's `$skill` surface.
+///
+/// The decision is pure enough to pin: a message that names a skill expands
+/// into the invocation message the agent follows (the SAME message
+/// `build_skill_invocation_message_in` builds for `/skill <name>`), a bare
+/// `$` asks for the picker, and a name that resolves to nothing asks for the
+/// picker with that name as its query.
+fn skill_surface_for(
+    handler: &GatewayMessageHandler,
+    session_key: &str,
+    content: &str,
+) -> SkillSurface {
+    let mentions = operant_core::skill_mentions::find_skill_mentions(content);
+    if mentions.is_empty() {
+        // A bare `$` is the "show me the skills" gesture.
+        return if content.trim() == "$" {
+            SkillSurface::Picker(String::new())
+        } else {
+            SkillSurface::None
+        };
+    }
+    let vendor_roots = vendor_skill_roots_for(handler);
+    let session = derived_gateway_session_id(session_key);
+    let expansion = operant_core::skill_mentions::expand_skill_mentions_in(
+        &handler.skills_root_dir,
+        content,
+        Some(session.as_str()),
+        &vendor_roots,
+    );
+    match expansion.message {
+        Some(text) => SkillSurface::Invoke(text),
+        // An unknown name is better answered by offering the skills that DO
+        // exist than by sending `$typo` to the agent.
+        None => SkillSurface::Picker(
+            expansion
+                .unresolved
+                .first()
+                .cloned()
+                .unwrap_or_else(|| mentions[0].name.clone()),
+        ),
     }
 }
 
@@ -1875,6 +1958,14 @@ pub struct PendingSkillPicker {
     pub entries: Vec<(String, String)>,
     /// The query that produced them ("" = browse everything).
     pub query: String,
+    /// The message the rows were rendered into.
+    ///
+    /// A chat can have TWO pickers open (the operator ran `$` again while the
+    /// first was still on screen), and a callback carries an INDEX — which
+    /// means nothing without the list it was drawn from. The id is what says
+    /// "this tap belongs to the picker still on offer"; a tap from any other
+    /// picker is stale, and must not invoke the wrong skill.
+    pub message_id: Option<String>,
 }
 
 /// The per-chat skill pickers.
@@ -5736,1205 +5827,1208 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
 
         loop {
             tokio::select! {
-                    maybe_msg = message_rx.recv() => {
-                        let Some(mut msg) = maybe_msg else { break };
-                        // Turn observability: the gateway log carried tool
-                        // registration, poll heartbeats and warnings, but no
-                        // inbound-message event at all — a turn was invisible in
-                        // the agent's own telemetry. Identifiers, booleans and
-                        // counts only; `msg.content` is user text and is never
-                        // logged.
-                        tracing::info!(
-                            user = %msg.user_id,
-                            platform = %msg.platform,
-                            channel = %msg.channel_id,
-                            is_group = msg.is_group_chat,
-                            thread_id = ?msg.thread_id,
-                            media_count = msg.media_urls.len(),
-                            "Gateway inbound message"
-                        );
-                        let platform = msg.platform.clone();
-                        let channel_id = msg.channel_id.clone();
-                        // Thread id captured before `msg` is moved into the turn —
-                        // stream/dedup markers and session keys are per-topic.
-                        let msg_thread = msg.thread_id;
-
-                        // Per-session routing key. Hoisted above both the command
-                        // branch and turn routing: `/stop` needs it to find the
-                        // running turn for THIS session, and it used to be derived
-                        // inside turn routing only. Deriving it in both places
-                        // would let them drift, and a drifted key means `/stop`
-                        // silently never matches.
-                        let session_key = match (msg.is_group_chat, msg.thread_id) {
-                            (true, Some(tid)) => {
-                                format!("{}:{}:thread:{}", msg.platform, msg.channel_id, tid)
-                            }
-                            (true, None) => format!("{}:{}", msg.platform, msg.channel_id),
-                            (false, Some(tid)) => format!(
-                                "{}:{}:{}:thread:{}",
-                                msg.platform, msg.channel_id, msg.user_id, tid
-                            ),
-                            (false, None) => {
-                                format!("{}:{}:{}", msg.platform, msg.channel_id, msg.user_id)
-                            }
-                        };
-
-                        // ── 1. Dialog interception (never queued) ────────────────
-                        // `true` = handled here (no agent turn); `false` = turn.
-                        let handled: anyhow::Result<bool> = async {
-                            // ── 1. Admin allowlist ────────────────────────────────
-                            if !admins.is_empty() && !admins.contains(&msg.user_id) {
-                                tracing::warn!(
-                                    "Message from unauthorized user {} on {} rejected",
-                                    msg.user_id,
-                                    msg.platform
-                                );
-                                let response = OutgoingMessage::new(
-                                    &msg.channel_id,
-                                    "You are not authorized to use this bot.",
-                                )
-                                .with_thread_id(msg.thread_id);
-                                gw.send_to_platform(&platform, response).await?;
-                                return Ok(true);
-                            }
-                            tracing::info!(
-                                "Message from {} passed admin allowlist check",
-                                msg.user_id
-                            );
-
-                            // ── 1.5 Command interception ──────────────────────────
-
-                            // (Approval button taps are synthesized as `/approve` /
-                            // `/deny` commands — see handle_callback_update in
-                            // core. The tap also carries an `approval_callback`
-                            // raw marker so we can edit the prompt message once
-                            // the outcome is known, exactly like hermes'
-                            // `query.edit_message_text` after a tap.)
-                            let approval_tap = msg.raw.get("approval_callback").cloned();
-                            let approval_was_pending = approval_tap.is_some()
-                                && pending_permission_exists(&msg.channel_id);
-                            let is_admin = admins.is_empty() || admins.contains(&msg.user_id);
-                            match resolve_command(&msg.content) {
-                            CommandMatch::Found(cmd_def, cmd_args) => {
-                                // `has_args` is a boolean on purpose: the args
-                                // string carries whatever the user typed after the
-                                // command name (`/title <text>`), so it is
-                                // classified but never logged.
-                                tracing::info!(
-                                    user = %msg.user_id,
-                                    platform = %platform,
-                                    channel = %channel_id,
-                                    session_key = %session_key,
-                                    command = cmd_def.name,
-                                    category = cmd_def.category,
-                                    admin_only = cmd_def.admin_only,
-                                    is_admin,
-                                    has_args = !cmd_args.is_empty(),
-                                    "Gateway command dispatch"
-                                );
-                                if cmd_def.admin_only && !is_admin {
-                                    let response = OutgoingMessage::new(
-                                        &msg.channel_id,
-                                        "This command is admin-only.",
-                                    )
-                                    .with_thread_id(msg.thread_id);
-                                    gw.send_to_platform(&platform, response).await?;
-                                } else if cmd_def.name == "stop"
-                                    && handler_for_stop.cancel_if_queued(&turn_inflight, &session_key)
-                                {
-                                    // W3-2: the turn is waiting on another
-                                    // chat's turn — cancel it before it starts.
-                                    let response = OutgoingMessage::new(
-                                        &msg.channel_id,
-                                        "⏹️ **Cancelled your queued message** (it was waiting behind another chat's turn).",
-                                    )
-                                    .with_thread_id(msg.thread_id);
-                                    gw.send_to_platform(&platform, response).await?;
-                                } else if cmd_def.name == "skills"
-                                    && cmd_args.trim().is_empty()
-                                    && offer_skill_picker(
-                                        &gw,
-                                        &platform,
-                                        &msg.channel_id,
-                                        msg.thread_id,
-                                        None,
-                                        &handler_for_stop.skills_root_dir,
-                                        &vendor_skill_roots_for(&handler_for_stop),
-                                        "",
-                                        0,
-                                    )
-                                    .await
-                                {
-                                    // The channel's skill SEARCH: the picker WAS
-                                    // rendered, so the command is fully handled
-                                    // here. A platform that cannot render buttons
-                                    // (or a skills dir with nothing loadable) falls
-                                    // through to the plain-text listing below.
-                                } else if let Some(reply) = handle_runtime_command(
-                                    &handler_for_stop,
-                                    cmd_def.name,
-                                    cmd_args,
-                                    &session_key,
-                                )
-                                .await
-                                {
-                                    // RT-175: session-mutating commands execute
-                                    // against THIS chat's conversation under the
-                                    // turn lock — the sync handle_command arms
-                                    // for them are unreachable honesty stubs
-                                    // kept for non-runtime contexts (tests).
-                                    let response =
-                                        OutgoingMessage::new(&msg.channel_id, reply)
-                                            .with_thread_id(msg.thread_id);
-                                    gw.send_to_platform(&platform, response).await?;
-                                } else {
-                                    let ctx = CommandContext::new(
-                                        Some(&gw),
-                                        &app_config_clone,
-                                        is_admin,
-                                        &msg.user_id,
-                                        &platform,
-                                        &msg.channel_id,
-                                    )
-                                    .with_stop_flag(
-                                        handler_for_stop
-                                            .stop_flag_if_running(&turn_inflight, &session_key),
-                                    )
-                                    .with_session_pins(Some(session_pins.clone()))
-                                    .with_session_key(&session_key)
-                                    // RT-175: the live steer queue off the
-                                    // handler's agent — the same queue
-                                    // drain_steers empties at the iteration
-                                    // boundary, so /steer from a channel
-                                    // reaches the RUNNING turn like the TUI's.
-                                    .with_steer_queue(Some(
-                                        handler_for_stop.slots.slot_for(&session_key).agent.steer_queue_handle(),
-                                    ))
-                                    // (2026-11-12) The NEXT-turn queue: where
-                                    // `/queue` parks a message. Separate from
-                                    // the steer queue above — that one is
-                                    // drained BETWEEN iterations, so a message
-                                    // parked there reaches the model inside the
-                                    // RUNNING turn.
-                                    .with_next_turn_queue(Some(
-                                        std::sync::Arc::clone(&handler_for_stop.next_turn_queue),
-                                    ))
-                                    // (2026-11-12) A steer steers a RUNNING
-                                    // turn; with no turn running the message
-                                    // belongs in the next-turn queue.
-                                    .with_turn_running(
-                                        handler_for_stop.session_is_running(&session_key),
-                                    );
-                                    if let Some(response_text) =
-                                        handle_command(cmd_def.name, cmd_args, &ctx)
-                                    {
-                                        let response = OutgoingMessage::new(
-                                            &msg.channel_id,
-                                            response_text,
-                                        )
-                                        .with_thread_id(msg.thread_id);
-                                        gw.send_to_platform(&platform, response).await?;
-                                    }
-                                }
-                                // Reflect the tap outcome on the prompt message
-                                // itself (hermes parity: "✅ Approved by X" /
-                                // "⌛ expired").
-                                if let Some(cb) = approval_tap {
-                                    edit_approval_prompt_message(
-                                        &gw,
-                                        &platform,
-                                        &cb,
-                                        approval_was_pending,
-                                    )
-                                    .await;
-                                }
-                                return Ok(true);
-                            }
-                            CommandMatch::Unknown { token } => {
-                                // A skill NAME is a command: the vendor skills
-                                // are published as commands (`/ponytail-audit`
-                                // RUNS the skill), and Telegram's menu spells a
-                                // hyphen as an underscore, so a token that is no
-                                // built-in may still be a skill — try both
-                                // spellings before rejecting (iter-2159).
-                                let vendor_roots =
-                                    crate::skill_roots::vendor_skill_roots(&app_config_clone);
-                                let instruction = msg
-                                    .content
-                                    .trim()
-                                    .strip_prefix('/')
-                                    .and_then(|rest| rest.split_once(char::is_whitespace))
-                                    .map(|(_, args)| args.trim())
-                                    .unwrap_or("");
-                                let skill_msg = crate::gateway_commands::skill_command_names(token)
-                                    .into_iter()
-                                    .find_map(|name| {
-                                        operant_core::agent::skill_preprocessing::build_skill_invocation_message_in(
-                                            &app_config_clone.skills.root_dir,
-                                            &name,
-                                            instruction,
-                                            None,
-                                            &vendor_roots,
-                                        )
-                                    });
-                                if let Some(injected) = skill_msg {
+                                maybe_msg = message_rx.recv() => {
+                                    let Some(mut msg) = maybe_msg else { break };
+                                    // Turn observability: the gateway log carried tool
+                                    // registration, poll heartbeats and warnings, but no
+                                    // inbound-message event at all — a turn was invisible in
+                                    // the agent's own telemetry. Identifiers, booleans and
+                                    // counts only; `msg.content` is user text and is never
+                                    // logged.
                                     tracing::info!(
                                         user = %msg.user_id,
-                                        platform = %platform,
-                                        channel_id = %channel_id,
-                                        token = %token,
-                                        "Gateway dispatch: an unknown token is a vendor skill command — running it"
+                                        platform = %msg.platform,
+                                        channel = %msg.channel_id,
+                                        is_group = msg.is_group_chat,
+                                        thread_id = ?msg.thread_id,
+                                        media_count = msg.media_urls.len(),
+                                        "Gateway inbound message"
                                     );
-                                    const CHANNEL_SKILL_HEAD_CHARS: usize = 1200;
-                                    let total = injected.chars().count();
-                                    let shown: String =
-                                        injected.chars().take(CHANNEL_SKILL_HEAD_CHARS).collect();
-                                    let mut reply = format!("🧩 Skill `{token}`\n\n{shown}");
-                                    if total > CHANNEL_SKILL_HEAD_CHARS {
-                                        reply.push_str(
-                                            "\n…(truncated — send this message to run the skill in full)",
-                                        );
-                                    }
-                                    gw.send_to_platform(
-                                        &platform,
-                                        OutgoingMessage::new(&msg.channel_id, reply)
-                                            .with_thread_id(msg.thread_id),
-                                    )
-                                    .await?;
-                                    return Ok(true);
-                                }
-                                // The single most valuable line for the
-                                // mistyped-command class: the token that failed to
-                                // resolve, and the fact that it was REJECTED here
-                                // rather than forwarded to the model. `warn!`
-                                // rather than `info!` because in a log dominated by
-                                // poll heartbeats an unrecognized command is an
-                                // anomaly that must not drown in the noise — and
-                                // before `resolve_command` returned three states,
-                                // exactly this case fell through as prose, the
-                                // model improvised a help reply, and nothing
-                                // recorded that the command surface had been
-                                // missed.
-                                tracing::warn!(
-                                    user = %msg.user_id,
-                                    platform = %platform,
-                                    channel = %channel_id,
-                                    session_key = %session_key,
-                                    token = %token,
-                                    "Gateway command dispatch: unknown token rejected, not sent to model"
-                                );
-                                let response = OutgoingMessage::new(
-                                    &msg.channel_id,
-                                    format!(
-                                        "Unknown command `/{}`.\nUse /help to list the available commands.",
-                                        token
-                                    ),
-                                )
-                                .with_thread_id(msg.thread_id);
-                                gw.send_to_platform(&platform, response).await?;
-                                return Ok(true);
-                            }
-                            // Prose: fall through to the agent turn below.
-                            CommandMatch::NotACommand => {
-                                // Classification companion to the inbound line:
-                                // this is a TURN, not a command. A pending dialog
-                                // below can still intercept it (a clarify reply),
-                                // so this records the classification and not the
-                                // outcome — the authoritative "a turn actually
-                                // started" event is the one in
-                                // `GatewayMessageHandler::handle`.
-                                // ── W5 (audit O-14): the Chair's channel ──
-                                // When org mode is on, a message from one of
-                                // Holon's configured Chair identities is the
-                                // OWNER speaking to the organization: classify
-                                // it through the kernel (Holon owns the
-                                // classifier), and a chair-command goes to the
-                                // kernel instead of the model. Anyone else
-                                // stays chat — exactly as before.
-                                if app_config_clone.holon.enabled {
-                                    match operant_os::chair::is_chair(
-                                        &app_config_clone.holon.home,
-                                        app_config_clone.holon.bin.as_deref(),
-                                        &platform,
-                                        &msg.user_id,
-                                    )
-                                    .await
-                                    {
-                                        Ok(true) => {
-                                            let reply = operant_os::chair::dispatch_message(
-                                                &app_config_clone.holon.home,
-                                                app_config_clone.holon.bin.as_deref(),
-                                                &msg.content,
+                                    let platform = msg.platform.clone();
+                                    let channel_id = msg.channel_id.clone();
+                                    // Thread id captured before `msg` is moved into the turn —
+                                    // stream/dedup markers and session keys are per-topic.
+                                    let msg_thread = msg.thread_id;
+
+                                    // Per-session routing key. Hoisted above both the command
+                                    // branch and turn routing: `/stop` needs it to find the
+                                    // running turn for THIS session, and it used to be derived
+                                    // inside turn routing only. Deriving it in both places
+                                    // would let them drift, and a drifted key means `/stop`
+                                    // silently never matches.
+                                    let session_key = match (msg.is_group_chat, msg.thread_id) {
+                                        (true, Some(tid)) => {
+                                            format!("{}:{}:thread:{}", msg.platform, msg.channel_id, tid)
+                                        }
+                                        (true, None) => format!("{}:{}", msg.platform, msg.channel_id),
+                                        (false, Some(tid)) => format!(
+                                            "{}:{}:{}:thread:{}",
+                                            msg.platform, msg.channel_id, msg.user_id, tid
+                                        ),
+                                        (false, None) => {
+                                            format!("{}:{}:{}", msg.platform, msg.channel_id, msg.user_id)
+                                        }
+                                    };
+
+                                    // ── 1. Dialog interception (never queued) ────────────────
+                                    // `true` = handled here (no agent turn); `false` = turn.
+                                    let handled: anyhow::Result<bool> = async {
+                                        // ── 1. Admin allowlist ────────────────────────────────
+                                        if !admins.is_empty() && !admins.contains(&msg.user_id) {
+                                            tracing::warn!(
+                                                "Message from unauthorized user {} on {} rejected",
+                                                msg.user_id,
+                                                msg.platform
+                                            );
+                                            let response = OutgoingMessage::new(
+                                                &msg.channel_id,
+                                                "You are not authorized to use this bot.",
                                             )
-                                            .await;
-                                            let text = match reply {
-                                                Ok(t) => t,
-                                                Err(e) => format!("chair command failed: {e}"),
-                                            };
-                                            let response = OutgoingMessage::new(&msg.channel_id, text)
-                                                .with_thread_id(msg.thread_id);
+                                            .with_thread_id(msg.thread_id);
                                             gw.send_to_platform(&platform, response).await?;
                                             return Ok(true);
                                         }
-                                        Ok(false) => {} // not the Chair: chat as usual
-                                        Err(e) => {
+                                        tracing::info!(
+                                            "Message from {} passed admin allowlist check",
+                                            msg.user_id
+                                        );
+
+                                        // ── 1.5 Command interception ──────────────────────────
+
+                                        // (Approval button taps are synthesized as `/approve` /
+                                        // `/deny` commands — see handle_callback_update in
+                                        // core. The tap also carries an `approval_callback`
+                                        // raw marker so we can edit the prompt message once
+                                        // the outcome is known, exactly like hermes'
+                                        // `query.edit_message_text` after a tap.)
+                                        let approval_tap = msg.raw.get("approval_callback").cloned();
+                                        let approval_was_pending = approval_tap.is_some()
+                                            && pending_permission_exists(&msg.channel_id);
+                                        let is_admin = admins.is_empty() || admins.contains(&msg.user_id);
+                                        match resolve_command(&msg.content) {
+                                        CommandMatch::Found(cmd_def, cmd_args) => {
+                                            // `has_args` is a boolean on purpose: the args
+                                            // string carries whatever the user typed after the
+                                            // command name (`/title <text>`), so it is
+                                            // classified but never logged.
+                                            tracing::info!(
+                                                user = %msg.user_id,
+                                                platform = %platform,
+                                                channel = %channel_id,
+                                                session_key = %session_key,
+                                                command = cmd_def.name,
+                                                category = cmd_def.category,
+                                                admin_only = cmd_def.admin_only,
+                                                is_admin,
+                                                has_args = !cmd_args.is_empty(),
+                                                "Gateway command dispatch"
+                                            );
+                                            if cmd_def.admin_only && !is_admin {
+                                                let response = OutgoingMessage::new(
+                                                    &msg.channel_id,
+                                                    "This command is admin-only.",
+                                                )
+                                                .with_thread_id(msg.thread_id);
+                                                gw.send_to_platform(&platform, response).await?;
+                                            } else if cmd_def.name == "stop"
+                                                && handler_for_stop.cancel_if_queued(&turn_inflight, &session_key)
+                                            {
+                                                // W3-2: the turn is waiting on another
+                                                // chat's turn — cancel it before it starts.
+                                                let response = OutgoingMessage::new(
+                                                    &msg.channel_id,
+                                                    "⏹️ **Cancelled your queued message** (it was waiting behind another chat's turn).",
+                                                )
+                                                .with_thread_id(msg.thread_id);
+                                                gw.send_to_platform(&platform, response).await?;
+                                            } else if cmd_def.name == "skills"
+                                                && cmd_args.trim().is_empty()
+                                                && offer_skill_picker(
+                                                    &gw,
+                                                    &platform,
+                                                    &msg.channel_id,
+                                                    msg.thread_id,
+                                                    None,
+                                                    &handler_for_stop.skills_root_dir,
+                                                    &vendor_skill_roots_for(&handler_for_stop),
+                                                    "",
+                                                    0,
+                                                )
+                                                .await
+                                            {
+                                                // The channel's skill SEARCH: the picker WAS
+                                                // rendered, so the command is fully handled
+                                                // here. A platform that cannot render buttons
+                                                // (or a skills dir with nothing loadable) falls
+                                                // through to the plain-text listing below.
+                                            } else if let Some(reply) = handle_runtime_command(
+                                                &handler_for_stop,
+                                                cmd_def.name,
+                                                cmd_args,
+                                                &session_key,
+                                            )
+                                            .await
+                                            {
+                                                // RT-175: session-mutating commands execute
+                                                // against THIS chat's conversation under the
+                                                // turn lock — the sync handle_command arms
+                                                // for them are unreachable honesty stubs
+                                                // kept for non-runtime contexts (tests).
+                                                let response =
+                                                    OutgoingMessage::new(&msg.channel_id, reply)
+                                                        .with_thread_id(msg.thread_id);
+                                                gw.send_to_platform(&platform, response).await?;
+                                            } else {
+                                                let ctx = CommandContext::new(
+                                                    Some(&gw),
+                                                    &app_config_clone,
+                                                    is_admin,
+                                                    &msg.user_id,
+                                                    &platform,
+                                                    &msg.channel_id,
+                                                )
+                                                .with_stop_flag(
+                                                    handler_for_stop
+                                                        .stop_flag_if_running(&turn_inflight, &session_key),
+                                                )
+                                                .with_session_pins(Some(session_pins.clone()))
+                                                .with_session_key(&session_key)
+                                                // RT-175: the live steer queue off the
+                                                // handler's agent — the same queue
+                                                // drain_steers empties at the iteration
+                                                // boundary, so /steer from a channel
+                                                // reaches the RUNNING turn like the TUI's.
+                                                .with_steer_queue(Some(
+                                                    handler_for_stop.slots.slot_for(&session_key).agent.steer_queue_handle(),
+                                                ))
+                                                // (2026-11-12) The NEXT-turn queue: where
+                                                // `/queue` parks a message. Separate from
+                                                // the steer queue above — that one is
+                                                // drained BETWEEN iterations, so a message
+                                                // parked there reaches the model inside the
+                                                // RUNNING turn.
+                                                .with_next_turn_queue(Some(
+                                                    std::sync::Arc::clone(&handler_for_stop.next_turn_queue),
+                                                ))
+                                                // (2026-11-12) A steer steers a RUNNING
+                                                // turn; with no turn running the message
+                                                // belongs in the next-turn queue.
+                                                .with_turn_running(
+                                                    handler_for_stop.session_is_running(&session_key),
+                                                );
+                                                if let Some(response_text) =
+                                                    handle_command(cmd_def.name, cmd_args, &ctx)
+                                                {
+                                                    let response = OutgoingMessage::new(
+                                                        &msg.channel_id,
+                                                        response_text,
+                                                    )
+                                                    .with_thread_id(msg.thread_id);
+                                                    gw.send_to_platform(&platform, response).await?;
+                                                }
+                                            }
+                                            // Reflect the tap outcome on the prompt message
+                                            // itself (hermes parity: "✅ Approved by X" /
+                                            // "⌛ expired").
+                                            if let Some(cb) = approval_tap {
+                                                edit_approval_prompt_message(
+                                                    &gw,
+                                                    &platform,
+                                                    &cb,
+                                                    approval_was_pending,
+                                                )
+                                                .await;
+                                            }
+                                            return Ok(true);
+                                        }
+                                        CommandMatch::Unknown { token } => {
+                                            // A skill NAME is a command: the vendor skills
+                                            // are published as commands (`/ponytail-audit`
+                                            // RUNS the skill), and Telegram's menu spells a
+                                            // hyphen as an underscore, so a token that is no
+                                            // built-in may still be a skill — try both
+                                            // spellings before rejecting (iter-2159).
+                                            let vendor_roots =
+                                                crate::skill_roots::vendor_skill_roots(&app_config_clone);
+                                            let instruction = msg
+                                                .content
+                                                .trim()
+                                                .strip_prefix('/')
+                                                .and_then(|rest| rest.split_once(char::is_whitespace))
+                                                .map(|(_, args)| args.trim())
+                                                .unwrap_or("");
+                                            let skill_msg = crate::gateway_commands::skill_command_names(token)
+                                                .into_iter()
+                                                .find_map(|name| {
+                                                    operant_core::agent::skill_preprocessing::build_skill_invocation_message_in(
+                                                        &app_config_clone.skills.root_dir,
+                                                        &name,
+                                                        instruction,
+                                                        None,
+                                                        &vendor_roots,
+                                                    )
+                                                });
+                                            if let Some(injected) = skill_msg {
+                                                tracing::info!(
+                                                    user = %msg.user_id,
+                                                    platform = %platform,
+                                                    channel_id = %channel_id,
+                                                    token = %token,
+                                                    "Gateway dispatch: an unknown token is a vendor skill command — running it"
+                                                );
+                                                const CHANNEL_SKILL_HEAD_CHARS: usize = 1200;
+                                                let total = injected.chars().count();
+                                                let shown: String =
+                                                    injected.chars().take(CHANNEL_SKILL_HEAD_CHARS).collect();
+                                                let mut reply = format!("🧩 Skill `{token}`\n\n{shown}");
+                                                if total > CHANNEL_SKILL_HEAD_CHARS {
+                                                    reply.push_str(
+                                                        "\n…(truncated — send this message to run the skill in full)",
+                                                    );
+                                                }
+                                                gw.send_to_platform(
+                                                    &platform,
+                                                    OutgoingMessage::new(&msg.channel_id, reply)
+                                                        .with_thread_id(msg.thread_id),
+                                                )
+                                                .await?;
+                                                return Ok(true);
+                                            }
+                                            // The single most valuable line for the
+                                            // mistyped-command class: the token that failed to
+                                            // resolve, and the fact that it was REJECTED here
+                                            // rather than forwarded to the model. `warn!`
+                                            // rather than `info!` because in a log dominated by
+                                            // poll heartbeats an unrecognized command is an
+                                            // anomaly that must not drown in the noise — and
+                                            // before `resolve_command` returned three states,
+                                            // exactly this case fell through as prose, the
+                                            // model improvised a help reply, and nothing
+                                            // recorded that the command surface had been
+                                            // missed.
                                             tracing::warn!(
-                                                error = %e,
-                                                "chair identity check degraded — treating sender as chat"
+                                                user = %msg.user_id,
+                                                platform = %platform,
+                                                channel = %channel_id,
+                                                session_key = %session_key,
+                                                token = %token,
+                                                "Gateway command dispatch: unknown token rejected, not sent to model"
+                                            );
+                                            let response = OutgoingMessage::new(
+                                                &msg.channel_id,
+                                                format!(
+                                                    "Unknown command `/{}`.\nUse /help to list the available commands.",
+                                                    token
+                                                ),
+                                            )
+                                            .with_thread_id(msg.thread_id);
+                                            gw.send_to_platform(&platform, response).await?;
+                                            return Ok(true);
+                                        }
+                                        // Prose: fall through to the agent turn below.
+                                        CommandMatch::NotACommand => {
+                                            // Classification companion to the inbound line:
+                                            // this is a TURN, not a command. A pending dialog
+                                            // below can still intercept it (a clarify reply),
+                                            // so this records the classification and not the
+                                            // outcome — the authoritative "a turn actually
+                                            // started" event is the one in
+                                            // `GatewayMessageHandler::handle`.
+                                            // ── W5 (audit O-14): the Chair's channel ──
+                                            // When org mode is on, a message from one of
+                                            // Holon's configured Chair identities is the
+                                            // OWNER speaking to the organization: classify
+                                            // it through the kernel (Holon owns the
+                                            // classifier), and a chair-command goes to the
+                                            // kernel instead of the model. Anyone else
+                                            // stays chat — exactly as before.
+                                            if app_config_clone.holon.enabled {
+                                                match operant_os::chair::is_chair(
+                                                    &app_config_clone.holon.home,
+                                                    app_config_clone.holon.bin.as_deref(),
+                                                    &platform,
+                                                    &msg.user_id,
+                                                )
+                                                .await
+                                                {
+                                                    Ok(true) => {
+                                                        let reply = operant_os::chair::dispatch_message(
+                                                            &app_config_clone.holon.home,
+                                                            app_config_clone.holon.bin.as_deref(),
+                                                            &msg.content,
+                                                        )
+                                                        .await;
+                                                        let text = match reply {
+                                                            Ok(t) => t,
+                                                            Err(e) => format!("chair command failed: {e}"),
+                                                        };
+                                                        let response = OutgoingMessage::new(&msg.channel_id, text)
+                                                            .with_thread_id(msg.thread_id);
+                                                        gw.send_to_platform(&platform, response).await?;
+                                                        return Ok(true);
+                                                    }
+                                                    Ok(false) => {} // not the Chair: chat as usual
+                                                    Err(e) => {
+                                                        tracing::warn!(
+                                                            error = %e,
+                                                            "chair identity check degraded — treating sender as chat"
+                                                        );
+                                                    }
+                                                }
+
+                                                // W5 (O-15): every channel message is an
+                                                // event source. The kernel's event
+                                                // triggers match against it; a match fires
+                                                // its routine (payload on stdin, cooldown
+                                                // enforced kernel-side). Fire-and-forget:
+                                                // a trigger problem never blocks the turn.
+                                                let ev_home = app_config_clone.holon.home.clone();
+                                                let ev_bin = app_config_clone.holon.bin.clone();
+                                                let ev_text = msg.content.clone();
+                                                tokio::spawn(async move {
+                                                    match operant_os::events::match_and_fire(
+                                                        &ev_home,
+                                                        ev_bin.as_deref(),
+                                                        &ev_text,
+                                                    )
+                                                    .await
+                                                    {
+                                                        Ok(fired) if fired > 0 => tracing::info!(
+                                                            fired,
+                                                            "event triggers fired for an inbound message"
+                                                        ),
+                                                        Ok(_) => {}
+                                                        Err(e) => tracing::warn!(
+                                                            error = %e,
+                                                            "event intake degraded"
+                                                        ),
+                                                    }
+                                                });
+                                            }
+
+                                                                             // ── (2026-11-12) A DIRECT message while THIS session's turn
+                                             // runs is a STEER ───────────────────────────────────────────
+                                             //
+                                             // The operator typed it while the model was working; the only
+                                             // useful reading is "change what you are doing now". The agent's
+                                             // steer queue delivers exactly that at the next iteration
+                                             // boundary.
+                                             //
+                                             // Before this, the message waited for the slot lock and then
+                                             // started a SECOND turn — so a channel could not steer at all,
+                                             // and queueing was the only behaviour it had. On a channel there
+                                             // is no Ctrl+Enter, so `/queue` is the ONLY way to park a message
+                                             // for the next turn.
+                                             //
+                                             // Per-session, not per-slot: another chat's turn holding the same
+                                             // slot does not make this chat's message a steer.
+                                             if handler_for_stop.session_is_running(&session_key) {
+                                                 let slot = handler_for_stop.slots.slot_for(&session_key);
+                                                 slot.agent.steer(msg.content.clone()).await;
+                                                 tracing::info!(
+                                                     user = %msg.user_id,
+                                                     platform = %platform,
+                                                     channel = %channel_id,
+                                                     session_key = %session_key,
+                                                     "Gateway command dispatch: prose steered into the running turn"
+                                                 );
+                                                 let response = OutgoingMessage::new(
+                                                     &msg.channel_id,
+                                                     "🧭 **Steered** — it reaches the agent at its next iteration boundary.\nUse `/queue <text>` to hold a message for the next turn instead.",
+                                                 )
+                                                 .with_thread_id(msg.thread_id);
+                                                 gw.send_to_platform(&platform, response).await?;
+                                                 return Ok(true);
+                                             }
+
+            tracing::info!(
+                                                user = %msg.user_id,
+                                                platform = %platform,
+                                                channel = %channel_id,
+                                                session_key = %session_key,
+                                                "Gateway command dispatch: prose, offered to the agent as a turn"
                                             );
                                         }
                                     }
 
-                                    // W5 (O-15): every channel message is an
-                                    // event source. The kernel's event
-                                    // triggers match against it; a match fires
-                                    // its routine (payload on stdin, cooldown
-                                    // enforced kernel-side). Fire-and-forget:
-                                    // a trigger problem never blocks the turn.
-                                    let ev_home = app_config_clone.holon.home.clone();
-                                    let ev_bin = app_config_clone.holon.bin.clone();
-                                    let ev_text = msg.content.clone();
-                                    tokio::spawn(async move {
-                                        match operant_os::events::match_and_fire(
-                                            &ev_home,
-                                            ev_bin.as_deref(),
-                                            &ev_text,
-                                        )
-                                        .await
-                                        {
-                                            Ok(fired) if fired > 0 => tracing::info!(
-                                                fired,
-                                                "event triggers fired for an inbound message"
-                                            ),
-                                            Ok(_) => {}
-                                            Err(e) => tracing::warn!(
-                                                error = %e,
-                                                "event intake degraded"
-                                            ),
-                                        }
-                                    });
-                                }
-
-                                                                 // ── (2026-11-12) A DIRECT message while THIS session's turn
-                                 // runs is a STEER ───────────────────────────────────────────
-                                 //
-                                 // The operator typed it while the model was working; the only
-                                 // useful reading is "change what you are doing now". The agent's
-                                 // steer queue delivers exactly that at the next iteration
-                                 // boundary.
-                                 //
-                                 // Before this, the message waited for the slot lock and then
-                                 // started a SECOND turn — so a channel could not steer at all,
-                                 // and queueing was the only behaviour it had. On a channel there
-                                 // is no Ctrl+Enter, so `/queue` is the ONLY way to park a message
-                                 // for the next turn.
-                                 //
-                                 // Per-session, not per-slot: another chat's turn holding the same
-                                 // slot does not make this chat's message a steer.
-                                 if handler_for_stop.session_is_running(&session_key) {
-                                     let slot = handler_for_stop.slots.slot_for(&session_key);
-                                     slot.agent.steer(msg.content.clone()).await;
-                                     tracing::info!(
-                                         user = %msg.user_id,
-                                         platform = %platform,
-                                         channel = %channel_id,
-                                         session_key = %session_key,
-                                         "Gateway command dispatch: prose steered into the running turn"
-                                     );
-                                     let response = OutgoingMessage::new(
-                                         &msg.channel_id,
-                                         "🧭 **Steered** — it reaches the agent at its next iteration boundary.\nUse `/queue <text>` to hold a message for the next turn instead.",
-                                     )
-                                     .with_thread_id(msg.thread_id);
-                                     gw.send_to_platform(&platform, response).await?;
-                                     return Ok(true);
-                                 }
-
-tracing::info!(
-                                    user = %msg.user_id,
-                                    platform = %platform,
-                                    channel = %channel_id,
-                                    session_key = %session_key,
-                                    "Gateway command dispatch: prose, offered to the agent as a turn"
-                                );
-                            }
-                        }
-
-                            // ── 1.6 Clarify choice taps ──────────────────────────
-                            // A `choice:` inline-button tap resolves the pending
-                            // clarify() question with the selected option. The
-                            // adapter synthesized this message with a raw
-                            // `choice_callback` marker — resolve it here so it
-                            // never reaches the agent as a stray message, and
-                            // edit the prompt to show the selection (hermes
-                            // `send_clarify` tap parity).
-                            if let Some(cc) = msg.raw.get("choice_callback").cloned() {
-                                let pending_map_clone = {
-                                    let global_uq =
-                                        crate::gateway_runner::PENDING_USER_QUESTIONS.get();
-                                    global_uq
-                                        .and_then(|g| g.lock().ok())
-                                        .and_then(|mut guard| guard.take())
-                                };
-                                let mut selected: Option<String> = None;
-                                if let Some(pending_map) = pending_map_clone {
-                                    let key = format!("{platform}:{channel_id}");
-                                    let idx = cc
-                                        .get("idx")
-                                        .and_then(|v| v.as_u64())
-                                        .unwrap_or(0) as usize;
-                                    if let Some((reply_tx, choices)) =
-                                        pending_map.lock().await.remove(&key)
-                                    {
-                                        let text = choices
-                                            .and_then(|c| c.get(idx).cloned())
-                                            .unwrap_or_else(|| format!("option {}", idx + 1));
-                                        let _ = reply_tx.send(text.clone());
-                                        selected = Some(text);
-                                    }
-                                    if let Some(g) =
-                                        crate::gateway_runner::PENDING_USER_QUESTIONS.get()
-                                        && let Ok(mut guard) = g.lock()
-                                    {
-                                        *guard = Some(pending_map);
-                                    }
-                                }
-                                // Edit the question message to show the selection
-                                // and remove the buttons.
-                                if let (Some(adapter), Some(chat), Some(mid)) = (
-                                    gw.adapter_for(&platform),
-                                    cc.get("chat_id").and_then(|v| v.as_str()),
-                                    cc.get("message_id").and_then(|v| v.as_i64()),
-                                ) {
-                                    let text = match selected {
-                                        Some(t) => format!("✅ Selected: {t}"),
-                                        None => "⌛ This question has already been answered or timed out."
-                                            .to_string(),
-                                    };
-                                    let _ = adapter
-                                        .edit_message(
-                                            chat,
-                                            &mid.to_string(),
-                                            &OutgoingMessage::new(chat, &text).no_markdown(),
-                                        )
-                                        .await;
-                                }
-                            return Ok(true);
-                        }
-
-                        // ── 1.7 Pending clarify() text replies ────────────────
-                        // A plain-text reply while a clarify() /
-                        // approval_request() dialog is pending resolves the
-                        // question with the user's text. Checked here (in
-                        // addition to the handler) so the reply is never
-                        // queued behind the very turn that spawned the
-                        // dialog — the dialog would otherwise deadlock until
-                        // its 120s timeout.
-                        if !msg.content.trim_start().starts_with('/') {
-                            let channel_key = format!("{platform}:{channel_id}");
-                            let pending_map_clone = {
-                                let global_uq =
-                                    crate::gateway_runner::PENDING_USER_QUESTIONS.get();
-                                global_uq
-                                    .and_then(|g| g.lock().ok())
-                                    .and_then(|mut guard| guard.take())
-                            };
-                            if let Some(pending_map) = pending_map_clone {
-                                let reply_tx = {
-                                    let mut pending = pending_map.lock().await;
-                                    pending.remove(&channel_key)
-                                };
-                                if let Some((reply_tx, _choices)) = reply_tx {
-                                    tracing::info!(
-                                        channel = %channel_key,
-                                        "Routing message as user-question reply (dispatch)"
-                                    );
-                                    let _ = reply_tx.send(msg.content.clone());
-                                    if let Some(g) =
-                                        crate::gateway_runner::PENDING_USER_QUESTIONS.get()
-                                        && let Ok(mut guard) = g.lock()
-                                    {
-                                        *guard = Some(pending_map);
-                                    }
-                                    // Acknowledge so the user knows the
-                                    // reply landed (hermes parity).
-                                    let ack = OutgoingMessage::new(
-                                        &msg.channel_id,
-                                        "✅ Reply received — resuming...",
-                                    )
-                                    .no_markdown()
-                                    .with_thread_id(msg.thread_id);
-                                    if let Err(e) = gw.send_to_platform(&platform, ack).await {
-                                        tracing::warn!(
-                                            platform = %platform,
-                                            error = %e,
-                                            "could not deliver an acknowledgement"
-                                        );
-                                    }
-                                    return Ok(true);
-                                }
-                                if let Some(g) =
-                                    crate::gateway_runner::PENDING_USER_QUESTIONS.get()
-                                    && let Ok(mut guard) = g.lock()
-                                {
-                                    *guard = Some(pending_map);
-                                }
-                            }
-                        }
-
-                        // ── 1.8 The skill picker and `$skill` mentions ────────
-                        // A channel has no composer, so the `$` grammar is
-                        // how a chat names a skill. Two shapes reach it:
-                        //
-                        //   * an inline mention ("apply $ponytail here") —
-                        //     expanded into the SAME invocation message the
-                        //     TUI's composer builds, so the skill's content
-                        //     reaches the turn;
-                        //   * a bare `$`, or a name that resolves to nothing —
-                        //     answered by the picker, the utility surface a
-                        //     channel can render (tappable rows + navigation).
-                        let skill_vendor_roots = vendor_skill_roots_for(&handler_for_stop);
-                        if let Some(marker) = msg.raw.get("skill_callback").cloned() {
-                            let key = format!("{platform}:{}", msg.channel_id);
-                            match skill_tap_action(&marker, &key) {
-                                Some(SkillTapAction::Invoke(name)) => {
-                                    let session = derived_gateway_session_id(&session_key);
-                                    match operant_core::agent::skill_preprocessing::build_skill_invocation_message_in(
-                                        &handler_for_stop.skills_root_dir,
-                                        &name,
-                                        "",
-                                        Some(session.as_str()),
-                                        &skill_vendor_roots,
-                                    ) {
-                                        // The tap IS a request to run the
-                                        // skill: the expansion becomes the turn
-                                        // body and the ordinary turn path below
-                                        // runs it.
-                                        Some(text) => msg.content = text,
-                                        None => {
-                                            let response = OutgoingMessage::new(
-                                                &msg.channel_id,
-                                                format!("Skill `{name}` is no longer loadable."),
-                                            )
-                                            .no_markdown()
-                                            .with_thread_id(msg.thread_id);
-                                            gw.send_to_platform(&platform, response).await?;
-                                            return Ok(true);
-                                        }
-                                    }
-                                }
-                                Some(SkillTapAction::Page(page)) => {
-                                    // Navigation replaces the picker message IN
-                                    // PLACE, so a chat does not collect one
-                                    // message per page.
-                                    let picker = pending_skill_picker(&key);
-                                    let message_id = marker
-                                        .get("message_id")
-                                        .and_then(|m| m.as_i64())
-                                        .map(|m| m.to_string());
-                                    let query = picker.as_ref().map(|p| p.query.clone()).unwrap_or_default();
-                                    offer_skill_picker(
-                                        &gw,
-                                        &platform,
-                                        &msg.channel_id,
-                                        msg.thread_id,
-                                        message_id.as_deref(),
-                                        &handler_for_stop.skills_root_dir,
-                                        &skill_vendor_roots,
-                                        &query,
-                                        page,
-                                    )
-                                    .await;
-                                    return Ok(true);
-                                }
-                                Some(SkillTapAction::Cancel) => {
-                                    // Clear the buttons so a dismissed picker
-                                    // cannot be re-tapped.
-                                    if let Some(adapter) = gw.adapter_for(&platform)
-                                        && let Some(chat) =
-                                            marker.get("chat_id").and_then(|c| c.as_str())
-                                        && let Some(mid) =
-                                            marker.get("message_id").and_then(|m| m.as_i64())
-                                    {
-                                        let _ = adapter
-                                            .edit_message(
-                                                chat,
-                                                &mid.to_string(),
-                                                &OutgoingMessage::new(
-                                                    chat,
-                                                    "🧩 Picker dismissed.",
-                                                )
-                                                .no_markdown(),
-                                            )
-                                            .await;
-                                    }
-                                    return Ok(true);
-                                }
-                                None => {
-                                    // The picker expired under the tap: offer a
-                                    // fresh one rather than a dead button.
-                                    offer_skill_picker(
-                                        &gw,
-                                        &platform,
-                                        &msg.channel_id,
-                                        msg.thread_id,
-                                        None,
-                                        &handler_for_stop.skills_root_dir,
-                                        &skill_vendor_roots,
-                                        "",
-                                        0,
-                                    )
-                                    .await;
-                                    return Ok(true);
-                                }
-                            }
-                        } else {
-                            let mentions =
-                                operant_core::skill_mentions::find_skill_mentions(&msg.content);
-                            if !mentions.is_empty() {
-                                let session = derived_gateway_session_id(&session_key);
-                                let expansion =
-                                    operant_core::skill_mentions::expand_skill_mentions_in(
-                                        &handler_for_stop.skills_root_dir,
-                                        &msg.content,
-                                        Some(session.as_str()),
-                                        &skill_vendor_roots,
-                                    );
-                                if let Some(text) = expansion.message {
-                                    msg.content = text;
-                                } else if let Some(unknown) = expansion.unresolved.first() {
-                                    // An unknown name is better answered by
-                                    // offering the skills that DO exist than by
-                                    // sending `$typo` to the agent.
-                                    let offered = offer_skill_picker(
-                                        &gw,
-                                        &platform,
-                                        &msg.channel_id,
-                                        msg.thread_id,
-                                        None,
-                                        &handler_for_stop.skills_root_dir,
-                                        &skill_vendor_roots,
-                                        unknown,
-                                        0,
-                                    )
-                                    .await;
-                                    if offered {
+                                        // ── 1.6 Clarify choice taps ──────────────────────────
+                                        // A `choice:` inline-button tap resolves the pending
+                                        // clarify() question with the selected option. The
+                                        // adapter synthesized this message with a raw
+                                        // `choice_callback` marker — resolve it here so it
+                                        // never reaches the agent as a stray message, and
+                                        // edit the prompt to show the selection (hermes
+                                        // `send_clarify` tap parity).
+                                        if let Some(cc) = msg.raw.get("choice_callback").cloned() {
+                                            let pending_map_clone = {
+                                                let global_uq =
+                                                    crate::gateway_runner::PENDING_USER_QUESTIONS.get();
+                                                global_uq
+                                                    .and_then(|g| g.lock().ok())
+                                                    .and_then(|mut guard| guard.take())
+                                            };
+                                            let mut selected: Option<String> = None;
+                                            if let Some(pending_map) = pending_map_clone {
+                                                let key = format!("{platform}:{channel_id}");
+                                                let idx = cc
+                                                    .get("idx")
+                                                    .and_then(|v| v.as_u64())
+                                                    .unwrap_or(0) as usize;
+                                                if let Some((reply_tx, choices)) =
+                                                    pending_map.lock().await.remove(&key)
+                                                {
+                                                    let text = choices
+                                                        .and_then(|c| c.get(idx).cloned())
+                                                        .unwrap_or_else(|| format!("option {}", idx + 1));
+                                                    let _ = reply_tx.send(text.clone());
+                                                    selected = Some(text);
+                                                }
+                                                if let Some(g) =
+                                                    crate::gateway_runner::PENDING_USER_QUESTIONS.get()
+                                                    && let Ok(mut guard) = g.lock()
+                                                {
+                                                    *guard = Some(pending_map);
+                                                }
+                                            }
+                                            // Edit the question message to show the selection
+                                            // and remove the buttons.
+                                            if let (Some(adapter), Some(chat), Some(mid)) = (
+                                                gw.adapter_for(&platform),
+                                                cc.get("chat_id").and_then(|v| v.as_str()),
+                                                cc.get("message_id").and_then(|v| v.as_i64()),
+                                            ) {
+                                                let text = match selected {
+                                                    Some(t) => format!("✅ Selected: {t}"),
+                                                    None => "⌛ This question has already been answered or timed out."
+                                                        .to_string(),
+                                                };
+                                                let _ = adapter
+                                                    .edit_message(
+                                                        chat,
+                                                        &mid.to_string(),
+                                                        &OutgoingMessage::new(chat, &text).no_markdown(),
+                                                    )
+                                                    .await;
+                                            }
                                         return Ok(true);
                                     }
-                                    // No picker possible: the raw text goes to
-                                    // the agent, which can say what it knows.
+
+                                    // ── 1.7 Pending clarify() text replies ────────────────
+                                    // A plain-text reply while a clarify() /
+                                    // approval_request() dialog is pending resolves the
+                                    // question with the user's text. Checked here (in
+                                    // addition to the handler) so the reply is never
+                                    // queued behind the very turn that spawned the
+                                    // dialog — the dialog would otherwise deadlock until
+                                    // its 120s timeout.
+                                    if !msg.content.trim_start().starts_with('/') {
+                                        let channel_key = format!("{platform}:{channel_id}");
+                                        let pending_map_clone = {
+                                            let global_uq =
+                                                crate::gateway_runner::PENDING_USER_QUESTIONS.get();
+                                            global_uq
+                                                .and_then(|g| g.lock().ok())
+                                                .and_then(|mut guard| guard.take())
+                                        };
+                                        if let Some(pending_map) = pending_map_clone {
+                                            let reply_tx = {
+                                                let mut pending = pending_map.lock().await;
+                                                pending.remove(&channel_key)
+                                            };
+                                            if let Some((reply_tx, _choices)) = reply_tx {
+                                                tracing::info!(
+                                                    channel = %channel_key,
+                                                    "Routing message as user-question reply (dispatch)"
+                                                );
+                                                let _ = reply_tx.send(msg.content.clone());
+                                                if let Some(g) =
+                                                    crate::gateway_runner::PENDING_USER_QUESTIONS.get()
+                                                    && let Ok(mut guard) = g.lock()
+                                                {
+                                                    *guard = Some(pending_map);
+                                                }
+                                                // Acknowledge so the user knows the
+                                                // reply landed (hermes parity).
+                                                let ack = OutgoingMessage::new(
+                                                    &msg.channel_id,
+                                                    "✅ Reply received — resuming...",
+                                                )
+                                                .no_markdown()
+                                                .with_thread_id(msg.thread_id);
+                                                if let Err(e) = gw.send_to_platform(&platform, ack).await {
+                                                    tracing::warn!(
+                                                        platform = %platform,
+                                                        error = %e,
+                                                        "could not deliver an acknowledgement"
+                                                    );
+                                                }
+                                                return Ok(true);
+                                            }
+                                            if let Some(g) =
+                                                crate::gateway_runner::PENDING_USER_QUESTIONS.get()
+                                                && let Ok(mut guard) = g.lock()
+                                            {
+                                                *guard = Some(pending_map);
+                                            }
+                                        }
+                                    }
+
+                                    // ── 1.8 The skill picker and `$skill` mentions ────────
+                                    // A channel has no composer, so the `$` grammar is
+                                    // how a chat names a skill. Two shapes reach it:
+                                    //
+                                    //   * an inline mention ("apply $ponytail here") —
+                                    //     expanded into the SAME invocation message the
+                                    //     TUI's composer builds, so the skill's content
+                                    //     reaches the turn;
+                                    //   * a bare `$`, or a name that resolves to nothing —
+                                    //     answered by the picker, the utility surface a
+                                    //     channel can render (tappable rows + navigation).
+                                    let skill_vendor_roots = vendor_skill_roots_for(&handler_for_stop);
+                                    if let Some(marker) = msg.raw.get("skill_callback").cloned() {
+                                        let key = format!("{platform}:{}", msg.channel_id);
+                                        match skill_tap_action(&marker, &key) {
+                                            Some(SkillTapAction::Invoke(name)) => {
+                                                let session = derived_gateway_session_id(&session_key);
+                                                match operant_core::agent::skill_preprocessing::build_skill_invocation_message_in(
+                                                    &handler_for_stop.skills_root_dir,
+                                                    &name,
+                                                    "",
+                                                    Some(session.as_str()),
+                                                    &skill_vendor_roots,
+                                                ) {
+                                                    // The tap IS a request to run the
+                                                    // skill: the expansion becomes the turn
+                                                    // body and the ordinary turn path below
+                                                    // runs it.
+                                                    Some(text) => msg.content = text,
+                                                    None => {
+                                                        let response = OutgoingMessage::new(
+                                                            &msg.channel_id,
+                                                            format!("Skill `{name}` is no longer loadable."),
+                                                        )
+                                                        .no_markdown()
+                                                        .with_thread_id(msg.thread_id);
+                                                        gw.send_to_platform(&platform, response).await?;
+                                                        return Ok(true);
+                                                    }
+                                                }
+                                            }
+                                            Some(SkillTapAction::Page(page)) => {
+                                                // Navigation replaces the picker message IN
+                                                // PLACE, so a chat does not collect one
+                                                // message per page.
+                                                let picker = pending_skill_picker(&key);
+                                                let message_id = marker
+                                                    .get("message_id")
+                                                    .and_then(|m| m.as_i64())
+                                                    .map(|m| m.to_string());
+                                                let query = picker.as_ref().map(|p| p.query.clone()).unwrap_or_default();
+                                                offer_skill_picker(
+                                                    &gw,
+                                                    &platform,
+                                                    &msg.channel_id,
+                                                    msg.thread_id,
+                                                    message_id.as_deref(),
+                                                    &handler_for_stop.skills_root_dir,
+                                                    &skill_vendor_roots,
+                                                    &query,
+                                                    page,
+                                                )
+                                                .await;
+                                                return Ok(true);
+                                            }
+                                            Some(SkillTapAction::Cancel) => {
+                                                // The pending entry is already gone
+                                                // (`skill_tap_action` consumed it); clear
+                                                // the buttons so a dismissed picker cannot
+                                                // be re-tapped.
+                                                if let Some(adapter) = gw.adapter_for(&platform)
+                                                    && let Some(chat) =
+                                                        marker.get("chat_id").and_then(|c| c.as_str())
+                                                    && let Some(mid) =
+                                                        marker.get("message_id").and_then(|m| m.as_i64())
+                                                {
+                                                    let _ = adapter
+                                                        .edit_message(
+                                                            chat,
+                                                            &mid.to_string(),
+                                                            &OutgoingMessage::new(
+                                                                chat,
+                                                                "🧩 Picker dismissed.",
+                                                            )
+                                                            .no_markdown(),
+                                                        )
+                                                        .await;
+                                                }
+                                                return Ok(true);
+                                            }
+                                            None => {
+                                                // The tap names no live picker: it
+                                                // expired, or it belongs to a
+                                                // picker this chat has since
+                                                // replaced. Edit the tapped
+                                                // message so its buttons die
+                                                // with it, and offer a fresh
+                                                // picker rather than leaving a
+                                                // dead button.
+                                                if let Some(adapter) = gw.adapter_for(&platform)
+                                                    && let Some(chat) = marker
+                                                        .get("chat_id")
+                                                        .and_then(|c| c.as_str())
+                                                    && let Some(mid) = marker
+                                                        .get("message_id")
+                                                        .and_then(|m| m.as_i64())
+                                                {
+                                                    let _ = adapter
+                                                        .edit_message(
+                                                            chat,
+                                                            &mid.to_string(),
+                                                            &OutgoingMessage::new(
+                                                                chat,
+                                                                "🧩 This picker was replaced — here is the current one.",
+                                                            )
+                                                            .no_markdown(),
+                                                        )
+                                                        .await;
+                                                }
+                                                offer_skill_picker(
+                                                    &gw,
+                                                    &platform,
+                                                    &msg.channel_id,
+                                                    msg.thread_id,
+                                                    None,
+                                                    &handler_for_stop.skills_root_dir,
+                                                    &skill_vendor_roots,
+                                                    "",
+                                                    0,
+                                                )
+                                                .await;
+                                                return Ok(true);
+                                            }
+                                        }
+                                    } else {
+                                        // The prose path: a message that NAMES a skill is expanded into
+                                        // the invocation message the agent follows; a bare `$` (or a name
+                                        // that resolves to nothing) asks for the picker.
+                                        match skill_surface_for(&handler_for_stop, &session_key, &msg.content) {
+                                            SkillSurface::Invoke(text) => msg.content = text,
+                                            SkillSurface::Picker(query) => {
+                                                let offered = offer_skill_picker(
+                                                    &gw,
+                                                    &platform,
+                                                    &msg.channel_id,
+                                                    msg.thread_id,
+                                                    None,
+                                                    &handler_for_stop.skills_root_dir,
+                                                    &skill_vendor_roots,
+                                                    &query,
+                                                    0,
+                                                )
+                                                .await;
+                                                if offered {
+                                                    return Ok(true);
+                                                }
+                                                // No picker possible: the raw text goes to the agent, which
+                                                // can say what it knows.
+                                            }
+                                            SkillSurface::None => {}
+                                        }
+                                    }
+
+                                    Ok(false)
                                 }
-                            } else if msg.content.trim() == "$" {
-                                let offered = offer_skill_picker(
-                                    &gw,
-                                    &platform,
-                                    &msg.channel_id,
-                                    msg.thread_id,
-                                    None,
-                                    &handler_for_stop.skills_root_dir,
-                                    &skill_vendor_roots,
-                                    "",
-                                    0,
-                                )
                                 .await;
-                                if offered {
-                                    return Ok(true);
-                                }
-                            }
-                        }
-                        Ok(false)
-                    }
-                    .await;
-                        match handled {
-                            Ok(true) => continue,
-                            Err(e) => {
-                                tracing::error!(
-                                    "Error intercepting message on {}: {}",
-                                    channel_id,
-                                    redact_err(&e)
-                                );
-                                continue;
-                            }
-                            Ok(false) => {}
-                        }
+                                    match handled {
+                                        Ok(true) => continue,
+                                        Err(e) => {
+                                            tracing::error!(
+                                                "Error intercepting message on {}: {}",
+                                                channel_id,
+                                                redact_err(&e)
+                                            );
+                                            continue;
+                                        }
+                                        Ok(false) => {}
+                                    }
 
-                        // ── 2. Turn routing (per-session FIFO queue) ─────────────
-                        if turn_inflight.contains_key(&session_key) {
-                            tracing::debug!(
-                                session = %session_key,
-                                "Queuing message behind in-flight turn"
-                            );
-                            // (RT-521) The per-session queue is BOUNDED: a
-                            // chat that floods while its turn is busy used
-                            // to grow the queue without limit. The drop is
-                            // visible — a dropped chat message is a real
-                            // loss, so it is logged, not silent.
-                            if !queue_has_room(&turn_queue, &session_key) {
-                                tracing::warn!(
-                                    session = %session_key,
-                                    limit = MAX_QUEUED_MESSAGES_PER_SESSION,
-                                    "the session's message queue is FULL — the message \
-                                     is dropped"
-                                );
-                                continue;
-                            }
-                            turn_queue.push_back((session_key, msg));
-                            continue;
-                        }
-                        // Insert the shared interrupt latch for this turn
-                        // BEFORE spawning, so `/stop` can find the flag while
-                        // the turn waits for or holds the turn lock. The
-                        // RESET moved into `handle` (plan 06A): resetting
-                        // here let one chat's dispatch wipe a `/stop` aimed
-                        // at the RUNNING chat, and a triggered flag that is
-                        // never cleared would brick the agent for the rest
-                        // of the session — the reset inside the lock keeps
-                        // both invariants.
-                        // (RT-508) The interrupt flag belongs to the
-                        // session's slot's agent.
-                        let stop_flag = handler_for_stop
-                            .slots
-                            .slot_for(&session_key)
-                            .agent
-                            .interrupt_flag();
-                        turn_inflight.insert(session_key.clone(), stop_flag);
-                        let gw = gw_for_turns.clone();
-                        let app_config_clone = app_config_for_turns.clone();
-                        let stream_delivery_for_dispatch = stream_delivery_for_turns.clone();
-                        let current_channel = current_channel_for_turns.clone();
-                        let telegram_token = telegram_token_for_turns.clone();
-                        let done_tx = turn_done_tx.clone();
-                        // (RT-508) The recap engine belongs to the AGENT,
-                        // so the handle is the session's SLOT's.
-                        let recap_activity_for_turn = handler_for_stop
-                            .slots
-                            .slot_for(&session_key)
-                            .recap_activity
-                            .clone();
-                        let session_pins_for_turns = session_pins.clone();
-                        let session_channels_for_turns = session_channels.clone();
-                        // The credential rotation below pushes a rotated
-                        // `.env` key into the live client, so this turn needs
-                        // its own handle to the handler.
-                        let handler_for_turn = handler.clone();
-                        tokio::spawn(async move {
-                    // Wrap the turn body for error resilience — a single message
-                    // processing error will not crash the whole gateway.
-                    let result: anyhow::Result<()> = async {
-                    // ── 2. Message enrichment ─────────────────────────────────────
-                    if platform == "telegram"
-                        && let Some(token) = &telegram_token
-                    {
-                        // Photo enrichment: download largest photo and note it
-                        if let Some(desc) = enrich_photo(&msg.raw, token).await {
-                            msg.content = format!("{}\n{}", desc, msg.content);
-                        }
-                        // Voice enrichment: download, transcribe, prepend
-                        if let Some(transcript) = enrich_voice(&msg.raw, token).await {
-                            msg.content = format!("{}\n{}", transcript, msg.content);
-                        }
-                        // Document enrichment: extract filename + caption
-                        if let Some(info) = enrich_document(&msg.raw) {
-                            msg.content = if msg.content.is_empty() {
-                                info
-                            } else {
-                                format!("{}\n{}", msg.content, info)
-                            };
-                        }
-                    }
-                    tracing::info!(
-                        "Message enrichment done, final content length: {}",
-                        msg.content.len()
-                    );
-
-                    // ── 3. Message pipeline ───────────────────────────────────────
-                    let pipeline = MessagePipeline::new();
-                    let action = pipeline.process(&msg);
-                    tracing::info!("Message pipeline action: {:?}", action);
-                    match action {
-                        PipelineAction::Block(reason) => {
-                            let response = OutgoingMessage::new(&msg.channel_id, reason)
-                                .with_thread_id(msg.thread_id);
-                            gw.send_to_platform(&platform, response).await?;
-                            return Ok(());
-                        }
-                        PipelineAction::Queue => {
-                            // Queue not yet wired — allow through for now.
-                        }
-                        // Replace is tool-seam semantics; the message
-                        // pipeline has nothing to replace here.
-                        PipelineAction::Replace(_) => {}
-                        PipelineAction::Allow => {}
-                    }
-
-                    // ── 4. Session management ─────────────────────────────────────
-                    if msg.is_group_chat {
-                        match gw.get_session_store().find_or_create_shared_session(
-                            &msg.platform,
-                            &msg.channel_id,
-                            msg_thread,
-                        ) {
-                            Ok(s) => tracing::info!(
-                                "Shared session {} for channel {}",
-                                s.session_id,
-                                msg.channel_id
-                            ),
-                            Err(e) => {
-                                tracing::warn!("Failed to get shared session: {}", redact_err(&e))
-                            }
-                        }
-                        msg.content = format!("[{}]: {}", msg.username, msg.content);
-                    } else {
-                        let existing = gw.get_session_store().find_session(
-                            &msg.platform,
-                            &msg.user_id,
-                            &msg.channel_id,
-                        );
-                        if let Some(s) = existing {
-                            tracing::info!(
-                                "Found existing session {} for {}@{}",
-                                s.session_id,
-                                msg.user_id,
-                                msg.platform
-                            );
-                            let _ = gw.get_session_store().update_activity(&s.session_id);
-                        } else {
-                            match gw.get_session_store().create_session(
-                                &msg.platform,
-                                &msg.user_id,
-                                &msg.channel_id,
-                            ) {
-                                Ok(s) => tracing::info!(
-                                    "Created new session {} for {}@{}",
-                                    s.session_id,
-                                    msg.user_id,
-                                    msg.platform
-                                ),
-                                Err(e) => {
-                                    tracing::warn!("Failed to create session: {}", redact_err(&e))
-                                }
-                            }
-                        }
-                    }
-
-                    // ── 5. Typing indicator ───────────────────────────────────────
-                    // Send typing indicator on ALL platforms, not just Telegram.
-                    // The PlatformAdapter::send_typing default is a no-op, so
-                    // non-supporting platforms skip silently. (Bug #13 from
-                    // iter-98 audit — Discord and Slack users saw no 'bot is
-                    // typing' indicator, making long silences look like the bot
-                    // was dead.)
-                    let typing_platform = platform.clone();
-                    let typing_thread_id = msg.thread_id;
-                    let typing_handle = {
-                        let gw = gw.clone();
-                        let ch = channel_id.clone();
-                        Some(tokio::spawn(async move {
-                            // iter-814: first indicator fires IMMEDIATELY — the
-                            // old loop consumed the interval's first tick, so a
-                            // 4s window at every turn start showed nothing and
-                            // users reported 'typing indicator not showing'.
-                            if gw.send_typing(&typing_platform, &ch, typing_thread_id).is_err() {
-                                return;
-                            }
-                            let mut interval = tokio::time::interval(std::time::Duration::from_secs(4));
-                            // Skip first immediate tick, send first after 4s
-                            interval.tick().await;
-                            loop {
-                                interval.tick().await;
-                                if gw
-                                    .send_typing(&typing_platform, &ch, typing_thread_id)
-                                    .is_err()
+                                    // ── 2. Turn routing (per-session FIFO queue) ─────────────
+                                    if turn_inflight.contains_key(&session_key) {
+                                        tracing::debug!(
+                                            session = %session_key,
+                                            "Queuing message behind in-flight turn"
+                                        );
+                                        // (RT-521) The per-session queue is BOUNDED: a
+                                        // chat that floods while its turn is busy used
+                                        // to grow the queue without limit. The drop is
+                                        // visible — a dropped chat message is a real
+                                        // loss, so it is logged, not silent.
+                                        if !queue_has_room(&turn_queue, &session_key) {
+                                            tracing::warn!(
+                                                session = %session_key,
+                                                limit = MAX_QUEUED_MESSAGES_PER_SESSION,
+                                                "the session's message queue is FULL — the message \
+                                                 is dropped"
+                                            );
+                                            continue;
+                                        }
+                                        turn_queue.push_back((session_key, msg));
+                                        continue;
+                                    }
+                                    // Insert the shared interrupt latch for this turn
+                                    // BEFORE spawning, so `/stop` can find the flag while
+                                    // the turn waits for or holds the turn lock. The
+                                    // RESET moved into `handle` (plan 06A): resetting
+                                    // here let one chat's dispatch wipe a `/stop` aimed
+                                    // at the RUNNING chat, and a triggered flag that is
+                                    // never cleared would brick the agent for the rest
+                                    // of the session — the reset inside the lock keeps
+                                    // both invariants.
+                                    // (RT-508) The interrupt flag belongs to the
+                                    // session's slot's agent.
+                                    let stop_flag = handler_for_stop
+                                        .slots
+                                        .slot_for(&session_key)
+                                        .agent
+                                        .interrupt_flag();
+                                    turn_inflight.insert(session_key.clone(), stop_flag);
+                                    let gw = gw_for_turns.clone();
+                                    let app_config_clone = app_config_for_turns.clone();
+                                    let stream_delivery_for_dispatch = stream_delivery_for_turns.clone();
+                                    let current_channel = current_channel_for_turns.clone();
+                                    let telegram_token = telegram_token_for_turns.clone();
+                                    let done_tx = turn_done_tx.clone();
+                                    // (RT-508) The recap engine belongs to the AGENT,
+                                    // so the handle is the session's SLOT's.
+                                    let recap_activity_for_turn = handler_for_stop
+                                        .slots
+                                        .slot_for(&session_key)
+                                        .recap_activity
+                                        .clone();
+                                    let session_pins_for_turns = session_pins.clone();
+                                    let session_channels_for_turns = session_channels.clone();
+                                    // The credential rotation below pushes a rotated
+                                    // `.env` key into the live client, so this turn needs
+                                    // its own handle to the handler.
+                                    let handler_for_turn = handler.clone();
+                                    tokio::spawn(async move {
+                                // Wrap the turn body for error resilience — a single message
+                                // processing error will not crash the whole gateway.
+                                let result: anyhow::Result<()> = async {
+                                // ── 2. Message enrichment ─────────────────────────────────────
+                                if platform == "telegram"
+                                    && let Some(token) = &telegram_token
                                 {
-                                    break;
+                                    // Photo enrichment: download largest photo and note it
+                                    if let Some(desc) = enrich_photo(&msg.raw, token).await {
+                                        msg.content = format!("{}\n{}", desc, msg.content);
+                                    }
+                                    // Voice enrichment: download, transcribe, prepend
+                                    if let Some(transcript) = enrich_voice(&msg.raw, token).await {
+                                        msg.content = format!("{}\n{}", transcript, msg.content);
+                                    }
+                                    // Document enrichment: extract filename + caption
+                                    if let Some(info) = enrich_document(&msg.raw) {
+                                        msg.content = if msg.content.is_empty() {
+                                            info
+                                        } else {
+                                            format!("{}\n{}", msg.content, info)
+                                        };
+                                    }
                                 }
-                            }
-                        }))
-                    };
-
-                    // ── 5.5 Keepalive notification ─────────────────────────────────
-                    // Send "Still working..." periodically for long-running operations
-                    let keepalive_handle = if platform == "telegram" {
-                        let gw = gw.clone();
-                        let ch = channel_id.clone();
-                        let thread_id = msg.thread_id;
-                        Some(tokio::spawn(async move {
-                            let start = std::time::Instant::now();
-                            // Wait 3 minutes before first notification (matches Python behavior)
-                            tokio::time::sleep(std::time::Duration::from_secs(180)).await;
-                            loop {
-                                let elapsed = start.elapsed().as_secs();
-                                let minutes = elapsed / 60;
-                                let body =
-                                    format!("\u{23F3} Still working... ({}m elapsed...)", minutes);
-                                let msg = OutgoingMessage::new(&ch, &body)
-                                    .no_markdown()
-                                    .with_thread_id(thread_id);
-                                if gw.send_to_platform("telegram", msg).await.is_err() {
-                                    break;
-                                }
-                                // Wait 3 minutes between notifications
-                                tokio::time::sleep(std::time::Duration::from_secs(180)).await;
-                            }
-                        }))
-                    } else {
-                        None
-                    };
-
-                    // ── 5.5 Set current channel for tool progress ────────────────
-                    tracing::debug!(
-                        "Setting current_channel to {}@{} for tool progress",
-                        platform,
-                        channel_id
-                    );
-                    *current_channel.lock().await =
-                        Some((platform.clone(), channel_id.clone(), msg.thread_id));
-
-                    // 5.5a Pin this session's delivery target for BACKGROUND
-                    // events (advisor/recap/self-improvement notes — iter-812).
-                    // They fire after the turn ends, when the global slot above
-                    // may already point at another session's thread; the
-                    // registry routes each note to its OWN topic.
-                    let turn_session_id = session_pins_for_turns
-                        .get(&session_key)
-                        .unwrap_or_else(|| derived_gateway_session_id(&session_key));
-                    session_channels_for_turns.lock().await.insert(
-                        turn_session_id.clone(),
-                        (platform.clone(), channel_id.clone(), msg.thread_id),
-                    );
-
-                    // ── 5.5b Cancel any pending idle recap ─────────────────
-                    // User activity arrived: the recap exists to greet a
-                    // returning user, never to interrupt one (omp parity —
-                    // same contract as the TUI's submit_user_message).
-                    if let Some(activity) = &recap_activity_for_turn {
-                        activity.notify();
-                    }
-                    // (notify is a try_send on the shared channel — the per-turn
-                    // clone keeps the dispatch loop's original valid.)
-
-                    // ── 5.6 Per-turn .env reload for credential rotation ─────────
-                    // Writing the process environment is not enough: the
-                    // running client captured its key when it was built and
-                    // the credential pool seeded its keys at startup, so a
-                    // value that only lands in the environment is read by
-                    // nobody and the rotation never took effect (RT-6c).
-                    // The reloaded values are pushed into the live agent
-                    // through the same seam `/connect` uses.
-                    let rotated = operant_core::env_passthrough::reload_dotenv();
-                    if let Some(key) = rotated
-                        .api_key
-                        .as_deref()
-                        .filter(|k| !k.trim().is_empty())
-                    {
-                        tracing::info!("credential rotated from .env; updating the live client");
-                        handler_for_turn
-                            .slots
-                            .slot_for(&session_key)
-                            .agent
-                            .set_api_key(key);
-                    }
-                    if let Some(base_url) = rotated
-                        .base_url
-                        .as_deref()
-                        .filter(|u| !u.trim().is_empty())
-                    {
-                        // Retarget ONLY on a change. `set_endpoint` with no
-                        // key empties a pool-backed client's credentials, so
-                        // calling it every turn for an endpoint that did not
-                        // change would leave the agent with no credential at
-                        // all and the next request would fail with "no
-                        // available keys".
-                        let current = handler_for_turn
-                            .slots
-                            .slot_for(&session_key)
-                            .agent
-                            .base_url();
-                        if current.as_deref() != Some(base_url) {
-                            tracing::info!("endpoint rotated from .env; updating the live client");
-                            // Pass the key the client is USING when the file
-                            // does not carry one: a `.env` with only a base
-                            // URL (the key lives in `operant.toml`) would
-                            // otherwise empty the pool and the agent would
-                            // have no credential at all.
-                            let key = rotated
-                                .api_key
-                                .as_deref()
-                                .filter(|k| !k.trim().is_empty())
-                                .map(str::to_string)
-                                .or_else(|| {
-                        handler_for_turn
-                            .slots
-                            .slot_for(&session_key)
-                            .agent
-                            .current_api_key()
-                    });
-                            handler_for_turn
-                        .slots
-                        .slot_for(&session_key)
-                        .agent
-                        .set_endpoint(base_url, key.as_deref());
-                        }
-                    }
-
-                    // ── 5.7 Turn state: mark pending ─────────────────────────────
-                    save_turn_state(&channel_id, "pending");
-
-                    // ── 5.8 Session context injection ────────────────────────────
-                    let ctx =
-                        build_session_context(&platform, &channel_id, msg_thread, &app_config_clone);
-                    msg.content = format!("[context: {}]\n{}", ctx.trim(), msg.content);
-
-                    // ── 6. Route message ──────────────────────────────────────
-                    match gw.route_message(msg).await {
-                        Ok(Some(response)) => {
-                            tracing::info!(
-                                "Message routed successfully, response length: {}",
-                                response.content.len()
-                            );
-                            // If streaming already delivered the response as a
-                            // progressive-edited message (AgentEvent::Content →
-                            // AgentEvent::Done), skip the duplicate full send.
-                            // (Kills the double-reply bug on gateway turns.)
-                            // R37: the event-consumer task drains queued events
-                            // (ToolStart/Usage/Content…) BEFORE Done, so its
-                            // marker insert can lag the routed return by
-                            // hundreds of ms on fast turns — an instant check
-                            // raced it and both paths delivered (duplicate
-                            // replies). Poll briefly for the marker before
-                            // falling back to the full send.
-                            let marker_key = (platform.clone(), channel_id.clone(), msg_thread);
-                            let mut streamed = false;
-                            for _ in 0..40 {
-                                let hit = {
-                                    let mut map = stream_delivery_for_dispatch.lock().await;
-                                    map.remove(&marker_key).is_some()
-                                };
-                                if hit {
-                                    streamed = true;
-                                    break;
-                                }
-                                tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-                            }
-                            if streamed {
                                 tracing::info!(
-                                    "Stream already delivered response to {}; skipping duplicate send",
+                                    "Message enrichment done, final content length: {}",
+                                    msg.content.len()
+                                );
+
+                                // ── 3. Message pipeline ───────────────────────────────────────
+                                let pipeline = MessagePipeline::new();
+                                let action = pipeline.process(&msg);
+                                tracing::info!("Message pipeline action: {:?}", action);
+                                match action {
+                                    PipelineAction::Block(reason) => {
+                                        let response = OutgoingMessage::new(&msg.channel_id, reason)
+                                            .with_thread_id(msg.thread_id);
+                                        gw.send_to_platform(&platform, response).await?;
+                                        return Ok(());
+                                    }
+                                    PipelineAction::Queue => {
+                                        // Queue not yet wired — allow through for now.
+                                    }
+                                    // Replace is tool-seam semantics; the message
+                                    // pipeline has nothing to replace here.
+                                    PipelineAction::Replace(_) => {}
+                                    PipelineAction::Allow => {}
+                                }
+
+                                // ── 4. Session management ─────────────────────────────────────
+                                if msg.is_group_chat {
+                                    match gw.get_session_store().find_or_create_shared_session(
+                                        &msg.platform,
+                                        &msg.channel_id,
+                                        msg_thread,
+                                    ) {
+                                        Ok(s) => tracing::info!(
+                                            "Shared session {} for channel {}",
+                                            s.session_id,
+                                            msg.channel_id
+                                        ),
+                                        Err(e) => {
+                                            tracing::warn!("Failed to get shared session: {}", redact_err(&e))
+                                        }
+                                    }
+                                    msg.content = format!("[{}]: {}", msg.username, msg.content);
+                                } else {
+                                    let existing = gw.get_session_store().find_session(
+                                        &msg.platform,
+                                        &msg.user_id,
+                                        &msg.channel_id,
+                                    );
+                                    if let Some(s) = existing {
+                                        tracing::info!(
+                                            "Found existing session {} for {}@{}",
+                                            s.session_id,
+                                            msg.user_id,
+                                            msg.platform
+                                        );
+                                        let _ = gw.get_session_store().update_activity(&s.session_id);
+                                    } else {
+                                        match gw.get_session_store().create_session(
+                                            &msg.platform,
+                                            &msg.user_id,
+                                            &msg.channel_id,
+                                        ) {
+                                            Ok(s) => tracing::info!(
+                                                "Created new session {} for {}@{}",
+                                                s.session_id,
+                                                msg.user_id,
+                                                msg.platform
+                                            ),
+                                            Err(e) => {
+                                                tracing::warn!("Failed to create session: {}", redact_err(&e))
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // ── 5. Typing indicator ───────────────────────────────────────
+                                // Send typing indicator on ALL platforms, not just Telegram.
+                                // The PlatformAdapter::send_typing default is a no-op, so
+                                // non-supporting platforms skip silently. (Bug #13 from
+                                // iter-98 audit — Discord and Slack users saw no 'bot is
+                                // typing' indicator, making long silences look like the bot
+                                // was dead.)
+                                let typing_platform = platform.clone();
+                                let typing_thread_id = msg.thread_id;
+                                let typing_handle = {
+                                    let gw = gw.clone();
+                                    let ch = channel_id.clone();
+                                    Some(tokio::spawn(async move {
+                                        // iter-814: first indicator fires IMMEDIATELY — the
+                                        // old loop consumed the interval's first tick, so a
+                                        // 4s window at every turn start showed nothing and
+                                        // users reported 'typing indicator not showing'.
+                                        if gw.send_typing(&typing_platform, &ch, typing_thread_id).is_err() {
+                                            return;
+                                        }
+                                        let mut interval = tokio::time::interval(std::time::Duration::from_secs(4));
+                                        // Skip first immediate tick, send first after 4s
+                                        interval.tick().await;
+                                        loop {
+                                            interval.tick().await;
+                                            if gw
+                                                .send_typing(&typing_platform, &ch, typing_thread_id)
+                                                .is_err()
+                                            {
+                                                break;
+                                            }
+                                        }
+                                    }))
+                                };
+
+                                // ── 5.5 Keepalive notification ─────────────────────────────────
+                                // Send "Still working..." periodically for long-running operations
+                                let keepalive_handle = if platform == "telegram" {
+                                    let gw = gw.clone();
+                                    let ch = channel_id.clone();
+                                    let thread_id = msg.thread_id;
+                                    Some(tokio::spawn(async move {
+                                        let start = std::time::Instant::now();
+                                        // Wait 3 minutes before first notification (matches Python behavior)
+                                        tokio::time::sleep(std::time::Duration::from_secs(180)).await;
+                                        loop {
+                                            let elapsed = start.elapsed().as_secs();
+                                            let minutes = elapsed / 60;
+                                            let body =
+                                                format!("\u{23F3} Still working... ({}m elapsed...)", minutes);
+                                            let msg = OutgoingMessage::new(&ch, &body)
+                                                .no_markdown()
+                                                .with_thread_id(thread_id);
+                                            if gw.send_to_platform("telegram", msg).await.is_err() {
+                                                break;
+                                            }
+                                            // Wait 3 minutes between notifications
+                                            tokio::time::sleep(std::time::Duration::from_secs(180)).await;
+                                        }
+                                    }))
+                                } else {
+                                    None
+                                };
+
+                                // ── 5.5 Set current channel for tool progress ────────────────
+                                tracing::debug!(
+                                    "Setting current_channel to {}@{} for tool progress",
+                                    platform,
                                     channel_id
                                 );
-                            } else {
-                                // (iter-1132) A webhook subscription's
-                                // `deliver` target names the platform the
-                                // answer goes to. Without one, the answer goes
-                                // back to where the message came from.
-                                let send_platform = response
-                                    .target_platform
-                                    .clone()
-                                    .unwrap_or_else(|| platform.clone());
-                                if let Err(e) = gw.send_to_platform(&send_platform, response).await {
-                                    tracing::error!(
-                                        "Failed to send response on {} to {}: {}",
-                                        send_platform,
-                                        channel_id,
-                                        redact_err(&e)
-                                    );
+                                *current_channel.lock().await =
+                                    Some((platform.clone(), channel_id.clone(), msg.thread_id));
+
+                                // 5.5a Pin this session's delivery target for BACKGROUND
+                                // events (advisor/recap/self-improvement notes — iter-812).
+                                // They fire after the turn ends, when the global slot above
+                                // may already point at another session's thread; the
+                                // registry routes each note to its OWN topic.
+                                let turn_session_id = session_pins_for_turns
+                                    .get(&session_key)
+                                    .unwrap_or_else(|| derived_gateway_session_id(&session_key));
+                                session_channels_for_turns.lock().await.insert(
+                                    turn_session_id.clone(),
+                                    (platform.clone(), channel_id.clone(), msg.thread_id),
+                                );
+
+                                // ── 5.5b Cancel any pending idle recap ─────────────────
+                                // User activity arrived: the recap exists to greet a
+                                // returning user, never to interrupt one (omp parity —
+                                // same contract as the TUI's submit_user_message).
+                                if let Some(activity) = &recap_activity_for_turn {
+                                    activity.notify();
                                 }
+                                // (notify is a try_send on the shared channel — the per-turn
+                                // clone keeps the dispatch loop's original valid.)
+
+                                // ── 5.6 Per-turn .env reload for credential rotation ─────────
+                                // Writing the process environment is not enough: the
+                                // running client captured its key when it was built and
+                                // the credential pool seeded its keys at startup, so a
+                                // value that only lands in the environment is read by
+                                // nobody and the rotation never took effect (RT-6c).
+                                // The reloaded values are pushed into the live agent
+                                // through the same seam `/connect` uses.
+                                let rotated = operant_core::env_passthrough::reload_dotenv();
+                                if let Some(key) = rotated
+                                    .api_key
+                                    .as_deref()
+                                    .filter(|k| !k.trim().is_empty())
+                                {
+                                    tracing::info!("credential rotated from .env; updating the live client");
+                                    handler_for_turn
+                                        .slots
+                                        .slot_for(&session_key)
+                                        .agent
+                                        .set_api_key(key);
+                                }
+                                if let Some(base_url) = rotated
+                                    .base_url
+                                    .as_deref()
+                                    .filter(|u| !u.trim().is_empty())
+                                {
+                                    // Retarget ONLY on a change. `set_endpoint` with no
+                                    // key empties a pool-backed client's credentials, so
+                                    // calling it every turn for an endpoint that did not
+                                    // change would leave the agent with no credential at
+                                    // all and the next request would fail with "no
+                                    // available keys".
+                                    let current = handler_for_turn
+                                        .slots
+                                        .slot_for(&session_key)
+                                        .agent
+                                        .base_url();
+                                    if current.as_deref() != Some(base_url) {
+                                        tracing::info!("endpoint rotated from .env; updating the live client");
+                                        // Pass the key the client is USING when the file
+                                        // does not carry one: a `.env` with only a base
+                                        // URL (the key lives in `operant.toml`) would
+                                        // otherwise empty the pool and the agent would
+                                        // have no credential at all.
+                                        let key = rotated
+                                            .api_key
+                                            .as_deref()
+                                            .filter(|k| !k.trim().is_empty())
+                                            .map(str::to_string)
+                                            .or_else(|| {
+                                    handler_for_turn
+                                        .slots
+                                        .slot_for(&session_key)
+                                        .agent
+                                        .current_api_key()
+                                });
+                                        handler_for_turn
+                                    .slots
+                                    .slot_for(&session_key)
+                                    .agent
+                                    .set_endpoint(base_url, key.as_deref());
+                                    }
+                                }
+
+                                // ── 5.7 Turn state: mark pending ─────────────────────────────
+                                save_turn_state(&channel_id, "pending");
+
+                                // ── 5.8 Session context injection ────────────────────────────
+                                let ctx =
+                                    build_session_context(&platform, &channel_id, msg_thread, &app_config_clone);
+                                msg.content = format!("[context: {}]\n{}", ctx.trim(), msg.content);
+
+                                // ── 6. Route message ──────────────────────────────────────
+                                match gw.route_message(msg).await {
+                                    Ok(Some(response)) => {
+                                        tracing::info!(
+                                            "Message routed successfully, response length: {}",
+                                            response.content.len()
+                                        );
+                                        // If streaming already delivered the response as a
+                                        // progressive-edited message (AgentEvent::Content →
+                                        // AgentEvent::Done), skip the duplicate full send.
+                                        // (Kills the double-reply bug on gateway turns.)
+                                        // R37: the event-consumer task drains queued events
+                                        // (ToolStart/Usage/Content…) BEFORE Done, so its
+                                        // marker insert can lag the routed return by
+                                        // hundreds of ms on fast turns — an instant check
+                                        // raced it and both paths delivered (duplicate
+                                        // replies). Poll briefly for the marker before
+                                        // falling back to the full send.
+                                        let marker_key = (platform.clone(), channel_id.clone(), msg_thread);
+                                        let mut streamed = false;
+                                        for _ in 0..40 {
+                                            let hit = {
+                                                let mut map = stream_delivery_for_dispatch.lock().await;
+                                                map.remove(&marker_key).is_some()
+                                            };
+                                            if hit {
+                                                streamed = true;
+                                                break;
+                                            }
+                                            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+                                        }
+                                        if streamed {
+                                            tracing::info!(
+                                                "Stream already delivered response to {}; skipping duplicate send",
+                                                channel_id
+                                            );
+                                        } else {
+                                            // (iter-1132) A webhook subscription's
+                                            // `deliver` target names the platform the
+                                            // answer goes to. Without one, the answer goes
+                                            // back to where the message came from.
+                                            let send_platform = response
+                                                .target_platform
+                                                .clone()
+                                                .unwrap_or_else(|| platform.clone());
+                                            if let Err(e) = gw.send_to_platform(&send_platform, response).await {
+                                                tracing::error!(
+                                                    "Failed to send response on {} to {}: {}",
+                                                    send_platform,
+                                                    channel_id,
+                                                    redact_err(&e)
+                                                );
+                                            }
+                                        }
+                                        save_turn_state_exit(
+                                            &channel_id,
+                                            "complete",
+                                            operant_core::gateway::lifecycle::TurnExitReason::Complete,
+                                            "turn returned a final response",
+                                        );
+                                    }
+                                    Ok(None) => {
+                                        // Even when the handler returns no response, clear any
+                                        // leftover stream marker so the next turn isn't
+                                        // wrongly suppressed.
+                                        let mut map = stream_delivery_for_dispatch.lock().await;
+                                        map.remove(&(platform.clone(), channel_id.clone(), msg_thread));
+                                        save_turn_state_exit(
+                                            &channel_id,
+                                            "complete",
+                                            operant_core::gateway::lifecycle::TurnExitReason::Complete,
+                                            "turn ended without a response",
+                                        );
+                                    }
+                                     Err(e) => {
+                                         tracing::error!(
+                                             "Failed to route message on {}: {}",
+                                             platform,
+                                             redact_err(&e)
+                                         );
+                                         let mut map = stream_delivery_for_dispatch.lock().await;
+                                         map.remove(&(platform.clone(), channel_id.clone(), msg_thread));
+                                         // iter-691: classify before the close so the
+                                         // journal's exit_code column carries the class a
+                                         // retry/breaker can branch on (kill markers are
+                                         // never auth — see classify_turn_error).
+                                         let exit_code =
+                                             operant_core::gateway::lifecycle::classify_turn_error(&e.to_string());
+                                         save_turn_state_exit(
+                                             &channel_id,
+                                             "failed",
+                                             exit_code,
+                                             &e.to_string(),
+                                         );
+                                     }
+                                }
+
+                                if let Some(handle) = typing_handle {
+                                    handle.abort();
+                                }
+                                if let Some(handle) = keepalive_handle {
+                                    handle.abort();
+                                }
+                                // ── Turn end: drop this session's background-event entry
+                                // (iter-812). The channel binding lives exactly as long as
+                                // the session has produced a turn this boot; a note firing
+                                // after cleanup falls back to the current slot — identical
+                                // to the pre-812 behavior for cold sessions.
+                                session_channels_for_turns
+                                    .lock()
+                                    .await
+                                    .remove(&turn_session_id);
+
+                                Ok(())
                             }
-                            save_turn_state_exit(
-                                &channel_id,
-                                "complete",
-                                operant_core::gateway::lifecycle::TurnExitReason::Complete,
-                                "turn returned a final response",
-                            );
-                        }
-                        Ok(None) => {
-                            // Even when the handler returns no response, clear any
-                            // leftover stream marker so the next turn isn't
-                            // wrongly suppressed.
-                            let mut map = stream_delivery_for_dispatch.lock().await;
-                            map.remove(&(platform.clone(), channel_id.clone(), msg_thread));
-                            save_turn_state_exit(
-                                &channel_id,
-                                "complete",
-                                operant_core::gateway::lifecycle::TurnExitReason::Complete,
-                                "turn ended without a response",
-                            );
-                        }
-                         Err(e) => {
-                             tracing::error!(
-                                 "Failed to route message on {}: {}",
-                                 platform,
-                                 redact_err(&e)
-                             );
-                             let mut map = stream_delivery_for_dispatch.lock().await;
-                             map.remove(&(platform.clone(), channel_id.clone(), msg_thread));
-                             // iter-691: classify before the close so the
-                             // journal's exit_code column carries the class a
-                             // retry/breaker can branch on (kill markers are
-                             // never auth — see classify_turn_error).
-                             let exit_code =
-                                 operant_core::gateway::lifecycle::classify_turn_error(&e.to_string());
-                             save_turn_state_exit(
-                                 &channel_id,
-                                 "failed",
-                                 exit_code,
-                                 &e.to_string(),
-                             );
-                         }
-                    }
-
-                    if let Some(handle) = typing_handle {
-                        handle.abort();
-                    }
-                    if let Some(handle) = keepalive_handle {
-                        handle.abort();
-                    }
-                    // ── Turn end: drop this session's background-event entry
-                    // (iter-812). The channel binding lives exactly as long as
-                    // the session has produced a turn this boot; a note firing
-                    // after cleanup falls back to the current slot — identical
-                    // to the pre-812 behavior for cold sessions.
-                    session_channels_for_turns
-                        .lock()
-                        .await
-                        .remove(&turn_session_id);
-
-                    Ok(())
-                }
-                .await;
-                if let Err(e) = result {
-                    tracing::error!(
-                        "Error processing message from {} on {}: {}",
-                        channel_id,
-                        platform,
-                        redact_err(&e)
-                    );
-                }
-                // Free the session slot so the next queued message runs.
-                let _ = done_tx.send(session_key);
-            });
-            continue;
-                    }
-                    Some(done_key) = turn_done_rx.recv() => {
-                        turn_inflight.remove(&done_key);
-                        // Run the next queued message for this session by
-                        // re-injecting it — the message arm re-runs interception
-                        // and spawns the turn.
-                        if let Some(pos) = turn_queue.iter().position(|(k, _)| *k == done_key)
-                            && let Some((_, msg)) = turn_queue.remove(pos)
-                        {
-                            // (RT-521) The reinject WAITS for room: a queued
-                            // chat message must not be dropped because the
-                            // ingress queue was momentarily full.
-                            if let Err(e) = message_tx_for_reinject.send(msg).await {
-                                tracing::warn!(
-                                    error = %e,
-                                    "a queued message could not be re-injected into the \
-                                     ingress queue — it is dropped"
+                            .await;
+                            if let Err(e) = result {
+                                tracing::error!(
+                                    "Error processing message from {} on {}: {}",
+                                    channel_id,
+                                    platform,
+                                    redact_err(&e)
                                 );
                             }
-                        }
-                    }
-                }
+                            // Free the session slot so the next queued message runs.
+                            let _ = done_tx.send(session_key);
+                        });
+                        continue;
+                                }
+                                Some(done_key) = turn_done_rx.recv() => {
+                                    turn_inflight.remove(&done_key);
+                                    // Run the next queued message for this session by
+                                    // re-injecting it — the message arm re-runs interception
+                                    // and spawns the turn.
+                                    if let Some(pos) = turn_queue.iter().position(|(k, _)| *k == done_key)
+                                        && let Some((_, msg)) = turn_queue.remove(pos)
+                                    {
+                                        // (RT-521) The reinject WAITS for room: a queued
+                                        // chat message must not be dropped because the
+                                        // ingress queue was momentarily full.
+                                        if let Err(e) = message_tx_for_reinject.send(msg).await {
+                                            tracing::warn!(
+                                                error = %e,
+                                                "a queued message could not be re-injected into the \
+                                                 ingress queue — it is dropped"
+                                            );
+                                        }
+                                    }
+                                }
+                            }
         }
     });
 

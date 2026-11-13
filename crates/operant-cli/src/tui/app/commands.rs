@@ -1692,11 +1692,15 @@ impl App {
             // cli.py reload_skills().
             "reload-skills" => {
                 let skills_dir = self.config.skills.root_dir.clone();
+                // The vendor roots — the installed integrations AND the
+                // plugin roots. The ponytail-only root this used to wire
+                // dropped every plugin skill from the overlay + typeahead
+                // until a restart.
+                let vendor_roots = crate::skill_roots::vendor_skill_roots(&self.config);
                 let mut mgr = operant_core::skills::SkillManager::new(skills_dir.clone());
-                // Ponytail phase 3: keep integration skills across the
-                // rescan — dropping them here would evict ponytail skills
-                // from the overlay + typeahead until restart.
-                mgr.add_extra_root(operant_core::ponytail::installed_skills_dir());
+                for root in &vendor_roots {
+                    mgr.add_extra_root(Some(root.clone()));
+                }
                 match mgr.load_all() {
                     Ok(mut loaded) => {
                         // Same (category, name) sort skills_view.open() uses so
@@ -1711,32 +1715,19 @@ impl App {
                         if self.skills_view.selected >= count {
                             self.skills_view.selected = 0;
                         }
-                        // Refresh the slash typeahead with fresh skill + bundle
-                        // names so /skill <Tab> completes newly-installed
-                        // skills without a restart.
-                        let skill_names = self
-                            .skills_view
-                            .skills
-                            .iter()
-                            .map(|s| s.name.clone())
-                            .collect();
-                        // The `$skill` mention popup carries the description.
-                        let skill_mentions = self
-                            .skills_view
-                            .skills
-                            .iter()
-                            .map(|s| (s.name.clone(), s.description.clone()))
-                            .collect();
+                        // ONE registration for both name tiers — the invocable
+                        // pool with the vendor roots — so a rescan and a
+                        // fresh start offer exactly the same names.
                         let bundle_names =
                             operant_core::agent::skill_bundle::refresh_skill_bundles()
                                 .keys()
                                 .map(|k| k.trim_start_matches('/').to_string())
                                 .collect();
-                        crate::tui::prompt_input::register_typeahead_names(
-                            skill_names,
+                        crate::tui::prompt_input::register_invocable_skills(
+                            &skills_dir,
+                            &vendor_roots,
                             bundle_names,
                         );
-                        crate::tui::prompt_input::register_skill_mentions(skill_mentions);
                         self.set_status_notice(format!(
                             "Rescanned {} skill{}. Browse with /skills (agent picks up changes on restart).",
                             count,

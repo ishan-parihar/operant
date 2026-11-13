@@ -176,7 +176,9 @@ async fn record_feed_routes_channel_posts_through_the_seat_map() {
         default_budget: operant_core::config::BudgetSettings::default(),
         context_injection: Some(injector),
         running_session: std::sync::Mutex::new(std::collections::HashMap::new()),
-        next_turn_queue: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        next_turn_queue: std::sync::Arc::new(std::sync::Mutex::new(
+            std::collections::HashMap::new(),
+        )),
         cancelled_queued: Default::default(),
         // RT-175: runtime-command handles (unused by this suite — see
         // slow_echo_handler for the rationale).
@@ -392,7 +394,9 @@ fn slow_echo_handler_with_slots(
         default_budget: operant_core::config::BudgetSettings::default(),
         context_injection: None,
         running_session: std::sync::Mutex::new(std::collections::HashMap::new()),
-        next_turn_queue: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        next_turn_queue: std::sync::Arc::new(std::sync::Mutex::new(
+            std::collections::HashMap::new(),
+        )),
         cancelled_queued: Default::default(),
         // RT-175: runtime-command handles. Empty MCP set (no servers to
         // reconnect) and a nonexistent skills dir (a rescan loads zero
@@ -476,7 +480,9 @@ fn context_exhaustion_handler(dir: &tempfile::TempDir) -> Arc<GatewayMessageHand
         default_budget: operant_core::config::BudgetSettings::default(),
         context_injection: None,
         running_session: std::sync::Mutex::new(std::collections::HashMap::new()),
-        next_turn_queue: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        next_turn_queue: std::sync::Arc::new(std::sync::Mutex::new(
+            std::collections::HashMap::new(),
+        )),
         cancelled_queued: Default::default(),
         mcp_manager: operant_core::mcp::McpManager::new(),
         mcp_server_configs: Vec::new(),
@@ -1902,7 +1908,9 @@ async fn gateway_effort_settles_into_the_agents_live_cell() {
         default_budget: operant_core::config::BudgetSettings::default(),
         context_injection: None,
         running_session: std::sync::Mutex::new(std::collections::HashMap::new()),
-        next_turn_queue: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        next_turn_queue: std::sync::Arc::new(std::sync::Mutex::new(
+            std::collections::HashMap::new(),
+        )),
         cancelled_queued: Default::default(),
         mcp_manager: operant_core::mcp::McpManager::new(),
         mcp_server_configs: Vec::new(),
@@ -2035,7 +2043,9 @@ async fn gateway_export_writes_this_sessions_transcript_as_markdown() {
         default_budget: operant_core::config::BudgetSettings::default(),
         context_injection: None,
         running_session: std::sync::Mutex::new(std::collections::HashMap::new()),
-        next_turn_queue: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        next_turn_queue: std::sync::Arc::new(std::sync::Mutex::new(
+            std::collections::HashMap::new(),
+        )),
         cancelled_queued: Default::default(),
         mcp_manager: operant_core::mcp::McpManager::new(),
         mcp_server_configs: Vec::new(),
@@ -2166,7 +2176,9 @@ async fn gateway_memory_reports_the_live_provider_and_recalls_through_it() {
         default_budget: operant_core::config::BudgetSettings::default(),
         context_injection: None,
         running_session: std::sync::Mutex::new(std::collections::HashMap::new()),
-        next_turn_queue: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        next_turn_queue: std::sync::Arc::new(std::sync::Mutex::new(
+            std::collections::HashMap::new(),
+        )),
         cancelled_queued: Default::default(),
         mcp_manager: operant_core::mcp::McpManager::new(),
         mcp_server_configs: Vec::new(),
@@ -2227,21 +2239,6 @@ async fn gateway_memory_reports_the_live_provider_and_recalls_through_it() {
 #[tokio::test]
 async fn gateway_skill_expands_a_real_installed_skill() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let agent_db = Arc::new(
-        operant_core::database::Database::init(dir.path().join("agent.sqlite")).expect("db"),
-    );
-    let agent = Arc::new(operant_core::agent::OperantAgent::new(
-        operant_core::agent::AgentConfig::default(),
-        Box::new(
-            operant_core::agent::clients::openai::OpenAIModelClient::new(
-                operant_core::client::OpenAIClient::new(
-                    operant_core::client::ClientConfig::default(),
-                ),
-            ),
-        ),
-        operant_core::tools::ToolRegistry::new(std::time::Duration::from_secs(1)),
-        agent_db.clone(),
-    ));
     // The configured skills root, carrying a real skill.
     let skills_root = dir.path().join("skills");
     let skill_dir = skills_root.join("probe-skill");
@@ -2252,26 +2249,7 @@ async fn gateway_skill_expands_a_real_installed_skill() {
     )
     .expect("SKILL.md");
 
-    let handler = GatewayMessageHandler {
-        admins: vec![],
-        slots: slot_pool(Arc::clone(&agent)),
-        gateway: tokio::sync::Mutex::new(None),
-        session_pins: Arc::new(SessionPins::default()),
-        exit_reasons: ExitReasonMap::default(),
-        turn_usage: TurnUsageMap::default(),
-        summary_ttl_minutes: 30,
-        default_budget: operant_core::config::BudgetSettings::default(),
-        context_injection: None,
-        running_session: std::sync::Mutex::new(std::collections::HashMap::new()),
-        next_turn_queue: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
-        cancelled_queued: Default::default(),
-        mcp_manager: operant_core::mcp::McpManager::new(),
-        mcp_server_configs: Vec::new(),
-        skills_root_dir: skills_root.clone(),
-        #[cfg(feature = "plugins-wasm")]
-        wasm_plugin_skill_roots: Vec::new(),
-        queue_waits: tokio::sync::Mutex::new(Default::default()),
-    };
+    let handler = handler_for_skills(skills_root.clone(), dir.path());
 
     // Bare /skill lists the REAL installed skills from the configured root.
     let list = handle_runtime_command(&handler, "skill", "", "telegram:dm:u1")
@@ -2374,7 +2352,9 @@ async fn the_skill_command_sees_the_vendor_roots_the_handler_captures() {
         default_budget: operant_core::config::BudgetSettings::default(),
         context_injection: None,
         running_session: std::sync::Mutex::new(std::collections::HashMap::new()),
-        next_turn_queue: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        next_turn_queue: std::sync::Arc::new(std::sync::Mutex::new(
+            std::collections::HashMap::new(),
+        )),
         cancelled_queued: Default::default(),
         mcp_manager: operant_core::mcp::McpManager::new(),
         mcp_server_configs: Vec::new(),
@@ -2450,7 +2430,9 @@ async fn gateway_search_drives_the_session_search_tool_over_the_real_store() {
         default_budget: operant_core::config::BudgetSettings::default(),
         context_injection: None,
         running_session: std::sync::Mutex::new(std::collections::HashMap::new()),
-        next_turn_queue: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        next_turn_queue: std::sync::Arc::new(std::sync::Mutex::new(
+            std::collections::HashMap::new(),
+        )),
         cancelled_queued: Default::default(),
         mcp_manager: operant_core::mcp::McpManager::new(),
         mcp_server_configs: Vec::new(),
@@ -2609,6 +2591,7 @@ fn skill_picker_taps_resolve_through_the_pending_list() {
                         ("gamma".to_string(), "third".to_string()),
                     ],
                     query: "a".to_string(),
+                    message_id: Some("42".to_string()),
                 },
             );
     };
@@ -2647,7 +2630,8 @@ fn skill_picker_taps_resolve_through_the_pending_list() {
         "an out-of-range index must not resolve to a skill"
     );
 
-    // A dismissal is a dismissal, and it consumes the picker.
+    // A dismissal is a dismissal, and it DROPS the picker: the operator said
+    // no, so the pending list it answered must not outlive it.
     seed();
     let marker = serde_json::json!({ "action": { "kind": "cancel" } });
     assert_eq!(
@@ -2656,8 +2640,8 @@ fn skill_picker_taps_resolve_through_the_pending_list() {
         "a cancel tap must be recognised"
     );
     assert!(
-        pending_skill_picker(&key).is_some(),
-        "a dismissal does not consume the list — the tap is decided by kind"
+        pending_skill_picker(&key).is_none(),
+        "a dismissal drops the picker it dismissed"
     );
 }
 
@@ -2693,5 +2677,159 @@ async fn a_channel_skill_mention_expands_into_the_invocation_message() {
     assert!(
         message.contains("apply to this diff"),
         "the user's words must ride the expansion, got: {message}"
+    );
+}
+
+/// Two pickers in one chat: the second replaced the first, and the first's
+/// buttons are still on screen. The callback carries an INDEX, so a tap on
+/// the FIRST picker would otherwise invoke whatever sits at that index in
+/// the SECOND's list — the wrong skill, with no warning.
+#[test]
+fn a_tap_from_a_replaced_picker_does_not_invoke_the_wrong_skill() {
+    let key = "telegram:dm:replaced-picker".to_string();
+    PENDING_SKILL_PICKERS
+        .get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(
+            key.clone(),
+            PendingSkillPicker {
+                entries: vec![("beta-skill".to_string(), "the live one".to_string())],
+                query: "b".to_string(),
+                message_id: Some("99".to_string()),
+            },
+        );
+
+    // A tap on the OLD message (42) names no live picker.
+    let stale = serde_json::json!({
+        "action": { "kind": "invoke", "idx": 0 },
+        "message_id": 42,
+    });
+    assert_eq!(
+        skill_tap_action(&stale, &key),
+        None,
+        "a stale tap must resolve to nothing rather than to an index"
+    );
+    assert!(
+        pending_skill_picker(&key).is_some(),
+        "a stale tap must not consume the picker that IS on offer"
+    );
+
+    // A tap on the LIVE message (99) invokes the skill it named.
+    let live = serde_json::json!({
+        "action": { "kind": "invoke", "idx": 0 },
+        "message_id": 99,
+    });
+    assert_eq!(
+        skill_tap_action(&live, &key),
+        Some(SkillTapAction::Invoke("beta-skill".to_string())),
+        "the live picker's tap must still invoke its skill"
+    );
+    assert!(
+        pending_skill_picker(&key).is_none(),
+        "an invoked picker is consumed"
+    );
+}
+
+/// A gateway handler whose skills root is `skills_root`.
+///
+/// ONE construction for every handler-shaped test: the struct gains fields
+/// as the gateway grows, and a second copy of this literal is a second place
+/// to fix it.
+fn handler_for_skills(
+    skills_root: std::path::PathBuf,
+    dir: &std::path::Path,
+) -> GatewayMessageHandler {
+    let agent_db =
+        Arc::new(operant_core::database::Database::init(dir.join("agent.sqlite")).expect("db"));
+    let agent = Arc::new(operant_core::agent::OperantAgent::new(
+        operant_core::agent::AgentConfig::default(),
+        Box::new(
+            operant_core::agent::clients::openai::OpenAIModelClient::new(
+                operant_core::client::OpenAIClient::new(
+                    operant_core::client::ClientConfig::default(),
+                ),
+            ),
+        ),
+        operant_core::tools::ToolRegistry::new(std::time::Duration::from_secs(1)),
+        agent_db,
+    ));
+    GatewayMessageHandler {
+        admins: vec![],
+        slots: slot_pool(Arc::clone(&agent)),
+        gateway: tokio::sync::Mutex::new(None),
+        session_pins: Arc::new(SessionPins::default()),
+        exit_reasons: ExitReasonMap::default(),
+        turn_usage: TurnUsageMap::default(),
+        summary_ttl_minutes: 30,
+        default_budget: operant_core::config::BudgetSettings::default(),
+        context_injection: None,
+        running_session: std::sync::Mutex::new(std::collections::HashMap::new()),
+        next_turn_queue: std::sync::Arc::new(std::sync::Mutex::new(
+            std::collections::HashMap::new(),
+        )),
+        cancelled_queued: Default::default(),
+        mcp_manager: operant_core::mcp::McpManager::new(),
+        mcp_server_configs: Vec::new(),
+        skills_root_dir: skills_root,
+        #[cfg(feature = "plugins-wasm")]
+        wasm_plugin_skill_roots: Vec::new(),
+        queue_waits: tokio::sync::Mutex::new(Default::default()),
+    }
+}
+
+/// A channel message's `$skill` surface, end to end.
+///
+/// The three shapes a chat can send: a message that NAMES a skill (expanded
+/// into the invocation message the agent follows), a bare `$` (the picker),
+/// and a name that resolves to nothing (the picker, with that name as its
+/// query). A plain message carries no `$` surface at all.
+#[test]
+fn a_channel_message_skill_surface_is_read_the_way_the_chat_expects() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let skills_root = dir.path().join("skills");
+    let skill_dir = skills_root.join("probe-skill");
+    std::fs::create_dir_all(&skill_dir).expect("skill dir");
+    std::fs::write(
+        skill_dir.join("SKILL.md"),
+        "---\nname: probe-skill\ndescription: A probe\n---\n\n# Do the probe step.\n",
+    )
+    .expect("SKILL.md");
+    let handler = handler_for_skills(skills_root.clone(), dir.path());
+
+    // A message that names a skill expands into the invocation message.
+    let surface = skill_surface_for(&handler, "telegram:dm:u1", "apply $probe-skill here");
+    let SkillSurface::Invoke(message) = surface else {
+        panic!("a named skill must expand, got {surface:?}");
+    };
+    assert!(
+        message.contains("Do the probe step"),
+        "the expansion must carry the skill's body, got: {message}"
+    );
+    assert!(
+        message.contains("has invoked the \"probe-skill\" skill"),
+        "the expansion must be the invocation message the agent follows, got: {message}"
+    );
+    assert!(
+        message.contains("apply here"),
+        "the user's words must ride the expansion, got: {message}"
+    );
+
+    // A bare `$` asks for the picker.
+    assert_eq!(
+        skill_surface_for(&handler, "telegram:dm:u1", "$"),
+        SkillSurface::Picker(String::new()),
+    );
+
+    // A name that resolves to nothing asks for the picker with that query.
+    assert_eq!(
+        skill_surface_for(&handler, "telegram:dm:u1", "$no-such-skill"),
+        SkillSurface::Picker("no-such-skill".to_string()),
+    );
+
+    // A plain message carries no `$` surface.
+    assert_eq!(
+        skill_surface_for(&handler, "telegram:dm:u1", "just a message"),
+        SkillSurface::None,
     );
 }

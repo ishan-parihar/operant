@@ -410,15 +410,6 @@ fn compute_name_completions(
         .collect()
 }
 
-/// Register the installed skill + bundle names for `/skill <Tab>` typeahead.
-/// Called by the app whenever the skills directory is (re)scanned.
-pub fn register_typeahead_names(skill_names: Vec<String>, bundle_names: Vec<String>) {
-    let _guard = SKILL_SNAPSHOT_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    set_typeahead_names(skill_names, bundle_names);
-}
-
 /// Lock-free inner writer used by `register_typeahead_names` and by the
 /// typeahead test (which holds `SKILL_SNAPSHOT_LOCK` across its assertions).
 pub(super) fn set_typeahead_names(skill_names: Vec<String>, bundle_names: Vec<String>) {
@@ -436,13 +427,39 @@ pub(super) fn set_typeahead_names(skill_names: Vec<String>, bundle_names: Vec<St
 static SKILL_MENTION_SNAPSHOT: std::sync::OnceLock<std::sync::RwLock<Vec<(String, String)>>> =
     std::sync::OnceLock::new();
 
-/// Register the installed skills (name + description) for the `$` mention
-/// tier. Called by the app whenever the skills directory is (re)scanned.
-pub fn register_skill_mentions(entries: Vec<(String, String)>) {
+/// Register the skills the composer can NAME — the invocable pool: the
+/// operator's own skills PLUS the vendor roots (the installed integrations
+/// and the plugin roots), which is exactly the pool the `$` / `/skill`
+/// expansion resolves against (`build_skill_invocation_message_in` takes the
+/// same roots).
+///
+/// One pool for both name tiers — `/skill <Tab>` and the `$` mention popup —
+/// so the popup can never be a SUBSET of what the expander would run. A
+/// vendor skill typed in full always resolved; before this it simply never
+/// appeared in the popup, which read as "not installed".
+pub fn register_invocable_skills(
+    skills_dir: &std::path::Path,
+    vendor_roots: &[std::path::PathBuf],
+    bundle_names: Vec<String>,
+) {
     let _guard = SKILL_SNAPSHOT_LOCK
         .lock()
         .unwrap_or_else(|e| e.into_inner());
-    set_skill_mentions(entries);
+    set_invocable_skills(skills_dir, vendor_roots, bundle_names);
+}
+
+/// Lock-free inner writer used by `register_invocable_skills` and by the
+/// typeahead test (which holds `SKILL_SNAPSHOT_LOCK` across its assertions).
+pub(super) fn set_invocable_skills(
+    skills_dir: &std::path::Path,
+    vendor_roots: &[std::path::PathBuf],
+    bundle_names: Vec<String>,
+) {
+    let loadable = operant_core::skill_mentions::loadable_skills(skills_dir, vendor_roots);
+    let mention_rows = loadable.clone();
+    let names: Vec<String> = loadable.into_iter().map(|(name, _)| name).collect();
+    set_typeahead_names(names, bundle_names);
+    set_skill_mentions(mention_rows);
 }
 
 /// Lock-free inner writer used by `register_skill_mentions` and by the

@@ -178,6 +178,17 @@ fn a_dollar_mid_word_is_not_live() {
 
 // ── expansion against a real skills tree ──────────────────────────────────
 
+/// Write a minimal skill into `dir/name`.
+fn write_skill(dir: &std::path::Path, name: &str) {
+    let skill_dir = dir.join(name);
+    std::fs::create_dir_all(&skill_dir).expect("skill dir");
+    std::fs::write(
+        skill_dir.join("SKILL.md"),
+        format!("---\nname: {name}\ndescription: The {name} skill.\n---\n\n# {name}\n"),
+    )
+    .expect("SKILL.md");
+}
+
 /// A minimal skill tree: two skills, one loadable and one not.
 fn skill_tree() -> tempfile::TempDir {
     let dir = tempfile::tempdir().expect("temp dir");
@@ -257,4 +268,38 @@ fn search_ranks_exact_before_prefix_before_substring() {
     let ranked: Vec<&str> = hits.iter().map(|(n, _)| n.as_str()).collect();
     assert_eq!(ranked, vec!["alpha-skill", "alpha-two", "zalpha"]);
     assert_eq!(search_skills(dir.path(), &[], "nope", 10).len(), 0);
+}
+
+#[test]
+fn loadable_skills_includes_the_vendor_roots() {
+    // The invocable pool is the operator's own skills PLUS the vendor roots
+    // (the installed integrations and the plugin roots) — the same roots the
+    // expansion resolves against. A vendor skill that is absent from this
+    // list is a skill the popup cannot offer but the expander would run.
+    let dir = tempfile::tempdir().expect("temp dir");
+    let pool = dir.path().join("skills");
+    let vendor = dir.path().join("vendor");
+    write_skill(&pool, "alpha-skill");
+    write_skill(&vendor, "ponytail-review");
+
+    let rows = loadable_skills(&pool, &[vendor.clone()]);
+    let names: Vec<&str> = rows.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(
+        names,
+        vec!["alpha-skill", "ponytail-review"],
+        "the vendor root's skills belong to the invocable pool"
+    );
+
+    // Without the vendor root the pool is the operator's own alone.
+    let rows = loadable_skills(&pool, &[]);
+    let names: Vec<&str> = rows.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(names, vec!["alpha-skill"]);
+
+    // A vendor root that is not installed is skipped, not an error.
+    let rows = loadable_skills(&pool, &[dir.path().join("not-installed")]);
+    assert_eq!(
+        rows.len(),
+        1,
+        "a missing vendor root must not empty the pool"
+    );
 }
