@@ -15372,3 +15372,164 @@ fn toggling_show_current_directory_in_settings_reaches_the_app_live() {
         "and the snapshot the screen persists must record the choice"
     );
 }
+
+
+// ---- (2026-11-13) the copy-pasteable way back to a session ----
+
+/// Every surface that names a session must name it with the WHOLE id, and
+/// with the command that continues it — an id the operator cannot see is an
+/// id they cannot type.
+///
+/// The annotation is the copy-paste surface: a status-bar line flashes away on
+/// the next keystroke, and a transcript row stays where they can select it.
+fn annotation_text(app: &App) -> String {
+    app.system_annotations
+        .iter()
+        .map(|a| a.text.clone())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// `/continue` is how an operator asks for that command WHILE the TUI is open
+/// — the exit leftover only helps once the TUI is already closed.
+#[test]
+fn the_continue_command_prints_the_copy_pasteable_way_back() {
+    let mut app = make_app();
+    // The agent has a session id: a turn already ran.
+    app.core_session_switch = Some(std::sync::Arc::new(
+        crate::tui::session_switch::SessionSwitchSource::new(
+            |_| {},
+            Vec::new,
+            || Some("sess-live-for-continue".to_string()),
+        ),
+    ));
+    app.session_title = Some("Fix the importer".to_string());
+
+    assert!(app.handle_tui_command("continue", ""));
+
+    let transcript = annotation_text(&app);
+    assert!(
+        transcript.contains("operant continue sess-live-for-continue"),
+        "the command must be copy-pasteable: {transcript:?}"
+    );
+    assert!(
+        transcript.contains("Fix the importer"),
+        "the title is what the operator recognises: {transcript:?}"
+    );
+}
+
+/// Before the first turn there is no session to continue, and the command must
+/// say so rather than print a command for an id that does not exist.
+#[test]
+fn the_continue_command_before_the_first_turn_says_there_is_no_session_yet() {
+    let mut app = make_app();
+    app.core_session_switch = None;
+
+    assert!(app.handle_tui_command("continue", ""));
+
+    let transcript = annotation_text(&app);
+    assert!(
+        transcript.contains("No session yet"),
+        "the message must name the situation: {transcript:?}"
+    );
+    assert!(
+        !transcript.contains("operant continue"),
+        "there is no session to continue, so there must be no command: {transcript:?}"
+    );
+}
+
+/// The boot notice is the surface a RESTART lands on: the operator killed the
+/// TUI, relaunched it, and needs the id to continue from a shell. Before this
+/// the notice named a truncated id in a status line that flashed away — there
+/// was nothing to copy.
+#[test]
+fn the_interrupted_session_boot_notice_carries_the_copy_pasteable_command() {
+    let mut app = make_app();
+    let marker = operant_core::session_interrupted::SessionInterrupted::new(
+        "sess-interrupted-42",
+        "Fix the exporter",
+    );
+
+    app.announce_interrupted_session(&marker);
+
+    let transcript = annotation_text(&app);
+    assert!(
+        transcript.contains("operant continue sess-interrupted-42"),
+        "the boot notice must carry the command: {transcript:?}"
+    );
+    assert!(
+        transcript.contains("Fix the exporter"),
+        "the title is what the operator recognises: {transcript:?}"
+    );
+    assert_eq!(
+        app.pending_hub_preselect.as_deref(),
+        Some("sess-interrupted-42"),
+        "the hub's cursor must land on the session the notice is about"
+    );
+}
+
+/// A deliberate close must not leave an interrupted-session record behind.
+///
+/// The exit teardown runs on BOTH exit paths, so before `exit_is_deliberate`
+/// existed the `/exit` arm's `clear_marker()` was undone by the teardown's
+/// own `write_marker()`: every deliberate close announced itself as an
+/// interruption on the next launch, and `operant sessions list --interrupted`
+/// listed a session the operator had closed on purpose.
+///
+/// The DB flag is the durable half of the record, and it is what this test
+/// asserts. The marker FILE is not asserted: writing it would touch the real
+/// operant home, which a test must never do — and the deliberate branch
+/// returns BEFORE that write, which is the property under test.
+#[test]
+fn a_deliberate_exit_leaves_no_interrupted_flag() {
+    let mut app = make_app();
+    let db_path = std::env::temp_dir().join(format!(
+        "operant-deliberate-exit-{}-{}.db",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    let db = operant_core::database::Database::init(db_path.clone()).expect("test database");
+    db.save_session(
+        "sess-closed",
+        Some("closed on purpose"),
+        "test",
+        "2026-11-02",
+        "2026-11-02",
+    )
+    .expect("seed the session row");
+    db.mark_session_interrupted("sess-closed")
+        .expect("flag it as an earlier interruption");
+    app.config.database_path = db_path;
+    app.core_session_switch = Some(std::sync::Arc::new(
+        crate::tui::session_switch::SessionSwitchSource::new(
+            |_| {},
+            Vec::new,
+            || Some("sess-closed".to_string()),
+        ),
+    ));
+
+    app.exit_is_deliberate = true;
+    app.write_interrupted_marker();
+
+    let rows = operant_core::database::Database::init(app.config.database_path.clone())
+        .expect("reopen the database")
+        .list_sessions_rich(10)
+        .expect("list the sessions");
+    let row = rows
+        .iter()
+        .find(|r| r.id == "sess-closed")
+        .expect("the seeded session");
+    assert!(
+        !matches!(
+            row.status,
+            operant_core::session::listing::RowStatus::Interrupted
+        ),
+        "a deliberate close must not leave the session flagged interrupted: {:?}",
+        row.status
+    );
+
+    let _ = std::fs::remove_file(&app.config.database_path);
+}

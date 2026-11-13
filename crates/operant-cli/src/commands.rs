@@ -393,6 +393,11 @@ pub static COMMAND_REGISTRY: &[CommandDef] = &[
     CommandDef::new("whoami", "Show your slash command access (admin / user)"),
     CommandDef::new("time", "Show the current time"),
     CommandDef::new("session", "Show current session info").with_aliases(&["s"]),
+    CommandDef::new(
+        "continue",
+        "Print the command that continues this session",
+    )
+    .cli_only(),
     CommandDef::new("doctor", "Run diagnostics"),
     CommandDef::new("init", "Initialize AGENTS.md for this project"),
     CommandDef::new("login", "Log in to Operant"),

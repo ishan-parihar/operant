@@ -306,6 +306,16 @@ pub struct App {
     /// passing it as the anchor replaces that guess with a fact.
     pub current_session: Option<String>,
 
+    /// Set by `/exit` (and `/quit`): the operator asked to close, as opposed
+    /// to the Ctrl+C / Ctrl+D path, which cuts the session off mid-flight.
+    ///
+    /// This is the ONLY thing that tells the two exits apart at teardown time:
+    /// by then `should_exit` is true on both paths, so the marker writer
+    /// cannot tell them apart on its own. Without it, `/exit` cleared the
+    /// interrupted-session marker and the teardown wrote it straight back, so
+    /// every deliberate close read as an interruption on the next launch.
+    pub exit_is_deliberate: bool,
+
     /// A queued advisor continuation (2026-10-28, omp advisor parity):
     /// set by the `BackgroundReview` handler when an advisor review's
     /// channel decision is CONTINUE (a note at/above
@@ -1540,6 +1550,27 @@ impl App {
         let Some(session_id) = source.session_id() else {
             return;
         };
+        if self.exit_is_deliberate {
+            // A deliberate exit is not an interruption — the `/exit` arm says
+            // the same thing when it clears the marker file. BOTH halves of the
+            // record must therefore stay quiet: the file is already cleared,
+            // and the row must not keep claiming the session was cut off.
+            //
+            // Without this branch the teardown wrote the marker straight back
+            // over the `/exit` arm's `clear_marker`, so the next launch
+            // announced an interruption for a session the operator had chosen
+            // to close — and `operant sessions list --interrupted` listed it.
+            let db_path = self.config.database_path.clone();
+            let cleared = operant_core::database::Database::init(db_path)
+                .and_then(|db| db.clear_session_interrupted(&session_id))
+                .unwrap_or(false);
+            tracing::debug!(
+                session_id = %session_id,
+                cleared,
+                "Deliberate exit: no interrupted marker, DB flag cleared"
+            );
+            return;
+        }
         let title = self.session_title.clone().unwrap_or_default();
         let marker =
             operant_core::session_interrupted::SessionInterrupted::new(&session_id, &title);
@@ -1599,6 +1630,58 @@ impl App {
         self.debug_hub.dump_on_exit();
         self.background_tasks
             .release_all(crate::tui::background_tasks::now_unix_secs());
+    }
+
+    /// Surface an interrupted session at boot: where it was, and the exact
+    /// command that continues it.
+    ///
+    /// TWO surfaces on purpose. The status notice is what the operator reads
+    /// first — it is the greeting, and it points at `/session` for the
+    /// in-TUI resume. The transcript annotation is what the operator can
+    /// COPY: a status line flashes away on the next keystroke, and a session
+    /// id that appears only in a truncated label is not something anybody can
+    /// paste into a shell.
+    ///
+    /// The hub's cursor is armed on the same session, so the first `/session`
+    /// lands on the row this notice is talking about.
+    pub fn announce_interrupted_session(
+        &mut self,
+        marker: &operant_core::session_interrupted::SessionInterrupted,
+    ) {
+        // Arm the hub's cursor (plan 2026-11-02, P2): the notice names the
+        // interrupted session in words; this makes the first `/session` land
+        // ON it.
+        self.pending_hub_preselect = Some(marker.session_id.clone());
+        let label = if marker.title.trim().is_empty() {
+            marker.session_id.chars().take(8).collect::<String>()
+        } else {
+            marker.title.clone()
+        };
+        // The liveness check is what the presence registry exists for
+        // (plan 2026-11-02, P0). A session still streaming in another terminal
+        // must not be offered for continuation: attaching would fork a second
+        // writer onto the same rows.
+        let live = operant_core::active_sessions::session_is_live(&marker.session_id);
+        self.set_status_notice(if live {
+            // Still live elsewhere: name the situation rather than offering an
+            // action that would fork a second writer.
+            format!("{label} is still running in another window — it is already live.")
+        } else {
+            format!("Last session was interrupted: {label} — /session to resume it.")
+        });
+        if !live {
+            // The copy-pasteable way back, as a TRANSCRIPT annotation and not
+            // only a status line: the operator needs this to survive long
+            // enough to select and copy it, and the id has to be the WHOLE id.
+            self.push_system_message(
+                crate::cmd_continue::format_continue_hint(
+                    "Last session was interrupted",
+                    &marker.session_id,
+                    Some(&marker.title),
+                ),
+                crate::tui::app::enums::SystemMessageStyle::Info,
+            );
+        }
     }
 
     /// Rebuild the display from a conversation the agent now holds
@@ -1761,8 +1844,34 @@ impl App {
                 && let Some(session_id) = self.pending_switch_session.take()
             {
                 if let Some(source) = self.core_session_switch.as_ref() {
+                    // The OUTGOING id, read before the switch: after it, the
+                    // source reports the incoming session and the old claim
+                    // would be released against the wrong id.
+                    let previous = source.session_id();
                     let conv = source.switch_to(&session_id);
                     self.apply_session_conversation(conv, &session_id);
+                    // The session this process is now attached to must be
+                    // CLAIMED: the presence registry is what `operant
+                    // continue` consults before attaching, and a session
+                    // nobody claimed is one two windows can own at once.
+                    //
+                    // iter-2150 claims at every turn start (the id exists
+                    // there); this covers the switch that has not run a turn
+                    // yet — which is every `operant continue` attach, and every
+                    // hub switch the operator reads before typing.
+                    self.claim_current_session();
+                    // And the outgoing one is released: this process no longer
+                    // writes there, and a claim it keeps would make
+                    // `operant continue <old-id>` refuse a session nobody is
+                    // in. The ownership check matters — the record is per
+                    // session, so an unconditional delete would erase ANOTHER
+                    // process's claim if it re-claimed the session after us.
+                    if let Some(previous) = previous
+                        && operant_core::active_sessions::session_presence(&previous)
+                            .is_some_and(|p| p.pid == std::process::id())
+                    {
+                        operant_core::active_sessions::unregister_presence(&previous);
+                    }
                 } else {
                     // No handle (a host without an agent): put the flag back so
                     // the outer drain can still try, and say why it is not done.

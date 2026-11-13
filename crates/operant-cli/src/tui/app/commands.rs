@@ -673,6 +673,36 @@ impl App {
                 self.session_list_pending = true;
                 true
             }
+            // /continue — the copy-pasteable way back to THIS session.
+            //
+            // The exit leftover prints this command when the TUI closes, but an
+            // operator who wants to leave NOW — another terminal, a colleague,
+            // an hour from now — has no way to ask for it while the TUI is
+            // open. This is that way: it puts the command in the TRANSCRIPT,
+            // where it survives and can be selected and copied, instead of
+            // flashing past in the status bar.
+            "continue" => {
+                let Some(session_id) = self
+                    .core_session_switch
+                    .as_ref()
+                    .and_then(|s| s.session_id())
+                else {
+                    self.push_system_message(
+                        "No session yet — send a message first, then `/continue` gives you the \
+                         command that reopens it."
+                            .to_string(),
+                        crate::tui::app::enums::SystemMessageStyle::Info,
+                    );
+                    return true;
+                };
+                let hint = crate::cmd_continue::format_continue_hint(
+                    "Current session",
+                    &session_id,
+                    self.session_title.as_deref(),
+                );
+                self.push_system_message(hint, crate::tui::app::enums::SystemMessageStyle::Info);
+                true
+            }
             // /branch — the hub's branch filter (hermes /branch parity;
             // audit R1 2026-10-28: was the session_branching overlay, now
             // the same pane as /session with CurrentBranch preselected).
@@ -766,6 +796,12 @@ impl App {
                 // the next launch does not offer to resume a session the
                 // operator just chose to close. Ctrl+C/Ctrl+D still writes it —
                 // that path goes through handle_exit_key_confirmation, not here.
+                //
+                // The flag is what tells the exit TEARDOWN to keep its hands
+                // off: the teardown runs on both exit paths, and without the
+                // flag it wrote the marker straight back over the
+                // `clear_marker` below.
+                self.exit_is_deliberate = true;
                 operant_core::session_interrupted::clear_marker();
                 // Release the presence claim too (plan 2026-11-02, P0). A
                 // deliberate exit means this process is NOT attached to the

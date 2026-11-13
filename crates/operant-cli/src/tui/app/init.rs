@@ -357,6 +357,7 @@ impl App {
             inline_interactive: None,
             pending_switch_session: None,
             current_session: None,
+            exit_is_deliberate: false,
             pending_advisor_continuation: None,
             agent_task_handle: None,
             pending_key: None,

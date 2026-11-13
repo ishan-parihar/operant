@@ -12,6 +12,7 @@ mod cmd_checkpoints;
 mod cmd_completion;
 mod cmd_config;
 mod cmd_context;
+mod cmd_continue;
 mod cmd_cookies;
 mod cmd_cron;
 mod cmd_curator;
@@ -256,6 +257,16 @@ enum Commands {
         /// Output as JSON (for scripting/CI)
         #[arg(long, global = true)]
         json: bool,
+    },
+    /// Continue a previous session in the TUI
+    ///
+    /// This is the command the TUI prints when it closes: the leftover names
+    /// the exact line that reopens the session you were just working in. With
+    /// no id it continues the session the last TUI was working on (the
+    /// interrupted-session marker), falling back to the most recent session.
+    Continue {
+        /// Session ID to continue (default: the interrupted session, else the most recent)
+        id: Option<String>,
     },
     /// Manage MCP servers
     Mcp {
@@ -3512,6 +3523,19 @@ async fn run(
         }
         Some(Commands::Sessions { cmd, json }) => {
             cmd_sessions::handle_sessions_command(&loaded.config, cmd.clone(), *json).await?;
+        }
+        Some(Commands::Continue { id }) => {
+            // Long-lived session: a child that closes its pipe must be a
+            // reportable error, not the death of the process (see
+            // `ignore_sigpipe_disposition`) — same guard `chat` uses.
+            ignore_sigpipe_disposition();
+            cmd_continue::handle_continue_command(
+                &loaded.config,
+                id.clone(),
+                cli.no_mouse,
+                cli.dangerously_skip_permissions,
+            )
+            .await?;
         }
         Some(Commands::Mcp { cmd, json }) => {
             let mcp_manager = operant_core::mcp::McpManager::new();

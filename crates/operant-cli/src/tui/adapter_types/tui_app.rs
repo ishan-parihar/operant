@@ -15,13 +15,22 @@ pub struct TuiApp {
     /// agent via `create_runtime_agent` (counter bumps), so the status bar
     /// reflects live stream-drop/memory-sync activity.
     metrics: std::sync::Arc<operant_core::runtime_metrics::RuntimeMetrics>,
+    /// Session id `operant continue` asked to attach to, or `None` for a fresh
+    /// session.
+    ///
+    /// Carried on the struct rather than passed to `run` because the two calls
+    /// are separate (`enter(..).run()`), and `enter` is where the launch mode
+    /// is known. Taken in `run` rather than read: attaching is a one-shot act,
+    /// and a second attach on the same field would rewind the session the
+    /// operator switched to afterwards.
+    resume_session_id: Option<String>,
 }
 
 impl TuiApp {
     pub async fn enter(
         config: operant_core::config::AppConfig,
         _system: Option<String>,
-        _mode: LaunchMode,
+        mode: LaunchMode,
         no_mouse: bool,
         dangerously_skip_permissions: bool,
     ) -> anyhow::Result<Self> {
@@ -29,8 +38,17 @@ impl TuiApp {
         use crate::tui::adapter_types::cost::CostTracker;
         use std::sync::Arc;
 
-        let initial_query = match &_mode {
+        let initial_query = match &mode {
             LaunchMode::Query(q) => Some(q.clone()),
+            _ => None,
+        };
+        // `operant continue <id>` re-enters an existing session. Armed as the
+        // frame loop's pending retarget — the same mechanism Enter in the
+        // session hub drives — rather than applied here: the retarget needs the
+        // `core_session_switch` source installed below, and the transcript
+        // rebuild belongs to `apply_session_conversation`, which the App owns.
+        let resume_session_id = match &mode {
+            LaunchMode::Resume(id) => Some(id.clone()),
             _ => None,
         };
         let mut app_config = config;
@@ -89,6 +107,7 @@ impl TuiApp {
             initial_query,
             no_mouse,
             metrics,
+            resume_session_id,
         })
     }
 
@@ -346,6 +365,14 @@ impl TuiApp {
             }
         }
 
+        // Attach to the session `operant continue` named. The App's frame loop
+        // drains this on its first pass (the `!is_streaming` branch), so the
+        // agent is retargeted and the display rebuilt before the operator sees
+        // a frame — the same path the session hub's Enter takes.
+        if let Some(session_id) = self.resume_session_id.take() {
+            self.app.pending_switch_session = Some(session_id);
+        }
+
         // Create the user-question channel and register the sender with
         // operant_core::user_question. The clarify tool will push
         // UserQuestionRequest { question, choices, reply_tx } to this
@@ -476,35 +503,16 @@ impl TuiApp {
             if !self.app.is_simulating
                 && let Some(marker) = operant_core::session_interrupted::consume_marker()
             {
-                // Arm the hub's cursor (plan 2026-11-02, P2). The notice below
-                // names the interrupted session in words; this makes the first
-                // `/resume` land ON it. Stored as pending rather than applied:
-                // the hub can only select a row once the row set has loaded, so
-                // the id is held until the hub is actually opened.
-                self.app.pending_hub_preselect = Some(marker.session_id.clone());
-                let label = if marker.title.is_empty() {
-                    marker.session_id.chars().take(8).collect::<String>()
-                } else {
-                    marker.title
-                };
-                // The liveness check is what the presence registry exists for
-                // (plan 2026-11-02, P0). Before P0 this notice said the same
-                // thing whether the marked session's process had died or was
-                // still streaming away in another terminal — so an operator who
-                // had left a window open got told to resume a session that was
-                // running, and two processes would then race on the same rows.
-                let live = operant_core::active_sessions::session_is_live(&marker.session_id);
-                self.app.set_status_notice(if live {
-                    // Still live elsewhere: resume would attach to a session
-                    // another process owns. Name the situation rather than
-                    // offering an action that would fork a second writer.
-                    format!("{label} is still running in another window — it is already live.")
-                } else {
-                    format!("Last session was interrupted: {label} — /session to resume it.")
-                });
+                // The announcement lives on the App so it is TESTABLE and so
+                // the adapter holds no session logic of its own: the hub
+                // cursor, the status line, AND the copy-pasteable command that
+                // tells the operator how to continue that session from a
+                // shell. The command is the part that was missing — a restart
+                // announced an interruption without ever showing the id, so
+                // there was nothing to copy.
+                self.app.announce_interrupted_session(&marker);
                 tracing::info!(
                     session_id = %marker.session_id,
-                    live,
                     "Offered an interrupted-session resume from the exit marker"
                 );
             }
@@ -659,6 +667,42 @@ impl TuiApp {
             crossterm::event::DisableBracketedPaste
         );
         execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+
+        // The leftover: the exact command that puts the operator back into the
+        // session they just left. Codex does the same when its TUI closes
+        // ("To continue this session, run: codex resume <id>" —
+        // codex-rs/tui/src/app/exit_summary.rs), and without it the session id
+        // is reachable only through `operant sessions list` — a lookup the
+        // operator has to remember to make while holding a half-finished task.
+        //
+        // Printed AFTER the alternate screen is popped, so it lands in the
+        // terminal's scrollback instead of being erased with it. No id means no
+        // turn ever ran (the agent mints the id on the first turn), and then
+        // there is no session to continue.
+        //
+        // Exemption from the module's print ban: this is NOT a print into the
+        // screen — the alternate screen is already popped above, which is the
+        // condition that ban exists to protect (see the header of `tui/mod.rs`).
+        #[allow(
+            clippy::print_stdout,
+            reason = "the farewell lands after LeaveAlternateScreen, in the operator's scrollback"
+        )]
+        if let Some(session_id) = self
+            .app
+            .core_session_switch
+            .as_ref()
+            .and_then(|s| s.session_id())
+        {
+            println!();
+            println!(
+                "{}",
+                crate::cmd_continue::format_exit_leftover(
+                    &session_id,
+                    self.app.session_title.as_deref()
+                )
+            );
+        }
+
         result
     }
 
@@ -1772,6 +1816,13 @@ fn shell_return_message(status: &std::process::ExitStatus) -> String {
 pub enum LaunchMode {
     Landing,
     Query(String),
+    /// `operant continue <id>` — attach to an existing session instead of
+    /// minting a new one on the first turn.
+    ///
+    /// The id is a session id from the store, so the conversation it rehydrates
+    /// is the one a PREVIOUS process wrote; the agent mints its id only when
+    /// there is nothing to resume.
+    Resume(String),
 }
 
 /// Tier-3 agent-flow handlers (/improve /judge /refactor /fix /triage):
