@@ -61,54 +61,63 @@ mod tests;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HubFilterMode {
     All,
-    /// Working directory matches the current process cwd.
-    CurrentDir,
-    /// Only rows carrying an employee tag (seat-bound sessions).
-    ByEmployee,
-    /// Live rows only: the streaming session + pending delegations.
-    Active,
-    /// Sessions that were cut off mid-turn — the question the operator opens
-    /// the hub to answer (audit 2026-11-13, finding 4).
+    /// The session's state is the operator's question: "what needs me, what is
+    /// running, what is done, what is parked" — codex's `TASK_FILTERS`
+    /// (codex-rs/tui/src/app/agent_center/mod.rs:12-18: All | Needs you |
+    /// Working | Ready | Inactive), ported onto operant's four `RowStatus`
+    /// values.
     ///
-    /// `RowStatus::Interrupted` is the persisted `end_reason = 'interrupted'`
-    /// marker, and it had no filter at all: `HubFilterMode` cycled All |
-    /// CurrentDir | ByEmployee | Active | CurrentBranch | Archived, so the
-    /// only way to find an interrupted session was to scan every row for a
-    /// status label. On the operator's database that is 22 sessions, all of
-    /// them unreachable through the keyboard.
-    Interrupted,
+    /// This ladder is what the operator asked for: "separate tabs for various
+    /// filters based on the status of the agentic-loop". Before it, the tab
+    /// row mixed a STATUS question with two SCOPE questions (which directory,
+    /// which branch) and one IDENTITY question (is it employee-tagged at
+    /// all), so no tab answered "what needs me" and the status of the
+    /// agentic loop had to be read off every row by eye.
+    NeedsYou,
+    /// Live rows: the streaming session + pending delegations.
+    Working,
+    /// Finished and quiet: nothing to do about them.
+    Ready,
+    /// Archived — parked deliberately, so not "inactive" in the sense of
+    /// idle, but out of the operator's way.
+    Inactive,
+    /// Working directory matches the current process cwd.
+    ///
+    /// A SCOPE question, not a status one, and it stays in the ladder because
+    /// it is the one scope the operator reaches for most often.
+    CurrentDir,
     /// The current session and its forks/children — the Ctrl+B branch
     /// view (audit R1 2026-10-28: replaces the session_branching
     /// overlay, which listed exactly this set).
     CurrentBranch,
-    Archived,
 }
 
 impl HubFilterMode {
     pub fn next(self) -> Self {
         match self {
-            Self::All => Self::CurrentDir,
-            Self::CurrentDir => Self::ByEmployee,
-            Self::ByEmployee => Self::Active,
-            // Interrupted sits between Active and CurrentBranch because that
-            // is where the operator's question sits: what needs me (Active),
-            // then what was cut off (Interrupted), then my own branch (Ctrl+B).
-            Self::Active => Self::Interrupted,
-            Self::Interrupted => Self::CurrentBranch,
-            Self::CurrentBranch => Self::Archived,
-            Self::Archived => Self::All,
+            Self::All => Self::NeedsYou,
+            // The four status tabs come first, in the order the operator asks
+            // the question: what needs me, what is running, what is done,
+            // what is parked.
+            Self::NeedsYou => Self::Working,
+            Self::Working => Self::Ready,
+            Self::Ready => Self::Inactive,
+            // Then the two scope views.
+            Self::Inactive => Self::CurrentDir,
+            Self::CurrentDir => Self::CurrentBranch,
+            Self::CurrentBranch => Self::All,
         }
     }
 
     pub fn label(self) -> &'static str {
         match self {
             Self::All => "all",
+            Self::NeedsYou => "needs you",
+            Self::Working => "working",
+            Self::Ready => "ready",
+            Self::Inactive => "inactive",
             Self::CurrentDir => "current dir",
-            Self::ByEmployee => "by employee",
-            Self::Active => "active",
-            Self::Interrupted => "interrupted",
             Self::CurrentBranch => "this branch's tree",
-            Self::Archived => "archived",
         }
     }
 
@@ -121,12 +130,12 @@ impl HubFilterMode {
     pub fn short_label(self) -> &'static str {
         match self {
             Self::All => "all",
+            Self::NeedsYou => "need",
+            Self::Working => "work",
+            Self::Ready => "ready",
+            Self::Inactive => "idle",
             Self::CurrentDir => "cur",
-            Self::ByEmployee => "emp",
-            Self::Active => "live",
-            Self::Interrupted => "int",
             Self::CurrentBranch => "br",
-            Self::Archived => "arch",
         }
     }
 }
@@ -247,9 +256,14 @@ pub(super) fn row_matches_filter(
 ) -> bool {
     match mode {
         HubFilterMode::All => true,
-        HubFilterMode::CurrentDir => r.cwd.as_deref().zip(cwd).is_some_and(|(a, b)| a == b),
-        HubFilterMode::ByEmployee => r.employee_id.is_some(),
-        HubFilterMode::Active => {
+        // "Needs you" is the session that was streaming when its owning
+        // process went away: the only state that is an unfinished obligation
+        // rather than a fact about the work. It had no tab at all before
+        // (audit 2026-11-13, finding 4) — 22 sessions on the operator's
+        // database, reachable only by reading 500 rows by eye.
+        HubFilterMode::NeedsYou => matches!(r.status, RowStatus::Interrupted),
+        // "Working" is the live session plus the delegations still pending.
+        HubFilterMode::Working => {
             matches!(r.status, RowStatus::Live)
                 || matches!(
                     &r.kind,
@@ -259,10 +273,11 @@ pub(super) fn row_matches_filter(
                     }
                 )
         }
-        // A session that was streaming when the owning process went away
-        // (audit 2026-11-13, finding 4): the one state with no tab before this.
-        HubFilterMode::Interrupted => matches!(r.status, RowStatus::Interrupted),
-        HubFilterMode::Archived => matches!(r.status, RowStatus::Archived),
+        // "Ready" is finished and quiet.
+        HubFilterMode::Ready => matches!(r.status, RowStatus::Idle),
+        // "Inactive" is parked on purpose.
+        HubFilterMode::Inactive => matches!(r.status, RowStatus::Archived),
+        HubFilterMode::CurrentDir => r.cwd.as_deref().zip(cwd).is_some_and(|(a, b)| a == b),
         HubFilterMode::CurrentBranch => match branch_root {
             Some(root) => r.id == root || r.parent_id.as_deref() == Some(root),
             None => true,
@@ -384,7 +399,7 @@ pub struct SessionHubState {
     ///
     /// Why this field exists: `RowStatus::Live` is documented as "the session
     /// this process is actively streaming into right now"
-    /// (`operant_core::session::listing`), and `HubFilterMode::Active` selects
+    /// (`operant_core::session::listing`), and `HubFilterMode::Working` selects
     /// it — but nothing ever SET it on a session row. The only production
     /// assignment of `Live` was inside the `RowKind::Subagent` arm of
     /// `refresh_subagent_rows`, so the "active" tab read 0 rows always, the ⚡

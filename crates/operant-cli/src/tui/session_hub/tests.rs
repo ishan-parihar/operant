@@ -52,10 +52,10 @@ fn by_employee_filter_keeps_only_tagged_rows() {
         row("s1", Some("tagged"), Some("premiere")),
         row("s2", Some("personal"), None),
     ]);
-    hub.filter_mode = HubFilterMode::ByEmployee;
+    hub.filter_mode = HubFilterMode::Ready;
     hub.rebuild_visible();
     let ids: Vec<&str> = hub.visible_rows().iter().map(|r| r.id.as_str()).collect();
-    assert_eq!(ids, vec!["s1"]);
+    assert_eq!(ids, vec!["s1", "s2"]);
 }
 
 #[test]
@@ -81,7 +81,7 @@ fn active_filter_keeps_pending_subagents() {
         subagent_row("dlg-1", "audit the tests", "pending"),
         subagent_row("dlg-2", "done work", "completed"),
     ]);
-    hub.filter_mode = HubFilterMode::Active;
+    hub.filter_mode = HubFilterMode::Working;
     hub.rebuild_visible();
     let ids: Vec<&str> = hub.visible_rows().iter().map(|r| r.id.as_str()).collect();
     assert_eq!(ids, vec!["dlg-1"]);
@@ -255,21 +255,16 @@ fn the_live_mark_overrides_an_older_interrupted_record() {
 // ---- (audit 2026-11-13, finding 4) the interrupted tab ----
 
 #[test]
-fn the_interrupted_filter_is_in_the_cycle_between_active_and_the_branch() {
+fn the_needs_you_filter_comes_first_in_the_status_ladder() {
     let mut hub = SessionHubState::new();
-    hub.filter_mode = HubFilterMode::Active;
+    hub.filter_mode = HubFilterMode::All;
     hub.cycle_filter();
     assert_eq!(
         hub.filter_mode,
-        HubFilterMode::Interrupted,
-        "interrupted follows active: what needs me, then what was cut off"
+        HubFilterMode::NeedsYou,
+        "what needs me is the first question the operator asks the tab bar"
     );
-    hub.cycle_filter();
-    assert_eq!(hub.filter_mode, HubFilterMode::CurrentBranch);
-    hub.cycle_filter();
-    assert_eq!(hub.filter_mode, HubFilterMode::Archived);
-    hub.cycle_filter();
-    assert_eq!(hub.filter_mode, HubFilterMode::All);
+    assert_eq!(hub.filter_mode.label(), "needs you");
 }
 
 #[test]
@@ -284,7 +279,7 @@ fn the_interrupted_filter_lists_the_sessions_that_were_cut_off() {
         row("s-idle", None, None),
         row("s-done", None, None),
     ]);
-    hub.filter_mode = HubFilterMode::Interrupted;
+    hub.filter_mode = HubFilterMode::NeedsYou;
     hub.rebuild_visible();
     let ids: Vec<&str> = hub.visible_rows().iter().map(|r| r.id.as_str()).collect();
     assert_eq!(ids, vec!["s-cut"], "{ids:?}");
@@ -300,7 +295,7 @@ fn the_interrupted_tab_count_agrees_with_the_visible_set() {
     let counts = hub.filter_counts();
     let interrupted = counts
         .iter()
-        .find(|(m, _)| *m == HubFilterMode::Interrupted)
+        .find(|(m, _)| *m == HubFilterMode::NeedsYou)
         .map(|(_, n)| *n)
         .expect("the mode is in the ladder");
     assert_eq!(interrupted, 1);
@@ -339,32 +334,35 @@ fn the_active_filter_finds_the_streaming_row() {
     let mut hub = SessionHubState::new();
     hub.set_live_session_id(Some("s-mine".to_string()));
     hub.replace_rows(vec![row("s-mine", None, None), row("s-other", None, None)]);
-    hub.filter_mode = HubFilterMode::Active;
+    hub.filter_mode = HubFilterMode::Working;
     hub.rebuild_visible();
     let ids: Vec<&str> = hub.visible_rows().iter().map(|r| r.id.as_str()).collect();
     assert_eq!(ids, vec!["s-mine"], "{ids:?}");
 }
 
 #[test]
-fn the_filter_cycle_includes_the_branch_view_between_active_and_archived() {
-    // The ladder is All → CurrentDir → ByEmployee → Active → Interrupted →
-    // CurrentBranch → Archived → All. `Interrupted` entered between Active and
-    // CurrentBranch (audit 2026-11-13, finding 4): what needs me, then what was
-    // cut off, then my own branch. This test pinned the old six-mode ladder
-    // before that, so it is the guard for the new one.
+fn the_filter_cycle_is_the_status_ladder() {
+    // The ladder is All -> Needs you -> Working -> Ready -> Inactive ->
+    // Current dir -> This branch's tree -> All: the four STATUS questions
+    // first, in the order the operator asks them, then the two scope views.
+    // That order is the point of this iteration (2026-11-13: the operator
+    // asked for tabs "based on the status of the agentic-loop"), so it is
+    // pinned here.
     let mut hub = SessionHubState::new();
-    hub.filter_mode = HubFilterMode::Active;
-    hub.cycle_filter();
-    assert_eq!(
-        hub.filter_mode,
-        HubFilterMode::Interrupted,
-        "interrupted follows active"
-    );
-    hub.cycle_filter();
-    assert_eq!(hub.filter_mode, HubFilterMode::CurrentBranch);
-    assert_eq!(hub.filter_mode.label(), "this branch's tree");
-    hub.cycle_filter();
-    assert_eq!(hub.filter_mode, HubFilterMode::Archived);
+    hub.filter_mode = HubFilterMode::All;
+    for expected in [
+        HubFilterMode::NeedsYou,
+        HubFilterMode::Working,
+        HubFilterMode::Ready,
+        HubFilterMode::Inactive,
+        HubFilterMode::CurrentDir,
+        HubFilterMode::CurrentBranch,
+        HubFilterMode::All,
+    ] {
+        hub.cycle_filter();
+        assert_eq!(hub.filter_mode, expected, "the status ladder is in order");
+    }
+    assert_eq!(hub.filter_mode.label(), "all");
 }
 
 // ---- (audit R4/R5 2026-10-28) the pane's nav and wheel match jcode's ----
@@ -1597,7 +1595,7 @@ fn the_tab_bar_shows_a_live_count_for_every_filter_mode() {
         .map(|line| line.chars().take(48).collect::<String>())
         .collect::<Vec<_>>()
         .join("\n");
-    for needle in ["all 2", "arch", "cur", "emp", "live"] {
+    for needle in ["all 2", "need", "work", "ready", "idle", "cur", "br"] {
         assert!(
             joined.contains(needle),
             "the tab bar must show every mode with its count, missing {needle:?}"
@@ -2305,14 +2303,15 @@ fn no_sort_key_sorts_by_a_field_the_row_does_not_have() {
 fn the_controls_row_carries_every_filter_tab_with_its_count() {
     // The Stage A contract, one assertion per tab: a control that exists in the
     // model and not on the screen is decoration the operator cannot find. The
-    // seventh tab (`int`) is the audit-2026-11-13 finding-4 addition.
+    // labels are the status ladder's (2026-11-13): all, need, work, ready,
+    // idle, cur, br.
     let (list, _preview) = hub_rows(vec![
         row("rich", Some("priciest"), None),
         row("mid", Some("middle"), None),
         row("cheap", Some("cheapest"), None),
     ]);
     let joined = list.join("\n");
-    for label in ["all", "cur", "emp", "live", "int", "br", "arch"] {
+    for label in ["all", "need", "work", "ready", "idle", "cur", "br"] {
         assert!(
             joined.contains(&format!("{label} ")),
             "the controls row must render the `{label}` tab with its count: {joined}"
@@ -2342,7 +2341,7 @@ fn the_sort_clause_survives_at_a_frame_that_can_afford_it() {
     let (narrow, _) = hub_rows(rows.clone());
     let narrow_joined = narrow.join("\n");
     assert!(
-        narrow_joined.contains("int "),
+        narrow_joined.contains("need "),
         "the seven tabs survive the narrow frame — that is the priority: {narrow_joined}"
     );
     let (wide, _) = hub_rows_at(160, rows);
