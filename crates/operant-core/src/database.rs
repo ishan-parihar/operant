@@ -153,6 +153,31 @@ CREATE INDEX IF NOT EXISTS idx_context_ledger_session
     ON context_ledger(session_id, request_seq);
 ";
 
+/// v4 — the session row's FIRST user prompt.
+///
+/// The hub's preview shows the session's opening ask above the tail window.
+/// It used to be found by loading the session's ENTIRE transcript (the largest
+/// session on the operator's database held 14,103 messages), taking the first
+/// user message, and throwing everything but the tail away — the plan
+/// 2026-11-13 I2 gap, which left the bounded read (I1) coupled to a full
+/// load. This column stores the answer on the row instead.
+///
+/// Existing rows are backfilled from their OWN first user message, so the
+/// column is true for every session that ever had one; a session with no user
+/// message stays NULL rather than being handed a guess. The backfill reads
+/// through `idx_messages_session`, so it is an indexed lookup per session
+/// rather than a table scan.
+const FIRST_PROMPT_MIGRATION: &str = "
+ALTER TABLE sessions ADD COLUMN first_prompt TEXT;
+UPDATE sessions SET first_prompt = (
+    SELECT m.content FROM messages m
+    WHERE m.session_id = sessions.id AND m.role = 'user'
+      AND m.content IS NOT NULL AND TRIM(m.content) != ''
+    ORDER BY m.timestamp ASC, m.id ASC LIMIT 1
+)
+WHERE first_prompt IS NULL;
+";
+
 /// Database manager for persistent storage.
 /// Thread-safe via `Arc<Mutex<Connection>>` pattern.
 #[derive(Clone)]
@@ -165,6 +190,7 @@ impl Database {
         DESIRED_SCHEMA_SQL,
         DEFERRED_INDEX_SQL,
         CONTEXT_LEDGER_MIGRATION,
+        FIRST_PROMPT_MIGRATION,
     ];
 
     /// Initialize a new database at the specified path.
@@ -1590,7 +1616,12 @@ impl Database {
                  ORDER BY MAX(m.timestamp) DESC
                  LIMIT 1",
             )
-            .map_err(|e| Error::Agent(format!("Failed to prepare most_recent_session_by_activity: {}", e)))?;
+            .map_err(|e| {
+                Error::Agent(format!(
+                    "Failed to prepare most_recent_session_by_activity: {}",
+                    e
+                ))
+            })?;
         let mut rows = stmt
             .query_map([], |row| {
                 Ok(DatabaseSession {
@@ -1608,7 +1639,12 @@ impl Database {
                     actual_cost_usd: row.get(6)?,
                 })
             })
-            .map_err(|e| Error::Agent(format!("Most recent session by activity query error: {}", e)))?;
+            .map_err(|e| {
+                Error::Agent(format!(
+                    "Most recent session by activity query error: {}",
+                    e
+                ))
+            })?;
         rows.next()
             .transpose()
             .map_err(|e| Error::Agent(format!("Row error: {}", e)))
@@ -1809,6 +1845,130 @@ impl Database {
         )
         .map_err(|e| Error::Agent(format!("Failed to stamp session cwd: {}", e)))?;
         Ok(())
+    }
+
+    /// The session's first user prompt, or None when the row never recorded
+    /// one (a session with no user message, or a row written before the
+    /// column existed and never backfilled).
+    ///
+    /// The preview pane shows this above the tail window: "what did I
+    /// originally ask for?" is the question a session picker exists to
+    /// answer, and before the column the hub answered it by loading every
+    /// message of the session — 14,103 rows for the largest one on the
+    /// operator's database.
+    pub fn get_session_first_prompt(&self, session_id: &str) -> Result<Option<String>> {
+        let conn = self.lock_conn()?;
+        let mut stmt = conn
+            .prepare("SELECT first_prompt FROM sessions WHERE id = ?1")
+            .map_err(|e| Error::Agent(format!("Failed to prepare first-prompt lookup: {}", e)))?;
+        let mut rows = stmt
+            .query_map(params![session_id], |row| row.get::<_, Option<String>>(0))
+            .map_err(|e| Error::Agent(format!("Failed to query first prompt: {}", e)))?;
+        match rows.next() {
+            Some(row) => row.map_err(|e| Error::Agent(format!("First-prompt row error: {}", e))),
+            None => Ok(None),
+        }
+    }
+
+    /// Stamp the session's first user prompt on the row — ONCE.
+    ///
+    /// First-write-wins by the `WHERE` clause: the first turn's prologue
+    /// writes the opening ask, and every later turn's write is a no-op. That
+    /// makes "the first prompt" a fact about the session rather than a race
+    /// between turns, and it keeps the column's producer the same for a live
+    /// session and for a backfilled legacy one.
+    ///
+    /// Best-effort by the same contract as [`Self::set_session_cwd`]: a miss
+    /// means the row was concurrently deleted, which is not worth failing a
+    /// turn over.
+    pub fn set_session_first_prompt(&self, session_id: &str, prompt: &str) -> Result<()> {
+        let conn = self.lock_conn()?;
+        conn.execute(
+            "UPDATE sessions SET first_prompt = ?2 WHERE id = ?1 AND first_prompt IS NULL",
+            params![session_id, prompt],
+        )
+        .map_err(|e| Error::Agent(format!("Failed to stamp session first prompt: {}", e)))?;
+        Ok(())
+    }
+
+    /// The TAIL of a session's transcript: the last `limit` messages, in the
+    /// same chronological order [`Self::get_session_messages_full`] returns.
+    ///
+    /// The bound is the point. The hub's preview shows the last 400 messages
+    /// and used to materialise every message before them to do it — each with
+    /// its reasoning, tool-call and codex-item columns — so selecting the
+    /// biggest session allocated the whole transcript to fill a 400-message
+    /// pane. The ORDER BY walks `idx_messages_session` backwards, so the
+    /// database stops after `limit` rows instead of sorting the session.
+    pub fn get_session_messages_preview(
+        &self,
+        session_id: &str,
+        limit: usize,
+    ) -> Result<Vec<MessageData>> {
+        let conn = self.lock_conn()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, session_id, role, content, full_content, tool_call_id, tool_calls, tool_name,
+                        timestamp, token_count, finish_reason, reasoning, reasoning_content,
+                        reasoning_details, codex_reasoning_items, codex_message_items,
+                        platform_message_id, observed, active
+                 FROM messages WHERE session_id = ?1 ORDER BY timestamp DESC, id DESC LIMIT ?2",
+            )
+            .map_err(|e| Error::Agent(format!("Failed to prepare preview statement: {}", e)))?;
+
+        let rows = stmt
+            .query_map(params![session_id, limit as i64], |row| {
+                Ok(MessageData {
+                    id: row.get(0)?,
+                    session_id: row.get(1)?,
+                    role: row.get(2)?,
+                    content: row.get(3)?,
+                    full_content: row.get(4)?,
+                    tool_call_id: row.get(5)?,
+                    tool_calls: row.get(6)?,
+                    tool_name: row.get(7)?,
+                    timestamp: row.get(8)?,
+                    token_count: row.get(9)?,
+                    finish_reason: row.get(10)?,
+                    reasoning: row.get(11)?,
+                    reasoning_content: row.get(12)?,
+                    reasoning_details: row.get(13)?,
+                    codex_reasoning_items: row.get(14)?,
+                    codex_message_items: row.get(15)?,
+                    platform_message_id: row.get(16)?,
+                    observed: row.get(17)?,
+                    active: row.get(18)?,
+                })
+            })
+            .map_err(|e| Error::Agent(format!("Preview query error: {}", e)))?;
+
+        let mut messages = Vec::new();
+        for row in rows {
+            messages.push(row.map_err(|e| Error::Agent(format!("Preview row error: {}", e)))?);
+        }
+        // The query walks the tail backwards; the pane reads forwards.
+        messages.reverse();
+        Ok(messages)
+    }
+
+    /// How many user prompts the session holds in total.
+    ///
+    /// The preview's "N earlier prompts not shown" line needs the WHOLE
+    /// session's prompt count, not the window's: with a bounded read the
+    /// window no longer carries the dropped head, so the count comes from
+    /// here and the difference is what fell off.
+    pub fn count_session_user_prompts(&self, session_id: &str) -> Result<usize> {
+        let conn = self.lock_conn()?;
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM messages
+                 WHERE session_id = ?1 AND role = 'user'
+                   AND content IS NOT NULL AND TRIM(content) != ''",
+                params![session_id],
+                |row| row.get(0),
+            )
+            .map_err(|e| Error::Agent(format!("Failed to count session user prompts: {}", e)))?;
+        Ok(count.max(0) as usize)
     }
 
     /// FTS5 session search with an optional role filter (`user`/`assistant`/
@@ -3435,15 +3595,37 @@ mod tests {
     #[test]
     fn the_most_recent_session_by_activity_is_the_crashed_one_not_the_last_started() {
         let db = test_db(); // a helper session with no messages: not a candidate
-        db.save_session("sess_crashed", Some("crashed"), "test", "2026-01-01", "2026-01-01")
-            .expect("save_session");
-        db.save_message("sess_crashed", "user", "the newest turn", "2026-01-09T10:00:00Z")
-            .expect("save_message");
+        db.save_session(
+            "sess_crashed",
+            Some("crashed"),
+            "test",
+            "2026-01-01",
+            "2026-01-01",
+        )
+        .expect("save_session");
+        db.save_message(
+            "sess_crashed",
+            "user",
+            "the newest turn",
+            "2026-01-09T10:00:00Z",
+        )
+        .expect("save_message");
         // Starts later and ends normally, but its last turn is OLDER.
-        db.save_session("sess_finished", Some("finished"), "test", "2026-01-05", "2026-01-05")
-            .expect("save_session");
-        db.save_message("sess_finished", "user", "an older turn", "2026-01-06T09:00:00Z")
-            .expect("save_message");
+        db.save_session(
+            "sess_finished",
+            Some("finished"),
+            "test",
+            "2026-01-05",
+            "2026-01-05",
+        )
+        .expect("save_session");
+        db.save_message(
+            "sess_finished",
+            "user",
+            "an older turn",
+            "2026-01-06T09:00:00Z",
+        )
+        .expect("save_message");
 
         let by_activity = db
             .most_recent_session_by_activity()
@@ -3464,10 +3646,22 @@ mod tests {
     fn the_most_recent_session_by_activity_skips_a_session_with_no_messages() {
         let db = test_db();
         // Newest start in the whole store, and zero turns.
-        db.save_session("sess-empty", Some("empty"), "test", "2026-01-09", "2026-01-09")
-            .expect("save_session");
-        db.save_session("sess-with", Some("with"), "test", "2026-01-01", "2026-01-01")
-            .expect("save_session");
+        db.save_session(
+            "sess-empty",
+            Some("empty"),
+            "test",
+            "2026-01-09",
+            "2026-01-09",
+        )
+        .expect("save_session");
+        db.save_session(
+            "sess-with",
+            Some("with"),
+            "test",
+            "2026-01-01",
+            "2026-01-01",
+        )
+        .expect("save_session");
         db.save_message("sess-with", "user", "a turn", "2026-01-02T00:00:00Z")
             .expect("save_message");
 
@@ -3482,9 +3676,19 @@ mod tests {
     #[test]
     fn the_most_recent_session_by_activity_is_none_when_no_session_has_messages() {
         let db = test_db();
-        db.save_session("sess-empty", Some("empty"), "test", "2026-01-09", "2026-01-09")
-            .expect("save_session");
-        assert!(db.most_recent_session_by_activity().expect("query").is_none());
+        db.save_session(
+            "sess-empty",
+            Some("empty"),
+            "test",
+            "2026-01-09",
+            "2026-01-09",
+        )
+        .expect("save_session");
+        assert!(
+            db.most_recent_session_by_activity()
+                .expect("query")
+                .is_none()
+        );
     }
 
     fn test_db_path() -> (Database, PathBuf) {
@@ -5537,6 +5741,111 @@ mod tests {
         assert_eq!(
             b.cwd, None,
             "an unstamped row stays NULL rather than inheriting a directory"
+        );
+    }
+
+    /// The FIRST user prompt must have a producer and be stored ONCE.
+    ///
+    /// The preview pane shows the session's opening ask above the tail
+    /// window. Before the column, the hub found it by loading the session's
+    /// ENTIRE transcript (the largest session on the operator's database held
+    /// 14,103 messages) — and the prompt itself was a race between turns,
+    /// because whichever turn wrote last would have won.
+    #[test]
+    fn the_first_prompt_is_stamped_once_and_survives_later_turns() {
+        let db = test_db();
+        let now = chrono::Utc::now().to_rfc3339();
+        db.save_session("fp-a", None, "agent", &now, &now)
+            .expect("a");
+        db.save_session("fp-b", None, "agent", &now, &now)
+            .expect("b");
+        db.set_session_first_prompt("fp-a", "the opening ask")
+            .expect("stamp");
+        db.set_session_first_prompt("fp-a", "a later turn's ask")
+            .expect("second stamp");
+        assert_eq!(
+            db.get_session_first_prompt("fp-a")
+                .expect("read")
+                .as_deref(),
+            Some("the opening ask"),
+            "the FIRST prompt is a fact about the session, not about the last turn"
+        );
+        assert_eq!(
+            db.get_session_first_prompt("fp-b").expect("read"),
+            None,
+            "the stamp must not leak to another row"
+        );
+    }
+
+    /// The preview reads the TAIL of a session, bounded — and in the order the
+    /// full read returns.
+    ///
+    /// The bounded read is the plan's I1: the load used to materialise every
+    /// message of the session (14,103 rows for the largest one on the
+    /// operator's database) to show 400 of them.
+    #[test]
+    fn the_preview_read_is_bounded_and_chronological() {
+        let db = test_db();
+        let now = chrono::Utc::now().to_rfc3339();
+        db.save_session("pv-1", None, "agent", &now, &now)
+            .expect("session");
+        for i in 0..500 {
+            db.save_message(
+                "pv-1",
+                "user",
+                &format!("prompt {i}"),
+                &format!("2024-01-01T00:{:02}:{:02}Z", i / 60, i % 60),
+            )
+            .expect("message");
+        }
+        let preview = db
+            .get_session_messages_preview("pv-1", 10)
+            .expect("preview");
+        assert_eq!(preview.len(), 10, "the read is bounded by the limit");
+        assert_eq!(
+            preview.first().and_then(|m| m.content.as_deref()),
+            Some("prompt 490"),
+            "the window starts at the tail"
+        );
+        assert_eq!(
+            preview.last().and_then(|m| m.content.as_deref()),
+            Some("prompt 499"),
+            "the window ends at the newest message"
+        );
+        assert!(
+            preview.windows(2).all(|w| w[0].timestamp <= w[1].timestamp),
+            "the pane reads forwards, the same order the full read returns"
+        );
+    }
+
+    /// The "N earlier prompts not shown" number must come from the STORE.
+    ///
+    /// With a bounded read the window no longer carries the dropped head, so
+    /// a count taken from the window would read 0 for a session whose
+    /// prompts are all behind the cut.
+    #[test]
+    fn the_prompt_count_comes_from_the_store_not_the_window() {
+        let db = test_db();
+        let now = chrono::Utc::now().to_rfc3339();
+        db.save_session("pc-1", None, "agent", &now, &now)
+            .expect("session");
+        for i in 0..30 {
+            db.save_message(
+                "pc-1",
+                "user",
+                &format!("prompt {i}"),
+                &format!("2024-01-01T00:{:02}:{:02}Z", i / 60, i % 60),
+            )
+            .expect("message");
+        }
+        let preview = db
+            .get_session_messages_preview("pc-1", 10)
+            .expect("preview");
+        assert_eq!(preview.len(), 10, "the window holds 10 of the 30");
+        assert_eq!(
+            db.count_session_user_prompts("pc-1").expect("count"),
+            30,
+            "the store knows about all 30 — that is what the hidden count needs"
         );
     }
 

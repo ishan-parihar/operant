@@ -400,27 +400,33 @@ fn msg(role: &str, content: &str) -> PreviewMessage {
     }
 }
 
+/// The hidden-prompt count is the STORE's count minus the window's.
+///
+/// The preview reads a bounded tail now, so the dropped head is not in the
+/// window any more: the number of prompts behind the cut comes from the
+/// database, and this is the arithmetic that turns the two into one number.
 #[test]
-fn window_messages_keeps_the_tail_and_counts_hidden_prompts() {
-    let mut all = Vec::new();
-    for i in 0..PREVIEW_MESSAGE_LIMIT + 2 {
-        all.push(msg("user", &format!("prompt {i}")));
-    }
-    all.insert(10, msg("assistant", "noise"));
-    let (windowed, hidden) = SessionHubState::window_messages(all);
-    assert_eq!(windowed.len(), PREVIEW_MESSAGE_LIMIT);
-    assert!(
-        hidden > 0,
-        "the prompts dropped off the head are counted, so the pane can number globally"
+fn the_hidden_prompt_count_is_the_store_minus_the_window() {
+    let window = vec![
+        msg("user", "prompt 8"),
+        msg("assistant", "noise"),
+        msg("user", "prompt 9"),
+    ];
+    assert_eq!(
+        SessionHubState::hidden_prompt_count(10, &window),
+        8,
+        "eight prompts fell off the head: the store's ten minus the window's two"
     );
-}
-
-#[test]
-fn window_messages_is_identity_under_the_limit() {
-    let msgs = vec![msg("user", "one"), msg("assistant", "two")];
-    let (windowed, hidden) = SessionHubState::window_messages(msgs.clone());
-    assert_eq!(windowed.len(), 2);
-    assert_eq!(hidden, 0);
+    assert_eq!(
+        SessionHubState::hidden_prompt_count(2, &window),
+        0,
+        "nothing fell off the head"
+    );
+    assert_eq!(
+        SessionHubState::hidden_prompt_count(1, &window),
+        0,
+        "a stale count cannot make the pane claim prompts that are not there"
+    );
 }
 
 #[test]
@@ -1081,21 +1087,13 @@ fn the_tab_counts_follow_the_rows_and_the_filters() {
 }
 
 // ---- (2026-11-13) the FIRST prompt, beside the last ----
-
-/// The first thing the operator TYPED is the answer to "how did this session
-/// start". The load read every message and the tail window dropped it.
-#[test]
-fn the_first_user_prompt_is_the_first_thing_the_operator_typed() {
-    let mut messages = vec![msg("system", "a system line")];
-    messages.push(msg("user", "  "));
-    messages.push(msg("user", "the opening question"));
-    messages.push(msg("assistant", "the answer"));
-    assert_eq!(
-        SessionHubState::first_user_prompt(&messages).as_deref(),
-        Some("the opening question"),
-        "a system line is not a prompt and an empty one is not a prompt"
-    );
-}
+//
+// (2026-11-14, plan I2) The first prompt is now a COLUMN on the session row,
+// written once at turn start and backfilled for the rows that predate it.
+// It is no longer derived from a message list, so there is no list-shaped
+// "which of these is the first prompt" rule to pin: the row holds the
+// answer, and `Database::set_session_first_prompt` holds the contract that
+// it is written once.
 
 /// The preview shows it: the operator asked for "first-message/last-message",
 /// and the last message is the window itself.

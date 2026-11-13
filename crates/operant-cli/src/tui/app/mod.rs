@@ -2038,26 +2038,45 @@ impl App {
                         let id_for_thread = session_id.clone();
                         tokio::spawn(async move {
                             let loaded = tokio::task::spawn_blocking(move || {
-                                let messages = operant_core::database::Database::init(db_path)
-                                    .and_then(|db| db.get_session_messages_full(&id_for_thread))
-                                    .unwrap_or_default()
+                                let db = operant_core::database::Database::init(db_path).ok()?;
+                                // The BOUNDED read (plan I1): the last
+                                // PREVIEW_MESSAGE_LIMIT messages and nothing
+                                // before them. The load used to read EVERY
+                                // message of the session and keep the last 400
+                                // — 14,103 rows of reasoning and tool-call
+                                // columns to fill a 400-message pane.
+                                let messages = db
+                                    .get_session_messages_preview(
+                                        &id_for_thread,
+                                        crate::tui::session_hub::PREVIEW_MESSAGE_LIMIT,
+                                    )
+                                    .unwrap_or_default();
+                                let preview = messages
                                     .into_iter()
                                     .filter_map(crate::tui::session_hub::preview_message_from_row)
                                     .collect::<Vec<_>>();
-                                // The FIRST user prompt, captured BEFORE the
-                                // tail window drops it (2026-11-13): the
-                                // operator asked for "first-message/last-message"
-                                // and the load already had the first message in
-                                // hand — it was read and discarded.
+                                // The prompts that fell off the head: the
+                                // STORE's count minus what the window shows.
+                                // The bounded read no longer carries the
+                                // dropped head, so the total has to come from
+                                // the database (the plan's I1 replaces
+                                // `window_messages` for exactly this reason).
+                                let total_prompts =
+                                    db.count_session_user_prompts(&id_for_thread).unwrap_or(0);
+                                let hidden =
+                                    crate::tui::session_hub::SessionHubState::hidden_prompt_count(
+                                        total_prompts,
+                                        &preview,
+                                    );
+                                // The FIRST user prompt, read from the session
+                                // row (plan I2's column: written once at turn
+                                // start, backfilled for legacy rows): the
+                                // question a session picker exists to answer,
+                                // without loading anything to find it. The plan
+                                // is explicit that no fallback read is needed.
                                 let first_prompt =
-                                    crate::tui::session_hub::SessionHubState::first_user_prompt(
-                                        &messages,
-                                    );
-                                let (windowed, hidden) =
-                                    crate::tui::session_hub::SessionHubState::window_messages(
-                                        messages,
-                                    );
-                                Some((windowed, hidden, first_prompt))
+                                    db.get_session_first_prompt(&id_for_thread).ok().flatten();
+                                Some((preview, hidden, first_prompt))
                             })
                             .await
                             .unwrap_or(None);

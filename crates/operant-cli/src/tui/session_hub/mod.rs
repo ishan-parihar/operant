@@ -1337,31 +1337,22 @@ impl SessionHubState {
             .is_some_and(|(_, msgs, _)| !msgs.is_empty())
     }
 
-    /// Window a session's messages to the preview: keep the trailing
-    /// `PREVIEW_MESSAGE_LIMIT` and count the user prompts that fell off the
-    /// head, so the pane can number prompts globally (jcode's
-    /// `build_messages_preview_with_offset`).
-    /// The FIRST user prompt in a message list.
+    /// How many user prompts fell off the head of the preview window.
     ///
-    /// "First" means the first thing the operator TYPED: a system line is not
-    /// a prompt, and an empty one is not a prompt either. The preview shows
-    /// this above the tail window, so the operator can see how the
-    /// conversation opened without scrolling a 400-message window back to the
-    /// top.
-    pub fn first_user_prompt(messages: &[PreviewMessage]) -> Option<String> {
-        messages
-            .iter()
-            .find(|m| m.role == "user" && !m.content.trim().is_empty())
-            .map(|m| m.content.trim().to_string())
-    }
-
-    pub fn window_messages(messages: Vec<PreviewMessage>) -> (Vec<PreviewMessage>, usize) {
-        let skip = messages.len().saturating_sub(PREVIEW_MESSAGE_LIMIT);
-        let hidden_prompts = messages[..skip]
+    /// The preview shows the last `PREVIEW_MESSAGE_LIMIT` messages and says
+    /// how many prompts sit behind them. The total comes from the STORE
+    /// (`Database::count_session_user_prompts`) because the bounded read no
+    /// longer carries the dropped head — the difference between the store's
+    /// count and the window's is exactly what the operator cannot see.
+    ///
+    /// "A prompt" means what the operator TYPED: a system line is not a
+    /// prompt, and an empty one is not a prompt either.
+    pub fn hidden_prompt_count(total_user_prompts: usize, window: &[PreviewMessage]) -> usize {
+        let in_window = window
             .iter()
             .filter(|m| m.role == "user" && !m.content.trim().is_empty())
             .count();
-        (messages.into_iter().skip(skip).collect(), hidden_prompts)
+        total_user_prompts.saturating_sub(in_window)
     }
 
     /// Jump to the last row (End).

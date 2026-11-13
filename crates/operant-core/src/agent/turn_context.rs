@@ -319,6 +319,23 @@ pub async fn build_turn_context(agent: &OperantAgent, user_query: &str) -> Resul
     if let Err(e) = agent.database.set_session_cwd(&session_id, &cwd_display) {
         warn!(error = %e, "Failed to stamp session cwd");
     }
+    // The session's FIRST user prompt, stamped once beside the directory for
+    // the same reason: the hub's preview shows it, and before this the hub
+    // loaded the session's ENTIRE transcript to find it — the largest session
+    // on the operator's database held 14,103 messages. First-write-wins in
+    // the setter, so the opening ask survives every later turn. The text
+    // stored is the EXPANDED query, the same string the messages table holds,
+    // so a live session and a backfilled legacy row agree on what "the first
+    // prompt" means.
+    let first_prompt = effective_query.trim();
+    if !first_prompt.is_empty() {
+        if let Err(e) = agent
+            .database
+            .set_session_first_prompt(&session_id, first_prompt)
+        {
+            warn!(error = %e, "Failed to stamp session first prompt");
+        }
+    }
 
     // Persist user message
     //
