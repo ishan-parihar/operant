@@ -39,8 +39,6 @@ pub struct ClientConfig {
     /// Explicit per-model request timeouts (`model` → seconds). Consulted
     /// ahead of the built-in reasoning floor; see `ClientSettings`.
     pub model_request_timeouts: std::collections::HashMap<String, Duration>,
-    /// Maximum context length (for truncation warnings)
-    pub max_context_length: usize,
     /// Rate limit settings for outbound requests.
     pub rate_limit: crate::config::RateLimitSettings,
     /// TTL for prompt-cache breakpoints (zeroclaw port: configurable).
@@ -64,7 +62,6 @@ impl From<&ClientSettings> for ClientConfig {
                 .iter()
                 .map(|(k, v)| (k.clone(), Duration::from_secs(*v)))
                 .collect(),
-            max_context_length: settings.max_context_length,
             rate_limit: settings.rate_limit.clone(),
             prompt_cache_ttl: settings.prompt_cache_ttl,
         }
@@ -370,7 +367,6 @@ impl OpenAIClient {
             api_key: api_key.or(base.client.api_key),
             timeout: Duration::from_secs(base.client.timeout_secs),
             model_request_timeouts,
-            max_context_length: base.client.max_context_length,
             rate_limit: base.client.rate_limit.clone(),
             prompt_cache_ttl: base.client.prompt_cache_ttl,
         }))
@@ -2360,7 +2356,6 @@ mod tests {
             api_key: Some("test-key".into()),
             timeout: Duration::from_secs(10),
             model_request_timeouts: Default::default(),
-            max_context_length: 8000,
             rate_limit: crate::config::RateLimitSettings {
                 max_retries: 1,
                 base_delay_secs: 0,
@@ -2422,7 +2417,6 @@ mod tests {
             api_key: Some("test-key".into()),
             timeout: Duration::from_secs(10),
             model_request_timeouts: Default::default(),
-            max_context_length: 8000,
             rate_limit: crate::config::RateLimitSettings {
                 max_retries: 0,
                 base_delay_secs: 0,
@@ -2830,7 +2824,6 @@ mod tests {
             api_key: Some("test-key".into()),
             timeout: Duration::from_secs(10),
             model_request_timeouts: Default::default(),
-            max_context_length: 8000,
             rate_limit: crate::config::RateLimitSettings {
                 max_retries: 2,
                 base_delay_secs: 0,
@@ -2977,7 +2970,6 @@ Connection: close
             api_key: Some("test-key".into()),
             timeout: Duration::from_secs(10),
             model_request_timeouts: Default::default(),
-            max_context_length: 8000,
             rate_limit: crate::config::RateLimitSettings {
                 max_retries: 2,
                 base_delay_secs: 0,
@@ -3049,7 +3041,6 @@ Connection: close
             api_key: Some("test-key".into()),
             timeout,
             model_request_timeouts: Default::default(),
-            max_context_length: 8000,
             rate_limit: crate::config::RateLimitSettings {
                 max_retries: 1,
                 base_delay_secs: 0,
@@ -3227,7 +3218,6 @@ Connection: close
             api_key: Some("test-key".into()),
             timeout: Duration::from_secs(10),
             model_request_timeouts: Default::default(),
-            max_context_length: 8000,
             rate_limit: crate::config::RateLimitSettings {
                 max_retries: 1,
                 base_delay_secs: 0,
@@ -3300,7 +3290,6 @@ Connection: close
             api_key: Some("test-key".into()),
             timeout: Duration::from_secs(10),
             model_request_timeouts: Default::default(),
-            max_context_length: 8000,
             rate_limit: crate::config::RateLimitSettings {
                 max_retries: 1,
                 base_delay_secs: 0,

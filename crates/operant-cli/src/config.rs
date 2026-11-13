@@ -1384,10 +1384,6 @@ impl CliConfig {
         if let Some(timeout) = self.api.timeout_seconds {
             app.client.timeout_secs = timeout;
         }
-        if let Some(max_tokens) = self.api.max_tokens {
-            app.client.max_context_length = max_tokens as usize;
-        }
-
         // Map agent settings
         if let Some(model) = &self.api.default_model {
             app.agent.model = model.clone();

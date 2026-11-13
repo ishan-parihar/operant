@@ -63,11 +63,11 @@ mod memory_provider_tools;
 mod plugin_memory;
 #[cfg(feature = "plugins-wasm")]
 mod plugin_tools;
-mod skill_roots;
 pub mod plugins_install;
 mod post_setup;
 mod prompt_helpers;
 pub mod provider;
+mod skill_roots;
 mod tui;
 
 pub(crate) use tui::free_mode_dialog;
@@ -840,7 +840,6 @@ fn apply_cli_overrides(cli: &Cli, config: &mut AppConfig) -> Result<()> {
         operant_core::config::validate_context_window(window)
             .context("invalid --context-window")?;
         config.agent.context_window = window;
-        config.client.max_context_length = window;
     }
     if let Some(healing) = cli.max_healing_attempts {
         config.agent.max_healing_attempts = healing;
@@ -4361,7 +4360,6 @@ mod tests {
             api_key: Some("sk-primary".to_string()),
             timeout: Duration::from_secs(60),
             model_request_timeouts: Default::default(),
-            max_context_length: 200_000,
             rate_limit: Default::default(),
             prompt_cache_ttl: Default::default(),
         };

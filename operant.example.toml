@@ -41,7 +41,6 @@ model_request_timeouts = {}
 # Retained for compatibility; the agent budgets from `[agent] context_window`
 # (which resolves per model). Leave at 0: a pinned value here is a second,
 # unused denominator that drifts from the real one.
-max_context_length = 0
 # TTL for provider prompt-cache breakpoints: "5m" (default) or "1h".
 # Applies to OpenRouter-compatible endpoints and the Anthropic adapter.
 # prompt_cache_ttl = "5m"

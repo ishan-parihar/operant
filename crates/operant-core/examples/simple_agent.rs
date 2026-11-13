@@ -133,7 +133,6 @@ async fn main() -> Result<()> {
         api_key: std::env::var("OPENAI_API_KEY").ok(),
         timeout: Duration::from_secs(60),
         model_request_timeouts: Default::default(),
-        max_context_length: 128_000,
         rate_limit: Default::default(),
         prompt_cache_ttl: Default::default(),
     };
@@ -175,7 +174,8 @@ Use the echo tool to repeat information and the calculate tool for math."
         // is why `cargo test --workspace` failed to compile the example while
         // `cargo check --workspace` passed: `check` does not build examples.
         max_tool_result_share: operant_core::context_management::DEFAULT_MAX_TOOL_RESULT_SHARE,
-        max_tool_result_total_share: operant_core::context_management::DEFAULT_MAX_TOOL_RESULT_TOTAL_SHARE,
+        max_tool_result_total_share:
+            operant_core::context_management::DEFAULT_MAX_TOOL_RESULT_TOTAL_SHARE,
         request_timeout: Duration::from_secs(120),
         model_request_timeouts: Default::default(),
         max_healing_attempts: 3,

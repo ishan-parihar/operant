@@ -567,7 +567,6 @@ pub struct ClientSettings {
     #[serde(default)]
     pub additional_api_keys: Vec<String>,
     pub timeout_secs: u64,
-    pub max_context_length: usize,
     /// Explicit per-model request timeouts, in seconds.
     ///
     /// The escape hatch the reasoning-floor doc has always promised ("a
@@ -596,7 +595,6 @@ impl Default for ClientSettings {
             api_key: None,
             additional_api_keys: Vec::new(),
             timeout_secs: 60,
-            max_context_length: 128_000,
             model_request_timeouts: std::collections::HashMap::new(),
             rate_limit: RateLimitSettings::default(),
             prompt_cache_ttl: Default::default(),
@@ -3002,15 +3000,12 @@ fn coerce_scalar(raw: &str) -> toml_edit::Item {
 pub fn persist_config_key(dotted: &str, raw_value: &str) -> Result<PathBuf> {
     let path = match loaded_config_path() {
         Some(path) => path,
-        None => default_config_paths()
-            .into_iter()
-            .next()
-            .ok_or_else(|| {
-                Error::Config(
-                    "no config file is loaded in this process and no default config path is available"
-                        .to_string(),
-                )
-            })?,
+        None => default_config_paths().into_iter().next().ok_or_else(|| {
+            Error::Config(
+                "no config file is loaded in this process and no default config path is available"
+                    .to_string(),
+            )
+        })?,
     };
     ensure_config_file_exists(&path)?;
     persist_config_key_at(&path, dotted, raw_value)
@@ -3021,8 +3016,7 @@ pub fn persist_config_key(dotted: &str, raw_value: &str) -> Result<PathBuf> {
 /// Comments only: the document is valid TOML, and the loader turns an empty
 /// document into the built-in defaults, so a created file behaves exactly
 /// like a config the operator never wrote.
-const FRESH_CONFIG_BODY: &str =
-    "# operant configuration\n# Created by operant: no config file existed when this key was set.\n";
+const FRESH_CONFIG_BODY: &str = "# operant configuration\n# Created by operant: no config file existed when this key was set.\n";
 
 /// Create the target config file when it does not exist yet.
 ///
@@ -4428,7 +4422,6 @@ wonderful_unknown_key = 42
 [client]
 base_url = "https://openrouter.ai/api/v1"
 timeout_secs = 30
-max_context_length = 1000
 prompt_cache_ttl = "1h"
 "#;
         let parsed = parse_config_str(raw, std::path::Path::new("ttl.toml"))
