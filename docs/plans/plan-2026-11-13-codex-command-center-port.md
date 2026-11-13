@@ -285,7 +285,7 @@ against `iter-2155`, and the work landed as **iters 2166–2189**.
 | 2158 F3+F4 | **2180** | `HubFilterMode::Interrupted` + the page cursor (`list_sessions_rich_page`) and `count_sessions`. The seventh tab pushed the sort clause off the 46-column pane; the ladder's priority (tabs first, sort drops first) now has both halves pinned by a test. |
 | 2159 H1+H2 | **2183**, **2184** | The preview's `project:` line (the FULL path). The row's directory qualifier went on the TITLE line, not the meta line — the meta line has no room, and the metric model over-estimates the row's real slack by ~3 cells. |
 | 2160 G1+G2 | **2185**, **2186** | The tab bar became a STATUS ladder: all, needs you, working, ready, inactive (codex's `TASK_FILTERS` shape). The employee axis (key `e`) filters by IDENTITY, not by boolean. |
-| 2161 I1+I2 | **2188** (I2 only) | The preview shows the session's FIRST prompt beside its tail — the load was reading it and `window_messages` was dropping it. **I1 (the bounded SQL read) did NOT land**: the load still reads every message and keeps the last 400. |
+| 2161 I1+I2 | **2188** (I2), **2212** (I1) | I2: the preview shows the session's FIRST prompt beside its tail — the load was reading it and `window_messages` was dropping it. It is now a COLUMN on the row (`first_prompt`, written once at turn start beside `cwd`, backfilled for the rows that predate it). I1: the load reads a BOUNDED tail (`get_session_messages_preview`, ordered so the window is exactly the tail of the full read) instead of every message, and the "N earlier prompts" count comes from the store (`count_session_user_prompts`). `window_messages` is gone. |
 | 2162 I4 | **2187** | `t` hides every tool call and every tool result; the prompts and the end-of-turn output remain, and the hidden state is named in the pane. |
 | 2163 J1+J2 | **2189** (J1 only) | The header says "500 of 3,302". **J2 (the `Show more` row) did NOT land**: the page cursor exists in the database layer, but nothing in the UI asks for the next page. |
 | 2164 J3 | **2189** | The tab counts are computed in `rebuild_visible`, not on every frame. |
@@ -295,11 +295,14 @@ plan as documents, and **2191** advertised the hub's new keys — `e` and `t`
 existed in the key handler and on no screen, which the repo's own standard
 calls decoration the operator cannot find.
 
-**Two planned items are still open** — I1 (the bounded preview read: the load
-reads all 14,103 messages of the largest session and keeps the last 400) and
-J2 (the `Show more` row, which the page cursor now makes possible). Both were
-scoped out at the end of the execution window, not forgotten; the code each
-needs is in place (the cursor, the count, the first-prompt capture).
+**One planned item is still open** — J2 (the `Show more` row, which the page
+cursor makes possible). I1 landed as **iter-2212**: the preview reads the last
+400 messages with one indexed SQL read, the first prompt is a column on the
+session row (written once at turn start, backfilled for the 3,314 rows that
+predate it), and the hidden-prompt count comes from the store rather than the
+window. The `Show more` row was scoped out again — it needs the list pane's
+own row model, and the fleet's session-hub work was in those files while this
+slice ran.
 
 ## Iteration order (as planned)
 
