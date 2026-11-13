@@ -2,6 +2,8 @@
 
 Dated-frozen: published `2026-11-14`. A survey is dated-frozen: a correction is a NEW audit.
 
+> **Amended `2026-11-14` (same day).** §5 — the enforcement survey — was added at the operator's request, answering which gate (if any) forces an agent to touch the whole config surface. The survey above is the original published text, unchanged.
+
 **Question this answers.** "What does the config surface actually have, what is missing, and is
 the architecture resilient to upgrades in its own architecture?" Every claim below cites the
 line that makes it true on `origin/main` at iter-2217 (`d3eb7a0c`), read on 2026-11-14.
@@ -79,3 +81,24 @@ warning exists; the guard does not.
    parity, so an agent can read the meaning and the default of every key without source.
 5. **A doctor sweep.** Unknown keys, deprecated keys, missing sections, the two-file split, the
    unparseable-file backup — report, and heal the safe ones.
+
+---
+
+## 5. The enforcement survey — what makes an agent touch the whole map
+
+The operator's question: "how can an agent developing a new config feature know everything it must
+update, and is that enforced at the architectural level?" The grounded answer:
+
+| Gate | File | What it forces | Direction |
+|---|---|---|---|
+| the compiler | `config.rs` | the struct field (and, in exhaustive literals, the default) | forward, partial |
+| `tests/example_template_loads.rs` | the template test | every commented example names a key the loader ACCEPTS | **reverse only** — a struct key the template omits is invisible |
+| `scripts/audit-config-surface.py --check` | the surface gate | a field with NO reader is in `ACCOUNTED_FOR` | forward, unread-fields only |
+| `scripts/check-doc-claims.sh` | the docs-check | AGENTS.md's code-surface claims match the code | doc claims only |
+| `genome lint` | the doc laws | one owner per question, mutability, no deletions, statuses | doc hygiene only |
+
+**The gap, stated exactly:** no gate checks the FORWARD coverage of a new key across the note,
+the heal entry, the template, the doctor row, the describe output, the RUNBOOK, and the CHANGELOG.
+An agent can add a key that compiles, passes every gate, and is invisible to the operator. The
+plan's §5 (`docs/plans/2026-11-14-config-resilience-architecture-...`) closes it with the generated
+registry and `scripts/audit-config-keys.py --check`.
