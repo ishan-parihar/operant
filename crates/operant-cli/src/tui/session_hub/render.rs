@@ -621,7 +621,11 @@ fn render_list_body(frame: &mut Frame, state: &SessionHubState, area: ratatui::l
                     .add_modifier(Modifier::BOLD),
             ))),
             ListItem::new(Line::from(Span::styled(
-                "     s cycles filters · Esc closes",
+                // (2026-11-13) The hub gained a second axis and a preview
+                // toggle, and this line named neither. It is the ONE place the
+                // hub tells the operator what a key does, so it names all
+                // three.
+                "     s cycles status · e cycles employee · t hides tool calls · Esc closes",
                 Style::default().fg(theme_colors::muted()),
             ))),
         ]
@@ -1270,7 +1274,11 @@ fn render_preview(
                 }
             }
             lines.push(Line::from(Span::styled(
-                "Enter switches to this session",
+                // The toggle's own hint, printed where its effect is: a control
+                // that exists only in a key reference is decoration the
+                // operator cannot find. `e` names itself in the header the
+                // moment it is engaged ("e:premiere").
+                "Enter switches to this session · t hides tool calls",
                 Style::default().fg(theme_colors::accent()),
             )));
             // The scroll bound must count WRAPPED rows, not source lines: the
