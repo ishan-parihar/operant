@@ -215,13 +215,25 @@ impl MockChildModel {
                 let Some((head, body)) = read_http_request(&mut sock).await else {
                     continue;
                 };
-                seen_task.lock().unwrap().push(body);
+                if !head.contains("/models") {
+                    seen_task.lock().unwrap().push(body);
+                }
 
                 // Insurance: nothing in this test should ask for embeddings,
                 // but a wrong-shaped reply here would surface as an opaque
                 // parse error rather than an isolation failure.
                 let reply = if head.contains("/embeddings") {
                     r#"{"data":[{"index":0,"embedding":[0.1,0.2,0.3]}]}"#.to_string()
+                } else if head.contains("/models") {
+                    // The context-window resolver probes `GET /models` before
+                    // the first request (iter-2153) to learn the model's real
+                    // window. It is NOT a chat turn: serving it from the chat
+                    // script ate the child's tool-call response, so the child
+                    // answered in one turn, never reached its own budget, and
+                    // the grace call this test is about never happened.
+                    // The probe is answered here, on its own, and the chat
+                    // script is left alone.
+                    r#"{"data":[{"id":"demo","context_length":128000}]}"#.to_string()
                 } else {
                     let mut guard = script.lock().unwrap();
                     if guard.is_empty() {
@@ -247,7 +259,11 @@ impl MockChildModel {
         }
     }
 
-    /// Every request body the child agent sent, in order.
+    /// Every CHAT request body the child agent sent, in order.
+    ///
+    /// The discovery probe (`GET /models`) is not a chat turn and is not
+    /// counted: it carries no body and says nothing about the child's
+    /// iteration accounting.
     fn requests(&self) -> Vec<String> {
         self.seen.lock().unwrap().clone()
     }
@@ -434,7 +450,8 @@ fn test_config() -> AgentConfig {
         stream: false,
         context_window: 8000,
         max_tool_result_share: operant_core::context_management::DEFAULT_MAX_TOOL_RESULT_SHARE,
-        max_tool_result_total_share: operant_core::context_management::DEFAULT_MAX_TOOL_RESULT_TOTAL_SHARE,
+        max_tool_result_total_share:
+            operant_core::context_management::DEFAULT_MAX_TOOL_RESULT_TOTAL_SHARE,
         max_healing_attempts: 1,
         fallback_models: Vec::new(),
         fallback_on_errors: false,
@@ -558,7 +575,8 @@ async fn nested_sub_agent_runs_on_its_own_budget_and_timeout() {
     );
     assert!(
         !carried_tools(&child_requests[1]),
-        "the child's second request is its grace call and must have no tools"
+        "the child's second request is its grace call and must have no tools. \
+         Recorded: {child_requests:#?}"
     );
 
     // ── The child's own script ran, and its answer came home ────
