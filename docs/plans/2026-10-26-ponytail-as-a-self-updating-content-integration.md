@@ -31,14 +31,15 @@ library and not a binary** — it is one prompt shipped in many wrappers:
   auxiliary skills (review/audit prompts, debt-ledger harvest, scoreboard,
   help). Same frontmatter shape.
 - `commands/*.toml` — six slash-command prompts (host-specific prompt
-  templates with `{{args}}` substitution). Operant already has the exact
-  equivalents as SKILL.md bodies, so the commands are NOT ported as a
-  separate surface: each command body rides inside its skill's
-  `description`-adjacent content, invoked through the existing
-  `/skill ponytail-review` path. (Rationale: a second command TOML surface
-  would duplicate `skill_bundle`/`build_skill_invocation_message_in`; the
-  skills path already names them and the TUI `/skill` typeahead already
-  completes them.)
+  templates with `{{args}}` substitution). The command BODIES are not
+  ported: each skill body strictly contains its command's substance (the
+  skill is the long form, the command the condensed prompt), so a second
+  command-TOML surface would be a downgrade as well as a duplicate of
+  `skill_bundle`/`build_skill_invocation_message_in`. What WAS missing is
+  the command NAMES: a skill name is a command, so `/ponytail-review` runs
+  the skill in the TUI and over a channel (iter-2159), and the vendor
+  skills are listed as commands in the command palette, in `/help` and in
+  the Telegram command menu.
 - `hooks/*.js` — node lifecycle hooks for Claude Code/Codex/Cursor/Qoder
   band UI, mode tracking, statusline. **Not ported**: operant has no node
   runtime in its loop, the band is host UI, and operant's mode persistence
@@ -242,7 +243,7 @@ GitHub release tarball is the cleaner fetch (no node, no npm runtime).
 
 - No npm/node runtime, no `hooks/*.js` port, no band UI, no statusline.
 - No port of `commands/*.toml` as a separate command TOML surface — the
-  skills cover them.
+  skills cover them, and a skill name IS a command (iter-2159).
 - No marketplace registry entry (`skill_marketplace.rs` stays as-is;
   ponytail is an integration, not a registry skill).
 - No i18n, no examples dir, no benchmarks port.

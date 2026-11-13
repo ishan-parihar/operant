@@ -56,6 +56,7 @@ async fn full_registry(root: &std::path::Path) -> anyhow::Result<Arc<ToolRegistr
         &registry,
         &root.join("skills"),
         &root.join("memory"),
+        &[],
         db,
         cron_db,
         kanban_db,

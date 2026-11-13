@@ -62,6 +62,7 @@ mod memory_provider_tools;
 mod plugin_memory;
 #[cfg(feature = "plugins-wasm")]
 mod plugin_tools;
+mod skill_roots;
 pub mod plugins_install;
 mod post_setup;
 mod prompt_helpers;
@@ -1258,10 +1259,15 @@ pub(crate) async fn build_registry(
     let sub_agent_disabled_tools = config.tools.disabled_tools.iter().cloned().collect();
     let sub_agent_disabled_toolsets = config.tools.disabled_toolsets.iter().cloned().collect();
 
+    // The vendor roots the skills tools may read: the same list the
+    // SkillManager gets, so a skill the agent advertises is always a skill
+    // `skills_list`/`skill_view` can load (iter-2159).
+    let vendor_skill_roots = crate::skill_roots::vendor_skill_roots(config);
     operant_core::tools::register_builtin_tools_with_sub_agent(
         &registry,
         &config.skills.root_dir,
         memory_dir,
+        &vendor_skill_roots,
         client,
         model,
         database.clone(),
@@ -1744,19 +1750,13 @@ async fn build_agent_core_with_memory(
     let skills_dir: &Path = holon_skills.as_deref().unwrap_or(skills_dir);
 
     let mut skill_manager = SkillManager::new(skills_dir.to_path_buf());
-    // Ponytail phase 3: installed integration skills ride as extra roots —
-    // invocable/listable, never creatable/deletable, operator pool wins
-    // collisions. None (integration absent) is a no-op.
-    if !operant_core::platform::is_holon_run() {
-        skill_manager.add_extra_root(operant_core::ponytail::installed_skills_dir());
-        // dsh capability-map (iter-1720): a plugin declaring the `skill`
-        // capability contributes its `skills/` dir as an extra root. Holon
-        // runs skip it the way they skip the ponytail root — org bodies do
-        // not carry personal integrations.
-        #[cfg(feature = "plugins-wasm")]
-        for root in plugin_tools::plugin_skill_roots(config) {
-            skill_manager.add_extra_root(Some(root));
-        }
+    // The vendor roots — the installed content integrations (the ponytail
+    // package) and plugin-contributed skill dirs — ride as extra roots:
+    // invocable/listable, never creatable/deletable, and the operator's
+    // pool wins a name collision. ONE list (iter-2159): the same roots the
+    // in-loop tools, the overlays and the slash-command surfaces read.
+    for root in crate::skill_roots::vendor_skill_roots(config) {
+        skill_manager.add_extra_root(Some(root));
     }
     if let Err(e) = skill_manager.load_all() {
         warn!(

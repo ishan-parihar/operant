@@ -756,8 +756,50 @@ pub fn resolve_command(text: &str) -> CommandMatch<'_> {
     }
 }
 
-/// Build a grouped help text from the command registry.
-fn build_help_text() -> String {
+/// The candidate skill names a command token names, in order: the token
+/// itself, then its HYPHENATED spelling. Telegram's `setMyCommands` writes
+/// a hyphen as an underscore, so a token typed from the menu arrives as
+/// `ponytail_review` and must still find `ponytail-review` (iter-2159).
+pub fn skill_command_names(token: &str) -> Vec<String> {
+    let mut names = vec![token.to_string()];
+    let hyphenated = token.replace('_', "-");
+    if hyphenated != token {
+        names.push(hyphenated);
+    }
+    names
+}
+
+/// The vendor skills as command rows from explicit roots — the pure core of
+/// [`crate::skill_roots::vendor_skill_command_rows`], so a test can pin it
+/// without the real install.
+pub fn skill_command_rows_for_roots(pool: &std::path::Path, roots: &[std::path::PathBuf]) -> Vec<(String, String)> {
+    if roots.is_empty() {
+        return Vec::new();
+    }
+    let mut manager = operant_core::skills::SkillManager::new(pool.to_path_buf());
+    for root in roots {
+        manager.add_extra_root(Some(root.clone()));
+    }
+    if manager.load_all().is_err() {
+        return Vec::new();
+    }
+    manager
+        .list()
+        .into_iter()
+        .filter(|(name, _)| {
+            manager
+                .get(name)
+                .map(|skill| skill.origin == operant_core::skills::SkillOrigin::Integration)
+                .unwrap_or(false)
+        })
+        .collect()
+}
+
+/// Build a grouped help text from the command registry, plus the vendor
+/// skills — a skill name IS a command (`/ponytail-audit` runs the skill,
+/// iter-2159). Only the vendor skills are listed: the operator's own pool
+/// is large and stays behind `/skill <name>`.
+fn build_help_text(config: &operant_core::config::AppConfig) -> String {
     let mut text = String::from("*Available commands:*\n\n");
     let mut categories: Vec<&str> = Vec::new();
 
@@ -779,6 +821,15 @@ fn build_help_text() -> String {
                 format!(" {}", cmd.args_hint)
             };
             text.push_str(&format!("/{}{} — {}\n", cmd.name, hint, cmd.description));
+        }
+        text.push('\n');
+    }
+
+    let skills = crate::skill_roots::vendor_skill_command_rows(config);
+    if !skills.is_empty() {
+        text.push_str("*Skills*\n");
+        for (name, description) in &skills {
+            text.push_str(&format!("/{name} — {description}\n"));
         }
         text.push('\n');
     }
@@ -1126,7 +1177,7 @@ pub fn handle_command(cmd_name: &str, _args: &str, ctx: &CommandContext<'_>) -> 
         // ── Info ─────────────────────────────────────────────────────
         "start" => "Hello! I'm Operant AI. Send me a message!".into(),
 
-        "help" => build_help_text(),
+        "help" => build_help_text(ctx.config),
 
         "commands" => {
             let mut text = String::from("*All commands:*\n");
@@ -2762,96 +2813,6 @@ pub fn handle_command(cmd_name: &str, _args: &str, ctx: &CommandContext<'_>) -> 
             msg
         }
 
-        // /skills [name [instruction]] — RT-179 item 3.3. This command is
-        // now the WHOLE skill surface over a channel: no args lists what is
-        // installed, a name EXPANDS that skill for this chat through
-        // `build_skill_invocation_message_in` — the same function the TUI
-        // injects, so both surfaces produce one message shape.
-        //
-        // The sync arm expands on purpose: expanding a skill is a pure file
-        // read, so unlike /memory this arm CAN answer the named form
-        // honestly. What it must not do is point at the TUI's browse panel,
-        // which a channel cannot render.
-        //
-        // The arm this replaces listed raw `read_dir` names, which is why
-        // `/skills` could only ever be a listing: bare directory names are
-        // not invoke-shaped, so the invoke form had nowhere to live.
-        "skills" | "skill" => {
-            let root = ctx.config.skills.root_dir.clone();
-            let rest = args.trim();
-            if rest.is_empty() {
-                // The browse half, over a channel: the REAL installed list,
-                // through the manager that also knows descriptions and
-                // prerequisites, so an unmet-prerequisite skill is not
-                // listed as usable.
-                let mut mgr = operant_core::skills::SkillManager::new(root);
-                let loaded = mgr.load_all().unwrap_or_default();
-                let rows: Vec<(String, String)> = mgr
-                    .list()
-                    .into_iter()
-                    .filter(|(name, _)| {
-                        mgr.get(name).map(|s| mgr.is_available(s)).unwrap_or(false)
-                    })
-                    .collect();
-                let mut reply = format!("🧩 {} installed skills:", loaded.len());
-                if rows.is_empty() {
-                    reply.push_str(
-                        "\n(none — `operant skills list` on the CLI shows what is installed)",
-                    );
-                } else {
-                    // Bounded head + count, the same shape /memory uses.
-                    const CHANNEL_SKILL_HEAD: usize = 30;
-                    for (name, desc) in rows.iter().take(CHANNEL_SKILL_HEAD) {
-                        reply.push_str(&format!("\n• **{name}** — {desc}"));
-                    }
-                    if rows.len() > CHANNEL_SKILL_HEAD {
-                        reply.push_str(&format!("\n…(and {} more)", rows.len() - CHANNEL_SKILL_HEAD));
-                    }
-                    reply.push_str("\n`/skill <name> [instruction]` to run one.");
-                }
-                reply
-            } else {
-                // `/skill <name> [instruction]`, split exactly as the TUI
-                // splits it (first whitespace), so both surfaces invoke the
-                // same way.
-                let (name, instruction) = match rest.split_once(char::is_whitespace) {
-                    Some((n, i)) => (n, i.trim().to_string()),
-                    None => (rest, String::new()),
-                };
-                match operant_core::agent::skill_preprocessing::build_skill_invocation_message_in(
-                    &root,
-                    name,
-                    &instruction,
-                    // The sync arm's context carries no session id (it holds
-                    // platform/channel, and the gateway's session key also
-                    // folds in the thread), so the session token stays
-                    // literal here — the documented fallback, not a silent
-                    // drop. The runtime arm substitutes it.
-                    None,
-                ) {
-                    Some(msg) => {
-                        const CHANNEL_SKILL_HEAD_CHARS: usize = 1200;
-                        let total = msg.chars().count();
-                        let shown: String = msg.chars().take(CHANNEL_SKILL_HEAD_CHARS).collect();
-                        let mut out = format!(
-                            "🧩 Skill `{name}`{} — send this to run it:\n\n{shown}",
-                            if instruction.is_empty() {
-                                String::new()
-                            } else {
-                                format!(" (with your instruction: {instruction})")
-                            }
-                        );
-                        if total > CHANNEL_SKILL_HEAD_CHARS {
-                            out.push_str("\n…(truncated)");
-                        }
-                        out
-                    }
-                    None => {
-                        format!("Skill `{name}` not found — `/skills` with no args lists what is installed.")
-                    }
-                }
-            }
-        }
 
         // RT-179 item 3.5 — /search drives the session_search tool over the
         // live agent's store. See the runtime arm in gateway_runner.rs for
@@ -3233,7 +3194,7 @@ pub fn handle_command(cmd_name: &str, _args: &str, ctx: &CommandContext<'_>) -> 
 ///
 /// Plugin commands registered via [`operant_core::plugins::register_plugin_command`]
 /// are appended after the built-in commands.
-pub fn telegram_bot_commands() -> String {
+pub fn telegram_bot_commands(vendor_skill_commands: &[(String, String)]) -> String {
     let mut json = String::from('[');
     let mut first = true;
 
@@ -3280,6 +3241,36 @@ pub fn telegram_bot_commands() -> String {
 
         let escaped_desc: String = cmd
             .description
+            .chars()
+            .flat_map(|ch| match ch {
+                '"' => vec!['\\', '"'],
+                '\\' => vec!['\\', '\\'],
+                c => vec![c],
+            })
+            .collect();
+
+        json.push_str(&format!(
+            r#"{{"command":"{}","description":"{}"}}"#,
+            sanitized_name, escaped_desc
+        ));
+    }
+
+    // The vendor skills are commands too — `/ponytail-audit` runs the
+    // skill (iter-2159). Telegram lowercases only; a hyphen is not a legal
+    // command character, so it becomes an underscore and the gateway's
+    // resolution accepts both spellings.
+    for (name, description) in vendor_skill_commands {
+        if !first {
+            json.push(',');
+        }
+        first = false;
+
+        let sanitized_name: String = name
+            .chars()
+            .map(|ch| if ch == '-' { '_' } else { ch })
+            .collect();
+
+        let escaped_desc: String = description
             .chars()
             .flat_map(|ch| match ch {
                 '"' => vec!['\\', '"'],
@@ -3591,7 +3582,7 @@ mod tests {
 
     #[test]
     fn test_telegram_json_valid() {
-        let json = telegram_bot_commands();
+        let json = telegram_bot_commands(&[]);
         assert!(json.starts_with('['));
         assert!(json.ends_with(']'));
         assert!(json.contains(r#""command":""#));
@@ -4450,7 +4441,7 @@ mod rt179_functional_core_tests {
         }
         // ...and the artifact list a platform syncs from the registry must
         // carry them, or the channel never SEES the command.
-        let bot_commands = telegram_bot_commands();
+        let bot_commands = telegram_bot_commands(&[]);
         assert!(
             bot_commands.contains("\"plan\""),
             "missing /plan: {bot_commands}"
@@ -4573,7 +4564,7 @@ mod rt179_functional_core_tests {
             }
             other => panic!("/context status must be a command, got {other:?}"),
         }
-        let bot_commands = telegram_bot_commands();
+        let bot_commands = telegram_bot_commands(&[]);
         assert!(
             bot_commands.contains("\"context\""),
             "missing /context: {bot_commands}"
@@ -4727,7 +4718,7 @@ mod rt179_export_tests {
                 other => panic!("{text} must be a command, got {other:?}"),
             }
         }
-        let bot_commands = telegram_bot_commands();
+        let bot_commands = telegram_bot_commands(&[]);
         assert!(
             bot_commands.contains("\"export\""),
             "missing /export: {bot_commands}"
@@ -4775,7 +4766,7 @@ mod rt179_memory_tests {
                 other => panic!("{text} must be a command, got {other:?}"),
             }
         }
-        let bot_commands = telegram_bot_commands();
+        let bot_commands = telegram_bot_commands(&[]);
         assert!(
             bot_commands.contains("\"memory\""),
             "missing /memory: {bot_commands}"
@@ -4816,60 +4807,79 @@ mod rt179_memory_tests {
 mod rt179_skill_tests {
     use super::*;
 
-    /// A REAL skill on disk (not a stub), so the named form is proven to
-    /// read the real `[skills]` root rather than a fixture baked into the
-    /// binary. The invocation marker is what the agent actually follows, so
-    /// its presence — not a substring of the description — is the assertion.
+    /// iter-2159: `/ponytail-audit` is not a built-in — it is a SKILL
+    /// COMMAND. The dispatch's unknown-token arm runs a vendor skill, and
+    /// Telegram's menu hyphenates to an underscore, so the resolution must
+    /// accept both spellings of a hyphenated skill name.
     #[test]
-    fn skill_expands_a_real_installed_skill() {
+    fn a_vendor_skill_name_is_a_command_in_both_spellings() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let skill_dir = dir.path().join("fizzbuzz");
-        std::fs::create_dir_all(&skill_dir).expect("skill dir");
+        let vendor = dir.path().join("ponytail-v9.9.9").join("skills");
+        std::fs::create_dir_all(vendor.join("ponytail-review")).expect("vendor skill dir");
         std::fs::write(
-            skill_dir.join("SKILL.md"),
-            "---\nname: fizzbuzz\ndescription: Count the fizzy numbers\n---\n\n# Count every number that is fizzy.\n",
+            vendor.join("ponytail-review").join("SKILL.md"),
+            "---\nname: ponytail-review\ndescription: Vendor review\n---\n\n# Review like a senior dev.\n",
         )
-        .expect("SKILL.md");
+        .expect("vendor SKILL.md");
 
-        let mut cfg = AppConfig::default();
-        cfg.skills.root_dir = dir.path().to_path_buf();
-        let ctx = CommandContext::new(None, &cfg, true, "op-1", "telegram", "chan-s");
-
-        let reply = handle_command("skill", "fizzbuzz count to 100", &ctx)
-            .expect("a named /skill must expand a real skill");
+        // The token no built-in claims reaches the unknown-token arm.
         assert!(
-            reply.contains("Count every number that is fizzy"),
-            "the expansion must carry the skill's body, got: {reply}"
+            matches!(
+                resolve_command("/ponytail-review"),
+                CommandMatch::Unknown { .. }
+            ),
+            "/ponytail-review must not be a built-in — it is a skill command"
+        );
+
+        // The candidate list the gateway's unknown-token arm walks: the token
+        // and its hyphenated spelling.
+        let candidates = skill_command_names("ponytail_review");
+        assert_eq!(
+            candidates,
+            vec!["ponytail_review".to_string(), "ponytail-review".to_string()]
+        );
+        // Exactly ONE candidate resolves — the skill's real name — and the
+        // arm stops there, so an underscored token (the Telegram menu's
+        // spelling) still finds the hyphenated skill.
+        let resolved: Vec<&String> = candidates
+            .iter()
+            .filter(|candidate| {
+                operant_core::agent::skill_preprocessing::build_skill_invocation_message_in(
+                    &dir.path().join("skills"),
+                    candidate,
+                    "",
+                    None,
+                    std::slice::from_ref(&vendor),
+                )
+                .is_some()
+            })
+            .collect();
+        assert_eq!(
+            resolved.len(),
+            1,
+            "the underscored token must find the hyphenated skill: {candidates:?}"
+        );
+        assert_eq!(resolved[0], "ponytail-review");
+        let msg = operant_core::agent::skill_preprocessing::build_skill_invocation_message_in(
+            &dir.path().join("skills"),
+            resolved[0],
+            "",
+            None,
+            std::slice::from_ref(&vendor),
+        )
+        .expect("the vendor skill must resolve");
+        assert!(msg.contains("Review like a senior dev"));
+
+        // The registry does NOT need a per-skill entry for this: the command
+        // list carries the skills command, and the vendor skills show in
+        // `/help` and the Telegram menu through the rows.
+        let rows = skill_command_rows_for_roots(
+            &dir.path().join("skills"),
+            std::slice::from_ref(&vendor),
         );
         assert!(
-            reply.contains("has invoked the \"fizzbuzz\" skill"),
-            "the expansion must be the invocation message the agent follows, got: {reply}"
-        );
-        // The trailing instruction is the TUI's own contract — it must be
-        // folded in, not dropped.
-        assert!(
-            reply.contains("count to 100"),
-            "the trailing instruction must ride the expansion, got: {reply}"
-        );
-    }
-
-    /// An unknown name must say so and point at the listing — never reply
-    /// with a success-shaped message that expands nothing.
-    #[test]
-    fn skill_unknown_name_says_not_found_and_names_the_listing() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let mut cfg = AppConfig::default();
-        cfg.skills.root_dir = dir.path().to_path_buf();
-        let ctx = CommandContext::new(None, &cfg, true, "op-1", "telegram", "chan-s");
-
-        let reply = handle_command("skill", "no-such-skill", &ctx).expect("a reply");
-        assert!(
-            reply.contains("not found") && reply.contains("/skill"),
-            "an unknown name must say not found and name the listing, got: {reply}"
-        );
-        assert!(
-            !reply.contains("has invoked"),
-            "a nonexistent skill must not produce an invocation message, got: {reply}"
+            rows.iter().any(|(name, _)| name == "ponytail-review"),
+            "the vendor skill must be a published command row, got: {rows:?}"
         );
     }
 
@@ -4894,7 +4904,7 @@ mod rt179_skill_tests {
                 "{text} must resolve to the `{expected}` command (its alias), not prose"
             );
         }
-        let bot_commands = telegram_bot_commands();
+        let bot_commands = telegram_bot_commands(&[]);
         assert!(
             bot_commands.contains("\"skills\""),
             "missing /skills: {bot_commands}"
@@ -4922,7 +4932,7 @@ mod rt179_search_tests {
                 "{text} must resolve to `{expected}`, not prose"
             );
         }
-        let bot_commands = telegram_bot_commands();
+        let bot_commands = telegram_bot_commands(&[]);
         assert!(
             bot_commands.contains("\"search\""),
             "missing /search: {bot_commands}"

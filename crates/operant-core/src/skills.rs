@@ -92,6 +92,90 @@ pub fn configured_skills_dir() -> PathBuf {
     }
 }
 
+
+// ---------------------------------------------------------------------------
+// The ONE rule for which roots a skill may live in (iter-2159)
+// ---------------------------------------------------------------------------
+
+/// The vendor roots a skill may live in besides the operator's own pool:
+/// the installed content integrations (the ponytail package) plus whatever
+/// extra roots the HOST contributes (plugin-contributed skill dirs).
+///
+/// ONE list, so every surface that can see or run a skill — the manager,
+/// the in-loop tools, the overlays and the slash-command invocation — agrees
+/// about which skills exist. The operator's pool always wins a name
+/// collision (it is searched first), and a Holon run carries no vendor root
+/// at all: an org body does not get a personal integration.
+pub fn vendor_skill_roots(host_roots: &[PathBuf]) -> Vec<PathBuf> {
+    if crate::platform::is_holon_run() {
+        return Vec::new();
+    }
+    let mut roots: Vec<PathBuf> = crate::ponytail::installed_skills_dir().into_iter().collect();
+    roots.extend(host_roots.iter().cloned());
+    roots
+}
+
+/// The directory holding `name`, searched in `roots` order — the operator's
+/// pool first, so the operator's own copy wins a collision with a vendor
+/// skill of the same name. `name` may be a bare skill name (found by the
+/// recursive search, including category-nested ones) or a nested path
+/// (`category/skill`); the path guard keeps a name from escaping its root.
+pub fn find_skill_in_roots(roots: &[PathBuf], name: &str) -> Option<PathBuf> {
+    for root in roots {
+        if let Some(found) = find_skill_in_root(root, name) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+fn find_skill_in_root(root: &Path, name: &str) -> Option<PathBuf> {
+    if !root.exists() || !is_plain_relative_path(name) {
+        return None;
+    }
+    let direct = root.join(name);
+    if direct.is_dir() && direct.join("SKILL.md").exists() {
+        return Some(direct);
+    }
+    find_skill_recursive(root, name)
+}
+
+fn find_skill_recursive(current_dir: &Path, name: &str) -> Option<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(current_dir) else {
+        return None;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let dir_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        if dir_name.starts_with('.')
+            || dir_name == "node_modules"
+            || dir_name == ".archive"
+            || dir_name == ".hub"
+        {
+            continue;
+        }
+        if dir_name == name && path.join("SKILL.md").exists() {
+            return Some(path);
+        }
+        if let Some(found) = find_skill_recursive(&path, name) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+/// A skill name is a plain relative path: never absolute, and never
+/// carrying a `.`/`..` component that would escape the root.
+fn is_plain_relative_path(name: &str) -> bool {
+    !name.is_empty()
+        && Path::new(name)
+            .components()
+            .all(|c| matches!(c, std::path::Component::Normal(_)))
+}
+
 /// Manages skill discovery, loading, and lifecycle.
 pub struct SkillManager {
     /// Root directory containing skill subdirectories

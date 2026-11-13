@@ -17,6 +17,11 @@ impl App {
         // when the UI is wedged. `start_monitor` is idempotent, so the many
         // `App::new` calls in the test suite start exactly one.
         crate::tui::operant_app::logging::watchdog::start_monitor();
+        // The vendor skills as command rows — a skill name IS a command
+        // (`/ponytail-audit` runs the skill, iter-2159). Computed ONCE: the
+        // typeahead reads these on every keystroke, and a skills scan per
+        // keystroke is not a cost anyone should pay.
+        let vendor_skill_commands = crate::skill_roots::vendor_skill_command_rows(&config);
         let auth_store = crate::tui::adapter_types::AuthStore::load();
         // (plan 2026-10-24 M5) Start the personal-history word predictor
         // when enabled. The history load here is the same file up-arrow
@@ -283,13 +288,13 @@ impl App {
                 // survives INSIDE a category, and the enum's order puts the
                 // catch-all ("Other") last.
                 let mut rows: Vec<(crate::commands::TuiCategory, String, String)> =
-                    tui_slash_command_data()
+                    tui_slash_command_data(&vendor_skill_commands)
                         .iter()
                         .map(|(name, desc)| {
                             (
                                 crate::commands::tui_category(name),
                                 format!("/{}", name),
-                                (*desc).to_string(),
+                                desc.clone(),
                             )
                         })
                         .collect();
@@ -306,6 +311,9 @@ impl App {
                     .collect();
                 DialogSelectState::new("Command Palette", items)
             },
+            // AFTER the palette: the palette borrows the rows, the struct
+            // owns them.
+            vendor_skill_commands,
             output_style: "auto".to_string(),
             current_dir: std::env::current_dir()
                 .ok()

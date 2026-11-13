@@ -17,12 +17,24 @@ use crate::tui::overlays::HelpEntry;
 /// GATEWAY's table; feeding the TUI's typeahead from it meant suggestions
 /// for commands that were never wired (the 18-command "not yet wired" list)
 /// and no suggestions for commands that were.
-pub fn tui_slash_command_data() -> Vec<(&'static str, &'static str)> {
+pub fn tui_slash_command_data(
+    vendor_skill_commands: &[(String, String)],
+) -> Vec<(String, String)> {
     // The typeahead matcher prefixes the slash itself — the rows carry
     // bare names (the same convention COMMAND_REGISTRY used).
-    crate::tui::operant_app::app::locally_suggested_command_rows()
-        .map(|(name, help)| (name.trim_start_matches('/'), help))
-        .collect()
+    let mut rows: Vec<(String, String)> = crate::tui::operant_app::app::locally_suggested_command_rows()
+        .map(|(name, help)| (name.trim_start_matches('/').to_string(), help.to_string()))
+        .collect();
+    // The vendor skills are commands too: `/ponytail-audit` runs the skill
+    // (iter-2159). They are computed ONCE (the App caches them) — the
+    // typeahead runs on every keystroke, and a skills scan per keystroke
+    // is not a cost anyone should pay.
+    rows.extend(
+        vendor_skill_commands
+            .iter()
+            .map(|(name, description)| (name.clone(), description.clone())),
+    );
+    rows
 }
 
 /// Generate help overlay entries from the unified command registry.

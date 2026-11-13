@@ -275,7 +275,11 @@ const TEST_FILE_AUTOCOMPLETE_SHOW_HIDDEN: bool = false;
 /// appeared.
 #[test]
 fn typeahead_suggests_the_registered_tui_commands() {
-    let cmds = crate::tui::app::helpers::tui_slash_command_data();
+    let cmds = crate::tui::app::helpers::tui_slash_command_data(&[]);
+    let cmds: Vec<(&str, &str)> = cmds
+        .iter()
+        .map(|(name, description)| (name.as_str(), description.as_str()))
+        .collect();
     for needle in ["/rew", "/perm", "/goal", "/undo"] {
         let suggestions = compute_slash_suggestions(needle, &cmds, &UsageStore::default());
         assert!(

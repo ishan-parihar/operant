@@ -59,7 +59,7 @@ impl SkillsViewState {
         Self::default()
     }
 
-    pub fn open(&mut self, skills_dir: PathBuf) {
+    pub fn open(&mut self, skills_dir: PathBuf, vendor_roots: Vec<std::path::PathBuf>) {
         self.visible = true;
         self.stage = SkillsStage::List;
         self.selected = 0;
@@ -73,10 +73,13 @@ impl SkillsViewState {
         // Errors (e.g. dir doesn't exist yet on a fresh install) are surfaced
         // inline rather than crashing the overlay.
         let mut mgr = operant_core::skills::SkillManager::new(skills_dir);
-        // Ponytail phase 3: installed integration skills are listable in
-        // the overlay — the typeahead derives from this view, so they are
-        // also invocable via /skill <Tab>.
-        mgr.add_extra_root(operant_core::ponytail::installed_skills_dir());
+        // The vendor roots ride as extra roots, so the overlay lists the
+        // installed integrations and plugin skills too — the typeahead
+        // derives from this view, so they are invocable as well
+        // (iter-2159).
+        for root in vendor_roots {
+            mgr.add_extra_root(Some(root));
+        }
         match mgr.load_all() {
             Ok(mut loaded) => {
                 // Sort by (category, name) so related skills cluster visually.

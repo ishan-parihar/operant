@@ -267,8 +267,16 @@ impl App {
             };
             let file_autocomplete_show_hidden =
                 self.settings.config.file_autocomplete_show_hidden_files;
+            // The slash rows: the registered commands plus the vendor
+            // skills (a skill name is a command, iter-2159). The cached rows
+            // are borrowed for the call — no scan per keystroke.
+            let slash_commands = tui_slash_command_data(&self.vendor_skill_commands);
+            let slash_refs: Vec<(&str, &str)> = slash_commands
+                .iter()
+                .map(|(name, description)| (name.as_str(), description.as_str()))
+                .collect();
             self.prompt_input.update_suggestions(
-                &tui_slash_command_data(),
+                &slash_refs,
                 &self.slash_usage,
                 file_autocomplete_limit,
                 file_autocomplete_show_hidden,

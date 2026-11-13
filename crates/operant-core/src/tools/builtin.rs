@@ -11,7 +11,7 @@ use crate::kanban::KanbanDb;
 use crate::mcp::McpManager;
 use crate::process_registry::ProcessRegistry;
 use crate::tools::{SessionSearchTool, ToolRegistry};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 pub use super::browser_cdp_tool::BrowserCdpTool;
@@ -78,10 +78,12 @@ pub async fn register_memory_tools(registry: &ToolRegistry) -> Result<()> {
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn register_builtin_tools(
     registry: &ToolRegistry,
     skills_dir: &Path,
     memory_dir: &Path,
+    vendor_skill_roots: &[PathBuf],
     database: Arc<Database>,
     cron_db: Arc<CronDb>,
     kanban_db: Arc<KanbanDb>,
@@ -148,10 +150,10 @@ pub async fn register_builtin_tools(
     registry.register(PatchTool).await?;
     registry.register(VisionTool).await?;
     registry
-        .register(SkillsTool::new(skills_dir.to_path_buf()))
+        .register(SkillsTool::new(skills_dir.to_path_buf()).with_vendor_roots(vendor_skill_roots.to_vec()))
         .await?;
     registry
-        .register(SkillViewTool::new(skills_dir.to_path_buf()))
+        .register(SkillViewTool::new(skills_dir.to_path_buf()).with_vendor_roots(vendor_skill_roots.to_vec()))
         .await?;
     registry
         .register(SkillManageTool::new(skills_dir.to_path_buf()))
@@ -242,6 +244,7 @@ pub async fn register_builtin_tools_with_sub_agent(
     registry: &ToolRegistry,
     skills_dir: &Path,
     memory_dir: &Path,
+    vendor_skill_roots: &[PathBuf],
     parent_client: &OpenAIClient,
     model: impl Into<String>,
     database: Arc<Database>,
@@ -256,6 +259,7 @@ pub async fn register_builtin_tools_with_sub_agent(
         registry,
         skills_dir,
         memory_dir,
+        vendor_skill_roots,
         database.clone(),
         cron_db,
         kanban_db,
@@ -389,6 +393,7 @@ mod tests {
             &registry,
             &skills_dir,
             &memory_dir,
+            &[],
             database,
             cron_db,
             kanban_db,
@@ -430,6 +435,7 @@ mod tests {
             &registry,
             &skills_dir,
             &memory_dir,
+            &[],
             &client,
             "gpt-4.1",
             database,
@@ -514,6 +520,7 @@ mod tests {
             &registry,
             &skills_dir,
             &memory_dir,
+            &[],
             database,
             cron_db,
             kanban_db,

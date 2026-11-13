@@ -2282,9 +2282,9 @@ impl App {
                     .unwrap_or("")
                     .to_string();
                 let exact_command = !typed_first_word.is_empty()
-                    && crate::tui::app::helpers::tui_slash_command_data()
+                    && crate::tui::app::helpers::tui_slash_command_data(&self.vendor_skill_commands)
                         .iter()
-                        .any(|(name, _)| *name == typed_first_word);
+                        .any(|(name, _)| name == &typed_first_word);
                 if !exact_command {
                     // Phase 1.3: Auto-select first suggestion when visible but none selected.
                     if !self.prompt_input.suggestions.is_empty()

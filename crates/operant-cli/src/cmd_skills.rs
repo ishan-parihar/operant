@@ -489,9 +489,12 @@ fn list_skills(config: &AppConfig, json: bool, tree: bool) -> Result<()> {
     }
 
     let mut manager = SkillManager::new(skills_dir.clone());
-    // Ponytail phase 3: installed integration skills are listable and
-    // marked so the operator can tell vendor content from their own.
-    manager.add_extra_root(operant_core::ponytail::installed_skills_dir());
+    // The vendor roots — the installed content integrations and
+    // plugin-contributed skill dirs — ride as extra roots, so the CLI
+    // lists exactly what the agent can run (iter-2159).
+    for root in crate::skill_roots::vendor_skill_roots(config) {
+        manager.add_extra_root(Some(root));
+    }
     manager
         .load_all()
         .with_context(|| format!("Failed to load skills from '{}'", skills_dir.display()))?;

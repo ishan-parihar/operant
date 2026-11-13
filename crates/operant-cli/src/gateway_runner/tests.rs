@@ -2316,6 +2316,98 @@ async fn gateway_skill_expands_a_real_installed_skill() {
     );
 }
 
+/// iter-2159: the vendor roots are part of the skill surface over a
+/// channel. A skill installed by a content integration (or a plugin) is
+/// LISTED by the bare form and EXPANDED by the named one, and BOTH
+/// spellings reach the same arm — the registry publishes `skills` with
+/// `skill` as its alias, and before this iteration only the alias had a
+/// reachable arm. The handler's `wasm_plugin_skill_roots` is how the roots
+/// arrive, so this drives the arm exactly as the gateway does.
+#[tokio::test]
+async fn the_skill_command_sees_the_vendor_roots_the_handler_captures() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let agent_db = Arc::new(
+        operant_core::database::Database::init(dir.path().join("agent.sqlite")).expect("db"),
+    );
+    let agent = Arc::new(operant_core::agent::OperantAgent::new(
+        operant_core::agent::AgentConfig::default(),
+        Box::new(
+            operant_core::agent::clients::openai::OpenAIModelClient::new(
+                operant_core::client::OpenAIClient::new(
+                    operant_core::client::ClientConfig::default(),
+                ),
+            ),
+        ),
+        operant_core::tools::ToolRegistry::new(std::time::Duration::from_secs(1)),
+        agent_db.clone(),
+    ));
+    let skills_root = dir.path().join("skills");
+    std::fs::create_dir_all(&skills_root).expect("skills root");
+    // The install layout the content integration produces:
+    // <root>/ponytail-v9.9.9/skills/<skill>/SKILL.md
+    let vendor = dir
+        .path()
+        .join("vendor")
+        .join("ponytail-v9.9.9")
+        .join("skills");
+    // A name the real install cannot claim: the vendor roots are searched in
+    // order (the installed integration first, then the host roots), so a
+    // name shared with a REALLY-installed skill resolves to the real one.
+    std::fs::create_dir_all(vendor.join("vendor-only-skill")).expect("vendor skill dir");
+    std::fs::write(
+        vendor.join("vendor-only-skill").join("SKILL.md"),
+        "---\nname: vendor-only-skill\ndescription: Vendor review\n---\n\n# Review like a senior dev.\n",
+    )
+    .expect("vendor SKILL.md");
+
+    let handler = GatewayMessageHandler {
+        admins: vec![],
+        slots: slot_pool(Arc::clone(&agent)),
+        gateway: tokio::sync::Mutex::new(None),
+        session_pins: Arc::new(SessionPins::default()),
+        exit_reasons: ExitReasonMap::default(),
+        turn_usage: TurnUsageMap::default(),
+        summary_ttl_minutes: 30,
+        default_budget: operant_core::config::BudgetSettings::default(),
+        context_injection: None,
+        running_session: std::sync::Mutex::new(std::collections::HashMap::new()),
+        cancelled_queued: Default::default(),
+        mcp_manager: operant_core::mcp::McpManager::new(),
+        mcp_server_configs: Vec::new(),
+        skills_root_dir: skills_root.clone(),
+        #[cfg(feature = "plugins-wasm")]
+        wasm_plugin_skill_roots: vec![vendor.clone()],
+        queue_waits: tokio::sync::Mutex::new(Default::default()),
+    };
+
+    // The bare form lists the vendor skill.
+    let list = handle_runtime_command(&handler, "skills", "", "telegram:dm:u1")
+        .await
+        .expect("/skills must be a runtime command");
+    assert!(
+        list.contains("vendor-only-skill"),
+        "the bare listing must show the vendor skill, got: {list}"
+    );
+
+    // The named form EXPANDS the vendor skill the pool never had.
+    let expanded = handle_runtime_command(
+        &handler,
+        "skill",
+        "vendor-only-skill focus on the pool search",
+        "telegram:dm:u1",
+    )
+    .await
+    .expect("a vendor skill must expand over a channel");
+    assert!(
+        expanded.contains("Review like a senior dev"),
+        "the expansion must carry the vendor skill's body, got: {expanded}"
+    );
+    assert!(
+        expanded.contains("focus on the pool search"),
+        "the instruction must ride the expansion, got: {expanded}"
+    );
+}
+
 /// RT-179 plan item 3.5 — `/search` must drive the REAL `session_search`
 /// tool over the agent's OWN store, so the channel answer is what the model
 /// itself would find. The plan said "resolve which search first": resolved

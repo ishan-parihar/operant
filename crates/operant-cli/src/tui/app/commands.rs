@@ -521,9 +521,10 @@ impl App {
             // active guidance. Bare `/skill` (or `/skills`) opens the overlay.
             "skill" => {
                 let name = args.trim();
+                let vendor_roots = crate::skill_roots::vendor_skill_roots(&self.config);
                 if name.is_empty() {
                     let skills_dir = self.config.skills.root_dir.clone();
-                    self.skills_view.open(skills_dir);
+                    self.skills_view.open(skills_dir, vendor_roots);
                     return true;
                 }
                 // Optional trailing instruction after the skill name:
@@ -537,6 +538,7 @@ impl App {
                     skill_name,
                     &instruction,
                     self.current_session.as_deref(),
+                    &vendor_roots,
                 ) {
                     Some(msg) => {
                         // Inject as a fresh user message on the next loop
@@ -603,7 +605,8 @@ impl App {
             }
             "skills" => {
                 let skills_dir = self.config.skills.root_dir.clone();
-                self.skills_view.open(skills_dir);
+                let vendor_roots = crate::skill_roots::vendor_skill_roots(&self.config);
+                self.skills_view.open(skills_dir, vendor_roots);
                 true
             }
             "plugins" => {
@@ -1973,6 +1976,26 @@ impl App {
                 // deletion) should NOT be intercepted so the test
                 // `test_feedback_survey_removed` can verify they fall through.
                 if self.command_registry.resolve(cmd).is_none() {
+                    // A skill NAME is a command: `/ponytail-audit` runs the
+                    // skill, exactly like `/skill ponytail-audit`. The
+                    // upstream hosts ship one command per skill
+                    // (commands/*.toml); this is the same surface, and it
+                    // only ever resolves a VENDOR skill — the operator's own
+                    // pool stays behind `/skill` (iter-2159).
+                    let vendor_roots = crate::skill_roots::vendor_skill_roots(&self.config);
+                    if !vendor_roots.is_empty()
+                        && let Some(msg) =
+                            operant_core::agent::skill_preprocessing::build_skill_invocation_message_in(
+                                &self.config.skills.root_dir,
+                                cmd,
+                                args,
+                                self.current_session.as_deref(),
+                                &vendor_roots,
+                            )
+                    {
+                        self.pending_user_message = Some(msg);
+                        return true;
+                    }
                     return false;
                 }
                 let cmd_name = cmd.to_string();

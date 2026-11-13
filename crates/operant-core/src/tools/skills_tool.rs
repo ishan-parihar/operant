@@ -420,25 +420,18 @@ fn find_skills_in_dir(skills_dir: &Path) -> Vec<SkillMeta> {
     skills
 }
 
-/// Read-only roots that carry VENDOR skills — the installed ponytail
-/// content integration. A Holon run never carries one: an org body does
-/// not get a personal integration (the same rule the SkillManager and the
-/// frozen-prefix injection follow).
-fn vendor_roots() -> Vec<PathBuf> {
-    if crate::platform::is_holon_run() {
-        return Vec::new();
-    }
-    crate::ponytail::installed_skills_dir().into_iter().collect()
-}
-
 /// The skills the tools may see: the operator's pool plus the vendor
 /// roots'. The pool wins a name collision — the same first-wins rule the
 /// SkillManager uses — and a vendor copy carries `origin: "integration"`
 /// so the model knows it is read-only.
-fn visible_skills(pool: &Path) -> Vec<SkillMeta> {
+///
+/// The roots are PASSED IN, not derived here: the same list the
+/// SkillManager gets, so the tools and the manager cannot disagree about
+/// which skills exist (iter-2159).
+fn visible_skills(pool: &Path, vendor_roots: &[PathBuf]) -> Vec<SkillMeta> {
     let mut skills = find_skills_in_dir(pool);
-    for root in vendor_roots() {
-        for mut skill in find_skills_in_dir(&root) {
+    for root in vendor_roots {
+        for mut skill in find_skills_in_dir(root) {
             if skills.iter().any(|s| s.name == skill.name) {
                 continue;
             }
@@ -451,14 +444,12 @@ fn visible_skills(pool: &Path) -> Vec<SkillMeta> {
 }
 
 /// The directory holding `name`: the operator's pool first, then the
-/// vendor roots' — the same precedence the listing and the SkillManager use.
-fn find_visible_skill(pool: &Path, name: &str) -> Option<PathBuf> {
-    if let Some(dir) = find_skill(pool, name) {
-        return Some(dir);
-    }
-    vendor_roots()
-        .iter()
-        .find_map(|root| find_skill(root, name))
+/// vendor roots' — the same precedence the listing and the SkillManager
+/// use, and the SAME resolver the slash-command invocation uses.
+fn find_visible_skill(pool: &Path, name: &str, vendor_roots: &[PathBuf]) -> Option<PathBuf> {
+    let mut roots = vec![pool.to_path_buf()];
+    roots.extend(vendor_roots.iter().cloned());
+    crate::skills::find_skill_in_roots(&roots, name)
 }
 
 fn collect_skills_recursive(base_dir: &Path, current_dir: &Path, skills: &mut Vec<SkillMeta>) {
@@ -1213,52 +1204,11 @@ fn collect_reference_children(skill_dir: &Path, ref_dir: &Path) -> Vec<SkillMeta
 /// `name` is a relative path of plain segments: no `..`, `.`, root, or empty
 /// segment. Lookups refuse anything else, because `Path::join` with an
 /// absolute or `..` name would step outside the skills tree (KB-2).
-fn is_plain_relative_path(name: &str) -> bool {
-    !name.is_empty()
-        && Path::new(name)
-            .components()
-            .all(|c| matches!(c, std::path::Component::Normal(_)))
-}
-
-/// Find a skill by name across all skill directories.
+/// Find a skill by name in the operator's pool — the shared resolver in
+/// `crate::skills`, so the tools, the manager and the slash-command
+/// invocation all resolve a skill the same way (iter-2159).
 fn find_skill(skills_dir: &Path, name: &str) -> Option<PathBuf> {
-    if !skills_dir.exists() || !is_plain_relative_path(name) {
-        return None;
-    }
-    // Direct lookup
-    let direct = skills_dir.join(name);
-    if direct.is_dir() && direct.join("SKILL.md").exists() {
-        return Some(direct);
-    }
-    // Recursive search (category/subcategory/skill)
-    find_skill_recursive(skills_dir, skills_dir, name)
-}
-
-fn find_skill_recursive(_base_dir: &Path, current_dir: &Path, name: &str) -> Option<PathBuf> {
-    let Ok(entries) = fs::read_dir(current_dir) else {
-        return None;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if !path.is_dir() {
-            continue;
-        }
-        let dir_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        if dir_name.starts_with('.')
-            || dir_name == "node_modules"
-            || dir_name == ".archive"
-            || dir_name == ".hub"
-        {
-            continue;
-        }
-        if dir_name == name && path.join("SKILL.md").exists() {
-            return Some(path);
-        }
-        if let Some(found) = find_skill_recursive(_base_dir, &path, name) {
-            return Some(found);
-        }
-    }
-    None
+    crate::skills::find_skill_in_roots(std::slice::from_ref(&skills_dir.to_path_buf()), name)
 }
 
 /// Resolve a supporting-file path and ensure it stays within the skill directory.
@@ -1449,6 +1399,10 @@ fn validate_file_path(file_path: &str) -> Option<String> {
 
 pub struct SkillsTool {
     root_dir: PathBuf,
+    /// The vendor roots this tool may read (the installed content
+    /// integrations, plugin-contributed skill dirs). Passed in rather than
+    /// derived: the same list the SkillManager gets.
+    vendor_roots: Vec<PathBuf>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -1468,7 +1422,16 @@ impl SkillsTool {
     pub fn new(skills_dir: PathBuf) -> Self {
         Self {
             root_dir: skills_dir,
+            vendor_roots: Vec::new(),
         }
+    }
+
+    /// The vendor roots this tool may read. The caller passes the SAME
+    /// list it gave the SkillManager, so the listing the model sees and
+    /// the listing the agent advertises cannot drift apart.
+    pub fn with_vendor_roots(mut self, roots: Vec<PathBuf>) -> Self {
+        self.vendor_roots = roots;
+        self
     }
 }
 
@@ -1507,7 +1470,7 @@ impl OperantTool for SkillsTool {
         // The operator's pool plus the vendor roots' skills: the ponytail
         // content integration installs its skills OUTSIDE the pool, so a
         // pool-only scan hid them from the model that was told they exist.
-        let skills = visible_skills(skills_dir);
+        let skills = visible_skills(skills_dir, &self.vendor_roots);
         if skills.is_empty() {
             return ToolResult::success(
                 "skills_list",
@@ -1550,6 +1513,9 @@ impl OperantTool for SkillsTool {
 
 pub struct SkillViewTool {
     root_dir: PathBuf,
+    /// The vendor roots this tool may read — the same list the
+    /// SkillManager gets (iter-2159).
+    vendor_roots: Vec<PathBuf>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -1567,7 +1533,16 @@ impl SkillViewTool {
     pub fn new(skills_dir: PathBuf) -> Self {
         Self {
             root_dir: skills_dir,
+            vendor_roots: Vec::new(),
         }
+    }
+
+    /// The vendor roots this tool may read. The caller passes the SAME
+    /// list it gave the SkillManager, so a skill the agent advertises is
+    /// always a skill this tool can load.
+    pub fn with_vendor_roots(mut self, roots: Vec<PathBuf>) -> Self {
+        self.vendor_roots = roots;
+        self
     }
 
     /// A VIEW is activity: the curator archives an agent-created skill after
@@ -1615,7 +1590,7 @@ impl OperantTool for SkillViewTool {
 
         // If file_path is specified, load a supporting file
         if let Some(file_path) = args.get("file_path").and_then(|v| v.as_str()) {
-            let Some(skill_dir) = find_visible_skill(skills_dir, name) else {
+            let Some(skill_dir) = find_visible_skill(skills_dir, name, &self.vendor_roots) else {
                 return ToolResult::error("skill_view", format!("Skill '{}' not found", name));
             };
             // Track that this skill was read during background review
@@ -1646,7 +1621,7 @@ impl OperantTool for SkillViewTool {
             };
         }
 
-        let skill_dir = match find_visible_skill(skills_dir, name) {
+        let skill_dir = match find_visible_skill(skills_dir, name, &self.vendor_roots) {
             Some(d) => {
                 // Track that this skill was read during background review
                 mark_review_skill_read(name);
@@ -1655,7 +1630,7 @@ impl OperantTool for SkillViewTool {
                 d
             }
             None => {
-                let available: Vec<String> = visible_skills(skills_dir)
+                let available: Vec<String> = visible_skills(skills_dir, &self.vendor_roots)
                     .iter()
                     .take(20)
                     .map(|s| s.name.clone())
@@ -3546,14 +3521,10 @@ mod tests {
         assert_eq!(tool.name(), "skill_view");
     }
 
-    /// A ponytail-shaped install under `home`: the layout the content
-    /// integration produces — `<home>/integrations/ponytail-vX.Y.Z/skills/<skill>/SKILL.md`.
-    fn install_vendor_skill(home: &Path, name: &str, body: &str) {
-        let dir = home
-            .join("integrations")
-            .join("ponytail-v9.9.9")
-            .join("skills")
-            .join(name);
+    /// A ponytail-shaped install: the layout the content integration
+    /// produces — `<root>/ponytail-vX.Y.Z/skills/<skill>/SKILL.md`.
+    fn install_vendor_skill(root: &Path, name: &str, body: &str) {
+        let dir = root.join("ponytail-v9.9.9").join("skills").join(name);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
             dir.join("SKILL.md"),
@@ -3562,39 +3533,37 @@ mod tests {
         .unwrap();
     }
 
-    /// Ponytail phase 3 follow-up: the integration's skills live OUTSIDE
-    /// the operator's pool, so the tools have to look there too. The
-    /// frozen prefix ADVERTISED six ponytail skills to the model while
-    /// `skills_list` hid them and `skill_view` refused to load one — the
-    /// model was told to use a skill it could not reach.
+    /// The tools must see every vendor root they are GIVEN — the installed
+    /// content integration AND a plugin-contributed skill dir. The frozen
+    /// prefix advertises both from the SkillManager's extra roots, so a
+    /// tool that cannot load them tells the model to use a skill it cannot
+    /// reach (iter-2159 closed the plugin half of the ponytail half).
     #[tokio::test]
-    async fn the_skill_tools_see_the_installed_integration_skills() {
-        let _env_lock = crate::platform::test_env_lock().await;
+    async fn the_skill_tools_see_the_vendor_roots_they_are_given() {
         let home = TempDir::new().unwrap();
         let pool = home.path().join("skills");
         std::fs::create_dir_all(&pool).unwrap();
-        install_vendor_skill(home.path(), "ponytail-review", "VENDOR BODY");
-        let previous = std::env::var("HERMES_HOME").ok();
-        // SAFETY: serialised by the crate's environment lock.
-        unsafe { std::env::set_var("HERMES_HOME", home.path()) };
+        let vendor = home.path().join("vendor");
+        install_vendor_skill(&vendor, "ponytail-review", "VENDOR BODY");
+        let plugin = home.path().join("plugin-skills");
+        std::fs::create_dir_all(plugin.join("plugin-skill")).unwrap();
+        std::fs::write(
+            plugin.join("plugin-skill").join("SKILL.md"),
+            "---\nname: plugin-skill\ndescription: From a plugin\n---\n\nPLUGIN BODY\n",
+        )
+        .unwrap();
 
         let list = SkillsTool::new(pool.clone())
+            .with_vendor_roots(vec![vendor.clone(), plugin.clone()])
             .execute(serde_json::json!({}), ToolContext::default())
             .await;
         let view = SkillViewTool::new(pool.clone())
+            .with_vendor_roots(vec![vendor.clone(), plugin.clone()])
             .execute(
-                serde_json::json!({ "name": "ponytail-review" }),
+                serde_json::json!({ "name": "plugin-skill" }),
                 ToolContext::default(),
             )
             .await;
-
-        // SAFETY: serialised by the crate's environment lock.
-        unsafe {
-            match previous {
-                Some(v) => std::env::set_var("HERMES_HOME", v),
-                None => std::env::remove_var("HERMES_HOME"),
-            }
-        }
 
         assert!(list.success, "skills_list failed: {}", list.content);
         assert!(view.success, "skill_view failed: {}", view.content);
@@ -3602,27 +3571,28 @@ mod tests {
         let entries = listed["skills"].as_array().unwrap();
         let names: Vec<&str> = entries.iter().map(|s| s["name"].as_str().unwrap()).collect();
         assert!(names.contains(&"ponytail-review"), "listed names: {names:?}");
-        let vendor = entries
+        assert!(names.contains(&"plugin-skill"), "listed names: {names:?}");
+        let vendor_entry = entries
             .iter()
             .find(|s| s["name"] == "ponytail-review")
             .unwrap();
-        assert_eq!(vendor["origin"], "integration");
+        assert_eq!(vendor_entry["origin"], "integration");
         let viewed: serde_json::Value = serde_json::from_str(&view.content).unwrap();
         assert!(
-            viewed["content"].as_str().unwrap().contains("VENDOR BODY"),
-            "skill_view did not load the vendor body: {viewed}"
+            viewed["content"].as_str().unwrap().contains("PLUGIN BODY"),
+            "skill_view did not load the plugin skill: {viewed}"
         );
     }
 
     /// The operator's own pool still wins a name collision — a vendor skill
     /// of the same name is shadowed, never the other way round.
     #[tokio::test]
-    async fn the_operator_pool_wins_a_name_collision_with_an_integration_skill() {
-        let _env_lock = crate::platform::test_env_lock().await;
+    async fn the_operator_pool_wins_a_name_collision_with_a_vendor_skill() {
         let home = TempDir::new().unwrap();
         let pool = home.path().join("skills");
         std::fs::create_dir_all(&pool).unwrap();
-        install_vendor_skill(home.path(), "ponytail-review", "VENDOR BODY");
+        let vendor = home.path().join("vendor");
+        install_vendor_skill(&vendor, "ponytail-review", "VENDOR BODY");
         let mine = pool.join("ponytail-review");
         std::fs::create_dir_all(&mine).unwrap();
         std::fs::write(
@@ -3630,25 +3600,15 @@ mod tests {
             "---\nname: ponytail-review\ndescription: Mine\n---\n\nOPERATOR BODY\n",
         )
         .unwrap();
-        let previous = std::env::var("HERMES_HOME").ok();
-        // SAFETY: serialised by the crate's environment lock.
-        unsafe { std::env::set_var("HERMES_HOME", home.path()) };
 
-        let listed = visible_skills(&pool);
+        let listed = visible_skills(&pool, std::slice::from_ref(&vendor));
         let view = SkillViewTool::new(pool.clone())
+            .with_vendor_roots(vec![vendor.clone()])
             .execute(
                 serde_json::json!({ "name": "ponytail-review" }),
                 ToolContext::default(),
             )
             .await;
-
-        // SAFETY: serialised by the crate's environment lock.
-        unsafe {
-            match previous {
-                Some(v) => std::env::set_var("HERMES_HOME", v),
-                None => std::env::remove_var("HERMES_HOME"),
-            }
-        }
 
         assert_eq!(listed.len(), 1, "the pool copy must be the only entry");
         assert_eq!(listed[0].origin, None, "the pool copy is not a vendor skill");

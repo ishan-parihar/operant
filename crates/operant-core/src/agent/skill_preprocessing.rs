@@ -287,6 +287,7 @@ pub fn build_skill_invocation_message(
         name,
         user_instruction,
         session_id,
+        &crate::skills::vendor_skill_roots(&[]),
     )
 }
 
@@ -294,96 +295,21 @@ pub fn build_skill_invocation_message(
 /// explicit skills root directory (e.g. the user's configured
 /// `skills.root_dir`), so the expansion honors config instead of always
 /// defaulting to the platform home.
-/// Resolve a skill directory from a name or relative path, mirroring the
-/// recursive resolution `skill_view`/`skills_list` use so `/skill` invocation
-/// behaves identically across layouts:
-///
-/// 1. Direct join — flat seeded layout (`components/heroes` ->
-///    `<root>/components/heroes`).
-/// 2. Path-segment walk — categorized layout where the router sits under
-///    category dirs (`creative/website-design/components/heroes`), so the
-///    caller can pass the relative path from the skills root.
-/// 3. Leaf-name recursive search — a bare name (`heroes`) resolves to the
-///    first skill with that name anywhere in the tree.
-fn resolve_skill_dir(skills_dir: &std::path::Path, name: &str) -> Option<std::path::PathBuf> {
-    // Ponytail phase 3: installed integration skills are invocable
-    // EXACTLY like operator skills — but the operator pool is tried
-    // FIRST (steps 1-3), so an operator's same-named skill shadows the
-    // integration's, the same first-wins rule SkillManager.load_all
-    // applies.
-    // 1. Direct join (fast path — flat seeded layout).
-    let direct = skills_dir.join(name);
-    if direct.join("SKILL.md").is_file() {
-        return Some(direct);
-    }
-    // 2. Path-segment walk from the skills root (categorized layout).
-    if name.contains('/') {
-        let mut cur = skills_dir.to_path_buf();
-        let mut ok = true;
-        for seg in name.split('/') {
-            if seg.is_empty() || seg == "." || seg == ".." {
-                ok = false;
-                break;
-            }
-            cur = cur.join(seg);
-        }
-        if ok && cur.join("SKILL.md").is_file() {
-            return Some(cur);
-        }
-    }
-    // 3. Leaf-name recursive search (bare names anywhere in the tree).
-    if let Some(found) = find_skill_by_name(skills_dir, name) {
-        return Some(found);
-    }
-    // 4. Integration roots — same three-step resolution, per root, only
-    // when the operator pool had no match. `installed_skills_dir()` is
-    // None until ponytail is installed, so the common path costs one
-    // latest_version_dir scan (readdir of the integrations dir).
-    let extra_root = crate::ponytail::installed_skills_dir()?;
-    let direct = extra_root.join(name);
-    if direct.join("SKILL.md").is_file() {
-        return Some(direct);
-    }
-    if name.contains('/') {
-        let mut cur = extra_root.clone();
-        let mut ok = true;
-        for seg in name.split('/') {
-            if seg.is_empty() || seg == "." || seg == ".." {
-                ok = false;
-                break;
-            }
-            cur = cur.join(seg);
-        }
-        if ok && cur.join("SKILL.md").is_file() {
-            return Some(cur);
-        }
-    }
-    find_skill_by_name(&extra_root, name)
-}
-
-/// Depth-first search for a directory named `name` that carries a SKILL.md.
-fn find_skill_by_name(dir: &std::path::Path, name: &str) -> Option<std::path::PathBuf> {
-    if !dir.is_dir() {
-        return None;
-    }
-    let entries = std::fs::read_dir(dir).ok()?;
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if !path.is_dir() {
-            continue;
-        }
-        let dir_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        if dir_name.starts_with('.') || dir_name == "node_modules" || dir_name == ".archive" {
-            continue;
-        }
-        if dir_name == name && path.join("SKILL.md").is_file() {
-            return Some(path);
-        }
-        if let Some(found) = find_skill_by_name(&path, name) {
-            return Some(found);
-        }
-    }
-    None
+/// Resolve a skill directory from a name or relative path, using the ONE
+/// resolver in `crate::skills`: the operator's pool first, then the vendor
+/// roots (the installed content integrations, plugin-contributed skill
+/// dirs). The pool wins a name collision, and a bare name resolves to the
+/// first skill with that name anywhere in the tree — the same behaviour
+/// `skill_view`/`skills_list` have, so `/skill` invocation and the tools
+/// cannot disagree (iter-2159).
+fn resolve_skill_dir(
+    skills_dir: &std::path::Path,
+    name: &str,
+    vendor_roots: &[std::path::PathBuf],
+) -> Option<std::path::PathBuf> {
+    let mut roots = vec![skills_dir.to_path_buf()];
+    roots.extend(vendor_roots.iter().cloned());
+    crate::skills::find_skill_in_roots(&roots, name)
 }
 
 /// Like [`build_skill_invocation_message`] but resolves the skill from an
@@ -395,8 +321,9 @@ pub fn build_skill_invocation_message_in(
     name: &str,
     user_instruction: &str,
     session_id: Option<&str>,
+    vendor_roots: &[std::path::PathBuf],
 ) -> Option<String> {
-    let skill_dir = resolve_skill_dir(skills_dir, name)?;
+    let skill_dir = resolve_skill_dir(skills_dir, name, vendor_roots)?;
     let skill_md = skill_dir.join("SKILL.md");
     let raw = std::fs::read_to_string(&skill_md).ok()?;
 
@@ -501,15 +428,13 @@ mod tests {
     /// Ponytail phase 3 acceptance (plan
     /// 2026-10-26-ponytail-as-a-self-updating-content-integration): with a
     /// ponytail-shaped install present, `/skill ponytail-review` must
-    /// inject the INTEGRATION's SKILL.md — resolved through the extra
-    /// root, frontmatter stripped, scaffolding wrapped. Uses a temp
-    /// HERMES_HOME so the test neither reads the operator's real install
-    /// nor mutates anything shared.
+    /// inject the INTEGRATION's SKILL.md — resolved through the vendor
+    /// root, frontmatter stripped, scaffolding wrapped.
+    ///
+    /// Hermetic since iter-2159: the vendor root is PASSED IN, so the test
+    /// touches neither the operator's real install nor the process env.
     #[test]
     fn integration_skill_injects_via_invocation_builder() {
-        let _env = crate::platform::test_env_lock_blocking();
-        let key = "HERMES_HOME";
-        let original = std::env::var(key).ok();
         let tmp =
             std::env::temp_dir().join(format!("operant-skill-integration-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
@@ -526,23 +451,18 @@ mod tests {
         )
         .unwrap();
         // Empty operator pool — resolution must fall through to the
-        // integration root.
-        std::fs::create_dir_all(tmp.join("skills")).unwrap();
-        // SAFETY: test-only env mutation under the crate-wide env lock.
-        unsafe { std::env::set_var(key, &tmp) };
+        // vendor root.
+        let pool = tmp.join("skills");
+        std::fs::create_dir_all(&pool).unwrap();
 
         let msg = build_skill_invocation_message_in(
-            &tmp.join("skills"),
+            &pool,
             "ponytail-review",
             "",
             Some("s-1"),
+            std::slice::from_ref(&skills),
         );
 
-        // Restore original value.
-        match original {
-            Some(val) => unsafe { std::env::set_var(key, val) },
-            None => unsafe { std::env::remove_var(key) },
-        }
         let _ = std::fs::remove_dir_all(&tmp);
 
         let msg = msg.expect("integration skill must resolve from the extra root");
@@ -568,9 +488,6 @@ mod tests {
     /// the integration's — `/skill` prefers the operator's copy.
     #[test]
     fn operator_pool_skill_shadows_integration_on_invocation() {
-        let _env = crate::platform::test_env_lock_blocking();
-        let key = "HERMES_HOME";
-        let original = std::env::var(key).ok();
         let tmp = std::env::temp_dir().join(format!("operant-skill-shadow-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         let pool = tmp.join("skills");
@@ -590,16 +507,15 @@ mod tests {
             "---\nname: ponytail-review\ndescription: vendor\n---\nVENDOR COPY\n",
         )
         .unwrap();
-        // SAFETY: test-only env mutation under the crate-wide env lock.
-        unsafe { std::env::set_var(key, &tmp) };
 
-        let msg = build_skill_invocation_message_in(&pool, "ponytail-review", "", Some("s-1"));
+        let msg = build_skill_invocation_message_in(
+            &pool,
+            "ponytail-review",
+            "",
+            Some("s-1"),
+            std::slice::from_ref(&extra),
+        );
 
-        // Restore original value.
-        match original {
-            Some(val) => unsafe { std::env::set_var(key, val) },
-            None => unsafe { std::env::remove_var(key) },
-        }
         let _ = std::fs::remove_dir_all(&tmp);
 
         let msg = msg.expect("operator copy must resolve");
@@ -763,7 +679,8 @@ mod tests {
         // SAFETY: test-only env mutation under the crate-wide env lock.
         unsafe { std::env::set_var(key, &tmp) };
 
-        let msg = build_skill_invocation_message_in(&skills, "session-skill", "", Some("s-42"));
+        let msg =
+            build_skill_invocation_message_in(&skills, "session-skill", "", Some("s-42"), &[]);
 
         // Restore original value.
         match original {

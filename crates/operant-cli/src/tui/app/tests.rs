@@ -10013,7 +10013,11 @@ async fn no_registered_tui_command_is_unwired() {
     // (plan 04) The TYPEAHEAD table is part of the contract now: anything
     // autocomplete suggests must dispatch. A row the typeahead offers that
     // falls through to the model (or prints not-wired) is a lying command.
-    for (name, _desc) in crate::tui::app::helpers::tui_slash_command_data() {
+    // (iter-2159) The sweep walks the vendor skills too — a skill name is a
+    // command, so `/ponytail-audit` must dispatch like any registered one.
+    for (name, _desc) in
+        crate::tui::app::helpers::tui_slash_command_data(&app.vendor_skill_commands)
+    {
         let bare = name.trim_start_matches('/');
         let before = app.system_annotations.len();
         let handled = app.handle_tui_command(bare, "");

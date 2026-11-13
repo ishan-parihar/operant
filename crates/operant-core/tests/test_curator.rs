@@ -536,6 +536,7 @@ async fn a_used_skill_is_not_archived_by_the_curator() {
         "used-skill",
         "",
         None,
+        &[],
     );
     assert!(
         invoked.is_some(),

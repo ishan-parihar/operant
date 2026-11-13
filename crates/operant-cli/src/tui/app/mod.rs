@@ -584,6 +584,10 @@ pub struct App {
     /// startup; saved back on every command invocation.
     /// (iter-125 — smart slash-command ordering.)
     pub slash_usage: crate::tui::slash_usage::UsageStore,
+    /// The vendor skills as command rows — a skill name IS a command
+    /// (`/ponytail-audit` runs the skill, iter-2159). Computed ONCE at
+    /// startup: the typeahead reads it on every keystroke.
+    pub vendor_skill_commands: Vec<(String, String)>,
     /// Standing session goal set via /goal. Injected as a system preamble
     /// message whenever it is set and displayed in the status bar.
     /// (iter-270 — wires /goal to real state.)

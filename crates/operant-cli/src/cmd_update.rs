@@ -31,11 +31,22 @@ pub async fn handle_update_command(_config: &AppConfig, cmd: UpdateSubcommand) -
 /// (plan 11B) Force-check the external integrations now: print the state
 /// of each and apply any pending update (bypassing the once-guard and the
 /// 6 h on-disk throttle — the user asked).
-async fn cmd_integrations(only: Option<&str>) -> Result<()> {
-    if let Some(name) = only
-        && !matches!(name, "sourcehound" | "aft" | "ponytail")
-    {
+/// The integrations `--only` accepts. A name outside this set is a typo,
+/// and the command says so rather than silently doing nothing.
+const INTEGRATION_NAMES: [&str; 3] = ["sourcehound", "aft", "ponytail"];
+
+/// Refuse an integration name `--only` does not know.
+fn check_integration_name(name: &str) -> Result<()> {
+    if INTEGRATION_NAMES.contains(&name) {
+        Ok(())
+    } else {
         anyhow::bail!("unknown integration '{name}' — choose sourcehound, aft or ponytail");
+    }
+}
+
+async fn cmd_integrations(only: Option<&str>) -> Result<()> {
+    if let Some(name) = only {
+        check_integration_name(name)?;
     }
     println!("operant integrations:\n");
     let report = |name: &str, r: Result<Option<operant_core::binary_updater::UpdateNotice>>| match r
@@ -91,4 +102,27 @@ async fn cmd_apply() -> Result<()> {
     println!("  2. Run: git pull && cargo install --path crates/operant-cli");
     println!("  3. Or visit: https://github.com/ishanp/HERMES/releases");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The `--only` filter must accept the three integrations and refuse a
+    /// name it does not know — a typo that silently refreshed NOTHING is
+    /// the failure this pins (iter-2159).
+    #[test]
+    fn the_only_filter_accepts_the_three_integrations_and_refuses_a_typo() {
+        for name in INTEGRATION_NAMES {
+            assert!(
+                check_integration_name(name).is_ok(),
+                "`{name}` is an integration and must be accepted"
+            );
+        }
+        let err = check_integration_name("bogus")
+            .expect_err("a typo must be refused")
+            .to_string();
+        assert!(err.contains("unknown integration 'bogus'"), "{err}");
+        assert!(err.contains("sourcehound, aft or ponytail"), "{err}");
+    }
 }

@@ -1018,14 +1018,16 @@ async fn handle_runtime_command(
             // would leave the other slots on the stale list.
             let build = || {
                 let mut mgr = operant_core::skills::SkillManager::new(skills_dir.clone());
-                // Ponytail phase 3: keep the extra root across reloads — a
-                // rescan that silently dropped integration skills would make
-                // /skill ponytail-review fail right after a reload.
-                mgr.add_extra_root(operant_core::ponytail::installed_skills_dir());
-                // iter-1720: same duty for skill-plugin roots — a rescan must
-                // not drop a plugin's skills.
+                // The vendor roots across a reload (iter-2159) — the
+                // installed content integrations plus the plugin roots the
+                // handler captured at start. A rescan that dropped them
+                // would make /skill ponytail-review fail right after a
+                // reload.
                 #[cfg(feature = "plugins-wasm")]
-                for root in handler.wasm_plugin_skill_roots.clone() {
+                let host = handler.wasm_plugin_skill_roots.clone();
+                #[cfg(not(feature = "plugins-wasm"))]
+                let host: Vec<std::path::PathBuf> = Vec::new();
+                for root in operant_core::skills::vendor_skill_roots(&host) {
                     mgr.add_extra_root(Some(root));
                 }
                 mgr.load_all().map(|loaded| (mgr, loaded.len()))
@@ -1407,14 +1409,28 @@ async fn handle_runtime_command(
         // can send it and the skill actually runs — that is a real seam
         // against the alternative, which is a `/skill` that replies and
         // does nothing.
-        "skill" => {
+        // BOTH spellings — the registry's canonical `skills` and its alias
+        // `skill` — so the dispatch reaches ONE implementation instead of
+        // two near-copies that only one of them can reach (iter-2159).
+        "skill" | "skills" => {
             let rest = args.trim();
             let skills_dir = handler.skills_root_dir.clone();
+            // The vendor roots — the installed content integrations plus the
+            // plugin roots captured at start: ONE list, the same one the
+            // SkillManager and the in-loop tools read.
+            #[cfg(feature = "plugins-wasm")]
+            let host = handler.wasm_plugin_skill_roots.clone();
+            #[cfg(not(feature = "plugins-wasm"))]
+            let host: Vec<std::path::PathBuf> = Vec::new();
+            let vendor_roots = operant_core::skills::vendor_skill_roots(&host);
             if rest.is_empty() {
                 // The browse half, over a channel: the REAL installed list,
                 // not a canned "see the TUI". A root with no skills says so
                 // rather than reading as an empty reply.
                 let mut mgr = operant_core::skills::SkillManager::new(skills_dir);
+                for root in &vendor_roots {
+                    mgr.add_extra_root(Some(root.clone()));
+                }
                 let loaded = mgr.load_all().unwrap_or_default();
                 let rows: Vec<(String, String)> = mgr
                     .list()
@@ -1465,6 +1481,7 @@ async fn handle_runtime_command(
                 // persisted session id differs; the derived one is the
                 // default this arm can resolve without the gateway lock).
                 Some(derived_gateway_session_id(session_key).as_str()),
+                &vendor_roots,
             ) {
                 Some(msg) => {
                     // Bounded to the same 1200-char head /memory uses, with
@@ -4575,7 +4592,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
         // went to the configured endpoint.
         let api_base = operant_core::tools::platform_bases::telegram_api_base();
         let cmd_url = format!("{}/bot{}/setMyCommands", api_base, token);
-        let cmd_body = format!(r#"{{"commands":{}}}"#, telegram_bot_commands());
+        let cmd_body = format!(r#"{{"commands":{}}}"#, telegram_bot_commands(&crate::skill_roots::vendor_skill_command_rows(app_config)));
         // Bounded retry: this fires once during boot — exactly when the
         // network may still be settling (the same race that kills adapter
         // starts). Without retries the command menu silently stays
@@ -5693,6 +5710,58 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                                 return Ok(true);
                             }
                             CommandMatch::Unknown { token } => {
+                                // A skill NAME is a command: the vendor skills
+                                // are published as commands (`/ponytail-audit`
+                                // RUNS the skill), and Telegram's menu spells a
+                                // hyphen as an underscore, so a token that is no
+                                // built-in may still be a skill — try both
+                                // spellings before rejecting (iter-2159).
+                                let vendor_roots =
+                                    crate::skill_roots::vendor_skill_roots(&app_config_clone);
+                                let instruction = msg
+                                    .content
+                                    .trim()
+                                    .strip_prefix('/')
+                                    .and_then(|rest| rest.split_once(char::is_whitespace))
+                                    .map(|(_, args)| args.trim())
+                                    .unwrap_or("");
+                                let skill_msg = crate::gateway_commands::skill_command_names(token)
+                                    .into_iter()
+                                    .find_map(|name| {
+                                        operant_core::agent::skill_preprocessing::build_skill_invocation_message_in(
+                                            &app_config_clone.skills.root_dir,
+                                            &name,
+                                            instruction,
+                                            None,
+                                            &vendor_roots,
+                                        )
+                                    });
+                                if let Some(injected) = skill_msg {
+                                    tracing::info!(
+                                        user = %msg.user_id,
+                                        platform = %platform,
+                                        channel_id = %channel_id,
+                                        token = %token,
+                                        "Gateway dispatch: an unknown token is a vendor skill command — running it"
+                                    );
+                                    const CHANNEL_SKILL_HEAD_CHARS: usize = 1200;
+                                    let total = injected.chars().count();
+                                    let shown: String =
+                                        injected.chars().take(CHANNEL_SKILL_HEAD_CHARS).collect();
+                                    let mut reply = format!("🧩 Skill `{token}`\n\n{shown}");
+                                    if total > CHANNEL_SKILL_HEAD_CHARS {
+                                        reply.push_str(
+                                            "\n…(truncated — send this message to run the skill in full)",
+                                        );
+                                    }
+                                    gw.send_to_platform(
+                                        &platform,
+                                        OutgoingMessage::new(&msg.channel_id, reply)
+                                            .with_thread_id(msg.thread_id),
+                                    )
+                                    .await?;
+                                    return Ok(true);
+                                }
                                 // The single most valuable line for the
                                 // mistyped-command class: the token that failed to
                                 // resolve, and the fact that it was REJECTED here
