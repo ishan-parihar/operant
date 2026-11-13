@@ -2833,3 +2833,103 @@ fn a_channel_message_skill_surface_is_read_the_way_the_chat_expects() {
         SkillSurface::None,
     );
 }
+
+/// (iter-2173) A direct prose message while THIS chat's turn is live is a
+/// STEER — it reaches the model at the agent's next iteration boundary.
+///
+/// Before iter-2172 the message waited for the slot lock and then started a
+/// SECOND turn, so a channel could not steer at all. And the one thing the
+/// steer must NEVER steal is the ANSWER to a pending `clarify()` question:
+/// the turn blocked on the question is exactly the turn that makes the
+/// session "running", so without the guard the answer became a steer and the
+/// tool timed out. Both halves are pinned here — the regression and the fix.
+#[tokio::test]
+async fn prose_steers_the_running_turn_and_never_steals_a_question_answer() {
+    use std::collections::HashMap;
+
+    const CHANNEL: &str = "-100steer";
+    // A DM's session key carries the user; the pending-question map is keyed
+    // by the CHANNEL alone. They are deliberately different strings here.
+    let session_key = format!("telegram:{CHANNEL}:op-1");
+    let channel_key = format!("telegram:{CHANNEL}");
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let agent = Arc::new(operant_core::agent::OperantAgent::new(
+        operant_core::agent::AgentConfig::default(),
+        Box::new(SlowEchoClient { delay_ms: 0 }),
+        operant_core::tools::ToolRegistry::new(Duration::from_secs(5)),
+        Arc::new(
+            operant_core::database::Database::init(dir.path().join("agent.sqlite")).expect("db"),
+        ),
+    ));
+    let handler = Arc::new(GatewayMessageHandler {
+        admins: vec![],
+        slots: slot_pool(agent),
+        gateway: tokio::sync::Mutex::new(None),
+        session_pins: Arc::new(SessionPins::default()),
+        exit_reasons: ExitReasonMap::default(),
+        turn_usage: TurnUsageMap::default(),
+        summary_ttl_minutes: 30,
+        default_budget: operant_core::config::BudgetSettings::default(),
+        context_injection: None,
+        running_session: std::sync::Mutex::new(HashMap::from([(session_key.clone(), 0usize)])),
+        next_turn_queue: std::sync::Arc::new(std::sync::Mutex::new(HashMap::new())),
+        cancelled_queued: Default::default(),
+        mcp_manager: operant_core::mcp::McpManager::new(),
+        mcp_server_configs: Vec::new(),
+        skills_root_dir: dir.path().join("skills-absent"),
+        #[cfg(feature = "plugins-wasm")]
+        wasm_plugin_skill_roots: Vec::new(),
+        queue_waits: tokio::sync::Mutex::new(Default::default()),
+    });
+
+    let msg = IncomingMessage::new("telegram", "op-1", "Operator", CHANNEL, "focus on the parser");
+
+    // ── 1. The live turn takes the steer. ──────────────────────────────
+    let reply = handler.steer_prose_into_running_turn(&msg, &session_key);
+    assert!(
+        reply.as_deref().is_some_and(|r| r.contains("Steered")),
+        "a prose message to a running turn steers it: {reply:?}"
+    );
+    let queue = handler.slots.slot_for(&session_key).agent.steer_queue_handle();
+    assert_eq!(
+        queue.try_lock().unwrap().as_slice(),
+        ["focus on the parser".to_string()],
+        "the text must reach the agent's live steer queue"
+    );
+
+    // ── 2. A session that is NOT running is not steered. ───────────────
+    // It waits for the slot lock and starts a turn of its own — the pre-iter
+    // 2172 behaviour, which is the correct behaviour for an idle chat.
+    let idle_key = format!("telegram:{CHANNEL}:someone-else");
+    assert!(
+        handler.steer_prose_into_running_turn(&msg, &idle_key).is_none(),
+        "a message for a chat with no live turn must start a turn, not steer"
+    );
+
+    // ── 3. A pending question's ANSWER is not a steer. ─────────────────
+    let global = crate::gateway_runner::PENDING_USER_QUESTIONS
+        .get_or_init(|| std::sync::Mutex::new(None));
+    let map = {
+        let mut guard = global.lock().unwrap();
+        guard
+            .get_or_insert_with(|| std::sync::Arc::new(tokio::sync::Mutex::new(HashMap::new())))
+            .clone()
+    };
+    let (reply_tx, _answer_rx) = tokio::sync::oneshot::channel();
+    map.lock().await.insert(channel_key.clone(), (reply_tx, None));
+    let answer = IncomingMessage::new("telegram", "op-1", "Operator", CHANNEL, "yes, do that");
+    let stolen = handler.steer_prose_into_running_turn(&answer, &session_key);
+    assert!(
+        stolen.is_none(),
+        "an answer to a pending question must NOT become a steer — \
+         the turn blocked on the question is the turn that is running"
+    );
+    assert_eq!(
+        queue.try_lock().unwrap().as_slice(),
+        ["focus on the parser".to_string()],
+        "and the answer was NOT written to the steer queue: it belongs to the question"
+    );
+    // Clean up so no other test sees this channel's question.
+    map.lock().await.remove(&channel_key);
+}

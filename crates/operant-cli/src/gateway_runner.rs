@@ -2833,6 +2833,97 @@ impl GatewayMessageHandler {
             .contains_key(session_key)
     }
 
+    /// True when a `clarify()` question is waiting for an answer in this
+    /// channel.
+    ///
+    /// A LOOKUP, not the interception: `handle()` takes the entry and routes
+    /// the message to the tool. This reads the same map WITHOUT consuming it,
+    /// so the dispatch loop can tell an ANSWER from a MESSAGE before it
+    /// decides what to do with the prose.
+    fn has_pending_question_reply(&self, message: &IncomingMessage) -> bool {
+        let channel_key = format!("{}:{}", message.platform, message.channel_id);
+        let Some(global) = crate::gateway_runner::PENDING_USER_QUESTIONS.get() else {
+            return false;
+        };
+        let Ok(guard) = global.lock() else {
+            return false;
+        };
+        let Some(map) = guard.as_ref() else {
+            return false;
+        };
+        // `try_lock`: the interception holds this lock only for
+        // microseconds. A FAILURE means "cannot know", and the safe direction
+        // is to answer "a question may be pending" — that sends the message
+        // down the normal path to `handle()`'s own interception instead of
+        // stealing it with a steer.
+        map.try_lock()
+            .map(|pending| pending.contains_key(&channel_key))
+            .unwrap_or(true)
+    }
+
+    /// (iter-2173) A DIRECT prose message while THIS session's turn is live
+    /// is a STEER: it reaches the model at the agent's next iteration
+    /// boundary.
+    ///
+    /// Returns the notice to send back, or `None` when the message is NOT a
+    /// steer and must fall through to the normal turn path.
+    ///
+    /// What this path must NOT steal:
+    ///
+    ///   1. a reply to a pending `clarify()` question. The interception for
+    ///      that lives at the TOP of `handle()`, and the turn blocked on the
+    ///      question is exactly the turn that makes `session_is_running`
+    ///      true — so without this check the ANSWER became a steer and the
+    ///      tool timed out (the regression iter-2172 shipped).
+    ///   2. a message for a session that is not running: it waits for the
+    ///      slot lock and starts a turn of its own.
+    ///
+    /// Per-session, NOT per-slot: another chat's turn holding the same slot
+    /// does not make this chat's message a steer.
+    fn steer_prose_into_running_turn(
+        &self,
+        message: &IncomingMessage,
+        session_key: &str,
+    ) -> Option<String> {
+        if !self.session_is_running(session_key) {
+            return None;
+        }
+        if self.has_pending_question_reply(message) {
+            tracing::info!(
+                channel = %message.channel_id,
+                session_key = %session_key,
+                "Gateway prose: a question is pending for this channel — the message is an answer, not a steer"
+            );
+            return None;
+        }
+        let slot = self.slots.slot_for(session_key);
+        let queue = slot.agent.steer_queue_handle();
+        let depth = match queue.try_lock() {
+            Ok(mut q) => {
+                q.push(message.content.clone());
+                q.len()
+            }
+            Err(_) => {
+                return Some(
+                    "🧭 The agent is reading its steer queue right now — send it again in a moment. Nothing was lost."
+                        .to_string(),
+                );
+            }
+        };
+        tracing::info!(
+            user = %message.user_id,
+            platform = %message.platform,
+            channel = %message.channel_id,
+            session_key = %session_key,
+            depth,
+            "Gateway command dispatch: prose steered into the running turn"
+        );
+        Some(
+            "🧭 **Steered** — it reaches the model at its next iteration boundary.\nUse `/queue <text>` to hold a message for the next turn instead."
+                .to_string(),
+        )
+    }
+
     /// Take the messages this session QUEUED for the next turn (FIFO).
     ///
     /// Read by the turn end so the messages are delivered WITH the turn that
@@ -6206,40 +6297,36 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                                                 });
                                             }
 
-                                                                             // ── (2026-11-12) A DIRECT message while THIS session's turn
-                                             // runs is a STEER ───────────────────────────────────────────
-                                             //
-                                             // The operator typed it while the model was working; the only
-                                             // useful reading is "change what you are doing now". The agent's
-                                             // steer queue delivers exactly that at the next iteration
-                                             // boundary.
-                                             //
-                                             // Before this, the message waited for the slot lock and then
-                                             // started a SECOND turn — so a channel could not steer at all,
-                                             // and queueing was the only behaviour it had. On a channel there
-                                             // is no Ctrl+Enter, so `/queue` is the ONLY way to park a message
-                                             // for the next turn.
-                                             //
-                                             // Per-session, not per-slot: another chat's turn holding the same
-                                             // slot does not make this chat's message a steer.
-                                             if handler_for_stop.session_is_running(&session_key) {
-                                                 let slot = handler_for_stop.slots.slot_for(&session_key);
-                                                 slot.agent.steer(msg.content.clone()).await;
-                                                 tracing::info!(
-                                                     user = %msg.user_id,
-                                                     platform = %platform,
-                                                     channel = %channel_id,
-                                                     session_key = %session_key,
-                                                     "Gateway command dispatch: prose steered into the running turn"
-                                                 );
-                                                 let response = OutgoingMessage::new(
-                                                     &msg.channel_id,
-                                                     "🧭 **Steered** — it reaches the agent at its next iteration boundary.\nUse `/queue <text>` to hold a message for the next turn instead.",
-                                                 )
-                                                 .with_thread_id(msg.thread_id);
-                                                 gw.send_to_platform(&platform, response).await?;
-                                                 return Ok(true);
-                                             }
+                                 // ── (2026-11-12, iter-2173) A DIRECT message while THIS
+                                 // session's turn runs is a STEER ───────────
+                                 //
+                                 // The operator typed it while the model was
+                                 // working; the only useful reading is "change
+                                 // what you are doing now". The agent's steer
+                                 // queue delivers exactly that at the next
+                                 // iteration boundary.
+                                 //
+                                 // Before this, the message waited for the slot
+                                 // lock and then started a SECOND turn — so a
+                                 // channel could not steer at all, and queueing
+                                 // was the only behaviour it had. On a channel
+                                 // there is no Ctrl+Enter, so `/queue` is the
+                                 // ONLY way to park a message for the next turn.
+                                 //
+                                 // The decision — and the two things it must NOT
+                                 // steal, a pending question's ANSWER and a
+                                 // message for a session that is not running —
+                                 // lives in the handler, because this branch sits
+                                 // AHEAD of `handle()`'s own interceptions.
+                                 if let Some(reply) = handler_for_stop
+                                     .steer_prose_into_running_turn(&msg, &session_key)
+                                 {
+                                     let response = OutgoingMessage::new(&msg.channel_id, reply)
+                                         .with_thread_id(msg.thread_id);
+                                     gw.send_to_platform(&platform, response).await?;
+                                     return Ok(true);
+                                 }
+
 
             tracing::info!(
                                                 user = %msg.user_id,
