@@ -2693,7 +2693,7 @@ fn the_name_tiers_offer_the_vendor_roots_too() {
     let guard = super::typeahead::SKILL_SNAPSHOT_LOCK
         .lock()
         .unwrap_or_else(|e| e.into_inner());
-    super::typeahead::set_invocable_skills(&pool, &[vendor.clone()], Vec::new());
+    super::typeahead::set_invocable_skills(&pool, std::slice::from_ref(&vendor), Vec::new());
 
     // The `$` popup offers the vendor skill.
     let s = compute_typeahead("$pony", &[], &UsageStore::default(), 15, false);

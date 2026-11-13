@@ -282,7 +282,7 @@ fn loadable_skills_includes_the_vendor_roots() {
     write_skill(&pool, "alpha-skill");
     write_skill(&vendor, "ponytail-review");
 
-    let rows = loadable_skills(&pool, &[vendor.clone()]);
+    let rows = loadable_skills(&pool, std::slice::from_ref(&vendor));
     let names: Vec<&str> = rows.iter().map(|(n, _)| n.as_str()).collect();
     assert_eq!(
         names,
