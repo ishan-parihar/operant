@@ -565,7 +565,14 @@ class Register:
 
 def claim_holder(cell: str) -> str | None:
     """Who holds the claim noted in a notes cell, or None."""
-    m = re.search(r"claimed-by `?([A-Za-z0-9_.-]+)", cell)
+    # The id charset must be the one `agent_identity` can produce: a checkout
+    # DISAMBIGUATED agent id carries an `@<checkout>` suffix, and the old
+    # charset stopped at the `@`, so the holder of a claim was read as the
+    # bare agent name while the identity was the suffixed one. Every
+    # checkout-disambiguated agent (every worktree agent in this fleet) could
+    # therefore CLAIM an item and never finish it -- `genome done` refused its
+    # own claim as somebody else's (2026-11-12, iter-2198).
+    m = re.search(r"claimed-by `?([A-Za-z0-9_.@-]+)", cell)
     return m.group(1) if m else None
 
 
