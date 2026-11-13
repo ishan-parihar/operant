@@ -4111,7 +4111,6 @@ model = "anthropic/claude-opus-4-20250514"
         assert!(not_ignored.is_empty(), "the chosen file is never ignored");
     }
 
-    use super::*;
     use serial_test::serial;
     use std::ffi::OsString;
     // The environment lock is CRATE-WIDE — see

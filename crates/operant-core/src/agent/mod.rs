@@ -1744,7 +1744,7 @@ mod tests {
     /// harder. 0 means the built-in default.
     #[tokio::test]
     async fn the_advertised_skills_budget_is_the_operator_s_number() {
-        use crate::skills::{Skill, SkillManager};
+        use crate::skills::SkillManager;
 
         let dir = tempfile::tempdir().expect("tempdir");
         let skills_dir = dir.path().join("skills");
@@ -1801,7 +1801,7 @@ mod tests {
     /// the model knows to reach for the skills tool.
     #[tokio::test]
     async fn the_advertised_skills_block_has_a_ceiling_and_says_what_it_dropped() {
-        use crate::skills::{Skill, SkillManager};
+        use crate::skills::SkillManager;
 
         let dir = tempfile::tempdir().expect("tempdir");
         let skills_dir = dir.path().join("skills");

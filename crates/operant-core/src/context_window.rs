@@ -410,7 +410,6 @@ mod tests {
         assert_eq!(resolved.source, WindowSource::Default);
     }
 
-    use super::*;
 
     #[test]
     fn configured_wins_over_every_live_source() {
