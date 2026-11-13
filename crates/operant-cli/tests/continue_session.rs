@@ -92,6 +92,15 @@ impl Fixture {
             .expect("seed older session");
         db.save_session(newer.0, Some(newer.1), "test", "2026-11-02", "2026-11-02")
             .expect("seed newer session");
+        // ONE message each, with the newer one later: the no-id fallback ranks by
+        // the newest MESSAGE, because `list_sessions` ranks a session that never
+        // ENDED by when it STARTED — which is what made `continue` with no id
+        // answer a session the operator had already finished. A session with no
+        // turns has nothing to rehydrate and is not a candidate.
+        db.save_message(older.0, "user", "the first prompt", "2026-11-01T09:00:00Z")
+            .expect("seed older message");
+        db.save_message(newer.0, "user", "the newer prompt", "2026-11-02T09:00:00Z")
+            .expect("seed newer message");
         self
     }
 }
@@ -210,6 +219,65 @@ fn the_most_recent_session_is_the_default() {
     assert!(
         text.contains("Fix the export dialog"),
         "the title is what the operator recognises: {text}"
+    );
+}
+
+/// A CRASHED session is the one `operant continue` answers with, even though a
+/// session the operator finished later STARTED after it.
+///
+/// `list_sessions` ranks by `COALESCE(ended_at, started_at)`, so a session that
+/// never ENDED (a crash, a SIGKILL, a closed terminal) is buried under one that
+/// started after it and finished normally. The operator's question is "what was
+/// I working on", which is the newest TURN, not the newest start.
+#[test]
+fn a_crashed_session_beats_a_later_finished_one() {
+    let fixt = Fixture::new("crash-default");
+    let db = operant_core::database::Database::init(fixt.path().join("database.db"))
+        .expect("init fixture database");
+    // Started first and never ended (ended_at NULL) — the crash shape.
+    db.save_session(
+        "sess_crashed",
+        Some("The session I was working in"),
+        "test",
+        "2026-11-10",
+        "2026-11-10",
+    )
+    .expect("seed the crashed session");
+    db.save_message(
+        "sess_crashed",
+        "user",
+        "the last thing I asked",
+        "2026-11-13T18:00:00Z",
+    )
+    .expect("seed its newest turn");
+    // Started LATER and finished normally, but its last turn is OLDER.
+    db.save_session(
+        "sess_finished",
+        Some("An older session I already finished"),
+        "test",
+        "2026-11-12",
+        "2026-11-12",
+    )
+    .expect("seed the finished session");
+    db.save_message(
+        "sess_finished",
+        "user",
+        "an older turn",
+        "2026-11-12T10:00:00Z",
+    )
+    .expect("seed its older turn");
+    drop(db);
+
+    let out = run(fixt.path());
+    let text = stdout(&out);
+    assert!(out.status.success(), "the fallback path must work: {text}");
+    assert!(
+        text.contains("operant continue sess_crashed"),
+        "the crashed session is the one the operator was working in: {text}"
+    );
+    assert!(
+        text.contains("The session I was working in"),
+        "the label is the title, not the id: {text}"
     );
 }
 

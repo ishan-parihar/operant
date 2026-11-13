@@ -15726,3 +15726,57 @@ fn a_switch_to_a_session_another_window_owns_is_refused() {
         "the agent must not have been retargeted onto a session another window owns"
     );
 }
+
+
+// ---- (2026-11-14) the session's human-readable label ----
+
+/// A session the operator renamed is labelled by the name they gave it.
+#[test]
+fn the_session_label_prefers_the_title_the_operator_set() {
+    let mut app = make_app();
+    app.session_title = Some("Fix the export dialog".to_string());
+    assert_eq!(app.session_label().as_deref(), Some("Fix the export dialog"));
+}
+
+/// A session the operator never renamed is labelled by its FIRST prompt — the
+/// same rule the store's auto-title uses.
+///
+/// `session_title` is written by exactly one path (`/rename`), so this is the
+/// common case: the live probe measured an exit where the DB held
+/// "Reply with the single word OK." while the App's field was `None`, so the
+/// leftover read `Session was interrupted — sess_d70f7957-…` — the one label
+/// the operator cannot recognise a day later.
+#[test]
+fn the_session_label_falls_back_to_the_first_prompt() {
+    let mut app = make_app();
+    app.messages
+        .push(crate::tui::adapter_types::types::Message::user(
+        "Reply with the single word OK.".to_string(),
+    ));
+    assert_eq!(
+        app.session_label().as_deref(),
+        Some("Reply with the single word OK.")
+    );
+}
+
+/// A long prompt is cut at 60 characters and ellipsised, matching the store's
+/// auto-title rule, so the two labels read as one sentence.
+#[test]
+fn the_session_label_cuts_a_long_prompt_the_way_the_store_does() {
+    let mut app = make_app();
+    app.messages
+        .push(crate::tui::adapter_types::types::Message::user(
+        "x".repeat(400),
+    ));
+    let label = app.session_label().expect("a label from the prompt");
+    assert!(label.chars().count() <= 61, "60 chars plus the ellipsis: {label}");
+    assert!(label.ends_with('…'), "a cut label marks the cut: {label:?}");
+}
+
+/// With no title and no prompt there is no label, and the caller falls back to
+/// the session id — never to an empty string that reads as a missing session.
+#[test]
+fn the_session_label_is_none_without_a_title_or_a_prompt() {
+    let app = make_app();
+    assert!(app.session_label().is_none());
+}

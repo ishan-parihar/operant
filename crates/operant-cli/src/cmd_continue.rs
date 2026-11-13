@@ -79,6 +79,23 @@ pub fn exit_state(deliberate: bool) -> &'static str {
     }
 }
 
+/// The short title for a session's first prompt — the SAME rule the store's
+/// auto-title uses (`agent/turn_context.rs::interrupted_title`, 60 chars,
+/// ellipsised at a character boundary).
+///
+/// Duplicated rather than shared because `turn_context` is `pub(crate)` to
+/// `operant-core`: if the rule changes there, change it here, and the two
+/// labels stay the same sentence.
+pub fn title_from_first_prompt(prompt: &str) -> String {
+    const MAX: usize = 60;
+    let trimmed = prompt.trim();
+    if trimmed.chars().count() <= MAX {
+        return trimmed.to_string();
+    }
+    let head: String = trimmed.chars().take(MAX).collect();
+    format!("{}…", head.trim_end())
+}
+
 /// Resolve the session `operant continue` should attach to.
 ///
 /// Three answers, in order of how well they know the operator's intent:
@@ -313,6 +330,17 @@ mod tests {
         let target = resolve_target_session(&db, None, None).expect("resolve");
         assert_eq!(target.id, "sess_crashed");
         assert_eq!(target.title.as_deref(), Some("crashed"));
+    }
+
+    /// The title rule the store's auto-title uses: the first 60 characters,
+/// ellipsised. Two labels that must read as one sentence cannot drift.
+    #[test]
+    fn the_title_rule_matches_the_stores_auto_title() {
+        assert_eq!(title_from_first_prompt("  padded  "), "padded");
+        let long = "x".repeat(400);
+        let cut = title_from_first_prompt(&long);
+        assert!(cut.chars().count() <= 61, "{cut}");
+        assert!(cut.ends_with('…'));
     }
 
     /// An empty database has no session to continue, and the error must say

@@ -714,7 +714,7 @@ impl TuiApp {
                 crate::cmd_continue::format_continue_hint(
                     crate::cmd_continue::exit_state(self.app.exit_is_deliberate),
                     &session_id,
-                    self.app.session_title.as_deref()
+                    self.app.session_label().as_deref()
                 )
             );
         }

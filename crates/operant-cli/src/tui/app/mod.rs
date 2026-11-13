@@ -1601,7 +1601,7 @@ impl App {
             );
             return;
         }
-        let title = self.session_title.clone().unwrap_or_default();
+        let title = self.session_label().unwrap_or_default();
         let marker =
             operant_core::session_interrupted::SessionInterrupted::new(&session_id, &title);
         if let Err(e) = operant_core::session_interrupted::write_marker(&marker) {
@@ -1645,6 +1645,45 @@ impl App {
         // now gone, which is exactly what makes the interrupted status honest.
         // The clean-exit path (the `/exit` arm in commands.rs) releases it too.
         operant_core::active_sessions::unregister_presence(&session_id);
+    }
+
+    /// The session's human-readable label: the title the operator set, else
+    /// the first prompt, else nothing.
+    ///
+    /// `session_title` is written by exactly ONE path — `/rename`
+    /// (`commands.rs`) — so a session the operator never renamed has `None`
+    /// there while its transcript still knows what it was about. Every surface
+    /// that labels a session for the operator (the exit leftover, the
+    /// interrupted marker's title, the boot notice) reads this instead, because
+    /// `Session was interrupted — sess_d70f7957-…` is the one label the
+    /// operator cannot recognise a day later.
+    ///
+    /// The fallback is the FIRST PROMPT, not the last: the title names the
+    /// session, and the last turn is what the operator was doing when it
+    /// stopped.
+    pub fn session_label(&self) -> Option<String> {
+        if let Some(title) = self
+            .session_title
+            .as_deref()
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+        {
+            return Some(title.to_string());
+        }
+        let first = self
+            .messages
+            .iter()
+            .find(|m| m.role == Role::User)
+            .and_then(|m| match &m.content {
+                crate::tui::adapter_types::types::MessageContent::Text(text) => {
+                    Some(text.as_str())
+                }
+                crate::tui::adapter_types::types::MessageContent::Blocks(_) => None,
+            })
+            .map(str::trim)
+            .filter(|t| !t.is_empty())?;
+        let title = crate::cmd_continue::title_from_first_prompt(first);
+        (!title.is_empty()).then_some(title)
     }
 
     fn run_exit_teardown(&mut self) {
