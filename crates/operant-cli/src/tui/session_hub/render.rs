@@ -411,17 +411,37 @@ fn render_header(state: &SessionHubState) -> Line<'static> {
     }
     // Without the key hints the tab bar and the group headings read as
     // decoration.
-    spans.push(Span::styled(
-        "  s cycle",
-        Style::default().fg(theme_colors::muted()),
-    ));
+    //
+    // The employee axis (2026-11-13) REPLACES this hint when it is engaged:
+    // the header measures 46 of the pane's 46 inner columns before anything
+    // is added, so there is no room for a second chip — and the hint is the
+    // only thing here that the tab bar already implies (the tab bar IS the
+    // filter row). The group clause drops to its short label at the same time,
+    // so the chip has somewhere to live.
+    match state.employee_filter() {
+        Some(emp) => spans.push(Span::styled(
+            format!("  e:{emp}"),
+            Style::default().fg(theme_colors::accent()),
+        )),
+        None => spans.push(Span::styled(
+            "  s cycle",
+            Style::default().fg(theme_colors::muted()),
+        )),
+    }
     // The `Group:` clause, codex's own header line shape. Stage C fills in the
     // mode and the key that changes it: the header alone now answers both
     // "which axis is this list ordered by" and "which key reorders it".
     spans.push(Span::styled(
         format!(
             "  Group: {}  {}",
-            state.group_mode.label(),
+            if state.employee_filter().is_some() {
+                // The short form, so the employee chip fits: the header is at
+                // 46 of 46 inner columns and the chip has to displace
+                // something.
+                state.group_mode.short_label()
+            } else {
+                state.group_mode.label()
+            },
             state.group_mode.key()
         ),
         Style::default().fg(theme_colors::text()),

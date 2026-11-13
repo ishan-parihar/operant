@@ -726,6 +726,12 @@ impl App {
                 // parked in the preview is the one most likely to need it.
                 KeyCode::Char('r') => self.session_hub.request_preview_reload(),
                 KeyCode::Char('s') => self.session_hub.cycle_filter(),
+                // The EMPLOYEE axis (2026-11-13): a separate filter, by
+                // identity, for the agentic-os employee sessions. `s` answers
+                // "which state is this work in"; `e` answers "whose is it".
+                // They are ANDed, never merged: one list of tabs for both
+                // makes neither readable.
+                KeyCode::Char('e') => self.session_hub.cycle_employee(),
                 // Cycle the grouping (Stage C, plan 2026-11-02). Codex binds
                 // `g` to its `Group:` control for the same reason: the filter
                 // (`s`) decides which rows exist, grouping decides the order
@@ -2286,9 +2292,11 @@ impl App {
                     .unwrap_or("")
                     .to_string();
                 let exact_command = !typed_first_word.is_empty()
-                    && crate::tui::app::helpers::tui_slash_command_data(&self.vendor_skill_commands)
-                        .iter()
-                        .any(|(name, _)| name == &typed_first_word);
+                    && crate::tui::app::helpers::tui_slash_command_data(
+                        &self.vendor_skill_commands,
+                    )
+                    .iter()
+                    .any(|(name, _)| name == &typed_first_word);
                 if !exact_command {
                     // Phase 1.3: Auto-select first suggestion when visible but none selected.
                     if !self.prompt_input.suggestions.is_empty()

@@ -183,6 +183,19 @@ impl HubGroupMode {
         }
     }
 
+    /// The compact form, for the header when the employee chip has taken the
+    /// room the long one used. The header measures 46 of the pane's 46 inner
+    /// columns, so a chip displaces the group clause rather than being added
+    /// beside it.
+    pub fn short_label(self) -> &'static str {
+        match self {
+            Self::Auto => "all",
+            Self::Directory => "dir",
+            Self::Employee => "emp",
+            Self::Status => "stat",
+        }
+    }
+
     /// The key that cycles it, for the header's affordance. Codex shows `g`
     /// next to the mode it is changing for exactly this reason.
     pub const fn key(self) -> &'static str {
@@ -414,6 +427,25 @@ pub struct SessionHubState {
     /// same fact), so a hub opened on a fresh start has no live session and
     /// every row stays Idle — which is the truth.
     live_session_id: Option<String>,
+    /// The EMPLOYEE this list is restricted to, by identity — the second axis.
+    ///
+    /// The operator asked for "a separate filter for the agentic-os employee
+    /// sessions, so that they can be filtered based on the employee/agent
+    /// identity". The ladder's old `ByEmployee` mode was the boolean version
+    /// of that and could not answer it: "by employee" says only THAT a
+    /// session is employee-tagged, never WHICH employee, so with three
+    /// distinct employees on the operator's database it was a filter that
+    /// could not tell them apart.
+    ///
+    /// It is a SEPARATE axis, not a seventh tab, and that is deliberate:
+    /// codex keeps its status filters (TASK_FILTERS) and its organisation
+    /// axes (AgentsOverviewGrouping) apart for the same reason — the first is
+    /// a QUESTION about the state of the work, the second is a way of looking
+    /// at it, and folding them into one list of tabs makes both unreadable.
+    ///
+    /// `None` = every employee, which is the default: a filter that hid rows
+    /// before the operator asked for one is a filter nobody can trust.
+    employee_filter: Option<String>,
 }
 
 impl Default for SessionHubState {
@@ -446,6 +478,7 @@ impl SessionHubState {
             branch_root: None,
             pending_archive: None,
             live_session_id: None,
+            employee_filter: None,
         }
     }
 
@@ -591,6 +624,43 @@ impl SessionHubState {
     ///
     /// No-op on `None`, which is the truth for a hub opened before the agent's
     /// first turn mints an id.
+    /// Cycle the EMPLOYEE filter (`e`): every employee → each in turn → back.
+    ///
+    /// The list is derived from the rows the operator is actually looking at,
+    /// not from the seat registry: an employee with no loaded session would
+    /// otherwise appear in the cycle and select nothing, which reads as a
+    /// broken filter. Sorted, so the cycle's order is stable between loads.
+    ///
+    /// One employee is `None`-filtered back to "all", and "all" is always the
+    /// first stop — an axis the operator cannot step onto without knowing its
+    /// shape is an axis they will avoid.
+    pub fn cycle_employee(&mut self) {
+        let mut employees: Vec<String> = self
+            .rows
+            .iter()
+            .filter_map(|r| r.employee_id.clone())
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        employees.sort();
+        self.employee_filter = match self.employee_filter.take() {
+            None => employees.first().cloned(),
+            Some(current) => {
+                let pos = employees.iter().position(|e| e == &current);
+                match pos {
+                    Some(i) if i + 1 < employees.len() => Some(employees[i + 1].clone()),
+                    _ => None,
+                }
+            }
+        };
+        self.rebuild_visible();
+    }
+
+    /// The employee this list is restricted to, for the header's chip.
+    pub fn employee_filter(&self) -> Option<&str> {
+        self.employee_filter.as_deref()
+    }
+
     pub fn set_live_session_id(&mut self, id: Option<String>) {
         self.live_session_id = id;
     }
@@ -792,6 +862,13 @@ impl SessionHubState {
                     .filter(|r| {
                         row_matches_filter(mode, r, self.branch_root.as_deref(), cwd.as_deref())
                     })
+                    // The counts answer "how many rows would this tab show",
+                    // so the employee axis has to be in them too: a count that
+                    // ignored the axis would promise 22 rows and deliver 0.
+                    .filter(|r| match self.employee_filter.as_deref() {
+                        Some(emp) => r.employee_id.as_deref() == Some(emp),
+                        None => true,
+                    })
                     .count();
                 (mode, n)
             })
@@ -841,6 +918,17 @@ impl SessionHubState {
                     self.branch_root.as_deref(),
                     cwd.as_deref(),
                 )
+            })
+            .filter(|(_, r)| {
+                // The employee axis is ANDed with the status ladder, never
+                // merged into it: the two answer different questions ("which
+                // state is this work in" and "whose is it"), and one predicate
+                // feeds both the visible set and the tab counts so they can
+                // never disagree.
+                match self.employee_filter.as_deref() {
+                    Some(emp) => r.employee_id.as_deref() == Some(emp),
+                    None => true,
+                }
             })
             .filter(|(_, r)| {
                 // AND-token search over a lowercase haystack: title, id,

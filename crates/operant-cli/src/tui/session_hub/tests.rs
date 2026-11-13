@@ -825,6 +825,35 @@ fn hub_rows(rows: Vec<SessionEntryV2>) -> (Vec<String>, Vec<String>) {
 /// `LIST_PANE_END` is derived from the hub's 40% split, so it has to move with
 /// the frame: clipping at 47 on a 160-column frame would silently cut the sort
 /// clause off and the test above would pass for the wrong reason.
+/// Paint an EXISTING hub at the standard frame — the header assertions need
+/// the hub's own state (the employee axis), not a freshly built one.
+fn hub_rows_with(hub: &mut SessionHubState) -> (Vec<String>, Vec<String>) {
+    use crate::tui::debug::debug_hub::buffer_rows;
+    use crate::tui::render::FrameCtx;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+    hub.visible = true;
+    let mut terminal = Terminal::new(TestBackend::new(FRAME_WIDTH, 40)).unwrap();
+    let mut ctx = FrameCtx {
+        size: ratatui::layout::Rect::new(0, 0, FRAME_WIDTH, 40),
+        preview_max_scroll: None,
+        stop: false,
+    };
+    terminal
+        .draw(|f| {
+            super::render::render_session_hub(f, hub, f.area(), &mut ctx);
+        })
+        .unwrap();
+    buffer_rows(terminal.backend().buffer())
+        .into_iter()
+        .map(|line| {
+            let list = line.chars().take(LIST_PANE_END).collect::<String>();
+            let preview = line.chars().skip(LIST_PANE_END).collect::<String>();
+            (list, preview)
+        })
+        .unzip()
+}
+
 fn hub_rows_at(width: u16, rows: Vec<SessionEntryV2>) -> (Vec<String>, Vec<String>) {
     use crate::tui::debug::debug_hub::buffer_rows;
     use crate::tui::render::FrameCtx;
@@ -967,6 +996,108 @@ fn a_subagent_row_names_its_delegation_status_without_focusing_it() {
     assert_ne!(
         completed, failed,
         "Completed and Failed must not draw as the same row"
+    );
+}
+
+// ---- (2026-11-13) the employee axis: filter by IDENTITY, not by boolean ----
+
+/// The boolean filter the ladder used to carry ("is it employee-tagged at
+/// all") could not tell two employees apart. This axis does.
+#[test]
+fn the_employee_filter_selects_one_employee_by_identity() {
+    let mut hub = SessionHubState::new();
+    hub.replace_rows(vec![
+        row("s1", Some("premiere work"), Some("premiere")),
+        row("s2", Some("analyst work"), Some("analyst")),
+        row("s3", Some("personal"), None),
+    ]);
+    hub.cycle_employee();
+    assert_eq!(
+        hub.employee_filter(),
+        Some("analyst"),
+        "the cycle starts at the first employee, sorted"
+    );
+    hub.rebuild_visible();
+    let ids: Vec<&str> = hub.visible_rows().iter().map(|r| r.id.as_str()).collect();
+    assert_eq!(ids, vec!["s2"], "{ids:?}");
+}
+
+/// The cycle ends back at "every employee", and "every employee" is where it
+/// starts: an axis the operator cannot step off is an axis they avoid.
+#[test]
+fn the_employee_cycle_returns_to_every_employee() {
+    let mut hub = SessionHubState::new();
+    hub.replace_rows(vec![
+        row("s1", None, Some("premiere")),
+        row("s2", None, Some("analyst")),
+    ]);
+    assert_eq!(
+        hub.employee_filter(),
+        None,
+        "no filter until the operator asks"
+    );
+    hub.cycle_employee();
+    assert_eq!(hub.employee_filter(), Some("analyst"));
+    hub.cycle_employee();
+    assert_eq!(hub.employee_filter(), Some("premiere"));
+    hub.cycle_employee();
+    assert_eq!(hub.employee_filter(), None, "the cycle closes");
+    hub.rebuild_visible();
+    assert_eq!(hub.visible_rows().len(), 2, "every employee is back");
+}
+
+/// An employee with no loaded session is not in the cycle: selecting it would
+/// show nothing, which reads as a broken filter rather than an empty one.
+#[test]
+fn the_employee_cycle_only_lists_employees_that_are_present() {
+    let mut hub = SessionHubState::new();
+    hub.replace_rows(vec![row("s1", None, Some("premiere"))]);
+    hub.cycle_employee();
+    assert_eq!(hub.employee_filter(), Some("premiere"));
+    hub.cycle_employee();
+    assert_eq!(hub.employee_filter(), None, "no phantom employees");
+}
+
+/// The tab counts must answer "how many rows would this tab show", so they
+/// honour the employee axis too.
+#[test]
+fn the_tab_counts_honour_the_employee_axis() {
+    let mut hub = SessionHubState::new();
+    let mut live = row("s1", None, Some("premiere"));
+    live.status = RowStatus::Live;
+    hub.replace_rows(vec![live, row("s2", None, Some("analyst"))]);
+    hub.cycle_employee();
+    assert_eq!(hub.employee_filter(), Some("analyst"));
+    let counts = hub.filter_counts();
+    let working = counts
+        .iter()
+        .find(|(m, _)| *m == HubFilterMode::Working)
+        .map(|(_, n)| *n)
+        .expect("the mode is in the ladder");
+    assert_eq!(
+        working, 0,
+        "the analyst has no working session: the count must not promise the \
+         premiere's one"
+    );
+}
+
+/// The header names the engaged axis, and the group clause yields its room to
+/// it (the header is at 46 of 46 inner columns).
+#[test]
+fn the_header_names_the_engaged_employee() {
+    let mut hub = SessionHubState::new();
+    hub.replace_rows(vec![row("s1", None, Some("premiere"))]);
+    let (list, _) = hub_rows_with(&mut hub);
+    assert!(
+        list.join("\n").contains("s cycle"),
+        "with no employee engaged the header keeps its hint: {list:?}"
+    );
+    hub.cycle_employee();
+    let (list, _) = hub_rows_with(&mut hub);
+    let joined = list.join("\n");
+    assert!(
+        joined.contains("e:premiere"),
+        "the engaged axis must be named in the header: {joined}"
     );
 }
 
