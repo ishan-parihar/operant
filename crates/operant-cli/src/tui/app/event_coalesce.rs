@@ -115,10 +115,14 @@ impl App {
                 }
                 EventOutcome::Consumed
             }
+            // No `!self.is_streaming` guard: the composer takes text while a
+            // turn streams (that is how a draft is queued for the next turn),
+            // and before `EnableBracketedPaste` a paste arrived as single
+            // keys that this arm's guard was never consulted for. Keeping the
+            // guard would have silently DROPPED every paste made mid-turn the
+            // moment the terminal started sending one `Event::Paste` instead.
             Event::Paste(data)
-                if !self.is_streaming
-                    && self.permission_request.is_none()
-                    && !self.history_search_overlay.visible =>
+                if self.permission_request.is_none() && !self.history_search_overlay.visible =>
             {
                 if !self.insert_text_into_dialog(&data) {
                     self.handle_paste_data(data);

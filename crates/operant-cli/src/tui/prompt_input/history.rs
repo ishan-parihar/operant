@@ -61,13 +61,21 @@ impl PromptInputState {
     }
 
     /// Handle a paste event.
+    ///
+    /// The pasted text is sanitized before it reaches the buffer. Clipboard
+    /// content copied out of a terminal carries that terminal's colour and
+    /// cursor escapes, and a cell holding `ESC` is not a glyph — the terminal
+    /// executes it, which smears the frame and can move the cursor anywhere
+    /// (measured 2026-11-13: `ESC[200~` from a paste painted as raw cells).
+    /// A newline is the one control a prompt wants; a tab becomes spaces so
+    /// pasted indentation survives; every other control character is dropped.
     pub fn paste(&mut self, content: &str) {
         let (text, stored) = handle_paste(content, &mut self.paste_counter);
         if let Some(stored_content) = stored {
             self.paste_contents
                 .insert(self.paste_counter, stored_content);
         }
-        for c in text.chars() {
+        for c in sanitize_pasted_text(&text).chars() {
             self.text.insert(self.cursor, c);
             self.cursor += c.len_utf8();
         }
@@ -110,4 +118,45 @@ impl PromptInputState {
     pub fn paste_from_register(&mut self, register: char) -> Option<String> {
         self.vim_registers.get(&register).cloned()
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_paste_drops_terminal_escapes_but_keeps_newlines_and_indentation() {
+        let mut state = PromptInputState::new();
+        // Copied out of a coloured terminal: SGR colour around RED.
+        state.paste("a\x1b[31mRED\x1b[0m\n\tb");
+        assert_eq!(
+            state.text, "aRED\n    b",
+            "the escapes must not become cells; the newline and the tab's indentation must survive"
+        );
+    }
+
+    #[test]
+    fn a_paste_keeps_ordinary_text_and_two_lines_inline() {
+        let mut state = PromptInputState::new();
+        state.paste("line one\nline two");
+        assert_eq!(state.text, "line one\nline two");
+    }
+}
+
+/// What a paste is allowed to put in the composer: printable text, newlines,
+/// and tabs widened to four spaces. See `paste` for why the rest is dropped.
+fn sanitize_pasted_text(text: &str) -> String {
+    // Whole sequences first, so `ESC[31m` leaves no `[31m` behind as visible
+    // text — the renderer already uses this scanner for captured output.
+    let text = crate::tui::operant_app::message::strip_ansi_escape_sequences(text);
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        match c {
+            '\n' => out.push('\n'),
+            '\t' => out.push_str("    "),
+            c if c.is_control() => {}
+            c => out.push(c),
+        }
+    }
+    out
 }

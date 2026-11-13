@@ -262,6 +262,56 @@ fn burst_single_char_then_enter_replays_submit() {
     );
 }
 
+#[test]
+fn burst_pasted_newline_arrives_as_ctrl_j_and_stays_a_newline() {
+    let mut app = make_app();
+    // A raw 0x0A byte reaches crossterm as Char('j')+CONTROL, not as Enter.
+    // The collector used to append every Char regardless of modifiers, so the
+    // letter `j` landed mid-paste: a multi-line clipboard became one line.
+    let q = vec![
+        burst_event(KeyCode::Char('a')),
+        Event::Key(press_key_with_control(KeyCode::Char('j'))),
+        burst_event(KeyCode::Char('b')),
+    ];
+    let (buf, pending) = app.collect_paste_burst('x', q.into_iter());
+    assert_eq!(
+        buf, "xa\nb",
+        "the newline survives; the letter `j` does not"
+    );
+    assert!(pending.is_none(), "a mid-paste Ctrl+J must not terminate");
+}
+
+#[test]
+fn burst_trailing_ctrl_j_replays_as_the_submit_key() {
+    let mut app = make_app();
+    // Same rule as Enter: nothing queued behind it means the operator's own
+    // submit chord, so it is handed back for replay instead of absorbed.
+    let q = vec![Event::Key(press_key_with_control(KeyCode::Char('j')))];
+    let (buf, pending) = app.collect_paste_burst('X', q.into_iter());
+    assert_eq!(buf, "X");
+    assert_eq!(
+        pending
+            .expect("Ctrl+J survives below-threshold bursts")
+            .code,
+        KeyCode::Char('j')
+    );
+}
+
+#[test]
+fn a_paste_mid_turn_lands_in_the_composer() {
+    let mut app = make_app();
+    // The terminal only sends `Event::Paste` because the TUI now enables
+    // bracketed paste, so this arm has to accept a paste while a turn runs —
+    // the composer is where the next turn's draft is queued.
+    app.is_streaming = true;
+    let outcome = app.apply_terminal_event(Event::Paste("line one\nline two".into()));
+    assert!(matches!(outcome, EventOutcome::Consumed));
+    assert_eq!(
+        app.prompt_input.text, "line one\nline two",
+        "both lines must reach the composer, mid-turn included"
+    );
+}
+
 // ---- MCP reconnect tick-drain tests (iter-326) ----
 
 #[test]

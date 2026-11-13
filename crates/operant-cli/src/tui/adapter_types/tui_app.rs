@@ -151,10 +151,22 @@ impl TuiApp {
                 let _ = execute!(std::io::stdout(), crossterm::event::DisableMouseCapture);
             }
             let _ = execute!(std::io::stdout(), crossterm::event::DisableFocusChange);
+            // Same reason as the kitty pop above: a panic must not leave the
+            // shell in paste-bracketing mode, which would make the next
+            // program wrap every paste in `ESC[200~`/`ESC[201~`.
+            let _ = execute!(std::io::stdout(), crossterm::event::DisableBracketedPaste);
             prev_hook(info);
         }));
 
         let mut stdout = std::io::stdout();
+        // Bracketed paste, for BOTH viewports (it is a paste mode, not a
+        // screen mode). Without it the terminal writes clipboard content as
+        // raw keystrokes: every embedded newline arrives as Ctrl+J and the
+        // composer received one mangled line — a multi-line paste landed as
+        // `line onejline two` (measured 2026-11-13 in tmux). With it, crossterm
+        // delivers `Event::Paste(text)`, whose arm already inserts the text
+        // intact, images and `@path` references included.
+        execute!(stdout, crossterm::event::EnableBracketedPaste)?;
         // P5-1 terminal-scrollback mode (2026-10-10 design): when enabled,
         // skip the alternate screen entirely and render into an INLINE
         // bottom viewport of the main buffer — the terminal's native
@@ -642,6 +654,10 @@ impl TuiApp {
             );
         }
         let _ = execute!(terminal.backend_mut(), crossterm::event::DisableFocusChange);
+        let _ = execute!(
+            terminal.backend_mut(),
+            crossterm::event::DisableBracketedPaste
+        );
         execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
         result
     }
@@ -1678,6 +1694,13 @@ fn run_suspended_shell_command(
             crossterm::event::DisableMouseCapture
         );
     }
+    // The child gets the terminal's own paste handling too: a shell inheriting
+    // paste-bracketing mode would show `ESC[200~` around what the operator
+    // pastes into it.
+    let _ = execute!(
+        terminal.backend_mut(),
+        crossterm::event::DisableBracketedPaste
+    );
     // Flush so the user sees the wizard's first prompt immediately.
     let _ = std::io::stdout().flush();
 
@@ -1723,6 +1746,10 @@ fn restore_tui_terminal(
     if mouse_capture {
         let _ = execute!(terminal.backend_mut(), crossterm::event::EnableMouseCapture);
     }
+    let _ = execute!(
+        terminal.backend_mut(),
+        crossterm::event::EnableBracketedPaste
+    );
     // Force ratatui to forget its cached buffer sizes.
     let size = terminal.size()?;
     let _ = terminal.resize(ratatui::layout::Rect::new(0, 0, size.width, size.height));
