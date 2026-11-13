@@ -96,6 +96,50 @@ pub fn posture_override() -> Option<PostureOverride> {
     POSTURE_OVERRIDE.read().ok().and_then(|cell| *cell)
 }
 
+/// The posture in force: the runtime override when one is set, else the
+/// config (on only when `enabled` AND `inject = "always_on"`). `None` = off.
+///
+/// ONE rule, so the TUI, the gateway and the frozen-prefix builder cannot
+/// disagree about whether the posture is on (iter-2207).
+pub fn effective_level(
+    settings: &crate::config::PonytailSettings,
+    override_value: Option<PostureOverride>,
+) -> Option<crate::config::PonytailLevel> {
+    match override_value {
+        Some(PostureOverride::Off) => None,
+        Some(PostureOverride::Level(level)) => Some(level),
+        None => {
+            if settings.enabled && settings.inject == crate::config::PonytailInject::AlwaysOn {
+                Some(settings.default_level)
+            } else {
+                None
+            }
+        }
+    }
+}
+
+/// What a bare `/ponytail` means. Upstream: *"No argument switches
+/// ponytail on at the default level if it is off, and otherwise reports the
+/// current level."* (iter-2207)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BareCommand {
+    /// The posture is OFF — switch it on at this level.
+    SwitchOn(crate::config::PonytailLevel),
+    /// The posture is ON at this level — report it.
+    Report(crate::config::PonytailLevel),
+}
+
+/// Upstream's bare-command rule, in one place.
+pub fn bare_command_effect(
+    settings: &crate::config::PonytailSettings,
+    override_value: Option<PostureOverride>,
+) -> BareCommand {
+    match effective_level(settings, override_value) {
+        Some(level) => BareCommand::Report(level),
+        None => BareCommand::SwitchOn(settings.default_level),
+    }
+}
+
 /// Test-only: the override cell guard pattern (`reasoning_override_test_guard`).
 #[cfg(test)]
 pub(crate) struct PostureOverrideGuard {
@@ -198,6 +242,52 @@ pub fn installed_ruleset() -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Upstream's bare-command rule: no argument switches the posture ON at
+    /// the default level when it is off, and otherwise reports the level in
+    /// force (iter-2207). Before this the bare command only REPORTED, so
+    /// `/ponytail` never turned anything on.
+    #[test]
+    fn the_bare_command_switches_the_posture_on_when_it_is_off() {
+        let off = crate::config::PonytailSettings::default();
+        assert!(!off.enabled);
+        // Off by config → switch it on at the configured default level.
+        assert_eq!(
+            bare_command_effect(&off, None),
+            BareCommand::SwitchOn(crate::config::PonytailLevel::Full)
+        );
+        // An explicit `off` override is still off → switch it on.
+        assert_eq!(
+            bare_command_effect(&off, Some(PostureOverride::Off)),
+            BareCommand::SwitchOn(crate::config::PonytailLevel::Full)
+        );
+        // On by override → report the level in force.
+        assert_eq!(
+            bare_command_effect(
+                &off,
+                Some(PostureOverride::Level(crate::config::PonytailLevel::Lite))
+            ),
+            BareCommand::Report(crate::config::PonytailLevel::Lite)
+        );
+        // On by config → report the config's level.
+        let mut on = off.clone();
+        on.enabled = true;
+        on.inject = crate::config::PonytailInject::AlwaysOn;
+        on.default_level = crate::config::PonytailLevel::Ultra;
+        assert_eq!(
+            bare_command_effect(&on, None),
+            BareCommand::Report(crate::config::PonytailLevel::Ultra)
+        );
+        // `effective_level` is the same rule the command reads.
+        assert_eq!(effective_level(&on, None), Some(crate::config::PonytailLevel::Ultra));
+        assert_eq!(effective_level(&off, None), None);
+        assert_eq!(effective_level(&off, Some(PostureOverride::Off)), None);
+        assert_eq!(
+            effective_level(&on, Some(PostureOverride::Level(crate::config::PonytailLevel::Lite))),
+            Some(crate::config::PonytailLevel::Lite)
+        );
+    }
+
 
     /// The spec must be content-shaped: tag-tarball install, skills
     /// extraction, keep=2, community guard source.

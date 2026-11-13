@@ -1900,7 +1900,8 @@ impl App {
                 use operant_core::config::PonytailLevel;
                 use operant_core::ponytail::{PostureOverride, set_posture_override};
                 let requested = args.trim().to_ascii_lowercase();
-                if requested.is_empty() || requested == "show" || requested == "status" {
+                if requested == "show" || requested == "status" {
+                    // Report only — never a switch (operant's own words).
                     let configured = &self.config.agent.ponytail;
                     let notice = match operant_core::ponytail::posture_override() {
                         Some(PostureOverride::Level(l)) => format!(
@@ -1913,21 +1914,49 @@ impl App {
                              inject={:?})",
                             configured.enabled, configured.inject
                         ),
-                        None if configured.enabled
-                            && configured.inject
-                                == operant_core::config::PonytailInject::AlwaysOn =>
-                        {
-                            format!(
-                                "ponytail: {} (from config; /ponytail off clears it \
-                             for this process)",
-                                configured.default_level
-                            )
-                        }
-                        None => format!(
-                            "ponytail: off (config: enabled={}, inject={:?}; \
+                        None => match operant_core::ponytail::effective_level(configured, None) {
+                            Some(l) => format!(
+                                "ponytail: {l} (from config; /ponytail off clears it \
+                             for this process)"
+                            ),
+                            None => format!(
+                                "ponytail: off (config: enabled={}, inject={:?}; \
                              /ponytail <lite|full|ultra> turns it on for this process)",
-                            configured.enabled, configured.inject
+                                configured.enabled, configured.inject
+                            ),
+                        },
+                    };
+                    self.set_status_notice(notice);
+                    return true;
+                }
+                if requested.is_empty() {
+                    // Upstream: "No argument switches ponytail on at the default
+                    // level if it is off, and otherwise reports the current
+                    // level." (iter-2207)
+                    let configured = &self.config.agent.ponytail;
+                    let notice = match operant_core::ponytail::bare_command_effect(
+                        configured,
+                        operant_core::ponytail::posture_override(),
+                    ) {
+                        operant_core::ponytail::BareCommand::Report(level) => format!(
+                            "ponytail: {level} (the posture is on; /ponytail off clears \
+                             it for this process)"
                         ),
+                        operant_core::ponytail::BareCommand::SwitchOn(level) => {
+                            if operant_core::ponytail::installed_ruleset().is_none() {
+                                "ponytail is not installed — run `operant update \
+                                 --integrations` first; the posture needs the upstream \
+                                 ruleset on disk."
+                                    .to_string()
+                            } else {
+                                set_posture_override(Some(PostureOverride::Level(level)));
+                                format!(
+                                    "ponytail: {level} — switched ON (it was off); the \
+                                     frozen prefix carries the ruleset from the NEXT turn \
+                                     (/ponytail off clears it for this process)."
+                                )
+                            }
+                        }
                     };
                     self.set_status_notice(notice);
                     return true;

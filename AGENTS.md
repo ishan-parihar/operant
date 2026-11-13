@@ -523,6 +523,10 @@ These are the user's intentional design choices. Do not replace, remove, or
   checked against upstream's tags at startup whatever the posture is,
   because a content integration that stops updating when its posture is off
   is a broken integration, not a quiet one.
+  `/ponytail [lite|full|ultra|off]` is a runtime override (config
+  untouched); a BARE `/ponytail` switches the posture ON at the default
+  level when it is off and reports the level in force when it is on —
+  upstream's rule (iter-2209) — with `/ponytail show` report-only.
   Level/install changes invalidate the prompt cache — documented, not a
   bug. Do NOT switch the posture's default away from OFF: it changes what
   the model is told every turn and must never silently enable.
