@@ -234,6 +234,8 @@ recap_idle_seconds = 240
 # so it must never silently enable. Installed skills stay invocable
 # (/skill ponytail-review etc.) regardless of this flag.
 [agent.ponytail]
+# The POSTURE: when false, the ruleset is not injected into the prompt.
+# The installed skills stay invocable either way.
 enabled = false
 # Posture level when enabled: "lite" | "full" | "ultra" (upstream default full).
 default_level = "full"
@@ -243,6 +245,12 @@ default_level = "full"
 # config change). Holon runs NEVER get the injection: the org brief is the
 # only posture for a bound body.
 inject = "on_invoke"
+# The CONTENT refresh, a separate switch (iter-2196): true checks the
+# installed integration against upstream's tags at startup and refreshes it
+# when it is behind. It is deliberately NOT tied to `enabled` — the posture
+# decides whether the prompt is injected, this decides whether the content
+# stays current.
+update = true
 
 # [advisor] — always-on transcript watchdog (omp advisor/ parity).
 # Distinct from [moa]: MoA fans out per turn; the advisor reviews the

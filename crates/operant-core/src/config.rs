@@ -1138,8 +1138,8 @@ impl Default for BehaviorSettings {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct PonytailSettings {
-    /// Master switch. `false` (default): installed skills stay invocable,
-    /// but no background update check and no prompt injection.
+    /// The POSTURE switch. `false` (default): the ruleset is not injected
+    /// into the prompt — the installed skills stay invocable either way.
     pub enabled: bool,
     /// Posture level when enabled: `lite` | `full` | `ultra` (upstream's
     /// three levels; `full` is upstream's default).
@@ -1149,6 +1149,18 @@ pub struct PonytailSettings {
     /// (phase 4). Changing this changes the prefix bytes (cache
     /// invalidation), like any config change.
     pub inject: PonytailInject,
+    /// The CONTENT refresh switch. `true` (default): the installed
+    /// integration is checked against upstream's tags at startup and
+    /// refreshed when it is behind.
+    ///
+    /// Separate from `enabled` ON PURPOSE (iter-2196): the posture decides
+    /// whether the prompt is INJECTED, and the refresh decides whether the
+    /// CONTENT is current. Fusing them meant the shipped default
+    /// (`enabled = false`) silently stopped the integration from ever
+    /// updating itself — the content drifted while `operant doctor` kept
+    /// reporting the drift. An integration that stops being current when
+    /// its posture is off is a broken integration, not a quiet one.
+    pub update: bool,
 }
 
 impl Default for PonytailSettings {
@@ -1157,6 +1169,7 @@ impl Default for PonytailSettings {
             enabled: false,
             default_level: PonytailLevel::Full,
             inject: PonytailInject::OnInvoke,
+            update: true,
         }
     }
 }
@@ -4652,6 +4665,10 @@ wonderful_unknown_key = 42
         assert!(!config.agent.ponytail.enabled);
         assert_eq!(config.agent.ponytail.default_level, PonytailLevel::Full);
         assert_eq!(config.agent.ponytail.inject, PonytailInject::OnInvoke);
+        // The CONTENT refresh is its own switch (iter-2196): the example
+        // pins it ON, so the installed integration keeps updating even
+        // though the posture is off.
+        assert!(config.agent.ponytail.update);
     }
 
     /// Ponytail defaults are OFF and skills-only: `enabled = false`,
@@ -4664,6 +4681,9 @@ wonderful_unknown_key = 42
         assert!(!config.agent.ponytail.enabled);
         assert_eq!(config.agent.ponytail.default_level, PonytailLevel::Full);
         assert_eq!(config.agent.ponytail.inject, PonytailInject::OnInvoke);
+        // The refresh defaults ON: the content follows upstream's tags even
+        // when the posture is off (iter-2196).
+        assert!(config.agent.ponytail.update);
     }
 
     /// The ponytail keys bind under `[agent.ponytail]`, not top-level

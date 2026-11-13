@@ -1803,7 +1803,10 @@ async fn build_agent_core_with_memory(
     // is the natural gate; the once-guard + 6h throttle +
     // OPERANT_NO_AUTO_UPDATE all still apply inside the kicker. A Holon
     // run NEVER kicks it — org bodies do not carry personal postures.
-    if config.agent.ponytail.enabled && !operant_core::platform::is_holon_run() {
+    // The CONTENT refresh is gated on `update`, NOT on the posture
+    // (`enabled`): the installed integration must stay current whether or
+    // not the ruleset is injected (iter-2196).
+    if config.agent.ponytail.update && !operant_core::platform::is_holon_run() {
         operant_core::ponytail::kick_update_check();
     }
 

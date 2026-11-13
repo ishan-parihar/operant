@@ -515,14 +515,17 @@ These are the user's intentional design choices. Do not replace, remove, or
   and the vendor skills are listed as commands in the command palette, in
   `/help` and in the Telegram menu. Refresh the content alone with
   `operant update integrations --only ponytail`. `[agent.ponytail]`
-  config defaults ALL OFF (`enabled=false`,
-  `default_level="full"`, `inject="on_invoke"`); `inject="always_on"`
-  rides the frozen prefix as a `<ponytail>` block (level suffix for
-  lite/ultra), NEVER on Holon runs. `/ponytail [lite|full|ultra|off]` is a
-  process-local runtime override (config untouched). Level/install changes
-  invalidate the prompt cache — documented, not a bug. Do NOT switch the
-  default away from OFF: the posture changes what the model is told every
-  turn and must never silently enable.
+  config separates the POSTURE from the CONTENT refresh (iter-2202): the
+  posture defaults OFF (`enabled=false`, `default_level="full"`,
+  `inject="on_invoke"`, and `inject="always_on"` rides the frozen prefix as
+  a `<ponytail>` block (level suffix for lite/ultra), NEVER on Holon runs),
+  while the refresh defaults ON (`update=true`) — the installed content is
+  checked against upstream's tags at startup whatever the posture is,
+  because a content integration that stops updating when its posture is off
+  is a broken integration, not a quiet one.
+  Level/install changes invalidate the prompt cache — documented, not a
+  bug. Do NOT switch the posture's default away from OFF: it changes what
+  the model is told every turn and must never silently enable.
 - **LifeOS**: NOT INTEGRATED. The 22 Notion-backed life-management tools were ported at iter-47/48 and are gone from the tree — there is no `lifeos` cargo feature, no tool module, and no `lifeos_enabled` config key (the key was removed because it gated nothing; `config.rs::lifeos_key_is_gone_from_config` locks its absence). The Notion surface that DOES exist is the `ntn` CLI, used by the `notion` skill (`skills/productivity/notion`) — a skill, not a built-in tool. Do not add a LifeOS claim here without the code behind it.
 
 ### WASM plugins (the capability-seam plugin architecture — iters 1720-1722)
