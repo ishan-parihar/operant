@@ -1,6 +1,7 @@
 //! session_hub state tests (plan iter-B/C gates).
 
 use super::*;
+use ratatui::style::{Modifier, Style};
 
 fn row(id: &str, title: Option<&str>, emp: Option<&str>) -> SessionEntryV2 {
     SessionEntryV2 {
@@ -1133,6 +1134,75 @@ fn a_first_prompt_for_another_session_is_not_shown() {
     hub.replace_rows(vec![row("s1", Some("work"), None)]);
     hub.set_first_prompt("s-other", Some("someone else's prompt".to_string()));
     assert_eq!(hub.first_prompt_for("s1"), None);
+}
+
+// ---- (2026-11-14, audit finding 4) the search highlight must not panic or drift ----
+
+/// A multi-byte token used to panic the render thread: the scan advanced by
+/// a CHARACTER count on a byte offset and landed inside the character.
+#[test]
+fn a_multi_byte_search_token_does_not_panic_the_highlight() {
+    // "café bar" — the 'é' is two bytes. Searching "é" used to advance to
+    // byte 4 and panic: "start byte index 4 is not a char boundary".
+    let spans = super::render::highlight_spans(
+        "café bar",
+        &["é".to_string()],
+        Style::default(),
+        Style::default().add_modifier(Modifier::BOLD),
+    );
+    let joined: String = spans.iter().map(|s| s.content.as_ref()).collect();
+    assert_eq!(joined, "café bar", "the text survives intact");
+    assert_eq!(spans.len(), 3, "three runs: plain, match, plain");
+    assert_eq!(
+        spans[1].content.as_ref(),
+        "é",
+        "the match is the CHARACTER, not a byte-sliced fragment"
+    );
+}
+
+/// The highlight must land on the characters the operator searched for, even
+/// when the title carries a multi-byte glyph before them.
+#[test]
+fn the_highlight_lands_on_the_right_characters_after_an_emoji() {
+    // "🤖 audit the tests" — the emoji is four bytes and ONE character. The
+    // old byte-indexed mask slid the marks four bytes right, so "audit" was
+    // NOT highlighted and " it th" was.
+    let spans = super::render::highlight_spans(
+        "🤖 audit the tests",
+        &["audit".to_string()],
+        Style::default(),
+        Style::default().add_modifier(Modifier::BOLD),
+    );
+    let joined: String = spans.iter().map(|s| s.content.as_ref()).collect();
+    assert_eq!(joined, "🤖 audit the tests");
+    let highlighted: Vec<&str> = spans
+        .iter()
+        .filter(|s| s.style.add_modifier.contains(Modifier::BOLD))
+        .map(|s| s.content.as_ref())
+        .collect();
+    assert_eq!(
+        highlighted,
+        vec!["audit"],
+        "exactly the searched word is highlighted: {highlighted:?}"
+    );
+}
+
+/// An ASCII title must behave exactly as before: one span when nothing
+/// matches, and the match alone when it does.
+#[test]
+fn the_highlight_of_an_ascii_title_is_unchanged() {
+    let spans = super::render::highlight_spans(
+        "audit the tests",
+        &["audit".to_string()],
+        Style::default(),
+        Style::default().add_modifier(Modifier::BOLD),
+    );
+    let highlighted: Vec<&str> = spans
+        .iter()
+        .filter(|s| s.style.add_modifier.contains(Modifier::BOLD))
+        .map(|s| s.content.as_ref())
+        .collect();
+    assert_eq!(highlighted, vec!["audit"]);
 }
 
 // ---- (2026-11-13) hide the tool calls: the prompts and the end of turn remain ----

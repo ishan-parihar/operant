@@ -263,25 +263,58 @@ fn tokens_suffix(tokens: u64) -> String {
 
 /// Per-char search highlight, jcode's `highlight_spans` semantics: tokens
 /// matched independently (OR), overlapping/adjacent merged.
-fn highlight_spans(text: &str, tokens: &[String], base: Style, hl: Style) -> Vec<Span<'static>> {
+pub(crate) fn highlight_spans(text: &str, tokens: &[String], base: Style, hl: Style) -> Vec<Span<'static>> {
     if tokens.is_empty() || text.is_empty() {
         return vec![Span::styled(text.to_string(), base)];
     }
-    let lower = text.to_lowercase();
+    // The mask is indexed by CHARACTER, and the whole search runs in character
+    // space. (2026-11-14, audit finding 4)
+    //
+    // It used to be indexed by BYTE while the text was walked by character:
+    // the mask was `vec![false; lower.len()]` (bytes), the marks were placed
+    // at byte offsets, and the scan advanced by `t.chars().count()` — a
+    // CHARACTER count added to a byte offset. Two consequences, both
+    // reproduced:
+    //   - the highlight landed on the wrong characters whenever the title held
+    //     a multi-byte glyph (an emoji is 4 bytes and 1 character, so the
+    //     marks slid four bytes right of where they belonged);
+    //   - searching for a multi-byte token PANICKED the render thread. "é" is
+    //     two bytes; the scan advanced to byte 4 of "café bar", which is
+    //     inside the character: "panicked: start byte index 4 is not a char
+    //     boundary". One search on an accented title took the TUI down.
+    //
+    // Lowercasing PER CHARACTER, not per string, is what keeps the mapping
+    // one-to-one: `str::to_lowercase` can expand one character into two
+    // ('İ' -> "i̇"), which would leave the mask longer than the text it
+    // indexes and slide every mark after it.
+    let chars: Vec<char> = text.chars().collect();
+    let lower: Vec<char> = chars
+        .iter()
+        .map(|c| c.to_lowercase().next().unwrap_or(*c))
+        .collect();
     let mut mask = vec![false; lower.len()];
     for t in tokens {
-        let mut from = 0;
-        while let Some(at) = lower[from..].find(t.as_str()) {
-            for cell in mask.iter_mut().skip(from + at).take(t.len()) {
-                *cell = true;
+        let tl: Vec<char> = t.chars().flat_map(|c| c.to_lowercase()).collect();
+        if tl.is_empty() || tl.len() > lower.len() {
+            continue;
+        }
+        let mut from = 0usize;
+        while from + tl.len() <= lower.len() {
+            if lower[from..from + tl.len()] == tl[..] {
+                for cell in mask.iter_mut().skip(from).take(tl.len()) {
+                    *cell = true;
+                }
+                // Past the match, so overlapping matches merge.
+                from += tl.len();
+            } else {
+                from += 1;
             }
-            from += at + t.chars().count();
         }
     }
     let mut spans = Vec::new();
     let mut cur_hl = mask.first().copied().unwrap_or(false);
     let mut buf = String::new();
-    for (ch, &m) in text.chars().zip(mask.iter()) {
+    for (i, &m) in mask.iter().enumerate() {
         if m != cur_hl {
             spans.push(Span::styled(
                 std::mem::take(&mut buf),
@@ -289,7 +322,7 @@ fn highlight_spans(text: &str, tokens: &[String], base: Style, hl: Style) -> Vec
             ));
             cur_hl = m;
         }
-        buf.push(ch);
+        buf.push(chars[i]);
     }
     if !buf.is_empty() {
         spans.push(Span::styled(buf, if cur_hl { hl } else { base }));
