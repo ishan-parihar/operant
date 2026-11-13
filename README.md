@@ -226,12 +226,22 @@ same head/tail cut.
   lossy method only runs when the full text is stored, and the compressed
   result names the key — resolved by the `evidence_recall` tool).
 - `min_size` is in **bytes** (512 by default); a smaller result is left alone.
-- `shell` names who owns shell output: `aft` (the default — AFT already
-  compresses bash output, so the layer skips it), `native` (the layer
-  compresses the payload itself), or `rtk` (the `rtk` binary owns it).
+- `shell` names who owns shell output: `aft` (the default — AFT owns the
+  output of its own bash tool, so the layer skips that one result and
+  compresses operant's own shell tools: `terminal`, `code_execution`,
+  `process`), `native` (the layer compresses every shell payload itself),
+  or `rtk` (the `rtk` binary executes the terminal tool's commands, so the
+  layer leaves the terminal tool's output alone).
 - A family's `enabled` flag, when present, decides for that family — it is
   not limited by the master switch, so one family can be turned on or off
   without a rebuild.
+- A family can also switch individual methods off: `methods` lists the method
+  names to drop for that family, so one aggressive filter goes without
+  swapping the whole chain. The names are the methods' own — `toon`, `cap`,
+  `code-filter`, `code-filter-aggressive`, `ansi`, `dedup` and the rest;
+  `operant.example.toml` carries the full list. The deny-list is
+  config-only: `operant doctor` prints each family's on/off/inherit state
+  and its chain, never the deny-list.
 
 It is **off by default** and behaviour-neutral until you set
 `enabled = true`. Measure before you tune:

@@ -48,6 +48,19 @@ pub static LOSSY: &[&dyn Method] = &[
     &CodeFilterAggressive,
 ];
 
+/// Every method the registry knows, by name.
+///
+/// The operator's deny-list (`families.<subject>.methods`) names methods by
+/// their `name()`. A name that is not in this list is a typo, and a typo
+/// that is silently ignored looks exactly like a setting that does nothing.
+pub fn all_names() -> Vec<&'static str> {
+    LOSSLESS
+        .iter()
+        .chain(LOSSY.iter())
+        .map(|m| m.name())
+        .collect()
+}
+
 /// The chain for a payload shape.
 ///
 /// `Json` and `Web` finish with a format conversion that short-circuits, so

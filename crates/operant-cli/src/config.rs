@@ -65,7 +65,6 @@ pub struct CliConfig {
     pub web: WebConfigV2,
     pub browser: BrowserConfig,
     pub checkpoints: CheckpointsConfig,
-    pub compression: CompressionConfig,
     pub prompt_caching: PromptCachingConfig,
     pub bedrock: BedrockConfig,
     pub auxiliary: AuxiliaryConfig,
@@ -123,7 +122,6 @@ impl Default for CliConfig {
             web: WebConfigV2::default(),
             browser: BrowserConfig::default(),
             checkpoints: CheckpointsConfig::default(),
-            compression: CompressionConfig::default(),
             prompt_caching: PromptCachingConfig::default(),
             bedrock: BedrockConfig::default(),
             auxiliary: AuxiliaryConfig::default(),
@@ -335,24 +333,6 @@ impl Default for CheckpointsConfig {
             enabled: Some(false),
             max_snapshots: Some(20),
             retention_days: Some(7),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct CompressionConfig {
-    pub enabled: Option<bool>,
-    pub threshold: Option<f64>,
-    pub protect_last_n: Option<u32>,
-}
-
-impl Default for CompressionConfig {
-    fn default() -> Self {
-        Self {
-            enabled: Some(true),
-            threshold: Some(0.50),
-            protect_last_n: Some(20),
         }
     }
 }
@@ -1528,7 +1508,6 @@ mod tests {
         assert_eq!(config.operant.name.as_deref(), Some("operant-rs"));
         assert!(config.api.max_retries.is_some());
         assert!(config.terminal.timeout.is_some());
-        assert!(config.compression.enabled.unwrap_or(false));
         assert_eq!(config.display.language.as_deref(), Some("en"));
     }
 

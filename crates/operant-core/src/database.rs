@@ -1345,9 +1345,15 @@ impl Database {
         let conn = self.lock_conn()?;
         let mut stmt = conn
             .prepare(
+                // The visible size and the archived size are BOTH counted in
+                // characters, so their ratio is a real share. The earlier
+                // report divided tokens by bytes, which read as a saving
+                // percentage and overstated it by the characters-per-token
+                // constant.
                 "SELECT tool_name, COUNT(*), SUM(token_count),
                         SUM(CASE WHEN full_content IS NOT NULL THEN LENGTH(full_content) ELSE 0 END),
-                        SUM(CASE WHEN full_content IS NOT NULL THEN 1 ELSE 0 END)
+                        SUM(CASE WHEN full_content IS NOT NULL THEN 1 ELSE 0 END),
+                        SUM(LENGTH(content))
                  FROM messages
                  WHERE role = 'tool' AND token_count IS NOT NULL AND tool_name IS NOT NULL
                  GROUP BY tool_name ORDER BY SUM(token_count) DESC",
@@ -1361,6 +1367,7 @@ impl Database {
                     tokens: row.get::<_, Option<i64>>(2)?.unwrap_or_default(),
                     archived_bytes: row.get::<_, Option<i64>>(3)?.unwrap_or_default(),
                     archived_results: row.get::<_, Option<i64>>(4)?.unwrap_or_default(),
+                    visible_bytes: row.get::<_, Option<i64>>(5)?.unwrap_or_default(),
                 })
             })
             .map_err(|e| Error::Agent(format!("Query error: {}", e)))?;
@@ -3123,6 +3130,11 @@ pub struct ToolTokenRank {
     /// How many rows of this family carry an archived copy — the rows the
     /// saving is measurable on.
     pub archived_results: i64,
+    /// The characters the model was shown for this family.
+    ///
+    /// The SAME unit as `archived_bytes`, so the two can be divided into a
+    /// real share: the visible size as a fraction of the tool's own output.
+    pub visible_bytes: i64,
 }
 
 /// A session from the database (for listing).
@@ -5521,6 +5533,20 @@ mod tests {
         assert_eq!(
             terminal.archived_results, 1,
             "only the row with an archived copy counts towards the saving"
+        );
+        assert_eq!(
+            terminal.visible_bytes, 440,
+            "the visible size in the SAME unit as the archived size: the 40 \
+             characters of the archived row plus the 400 of the row without one"
+        );
+        // The share the report prints divides these two. It must be a share
+        // of CHARACTERS: the earlier report divided tokens by bytes, which
+        // reads as a saving percentage and overstates it by the
+        // characters-per-token constant.
+        let share = terminal.visible_bytes as f64 / terminal.archived_bytes as f64;
+        assert!(
+            share > 0.0 && share < 1.0,
+            "the visible share is a real fraction: {share}"
         );
 
         let file_read = ranking

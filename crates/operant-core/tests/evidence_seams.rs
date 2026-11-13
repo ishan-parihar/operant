@@ -226,7 +226,7 @@ fn native_mode_compresses_shell_output() {
 }
 
 #[test]
-fn rtk_mode_leaves_shell_output_to_rtk() {
+fn rtk_mode_leaves_the_terminal_tools_output_to_rtk() {
     let text = terminal_output(400);
     let cfg = EvidenceConfig {
         enabled: true,
@@ -235,7 +235,31 @@ fn rtk_mode_leaves_shell_output_to_rtk() {
         ..EvidenceConfig::default()
     };
     let out = compress("terminal", &text, &cfg);
-    assert!(!out.changed(), "rtk mode must not touch a shell result");
+    assert!(!out.changed(), "rtk mode must not touch the terminal tool's output");
+}
+
+#[test]
+fn rtk_mode_still_compresses_the_shell_tools_rtk_never_touches() {
+    // rtk is the terminal tool's EXECUTOR: it rewrites the command that tool
+    // is about to run. It never sees `code_execution` or `process` — those
+    // are separate tools with their own backends. Skipping the whole shell
+    // subject in rtk mode therefore left the fleet's largest measured token
+    // family (code_execution, 267 rows and 316 KB archived on the operator's
+    // live database) uncompressed, the same over-skip the `aft` mode had.
+    let text = terminal_output(400);
+    let cfg = EvidenceConfig {
+        enabled: true,
+        min_size: 1,
+        shell: ShellMode::Rtk,
+        ..EvidenceConfig::default()
+    };
+    let out = compress("code_execution", &text, &cfg);
+    assert!(
+        out.changed(),
+        "rtk mode must still compress the shell tools rtk never touches"
+    );
+    let out = compress("process", &text, &cfg);
+    assert!(out.changed(), "and the process tool too");
 }
 
 #[test]

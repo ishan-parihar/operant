@@ -1007,9 +1007,15 @@ enabled = true
 # [compression]
 # enabled = false
 # min_size = 512              # bytes; below this, compression is a no-op
-# shell = "aft"               # "aft" (AFT owns shell output; the layer skips it)
-#                             # | "native" (the layer compresses the payload)
-#                             # | "rtk" (the rtk binary owns it; the layer skips it)
+# shell = "aft"               # "aft" (AFT owns the output of ITS OWN bash
+#                             #  tool, so the layer skips that one result and
+#                             #  compresses operant's own shell tools:
+#                             #  terminal, code_execution, process)
+#                             # | "native" (the layer compresses every shell
+#                             #  payload itself)
+#                             # | "rtk" (the rtk binary executes the terminal
+#                             #  tool's commands, so the layer leaves the
+#                             #  terminal tool's output alone)
 #
 # Per-family overrides, keyed by subject name. A listed family's `enabled`
 # flag, when present, DECIDES for that family: it is not limited by the
@@ -1017,6 +1023,17 @@ enabled = true
 # everything — or one family off without a rebuild. `chain` names one of:
 # json, web, matches, lockfile, term, code, code-aggressive, plain, lossless.
 #
+# `methods` is a deny-list: the method names to switch OFF for that family,
+# so one aggressive filter goes without swapping the whole chain. The names
+# are the methods' own names, and the full list is:
+#   ansi, progress, dedup, minify-json, md-slim, strip-line-numbers,
+#   base64-elide, shape, rle, toon, grep-group, cap, truncate, web-md,
+#   lockfile, code-filter, code-filter-aggressive.
+# A name that is not in that list is ignored. The deny-list is CONFIG-ONLY:
+# the doctor prints each family's on/off/inherit state and its chain, never
+# the deny-list.
+#
 # [compression.families.read]
 # enabled = true
 # chain = "code-aggressive"   # signatures stay, function bodies go
+# methods = ["code-filter-aggressive"]   # switch that one method off

@@ -189,12 +189,34 @@ fn last_user_turn(messages: &[Message]) -> String {
 /// full text even when the shaped text happens to equal the original: the
 /// provenance marker promises the full output can come back, and that
 /// promise must not depend on the shaped text being different.
+/// The text the model receives for one tool result.
+///
+/// A lossy result carries the recovery marker ONLY when the archive was
+/// written: the marker says "the full output is retrievable at this key",
+/// and the key holds it only if a row landed. When the write failed, the
+/// promise would be false — so the model gets the tool's OWN output instead,
+/// which is exactly what the archive would have held.
+fn model_facing_tool_result(
+    content: String,
+    full_body: &str,
+    marker: Option<&str>,
+    archived: bool,
+) -> String {
+    match marker {
+        Some(marker) if archived => format!("{content}{marker}"),
+        Some(_) => format!(
+            "{full_body}\n[the compressed copy could not be archived — the full output is shown instead]"
+        ),
+        None => content,
+    }
+}
+
 fn compress_tool_result(
     tool_name: &str,
     body: &str,
     tool_call_id: &str,
     session_id: &str,
-) -> (String, bool) {
+) -> (String, Option<String>) {
     let cfg = crate::config::compression_config();
     // The master switch is NOT checked here. It is checked inside
     // `compress()`, where the per-family override is consulted first — so a
@@ -203,10 +225,10 @@ fn compress_tool_result(
     // did nothing.
     let compressed = crate::agent::evidence::compress(tool_name, body, &cfg);
     if !compressed.changed() {
-        return (body.to_string(), false);
+        return (body.to_string(), None);
     }
     if !compressed.lossy {
-        return (compressed.text, false);
+        return (compressed.text, None);
     }
     let key = crate::agent::evidence::recall::key_for(Some(session_id), tool_call_id);
     let marker = crate::agent::evidence::recall::marker(
@@ -215,9 +237,12 @@ fn compress_tool_result(
         compressed.tokens_after,
         &compressed.applied,
     );
-    let mut text = compressed.text;
-    text.push_str(&marker);
-    (text, true)
+    // The marker is NOT attached here. It is a PROMISE — "the full output is
+    // retrievable at this key" — and a promise must not reach the model
+    // before the thing it points at exists. The caller attaches it once the
+    // archive row is written, and drops it (falling back to the full text)
+    // when the write fails.
+    (compressed.text, Some(marker))
 }
 
 impl OperantAgent {
@@ -3267,7 +3292,7 @@ impl OperantAgent {
                         // Only SUCCESSFUL results are compressed: errors are
                         // short and the model needs them verbatim.
                         let full_body = body;
-                        let (body, result_was_lossy) = if result.success {
+                        let (body, marker) = if result.success {
                             compress_tool_result(
                                 &result.name,
                                 &full_body,
@@ -3275,7 +3300,7 @@ impl OperantAgent {
                                 &session_id,
                             )
                         } else {
-                            (full_body.clone(), false)
+                            (full_body.clone(), None)
                         };
                         let body = self
                             .guard_tool_output_spend(&result.tool_call_id, &result.name, body)
@@ -3288,7 +3313,17 @@ impl OperantAgent {
                         } else {
                             body
                         };
-                        let content = body;
+                        // The marker is attached AFTER the guard and the cap,
+                        // for two reasons. First, both of them REPLACE the
+                        // text they trim -- the cap head-truncates and the
+                        // guard swaps in its own marker -- so a marker
+                        // attached before them could be cut off, and the
+                        // model would never learn the text is recoverable.
+                        // Second, the marker is a promise, and the promise
+                        // must not reach the model before the archive row
+                        // exists.
+                        let result_was_lossy = marker.is_some();
+                        let content = model_facing_tool_result(body, &full_body, marker.as_deref(), true);
 
                         // ── Memory write mirroring (hermes parity) ────────
                         // When a built-in memory tool writes an entry
@@ -3412,14 +3447,37 @@ impl OperantAgent {
                                 &msg_data.timestamp,
                             )
                             .unwrap_or(false);
-                        if !replaced && let Err(e) = self.database.save_message_full(&msg_data) {
-                            tracing::warn!(
-                                error = %e,
-                                tool_call_id = %result.tool_call_id,
-                                tool = %result.name,
-                                "failed to persist tool result"
-                            );
-                        }
+                        // Did the ARCHIVE land? The marker in `content` says
+                        // "the full output is retrievable at this key", and
+                        // the key only holds it if a row was written. Both
+                        // writers below carry `full_content`, so either one
+                        // keeps the promise.
+                        let archived = if replaced {
+                            true
+                        } else {
+                            match self.database.save_message_full(&msg_data) {
+                                Ok(()) => true,
+                                Err(e) => {
+                                    tracing::warn!(
+                                        error = %e,
+                                        tool_call_id = %result.tool_call_id,
+                                        tool = %result.name,
+                                        "failed to persist tool result"
+                                    );
+                                    false
+                                }
+                            }
+                        };
+                        // A lossy result whose archive did NOT land must not
+                        // carry the promise. The model gets the tool's own
+                        // output instead -- the honest fallback: nothing was
+                        // saved, so nothing is lost either.
+                        let content = model_facing_tool_result(
+                            content,
+                            &full_body,
+                            marker.as_deref(),
+                            archived,
+                        );
                         if let Err(e) = self.database.save_session(
                             &session_id,
                             None,
@@ -4731,6 +4789,57 @@ pub(super) fn guardrail_halt_reply(summary: &str) -> String {
         "I stopped this turn because a tool kept failing without making progress: {cause}\n\n\
          Tell me how you'd like to proceed, or send `continue` and I'll try a different approach."
     )
+}
+
+#[cfg(test)]
+mod tool_result_promise_tests {
+    use super::model_facing_tool_result;
+
+    /// A lossy result's marker is a PROMISE: "the full output is retrievable
+    /// at this key". It must reach the model only when the archive row
+    /// exists — otherwise the model holds a pointer to nothing, and the
+    /// recall answers "no retained text".
+    #[test]
+    fn the_marker_reaches_the_model_only_when_the_archive_landed() {
+        let marker = "[the full output is retrievable at session:call]";
+        let kept = model_facing_tool_result(
+            "the shaped copy".to_string(),
+            "the tool's own output",
+            Some(marker),
+            true,
+        );
+        assert!(
+            kept.ends_with(marker),
+            "with an archive the marker travels with the result: {kept}"
+        );
+
+        let fallback = model_facing_tool_result(
+            "the shaped copy".to_string(),
+            "the tool's own output",
+            Some(marker),
+            false,
+        );
+        assert!(
+            !fallback.contains(marker),
+            "without an archive the promise must not be made: {fallback}"
+        );
+        assert!(
+            fallback.contains("the tool's own output"),
+            "and the model gets the full text instead: {fallback}"
+        );
+    }
+
+    /// A lossless result carries no marker and is never rewritten.
+    #[test]
+    fn a_lossless_result_is_untouched() {
+        let out = model_facing_tool_result(
+            "the shaped copy".to_string(),
+            "the tool's own output",
+            None,
+            false,
+        );
+        assert_eq!(out, "the shaped copy");
+    }
 }
 
 #[cfg(test)]

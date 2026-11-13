@@ -20,7 +20,7 @@ corrected against. The evidence layer landed across three commits, not one:
 
 | Part | State | Commit |
 |---|---|---|
-| P0 — instrument the tool-result chokepoint | **LANDED** — per-tool token accounting is part of the layer's own `Compressed` report (`tokens_before`/`tokens_after`/`applied`), `crates/operant-core/src/agent/evidence/mod.rs:95-116` | `9d163951` (iter-2120), re-landed in `9f723e88` (iter-2139) |
+| P0 — instrument the tool-result chokepoint | **PARTIAL** — the Goal's counter was never built. SHIPPED: one `tracing` line per CHANGED result (`tool`, `subject`, `format`, `methods`, `lossy`, `tokens_before`, `tokens_after` — `crates/operant-core/src/agent/evidence/mod.rs:302-311`), the per-result `Compressed` report (`tokens_before`/`tokens_after`/`applied` — `crates/operant-core/src/agent/evidence/mod.rs:123-144`), and the whole-database ranking (`Database::tool_token_ranking`) behind `operant doctor --tools-tokens`. MISSING: the `guard_fired` / `cap_fired` / `recall_written` fields — all three have zero hits in the Rust sources — and the session aggregate that would roll the per-result numbers up | `9d163951` (iter-2120), re-landed in `9f723e88` (iter-2139) |
 | P1 — the evidence layer (types, chain runner, classifier, router, recall contract) | **LANDED** — `crates/operant-core/src/agent/evidence/` | `9d163951` (iter-2120), re-landed in `9f723e88` (iter-2139) |
 | P2 — the method set and the per-format chains | **LANDED** — 9 lossless + 6 lossy methods, plus the code filter | `9d163951` (iter-2120), re-landed in `9f723e88` (iter-2139) |
 | P3 — lossless recovery | **LANDED, but not as this plan described it** — there is NO bounded ring and NO disk spill: both were deliberately deleted, so one fact has one owner. The full text lives in `messages.full_content` (`crates/operant-core/src/database.rs:78`) and the `evidence_recall` tool reads it back (`crates/operant-core/src/tools/evidence_recall.rs:96` → `crates/operant-core/src/database.rs:1289`) | `9f723e88` (iter-2139) |
@@ -469,6 +469,19 @@ Add a counter at `run.rs:2745` keyed by tool name: `chars`, `estimate_tokens`, `
 (classifier stub), `guard_fired`, `cap_fired`, `recall_written`. Emit as a `tracing` span plus a
 session aggregate.
 
+**What shipped (corrected 2026-11-13):** the ranking the Exit asks for —
+`Database::tool_token_ranking` behind `operant doctor --tools-tokens` — and the per-result numbers
+a counter would have carried: one `tracing` line per CHANGED result (`tool`, `subject`, `format`,
+`methods`, `lossy`, `tokens_before`, `tokens_after`,
+`crates/operant-core/src/agent/evidence/mod.rs:302-311`) plus the `Compressed` report's
+`tokens_before`/`tokens_after`/`applied`
+(`crates/operant-core/src/agent/evidence/mod.rs:123-144`).
+
+**What did not ship:** the counter itself. There is no `guard_fired`, `cap_fired` or `recall_written`
+field anywhere in the Rust sources, and there is no session aggregate rolling the per-result numbers
+up. The Goal stands as written — the counter is still worth having — but the landing table above
+records P0 as PARTIAL, not LANDED.
+
 - Exit: a report that ranks operant's tool families by model-visible tokens **on real sessions**.
 - Verify: `cargo test --workspace`; a new `operant doctor --tools-tokens` (or extend `doctor.rs`) prints
   the ranking; `scripts/check.sh check --workspace`.
@@ -563,8 +576,10 @@ be reformatted).
 
 Three operating modes, chosen by config, default to the safest:
 
-- `compression.shell = "aft"` (**default**, and the only mode worth shipping): `terminal` results are
-  either routed to `aft_bash` or marked "AFT-owned" so the evidence layer skips them [R].
+- `compression.shell = "aft"` (**default**, and the only mode worth shipping): the gate skips the
+  ONE tool AFT owns (`aft_bash`) and compresses operant's own shell tools (`terminal`,
+  `code_execution`, `process`). Ownership is decided by tool name at the gate, not by a mark on
+  the result.
 - `compression.shell = "native"`: the evidence layer applies the `Term` chain to `stdout`. Note the
   incremental value over AFT is *not* ANSI+dedup — AFT's tier-5 already does that — it is `progress`,
   `base64-elide` and `cap`, which AFT does not have [V].
@@ -600,7 +615,8 @@ Config lands in `operant.example.toml` and `README.md`/`CHANGELOG.md` per the re
 The 2026-11-12 version of this block documented four keys that do not exist, and
 spelled the family table wrong. `EvidenceConfig` has exactly these fields:
 `enabled`, `min_size`, `shell`, and `families.<subject>.enabled` /
-`families.<subject>.chain`.
+`families.<subject>.chain` / `families.<subject>.methods` (a deny-list of method
+names, added in iter-2157).
 
 ```toml
 [compression]
@@ -635,7 +651,7 @@ old block gets a config that loads cleanly with those keys silently dropped.
 | Compression breaks the `tool_call_id` envelope | the envelope is JSON too | the router operates **inside** the envelope, on `content` — never on the envelope (precedent: `truncate_tool_content`, `compress.rs:160-170`) |
 | Compression redacts wrong / leaks | order at the chokepoint | redactor runs before the compressor [V]; the recall store is written post-redaction only |
 | Prompt-cache thrash | compressing mid-conversation changes prefixes | compress **before** the result joins the message list — which the chokepoint satisfies [R]; RTK makes the same guarantee for its own hook path [D] |
-| Double compression (AFT + evidence layer) | both active | P5 marks AFT-owned results so the layer skips them; a test asserts exclusivity |
+| Double compression (AFT + evidence layer) | both active | the gate decides by TOOL NAME, not by a mark on the result: in `aft` mode the layer skips the `aft_bash` tool's result and compresses operant's own shell tools (`terminal`, `code_execution`, `process`) — `crates/operant-core/src/agent/evidence/mod.rs:206-208`; `aft_mode_leaves_afts_own_shell_output_to_aft` asserts the exclusivity (`crates/operant-core/tests/evidence_seams.rs:154`) |
 | Recall store grows unboundedly | every lossy result spills | spill only above `min_size`; reuse LCM's existing maintenance/retention |
 | A new tool silently loses its output | no classifier entry | P4's coverage test over the live registry fails loudly |
 | Compression helps latency but hides the answer | shaping is lossy | P3's recall wiring is a **precondition** for enabling lossy methods, not a follow-up |

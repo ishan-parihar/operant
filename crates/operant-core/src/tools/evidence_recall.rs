@@ -32,6 +32,20 @@ use crate::tools::{OperantTool, ToolContext, ToolResult};
 pub struct EvidenceRecallArgs {
     /// The key from the compression marker, e.g. `session-id:tool-call-id`.
     pub key: String,
+    /// How many characters to return (default 4096).
+    ///
+    /// The ceiling exists so one recovery cannot spend more context than the
+    /// compression saved. Raising it trades that for coverage.
+    #[serde(default)]
+    pub length: usize,
+    /// Which character to start from (default 0).
+    ///
+    /// Without this the tool returns the head and the rest of the text is
+    /// unreachable, which makes the marker's promise dead past the first
+    /// window — `session_search` and `ctx_search` index the SHAPED copy, so
+    /// no other model-facing tool can fetch it either.
+    #[serde(default)]
+    pub offset: usize,
 }
 
 /// Retrieve a compressed tool result's full text by its key.
@@ -103,16 +117,17 @@ impl OperantTool for EvidenceRecallTool {
                 // The recall has a CEILING. A tool result can be 200 000
                 // bytes, and handing all of it back costs the model more
                 // than the compression saved — the recovery path would be
-                // the expensive one. The window is the head of the text;
-                // the note says how much was withheld so the model can ask
-                // for the rest rather than guess.
-                let (window, withheld) = if content.chars().count() > RECALL_WINDOW_CHARS {
-                    let head: String = content.chars().take(RECALL_WINDOW_CHARS).collect();
-                    let rest = content.chars().count() - RECALL_WINDOW_CHARS;
-                    (head, rest)
+                // the expensive one. The window is addressable, so the
+                // remainder is reachable rather than a dead end.
+                let total = content.chars().count();
+                let length = if args.length == 0 {
+                    RECALL_WINDOW_CHARS
                 } else {
-                    (content, 0)
+                    args.length
                 };
+                let offset = args.offset.min(total);
+                let window: String = content.chars().skip(offset).take(length).collect();
+                let withheld = total - offset - window.chars().count();
                 let mut payload = json!({
                     "_evidence_tool": "evidence_recall",
                     "key": args.key.trim(),
@@ -121,9 +136,13 @@ impl OperantTool for EvidenceRecallTool {
                 });
                 if withheld > 0 {
                     payload["withheld_chars"] = json!(withheld);
+                    payload["offset"] = json!(offset);
+                    payload["length"] = json!(window.chars().count());
+                    payload["total_chars"] = json!(total);
                     payload["note"] = json!(format!(
-                        "the first {RECALL_WINDOW_CHARS} characters of the full output are shown; \
-                         {withheld} more characters are withheld — the whole text is still in the session store"
+                        "characters {offset}..{} of {total} are shown; {withheld} more are \
+                         withheld — ask again with a larger offset to read on",
+                        offset + window.chars().count()
                     ));
                 }
                 ToolResult::success("evidence_recall", payload)
@@ -159,6 +178,79 @@ mod tests {
             std::process::id()
         ));
         Arc::new(Database::init(path).expect("database"))
+    }
+
+    /// The text the recall withheld must be REACHABLE. The tool returns one
+    /// window so a recovery cannot cost more than the compression saved; a
+    /// model that cannot ask for the next window is told the whole text is
+    /// "still in the session store" and given no way to read it — and the
+    /// search tools index the SHAPED copy, so nothing else can fetch it.
+    #[tokio::test]
+    async fn the_text_the_recall_withheld_is_reachable_in_the_next_window() {
+        let db = test_db("window");
+        let big: String = (0..20_000).map(|i| format!("line {i}\n")).collect();
+        let msg = crate::database::MessageData {
+            id: 0,
+            session_id: "sess-window".to_string(),
+            role: "tool".to_string(),
+            content: Some("the shaped copy".to_string()),
+            full_content: Some(big.clone()),
+            tool_call_id: Some("call-window".to_string()),
+            tool_calls: None,
+            tool_name: Some("terminal".to_string()),
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            token_count: None,
+            finish_reason: None,
+            reasoning: None,
+            reasoning_content: None,
+            reasoning_details: None,
+            codex_reasoning_items: None,
+            codex_message_items: None,
+            platform_message_id: None,
+            observed: None,
+            active: 1,
+        };
+        db.save_session(
+            "sess-window",
+            Some("window"),
+            "test",
+            "2026-11-12T00:00:00Z",
+            "2026-11-12T00:00:00Z",
+        )
+        .expect("the session row");
+        db.save_message_full(&msg).expect("the row");
+
+        let tool = EvidenceRecallTool::new(db);
+        let key = "sess-window:call-window";
+        let first = tool
+            .execute(json!({ "key": key }), ToolContext::default())
+            .await;
+        let payload: Value = serde_json::from_str(&first.content).expect("parses");
+        let head = payload["content"].as_str().expect("a string");
+        assert_eq!(
+            head.chars().count(),
+            RECALL_WINDOW_CHARS,
+            "the first window is one window"
+        );
+        assert!(
+            payload["withheld_chars"].as_i64().expect("a count") > 0,
+            "and it says how much was withheld: {payload}"
+        );
+
+        // The second window must continue where the first stopped.
+        let second = tool
+            .execute(
+                json!({ "key": key, "offset": RECALL_WINDOW_CHARS }),
+                ToolContext::default(),
+            )
+            .await;
+        let payload: Value = serde_json::from_str(&second.content).expect("parses");
+        let next = payload["content"].as_str().expect("a string");
+        assert!(
+            next.starts_with(&big.chars().skip(RECALL_WINDOW_CHARS).take(20).collect::<String>()),
+            "the second window continues where the first stopped"
+        );
+        assert_ne!(head, next, "the two windows are different text");
     }
 
     #[tokio::test]

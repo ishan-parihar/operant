@@ -28,7 +28,7 @@ pub mod types;
 
 use serde::{Deserialize, Serialize};
 
-pub use chain::{ChainOutcome, run_chain_guarded, run_chain_traced};
+pub use chain::run_chain_guarded;
 pub use types::{
     Block, ContentFormat, Method, MethodCtx, MethodInfo, Origin, Outcome, Produces, Recovery,
     Subject,
@@ -56,6 +56,16 @@ pub enum ShellMode {
 /// output AFT never touched. Skipping them all left the fleet's largest
 /// token family uncompressed while the doctor said the layer was on.
 pub const AFT_SHELL_TOOL: &str = "aft_bash";
+
+/// The tool whose output the `rtk` binary produces.
+///
+/// rtk is the terminal tool's EXECUTOR: it rewrites the command the terminal
+/// tool is about to run and compresses what comes back. It never sees
+/// `code_execution` or `process` — those are separate tools with their own
+/// backends. Skipping the whole shell subject in rtk mode therefore left the
+/// fleet's largest token family uncompressed, the same over-skip the `aft`
+/// mode had.
+pub const RTK_SHELL_TOOL: &str = "terminal";
 
 /// A per-family override.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -171,7 +181,7 @@ impl Compressed {
 /// CHARACTERS (the CJK fix from iter-18), so on multibyte text it
 /// over-counted by up to 4× — and the numbers in a provenance marker must
 /// mean the same thing as the numbers in the context footer.
-pub use crate::context_management::estimate_tokens;
+use crate::context_management::estimate_tokens;
 
 /// Compress one tool result.
 ///
@@ -206,12 +216,14 @@ pub fn compress(tool_name: &str, content: &str, cfg: &EvidenceConfig) -> Compres
             ShellMode::Aft if tool_name == AFT_SHELL_TOOL => {
                 return Compressed::unchanged(subject, format, content);
             }
-            // The `rtk` binary is the executor for EVERY shell command, so
-            // the layer stays out of the shell path entirely.
-            ShellMode::Rtk => return Compressed::unchanged(subject, format, content),
-            // `Native`, and `Aft` for the tools AFT does not own: the layer
-            // compresses them.
-            ShellMode::Aft | ShellMode::Native => {}
+            // The `rtk` binary is the terminal tool's EXECUTOR, so the layer
+            // stays out of the terminal tool's output — and only that. rtk
+            // never sees `code_execution` or `process`.
+            ShellMode::Rtk if tool_name == RTK_SHELL_TOOL => {
+                return Compressed::unchanged(subject, format, content);
+            }
+            // Every other case: the layer compresses this shell payload.
+            ShellMode::Aft | ShellMode::Native | ShellMode::Rtk => {}
         }
     }
 
@@ -256,6 +268,20 @@ pub fn compress(tool_name: &str, content: &str, cfg: &EvidenceConfig) -> Compres
     // And it may switch individual methods off. The names are the methods'
     // own `name()` values ("toon", "code-filter", …).
     let switched_off: &[String] = family.and_then(|f| f.methods.as_deref()).unwrap_or(&[]);
+    // A name that matches no method is a typo, and a typo that is silently
+    // ignored looks exactly like a setting that does nothing. Say so.
+    if !switched_off.is_empty() {
+        let known = methods::all_names();
+        for name in switched_off {
+            if !known.contains(&name.as_str()) {
+                tracing::warn!(
+                    method = %name,
+                    known = %known.join(","),
+                    "compression: a family switches off a method that does not exist"
+                );
+            }
+        }
+    }
 
     for segment in &plan.segments {
         let chain = named.unwrap_or_else(|| methods::chain_for(segment.format));
@@ -380,11 +406,11 @@ mod tests {
 
     /// A layer the shell results are allowed through.
     ///
-    /// `ShellMode::Native` is the only mode where the layer compresses the
-    /// shell payload itself — AFT and rtk both own it in their own modes, and
-    /// the default (AFT) leaves a terminal result alone. Every shell test
-    /// below therefore names the mode explicitly, because the default is the
-    /// NO-OP.
+    /// `ShellMode::Native` compresses every shell payload. The other two
+    /// modes leave ONE tool's output alone — `aft` leaves `aft_bash` to AFT,
+    /// `rtk` leaves `terminal` to the rtk binary — and compress the rest.
+    /// Every shell test below names the mode explicitly, because the mode
+    /// decides who owns the output.
     fn cfg() -> EvidenceConfig {
         EvidenceConfig {
             enabled: true,

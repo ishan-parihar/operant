@@ -1228,9 +1228,14 @@ fn archived_summary(rank: &operant_core::database::ToolTokenRank) -> String {
     if rank.archived_results <= 0 || rank.archived_bytes <= 0 {
         return "no archived copy yet".to_string();
     }
-    let visible_share = rank.tokens as f64 / rank.archived_bytes as f64 * 100.0;
+    // Both operands are CHARACTERS: the visible copy and the tool's own
+    // output. The earlier line divided tokens by bytes, which reads as a
+    // saving percentage and overstates it by the characters-per-token
+    // constant — on the operator's live database it said 22.6 % where the
+    // real visible share was 89.1 %.
+    let visible_share = rank.visible_bytes as f64 / rank.archived_bytes as f64 * 100.0;
     format!(
-        "{} archived ({} archived) — the visible tokens are {:.1}% of the archived bytes",
+        "{} archived ({} archived) — the model saw {:.1}% of the tool's own output",
         human_bytes(rank.archived_bytes),
         rank.archived_results,
         visible_share
