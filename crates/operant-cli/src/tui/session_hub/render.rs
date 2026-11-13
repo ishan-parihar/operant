@@ -396,7 +396,16 @@ fn render_header(state: &SessionHubState) -> Line<'static> {
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
-            format!("  {} rows", state.rows.len()),
+            // "N of M" when the store total is known: the hub loads a PAGE
+            // (500 rows), so a bare "500 rows" read as "these are all your
+            // sessions" while 2,802 of 3,302 sat past the page (audit finding
+            // 3 — the silent cap).
+            match state.store_total() {
+                Some(total) if total > state.rows.len() => {
+                    format!("  {} of {} rows", state.rows.len(), total)
+                }
+                _ => format!("  {} rows", state.rows.len()),
+            },
             Style::default().fg(theme_colors::muted()),
         ),
     ];

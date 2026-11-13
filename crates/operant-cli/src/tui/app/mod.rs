@@ -752,8 +752,15 @@ pub struct App {
     pub pending_title_save: Option<String>,
     /// Receiver for background session-hub row loads (plan 2026-10-28: the
     /// unified `SessionEntryV2` rows — DB list + delegation snapshot).
-    pub session_list_rx:
-        Option<tokio::sync::mpsc::Receiver<Vec<operant_core::session::listing::SessionEntryV2>>>,
+    pub session_list_rx: Option<
+        tokio::sync::mpsc::Receiver<(
+            Vec<operant_core::session::listing::SessionEntryV2>,
+            // How many sessions the STORE holds, with no limit. The hub loads
+            // a page (500), so without this the header's row count is the
+            // page size and reads as the whole truth (audit finding 3).
+            Option<usize>,
+        )>,
+    >,
     /// Receiver for the hub's per-session PREVIEW load (the right pane's
     /// transcript window). Separate from `session_list_rx` so the list load
     /// and the pane load are independent flights: moving the cursor while
@@ -1982,18 +1989,21 @@ impl App {
                 self.session_list_rx = Some(rx);
                 let db_path = self.config.database_path.clone();
                 tokio::spawn(async move {
-                    let rows = tokio::task::spawn_blocking(move || {
-                        let mut rows = operant_core::database::Database::init(db_path)
-                            .and_then(|db| db.list_sessions_rich(500))
+                    let loaded = tokio::task::spawn_blocking(move || {
+                        let db = operant_core::database::Database::init(db_path).ok();
+                        let total = db.as_ref().and_then(|d| d.count_sessions().ok());
+                        let mut rows = db
+                            .as_ref()
+                            .and_then(|d| d.list_sessions_rich(500).ok())
                             .unwrap_or_default();
                         // iter-C: subagent rows are process-local registry
                         // state, appended (not joined) to the DB rows.
                         rows.extend(operant_core::tools::async_delegation::records_snapshot());
-                        rows
+                        (rows, total)
                     })
                     .await
-                    .unwrap_or_default();
-                    let _ = tx.send(rows).await;
+                    .unwrap_or_else(|_| (Vec::new(), None));
+                    let _ = tx.send(loaded).await;
                 });
             }
 

@@ -157,7 +157,7 @@ impl App {
             return false;
         };
         match rx.try_recv() {
-            Ok(rows) => {
+            Ok((rows, total)) => {
                 self.debug_hub
                     .publish(crate::tui::debug::TuiEvent::SessionList {
                         count: rows.len(),
@@ -177,6 +177,9 @@ impl App {
                     .as_ref()
                     .and_then(|s| s.session_id());
                 self.session_hub.set_live_session_id(live);
+                // The store total, so the header can say "500 of 3,302"
+                // instead of a bare "500" that reads as everything.
+                self.session_hub.set_store_total(total);
                 self.session_hub.replace_rows(rows);
                 self.session_list_rx = None;
                 if std::mem::take(&mut self.rename_on_list_load) {

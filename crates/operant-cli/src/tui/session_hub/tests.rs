@@ -999,6 +999,86 @@ fn a_subagent_row_names_its_delegation_status_without_focusing_it() {
     );
 }
 
+// ---- (2026-11-13) the honest header, and counts that are not recomputed per frame ----
+
+/// The header must say "N of M": the hub loads a PAGE, and a bare "500 rows"
+/// read as "these are all your sessions" (audit finding 3 — the silent cap).
+#[test]
+fn the_header_names_the_page_and_the_store() {
+    let mut hub = SessionHubState::new();
+    hub.replace_rows(vec![row("s1", None, None), row("s2", None, None)]);
+    hub.set_store_total(Some(3302));
+    let (list, _) = hub_rows_with(&mut hub);
+    let joined = list.join("\n");
+    assert!(
+        joined.contains("2 of 3302 rows"),
+        "the header must name the window: {joined}"
+    );
+    assert!(
+        !joined.contains("  2 rows"),
+        "and must not read as the whole store: {joined}"
+    );
+}
+
+/// With no total known (a load that failed), the header keeps its old shape
+/// rather than printing a lie or an empty clause.
+#[test]
+fn the_header_without_a_total_still_counts_the_rows() {
+    let mut hub = SessionHubState::new();
+    hub.replace_rows(vec![row("s1", None, None)]);
+    let (list, _) = hub_rows_with(&mut hub);
+    assert!(
+        list.join("\n").contains("1 rows"),
+        "the row count must always be there: {list:?}"
+    );
+}
+
+/// The counts are computed ONCE per change, not once per frame: the tab bar
+/// asks for them on every frame, and each ask used to walk every row through
+/// every mode (audit finding 9).
+#[test]
+fn the_tab_counts_follow_the_rows_and_the_filters() {
+    let mut hub = SessionHubState::new();
+    hub.replace_rows(vec![
+        row("s1", None, Some("premiere")),
+        row("s2", None, Some("analyst")),
+    ]);
+    let all = hub
+        .filter_counts()
+        .iter()
+        .find(|(m, _)| *m == HubFilterMode::All)
+        .map(|(_, n)| *n)
+        .expect("all is in the ladder");
+    assert_eq!(all, 2);
+    // A change to the rows recomputes them.
+    hub.replace_rows(vec![row("s1", None, Some("premiere"))]);
+    let all_after = hub
+        .filter_counts()
+        .iter()
+        .find(|(m, _)| *m == HubFilterMode::All)
+        .map(|(_, n)| *n)
+        .expect("all is in the ladder");
+    assert_eq!(all_after, 1, "the cache must follow the rows");
+    // And so does a change to the filter.
+    hub.cycle_employee();
+    let all_filtered = hub
+        .filter_counts()
+        .iter()
+        .find(|(m, _)| *m == HubFilterMode::All)
+        .map(|(_, n)| *n)
+        .expect("all is in the ladder");
+    let engaged = hub.employee_filter().expect("an employee is engaged");
+    let expected = hub
+        .rows
+        .iter()
+        .filter(|r| r.employee_id.as_deref() == Some(engaged))
+        .count();
+    assert_eq!(
+        all_filtered, expected,
+        "with an employee engaged the counts must follow it"
+    );
+}
+
 // ---- (2026-11-13) the FIRST prompt, beside the last ----
 
 /// The first thing the operator TYPED is the answer to "how did this session
@@ -1886,7 +1966,10 @@ fn filter_counts_agree_with_the_visible_set_for_each_mode() {
     ];
     let mut hub = SessionHubState::new();
     hub.replace_rows(rows);
-    for (mode, counted) in hub.filter_counts() {
+    // The counts are borrowed from the hub now (they are cached), and the
+    // loop mutates the hub, so the snapshot is taken first.
+    let counts = hub.filter_counts().to_vec();
+    for (mode, counted) in counts {
         // Reach the same mode through the public cycle so we exercise the real
         // path rather than assuming `filter_counts`'s ordering.
         hub.cycle_filter();

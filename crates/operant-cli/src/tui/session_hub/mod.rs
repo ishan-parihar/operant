@@ -459,6 +459,12 @@ pub struct SessionHubState {
     /// operator typed and the assistant's end-of-turn output — which is
     /// exactly the pair the operator named.
     pub hide_tool_calls: bool,
+    /// How many sessions the STORE holds, with no limit — the header's
+    /// "N of M" (audit finding 3: the hub's own count read as the whole
+    /// truth while 2,802 of 3,302 sessions sat past the 500-row page).
+    store_total: Option<usize>,
+    /// The cached per-mode counts (see `filter_counts`).
+    filter_counts_cache: Vec<(HubFilterMode, usize)>,
     /// The session's FIRST user prompt, kept beside the tail window.
     ///
     /// The operator asked for "scrolling mechanism through the user-prompt,
@@ -507,6 +513,8 @@ impl SessionHubState {
             employee_filter: None,
             hide_tool_calls: false,
             preview_first_prompt: None,
+            store_total: None,
+            filter_counts_cache: Vec::new(),
         }
     }
 
@@ -876,7 +884,25 @@ impl SessionHubState {
     /// "what would I see if I switched filters", which is the only question a
     /// static tab bar can answer. Mixing the live search in would make the
     /// numbers jump per keystroke and teach the operator to ignore them.
-    pub fn filter_counts(&self) -> Vec<(HubFilterMode, usize)> {
+    /// The per-mode counts, CACHED.
+    ///
+    /// (2026-11-13, audit finding 9) This ran on EVERY FRAME: the tab bar
+    /// calls it to draw the counts, and each call walked the mode ladder and
+    /// ran `row_matches_filter` over every loaded row — 3,302 rows times
+    /// seven modes, every frame, to produce seven numbers that change only
+    /// when the rows or the filters change.
+    ///
+    /// It is recomputed in `rebuild_visible`, which is the one place every
+    /// input that can change a count already goes through: the rows landed
+    /// (`replace_rows`), the mode cycled (`cycle_filter`), the employee axis
+    /// cycled (`cycle_employee`), the search changed, and the branch anchor
+    /// moved. One predicate still feeds both the counts and the visible set,
+    /// so the two cannot disagree — that is the rule the cache keeps.
+    pub fn filter_counts(&self) -> &[(HubFilterMode, usize)] {
+        &self.filter_counts_cache
+    }
+
+    fn compute_filter_counts(&self) -> Vec<(HubFilterMode, usize)> {
         // The order comes from `next()` walking its own cycle, so the tab bar
         // can never disagree with the order `s` cycles in.
         let cwd = std::env::current_dir()
@@ -937,6 +963,11 @@ impl SessionHubState {
 
     /// Re-derive `visible_idx` from `rows` + filter + search.
     pub fn rebuild_visible(&mut self) {
+        // The counts are recomputed HERE, once per change, rather than on
+        // every frame (audit finding 9). The visible set is computed just
+        // below from the same predicate, so the tab counts and the rows can
+        // never disagree.
+        self.filter_counts_cache = self.compute_filter_counts();
         let tokens = if self.search_active || !self.search_query.is_empty() {
             Self::search_tokens()(&self.search_query)
         } else {
@@ -1182,6 +1213,15 @@ impl SessionHubState {
     /// row — a load that landed after the operator moved on belongs to a
     /// row nobody is looking at (the stale-write guard jcode gets for free
     /// from comparing `pending.session_id`).
+    /// The store's session count, for the header's "N of M".
+    pub fn store_total(&self) -> Option<usize> {
+        self.store_total
+    }
+
+    pub fn set_store_total(&mut self, total: Option<usize>) {
+        self.store_total = total;
+    }
+
     /// Record the session's FIRST user prompt, so the preview can show it
     /// beside the tail window.
     ///

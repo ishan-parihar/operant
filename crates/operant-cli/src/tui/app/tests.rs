@@ -2677,12 +2677,12 @@ async fn the_hub_navigation_key_waits_for_the_row_load_to_land() {
     app.handle_tui_command("session", "");
     assert!(app.session_hub.visible, "the hub opens on /session");
     app.session_list_pending = false;
-    let (tx, rx) = tokio::sync::mpsc::channel::<Vec<_>>(1);
+    let (tx, rx) = tokio::sync::mpsc::channel::<(Vec<_>, Option<usize>)>(1);
     app.session_list_rx = Some(rx);
     // Deliver the rows a few frames late, exactly like the real blocking load.
     tokio::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        let _ = tx.send(hub_rows(3)).await;
+        let _ = tx.send((hub_rows(3), None)).await;
     });
 
     app.simulated_keys = vec![press_key(KeyCode::Down, KeyModifiers::NONE)];
@@ -2740,9 +2740,9 @@ async fn the_hub_enter_switches_session_and_rebuilds_the_display_in_frame() {
     app.handle_tui_command("session", "");
     assert!(app.session_hub.visible, "the hub opens on /session");
     app.session_list_pending = false;
-    let (tx, rx) = tokio::sync::mpsc::channel::<Vec<_>>(1);
+    let (tx, rx) = tokio::sync::mpsc::channel::<(Vec<_>, Option<usize>)>(1);
     app.session_list_rx = Some(rx);
-    tx.send(crate::tui::session_hub::probe_rows(2))
+    tx.send((crate::tui::session_hub::probe_rows(2), None))
         .await
         .expect("the seeded rows survive the channel");
 
@@ -10481,8 +10481,11 @@ mod rename_on_load_tests {
         app.rename_on_list_load = true;
         let (tx, rx) = tokio::sync::mpsc::channel(1);
         app.session_list_rx = Some(rx);
-        tx.try_send(Vec::<operant_core::session::listing::SessionEntryV2>::new())
-            .unwrap();
+        tx.try_send((
+            Vec::<operant_core::session::listing::SessionEntryV2>::new(),
+            None,
+        ))
+        .unwrap();
 
         assert!(app.drain_session_list());
 
