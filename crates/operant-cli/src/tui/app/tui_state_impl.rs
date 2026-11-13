@@ -236,6 +236,10 @@ impl TuiState for App {
         self.is_streaming
     }
 
+    fn keyboard_enhanced(&self) -> bool {
+        self.keyboard_enhanced
+    }
+
     fn queued_messages(&self) -> &[String] {
         // The NEXT-turn queue (Ctrl+Enter, /queue): delivered WITH the next
         // turn. This used to return `&[]` behind a `[port-decision]` stub, so

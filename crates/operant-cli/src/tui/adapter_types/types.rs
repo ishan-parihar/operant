@@ -130,7 +130,9 @@ pub struct Message {
 }
 
 impl Message {
-    #[cfg_attr(not(test), expect(dead_code, reason = "AD-034: test-only constructor"))]
+    // (iter-2174) No longer test-only: the plain-Enter-mid-stream steer
+    // pushes this constructor in production, so the operator's steered words
+    // become a row they can actually see.
     pub fn user(text: String) -> Self {
         Self {
             role: Role::User,

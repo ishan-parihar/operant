@@ -589,6 +589,15 @@ pub struct App {
     /// steer (plain Enter mid-stream, /steer) was invisible to the operator —
     /// the queue looked dead even though the agent drained it.
     pub steer_queue_mirror: Vec<String>,
+    /// Whether the kitty keyboard protocol was REQUESTED at startup.
+    ///
+    /// (iter-2174) Ctrl+Enter is a catalogued chord, and without the protocol
+    /// every Enter chord arrives as a bare `\r` — indistinguishable from a
+    /// plain Enter, which now STEERS. So the app must at least know whether it
+    /// ever asked. `enable_keyboard_enhancement()`'s doc is explicit that a
+    /// `true` result is NOT proof the terminal honours it, so a false here is
+    /// the only honest signal: the chord is definitely undeliverable.
+    pub keyboard_enhanced: bool,
     /// Messages the operator QUEUED for the NEXT turn (Ctrl+Enter, `/queue`).
     ///
     /// A SEPARATE store from the live steer queue, and that separation is the

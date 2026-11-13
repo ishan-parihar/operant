@@ -91,7 +91,17 @@ pub(super) fn composer_hint(app: &dyn TuiState) -> Option<String> {
         // The hint used to name only the queue, because the steer was a dead
         // key that told the operator to run `/queue <text>`, which was a
         // steer. Both chords are named now.
-        return Some("Enter to steer · Ctrl/Cmd+Enter to queue".to_string());
+        //
+        // (iter-2174) But the chord is only promised when it can be
+        // DELIVERED: without the kitty keyboard protocol a terminal sends a
+        // bare `\r` for Ctrl+Enter, the app cannot tell it from Enter, and
+        // the operator's queue would become a steer — the opposite of the
+        // advertised action. `/keys` flags the chord in that situation; here
+        // the hint offers the slash command, which works on every terminal.
+        if app.keyboard_enhanced() {
+            return Some("Enter to steer · Ctrl/Cmd+Enter to queue".to_string());
+        }
+        return Some("Enter to steer · /queue <text> to queue".to_string());
     }
     None
 }
@@ -578,7 +588,9 @@ pub(super) fn pending_prompt_count(app: &dyn TuiState) -> usize {
             .interleave_message()
             .map(|msg| !msg.is_empty())
             .unwrap_or(false);
-    app.queued_messages().len() + pending_count + if interleave { 1 } else { 0 }
+    app.queued_messages().len()
+        + pending_count
+        + if interleave { 1 } else { 0 }
         + app.pending_steers().len()
 }
 
@@ -3389,6 +3401,10 @@ mod composer_hint_tests {
     fn the_input_area_carries_no_non_input_text() {
         let mut app = make_app();
         app.is_streaming = true;
+        // The enhanced case, so the hint really does name the chord: the
+        // point of this test is that the hint is NOT painted in the text
+        // rect.
+        app.keyboard_enhanced = true;
         app.prompt_input
             .replace_text("then check the tests".to_string());
 
@@ -3410,7 +3426,8 @@ mod composer_hint_tests {
         );
     }
 
-    /// The ONE truth the hint states: Ctrl/Cmd+Enter queues the draft.
+    /// The ONE truth the hint states: the draft can be QUEUED, and there is
+    /// no "send now" path.
     #[test]
     fn the_streaming_hint_says_queue_and_not_send_now() {
         let mut app = make_app();
@@ -3420,12 +3437,44 @@ mod composer_hint_tests {
 
         let status = rendered_status(&app);
         assert!(
-            status.contains("Ctrl/Cmd+Enter to queue"),
+            status.contains("to queue"),
             "the streaming hint must say queue: {status:?}"
         );
         assert!(
             !status.contains("send now"),
             "there is no send-now path, so the hint must never offer one: {status:?}"
+        );
+    }
+
+    /// (iter-2174) The hint must NOT advertise Ctrl+Enter when the terminal
+    /// cannot deliver it.
+    ///
+    /// Without the kitty keyboard protocol every Enter chord arrives as a bare
+    /// `\r`, so the app cannot tell Ctrl+Enter from Enter — and plain Enter
+    /// now STEERS. A hint that promised Ctrl+Enter would be promising the
+    /// opposite of what the key does. `/keys` flags the chord; the hint
+    /// offers the slash command, which works on every terminal.
+    #[test]
+    fn the_streaming_hint_does_not_promise_a_chord_the_terminal_cannot_send() {
+        let mut app = make_app();
+        app.is_streaming = true;
+        app.keyboard_enhanced = false;
+        app.prompt_input
+            .replace_text("then check the tests".to_string());
+
+        let status = rendered_status(&app);
+        assert!(
+            !status.contains("Ctrl/Cmd+Enter"),
+            "without the keyboard protocol the chord cannot be delivered, so \
+             the hint must not name it: {status:?}"
+        );
+        assert!(
+            status.contains("/queue"),
+            "the slash command works on every terminal: {status:?}"
+        );
+        assert!(
+            status.contains("Enter to steer"),
+            "and the chord that DOES work is named: {status:?}"
         );
     }
 
@@ -3440,7 +3489,7 @@ mod composer_hint_tests {
 
         let status = rendered_status(&app);
         assert!(
-            status.contains("Ctrl/Cmd+Enter to queue"),
+            status.contains("to queue"),
             "plan mode queues exactly like the default mode: {status:?}"
         );
         assert!(

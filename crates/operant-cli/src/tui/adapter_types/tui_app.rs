@@ -150,8 +150,17 @@ impl TuiApp {
         // pop in the teardown below and in the panic hook; ownership-gated so
         // a suspended editor's own entry can never be popped by mistake.
         let keyboard_enhanced = crate::tui::keyboard_enhancement::enable_keyboard_enhancement();
+        // (iter-2174) Store it: the composer's hint and `/keys` must not
+        // advertise Ctrl+Enter when this is false, because a terminal without
+        // the protocol sends a bare `\r` and the queue would become a steer.
+        self.app.keyboard_enhanced = keyboard_enhanced;
         if keyboard_enhanced {
             tracing::info!("kitty keyboard protocol requested (Enter chords distinguishable)");
+        } else {
+            tracing::info!(
+                "kitty keyboard protocol NOT requested — Enter chords are indistinguishable, \
+                 so Ctrl+Enter cannot be advertised"
+            );
         }
 
         // Install a panic hook that restores the terminal before printing
@@ -709,6 +718,24 @@ impl TuiApp {
                 )
             );
         }
+        // (iter-2174) A message the operator QUEUED for the next turn and
+        // never sent is DROPPED here — the queue is in-memory, so closing the
+        // TUI loses it. Say so, with the text, rather than letting the
+        // operator believe it was delivered.
+        #[allow(
+            clippy::print_stdout,
+            reason = "the warning lands after LeaveAlternateScreen, in the operator's scrollback"
+        )]
+        if !self.app.next_turn_queue.is_empty() {
+            println!();
+            println!(
+                "⚠️ {} message(s) were queued for the next turn and were NOT delivered:",
+                self.app.next_turn_queue.len()
+            );
+            for queued in &self.app.next_turn_queue {
+                println!("  • {}", queued.chars().take(120).collect::<String>());
+            }
+        }
 
         result
     }
@@ -805,7 +832,13 @@ impl TuiApp {
         let mut text = text;
         let pending = self.app.take_pending_queued_messages();
         if !pending.is_empty() {
-            text = format!("{}\n\n{}", pending.join("\n\n"), text);
+            // Each parked message carries a marker, so the operator can tell
+            // what they QUEUED from what they just typed — the merged row is
+            // one user message and would otherwise be indistinguishable. The
+            // marker is the `[STEER]` house style, and the model reads it too.
+            // The same merge happens on the gateway side (gateway_runner.rs).
+            let marked: Vec<String> = pending.iter().map(|m| format!("[QUEUED] {}", m)).collect();
+            text = format!("{}\n\n{}", marked.join("\n\n"), text);
         }
         // (plan 03 §5) The failed-input restore slot is the COMPOSER's
         // debt: `take_input` armed it when Enter consumed the composer,

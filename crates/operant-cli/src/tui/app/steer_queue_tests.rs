@@ -365,3 +365,57 @@ fn queued_messages_keep_their_order() {
         "FIFO: the operator's order is the agent's order"
     );
 }
+
+/// (iter-2174) A steer leaves a ROW in the transcript.
+///
+/// The agent injects it into the running conversation and persists it, but
+/// the TUI's transcript is its own vec — so without this the operator's words
+/// appeared nowhere on screen: the composer cleared, the band entry dropped
+/// the moment the agent drained it, and there was no proof they had ever said
+/// it. (This is the gap the red team found after iter-2172 shipped.)
+#[test]
+fn a_steered_message_is_a_row_in_the_transcript() {
+    use crate::tui::adapter_types::types::{MessageContent, Role};
+
+    let mut app = super::tests::make_app();
+    let queue = make_steer_queue();
+    app.steer_queue_handle = Some(std::sync::Arc::clone(&queue));
+    app.is_streaming = true;
+
+    app.set_prompt_text("focus on the parser".to_string());
+    app.handle_key_event(press_key(KeyCode::Enter, KeyModifiers::NONE));
+
+    let user_rows: Vec<&str> = app
+        .messages
+        .iter()
+        .filter(|m| m.role == Role::User)
+        .filter_map(|m| match &m.content {
+            MessageContent::Text(t) => Some(t.as_str()),
+            MessageContent::Blocks(_) => None,
+        })
+        .collect();
+    assert_eq!(
+        user_rows,
+        ["focus on the parser"],
+        "the steered words must be a row the operator can see"
+    );
+}
+
+/// (iter-2174) `/queue` with no text LISTS what is parked — the one way the
+/// operator can see the queue before it is delivered.
+#[test]
+fn the_queue_command_lists_the_parked_messages() {
+    let mut app = super::tests::make_app();
+    let queue = make_steer_queue();
+    app.steer_queue_handle = Some(std::sync::Arc::clone(&queue));
+
+    app.queue_for_next_turn("first parked");
+    app.queue_for_next_turn("second parked");
+
+    assert!(app.handle_tui_command("queue", ""));
+    let notice = app.status_notice().unwrap_or_default();
+    assert!(
+        notice.contains("first parked") && notice.contains("second parked"),
+        "/queue must list the parked messages: {notice}"
+    );
+}

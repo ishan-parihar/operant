@@ -2552,6 +2552,23 @@ impl App {
                         // had been lost.
                         let _ = self.prompt_input.take();
                         self.remember_prompt_history(&held);
+                        // (iter-2174) The steer is the operator's OWN words,
+                        // and it is a row in the TRANSCRIPT, not a status
+                        // notice. The agent injects it into the running
+                        // conversation and persists it; the TUI's transcript
+                        // is its own vec, so without this the message appeared
+                        // NOWHERE on screen — the composer cleared, the band
+                        // entry dropped the moment the agent drained it, and
+                        // the operator had no proof they had ever said it.
+                        //
+                        // `Message::user` directly, NOT `add_message`: the
+                        // latter calls `begin_user_turn_snapshot`, and a steer
+                        // must not become a rewind mark (the agent excludes
+                        // steers from marks by construction — they never pass
+                        // `build_turn_context`).
+                        self.messages.push(Message::user(held));
+                        self.invalidate_transcript();
+                        self.on_new_message();
                     }
                     self.set_status_notice(notice);
                 }

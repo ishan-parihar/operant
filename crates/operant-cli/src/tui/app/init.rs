@@ -210,6 +210,7 @@ impl App {
             steer_queue_handle: None,
             steer_queue_mirror: Vec::new(),
             next_turn_queue: Vec::new(),
+            keyboard_enhanced: false,
             pending_mcp_reconnect: false,
             pending_mcp_panel_auth: None,
             // (iter-209: file_history + current_turn init deleted)

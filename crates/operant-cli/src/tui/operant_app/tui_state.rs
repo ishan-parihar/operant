@@ -190,6 +190,10 @@ pub trait TuiState {
     fn is_processing(&self) -> bool;
     /// Messages queued for the NEXT turn (Ctrl+Enter, `/queue`). Delivered
     /// WITH the next turn — never into the running one.
+    /// Whether the kitty keyboard protocol was REQUESTED at startup (see
+    /// `App::keyboard_enhanced`). False means Enter chords cannot be told
+    /// apart, so a chord bound to Ctrl+Enter must not be advertised.
+    fn keyboard_enhanced(&self) -> bool;
     fn queued_messages(&self) -> &[String];
     /// Messages steering the RUNNING turn: injected at the agent's next
     /// iteration boundary. A separate list from `queued_messages` because a

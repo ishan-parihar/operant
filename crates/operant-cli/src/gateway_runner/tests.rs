@@ -2883,7 +2883,13 @@ async fn prose_steers_the_running_turn_and_never_steals_a_question_answer() {
         queue_waits: tokio::sync::Mutex::new(Default::default()),
     });
 
-    let msg = IncomingMessage::new("telegram", "op-1", "Operator", CHANNEL, "focus on the parser");
+    let msg = IncomingMessage::new(
+        "telegram",
+        "op-1",
+        "Operator",
+        CHANNEL,
+        "focus on the parser",
+    );
 
     // ── 1. The live turn takes the steer. ──────────────────────────────
     let reply = handler.steer_prose_into_running_turn(&msg, &session_key);
@@ -2891,7 +2897,11 @@ async fn prose_steers_the_running_turn_and_never_steals_a_question_answer() {
         reply.as_deref().is_some_and(|r| r.contains("Steered")),
         "a prose message to a running turn steers it: {reply:?}"
     );
-    let queue = handler.slots.slot_for(&session_key).agent.steer_queue_handle();
+    let queue = handler
+        .slots
+        .slot_for(&session_key)
+        .agent
+        .steer_queue_handle();
     assert_eq!(
         queue.try_lock().unwrap().as_slice(),
         ["focus on the parser".to_string()],
@@ -2903,13 +2913,15 @@ async fn prose_steers_the_running_turn_and_never_steals_a_question_answer() {
     // 2172 behaviour, which is the correct behaviour for an idle chat.
     let idle_key = format!("telegram:{CHANNEL}:someone-else");
     assert!(
-        handler.steer_prose_into_running_turn(&msg, &idle_key).is_none(),
+        handler
+            .steer_prose_into_running_turn(&msg, &idle_key)
+            .is_none(),
         "a message for a chat with no live turn must start a turn, not steer"
     );
 
     // ── 3. A pending question's ANSWER is not a steer. ─────────────────
-    let global = crate::gateway_runner::PENDING_USER_QUESTIONS
-        .get_or_init(|| std::sync::Mutex::new(None));
+    let global =
+        crate::gateway_runner::PENDING_USER_QUESTIONS.get_or_init(|| std::sync::Mutex::new(None));
     let map = {
         let mut guard = global.lock().unwrap();
         guard
@@ -2917,7 +2929,9 @@ async fn prose_steers_the_running_turn_and_never_steals_a_question_answer() {
             .clone()
     };
     let (reply_tx, _answer_rx) = tokio::sync::oneshot::channel();
-    map.lock().await.insert(channel_key.clone(), (reply_tx, None));
+    map.lock()
+        .await
+        .insert(channel_key.clone(), (reply_tx, None));
     let answer = IncomingMessage::new("telegram", "op-1", "Operator", CHANNEL, "yes, do that");
     let stolen = handler.steer_prose_into_running_turn(&answer, &session_key);
     assert!(

@@ -77,6 +77,10 @@ const OS_CONFLICTS: &[(&str, &str)] = &[
         "Ctrl+l",
         "readline clear-screen — most terminals repaint instead of delivering the key",
     ),
+    (
+        "Ctrl+Enter",
+        "Enter chords need the kitty keyboard protocol — without it a terminal sends a bare \r, so the TUI cannot tell it from Enter",
+    ),
     ("F1", "many terminals bind their own help viewer to F1"),
 ];
 

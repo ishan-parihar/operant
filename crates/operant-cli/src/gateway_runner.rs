@@ -3729,7 +3729,13 @@ impl MessageHandler for GatewayMessageHandler {
                     depth = queued.len(),
                     "Delivering the chat's queued messages with this turn"
                 );
-                format!("{}\n\n{}", queued.join("\n\n"), query)
+                // Each parked message carries a marker: the merged row is one
+                // prompt, so without it neither the operator nor the model can
+                // tell what this chat QUEUED from what it just sent. The same
+                // merge happens on the TUI side (adapter_types/tui_app.rs).
+                let marked: Vec<String> =
+                    queued.iter().map(|m| format!("[QUEUED] {}", m)).collect();
+                format!("{}\n\n{}", marked.join("\n\n"), query)
             }
         };
 
