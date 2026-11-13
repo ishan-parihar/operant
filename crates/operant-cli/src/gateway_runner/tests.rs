@@ -3076,3 +3076,40 @@ async fn the_session_bus_routes_an_event_to_its_slot_and_no_other() {
         "a client subscribed to another slot must not see this event"
     );
 }
+
+/// RT-548: the session cap and the slot count are the SAME number.
+///
+/// A cap of 32 with four slots admitted 32 sessions and ran four at a time,
+/// silently. The cap is the operator's statement of how many concurrent
+/// conversations this gateway serves, so it IS the slot count.
+#[test]
+fn the_session_cap_and_the_slot_count_are_one_number() {
+    // The default is the documented four.
+    assert_eq!(
+        slot_count_for(None),
+        4,
+        "the default must be the documented four"
+    );
+
+    // A cap of N is N slots — the number the operator wrote.
+    assert_eq!(
+        slot_count_for(Some(32)),
+        32,
+        "a cap of 32 must mean 32 slots, not 4"
+    );
+
+    // A cap of one is one slot, and a cap of zero is not a gateway.
+    assert_eq!(slot_count_for(Some(1)), 1, "one session means one slot");
+    assert_eq!(
+        slot_count_for(Some(0)),
+        1,
+        "a cap of zero must not produce a gateway with no slots"
+    );
+
+    // The ceiling is a RAM decision, not a concurrency one.
+    assert_eq!(
+        slot_count_for(Some(10_000)),
+        MAX_AGENT_SLOT_COUNT,
+        "the slot count is capped: a slot is a full agent"
+    );
+}

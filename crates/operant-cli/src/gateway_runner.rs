@@ -2611,17 +2611,30 @@ impl operant_core::session_server::SessionHandler for GatewaySessionHandler {
     }
 }
 
-/// How many agent slots the gateway runs (RT-508).
+/// The default number of agent slots the gateway runs (RT-508).
 ///
 /// One slot per concurrent conversation: a slot is a full agent with its
 /// OWN conversation, so a turn in one slot cannot retarget another slot's
 /// turn — the corruption the single global lock existed to prevent.
+const DEFAULT_AGENT_SLOT_COUNT: usize = 4;
+
+/// The ceiling on the slot count (RT-548).
 ///
-/// Four is the default because a gateway serves a handful of seats, not a
-/// thousand: the slots exist so a busy chat does not block the others.
-/// The CLI's scale story is the daemon (RT-513): many clients, ONE
-/// process, one child set.
-const AGENT_SLOT_COUNT: usize = 4;
+/// A slot is a full agent, so the count is a RAM decision as much as a
+/// concurrency one: 32 agents is ~2.9 GB on the box this was measured on.
+const MAX_AGENT_SLOT_COUNT: usize = 64;
+
+/// How many slots the gateway runs for this config (RT-548).
+///
+/// The slot count and the session cap are the SAME number: a cap of 32 with
+/// four slots meant 32 sessions were admitted and four ran at a time, silently.
+/// The cap is the operator's statement of how many concurrent conversations
+/// this gateway serves, so it is the slot count too.
+fn slot_count_for(max_concurrent_sessions: Option<usize>) -> usize {
+    max_concurrent_sessions
+        .unwrap_or(DEFAULT_AGENT_SLOT_COUNT)
+        .clamp(1, MAX_AGENT_SLOT_COUNT)
+}
 
 /// One agent slot (RT-508).
 ///
@@ -4734,8 +4747,10 @@ pub async fn start_gateway(
     // wait was measured but never acted on. The slots are that upgrade
     // path, and they share the hoisted pair (memory), the MCP manager (so
     // the MCP CHILDREN are shared) and the permission channel.
-    let mut slots: Vec<AgentSlot> = Vec::with_capacity(AGENT_SLOT_COUNT);
-    for _ in 0..AGENT_SLOT_COUNT {
+    let slot_count = slot_count_for(app_config.gateway.max_concurrent_sessions);
+    tracing::info!(slots = slot_count, "the gateway's agent slots");
+    let mut slots: Vec<AgentSlot> = Vec::with_capacity(slot_count);
+    for _ in 0..slot_count {
         // (RT-508 red-team, finding 1) The slot's OWN memory provider: the
         // scope cell is per provider, so two slots cannot swap each other's
         // bank mid-turn.
