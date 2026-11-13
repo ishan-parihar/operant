@@ -34,5 +34,5 @@
 | process-architecture-028 | done | RT-522 (S): the presence registry is never claimed and a claim overwrites a live owner | — | [2026-11-13] docs/audit/2026-11-12-process-architecture-red-team-execution.md |
 | process-architecture-029 | done | RT-524 (S): one persistence rule applied four ways (the rewind fork and the interrupted tail dropped the tool history; the steers were never persisted) | — | [2026-11-13] docs/audit/2026-11-12-process-architecture-red-team-execution.md |
 | process-architecture-030 | done | RT-525 (N): the unwired machinery — the persistence seam deleted, the stall detector wired into the drain | — | [2026-11-13] docs/audit/2026-11-12-process-architecture-red-team-execution.md |
-| process-architecture-031 | open | RT-537 (S): the checkpoint list is shared by every chat | — | — |
+| process-architecture-031 | open | RT-539 (S): the checkpoint list is shared by every chat | — | — |
 | process-architecture-032 | open | RT-538 (S): the file-state snapshots are shared by every chat | — | — |

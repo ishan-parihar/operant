@@ -89,7 +89,7 @@ was load-tested, and no number in this report was invented.
 
 ## Should fix
 
-### 5. The checkpoint list is shared by every chat — **OPEN (ledger RT-537)**
+### 5. The checkpoint list is shared by every chat — **OPEN (ledger RT-539)**
 (`crates/operant-core/src/tools/checkpoint_tool.rs:30`)
 
 - **What this is:** checkpoints live in one process-global manager, keyed by
@@ -100,7 +100,7 @@ was load-tested, and no number in this report was invented.
 - **Fix:** key the checkpoints by session as well as working directory.
 - **If we skip it:** a seat can read another seat's checkpoints.
 
-### 6. The file-state snapshots are shared by every chat — **OPEN (ledger RT-538)**
+### 6. The file-state snapshots are shared by every chat — **CLOSED (iter-2156)**
 (`crates/operant-core/src/tools/file_state.rs:23`)
 
 - **What this is:** one process-global map of file snapshots (the file-edit
@@ -108,6 +108,10 @@ was load-tested, and no number in this report was invented.
 - **Problem:** two chats editing the same file interleave their snapshots.
 - **Fix:** key the map by session and path.
 - **If we skip it:** a chat's file undo can restore another chat's snapshot.
+- **Closed in iter-2156:** the map is keyed by (session, path) and the session
+  rides the tool's operations through the context. Pinned by
+  `tools::file_state::tests::two_sessions_snapshots_of_one_file_do_not_interleave`
+  (mutation-proved).
 
 ### 7. The conversation-reload decision races between slots — **CLOSED (iter-2153)**
 (`crates/operant-cli/src/gateway_runner.rs:2843`)
@@ -134,8 +138,8 @@ ways, closed iter-2151), RT-525 (about 1,350 lines of implemented, tested,
 unwired machinery, closed iter-2152) and RT-526 (the daemon lock file is
 unlinked on drop, closed iter-2142). Each carries its own fix and test in the
 ledger. The two findings this report raised that are still open are tracked
-as ledger rows RT-537 (the shared checkpoint list) and RT-538 (the shared
-file-state snapshots).
+as ledger rows RT-539 (the shared checkpoint list) and RT-538 (the shared
+file-state snapshots, closed in iter-2156).
 
 ---
 

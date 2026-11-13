@@ -20,8 +20,24 @@ struct FileSnapshot {
     permissions: String,
 }
 
-static FILE_STATES: LazyLock<Mutex<HashMap<String, FileSnapshot>>> =
+/// One watched state, keyed by the SESSION that watched it then the path
+/// (RT-538).
+///
+/// The map was keyed by path alone, so two gateway chats editing the same
+/// file interleaved their snapshots and one chat's `diff` reported the
+/// other chat's change. Every gateway chat is a different session.
+type FileStateKey = (String, String);
+
+static FILE_STATES: LazyLock<Mutex<HashMap<FileStateKey, FileSnapshot>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// The key for a path in a session. `None` when the context does not name
+/// one (a non-gateway call: the CLI, a test) — the key is then just the
+/// path, which is what the surface never shared between two sessions
+/// anyway.
+fn state_key(session_id: Option<&str>, path: &str) -> FileStateKey {
+    (session_id.unwrap_or("").to_string(), path.to_string())
+}
 
 pub struct FileStateTool;
 
@@ -143,16 +159,19 @@ impl OperantTool for FileStateTool {
         ToolSchema::from_type::<FileStateArgs>("file_state", "Track file system state")
     }
 
-    async fn execute(&self, args: Value, _context: ToolContext) -> ToolResult {
+    async fn execute(&self, args: Value, context: ToolContext) -> ToolResult {
         let args: FileStateArgs = match serde_json::from_value(args) {
             Ok(a) => a,
             Err(e) => return ToolResult::error("file_state", format!("Invalid arguments: {}", e)),
         };
 
+        // (RT-538) The session rides every operation: the snapshot map is
+        // keyed by session and path, so one chat's `diff` never reports
+        // another chat's change.
         match args.operation.as_str() {
             "check" => handle_check(&args.path),
-            "watch" => handle_watch(&args.path),
-            "diff" => handle_diff(&args.path),
+            "watch" => handle_watch(context.session_id.as_deref(), &args.path),
+            "diff" => handle_diff(context.session_id.as_deref(), &args.path),
             other => ToolResult::error(
                 "file_state",
                 format!(
@@ -188,7 +207,7 @@ fn handle_check(path: &str) -> ToolResult {
     clippy::expect_used,
     reason = "poisoned lock: panic is the intended recovery"
 )]
-fn handle_watch(path: &str) -> ToolResult {
+fn handle_watch(session_id: Option<&str>, path: &str) -> ToolResult {
     let snapshot = match get_file_metadata(path) {
         Ok(s) => s,
         Err(e) => return ToolResult::error("file_state", format!("Watch failed: {}", e)),
@@ -197,7 +216,7 @@ fn handle_watch(path: &str) -> ToolResult {
     let mut states = FILE_STATES
         .lock()
         .expect("FILE_STATES mutex poisoned — programmer error");
-    states.insert(path.to_string(), snapshot);
+    states.insert(state_key(session_id, path), snapshot);
 
     ToolResult::success(
         "file_state",
@@ -213,11 +232,11 @@ fn handle_watch(path: &str) -> ToolResult {
     clippy::expect_used,
     reason = "poisoned lock: panic is the intended recovery"
 )]
-fn handle_diff(path: &str) -> ToolResult {
+fn handle_diff(session_id: Option<&str>, path: &str) -> ToolResult {
     let states = FILE_STATES
         .lock()
         .expect("FILE_STATES mutex poisoned — programmer error");
-    let stored = match states.get(path) {
+    let stored = match states.get(&state_key(session_id, path)) {
         Some(s) => s.clone(),
         None => {
             return ToolResult::success(
@@ -392,6 +411,62 @@ mod tests {
     }
 
     // ---- compute_hash tests --------------------------------------------
+
+    /// RT-538: two sessions' snapshots of ONE file do not interleave.
+    ///
+    /// The snapshot map was keyed by path alone, so a second chat's `watch`
+    /// overwrote the first chat's snapshot, and one chat's `diff` reported
+    /// the other chat's change.
+    #[tokio::test]
+    async fn two_sessions_snapshots_of_one_file_do_not_interleave() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("shared.txt");
+        std::fs::write(&path, "one").expect("the file");
+
+        async fn watch(session: &str, path: &str) -> ToolResult {
+            FileStateTool
+                .execute(
+                    serde_json::json!({"operation": "watch", "path": path}),
+                    ToolContext::default().with_session_id(session),
+                )
+                .await
+        }
+        async fn diff(session: &str, path: &str) -> ToolResult {
+            FileStateTool
+                .execute(
+                    serde_json::json!({"operation": "diff", "path": path}),
+                    ToolContext::default().with_session_id(session),
+                )
+                .await
+        }
+
+        // Chat A watches the file.
+        watch("chat-a", path.to_str().expect("utf8")).await;
+
+        // Chat B watches the SAME file, and the file changes.
+        std::fs::write(&path, "two").expect("the file");
+        watch("chat-b", path.to_str().expect("utf8")).await;
+
+        // Chat A's snapshot is still the one it took: its diff reports a
+        // change against ITS OWN baseline, not chat B's.
+        let result = diff("chat-a", path.to_str().expect("utf8")).await;
+        let text = serde_json::to_string(&result).expect("json");
+        assert!(
+            text.contains("changed") || text.contains("modified"),
+            "chat A's diff must compare against chat A's own snapshot — the \
+             shared map made it report chat B's state: {text}"
+        );
+
+        // Chat C, which never watched, has NO snapshot: the map is per
+        // session, so a stranger's watch is invisible.
+        let stranger = diff("chat-c", path.to_str().expect("utf8")).await;
+        let text = serde_json::to_string(&stranger).expect("json");
+        assert!(
+            text.contains("watched"),
+            "a session that never watched has no snapshot — the map is \
+             shared across every chat: {text}"
+        );
+    }
 
     #[test]
     fn test_compute_hash_known_content() {
