@@ -88,6 +88,7 @@ they describe. The front door is [docs/library/README.md](library/README.md); th
 | `docs/library/tui-debugging.md` | TUI debug + live-repro tooling: headless simulate, scenario corpus, tmux recipes | the TUI's architecture (`tui.md`) |
 | `docs/library/gateway.md` | the channel gateway: 7 adapters, session store, dispatch breaker, subscriptions | the dashboard (`observability.md`), platform org seats (`org.md`) |
 | `docs/library/sessions.md` | the session substrate: per-session conversation, branching, rewind, checkpoints, search/recap | persistence mechanics (`persistence.md`) |
+| `docs/library/session-server.md` | the process that owns the agentic runtime (registry, MCP children, AFT pool, database handles) and the client protocol that drives a session there | the channel adapters (`gateway.md`), the session transcript (`sessions.md`) |
 | `docs/library/skills.md` | skills: discovery, guard, usage, marketplace, bundles, SOPs | ponytail packs (`context-injection.md` §ponytail) |
 | `docs/library/mcp.md` | MCP both ways: client (HTTP/stdio/SSE, OAuth) and server | plugins (WASM) (`plugins.md`) |
 | `docs/library/plugins.md` | WASM plugins: manifest, capabilities, host, install | MCP servers (`mcp.md`) |
